@@ -1,16 +1,31 @@
-import { useState, type ComponentType } from "react";
-import type { ThreadTodo, ThreadTodoKind } from "@pwragent/shared";
+import { useEffect, useRef, useState, type ComponentType } from "react";
+import type {
+  ThreadTodo,
+  ThreadTodoKind,
+  ThreadTodoMergeMethod,
+  ThreadTodoMergeMethodPreferences,
+  ThreadTodoResolution,
+} from "@pwragent/shared";
+import {
+  THREAD_TODO_MERGE_METHODS,
+  resolveThreadTodoMergeMethod,
+} from "@pwragent/shared";
 import {
   CheckIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   ChevronUpIcon,
   CloseIcon,
+  CopyIcon,
+  FolderIcon,
   HandoffIcon,
   MergeIcon,
   ReviewIcon,
   type IconProps,
 } from "../../icons";
+import { copyText } from "../../lib/copy-text";
+import { TodoSplitButton, type TodoSplitMenuEntry } from "./TodoSplitButton";
+import type { ThreadTodoInstance, ThreadTodoRunOptions } from "./thread-todos-view";
 
 const KIND_ICONS: Record<ThreadTodoKind, ComponentType<IconProps> | undefined> = {
   reminder: undefined,
@@ -19,17 +34,40 @@ const KIND_ICONS: Record<ThreadTodoKind, ComponentType<IconProps> | undefined> =
   handoff: HandoffIcon,
 };
 
+/** The button says what it will do; the menu says it as GitHub does. */
+const MERGE_METHOD_LABELS: Record<
+  ThreadTodoMergeMethod,
+  { button: string; menu: string; verb: string }
+> = {
+  squash: { button: "Squash merge", menu: "Squash and merge", verb: "Squash merge" },
+  rebase: { button: "Rebase merge", menu: "Rebase and merge", verb: "Rebase and merge" },
+  merge: { button: "Merge", menu: "Create a merge commit", verb: "Merge" },
+};
+
+const COPIED_MS = 1_500;
+
 export type ThreadTodoCardHandlers = {
   /** Merge or start-thread, in the main process. */
-  onRun: (todo: ThreadTodo) => void;
+  onRun: (todo: ThreadTodo, options?: ThreadTodoRunOptions) => void;
   /** Opens the composer's `/review` flow; the card resolves once it starts. */
   onStartReview: (todo: ThreadTodo) => void;
-  onResolve: (todo: ThreadTodo, status: "done" | "dismissed") => void;
+  onResolve: (
+    todo: ThreadTodo,
+    status: "done" | "dismissed",
+    resolution?: ThreadTodoResolution,
+  ) => void;
+  /**
+   * Sends a handoff's prompt to the card's own thread as a reply. Only the
+   * thread on screen can take one, so other surfaces leave it out.
+   */
+  onDoHere?: (todo: ThreadTodo) => void;
 };
 
 export type ThreadTodoCardProps = ThreadTodoCardHandlers & {
   todo: ThreadTodo;
   running: boolean;
+  mergeMethods?: ThreadTodoMergeMethodPreferences;
+  instances?: ThreadTodoInstance[];
   pager?: {
     position: number;
     total: number;
@@ -40,6 +78,12 @@ export type ThreadTodoCardProps = ThreadTodoCardHandlers & {
   now?: number;
 };
 
+type MergeConfirmation = {
+  method: ThreadTodoMergeMethod;
+  /** A pick from the menu, remembered for the card's project. */
+  remember: boolean;
+};
+
 /**
  * One to-do. Its anatomy is the notice toast's: the title row carries the
  * kind glyph, age and the icon tools; the pager leads the footer and the
@@ -47,45 +91,168 @@ export type ThreadTodoCardProps = ThreadTodoCardHandlers & {
  */
 export function ThreadTodoCard(props: ThreadTodoCardProps) {
   const { todo } = props;
-  const [confirmingMerge, setConfirmingMerge] = useState(false);
+  const [confirmingMerge, setConfirmingMerge] = useState<MergeConfirmation>();
   const [promptExpanded, setPromptExpanded] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const copiedTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(copiedTimerRef.current), []);
   const KindIcon = KIND_ICONS[todo.kind];
   const action = todo.action;
   const titleId = `thread-todo-title-${todo.id}`;
-
-  const primary = (() => {
-    if (!action) return undefined;
-    switch (action.type) {
-      case "start_review":
-        return {
-          label: "Start review",
-          Icon: ReviewIcon,
-          onClick: () => props.onStartReview(todo),
-        };
-      case "merge_pull_request":
-        return {
-          label: confirmingMerge ? "Squash merge" : todo.error ? "Retry merge" : "Squash merge",
-          Icon: MergeIcon,
-          onClick: () => {
-            if (!confirmingMerge) {
-              setConfirmingMerge(true);
-              return;
-            }
-            setConfirmingMerge(false);
-            props.onRun(todo);
-          },
-        };
-      case "start_thread":
-        return {
-          label: todo.error ? "Retry" : "Start thread",
-          Icon: HandoffIcon,
-          onClick: () => props.onRun(todo),
-        };
-    }
-  })();
-  const runningLabel = action?.type === "merge_pull_request" ? "Merging…" : "Starting…";
   const prompt = action?.type === "start_thread" ? action.prompt : undefined;
   const facts = buildFacts(todo);
+  const runningLabel = action?.type === "merge_pull_request" ? "Merging…" : "Starting…";
+
+  const copyPrompt = (): void => {
+    if (!prompt) return;
+    void copyText(prompt).then(() => {
+      clearTimeout(copiedTimerRef.current);
+      setCopied(true);
+      copiedTimerRef.current = setTimeout(() => setCopied(false), COPIED_MS);
+    }).catch((error: unknown) => {
+      console.warn("Copying the handoff prompt failed.", error);
+    });
+  };
+
+  const renderAction = () => {
+    if (props.running) {
+      return (
+        <span className="thread-todo-card__button thread-todo-card__button--busy" role="status">
+          <span className="pending-spinner pending-spinner--sm" aria-hidden="true" />
+          {runningLabel}
+        </span>
+      );
+    }
+    const done = (
+      <button
+        type="button"
+        className="button thread-todo-card__button thread-todo-card__button--quiet"
+        onClick={() => props.onResolve(todo, "done")}
+      >
+        Done
+      </button>
+    );
+    switch (action?.type) {
+      case undefined:
+        return (
+          <button
+            type="button"
+            className="button thread-todo-card__button"
+            onClick={() => props.onResolve(todo, "done")}
+          >
+            <CheckIcon size={12} />
+            Done
+          </button>
+        );
+      case "start_review":
+        return (
+          <>
+            {done}
+            <button
+              type="button"
+              className="button button--primary thread-todo-card__button"
+              onClick={() => props.onStartReview(todo)}
+            >
+              <ReviewIcon size={12} />
+              Start review
+            </button>
+          </>
+        );
+      case "merge_pull_request": {
+        if (confirmingMerge) {
+          return (
+            <>
+              <button
+                type="button"
+                className="button thread-todo-card__button thread-todo-card__button--quiet"
+                onClick={() => setConfirmingMerge(undefined)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="button button--primary thread-todo-card__button"
+                onClick={() => {
+                  const confirmation = confirmingMerge;
+                  setConfirmingMerge(undefined);
+                  props.onRun(todo, {
+                    mergeMethod: confirmation.method,
+                    ...(confirmation.remember ? { rememberMergeMethod: true } : {}),
+                  });
+                }}
+              >
+                <MergeIcon size={12} />
+                {MERGE_METHOD_LABELS[confirmingMerge.method].verb}
+              </button>
+            </>
+          );
+        }
+        const method = resolveThreadTodoMergeMethod(todo, props.mergeMethods);
+        return (
+          <>
+            {done}
+            <TodoSplitButton
+              label={todo.error ? "Retry merge" : MERGE_METHOD_LABELS[method].button}
+              Icon={MergeIcon}
+              menuLabel="Merge options"
+              onClick={() => setConfirmingMerge({ method, remember: false })}
+              entries={THREAD_TODO_MERGE_METHODS.map((option) => ({
+                kind: "item",
+                id: option,
+                label: MERGE_METHOD_LABELS[option].menu,
+                checked: option === method,
+                onSelect: () => setConfirmingMerge({ method: option, remember: true }),
+              }))}
+            />
+          </>
+        );
+      }
+      case "start_thread": {
+        const entries: TodoSplitMenuEntry[] = [];
+        if (props.onDoHere) {
+          const doHere = props.onDoHere;
+          entries.push({
+            kind: "item",
+            id: "here",
+            label: "Do it here",
+            onSelect: () => doHere(todo),
+          });
+        }
+        const instances = props.instances ?? [];
+        if (instances.length > 0) {
+          entries.push({
+            kind: "submenu",
+            id: "instances",
+            label: "Start thread on",
+            entries: instances.map((instance) => ({
+              kind: "item",
+              id: instance.instanceId,
+              label: instance.label,
+              onSelect: () => props.onRun(todo, { startOnInstanceId: instance.instanceId }),
+            })),
+          });
+        }
+        if (entries.length > 0) {
+          entries.push({ kind: "separator", id: "separator" });
+        }
+        entries.push({
+          kind: "item",
+          id: "elsewhere",
+          label: "Handled elsewhere",
+          onSelect: () => props.onResolve(todo, "done", "handled_elsewhere"),
+        });
+        return (
+          <TodoSplitButton
+            label={todo.error ? "Retry" : "Start thread"}
+            Icon={HandoffIcon}
+            menuLabel="Handoff options"
+            onClick={() => props.onRun(todo)}
+            entries={entries}
+          />
+        );
+      }
+    }
+  };
 
   return (
     <article
@@ -126,6 +293,13 @@ export function ThreadTodoCard(props: ThreadTodoCardProps) {
         </div>
       </div>
 
+      {todo.targetProject ? (
+        <p className="thread-todo-card__project">
+          <FolderIcon size={11} aria-hidden="true" />
+          <span className="thread-todo-card__project-label">For {todo.targetProject.label}</span>
+        </p>
+      ) : null}
+
       {todo.detail || facts.length > 0 || prompt || todo.error ? (
         <div className="thread-todo-card__body">
           {todo.detail ? <p className="thread-todo-card__detail">{todo.detail}</p> : null}
@@ -140,15 +314,26 @@ export function ThreadTodoCard(props: ThreadTodoCardProps) {
             </dl>
           ) : null}
           {prompt ? (
-            <button
-              type="button"
-              className={`thread-todo-card__prompt${promptExpanded ? " is-expanded" : ""}`}
-              aria-expanded={promptExpanded}
-              aria-label={promptExpanded ? "Collapse proposed prompt" : "Show the whole proposed prompt"}
-              onClick={() => setPromptExpanded((current) => !current)}
-            >
-              <span className="thread-todo-card__prompt-text">{prompt}</span>
-            </button>
+            <div className="thread-todo-card__prompt-block">
+              <button
+                type="button"
+                className={`thread-todo-card__prompt${promptExpanded ? " is-expanded" : ""}`}
+                aria-expanded={promptExpanded}
+                aria-label={promptExpanded ? "Collapse proposed prompt" : "Show the whole proposed prompt"}
+                onClick={() => setPromptExpanded((current) => !current)}
+              >
+                <span className="thread-todo-card__prompt-text">{prompt}</span>
+              </button>
+              <button
+                type="button"
+                className="thread-todo-card__icon-button thread-todo-card__copy"
+                aria-label={copied ? "Prompt copied" : "Copy prompt"}
+                title={copied ? "Copied" : "Copy prompt"}
+                onClick={copyPrompt}
+              >
+                {copied ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+              </button>
+            </div>
           ) : null}
           {todo.error ? (
             <p className="thread-todo-card__error" role="alert">{todo.error}</p>
@@ -158,9 +343,7 @@ export function ThreadTodoCard(props: ThreadTodoCardProps) {
 
       {confirmingMerge && action?.type === "merge_pull_request" ? (
         <p className="thread-todo-card__confirm">
-          {/^\d+$/.test(action.pullRequest)
-            ? `Squash merge #${action.pullRequest}? This cannot be undone here.`
-            : "Squash merge this pull request? This cannot be undone here."}
+          {confirmMergeText(action.pullRequest, confirmingMerge.method, todo.targetProject?.label)}
         </p>
       ) : null}
 
@@ -190,54 +373,20 @@ export function ThreadTodoCard(props: ThreadTodoCardProps) {
             </button>
           </nav>
         ) : null}
-        <div className="thread-todo-card__actions">
-          {props.running ? (
-            <span className="thread-todo-card__button thread-todo-card__button--busy" role="status">
-              <span className="pending-spinner pending-spinner--sm" aria-hidden="true" />
-              {runningLabel}
-            </span>
-          ) : primary ? (
-            <>
-              {confirmingMerge ? (
-                <button
-                  type="button"
-                  className="button thread-todo-card__button thread-todo-card__button--quiet"
-                  onClick={() => setConfirmingMerge(false)}
-                >
-                  Cancel
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  className="button thread-todo-card__button thread-todo-card__button--quiet"
-                  onClick={() => props.onResolve(todo, "done")}
-                >
-                  Done
-                </button>
-              )}
-              <button
-                type="button"
-                className="button button--primary thread-todo-card__button"
-                onClick={primary.onClick}
-              >
-                <primary.Icon size={12} />
-                {primary.label}
-              </button>
-            </>
-          ) : (
-            <button
-              type="button"
-              className="button thread-todo-card__button"
-              onClick={() => props.onResolve(todo, "done")}
-            >
-              <CheckIcon size={12} />
-              Done
-            </button>
-          )}
-        </div>
+        <div className="thread-todo-card__actions">{renderAction()}</div>
       </div>
     </article>
   );
+}
+
+function confirmMergeText(
+  pullRequest: string,
+  method: ThreadTodoMergeMethod,
+  projectLabel: string | undefined,
+): string {
+  const target = /^\d+$/.test(pullRequest) ? `#${pullRequest}` : "this pull request";
+  const where = projectLabel ? ` in ${projectLabel}` : "";
+  return `${MERGE_METHOD_LABELS[method].verb} ${target}${where}? This cannot be undone here.`;
 }
 
 function buildFacts(todo: ThreadTodo): Array<[string, string]> {
@@ -249,7 +398,10 @@ function buildFacts(todo: ThreadTodo): Array<[string, string]> {
     const facts: Array<[string, string]> = [];
     const model = [action.model, action.reasoningEffort].filter(Boolean).join(" · ");
     if (model) facts.push(["Model", model]);
-    facts.push(["Where", action.workMode === "worktree" ? "New worktree" : "This thread's directory"]);
+    const directory = todo.targetProject
+      ? `${todo.targetProject.label}'s directory`
+      : "This thread's directory";
+    facts.push(["Where", action.workMode === "worktree" ? "New worktree" : directory]);
     return facts;
   }
   return [];

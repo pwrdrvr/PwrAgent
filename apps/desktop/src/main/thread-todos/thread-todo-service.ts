@@ -4,19 +4,24 @@ import type {
   ListThreadTodosRequest,
   ThreadTodo,
   ThreadTodoAction,
+  ThreadTodoMergeMethod,
+  ThreadTodoMergeMethodPreferences,
+  ThreadTodoProject,
+  ThreadTodoResolution,
+  ThreadTodoStartedThread,
   ThreadTodoStatus,
   ThreadTodosChangedEvent,
 } from "@pwragent/shared";
 import {
+  DEFAULT_THREAD_TODO_MERGE_METHOD,
   THREAD_TODO_MAX_OPEN_PER_THREAD,
+  THREAD_TODO_RESOLUTION_RESULTS,
+  threadTodoActionProject,
   threadTodoKindForAction,
 } from "@pwragent/shared";
 import type { ThreadTodoStore } from "./thread-todo-store.js";
 
-export type ThreadTodoStartedThread = {
-  backend: AppServerBackendKind;
-  threadId: string;
-};
+type StartThreadAction = Extract<ThreadTodoAction, { type: "start_thread" }>;
 
 /**
  * The two actions that run in the main process. `start_review` is not here:
@@ -28,12 +33,28 @@ export type ThreadTodoActionRunners = {
   mergePullRequest: (params: {
     cwd?: string;
     pullRequest: string;
+    method: ThreadTodoMergeMethod;
   }) => Promise<{ summary: string }>;
+  /**
+   * `crossProject` is true when the card is for a project other than the
+   * raising thread's. Such a thread is not grouped under the source thread,
+   * matching handoff_task.
+   */
   startThread: (params: {
     sourceBackend: AppServerBackendKind;
     sourceThreadId: string;
     cwd?: string;
-    action: Extract<ThreadTodoAction, { type: "start_thread" }>;
+    crossProject: boolean;
+    action: StartThreadAction;
+  }) => Promise<ThreadTodoStartedThread>;
+  /** The same, on a federation peer, in that peer's copy of `project`. */
+  startThreadOnInstance?: (params: {
+    instanceId: string;
+    sourceBackend: AppServerBackendKind;
+    sourceThreadId: string;
+    project?: ThreadTodoProject;
+    crossProject: boolean;
+    action: StartThreadAction;
   }) => Promise<ThreadTodoStartedThread>;
 };
 
@@ -42,6 +63,8 @@ export type AddThreadTodoInput = {
   detail?: string;
   key?: string;
   action?: ThreadTodoAction;
+  /** The project name or path the thread named, resolved by the runtime. */
+  project?: string;
 };
 
 export class ThreadTodoError extends Error {
@@ -57,6 +80,8 @@ export type ThreadTodoServiceOptions = {
   store: ThreadTodoStore;
   runners?: ThreadTodoActionRunners;
   onChanged?: (event: ThreadTodosChangedEvent) => void;
+  /** `[git] default_merge_method`, read when it is needed. */
+  defaultMergeMethod?: () => ThreadTodoMergeMethod;
   now?: () => number;
   newId?: () => string;
 };
@@ -67,12 +92,15 @@ export class ThreadTodoService {
   private readonly newId: () => string;
   private readonly running = new Set<string>();
   private runners: ThreadTodoActionRunners | undefined;
+  private readonly defaultMergeMethod: () => ThreadTodoMergeMethod;
   private onChanged: ((event: ThreadTodosChangedEvent) => void) | undefined;
 
   constructor(options: ThreadTodoServiceOptions) {
     this.store = options.store;
     this.runners = options.runners;
     this.onChanged = options.onChanged;
+    this.defaultMergeMethod = options.defaultMergeMethod
+      ?? (() => DEFAULT_THREAD_TODO_MERGE_METHOD);
     this.now = options.now ?? Date.now;
     this.newId = options.newId ?? randomUUID;
   }
@@ -96,10 +124,18 @@ export class ThreadTodoService {
     backend: AppServerBackendKind;
     threadId: string;
     cwd?: string;
+    sourceProject?: ThreadTodoProject;
+    targetProject?: ThreadTodoProject;
     input: AddThreadTodoInput;
   }): { todo: ThreadTodo; created: boolean } {
-    const { backend, threadId, input } = params;
+    const { backend, threadId, input, sourceProject } = params;
     const kind = threadTodoKindForAction(input.action);
+    // Naming the thread's own project is not a target: there is nothing
+    // to point at that the source does not already say.
+    const targetProject = params.targetProject
+      && params.targetProject.key !== sourceProject?.key
+      ? params.targetProject
+      : undefined;
     const now = this.now();
     const existing = input.key
       ? this.store.findOpenByKey({ backend, threadId, key: input.key })
@@ -112,6 +148,8 @@ export class ThreadTodoService {
         detail: input.detail,
         action: input.action,
         cwd: params.cwd,
+        sourceProject,
+        targetProject,
         now,
       });
       this.emit(todo);
@@ -133,6 +171,8 @@ export class ThreadTodoService {
       detail: input.detail,
       action: input.action,
       cwd: params.cwd,
+      sourceProject,
+      targetProject,
       now,
     });
     this.emit(todo);
@@ -143,8 +183,19 @@ export class ThreadTodoService {
     return this.store.list(request);
   }
 
+  mergeMethodPreferences(): ThreadTodoMergeMethodPreferences {
+    return {
+      defaultMethod: this.defaultMergeMethod(),
+      byProject: this.store.listProjectMergeMethods(),
+    };
+  }
+
   /** Operator resolve or reopen (Undo), from the card or the panel. */
-  resolve(params: { id: string; status: ThreadTodoStatus }): ThreadTodo {
+  resolve(params: {
+    id: string;
+    status: ThreadTodoStatus;
+    resolution?: ThreadTodoResolution;
+  }): ThreadTodo {
     const current = this.require(params.id);
     if (current.status === params.status) {
       return current;
@@ -166,6 +217,9 @@ export class ThreadTodoService {
       id: params.id,
       status: params.status,
       now: this.now(),
+      ...(params.status === "done" && params.resolution
+        ? { result: { result: THREAD_TODO_RESOLUTION_RESULTS[params.resolution] } }
+        : {}),
     });
     this.emit(todo);
     return todo;
@@ -206,7 +260,14 @@ export class ThreadTodoService {
    * result. Failure keeps the card open with the error, so the operator can
    * read it and retry.
    */
-  async runAction(id: string): Promise<ThreadTodo> {
+  async runAction(
+    id: string,
+    options: {
+      mergeMethod?: ThreadTodoMergeMethod;
+      rememberMergeMethod?: boolean;
+      startOnInstanceId?: string;
+    } = {},
+  ): Promise<ThreadTodo> {
     const todo = this.require(id);
     if (todo.status !== "open") {
       throw new ThreadTodoError("conflict", "This to-do is already resolved.");
@@ -225,23 +286,59 @@ export class ThreadTodoService {
     if (!runners) {
       throw new Error("Thread to-do actions are not available.");
     }
+    const startOnInstance = action.type === "start_thread" && options.startOnInstanceId
+      ? runners.startThreadOnInstance
+      : undefined;
+    if (action.type === "start_thread" && options.startOnInstanceId && !startOnInstance) {
+      throw new Error("Starting a thread on another PwrAgent is not available.");
+    }
+    const project = threadTodoActionProject(todo);
+    // A target project is a different repository: run there, not in the
+    // raising thread's workspace.
+    const cwd = todo.targetProject ? todo.targetProject.path : todo.cwd;
+    const crossProject = todo.targetProject !== undefined;
     this.running.add(id);
     try {
       if (action.type === "merge_pull_request") {
+        const method = options.mergeMethod
+          ?? (project ? this.store.getProjectMergeMethod(project.key) : undefined)
+          ?? this.defaultMergeMethod();
+        // Remembered before the merge runs: the pick is the operator's
+        // preference whether or not this particular merge succeeds.
+        if (options.mergeMethod && options.rememberMergeMethod && project) {
+          this.store.setProjectMergeMethod({
+            directoryKey: project.key,
+            method: options.mergeMethod,
+            now: this.now(),
+          });
+        }
         const merged = await runners.mergePullRequest({
-          cwd: todo.cwd,
+          cwd,
           pullRequest: action.pullRequest,
+          method,
         });
         return this.finish(id, { result: merged.summary });
       }
-      const started = await runners.startThread({
-        sourceBackend: todo.backend,
-        sourceThreadId: todo.threadId,
-        cwd: todo.cwd,
-        action,
-      });
+      const started = startOnInstance && options.startOnInstanceId
+        ? await startOnInstance({
+            instanceId: options.startOnInstanceId,
+            sourceBackend: todo.backend,
+            sourceThreadId: todo.threadId,
+            project,
+            crossProject,
+            action,
+          })
+        : await runners.startThread({
+            sourceBackend: todo.backend,
+            sourceThreadId: todo.threadId,
+            cwd,
+            crossProject,
+            action,
+          });
       return this.finish(id, {
-        result: "Started thread",
+        result: started.instanceLabel
+          ? `Started thread on ${started.instanceLabel}`
+          : "Started thread",
         startedThread: started,
       });
     } catch (error) {

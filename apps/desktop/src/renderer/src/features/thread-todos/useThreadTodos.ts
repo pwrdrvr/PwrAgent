@@ -7,7 +7,13 @@ import {
   useRef,
   useState,
 } from "react";
-import type { ThreadTodo, ThreadTodoStatus } from "@pwragent/shared";
+import type {
+  ResolveThreadTodoRequest,
+  RunThreadTodoActionRequest,
+  ThreadTodo,
+  ThreadTodoMergeMethodPreferences,
+  ThreadTodoStatus,
+} from "@pwragent/shared";
 import { buildThreadIdentityKey } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
@@ -19,10 +25,18 @@ export type ThreadTodosController = {
   openByThreadKey: ReadonlyMap<string, ThreadTodo[]>;
   /** Bumps on every change event, so a Done list can refetch. */
   revision: number;
+  mergeMethods?: ThreadTodoMergeMethodPreferences;
   /** Ids whose main-process action is running in this window. */
   runningIds: ReadonlySet<string>;
-  resolve: (id: string, status: ThreadTodoStatus) => Promise<ThreadTodo | undefined>;
-  runAction: (id: string) => Promise<ThreadTodo | undefined>;
+  resolve: (
+    id: string,
+    status: ThreadTodoStatus,
+    resolution?: ResolveThreadTodoRequest["resolution"],
+  ) => Promise<ThreadTodo | undefined>;
+  runAction: (
+    id: string,
+    options?: Omit<RunThreadTodoActionRequest, "id">,
+  ) => Promise<ThreadTodo | undefined>;
 };
 
 type ThreadTodosApi = Pick<
@@ -48,6 +62,7 @@ export function useThreadTodos(
   const api = remoteWindow ? undefined : desktopApi;
   const [openTodos, setOpenTodos] = useState<ThreadTodo[]>(EMPTY_TODOS);
   const [revision, setRevision] = useState(0);
+  const [mergeMethods, setMergeMethods] = useState<ThreadTodoMergeMethodPreferences>();
   const [runningIds, setRunningIds] = useState<ReadonlySet<string>>(EMPTY_SET);
   const loadingRef = useRef(false);
   const reloadQueuedRef = useRef(false);
@@ -66,6 +81,7 @@ export function useThreadTodos(
         try {
           const response = await list({ status: "open" });
           setOpenTodos(response.todos.length > 0 ? response.todos : EMPTY_TODOS);
+          if (response.mergeMethods) setMergeMethods(response.mergeMethods);
         } catch (error) {
           console.warn("Loading thread to-dos failed.", error);
         }
@@ -85,19 +101,30 @@ export function useThreadTodos(
   }, [api, reload]);
 
   const resolve = useCallback(
-    async (id: string, status: ThreadTodoStatus): Promise<ThreadTodo | undefined> => {
-      const response = await api?.resolveThreadTodo?.({ id, status });
+    async (
+      id: string,
+      status: ThreadTodoStatus,
+      resolution?: ResolveThreadTodoRequest["resolution"],
+    ): Promise<ThreadTodo | undefined> => {
+      const response = await api?.resolveThreadTodo?.({
+        id,
+        status,
+        ...(resolution ? { resolution } : {}),
+      });
       return response?.todo;
     },
     [api],
   );
 
   const runAction = useCallback(
-    async (id: string): Promise<ThreadTodo | undefined> => {
+    async (
+      id: string,
+      options: Omit<RunThreadTodoActionRequest, "id"> = {},
+    ): Promise<ThreadTodo | undefined> => {
       if (!api?.runThreadTodoAction) return undefined;
       setRunningIds((current) => new Set(current).add(id));
       try {
-        return (await api.runThreadTodoAction({ id })).todo;
+        return (await api.runThreadTodoAction({ ...options, id })).todo;
       } finally {
         setRunningIds((current) => {
           const next = new Set(current);
@@ -122,8 +149,16 @@ export function useThreadTodos(
   }, [openTodos]);
 
   return useMemo(
-    () => ({ openTodos, openByThreadKey, revision, runningIds, resolve, runAction }),
-    [openTodos, openByThreadKey, revision, runningIds, resolve, runAction],
+    () => ({
+      openTodos,
+      openByThreadKey,
+      revision,
+      mergeMethods,
+      runningIds,
+      resolve,
+      runAction,
+    }),
+    [openTodos, openByThreadKey, revision, mergeMethods, runningIds, resolve, runAction],
   );
 }
 

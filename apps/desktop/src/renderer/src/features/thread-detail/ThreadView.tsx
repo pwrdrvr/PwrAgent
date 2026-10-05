@@ -60,6 +60,7 @@ import type {
 import {
   buildPendingRequestResponse,
   buildThreadIdentityKey,
+  classifyDirectory,
   isBranchDrifted,
   isRemoteFederationTarget,
   parseCodexAsyncQuestionReply,
@@ -1359,10 +1360,14 @@ export function ThreadView(props: ThreadViewProps) {
   const threadTodoKey = selectedThread && !selectedThread.federation
     ? threadSummaryIdentityKey(selectedThread)
     : undefined;
+  const threadTodoDirectory = selectedThread?.linkedDirectories[0];
   const threadTodos = props.threadTodos && threadTodoKey
     ? {
         view: props.threadTodos,
         threadKey: threadTodoKey,
+        projectKey: threadTodoDirectory
+          ? classifyDirectory(threadTodoDirectory).key
+          : undefined,
         todos: props.threadTodos.openByThreadKey.get(threadTodoKey)
           ?? NO_THREAD_TODOS,
       }
@@ -2523,6 +2528,18 @@ export function ThreadView(props: ThreadViewProps) {
         console.warn("Resolving the review to-do failed.", error);
       });
     }
+  });
+  // "Do it here" sends a handoff's prompt through the same reply path an
+  // answered question takes: start, steer or queue, as a typed reply would.
+  // The card resolves only once the composer has taken it.
+  const doTodoHere = useEventCallback((todo: ThreadTodo) => {
+    if (todo.action?.type !== "start_thread") return;
+    void handleAnswerAsyncQuestions(todo.action.prompt).then((accepted) => {
+      if (!accepted) return;
+      return props.threadTodos?.resolve(todo, "done", "sent_here");
+    }).catch((error: unknown) => {
+      console.warn("Sending the handoff here failed.", error);
+    });
   });
   const handleReplySubmissionSettled = useEventCallback((id: number, accepted: boolean) => {
     const settle = asyncQuestionReplySettlers.current.get(id);
@@ -4066,6 +4083,7 @@ export function ThreadView(props: ThreadViewProps) {
           todos={threadTodos.todos}
           view={threadTodos.view}
           onStartReview={startTodoReview}
+          onDoHere={doTodoHere}
           findOpen={props.findOpen}
         />
       ) : null}
@@ -4266,7 +4284,9 @@ export function ThreadView(props: ThreadViewProps) {
           todos: threadTodos ? {
             view: threadTodos.view,
             threadKey: threadTodos.threadKey,
+            projectKey: threadTodos.projectKey,
             onStartReview: startTodoReview,
+            onDoHere: doTodoHere,
           } : undefined,
         }
       : {};

@@ -32,13 +32,32 @@ export type ThreadTodoKind = "reminder" | "review" | "merge" | "handoff";
 
 export type ThreadTodoWorkMode = "local" | "worktree";
 
+/**
+ * How the operator lands a PR. The operator picks it when clicking, not the
+ * agent: the default comes from Settings, and a pick from the card's menu
+ * sticks for that project.
+ */
+export const THREAD_TODO_MERGE_METHODS = ["squash", "rebase", "merge"] as const;
+
+export type ThreadTodoMergeMethod = (typeof THREAD_TODO_MERGE_METHODS)[number];
+
+export const DEFAULT_THREAD_TODO_MERGE_METHOD: ThreadTodoMergeMethod = "squash";
+
+export function isThreadTodoMergeMethod(
+  value: unknown,
+): value is ThreadTodoMergeMethod {
+  return (
+    typeof value === "string"
+    && (THREAD_TODO_MERGE_METHODS as readonly string[]).includes(value)
+  );
+}
+
 export type ThreadTodoAction =
   | { type: "start_review" }
   | {
       type: "merge_pull_request";
       /** A PR number or URL, as `gh pr merge` accepts it. */
       pullRequest: string;
-      method: "squash";
     }
   | {
       type: "start_thread";
@@ -50,6 +69,26 @@ export type ThreadTodoAction =
     };
 
 export type ThreadTodoActionType = ThreadTodoAction["type"];
+
+/**
+ * A project as the Directories lens files it: `key` is the directory key
+ * (`directory:<repo root>`), which worktrees of one repo share. `label` and
+ * `path` are captured when the card is raised, so a card still reads right
+ * after the project is renamed or removed.
+ */
+export type ThreadTodoProject = {
+  key: string;
+  label: string;
+  path: string;
+};
+
+export type ThreadTodoStartedThread = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  /** Set when the thread was started on a federation peer. */
+  instanceId?: string;
+  instanceLabel?: string;
+};
 
 export const THREAD_TODO_ACTION_TYPES = [
   "start_review",
@@ -73,9 +112,16 @@ export type ThreadTodo = {
    * start-thread run from it, so a card keeps working after the thread moves.
    */
   cwd?: string;
+  /** The raising thread's project when the card was raised. */
+  sourceProject?: ThreadTodoProject;
+  /**
+   * The project the work is for, when the thread named one other than its
+   * own ("build this in PwrSnap"). Merge and start-thread run there.
+   */
+  targetProject?: ThreadTodoProject;
   /** What the action produced, e.g. "Merged" or the started thread. */
   result?: string;
-  startedThread?: { backend: AppServerBackendKind; threadId: ThreadIdentifier };
+  startedThread?: ThreadTodoStartedThread;
   /** The last action failure. The card stays open. */
   error?: string;
   createdAt: number;
@@ -97,16 +143,69 @@ export type ListThreadTodosRequest = {
 
 export type ListThreadTodosResponse = {
   todos: ThreadTodo[];
+  /** What a merge card's primary button does, so its label can say so. */
+  mergeMethods?: ThreadTodoMergeMethodPreferences;
 };
+
+export type ThreadTodoMergeMethodPreferences = {
+  /** `[git] default_merge_method`. */
+  defaultMethod: ThreadTodoMergeMethod;
+  /** The operator's last pick from a card's menu, per project key. */
+  byProject: Record<string, ThreadTodoMergeMethod>;
+};
+
+/** The project a card's actions run in: its target, else where it came from. */
+export function threadTodoActionProject(
+  todo: Pick<ThreadTodo, "sourceProject" | "targetProject">,
+): ThreadTodoProject | undefined {
+  return todo.targetProject ?? todo.sourceProject;
+}
+
+export function resolveThreadTodoMergeMethod(
+  todo: Pick<ThreadTodo, "sourceProject" | "targetProject">,
+  preferences: ThreadTodoMergeMethodPreferences | undefined,
+): ThreadTodoMergeMethod {
+  const projectKey = threadTodoActionProject(todo)?.key;
+  return (projectKey ? preferences?.byProject[projectKey] : undefined)
+    ?? preferences?.defaultMethod
+    ?? DEFAULT_THREAD_TODO_MERGE_METHOD;
+}
 
 export type ResolveThreadTodoRequest = {
   id: string;
   /** `open` reopens a done or dismissed card (Undo). */
   status: ThreadTodoStatus;
+  /**
+   * With `done`, how the work got done when no action ran:
+   * `handled_elsewhere` when the operator pasted a handoff prompt into an
+   * agent outside PwrAgent, `sent_here` when it went to this thread as a
+   * reply. Recorded as the result.
+   */
+  resolution?: ThreadTodoResolution;
 };
+
+export type ThreadTodoResolution = "handled_elsewhere" | "sent_here";
+
+export const THREAD_TODO_RESOLUTION_RESULTS: Record<ThreadTodoResolution, string> = {
+  handled_elsewhere: "Handled elsewhere",
+  sent_here: "Sent to this thread",
+};
+
+export function isThreadTodoResolution(value: unknown): value is ThreadTodoResolution {
+  return value === "handled_elsewhere" || value === "sent_here";
+}
 
 export type RunThreadTodoActionRequest = {
   id: string;
+  /**
+   * Merge cards only. Absent: the project's remembered pick, else the
+   * configured default.
+   */
+  mergeMethod?: ThreadTodoMergeMethod;
+  /** Remember `mergeMethod` for the card's project: a pick from the menu. */
+  rememberMergeMethod?: boolean;
+  /** Handoff cards only: start the thread on this federation peer. */
+  startOnInstanceId?: string;
 };
 
 export type ThreadTodoMutationResponse = {

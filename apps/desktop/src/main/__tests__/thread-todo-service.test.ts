@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   THREAD_TODO_MAX_OPEN_PER_THREAD,
+  type ThreadTodoProject,
   type ThreadTodosChangedEvent,
 } from "@pwragent/shared";
 import { StateDb } from "../state/state-db";
@@ -15,6 +16,8 @@ import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 
 const THREAD = { backend: "codex" as const, threadId: "thread-a" };
+const AGENT: ThreadTodoProject = { key: "directory:/src/pwragent", label: "PwrAgent", path: "/src/pwragent" };
+const SNAP: ThreadTodoProject = { key: "directory:/src/pwrsnap", label: "PwrSnap", path: "/src/pwrsnap" };
 
 describe("ThreadTodoService", () => {
   let db: StateDb;
@@ -59,7 +62,7 @@ describe("ThreadTodoService", () => {
       ...THREAD,
       input: {
         title: "Merge it",
-        action: { type: "merge_pull_request", pullRequest: "42", method: "squash" },
+        action: { type: "merge_pull_request", pullRequest: "42" },
       },
     });
 
@@ -125,6 +128,126 @@ describe("ThreadTodoService", () => {
       .toThrow(expect.objectContaining({ code: "conflict" }));
   });
 
+  it("records work handled outside PwrAgent and clears it on reopen", () => {
+    const service = createService();
+    const todo = service.add({
+      ...THREAD,
+      input: { title: "Hand off", action: { type: "start_thread", prompt: "Go" } },
+    }).todo;
+
+    expect(service.resolve({ id: todo.id, status: "done", resolution: "handled_elsewhere" }))
+      .toMatchObject({ status: "done", result: "Handled elsewhere" });
+    expect(service.resolve({ id: todo.id, status: "open" }).result).toBeUndefined();
+  });
+
+  it("merges with the method the operator picked", async () => {
+    const mergePullRequest = vi.fn(async () => ({ summary: "Rebased and merged #9" }));
+    const service = createService({ mergePullRequest, startThread: vi.fn() });
+    const todo = service.add({
+      ...THREAD,
+      input: { title: "Merge", action: { type: "merge_pull_request", pullRequest: "9" } },
+    }).todo;
+
+    await service.runAction(todo.id, { mergeMethod: "rebase" });
+    expect(mergePullRequest).toHaveBeenCalledWith(expect.objectContaining({ method: "rebase" }));
+  });
+
+  it("keeps a card's target project and drops one that is its own", () => {
+    const service = createService();
+    const own = service.add({
+      ...THREAD,
+      sourceProject: AGENT,
+      targetProject: AGENT,
+      input: { title: "Here" },
+    }).todo;
+    const cross = service.add({
+      ...THREAD,
+      sourceProject: AGENT,
+      targetProject: SNAP,
+      input: { title: "There" },
+    }).todo;
+
+    expect(own.targetProject).toBeUndefined();
+    const store = new ThreadTodoStore(db);
+    expect(store.get(own.id)).toMatchObject({ sourceProject: AGENT });
+    expect(store.get(cross.id)).toMatchObject({ sourceProject: AGENT, targetProject: SNAP });
+  });
+
+  it("merges a target project's card in that project with its remembered method", async () => {
+    const mergePullRequest = vi.fn(async () => ({ summary: "Merged #3" }));
+    const service = createService({ mergePullRequest, startThread: vi.fn() });
+    const add = (title: string) => service.add({
+      ...THREAD,
+      cwd: "/src/pwragent",
+      sourceProject: AGENT,
+      targetProject: SNAP,
+      input: { title, action: { type: "merge_pull_request", pullRequest: "3" } },
+    }).todo;
+
+    await service.runAction(add("First").id, { mergeMethod: "merge", rememberMergeMethod: true });
+    expect(mergePullRequest).toHaveBeenLastCalledWith({
+      cwd: "/src/pwrsnap",
+      pullRequest: "3",
+      method: "merge",
+    });
+    expect(service.mergeMethodPreferences()).toEqual({
+      defaultMethod: "squash",
+      byProject: { [SNAP.key]: "merge" },
+    });
+
+    // The next card in that project merges the remembered way.
+    await service.runAction(add("Second").id);
+    expect(mergePullRequest).toHaveBeenLastCalledWith(
+      expect.objectContaining({ method: "merge" }),
+    );
+
+    // A one-off pick does not change what is remembered.
+    await service.runAction(add("Third").id, { mergeMethod: "rebase" });
+    expect(service.mergeMethodPreferences().byProject).toEqual({ [SNAP.key]: "merge" });
+  });
+
+  it("starts a handoff on a peer and names the peer in the result", async () => {
+    const startThread = vi.fn();
+    const startThreadOnInstance = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "remote-1",
+      instanceId: "peer-1",
+      instanceLabel: "Studio Mac",
+    }));
+    const service = createService({ mergePullRequest: vi.fn(), startThread, startThreadOnInstance });
+    const todo = service.add({
+      ...THREAD,
+      sourceProject: AGENT,
+      targetProject: SNAP,
+      input: { title: "Build", action: { type: "start_thread", prompt: "Build it" } },
+    }).todo;
+
+    const ended = await service.runAction(todo.id, { startOnInstanceId: "peer-1" });
+    expect(startThread).not.toHaveBeenCalled();
+    expect(startThreadOnInstance).toHaveBeenCalledWith(expect.objectContaining({
+      instanceId: "peer-1",
+      project: SNAP,
+      crossProject: true,
+    }));
+    expect(ended).toMatchObject({
+      status: "done",
+      result: "Started thread on Studio Mac",
+      startedThread: { threadId: "remote-1", instanceId: "peer-1" },
+    });
+  });
+
+  it("refuses a peer start without federation", async () => {
+    const service = createService({ mergePullRequest: vi.fn(), startThread: vi.fn() });
+    const todo = service.add({
+      ...THREAD,
+      input: { title: "Build", action: { type: "start_thread", prompt: "Build it" } },
+    }).todo;
+
+    await expect(service.runAction(todo.id, { startOnInstanceId: "peer-1" }))
+      .rejects.toThrow("Starting a thread on another PwrAgent is not available.");
+    expect(service.list({ status: "open" })).toHaveLength(1);
+  });
+
   it("lets a thread resolve only its own cards", () => {
     const service = createService();
     const todo = service.add({ ...THREAD, input: { key: "k", title: "Mine" } }).todo;
@@ -152,7 +275,7 @@ describe("ThreadTodoService", () => {
       cwd: "/repo",
       input: {
         title: "Merge",
-        action: { type: "merge_pull_request", pullRequest: "42", method: "squash" },
+        action: { type: "merge_pull_request", pullRequest: "42" },
       },
     }).todo;
     const handoff = service.add({
@@ -167,7 +290,11 @@ describe("ThreadTodoService", () => {
       status: "done",
       result: "Squash-merged #42",
     });
-    expect(runners.mergePullRequest).toHaveBeenCalledWith({ cwd: "/repo", pullRequest: "42" });
+    expect(runners.mergePullRequest).toHaveBeenCalledWith({
+      cwd: "/repo",
+      pullRequest: "42",
+      method: "squash",
+    });
 
     const failed = await service.runAction(handoff.id);
     expect(failed).toMatchObject({ status: "open", error: "backend unavailable" });
@@ -228,6 +355,19 @@ describe("ThreadTodoService", () => {
     expectSqliteWriteBudget({
       note: "one card raised, updated in place by key, then resolved: one commit each (~11 KB), none per turn or event; ~0.55 MB/day at 50 card operations",
       scenario: "thread-todo-add-update-resolve",
+      writes,
+    });
+  });
+
+  it("costs one commit to remember a merge method and none to repeat it", async () => {
+    const store = new ThreadTodoStore(db);
+    const { writes } = await measureSqliteWrites(() => {
+      store.setProjectMergeMethod({ directoryKey: SNAP.key, method: "rebase", now: 1 });
+      store.setProjectMergeMethod({ directoryKey: SNAP.key, method: "rebase", now: 2 });
+    });
+    expectSqliteWriteBudget({
+      note: "a merge method picked on a card, then picked again: one upsert, and the unchanged repeat writes nothing; only on an explicit menu pick",
+      scenario: "thread-todo-remember-merge-method",
       writes,
     });
   });

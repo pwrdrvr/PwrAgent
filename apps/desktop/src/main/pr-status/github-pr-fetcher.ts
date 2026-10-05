@@ -4,6 +4,7 @@ import type {
   DesktopGhDiscoverySnapshot,
   GhStatus,
   PrSummary,
+  ThreadTodoMergeMethod,
 } from "@pwragent/shared";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { getMainLogger } from "../log";
@@ -30,6 +31,12 @@ export {
 export type { GhCheckRunPayload, GhPrPayload } from "./pr-derivations";
 
 const execFileAsync = promisify(execFile);
+
+const MERGE_METHOD_RESULTS: Record<ThreadTodoMergeMethod, string> = {
+  squash: "Squash-merged",
+  rebase: "Rebased and merged",
+  merge: "Merged",
+};
 const fetcherLog = getMainLogger("pwragent:pr-fetcher");
 
 /** Default re-probe cadence for `gh --version`. */
@@ -163,8 +170,8 @@ export class GithubPrFetcher {
   }
 
   /**
-   * Squash-merge one PR with the operator's gh. Run only from an explicit
-   * operator click (a thread to-do's confirmed Squash merge). `pullRequest` is
+   * Merge one PR with the operator's gh, by `method`. Run only from an
+   * explicit operator click (a thread to-do's confirmed merge). `pullRequest` is
    * a number, resolved against the repository at `cwd`, or a github.com URL.
    * The branch is left alone: `--delete-branch` would also check out the
    * default branch in `cwd`, which may be the thread's worktree.
@@ -172,12 +179,13 @@ export class GithubPrFetcher {
   async mergePullRequest(params: {
     cwd?: string;
     pullRequest: string;
+    method: ThreadTodoMergeMethod;
   }): Promise<{ summary: string }> {
     const command = await this.resolveGhCommand();
     try {
       await execFileAsync(
         command,
-        ["pr", "merge", params.pullRequest, "--squash"],
+        ["pr", "merge", params.pullRequest, `--${params.method}`],
         {
           ...(params.cwd ? { cwd: params.cwd } : {}),
           env: buildPwrAgentChildProcessEnv(process.env),
@@ -190,10 +198,11 @@ export class GithubPrFetcher {
       const detail = err.stderr?.trim() || err.message || String(error);
       throw new Error(`gh pr merge failed: ${detail.split("\n")[0]}`);
     }
+    const verb = MERGE_METHOD_RESULTS[params.method];
     return {
       summary: /^\d+$/.test(params.pullRequest)
-        ? `Squash-merged #${params.pullRequest}`
-        : "Squash-merged",
+        ? `${verb} #${params.pullRequest}`
+        : verb,
     };
   }
 

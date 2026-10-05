@@ -17,7 +17,7 @@ import {
   isSqliteWriteMetricsEnabled,
 } from "./sqlite-write-metrics.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 69;
+export const CURRENT_STATE_DB_USER_VERSION = 70;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -573,7 +573,9 @@ CREATE TABLE IF NOT EXISTS thread_todos (
   error        TEXT,
   created_at   INTEGER NOT NULL,
   updated_at   INTEGER NOT NULL,
-  resolved_at  INTEGER
+  resolved_at  INTEGER,
+  source_project_json TEXT,
+  target_project_json TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_thread_todos_status_thread
   ON thread_todos(status, backend, thread_id, created_at);
@@ -581,6 +583,33 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_thread_todos_open_key
   ON thread_todos(backend, thread_id, todo_key)
   WHERE status = 'open' AND todo_key IS NOT NULL;
 `;
+
+/**
+ * The merge method an operator last picked from a to-do card's menu, per
+ * project. Learned state, so it lives here rather than in config.toml; the
+ * configured default is `[git] default_merge_method`.
+ */
+const THREAD_TODO_PROJECT_PREFS_SCHEMA = `
+CREATE TABLE IF NOT EXISTS thread_todo_project_prefs (
+  directory_key TEXT PRIMARY KEY,
+  merge_method  TEXT NOT NULL,
+  updated_at    INTEGER NOT NULL
+);
+`;
+
+/** v70: the project a card came from and the one it is for. */
+function ensureThreadTodoProjectColumns(db: BetterSqlite3.Database): void {
+  if (!tableExists(db, "thread_todos")) {
+    db.exec(THREAD_TODO_SCHEMA);
+  }
+  if (!tableColumnExists(db, "thread_todos", "source_project_json")) {
+    db.exec("ALTER TABLE thread_todos ADD COLUMN source_project_json TEXT");
+  }
+  if (!tableColumnExists(db, "thread_todos", "target_project_json")) {
+    db.exec("ALTER TABLE thread_todos ADD COLUMN target_project_json TEXT");
+  }
+  db.exec(THREAD_TODO_PROJECT_PREFS_SCHEMA);
+}
 
 const MESSAGING_ACTIVITY_SUMMARY_SCHEMA = `
 CREATE TABLE IF NOT EXISTS messaging_activity_summary (
@@ -1914,6 +1943,12 @@ export class StateDb {
           db.pragma("user_version = 69");
         })();
       }
+      if ((db.pragma("user_version", { simple: true }) as number) < 70) {
+        db.transaction(() => {
+          ensureThreadTodoProjectColumns(db);
+          db.pragma("user_version = 70");
+        })();
+      }
       // Keep current-version databases converged without asking pre-v36 profiles
       // to install the unique index before the migration above removes duplicates.
       db.exec(PR_AUTO_DISPATCH_GLOBAL_FINGERPRINT_INDEX);
@@ -2625,6 +2660,7 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     db.exec(STAR_MAP_ARRANGEMENT_SCHEMA);
     db.exec(STAR_MAP_WORKSPACE_SCHEMA);
     db.exec(THREAD_TODO_SCHEMA);
+    ensureThreadTodoProjectColumns(db);
     db.exec(DESKTOP_CONFIG_STORE_SCHEMA);
     if ((db.pragma("user_version", { simple: true }) as number) < 4) {
       db.pragma("user_version = 4");
@@ -4043,6 +4079,7 @@ function tableColumnExists(
     | "thread_pricing_summaries"
     | "remote_thread_pins"
     | "thread_search_fts"
+    | "thread_todos"
     | "thread_usage_lines"
     | "thread_usage_turns",
   columnName: string,
@@ -4082,10 +4119,15 @@ function readTableInfo(
     | "thread_pricing_summaries"
     | "remote_thread_pins"
     | "thread_search_fts"
+    | "thread_todos"
     | "thread_usage_lines"
     | "thread_usage_turns",
 ): Array<{ name: string }> {
   switch (tableName) {
+    case "thread_todos":
+      return db.prepare("PRAGMA table_info(thread_todos)").all() as Array<{
+        name: string;
+      }>;
     case "app_runtime_instances":
       return db.prepare("PRAGMA table_info(app_runtime_instances)").all() as Array<{
         name: string;

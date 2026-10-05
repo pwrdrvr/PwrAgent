@@ -476,6 +476,7 @@ function createSnapshot(
         value: true,
         source: "default",
       },
+      defaultMergeMethod: { value: "squash", source: "default" },
     },
     applications: {
       editors: [

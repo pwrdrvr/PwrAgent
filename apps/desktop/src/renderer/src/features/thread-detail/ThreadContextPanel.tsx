@@ -103,7 +103,9 @@ type ThreadContextPanelProps = {
   todos?: {
     view: ThreadTodosView;
     threadKey: string;
+    projectKey?: string;
     onStartReview: (todo: ThreadTodo) => void;
+    onDoHere?: (todo: ThreadTodo) => void;
   };
   activeTurnId?: string;
   backendError?: string;
@@ -768,7 +770,9 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
           <ThreadTodosPanel
             view={props.todos.view}
             threadKey={props.todos.threadKey}
+            projectKey={props.todos.projectKey}
             onStartReview={props.todos.onStartReview}
+            onDoHere={props.todos.onDoHere}
           />
         );
       case "edits":

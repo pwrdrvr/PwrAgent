@@ -19,6 +19,7 @@ import {
 } from "react";
 import {
   buildThreadIdentityKey,
+  DEFAULT_THREAD_TODO_MERGE_METHOD,
   federatedThreadIdentityKey,
   DEFAULT_BACKGROUND_PR_POLLING,
   DEFAULT_PR_AUTO_DISPATCH_ALLOWED,
@@ -2322,26 +2323,57 @@ function DesktopAppShell(props: {
     return titles;
   }, [navigation.threads]);
   const listThreadTodos = desktopApi?.listThreadTodos;
+  const configuredMergeMethod = props.settings.snapshot?.git?.defaultMergeMethod?.value;
+  // Peers that can host a handoff thread, the same list the new-thread
+  // machine chip offers.
+  const todoHandoffInstances = useMemo(
+    () => newThreadFederationTargets
+      .filter((target) => target.availability === "available")
+      .map((target) => ({ instanceId: target.instanceId, label: target.label })),
+    [newThreadFederationTargets],
+  );
   const threadTodosView = useMemo<ThreadTodosView | undefined>(() => {
     if (!listThreadTodos || readRendererFederationTarget()) return undefined;
     const showTodoThread = (backend: AppServerBackendKind, threadId: string): void => {
       showThreadFromLink({ backend, threadId });
     };
+    // Settings is the live source for the default, so the button relabels
+    // as soon as it changes there rather than on the next card change.
+    const mergeMethods = threadTodoController.mergeMethods || configuredMergeMethod
+      ? {
+          defaultMethod: configuredMergeMethod
+            ?? threadTodoController.mergeMethods?.defaultMethod
+            ?? DEFAULT_THREAD_TODO_MERGE_METHOD,
+          byProject: threadTodoController.mergeMethods?.byProject ?? {},
+        }
+      : undefined;
     return {
       open: threadTodoController.openTodos,
       openByThreadKey: threadTodoController.openByThreadKey,
       revision: threadTodoController.revision,
       runningIds: threadTodoController.runningIds,
+      mergeMethods,
+      instances: todoHandoffInstances,
       threadTitle: (todo) =>
         localThreadTitles.get(buildThreadIdentityKey(todo.backend, todo.threadId))
           ?? "Untitled thread",
-      resolve: (todo, status) => threadTodoController.resolve(todo.id, status),
-      run: (todo) => threadTodoController.runAction(todo.id),
+      resolve: (todo, status, resolution) =>
+        threadTodoController.resolve(todo.id, status, resolution),
+      run: (todo, options) => threadTodoController.runAction(todo.id, options),
       openThread: (todo) => showTodoThread(todo.backend, todo.threadId),
       openStartedThread: (todo) => {
-        if (todo.startedThread) {
-          showTodoThread(todo.startedThread.backend, todo.startedThread.threadId);
-        }
+        const started = todo.startedThread;
+        if (!started) return;
+        showThreadFromLink({
+          backend: started.backend,
+          threadId: started.threadId,
+          ...(started.instanceId
+            ? {
+                instanceId: started.instanceId,
+                ...(started.instanceLabel ? { instanceLabel: started.instanceLabel } : {}),
+              }
+            : {}),
+        });
       },
       listResolved: async () => {
         const response = await listThreadTodos({ status: "all" });
@@ -2351,7 +2383,14 @@ function DesktopAppShell(props: {
             (right.resolvedAt ?? right.updatedAt) - (left.resolvedAt ?? left.updatedAt));
       },
     };
-  }, [listThreadTodos, localThreadTitles, showThreadFromLink, threadTodoController]);
+  }, [
+    configuredMergeMethod,
+    listThreadTodos,
+    localThreadTitles,
+    showThreadFromLink,
+    threadTodoController,
+    todoHandoffInstances,
+  ]);
   // Fetch the boot info once at mount. Stable for the renderer's
   // lifetime — the main process records the decision before this
   // window opens, and graduating the bootstrap profile spawns a

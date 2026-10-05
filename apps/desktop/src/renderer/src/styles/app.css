@@ -21406,6 +21406,205 @@ a.button {
   opacity: 0.4;
 }
 
+/* The project a card's work is for, when that is not this thread's. */
+.thread-todo-card__project {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  margin: 0 8px 4px 22px;
+  color: var(--accent-bright);
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 16px;
+}
+
+.thread-todo-card__project svg {
+  flex: none;
+}
+
+.thread-todo-card__project-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The prompt and its copy button. The button sits beside the quote, not in
+   it, so a click on it never also toggles the quote open. */
+.thread-todo-card__prompt-block {
+  display: flex;
+  align-items: flex-start;
+  gap: 2px;
+  margin-top: 6px;
+}
+
+.thread-todo-card__prompt-block .thread-todo-card__prompt {
+  min-width: 0;
+  flex: 1 1 auto;
+  margin: 0;
+}
+
+.thread-todo-card__copy {
+  flex: none;
+  margin-right: -6px;
+}
+
+/* A card's action as the composer's Send pill: chevron, seam, label. The
+   tokens are the composer's, so the two read as one control family. */
+.todo-split {
+  position: relative;
+  display: inline-flex;
+}
+
+.todo-split__pill {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: stretch;
+  overflow: hidden;
+  border: 1px solid var(--accent-border);
+  border-radius: 999px;
+  background: var(--bg-row-active);
+}
+
+.todo-split__chevron,
+.todo-split__primary {
+  display: inline-flex;
+  align-items: center;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--accent-bright);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.2;
+  white-space: nowrap;
+  transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.todo-split__chevron {
+  width: 26px;
+  justify-content: center;
+  padding: 0;
+  border-right: 1px solid var(--accent-border);
+}
+
+.todo-split__chevron svg {
+  transition: transform 120ms ease;
+}
+
+.todo-split--open .todo-split__chevron svg {
+  transform: rotate(180deg);
+}
+
+.todo-split__primary {
+  gap: 5px;
+  padding: 0 11px 0 8px;
+}
+
+/* Once a zone fills, its own edge is the boundary; the hairline would read
+   as a stray sliver beside it. */
+.todo-split__pill:hover .todo-split__chevron,
+.todo-split--open .todo-split__chevron {
+  border-right-color: transparent;
+}
+
+.todo-split__chevron:hover,
+.todo-split__primary:hover,
+.todo-split--open .todo-split__chevron {
+  background: var(--accent);
+  color: var(--button-text);
+}
+
+/* One ring around the pill; a per-zone outline would be cropped by its clip. */
+.todo-split__chevron:focus,
+.todo-split__primary:focus {
+  outline: none;
+}
+
+.todo-split__pill:has(:focus-visible) {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* Opens downward: the stack sits at the top of the transcript. */
+.todo-split__menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 2;
+  min-width: 188px;
+  max-width: 260px;
+  padding: 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  box-shadow: var(--shadow-popover);
+}
+
+.todo-split__menu:focus {
+  outline: none;
+}
+
+.todo-split__item {
+  display: flex;
+  width: 100%;
+  min-height: 30px;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px 5px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 1.3;
+  text-align: left;
+}
+
+.todo-split__item:hover,
+.todo-split__item:focus-visible {
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+  outline: none;
+}
+
+.todo-split__item[aria-disabled="true"] {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.todo-split__item--back {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.todo-split__item-check {
+  display: inline-grid;
+  width: 14px;
+  flex: none;
+  place-items: center;
+  color: var(--accent-bright);
+}
+
+.todo-split__item-label {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.todo-split__separator {
+  height: 1px;
+  margin: 4px 2px;
+  background: var(--border-subtle);
+}
+
 /* Collapsed: a count chip in the same corner. Neutral border, accent glyph,
    so it reads as present without competing with the transcript. */
 .thread-todo-stack__chip {
@@ -21585,6 +21784,60 @@ button.thread-todos-panel__row-main:focus-visible {
   color: var(--text-muted);
   font-size: 11.5px;
   line-height: 16px;
+}
+
+/* Where a card came from or is for, under its row. */
+.thread-todos-panel__row-route {
+  margin: 0;
+  padding: 0 8px 0 30px;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-todos-panel__controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.thread-todos-panel__controls .subagent-lens-switch {
+  flex: 1 1 auto;
+  margin: 0;
+}
+
+/* Sits beside the lens switch at its height, in its quiet style. */
+.thread-todos-panel__resolved-toggle {
+  flex: none;
+  height: 32px;
+  padding: 0 9px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.thread-todos-panel__resolved-toggle:hover {
+  color: var(--text-primary);
+}
+
+.thread-todos-panel__resolved-toggle[aria-pressed="true"] {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.thread-todos-panel__resolved-toggle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
 }
 
 /* The rail tab's count. Sits where the actions tab's activity dot does. */

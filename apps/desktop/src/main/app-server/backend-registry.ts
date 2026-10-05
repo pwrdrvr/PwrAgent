@@ -10820,6 +10820,26 @@ export class DesktopBackendRegistry {
     return await this.resolveThreadEnvironmentCwd(backend, threadId);
   }
 
+  /**
+   * The linked directory a thread's project is filed under: its first link,
+   * as the Directories lens and the Star Map read it.
+   */
+  async resolveThreadPrimaryDirectory(
+    backend: AppServerBackendKind,
+    threadId: string,
+  ): Promise<LinkedDirectorySummary | undefined> {
+    const pending = this.pendingStartedThreads.get(
+      buildThreadIdentityKey(backend, threadId),
+    );
+    const thread = pending ?? await this.findThreadForWorkspaceHandoff({
+      backend,
+      callerReason: "turn-cwd",
+      freshness: "last-known",
+      threadId,
+    });
+    return thread?.linkedDirectories?.[0];
+  }
+
   setFederatedThreadMessageHandler(
     handler: PwrAgentFederatedThreadMessageHandler | null | undefined,
   ): void {

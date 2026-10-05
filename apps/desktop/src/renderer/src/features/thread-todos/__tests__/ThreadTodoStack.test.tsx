@@ -1,16 +1,26 @@
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { NavigationThreadSummary, ThreadTodo } from "@pwragent/shared";
+import type { NavigationThreadSummary, ThreadTodo, ThreadTodoProject } from "@pwragent/shared";
+import { copyText } from "../../../lib/copy-text";
 import { ThreadMetaChips } from "../../navigation/ThreadMetaChips";
 import { ThreadTodoStack } from "../ThreadTodoStack";
 import { ThreadTodosPanel } from "../ThreadTodosPanel";
 import { ThreadTodoCountsContext } from "../useThreadTodos";
 import type { ThreadTodosView } from "../thread-todos-view";
 
+vi.mock("../../../lib/copy-text", () => ({
+  copyText: vi.fn(async () => undefined),
+}));
+
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
+  vi.mocked(copyText).mockClear();
 });
+
+const AGENT: ThreadTodoProject = { key: "directory:/src/pwragent", label: "PwrAgent", path: "/src/pwragent" };
+const SNAP: ThreadTodoProject = { key: "directory:/src/pwrsnap", label: "PwrSnap", path: "/src/pwrsnap" };
+const GIT: ThreadTodoProject = { key: "directory:/src/pwrgit", label: "PwrGit", path: "/src/pwrgit" };
 
 function todo(overrides: Partial<ThreadTodo> & { id: string }): ThreadTodo {
   return {
@@ -36,6 +46,7 @@ function createView(open: ThreadTodo[], overrides: Partial<ThreadTodosView> = {}
     openByThreadKey,
     revision: 0,
     runningIds: new Set(),
+    instances: [],
     threadTitle: (entry) => (entry.threadId === "thread-a" ? "Alpha" : "Beta"),
     resolve: vi.fn(async (entry, status) => ({ ...entry, status })),
     run: vi.fn(async (entry) => entry),
@@ -90,7 +101,7 @@ describe("ThreadTodoStack", () => {
       id: "m",
       kind: "merge",
       title: "Merge the fix",
-      action: { type: "merge_pull_request", pullRequest: "42", method: "squash" },
+      action: { type: "merge_pull_request", pullRequest: "42" },
     });
     const view = createView([merge]);
     render(
@@ -107,7 +118,110 @@ describe("ThreadTodoStack", () => {
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Squash merge" }));
     });
-    expect(view.run).toHaveBeenCalledWith(merge);
+    expect(view.run).toHaveBeenCalledWith(merge, { mergeMethod: "squash" });
+  });
+
+  it("remembers a merge method picked from the menu", async () => {
+    const merge = todo({
+      id: "m2",
+      kind: "merge",
+      title: "Merge the fix",
+      sourceProject: AGENT,
+      action: { type: "merge_pull_request", pullRequest: "42" },
+    });
+    const view = createView([merge]);
+    render(
+      <ThreadTodoStack threadKey="codex:thread-a" todos={[merge]} view={view} onStartReview={vi.fn()} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Merge options" }));
+    const menu = screen.getByRole("menu", { name: "Merge options" });
+    expect(within(menu).getByRole("menuitemradio", { name: "Squash and merge" })
+      .getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(within(menu).getByRole("menuitemradio", { name: "Rebase and merge" }));
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(screen.getByText(/Rebase and merge #42\?/)).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Rebase and merge" }));
+    });
+    expect(view.run).toHaveBeenCalledWith(merge, {
+      mergeMethod: "rebase",
+      rememberMergeMethod: true,
+    });
+  });
+
+  it("labels the merge with the target project's remembered method", () => {
+    const merge = todo({
+      id: "m3",
+      kind: "merge",
+      sourceProject: AGENT,
+      targetProject: SNAP,
+      action: { type: "merge_pull_request", pullRequest: "7" },
+    });
+    const view = createView([merge], {
+      mergeMethods: { defaultMethod: "squash", byProject: { [SNAP.key]: "merge" } },
+    });
+    render(
+      <ThreadTodoStack threadKey="codex:thread-a" todos={[merge]} view={view} onStartReview={vi.fn()} />,
+    );
+
+    expect(screen.getByText("For PwrSnap")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Merge" }));
+    expect(screen.getByText("Merge #7 in PwrSnap? This cannot be undone here.")).toBeTruthy();
+  });
+
+  it("offers a handoff here, on a peer, or as handled elsewhere", async () => {
+    const handoff = todo({
+      id: "h2",
+      kind: "handoff",
+      action: { type: "start_thread", prompt: "Build it" },
+    });
+    const view = createView([handoff], {
+      instances: [{ instanceId: "peer-1", label: "Studio Mac" }],
+    });
+    const onDoHere = vi.fn();
+    render(
+      <ThreadTodoStack
+        threadKey="codex:thread-a"
+        todos={[handoff]}
+        view={view}
+        onStartReview={vi.fn()}
+        onDoHere={onDoHere}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Handoff options" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Do it here" }));
+    expect(onDoHere).toHaveBeenCalledWith(handoff);
+
+    fireEvent.click(screen.getByRole("button", { name: "Handoff options" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Start thread on" }));
+    expect(screen.getByRole("menu", { name: "Start thread on" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Studio Mac" }));
+    expect(view.run).toHaveBeenCalledWith(handoff, { startOnInstanceId: "peer-1" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Handoff options" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: "Handled elsewhere" }));
+    });
+    expect(view.resolve).toHaveBeenCalledWith(handoff, "done", "handled_elsewhere");
+  });
+
+  it("copies the handoff prompt", async () => {
+    const handoff = todo({
+      id: "h3",
+      kind: "handoff",
+      action: { type: "start_thread", prompt: "Port the parser" },
+    });
+    render(
+      <ThreadTodoStack threadKey="codex:thread-a" todos={[handoff]} view={createView([handoff])} onStartReview={vi.fn()} />,
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Copy prompt" }));
+    });
+    expect(copyText).toHaveBeenCalledWith("Port the parser");
+    expect(screen.getByRole("button", { name: "Prompt copied" })).toBeTruthy();
   });
 
   it("hands Start review to the composer instead of running it", () => {
@@ -169,12 +283,58 @@ describe("ThreadTodosPanel", () => {
       <ThreadTodosPanel view={view} threadKey="codex:thread-a" onStartReview={vi.fn()} />,
     );
 
+    // Without a project, the panel has no Project lens.
+    expect(screen.queryByRole("tab", { name: /Project/ })).toBeNull();
+    expect(screen.getByRole("tab", { name: /Thread/ }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.queryByText("Elsewhere")).toBeNull();
+
+    fireEvent.click(screen.getByRole("tab", { name: /All/ }));
+    // All groups by project; neither card has one.
     const groups = screen.getAllByRole("heading", { level: 4 });
-    expect(groups.map((group) => group.textContent)).toEqual(["Alpha1", "Beta1"]);
+    expect(groups.map((group) => group.textContent)).toEqual(["No project2"]);
     // This thread's cards are whole; another thread's are rows.
     expect(screen.getByRole("heading", { level: 3, name: "Mine" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Open thread: Elsewhere, in Beta" }));
     expect(view.openThread).toHaveBeenCalledWith(other);
+  });
+
+  it("shows a cross-project card in both projects and names both ends in All", () => {
+    const mine = todo({ id: "p1", title: "Mine", sourceProject: AGENT });
+    const incoming = todo({
+      id: "p2",
+      threadId: "thread-b",
+      title: "Adopt the agent API",
+      sourceProject: GIT,
+      targetProject: AGENT,
+    });
+    const outgoing = todo({
+      id: "p3",
+      threadId: "thread-b",
+      title: "Build it in PwrSnap",
+      sourceProject: GIT,
+      targetProject: SNAP,
+    });
+    const view = createView([mine, incoming, outgoing]);
+    render(
+      <ThreadTodosPanel
+        view={view}
+        threadKey="codex:thread-a"
+        projectKey={AGENT.key}
+        onStartReview={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("tab", { name: /Project/ }));
+    expect(screen.getByRole("tab", { name: /Project/ }).textContent).toBe("Project2");
+    expect(screen.getByText("Adopt the agent API")).toBeTruthy();
+    expect(screen.getByText("From PwrGit")).toBeTruthy();
+    expect(screen.queryByText("Build it in PwrSnap")).toBeNull();
+
+    fireEvent.click(screen.getByRole("tab", { name: /All/ }));
+    const groups = screen.getAllByRole("heading", { level: 4 });
+    expect(groups.map((group) => group.textContent)).toEqual(["PwrAgent1", "PwrGit2"]);
+    expect(screen.getByText("Beta · PwrGit → PwrAgent")).toBeTruthy();
+    expect(screen.getByText("Beta · PwrGit → PwrSnap")).toBeTruthy();
   });
 });
 

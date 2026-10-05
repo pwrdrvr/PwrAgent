@@ -76,21 +76,17 @@ describe("normalizeAddTodoArgs", () => {
     expect(normalizeAddTodoArgs({ title: "   " })).toMatchObject({ ok: false });
   });
 
-  it("forces squash and refuses other merge methods", () => {
+  it("leaves the merge method to the operator", () => {
     expect(normalizeAddTodoArgs({
       title: "Merge",
-      action: { type: "merge_pull_request", pullRequest: 12 },
+      action: { type: "merge_pull_request", pullRequest: 12, method: "rebase" },
     })).toEqual({
       ok: true,
       value: {
         title: "Merge",
-        action: { type: "merge_pull_request", pullRequest: "12", method: "squash" },
+        action: { type: "merge_pull_request", pullRequest: "12" },
       },
     });
-    expect(normalizeAddTodoArgs({
-      title: "Merge",
-      action: { type: "merge_pull_request", pullRequest: 12, method: "rebase" },
-    })).toMatchObject({ ok: false });
   });
 
   it("keeps a handoff's optional fields and drops blank ones", () => {
@@ -112,6 +108,15 @@ describe("normalizeAddTodoArgs", () => {
         action: { type: "start_thread", prompt: "Write the tests", workMode: "worktree" },
       },
     });
+  });
+
+  it("passes a named project through for the runtime to resolve", () => {
+    expect(normalizeAddTodoArgs({ title: "Build it", project: " PwrSnap " })).toEqual({
+      ok: true,
+      value: { title: "Build it", project: "PwrSnap" },
+    });
+    expect(normalizeAddTodoArgs({ title: "Build it", project: "x".repeat(1_001) }))
+      .toMatchObject({ ok: false });
   });
 
   it("refuses an unknown action type and a bad work mode", () => {

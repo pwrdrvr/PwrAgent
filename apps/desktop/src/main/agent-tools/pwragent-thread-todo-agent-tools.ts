@@ -26,6 +26,7 @@ export const PWRAGENT_THREAD_TODO_UNAVAILABLE_MESSAGE =
   "PwrAgent to-do tools are not available.";
 
 const KEY_MAX_LENGTH = 80;
+const PROJECT_MAX_LENGTH = 1_000;
 
 type ThreadTodoToolContext = {
   backend: AppServerBackendKind;
@@ -184,6 +185,13 @@ export function normalizeAddTodoArgs(
       message: `add_todo key must be at most ${KEY_MAX_LENGTH} characters.`,
     };
   }
+  const project = optionalString(args.project);
+  if (project && project.length > PROJECT_MAX_LENGTH) {
+    return {
+      ok: false,
+      message: `add_todo project must be at most ${PROJECT_MAX_LENGTH} characters.`,
+    };
+  }
   const action = normalizeAction(args.action);
   if (action && !action.ok) {
     return action;
@@ -194,6 +202,7 @@ export function normalizeAddTodoArgs(
       title,
       ...(detail ? { detail } : {}),
       ...(key ? { key } : {}),
+      ...(project ? { project } : {}),
       ...(action ? { action: action.value } : {}),
     },
   };
@@ -221,12 +230,11 @@ function normalizeAction(
             "merge_pull_request requires pullRequest: a PR number or a github.com pull request URL.",
         };
       }
-      if (action.method !== undefined && action.method !== "squash") {
-        return { ok: false, message: "merge_pull_request supports only method \"squash\"." };
-      }
+      // The merge method is the operator's pick at click time, so any
+      // method the agent names is ignored rather than refused.
       return {
         ok: true,
-        value: { type: "merge_pull_request", pullRequest, method: "squash" },
+        value: { type: "merge_pull_request", pullRequest },
       };
     }
     case "start_thread": {
@@ -303,6 +311,9 @@ function summarizeTodo(todo: ThreadTodo): Record<string, unknown> {
     title: todo.title,
     ...(todo.detail ? { detail: todo.detail } : {}),
     ...(todo.action ? { action: todo.action } : {}),
+    ...(todo.targetProject
+      ? { project: { label: todo.targetProject.label, path: todo.targetProject.path } }
+      : {}),
     ...(todo.result ? { result: todo.result } : {}),
     ...(todo.error ? { error: todo.error } : {}),
     createdAt: new Date(todo.createdAt).toISOString(),
@@ -323,6 +334,7 @@ function descriptionForOperation(operation: PwrAgentThreadTodoOperationName): st
         "The operator clicks to run an action, and you never run it.",
         "Do not use cards for progress updates.",
         "Pass a stable key to update one card instead of adding another each turn.",
+        "Pass project when the work is for another project, and raise one card per project.",
       ].join(" ");
     case "list_todos":
       return "List this thread's to-do cards. Defaults to open cards.";
@@ -354,6 +366,11 @@ function inputSchemaForOperation(
             description:
               "Stable identifier. Adding with the key of an open card updates that card in place.",
           },
+          project: {
+            type: "string",
+            description:
+              "The project the work is for, by name or path, such as PwrSnap. Omit for this thread's own project.",
+          },
           action: {
             type: "object",
             description: "The one action the card's button runs. Omit for a reminder.",
@@ -366,7 +383,7 @@ function inputSchemaForOperation(
               pullRequest: {
                 type: "string",
                 description:
-                  "merge_pull_request only: the PR number in this thread's repository, or its github.com URL. It is squash-merged after the operator confirms.",
+                  "merge_pull_request only: the PR number in this thread's repository, or its github.com URL. The operator picks the merge method.",
               },
               prompt: {
                 type: "string",

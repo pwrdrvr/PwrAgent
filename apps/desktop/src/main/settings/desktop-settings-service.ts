@@ -1,4 +1,7 @@
-import { normalizeThreadArchivePolicy } from "@pwragent/shared";
+import {
+  DEFAULT_THREAD_TODO_MERGE_METHOD,
+  normalizeThreadArchivePolicy,
+} from "@pwragent/shared";
 import { bundledGitExecutable, bundledGitLfsExecutable } from "../bundled-git";
 import { gitRuntimeEnvironment } from "../git-runtime";
 import { getAppStateDb } from "../state/app-state";
@@ -51,6 +54,7 @@ import type {
   DesktopUpdateTrain,
   DesktopWorktreeStorageLocation,
   MessagingToolUpdateMode,
+  ThreadTodoMergeMethod,
 } from "@pwragent/shared";
 import { execFile } from "node:child_process";
 import { readFile, realpath } from "node:fs/promises";
@@ -1653,6 +1657,9 @@ export class DesktopSettingsService {
           config.git?.pausePrAutoDispatchWhenBudgetEmpty,
           DEFAULT_PAUSE_PR_AUTO_DISPATCH_WHEN_BUDGET_EMPTY,
         ),
+        defaultMergeMethod: this.resolveDefaultMergeMethodValue(
+          config.git?.defaultMergeMethod,
+        ),
       },
       worktrees: {
         ...this.resolveWorktrees(config.worktrees?.storage),
@@ -2091,6 +2098,13 @@ export class DesktopSettingsService {
     return this.resolveConfigBoolean(
       this.readExperimentalConfig().managedReview,
       false,
+    ).value;
+  }
+
+  /** What a to-do card's merge button does when its project has no pick. */
+  resolveDefaultMergeMethod(): ThreadTodoMergeMethod {
+    return this.resolveDefaultMergeMethodValue(
+      this.configStore.read("git")?.defaultMergeMethod,
     ).value;
   }
 
@@ -3702,6 +3716,15 @@ export class DesktopSettingsService {
   ): DesktopSettingsValue<DesktopHotCpuProfileStartDelayMs> {
     return {
       value: configValue ?? DESKTOP_HOT_CPU_PROFILE_START_DELAY_DEFAULT_MS,
+      source: configValue === undefined ? "default" : "config",
+    };
+  }
+
+  private resolveDefaultMergeMethodValue(
+    configValue: ThreadTodoMergeMethod | undefined,
+  ): DesktopSettingsValue<ThreadTodoMergeMethod> {
+    return {
+      value: configValue ?? DEFAULT_THREAD_TODO_MERGE_METHOD,
       source: configValue === undefined ? "default" : "config",
     };
   }

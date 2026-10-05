@@ -1,4 +1,10 @@
-import { useEffect, useId, useState, type ComponentType, type KeyboardEvent } from "react";
+import {
+  useEffect,
+  useId,
+  useState,
+  type ComponentType,
+  type KeyboardEvent,
+} from "react";
 import type { ThreadTodo, ThreadTodoKind } from "@pwragent/shared";
 import { buildThreadIdentityKey } from "@pwragent/shared";
 import {
@@ -10,11 +16,12 @@ import {
 import { ThreadTodoCard, formatTodoAge } from "./ThreadTodoCard";
 import type { ThreadTodosView } from "./thread-todos-view";
 
-type TodoFilter = "open" | "resolved";
+export type ThreadTodoScope = "thread" | "project" | "all";
 
-const FILTERS: Array<{ id: TodoFilter; label: string }> = [
-  { id: "open", label: "Open" },
-  { id: "resolved", label: "Resolved" },
+const SCOPES: Array<{ id: ThreadTodoScope; label: string }> = [
+  { id: "thread", label: "Thread" },
+  { id: "project", label: "Project" },
+  { id: "all", label: "All" },
 ];
 
 const KIND_ICONS: Record<ThreadTodoKind, ComponentType<IconProps> | undefined> = {
@@ -24,6 +31,14 @@ const KIND_ICONS: Record<ThreadTodoKind, ComponentType<IconProps> | undefined> =
   handoff: HandoffIcon,
 };
 
+const NO_PROJECT_KEY = "";
+
+/**
+ * The lens the operator last picked. Module scope, so switching threads
+ * keeps it; a reload starts again from Project.
+ */
+let rememberedScope: ThreadTodoScope = "project";
+
 type TodoGroup = {
   key: string;
   title: string;
@@ -32,25 +47,36 @@ type TodoGroup = {
 
 export type ThreadTodosPanelProps = {
   view: ThreadTodosView;
-  /** `backend:threadId` of the thread on screen; its group comes first. */
+  /** `backend:threadId` of the thread on screen. */
   threadKey: string;
+  /** Directory key of that thread's project, when it has one. */
+  projectKey?: string;
   onStartReview: (todo: ThreadTodo) => void;
+  onDoHere?: (todo: ThreadTodo) => void;
 };
 
 /**
- * Every thread's to-dos, grouped by thread with this thread first. This
- * thread's cards render whole, with their actions; another thread's are
- * rows that open that thread.
+ * To-dos under three lenses: this thread, this project, and every thread.
+ * A card for another project shows in both projects' lens. This thread's
+ * open cards render whole, with their actions; every other card is a row
+ * that opens its thread.
  */
 export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
-  const { view, threadKey } = props;
-  const [filter, setFilter] = useState<TodoFilter>("open");
+  const { view, threadKey, projectKey } = props;
+  const [scope, setScopeState] = useState<ThreadTodoScope>(rememberedScope);
+  const [showResolved, setShowResolved] = useState(false);
   const [resolved, setResolved] = useState<ThreadTodo[]>();
   const controlId = useId();
   const listResolved = view.listResolved;
+  const scopes = projectKey ? SCOPES : SCOPES.filter((entry) => entry.id !== "project");
+  const activeScope = scope === "project" && !projectKey ? "thread" : scope;
+  const setScope = (next: ThreadTodoScope): void => {
+    rememberedScope = next;
+    setScopeState(next);
+  };
 
   useEffect(() => {
-    if (filter !== "resolved" || !listResolved) return;
+    if (!showResolved || !listResolved) return;
     let cancelled = false;
     void listResolved().then((todos) => {
       if (!cancelled) setResolved(todos);
@@ -61,59 +87,90 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
     return () => {
       cancelled = true;
     };
-  }, [filter, listResolved, view.revision]);
+  }, [showResolved, listResolved, view.revision]);
 
-  const todos = filter === "open" ? view.open : resolved;
-  const groups = todos ? groupByThread(todos, threadKey, view) : undefined;
+  const inScope = (todo: ThreadTodo, lens: ThreadTodoScope): boolean => {
+    switch (lens) {
+      case "thread":
+        return buildThreadIdentityKey(todo.backend, todo.threadId) === threadKey;
+      case "project":
+        return projectKey !== undefined
+          && (todo.sourceProject?.key === projectKey
+            || todo.targetProject?.key === projectKey);
+      case "all":
+        return true;
+    }
+  };
+  const source = showResolved ? resolved : view.open;
+  const todos = source?.filter((todo) => inScope(todo, activeScope));
+  const groups = todos ? groupTodos(todos, activeScope, props) : undefined;
 
-  const handleFilterKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
+  const handleScopeKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
     event.preventDefault();
-    const next = filter === "open" ? "resolved" : "open";
-    setFilter(next);
+    const index = scopes.findIndex((entry) => entry.id === activeScope);
+    const step = event.key === "ArrowRight" ? 1 : -1;
+    const next = scopes[(index + step + scopes.length) % scopes.length]!.id;
+    setScope(next);
     document.getElementById(`${controlId}-${next}`)?.focus();
   };
+
+  const emptyText = showResolved
+    ? "No resolved to-dos."
+    : activeScope === "thread"
+      ? "No to-dos for this thread."
+      : activeScope === "project"
+        ? "No to-dos for this project."
+        : "Nothing to do.";
 
   return (
     <section className="context-panel__section thread-todos-panel">
       <h3>To-dos</h3>
-      <div
-        aria-label="To-do status"
-        aria-orientation="horizontal"
-        className="subagent-lens-switch"
-        role="tablist"
-        onKeyDown={handleFilterKeyDown}
-      >
-        {FILTERS.map((entry) => (
-          <button
-            aria-controls={`${controlId}-panel`}
-            aria-selected={filter === entry.id}
-            className="subagent-lens-switch__button"
-            id={`${controlId}-${entry.id}`}
-            key={entry.id}
-            role="tab"
-            tabIndex={filter === entry.id ? 0 : -1}
-            type="button"
-            onClick={() => setFilter(entry.id)}
-          >
-            <span>{entry.label}</span>
-            {entry.id === "open" ? (
-              <span className="subagent-lens-switch__count">{view.open.length}</span>
-            ) : null}
-          </button>
-        ))}
+      <div className="thread-todos-panel__controls">
+        <div
+          aria-label="To-do scope"
+          aria-orientation="horizontal"
+          className="subagent-lens-switch"
+          role="tablist"
+          onKeyDown={handleScopeKeyDown}
+        >
+          {scopes.map((entry) => (
+            <button
+              aria-controls={`${controlId}-panel`}
+              aria-selected={activeScope === entry.id}
+              className="subagent-lens-switch__button"
+              id={`${controlId}-${entry.id}`}
+              key={entry.id}
+              role="tab"
+              tabIndex={activeScope === entry.id ? 0 : -1}
+              type="button"
+              onClick={() => setScope(entry.id)}
+            >
+              <span>{entry.label}</span>
+              <span className="subagent-lens-switch__count">
+                {view.open.filter((todo) => inScope(todo, entry.id)).length}
+              </span>
+            </button>
+          ))}
+        </div>
+        <button
+          type="button"
+          className={`thread-todos-panel__resolved-toggle${showResolved ? " is-active" : ""}`}
+          aria-pressed={showResolved}
+          onClick={() => setShowResolved((current) => !current)}
+        >
+          Resolved
+        </button>
       </div>
       <div
-        aria-labelledby={`${controlId}-${filter}`}
+        aria-labelledby={`${controlId}-${activeScope}`}
         id={`${controlId}-panel`}
         role="tabpanel"
       >
         {!groups ? (
           <p className="context-empty">Loading to-dos…</p>
         ) : groups.length === 0 ? (
-          <p className="context-empty">
-            {filter === "open" ? "Nothing to do." : "No resolved to-dos."}
-          </p>
+          <p className="context-empty">{emptyText}</p>
         ) : (
           groups.map((group) => (
             <section
@@ -126,33 +183,41 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
                 <span className="thread-todos-panel__group-count">{group.todos.length}</span>
               </h4>
               <ul className="thread-todos-panel__list">
-                {group.todos.map((todo) => (
-                  <li key={todo.id}>
-                    {filter === "open" && group.key === threadKey ? (
-                      <ThreadTodoCard
-                        todo={todo}
-                        running={view.runningIds.has(todo.id)}
-                        onResolve={(target, status) => {
-                          void view.resolve(target, status).catch((error: unknown) => {
-                            console.warn("Resolving a to-do failed.", error);
-                          });
-                        }}
-                        onRun={(target) => {
-                          void view.run(target).catch((error: unknown) => {
-                            console.warn("Running a to-do failed.", error);
-                          });
-                        }}
-                        onStartReview={props.onStartReview}
-                      />
-                    ) : (
-                      <TodoRow
-                        todo={todo}
-                        current={group.key === threadKey}
-                        view={view}
-                      />
-                    )}
-                  </li>
-                ))}
+                {group.todos.map((todo) => {
+                  const mine = buildThreadIdentityKey(todo.backend, todo.threadId) === threadKey;
+                  return (
+                    <li key={todo.id}>
+                      {mine && todo.status === "open" ? (
+                        <ThreadTodoCard
+                          todo={todo}
+                          running={view.runningIds.has(todo.id)}
+                          mergeMethods={view.mergeMethods}
+                          instances={view.instances}
+                          onResolve={(target, status, resolution) => {
+                            void view.resolve(target, status, resolution).catch((error: unknown) => {
+                              console.warn("Resolving a to-do failed.", error);
+                            });
+                          }}
+                          onRun={(target, options) => {
+                            void view.run(target, options).catch((error: unknown) => {
+                              console.warn("Running a to-do failed.", error);
+                            });
+                          }}
+                          onStartReview={props.onStartReview}
+                          onDoHere={props.onDoHere}
+                        />
+                      ) : (
+                        <TodoRow
+                          todo={todo}
+                          current={mine}
+                          scope={activeScope}
+                          projectKey={projectKey}
+                          view={view}
+                        />
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             </section>
           ))
@@ -162,12 +227,21 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
   );
 }
 
-function TodoRow(props: { todo: ThreadTodo; current: boolean; view: ThreadTodosView }) {
+function TodoRow(props: {
+  todo: ThreadTodo;
+  current: boolean;
+  scope: ThreadTodoScope;
+  projectKey?: string;
+  view: ThreadTodosView;
+}) {
   const { todo, view } = props;
   const KindIcon = KIND_ICONS[todo.kind];
   const resolution = todo.status === "open"
     ? undefined
     : todo.result ?? (todo.status === "done" ? "Done" : "Dismissed");
+  const route = describeRoute(todo, props.scope, props.projectKey);
+  // Grouped by project, the thread is not in the heading: say it here.
+  const threadName = props.scope === "all" && !props.current ? view.threadTitle(todo) : undefined;
   const main = (
     <>
       <span className="thread-todo-card__kind" aria-hidden="true">
@@ -179,6 +253,7 @@ function TodoRow(props: { todo: ThreadTodo; current: boolean; view: ThreadTodosV
       </span>
     </>
   );
+  const meta = [threadName, route].filter(Boolean).join(" · ");
   return (
     <div className="thread-todos-panel__row" data-status={todo.status}>
       {props.current ? (
@@ -193,6 +268,7 @@ function TodoRow(props: { todo: ThreadTodo; current: boolean; view: ThreadTodosV
           {main}
         </button>
       )}
+      {meta ? <p className="thread-todos-panel__row-route">{meta}</p> : null}
       {resolution ? (
         <p className="thread-todos-panel__row-meta">
           <span>{resolution}</span>
@@ -205,7 +281,7 @@ function TodoRow(props: { todo: ThreadTodo; current: boolean; view: ThreadTodosV
               Open thread
             </button>
           ) : null}
-          {!todo.result ? (
+          {!todo.startedThread && !todo.result ? (
             <button
               type="button"
               className="thread-todos-panel__row-link"
@@ -224,20 +300,49 @@ function TodoRow(props: { todo: ThreadTodo; current: boolean; view: ThreadTodosV
   );
 }
 
-function groupByThread(
+/**
+ * Where a card came from and where it points, in the words of the lens it
+ * shows in. In Project, the project is given, so only the other end is
+ * named. In All, both ends are.
+ */
+function describeRoute(
+  todo: ThreadTodo,
+  scope: ThreadTodoScope,
+  projectKey: string | undefined,
+): string | undefined {
+  const target = todo.targetProject;
+  if (!target) return undefined;
+  const source = todo.sourceProject;
+  if (scope === "project") {
+    return target.key === projectKey
+      ? source ? `From ${source.label}` : undefined
+      : `For ${target.label}`;
+  }
+  return source ? `${source.label} → ${target.label}` : `For ${target.label}`;
+}
+
+function groupTodos(
   todos: ThreadTodo[],
-  threadKey: string,
-  view: ThreadTodosView,
+  scope: ThreadTodoScope,
+  props: ThreadTodosPanelProps,
 ): TodoGroup[] {
   const groups = new Map<string, TodoGroup>();
   for (const todo of todos) {
-    const key = buildThreadIdentityKey(todo.backend, todo.threadId);
+    // All groups by the project a card came from; the narrower lenses by
+    // thread, since one project's threads are what the operator moves between.
+    const key = scope === "all"
+      ? todo.sourceProject?.key ?? NO_PROJECT_KEY
+      : buildThreadIdentityKey(todo.backend, todo.threadId);
+    const title = scope === "all"
+      ? todo.sourceProject?.label ?? "No project"
+      : props.view.threadTitle(todo);
     const group = groups.get(key);
     if (group) group.todos.push(todo);
-    else groups.set(key, { key, title: view.threadTitle(todo), todos: [todo] });
+    else groups.set(key, { key, title, todos: [todo] });
   }
+  const first = scope === "all" ? props.projectKey : props.threadKey;
   const ordered = [...groups.values()];
-  const current = ordered.findIndex((group) => group.key === threadKey);
+  const current = ordered.findIndex((group) => group.key === first);
   if (current > 0) {
     ordered.unshift(...ordered.splice(current, 1));
   }

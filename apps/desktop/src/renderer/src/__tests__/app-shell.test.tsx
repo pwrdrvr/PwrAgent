@@ -2533,6 +2533,7 @@ describe("App", () => {
           value: true,
           source: "default",
         },
+        defaultMergeMethod: { value: "squash", source: "default" },
       },
       applications: {
         editors: [],

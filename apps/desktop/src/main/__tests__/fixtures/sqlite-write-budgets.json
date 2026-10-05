@@ -922,6 +922,13 @@
     "rowsChanged": 3,
     "statements": 3
   },
+  "thread-todo-remember-merge-method": {
+    "commits": 1,
+    "note": "a merge method picked on a card, then picked again: one upsert, and the unchanged repeat writes nothing; only on an explicit menu pick",
+    "observedWalBytes": 8240,
+    "rowsChanged": 1,
+    "statements": 1
+  },
   "thread-usage-finalization": {
     "commits": 1,
     "note": "one successor pricing flush finalizes its predecessor in the same transaction",

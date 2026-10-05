@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import type { ThreadTodo } from "@pwragent/shared";
+import type { ThreadTodo, ThreadTodoResolution } from "@pwragent/shared";
 import { TodoIcon } from "../../icons";
 import { ThreadTodoCard } from "./ThreadTodoCard";
-import type { ThreadTodosView } from "./thread-todos-view";
+import type { ThreadTodoRunOptions, ThreadTodosView } from "./thread-todos-view";
 
 const RESOLVED_NOTICE_MS = 4_000;
 
@@ -17,6 +17,8 @@ const collapsedIdsByThreadKey = new Map<string, ReadonlySet<string>>();
 type ResolvedNotice = {
   todo: ThreadTodo;
   text: string;
+  /** False for an action that ran: a merge or a started thread stays done. */
+  undoable: boolean;
 };
 
 export type ThreadTodoStackProps = {
@@ -25,6 +27,8 @@ export type ThreadTodoStackProps = {
   todos: ThreadTodo[];
   view: ThreadTodosView;
   onStartReview: (todo: ThreadTodo) => void;
+  /** Sends a handoff's prompt to this thread as a reply. */
+  onDoHere?: (todo: ThreadTodo) => void;
   /** Moves the stack below the find bar while it is open. */
   findOpen?: boolean;
 };
@@ -73,22 +77,27 @@ export function ThreadTodoStack(props: ThreadTodoStackProps) {
       RESOLVED_NOTICE_MS,
     );
   };
-  const resolve = (target: ThreadTodo, status: "done" | "dismissed"): void => {
-    void view.resolve(target, status).then((resolved) => {
+  const resolve = (
+    target: ThreadTodo,
+    status: "done" | "dismissed",
+    resolution?: ThreadTodoResolution,
+  ): void => {
+    void view.resolve(target, status, resolution).then((resolved) => {
       if (resolved) {
         showNotice({
           todo: resolved,
-          text: status === "done" ? "Marked done" : "Dismissed",
+          text: resolved.result ?? (status === "done" ? "Marked done" : "Dismissed"),
+          undoable: true,
         });
       }
     }).catch((error: unknown) => {
       console.warn("Resolving a to-do failed.", error);
     });
   };
-  const run = (target: ThreadTodo): void => {
-    void view.run(target).then((ended) => {
+  const run = (target: ThreadTodo, options?: ThreadTodoRunOptions): void => {
+    void view.run(target, options).then((ended) => {
       if (ended?.status === "done" && ended.result) {
-        showNotice({ todo: ended, text: ended.result });
+        showNotice({ todo: ended, text: ended.result, undoable: false });
       }
     }).catch((error: unknown) => {
       console.warn("Running a to-do failed.", error);
@@ -144,9 +153,12 @@ export function ThreadTodoStack(props: ThreadTodoStackProps) {
               );
               setCollapseVersion((current) => current + 1);
             }}
+            mergeMethods={view.mergeMethods}
+            instances={view.instances}
             onResolve={resolve}
             onRun={run}
             onStartReview={props.onStartReview}
+            onDoHere={props.onDoHere}
           />
         </div>
       ) : null}
@@ -161,7 +173,7 @@ export function ThreadTodoStack(props: ThreadTodoStackProps) {
             >
               Open thread
             </button>
-          ) : notice.todo.status !== "open" && !notice.todo.result ? (
+          ) : notice.undoable ? (
             <button
               type="button"
               className="thread-todo-stack__notice-button"
