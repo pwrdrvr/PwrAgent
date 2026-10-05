@@ -35205,7 +35205,13 @@ export class DesktopBackendRegistry {
       && typeof request.params.callId === "string"
         ? request.params.callId.trim()
         : "";
-    if (!callId) {
+    if (
+      !callId
+      || !this.isLiveDynamicToolCall(backend, {
+        threadId: request.params.threadId,
+        turnId: request.params.turnId ?? undefined,
+      })
+    ) {
       return await this.observeNativeVoiceToolCall(
         backend,
         request,
@@ -36018,6 +36024,29 @@ export class DesktopBackendRegistry {
     const turnId = call.turnId?.trim();
     if (!turnId) return false;
     return this.activeTurnKeys.has(buildActiveTurnKey(backend, call.threadId, turnId));
+  }
+
+  private clearAcceptedToolCallsForEndedTurn(
+    backend: AppServerBackendKind,
+    threadId: string,
+    turnId: string,
+  ): void {
+    // Removing replay results while the turn is live would admit the same
+    // call again. Both turn-ending paths remove that marker before eviction.
+    if (this.isLiveDynamicToolCall(backend, { threadId, turnId })) return;
+
+    const dynamicCallPrefix = [backend, threadId, turnId, ""].join("\u0000");
+    for (const key of this.acceptedDynamicToolCalls.keys()) {
+      if (key.startsWith(dynamicCallPrefix)) {
+        this.acceptedDynamicToolCalls.delete(key);
+      }
+    }
+    const handoffPrefix = ["handoff", backend, threadId, turnId, ""].join(":");
+    for (const key of this.acceptedHandoffTaskRequests.keys()) {
+      if (key.startsWith(handoffPrefix)) {
+        this.acceptedHandoffTaskRequests.delete(key);
+      }
+    }
   }
 
   private resolveAgentToolMcpCallContext(
@@ -37949,7 +37978,7 @@ export class DesktopBackendRegistry {
     request: PwrAgentThreadOrchestrationRequest<"handoff_task">,
   ): Promise<PwrAgentThreadOrchestrationResponse> {
     const callId = request.context.callId?.trim();
-    if (!callId) {
+    if (!callId || !this.isLiveDynamicToolCall(request.context.backend, request.context)) {
       return await this.performHandoffTaskToThread(request);
     }
     const handoffId = [
@@ -43285,29 +43314,6 @@ export class DesktopBackendRegistry {
       const completedTurnId = turnIdFromTerminalNotification(event.notification);
       this.mcpGatewayTools?.cancel(event.backend, event.notification.params.threadId, completedTurnId);
       if (completedTurnId) {
-        const dynamicCallPrefix = [
-          event.backend,
-          event.notification.params.threadId,
-          completedTurnId,
-          "",
-        ].join("\u0000");
-        for (const key of this.acceptedDynamicToolCalls.keys()) {
-          if (key.startsWith(dynamicCallPrefix)) {
-            this.acceptedDynamicToolCalls.delete(key);
-          }
-        }
-        const handoffPrefix = [
-          "handoff",
-          event.backend,
-          event.notification.params.threadId,
-          completedTurnId,
-          "",
-        ].join(":");
-        for (const key of this.acceptedHandoffTaskRequests.keys()) {
-          if (key.startsWith(handoffPrefix)) {
-            this.acceptedHandoffTaskRequests.delete(key);
-          }
-        }
         const usageKey = [
           event.backend,
           event.notification.params.threadId,
@@ -43410,6 +43416,10 @@ export class DesktopBackendRegistry {
           for (const key of Array.from(this.activeTurnKeys)) {
             if (key.startsWith(genericActiveTurnKeyPrefix)) {
               this.activeTurnKeys.delete(key);
+              const parsed = parseActiveTurnKey(key);
+              if (parsed) {
+                this.clearAcceptedToolCallsForEndedTurn(parsed.backend, parsed.threadId, parsed.turnId);
+              }
             }
           }
         } else {
@@ -43417,6 +43427,7 @@ export class DesktopBackendRegistry {
             buildActiveTurnKey(event.backend, notification.params.threadId, turnId),
           );
         }
+        this.clearAcceptedToolCallsForEndedTurn(event.backend, notification.params.threadId, turnId);
         const steerKeyPrefix = buildSteerTurnKeyPrefix({
           backend: event.backend,
           threadId: notification.params.threadId,
@@ -43634,6 +43645,9 @@ export class DesktopBackendRegistry {
             endedTurnIds.add(parsed.turnId);
           }
           this.activeTurnKeys.delete(key);
+          if (parsed) {
+            this.clearAcceptedToolCallsForEndedTurn(parsed.backend, parsed.threadId, parsed.turnId);
+          }
         }
       }
       if (event.backend !== "codex") {
@@ -43671,6 +43685,9 @@ export class DesktopBackendRegistry {
               endedTurnIds.add(parsed.turnId);
             }
             this.activeCodexTurnModes.delete(key);
+            if (parsed) {
+              this.clearAcceptedToolCallsForEndedTurn(event.backend, parsed.threadId, parsed.turnId);
+            }
           }
         }
         if (hadKnownActiveTurn) {
