@@ -249,6 +249,7 @@ import { useComposerMentionSources } from "./useComposerMentionSources";
 import { isSteerShortcut, useQueueSteerTooltip } from "./steer-shortcut";
 import { useComposerPopoverClamp } from "./useComposerPopoverClamp";
 import { useOwnedComposerDraftStore } from "./useOwnedComposerDraftStore";
+import { useComposerTip } from "./useComposerTip";
 
 type ComposerProps = {
   activeTurnId?: string;
@@ -10624,13 +10625,15 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       (target) => target.instanceId === launchpadMachine.currentInstanceId,
     )?.label ?? launchpadMachine.currentInstanceId
     : undefined;
+  // The reply box doubles as a place to teach one feature at a time.
+  const composerTip = useComposerTip(isLaunchpad ? undefined : composerScopeKey, draft.length === 0);
   const composerPlaceholder = launchpadSubmitting
     ? "Queue a follow-up while this thread starts"
     : isLaunchpad
     ? `Start a new thread in ${props.launchpad?.directoryLabel ?? "this directory"}${
       launchpadRemoteMachineLabel ? ` on ${launchpadRemoteMachineLabel}` : ""
     }`
-    : "Reply to this thread";
+    : composerTip ?? "Reply to this thread";
   const handleComposerChange = (
     nextDraft: string,
     nextSkillTokens?: ComposerSkillToken[],
