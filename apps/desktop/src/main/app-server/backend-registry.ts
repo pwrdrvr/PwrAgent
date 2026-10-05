@@ -9264,6 +9264,9 @@ export class DesktopBackendRegistry {
   private threadPullRequestWatchToolHandler:
     | ThreadPullRequestWatchToolHandler
     | undefined;
+  private threadDependencyToolHandler:
+    | ((args: import("@pwragent/shared").ManageThreadDependenciesRequest) => Promise<PwrAgentThreadInspectionResponse>)
+    | undefined;
   private directoryGitStatusWriter: DirectoryGitStatusWriter | undefined;
   private readonly pendingDirectoryGitStatusKeys = new Set<string>();
   private readonly pendingThreadGitWorkingStateByPath = new Map<
@@ -11112,6 +11115,12 @@ export class DesktopBackendRegistry {
     handler: ThreadPullRequestWatchToolHandler | null | undefined,
   ): void {
     this.threadPullRequestWatchToolHandler = handler ?? undefined;
+  }
+
+  setThreadDependencyToolHandler(
+    handler: ((args: import("@pwragent/shared").ManageThreadDependenciesRequest) => Promise<PwrAgentThreadInspectionResponse>) | undefined,
+  ): void {
+    this.threadDependencyToolHandler = handler;
   }
 
   setDirectoryGitStatusWriter(
@@ -42168,6 +42177,15 @@ export class DesktopBackendRegistry {
         };
       }
       return await this.threadPullRequestWatchToolHandler({
+        ...request.args,
+        backend: request.args.backend ?? request.context.backend,
+        threadId: request.args.threadId ?? request.context.threadId,
+      });
+    }
+
+    if (request.operation === "manage_thread_dependencies") {
+      if (!this.threadDependencyToolHandler) return threadInspectionFailure("unsupported_operation", "Thread dependencies are not available.");
+      return await this.threadDependencyToolHandler({
         ...request.args,
         backend: request.args.backend ?? request.context.backend,
         threadId: request.args.threadId ?? request.context.threadId,
