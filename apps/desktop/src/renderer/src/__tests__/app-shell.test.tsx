@@ -29,7 +29,7 @@ import type {
   StartTurnRequest,
   StartTurnResponse,
 } from "@pwragent/shared";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   App,
   inferReplayCodexProfileModel,
@@ -576,15 +576,30 @@ describe("App", () => {
         expect.objectContaining({ directoryLabel: label }),
       ));
     };
-    const settle = async (): Promise<void> => {
-      await act(async () => {
-        await new Promise<void>((resolve) => {
-          window.requestAnimationFrame(() => {
-            window.requestAnimationFrame(() => {
-              window.setTimeout(resolve, 0);
-            });
-          });
-        });
+    // The reveal ends by scrolling the project's row, in the same frame that
+    // used to focus its header, so a scroll of that row is the moment to
+    // check where focus is.
+    const scrollIntoView = vi.fn<(this: HTMLElement) => void>();
+    const scrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      "scrollIntoView",
+    );
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: scrollIntoView,
+    });
+    onTestFinished(() => {
+      if (scrollIntoViewDescriptor) {
+        Object.defineProperty(HTMLElement.prototype, "scrollIntoView", scrollIntoViewDescriptor);
+      } else {
+        delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+      }
+    });
+    const revealed = async (label: string): Promise<void> => {
+      await waitFor(() => {
+        expect(scrollIntoView.mock.contexts.some((row) =>
+          row.querySelector(".directory-row__summary")?.textContent?.includes(label)))
+          .toBe(true);
       });
     };
 
@@ -598,16 +613,11 @@ describe("App", () => {
     await waitFor(() => {
       expect(screen.getByRole("textbox", { name: "New thread" })).toHaveFocus();
     });
-    await settle();
+    await revealed("PwrAgent");
 
+    scrollIntoView.mockClear();
     await jumpTo("PwrSnap");
-    await waitFor(() => {
-      expect(
-        document.querySelector(".directory-row__summary.is-selected"),
-      ).toHaveTextContent("PwrSnap");
-    });
-    await settle();
-    await settle();
+    await revealed("PwrSnap");
     expect(screen.getByRole("textbox", { name: "New thread" })).toHaveFocus();
   });
 

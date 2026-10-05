@@ -1387,13 +1387,15 @@ export function ThreadView(props: ThreadViewProps) {
   const pendingForkEnvironmentSetup = props.pendingForkEnvironmentSetup;
   // Which view renders: a fork still in setup, the empty state, a launchpad
   // (`composerLaunchpad` is set), or a thread. Only a launchpad and a thread
-  // have a composer.
-  const emptyView =
-    !pendingForkEnvironmentSetup && !selectedThread && !selectedLaunchpad;
+  // have a composer. A launchpad whose directory row has not loaded has no
+  // view of its own and, without a thread, shows the empty state: the thread
+  // view needs a thread.
   const composerLaunchpad =
     !pendingForkEnvironmentSetup && props.selectedDirectory
       ? selectedLaunchpad
       : undefined;
+  const emptyView =
+    !pendingForkEnvironmentSetup && !composerLaunchpad && !selectedThread;
   const composerView = !pendingForkEnvironmentSetup && !emptyView;
   const threadView = composerView && !composerLaunchpad;
   // The composer slot's key: the thread a launchpad becomes keeps the

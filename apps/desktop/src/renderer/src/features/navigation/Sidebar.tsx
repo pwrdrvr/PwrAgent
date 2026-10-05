@@ -515,7 +515,7 @@ export function Sidebar(props: SidebarProps) {
   const previousSelectedItemKeyRef = useRef<string | undefined>(
     props.selectedItemKey,
   );
-  const [projectReveal, setProjectReveal] = useState<{ key: string; focus?: boolean }>();
+  const [projectReveal, setProjectReveal] = useState<{ key: string }>();
   const [directoryRevealRequest, setDirectoryRevealRequest] = useState(0);
   const [selectedThreadKeys, setSelectedThreadKeys] = useState<Set<string>>(
     () =>
@@ -964,7 +964,7 @@ export function Sidebar(props: SidebarProps) {
     if (browseMode === "directories" && selectedItemKey.startsWith("launchpad:")) {
       handledRevealRequestRef.current = request;
       releaseHoverStableSnapshot();
-      setProjectReveal({ key: selectedItemKey.slice("launchpad:".length), focus: false });
+      setProjectReveal({ key: selectedItemKey.slice("launchpad:".length) });
       return;
     }
 
@@ -2233,9 +2233,9 @@ export function Sidebar(props: SidebarProps) {
           projects={props.directories}
           onJumpToProject={(directory) => {
             props.onBrowseModeChange("directories");
-            // Reveal, but leave focus alone: the launchpad's composer takes
+            // The reveal leaves focus alone: the launchpad's composer takes
             // it, so the operator can type the new thread straight away.
-            setProjectReveal({ key: directory.key, focus: false });
+            setProjectReveal({ key: directory.key });
             if (props.onJumpToProject) props.onJumpToProject(directory);
             else void props.onOpenLaunchpad(directory);
           }}

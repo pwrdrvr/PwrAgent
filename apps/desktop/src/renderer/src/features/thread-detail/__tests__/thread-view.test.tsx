@@ -3437,6 +3437,34 @@ describe("ThreadView", () => {
     }
   });
 
+  // A starting launchpad can be selected before its directory row loads.
+  // With no thread either, nothing can render the thread view.
+  it("shows the empty state for a launchpad whose directory has not loaded", () => {
+    render(
+      <ThreadView
+        addOptimisticUserMessage={() => "optimistic-1"}
+        backends={[]}
+        clearPendingRequest={() => undefined}
+        composerDisabled={false}
+        loading={false}
+        loadingMore={false}
+        messageCount={0}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={() => undefined}
+        selectedLaunchpad={{
+          backend: "codex", directoryKey: "directory:/repo", directoryKind: "directory",
+          directoryLabel: "Example", directoryPath: "/repo", executionMode: "default",
+          prompt: "", workMode: "local", createdAt: 1, updatedAt: 1,
+        }}
+        skills={[]}
+        transcriptEntries={[]}
+      />,
+    );
+
+    expect(screen.getByRole("heading", { name: "Select a thread" })).toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: /^(New thread|Reply)$/ })).toBeNull();
+  });
+
   it("opens submitted image previews while the launchpad is materializing", () => {
     const dataUrl = "data:image/png;base64,aGVsbG8=";
     render(
