@@ -14,6 +14,7 @@ import {
   THREAD_NAVIGATION_RELATIONSHIPS_SCHEMA,
 } from "./thread-navigation-relationships.js";
 import { STORAGE_RETENTION_SCHEMA } from "./storage-maintenance.js";
+import { THREAD_DEPENDENCY_SCHEMA } from "./thread-dependency-store.js";
 import { migratePrReferenceIdentities } from "./migrate-pr-reference-identities.js";
 import { DURABLE_TURN_REQUEST_SCHEMA } from "./durable-turn-request-schema";
 import {
@@ -21,7 +22,7 @@ import {
   isSqliteWriteMetricsEnabled,
 } from "./sqlite-write-metrics.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 76;
+export const CURRENT_STATE_DB_USER_VERSION = 77;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -2052,6 +2053,12 @@ export class StateDb {
           db.pragma("user_version = 76");
         }).immediate();
       }
+      if ((db.pragma("user_version", { simple: true }) as number) < 77) {
+        db.transaction(() => {
+          db.exec(THREAD_DEPENDENCY_SCHEMA);
+          db.pragma("user_version = 77");
+        })();
+      }
       // Keep current-version databases converged without asking pre-v36 profiles
       // to install the unique index before the migration above removes duplicates.
       db.exec(PR_AUTO_DISPATCH_GLOBAL_FINGERPRINT_INDEX);
@@ -2747,6 +2754,7 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     db.exec(PR_AUTO_DISPATCH_SCHEMA);
     db.exec(PR_AUTO_DISPATCH_BUDGET_SCHEMA);
     db.exec(PR_STATUS_WATCH_SCHEMA);
+    db.exec(THREAD_DEPENDENCY_SCHEMA);
     ensureThreadSearchFtsThreadIdColumn(db);
     ensurePullRequestProviderColumns(db);
     ensureThreadUsagePricingProviderScope(db);

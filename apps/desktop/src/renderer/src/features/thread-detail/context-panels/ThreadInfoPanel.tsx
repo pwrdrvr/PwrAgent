@@ -4,6 +4,7 @@ import type { DesktopApi } from "../../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../../lib/federation-window";
 import { formatBackendLabel } from "../../../lib/backend-label";
 import { formatExecutionModeLabel } from "../../../lib/execution-mode";
+import { ThreadDependenciesPanel } from "./ThreadDependenciesPanel";
 import {
   CODEX_AGENT_THREAD_CHANGE_NOTE,
   createDesktopAgentThread,
@@ -69,6 +70,7 @@ export const ThreadInfoPanel = memo(function ThreadInfoPanel(props: ThreadInfoPa
 
   return (
     <>
+      <ThreadDependenciesPanel thread={props.thread} desktopApi={props.desktopApi} />
       <section className="context-panel__section">
         <h3>Agent</h3>
         {props.thread.agentChange && !props.thread.agentChange.error ? (
