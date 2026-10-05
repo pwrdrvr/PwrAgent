@@ -22,6 +22,7 @@ import {
   applyNavigationLaunchpadProviderSettingsPatch,
   buildFederatedThreadRef,
   buildNavigationSnapshot,
+  buildPricingSpendByModel,
   buildThreadIdentityKey,
   CODEX_NATIVE_SUBAGENT_NAVIGATION_RETENTION_MS,
   federatedThreadIdentityKey,
@@ -41464,6 +41465,148 @@ script = "printf setup"
         }),
       },
     })]);
+  });
+
+  it("shows queued-message titles on one Sub-agents row and charges them to the thread", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const temp = createTempStateDb("pwragent-queued-message-titles-");
+    const db = StateDb.open(temp.dbPath);
+    const overlayStore = new SqliteOverlayStore(db);
+    onTestFinished(() => {
+      db.close();
+      removeTempStateDbDir(temp.tempDir);
+      vi.unstubAllEnvs();
+    });
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      threads: [{ id: "recipient", title: "recipient", titleSource: "explicit" as const, source: "codex" as const, linkedDirectories: [] }],
+    });
+    const helperTurns: Array<{ prompt: string; resolve: (title: string) => void }> = [];
+    (
+      codexClient as unknown as {
+        generateStructuredObject: (request: { prompt: string }) => Promise<unknown>;
+      }
+    ).generateStructuredObject = (request) => new Promise((resolve) => {
+      const run = helperTurns.length + 1;
+      helperTurns.push({ prompt: request.prompt, resolve: (title) => resolve({
+        status: "ok",
+        object: { title },
+        helperThreadId: `queued-title-helper-${run}`,
+        helperTurnId: `queued-title-turn-${run}`,
+        model: "gpt-5.6-luna",
+        reasoningEffort: "low",
+        tokenUsage: { inputTokens: 100 * run, cachedInputTokens: 20, outputTokens: 10, totalTokens: 100 * run + 10 },
+      }) });
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore, threadTitleGenerationService: null });
+    onTestFinished(() => registry.close());
+    await discoverCodexBackendForTest(registry);
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => { events.push(event); });
+    await registry.publishLocalEvent({ backend: "codex", notification: {
+      method: "turn/started", params: { threadId: "recipient", turnId: "active", turn: { id: "active" } },
+    } });
+    const firstText = "Docs child: the migration guide now covers the renamed config keys and the new default port.";
+    const secondText = "Tests child: the flaky upload spec now waits for the server ack before it asserts the row.";
+    await registry.submitTurn({ backend: "codex", threadId: "recipient", queueEntryId: "first", input: [{ type: "text", text: firstText }] });
+    await registry.submitTurn({ backend: "codex", threadId: "recipient", queueEntryId: "second", input: [{ type: "text", text: secondText }] });
+    await waitForCondition(() => helperTurns.length === 1);
+    const monitorId = "system:queued-message-titles:codex:recipient";
+    const readRow = async () =>
+      (await overlayStore.getThreadOverlayState({ backend: "codex", threadId: "recipient" }))
+        ?.subAgents?.filter((subAgent) => subAgent.monitorId.startsWith("system:queued-message-titles:"));
+
+    // Three runs: one lands, one is outgrown by an edit, one lands the edit.
+    const { writes } = await measureSqliteWrites(async () => {
+      helperTurns[0]!.resolve("Migration guide covers renamed keys");
+      await waitForCondition(() => helperTurns.length === 2);
+      registry.updateQueuedTurnInput("second", [{ type: "text", text: `${secondText}\nAlso retried the export spec.` }]);
+      helperTurns[1]!.resolve("Upload spec waits for ack");
+      await waitForCondition(() => helperTurns.length === 3);
+      helperTurns[2]!.resolve("Upload and export specs fixed");
+      await registry.queuedMessageTitlesIdle();
+    });
+    expectSqliteWriteBudget({ scenario: "queued-message-title-helper-row", writes,
+      note: "Three queued-message title runs, two commits each: the thread's one Sub-agents row (~19 KB) plus the run's usage line (~65 KB); no running state, no idle writes. ~85 KB/title: ~4 MB/day at 50 long queued messages, ~17 MB/day at 200" });
+
+    expect(await readRow()).toEqual([expect.objectContaining({
+      monitorId,
+      task: "Name queued messages",
+      status: "success",
+      outcome: "success",
+      backend: "codex",
+      agentName: "PwrAgent",
+      preferredModel: "gpt-5.6-luna",
+      preferredReasoningEffort: "low",
+      monitorThreadId: "queued-title-helper-3",
+      monitorTurnId: "queued-title-turn-3",
+      lastMessage: "Named 2 queued messages. Latest: Upload and export specs fixed",
+      monitorUsage: expect.objectContaining({
+        model: "gpt-5.6-luna",
+        tokenUsage: expect.objectContaining({
+          inputTokens: 600,
+          cachedInputTokens: 60,
+          uncachedInputTokens: 540,
+          outputTokens: 30,
+          totalTokens: 630,
+        }),
+      }),
+    })]);
+    const pricing = await overlayStore.readThreadPricing({ backend: "codex", threadId: "recipient" });
+    expect(pricing.lines.map((line) => [line.sourceItemId, line.scope, line.parentThreadId, line.threadId, line.inputTokens]))
+      .toEqual(expect.arrayContaining([
+        [monitorId, "monitor", "recipient", "queued-title-helper-1", 100],
+        [monitorId, "monitor", "recipient", "queued-title-helper-2", 200],
+        [monitorId, "monitor", "recipient", "queued-title-helper-3", 300],
+      ]));
+    expect(pricing.lines).toHaveLength(3);
+    expect(pricing.lines.every((line) => line.priceStatus === "priced")).toBe(true);
+    // The Pricing rail counts helpers, not runs: three runs are one system helper.
+    expect(buildPricingSpendByModel({ lines: pricing.lines }).flatMap((provider) => provider.models))
+      .toEqual([expect.objectContaining({ model: "gpt-5.6-luna", systemHelperCount: 1, subAgentCount: 0 })]);
+    expect(events.filter((event) => event.notification.method === "thread/subAgents/updated"))
+      .toHaveLength(3);
+    expect(events.some((event) =>
+      event.notification.method === "thread/subAgents/updated"
+      && event.notification.params.threadId === "recipient")).toBe(true);
+  });
+
+  it("records a failed queued-message title and skips a helper that never ran", async () => {
+    const overlayStore = createOverlayStoreMock();
+    const upsertSubAgentSpy = vi.spyOn(overlayStore, "upsertThreadSubAgent");
+    const upsertUsageLineSpy = vi.spyOn(overlayStore, "upsertThreadUsageLine");
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      threads: [{ id: "recipient", title: "recipient", titleSource: "explicit" as const, source: "codex" as const, linkedDirectories: [] }],
+    });
+    const results: unknown[] = [
+      { status: "unavailable", reason: "codex_structured_generation_unavailable" },
+      { status: "failed", reason: "helper turn timed out" },
+    ];
+    (
+      codexClient as unknown as { generateStructuredObject: () => Promise<unknown> }
+    ).generateStructuredObject = async () => results.shift();
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore, threadTitleGenerationService: null });
+    onTestFinished(() => registry.close());
+    await discoverCodexBackendForTest(registry);
+    await registry.publishLocalEvent({ backend: "codex", notification: {
+      method: "turn/started", params: { threadId: "recipient", turnId: "active", turn: { id: "active" } },
+    } });
+    const longText = "Docs child: the migration guide now covers the renamed config keys and the new default port.";
+    await registry.submitTurn({ backend: "codex", threadId: "recipient", queueEntryId: "unavailable", input: [{ type: "text", text: longText }] });
+    await registry.queuedMessageTitlesIdle();
+    expect(upsertSubAgentSpy).not.toHaveBeenCalled();
+
+    await registry.submitTurn({ backend: "codex", threadId: "recipient", queueEntryId: "failed", input: [{ type: "text", text: `${longText} Again.` }] });
+    await registry.queuedMessageTitlesIdle();
+    expect(upsertSubAgentSpy.mock.calls.map(([call]) => call.subAgent)).toEqual([expect.objectContaining({
+      monitorId: "system:queued-message-titles:codex:recipient",
+      task: "Name queued messages",
+      status: "failed",
+      outcome: "failure",
+      lastMessage: "Latest title failed: helper turn timed out",
+    })]);
+    expect(upsertUsageLineSpy).not.toHaveBeenCalled();
   });
 
   it("still titles a queued message whose start was refused and held", async () => {

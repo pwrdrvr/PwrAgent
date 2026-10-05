@@ -760,6 +760,7 @@
     "rowsChanged": 2,
     "statements": 3
   },
+  "queued-message-title-helper-row": {"commits": 6, "note": "Three queued-message title runs, two commits each: the thread's one Sub-agents row (~19 KB) plus the run's usage line (~65 KB); no running state, no idle writes. ~85 KB/title: ~4 MB/day at 50 long queued messages, ~17 MB/day at 200", "observedWalBytes": 255440, "rowsChanged": 12, "statements": 12},
   "queued-scheduled-action-hold": {
     "commits": 1,
     "note": "one queued scheduled action durably held after its preceding turn fails; one boundary transition, not a timer",

@@ -1,4 +1,4 @@
-import type { AppServerTurnInputItem } from "@pwragent/shared";
+import type { AppServerBackendKind, AppServerTurnInputItem } from "@pwragent/shared";
 import queuedMessageTitlePrompt from "./queued-message-title-prompt.md?raw";
 import type { ThreadTitleAdapterResult } from "./thread-title-generation-service";
 
@@ -10,7 +10,9 @@ import type { ThreadTitleAdapterResult } from "./thread-title-generation-service
  * report, a pasted plan — needs a few words that tell it apart from the rest
  * of the queue. A helper turn writes those words once, when the message joins
  * a busy thread's queue. The title is display-only and lives on the queue
- * entry in memory, like the queue itself: nothing here touches sqlite.
+ * entry in memory, like the queue itself. The owner records each finished
+ * run (its cost and what it wrote) through `settle`; nothing in this module
+ * touches sqlite.
  */
 
 /**
@@ -88,7 +90,21 @@ function cleanTitle(value: string): string {
 
 export type QueuedMessageTitleRequest = {
   entryId: string;
+  /** The thread whose queue holds the entry, which the run is charged to. */
+  backend: AppServerBackendKind;
+  threadId: string;
   source: string;
+};
+
+/** What one helper run produced, for the owner's record of it. */
+export type QueuedMessageTitleSettlement = {
+  startedAt: number;
+  /** The helper's answer; a request that threw reads as `failed`. */
+  result: ThreadTitleAdapterResult;
+  /** Set when the answer normalized to a usable title. */
+  title?: string;
+  /** Whether `apply` landed `title` on its entry. */
+  applied: boolean;
 };
 
 export type QueuedMessageTitlerOptions = {
@@ -101,10 +117,19 @@ export type QueuedMessageTitlerOptions = {
     turnTimeoutMs: number;
   }) => Promise<ThreadTitleAdapterResult>;
   /**
-   * Applies a finished title. The owner checks the entry is still queued and
-   * still holds `source`; an edit or a send in the meantime drops it.
+   * Applies a finished title and says whether it landed. The owner checks the
+   * entry is still queued and still holds `source`; an edit or a send in the
+   * meantime drops it.
    */
-  apply: (request: QueuedMessageTitleRequest, title: string) => void;
+  apply: (request: QueuedMessageTitleRequest, title: string) => boolean;
+  /**
+   * Records a finished run, landed or not. Awaited before the next request
+   * starts, so `idle` also covers the record.
+   */
+  settle?: (
+    request: QueuedMessageTitleRequest,
+    settlement: QueuedMessageTitleSettlement,
+  ) => Promise<void> | void;
   log?: (message: string, fields: Record<string, unknown>) => void;
 };
 
@@ -146,15 +171,38 @@ export class QueuedMessageTitler {
         if (next.done) return;
         const request = next.value;
         this.pending.delete(request.entryId);
-        const title = await this.generate(request);
-        if (title) this.options.apply(request, title);
+        const startedAt = Date.now();
+        const { result, title } = await this.generate(request);
+        const applied = title !== undefined && this.options.apply(request, title);
+        await this.settle(request, {
+          startedAt,
+          result,
+          ...(title !== undefined ? { title } : {}),
+          applied,
+        });
       }
     } finally {
       this.running = false;
     }
   }
 
-  private async generate(request: QueuedMessageTitleRequest): Promise<string | undefined> {
+  private async settle(
+    request: QueuedMessageTitleRequest,
+    settlement: QueuedMessageTitleSettlement,
+  ): Promise<void> {
+    try {
+      await this.options.settle?.(request, settlement);
+    } catch (error) {
+      this.options.log?.("queued message title record failed", {
+        entryId: request.entryId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private async generate(
+    request: QueuedMessageTitleRequest,
+  ): Promise<{ result: ThreadTitleAdapterResult; title?: string }> {
     try {
       const result = await this.options.generate({
         system: QUEUED_MESSAGE_TITLE_SYSTEM_PROMPT,
@@ -170,19 +218,21 @@ export class QueuedMessageTitler {
           status: result.status,
           reason: result.reason,
         });
-        return undefined;
+        return { result };
       }
       const title = normalizeQueuedMessageTitle(result.object);
       if (!title) {
         this.options.log?.("queued message title rejected", { entryId: request.entryId });
+        return { result };
       }
-      return title;
+      return { result, title };
     } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
       this.options.log?.("queued message title failed", {
         entryId: request.entryId,
-        error: error instanceof Error ? error.message : String(error),
+        error: reason,
       });
-      return undefined;
+      return { result: { status: "failed", reason } };
     }
   }
 }

@@ -5,9 +5,11 @@ import {
   buildQueuedMessageTitlePrompt,
   normalizeQueuedMessageTitle,
   queuedMessageTitleSource,
+  type QueuedMessageTitlerOptions,
 } from "../app-server/queued-message-title";
 import type { ThreadTitleAdapterResult } from "../app-server/thread-title-generation-service";
 
+const THREAD = { backend: "codex", threadId: "thread-1" } as const;
 const LONG_TEXT =
   "Docs child: the migration guide now covers the renamed config keys and the new default port.";
 
@@ -95,7 +97,7 @@ describe("QueuedMessageTitler", () => {
   it("runs one helper turn at a time, in request order", async () => {
     const calls: string[] = [];
     const pending: Array<ReturnType<typeof deferred<ThreadTitleAdapterResult>>> = [];
-    const apply = vi.fn();
+    const apply = vi.fn<QueuedMessageTitlerOptions["apply"]>(() => true);
     const titler = new QueuedMessageTitler({
       generate: (params) => {
         calls.push(params.prompt);
@@ -106,8 +108,8 @@ describe("QueuedMessageTitler", () => {
       apply,
     });
 
-    titler.request({ entryId: "a", source: "alpha message" });
-    titler.request({ entryId: "b", source: "beta message" });
+    titler.request({ entryId: "a", ...THREAD, source: "alpha message" });
+    titler.request({ entryId: "b", ...THREAD, source: "beta message" });
     await Promise.resolve();
     expect(calls).toHaveLength(1);
     expect(calls[0]).toContain("alpha message");
@@ -119,15 +121,15 @@ describe("QueuedMessageTitler", () => {
     await titler.idle();
 
     expect(apply.mock.calls).toEqual([
-      [{ entryId: "a", source: "alpha message" }, "Alpha"],
-      [{ entryId: "b", source: "beta message" }, "Beta"],
+      [{ entryId: "a", ...THREAD, source: "alpha message" }, "Alpha"],
+      [{ entryId: "b", ...THREAD, source: "beta message" }, "Beta"],
     ]);
   });
 
   it("replaces a waiting request for the same entry and drops forgotten ones", async () => {
     const first = deferred<ThreadTitleAdapterResult>();
     const prompts: string[] = [];
-    const apply = vi.fn();
+    const apply = vi.fn<QueuedMessageTitlerOptions["apply"]>(() => true);
     const titler = new QueuedMessageTitler({
       generate: async (params) => {
         prompts.push(params.prompt);
@@ -138,10 +140,10 @@ describe("QueuedMessageTitler", () => {
       apply,
     });
 
-    titler.request({ entryId: "busy", source: "in flight" });
-    titler.request({ entryId: "edited", source: "before the edit" });
-    titler.request({ entryId: "gone", source: "left the queue" });
-    titler.request({ entryId: "edited", source: "after the edit" });
+    titler.request({ entryId: "busy", ...THREAD, source: "in flight" });
+    titler.request({ entryId: "edited", ...THREAD, source: "before the edit" });
+    titler.request({ entryId: "gone", ...THREAD, source: "left the queue" });
+    titler.request({ entryId: "edited", ...THREAD, source: "after the edit" });
     titler.forget("gone");
     first.resolve({ status: "ok", object: { title: "Busy" } });
     await titler.idle();
@@ -156,7 +158,7 @@ describe("QueuedMessageTitler", () => {
 
   it("logs and skips an unavailable, rejected, or failed helper", async () => {
     const log = vi.fn();
-    const apply = vi.fn();
+    const apply = vi.fn<QueuedMessageTitlerOptions["apply"]>(() => true);
     const results: Array<ThreadTitleAdapterResult | Error> = [
       { status: "unavailable", reason: "codex not ready" },
       { status: "ok", object: { title: "" } },
@@ -172,9 +174,9 @@ describe("QueuedMessageTitler", () => {
       log,
     });
 
-    titler.request({ entryId: "1", source: LONG_TEXT });
-    titler.request({ entryId: "2", source: LONG_TEXT });
-    titler.request({ entryId: "3", source: LONG_TEXT });
+    titler.request({ entryId: "1", ...THREAD, source: LONG_TEXT });
+    titler.request({ entryId: "2", ...THREAD, source: LONG_TEXT });
+    titler.request({ entryId: "3", ...THREAD, source: LONG_TEXT });
     await titler.idle();
 
     expect(apply).not.toHaveBeenCalled();
@@ -183,5 +185,50 @@ describe("QueuedMessageTitler", () => {
       "queued message title rejected",
       "queued message title failed",
     ]);
+  });
+
+  it("settles every run with its result, title, and whether the title landed", async () => {
+    const log = vi.fn();
+    const results: Array<ThreadTitleAdapterResult | Error> = [
+      { status: "ok", object: { title: "Landed" }, model: "gpt-6-luna", tokenUsage: { inputTokens: 10 } },
+      { status: "ok", object: { title: "Outgrown" } },
+      { status: "ok", object: { title: "" } },
+      new Error("boom"),
+    ];
+    const settle = vi.fn<NonNullable<QueuedMessageTitlerOptions["settle"]>>(async (request) => {
+      if (request.entryId === "outgrown") throw new Error("disk full");
+    });
+    const titler = new QueuedMessageTitler({
+      generate: async () => {
+        const next = results.shift()!;
+        if (next instanceof Error) throw next;
+        return next;
+      },
+      apply: (request) => request.entryId === "landed",
+      settle,
+      log,
+    });
+
+    for (const entryId of ["landed", "outgrown", "rejected", "thrown"]) {
+      titler.request({ entryId, ...THREAD, source: LONG_TEXT });
+    }
+    await titler.idle();
+
+    expect(settle.mock.calls.map(([request, settlement]) => [request.entryId, settlement])).toEqual([
+      ["landed", {
+        startedAt: expect.any(Number),
+        result: expect.objectContaining({ status: "ok", model: "gpt-6-luna" }),
+        title: "Landed",
+        applied: true,
+      }],
+      ["outgrown", { startedAt: expect.any(Number), result: expect.objectContaining({ status: "ok" }), title: "Outgrown", applied: false }],
+      ["rejected", { startedAt: expect.any(Number), result: expect.objectContaining({ status: "ok" }), applied: false }],
+      ["thrown", { startedAt: expect.any(Number), result: { status: "failed", reason: "boom" }, applied: false }],
+    ]);
+    // A record that fails is logged and does not stop the next run.
+    expect(log).toHaveBeenCalledWith("queued message title record failed", {
+      entryId: "outgrown",
+      error: "disk full",
+    });
   });
 });
