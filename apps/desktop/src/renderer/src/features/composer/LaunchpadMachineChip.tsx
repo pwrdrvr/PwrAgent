@@ -84,8 +84,47 @@ function MachineMark(props: {
   return <ServerIcon size={props.size} />;
 }
 
+/** A machine a thread runs on, for a chip that only names it. */
+export type MachineChipValue = {
+  /** Full name, for the tooltip. */
+  label: string;
+  /** The short name the chip shows. */
+  shortLabel?: string;
+  celestialIcon?: CelestialIconId;
+  instanceId?: string;
+  remote?: boolean;
+  offline?: boolean;
+};
+
 /**
- * The first chip of a launchpad composer: which machine the thread will
+ * The machine chip with nothing to choose: a sub-thread launchpad, whose
+ * parent fixes where it runs, and the thread header once a thread exists.
+ */
+export function FixedMachineChip(props: { machine: MachineChipValue; verb?: string }) {
+  const { machine } = props;
+  const label = machine.shortLabel ?? machine.label;
+  return (
+    <span
+      className="composer__fixed-value composer__fixed-value--machine"
+      aria-label={`${props.verb ?? "Runs on"} ${label}${machine.offline ? ", offline" : ""}`}
+      title={machine.label}
+      data-remote={machine.remote ? "true" : undefined}
+      data-offline={machine.offline ? "true" : undefined}
+    >
+      <span aria-hidden="true" className="composer-dropdown__icon">
+        <MachineMark
+          celestialIcon={machine.celestialIcon}
+          instanceId={machine.instanceId}
+          size={13}
+        />
+      </span>
+      {label}
+    </span>
+  );
+}
+
+/**
+ * The launchpad's machine chip: which machine the thread will
  * start on. Without it a composer aimed at a peer looked exactly like a
  * local one, and the only way to learn the target was to send and see where
  * the thread landed.
@@ -97,6 +136,7 @@ function MachineMark(props: {
 export function LaunchpadMachineChip(props: {
   control: LaunchpadMachineControl;
   disabled?: boolean;
+  menuPlacement?: "above" | "below";
   onRetarget: (instanceId: string | undefined) => void;
 }) {
   const { control } = props;
@@ -203,18 +243,18 @@ export function LaunchpadMachineChip(props: {
 
   if (!control.planRetarget) {
     return (
-      <span
-        className="composer__fixed-value composer__fixed-value--machine"
-        aria-label={`Runs on ${currentLabel}${currentOffline ? ", offline" : ""}`}
-        title={fullLabel}
-        data-remote={currentRemote ? "true" : undefined}
-        data-offline={currentOffline ? "true" : undefined}
-      >
-        <span aria-hidden="true" className="composer-dropdown__icon">
-          <Icon size={13} />
-        </span>
-        {currentLabel}
-      </span>
+      <FixedMachineChip
+        machine={{
+          label: fullLabel,
+          shortLabel: currentLabel,
+          celestialIcon: control.currentInstanceId
+            ? current?.celestialIcon
+            : control.local.celestialIcon,
+          instanceId: control.currentInstanceId ?? control.local.instanceId,
+          remote: currentRemote,
+          offline: currentOffline,
+        }}
+      />
     );
   }
 
@@ -224,6 +264,7 @@ export function LaunchpadMachineChip(props: {
       ariaLabel="Machine"
       disabled={props.disabled}
       icon={Icon}
+      menuPlacement={props.menuPlacement}
       tone={currentOffline ? "offline" : currentRemote ? "remote" : undefined}
       tooltip={currentOffline ? `${fullLabel} is offline` : `Starts on ${fullLabel}`}
       value={control.currentInstanceId ?? THIS_MACHINE_VALUE}

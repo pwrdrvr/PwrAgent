@@ -789,7 +789,7 @@ describe("Composer", () => {
     expect(screen.getByLabelText("New thread")).toHaveValue("Keep this follow-up");
   });
 
-  it("keeps composer focus when handoff replaces the editor within the same component", async () => {
+  it("keeps the focused editor when its launchpad becomes the thread", async () => {
     const store = createComposerDraftStore();
     const launchpad = createRetargetingLaunchpad(retargetingPwrSnap, "First message");
     const view = render(<Composer backends={[backendSummary("codex")]}
@@ -807,8 +807,10 @@ describe("Composer", () => {
     view.rerender(<Composer backends={[backendSummary("codex")]}
       thread={thread} draftStore={store} skills={[]} />);
     const reply = screen.getByLabelText("Reply") as HTMLInputElement;
-    expect(reply).not.toBe(input);
-    await waitFor(() => expect(reply).toHaveFocus());
+    // Reconfigured, not replaced: a rebuilt editor drops the caret, and keys
+    // typed while it mounts land nowhere.
+    expect(reply).toBe(input);
+    expect(reply).toHaveFocus();
     expect(reply.selectionStart).toBe(6);
     expect(reply).toHaveValue("Still typing");
   });

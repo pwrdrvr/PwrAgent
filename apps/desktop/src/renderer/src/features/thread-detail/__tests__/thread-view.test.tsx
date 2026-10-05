@@ -1,7 +1,7 @@
 import * as composerMentionSources from "../../composer/useComposerMentionSources";
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
-import { cloneElement, useState, type ReactElement } from "react";
+import { cloneElement, StrictMode, useState, type ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AgentEvent,
@@ -3272,7 +3272,10 @@ describe("ThreadView", () => {
     );
   });
 
-  it.each(["composer", "elsewhere", "moved-after-handoff", "visit-later"])("hands off environment setup without losing or stealing focus (%s)", async (focus) => {
+  // `strict-mode` is the dev build's own shape: StrictMode re-runs a freshly
+  // mounted composer's effects, which rebuilt the editor that focus had just
+  // been handed to.
+  it.each(["composer", "strict-mode", "elsewhere", "moved-after-handoff", "visit-later"])("hands off environment setup without losing or stealing focus (%s)", async (focus) => {
     const { result } = renderHook(useComposerDraftStore);
     const draftStore = result.current;
     const launchpad: NavigationLaunchpadDraft = {
@@ -3326,7 +3329,7 @@ describe("ThreadView", () => {
         <ThreadView {...props} {...overrides} />
       </>
     );
-    const view = render(element());
+    const view = render(element(), focus === "strict-mode" ? { wrapper: StrictMode } : undefined);
     const input = screen.getByRole("textbox", { name: "New thread" }) as HTMLInputElement;
     fireEvent.change(input, { target: { value: "Still typing" } });
     // Let initial launchpad hydration finish its existing focus request.
@@ -3356,7 +3359,11 @@ describe("ThreadView", () => {
 
     const reply = screen.getByRole("textbox", { name: "Reply" }) as HTMLInputElement;
     expect(reply).toHaveValue("Still typing");
-    if (focus === "composer") {
+    // The thread a launchpad becomes keeps the launchpad's editor. A detour
+    // through another thread mounts a fresh one, as any other switch does.
+    if (focus === "visit-later") expect(reply).not.toBe(input);
+    else expect(reply).toBe(input);
+    if (focus === "composer" || focus === "strict-mode") {
       await waitFor(() => expect(reply).toHaveFocus());
       expect(reply.selectionStart).toBe(6);
       expect(window.getSelection()?.anchorNode?.textContent).toBe("Still typing");

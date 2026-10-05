@@ -784,6 +784,14 @@ describe("Tangerine Terminal theme contract", () => {
     );
   });
 
+  it("keeps the header machine chip and its menu out of the drag region", () => {
+    // The menu is a descendant of `.thread-header`, so the header's
+    // `.thread-header *` drag rule reaches every box in it.
+    expect(css).toMatch(
+      /\.thread-header \.thread-header__machine,\s*\.thread-header \.thread-header__machine \*\s*\{[\s\S]*?-webkit-app-region:\s*no-drag;[\s\S]*?\}/,
+    );
+  });
+
   it("layers MCP action menus above full-window settings", () => {
     const menuRule = extractRuleBody(css, ".settings-mcp-context-menu");
     const settingsRule = extractRuleBody(css, ".app-shell__settings-layer");
