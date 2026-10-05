@@ -6,6 +6,8 @@ export type RendererErrorSource =
   | "unhandled-rejection";
 
 export type RendererErrorReport = {
+  /** Window-local fault fingerprint linking the first report and repeat summary. */
+  faultId?: string;
   colno?: number;
   componentStack?: string;
   filename?: string;
@@ -17,6 +19,12 @@ export type RendererErrorReport = {
     action: "automatic-remount" | "manual-remount" | "stopped";
     attempt: number;
     limit: number;
+  };
+  /** Additional occurrences since the first report; contains no new snapshot. */
+  repeat?: {
+    count: number;
+    firstTimestamp: string;
+    lastTimestamp: string;
   };
   source: RendererErrorSource;
   stack?: string;

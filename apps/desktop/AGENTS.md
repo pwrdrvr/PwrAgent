@@ -235,8 +235,14 @@ window.__pwragentRendererUpdates.eventNames
 `firstMs`, `lastMs`, and `capturedAtMs` are renderer `performance.now()` times.
 Snapshots are detached copies. `lastError()` retains the latest reported
 failure through automatic recovery; a renderer reload clears this history.
-The error boundary captures before failed-tree teardown. Global errors and
-unhandled rejections capture at notification time.
+The error boundary captures before failed-tree teardown. The first identical
+global error or unhandled rejection in a one-minute window captures at notification
+time; further notifications increment a count without capture or IPC. One trailing
+timeout, eviction, or teardown flushes the repeat count and timestamps without
+replacing the retained snapshot. Renderer and main summary tables each have 64
+slots with bounded summary strings and fixed-size keys. Explicit recovery reports
+remain immediate. See [../../docs/renderer-recovery.md](../../docs/renderer-recovery.md)
+for the delivery and eviction limits.
 
 Normal recording has no timers, IPC, logging, or database writes. Fixed arrays
 use 1,944 bytes for numeric storage and scope-reference slots, plus JavaScript

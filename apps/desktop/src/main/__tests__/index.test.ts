@@ -67,6 +67,7 @@ const disposeProfilesIpcHandlersMock = vi.fn();
 const listDesktopPwrAgentProfilesMock = vi.fn();
 const openDesktopPwrAgentProfileMock = vi.fn();
 const registerRendererErrorIpcHandlersMock = vi.fn();
+const disposeRendererErrorIpcHandlersMock = vi.fn();
 const registerBootInfoIpcHandlersMock = vi.fn();
 const disposeBootInfoIpcHandlersMock = vi.fn();
 const registerQuitBlockerIpcHandlersMock = vi.fn();
@@ -498,6 +499,7 @@ vi.mock("../ipc/profiles", () => ({
 
 vi.mock("../ipc/renderer-error", () => ({
   registerRendererErrorIpcHandlers: registerRendererErrorIpcHandlersMock,
+  disposeRendererErrorIpcHandlers: disposeRendererErrorIpcHandlersMock,
 }));
 
 vi.mock("../ipc/boot-info", () => ({
@@ -784,6 +786,7 @@ describe("bootstrapApp", () => {
       reason: "active",
     });
     registerRendererErrorIpcHandlersMock.mockReset();
+    disposeRendererErrorIpcHandlersMock.mockReset();
     registerBootInfoIpcHandlersMock.mockReset();
     disposeBootInfoIpcHandlersMock.mockReset();
     registerQuitBlockerIpcHandlersMock.mockReset();
@@ -2240,6 +2243,7 @@ describe("bootstrapApp", () => {
     finishTerminalShutdown();
     await vi.waitFor(() => expect(quitMock).toHaveBeenCalledTimes(1));
 
+    expect(disposeRendererErrorIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeComposerDraftIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeIntegratedTerminalIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeFederationIpcHandlersMock).toHaveBeenCalledTimes(1);

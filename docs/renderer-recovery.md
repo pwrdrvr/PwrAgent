@@ -48,6 +48,26 @@ Renderer termination no longer invokes the main-window shutdown path; only an
 actual window close participates in the existing quit-confirmation flow.
 This feature does not add minidump collection or uploads.
 
+Identical global errors and unhandled rejections now share a one-minute reporting
+window. The first occurrence captures and retains update diagnostics and crosses
+IPC immediately. Additional occurrences increment an in-memory count without
+capturing or retaining another snapshot or calling the bridge. A single trailing
+timeout reports their count and first/last timestamps. Eviction, handler cleanup,
+and document `pagehide` also flush pending counts. Delivery during document exit
+is best effort; abrupt renderer termination can lose an unflushed count.
+
+The renderer remembers at most 64 bounded summaries, keyed by fixed-size fault
+fingerprints over source, complete message/stack, URL, and file/line/column.
+Main separately bounds ordinary and aggregated repeat summaries in a 64-entry
+table and serializes detail diagnostics only when its existing one-minute detail
+budget admits them. Explicit automatic, stopped, and manual recovery reports
+remain immediate; their pre-teardown snapshot capture is unchanged. There is no
+periodic polling or new disk/SQLite persistence beyond the admitted log lines.
+The trailing timeout stops when no repeats remain. Distinct faults remain
+visible; a fault evicted by more than 64 reporting identities is admitted again.
+This limits reporting work, without suppressing browser warnings or resolving
+the observer/layout behavior that produced them.
+
 The same React boundary protects auxiliary routes. Automatic native termination
 recovery is installed on main/federation shell windows; auxiliary BrowserWindows
 retain their existing native lifecycle. **View → Reload Window** is always
