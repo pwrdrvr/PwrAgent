@@ -171,6 +171,18 @@ export class CodexDiscoveryCoordinator {
         + rejectedOldCodex.command,
       );
     }
+    // A launcher can exist and pass X_OK while its nested native spawn fails.
+    // Keep that diagnostic instead of telling the operator Codex is absent.
+    const failedProbe = snapshot.candidates.find(
+      (candidate) => candidate.versionProbeOutcome === "failed"
+        && Boolean(candidate.failureReason ?? candidate.versionFailureReason),
+    );
+    if (failedProbe) {
+      throw new Error(
+        `Codex CLI failed to launch: ${failedProbe.command}\n`
+        + (failedProbe.failureReason ?? failedProbe.versionFailureReason),
+      );
+    }
     throw new CodexCliNotInstalledError();
   }
 

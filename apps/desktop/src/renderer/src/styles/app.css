@@ -8306,6 +8306,18 @@ a.button {
   padding-right: 6px;
 }
 
+.app-notice-toast__link {
+  color: var(--accent-bright);
+  font-size: 12px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.app-notice-toast__link:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 3px;
+}
+
 .codex-version-build {
   display: grid;
   gap: 8px;

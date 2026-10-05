@@ -93,6 +93,27 @@ describe("resolveBackendErrorNotice", () => {
     + "Invalid 'input[169].id': 'review_rollout_user'. "
     + "Expected an ID that begins with 'msg'.";
 
+  it("offers recovery tools for a local Codex launch failure during a turn", () => {
+    const onOpenCodexSettings = vi.fn();
+    const signal: BackendErrorSignal = {
+      kind: "turn-failed",
+      backend: "codex",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      threadLabel: "Fixture thread",
+      errorMessage: "spawn /opt/homebrew/lib/node_modules/@openai/codex/vendor/aarch64-apple-darwin/codex/codex ENOENT",
+      onOpenCodexSettings,
+    };
+    const notice = resolveBackendErrorNotice(signal, undefined);
+    expect(notice?.actions?.[0]?.label).toBe("Open Codex settings");
+    expect(notice?.body).toBeDefined();
+    notice?.actions?.[0]?.onClick();
+    expect(onOpenCodexSettings).toHaveBeenCalledOnce();
+    expect(resolveBackendErrorNotice({ ...signal, instanceId: "peer-1" }, undefined)?.actions).toBeUndefined();
+    expect(resolveBackendErrorNotice({ ...signal, backend: "acp:gemini" }, undefined)?.actions).toBeUndefined();
+    expect(resolveBackendErrorNotice({ ...signal, errorMessage: "spawn /usr/bin/bash ENOENT" }, undefined)?.actions).toBeUndefined();
+  });
+
   it.each([
     [1, "another thread finishes its turn"],
     [3, "3 other threads finish their turns"],

@@ -144,6 +144,10 @@ import { copyTextAsCodeBlock } from "./lib/copy-text";
 import { resolveThreadWorkingStatePath } from "./lib/thread-working-state-path";
 import { CodexConfigWarningBanner } from "./features/codex-config/CodexConfigWarningBanner";
 import type { AppNoticeToastNotice } from "./features/notifications/AppNoticeToast";
+import {
+  CODEX_LAUNCH_NOTICE_ID,
+  CodexLaunchNotice,
+} from "./features/notifications/CodexLaunchNotice";
 import { turnFailureAcknowledgements, turnFailureNoticeId, turnFailureScopeKey } from "./features/notifications/turn-failure-acknowledgements";
 import { AppNoticeStack } from "./features/notifications/AppNoticeStack";
 import {
@@ -907,6 +911,12 @@ function DesktopAppShell(props: {
   const openCodexSettings = useCallback(() => {
     openSettingsSection("models", "codex");
   }, [openSettingsSection]);
+  const syncCodexLaunchNotice = useCallback((
+    notice: AppNoticeToastNotice | undefined,
+  ): void => {
+    dispatchAppNotice({ type: "dismiss", id: CODEX_LAUNCH_NOTICE_ID });
+    if (notice) showAppNotice(notice);
+  }, [showAppNotice]);
   const changeCodexManagedBuilds = useCallback(async (managedBuilds: boolean) => {
     const saved = await props.settings.writeConfig({ models: { codex: { managedBuilds } } });
     if (saved) {
@@ -1439,6 +1449,7 @@ function DesktopAppShell(props: {
             errorNoticeContext: event.errorNoticeContext,
             originLabel: instanceId ? `Remote instance: ${instanceId}` : "This machine",
             onCodexLogin: openCodexLogin,
+            onOpenCodexSettings: openCodexSettings,
             backend: event.backend,
             threadId: params.threadId ?? "unknown",
             turnId: params.turnId ?? "unknown",
@@ -1523,6 +1534,7 @@ function DesktopAppShell(props: {
     acknowledgeThreadSpendAlert,
     desktopApi,
     openCodexLogin,
+    openCodexSettings,
     props.settings.snapshot?.experimental.codexSkillQuestionsWarningDismissed?.value,
   ]);
   // `instant` is for callers that are about to hide the sidebar (the ⌘K peek):
@@ -3833,6 +3845,11 @@ function DesktopAppShell(props: {
           onOpenCodexSettings={openCodexSettings}
           onManagedBuildsChange={changeCodexManagedBuilds}
           onCheckManagedBuildUpdates={checkCodexManagedBuildUpdates}
+        />
+        <CodexLaunchNotice
+          discovery={settings.snapshot?.models.codex.discovery}
+          onNoticeChanged={syncCodexLaunchNotice}
+          onOpenCodexSettings={openCodexSettings}
         />
         <CodexRestartNotice
           desktopApi={desktopApi}

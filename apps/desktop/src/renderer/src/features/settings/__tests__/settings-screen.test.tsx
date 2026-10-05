@@ -1119,6 +1119,8 @@ describe("SettingsScreen", () => {
   });
 
   it("refreshes only Codex from the focused Codex screen", async () => {
+    const settings = createSettingsState();
+    const refreshSettings = vi.fn(async () => undefined);
     const listBackends = vi.fn<NonNullable<DesktopApi["listBackends"]>>(
       async () => ({ fetchedAt: 1000, backends: [] }),
     );
@@ -1130,7 +1132,7 @@ describe("SettingsScreen", () => {
       <SettingsScreen
         desktopApi={{ listAcpAgents, listBackends }}
         initialSection="models"
-        settings={createSettingsState()}
+        settings={{ ...settings, refresh: refreshSettings }}
         onClose={() => undefined}
       />,
     );
@@ -1152,6 +1154,7 @@ describe("SettingsScreen", () => {
         refreshModels: "codex",
       });
     });
+    await waitFor(() => expect(refreshSettings).toHaveBeenCalledOnce());
     expect(listAcpAgents).not.toHaveBeenCalled();
   });
 

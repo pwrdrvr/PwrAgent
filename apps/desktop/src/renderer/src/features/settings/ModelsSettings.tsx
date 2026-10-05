@@ -240,6 +240,9 @@ export function ModelsSettings(props: {
       });
       setBackends(response.backends);
       setCatalogError(undefined);
+      if (refreshModels) {
+        await props.onRefresh();
+      }
       return true;
     } catch (error) {
       setCatalogError(error instanceof Error ? error.message : String(error));
