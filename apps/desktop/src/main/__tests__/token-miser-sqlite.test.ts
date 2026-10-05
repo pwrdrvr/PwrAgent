@@ -108,3 +108,46 @@ it("budgets durable acceptance, observations, replay buffering and turn flushes"
   expectSqliteWriteBudget({ scenario: "token-miser-replay-buffer", note: "100 model requests across ten gates, buffered in RAM.", writes: replayed });
   expectSqliteWriteBudget({ scenario: "token-miser-turn-flush", note: "Flush ten gate counters in one turn-boundary transaction.", writes: flushed });
 });
+
+it("charges retrieval prompt replay in the existing retrieval commit, without repeating it on later replays", async () => {
+  const { store, root, stateDb } = await fixture();
+  const entry = await store.store(params);
+  if (!isSqliteWriteMetricsEnabled()) attachSqliteWriteMetrics({ db: stateDb.raw, dbPath: path.join(root, "state.db") });
+  store.recordParentRequestUsage({ threadId: "owner", requestEpoch: "session", cumulativeInputTokens: 200_000, cachedInputTokens: 199_000 });
+  const delivery = await store.prepareRetrievalDelivery({ objectId: entry.objectId, threadId: "owner", visibleText: "xxxx" });
+  const { writes } = await measureSqliteWrites(() => store.confirmModelVisibleRetrievals({ threadId: "owner", output: delivery!.text }));
+  expectSqliteWriteBudget({ scenario: "token-miser-retrieval-request", note: "Full cached prompt attribution shares one existing retrieval commit (~5.9 MB/day at one retrieval/minute); zero additional commits or MB/day.", writes });
+  expect(await store.readMetadata(entry.objectId)).toMatchObject({ cachedRevealedTokens: 199_000, retrievalRequestCachedTokens: 199_000 });
+  for (const tokens of [200_000, 400_000, 600_000, 800_000]) {
+    await store.recordParentModelRequest({ objectId: entry.objectId, cumulativeInputTokens: tokens });
+  }
+  // Two subsequent ordinary replays add only the summary and revealed bytes,
+  // rather than replaying the accounting penalty itself.
+  expect(await store.readMetadata(entry.objectId)).toMatchObject({ cachedRevealedTokens: 199_008, retrievalRequestCachedTokens: 199_000 });
+});
+
+it("does not reuse retrieval usage across turns, threads, missing cache usage or a session reset", async () => {
+  const { store } = await fixture();
+  const entry = await store.store(params);
+  const confirm = async () => {
+    const delivery = await store.prepareRetrievalDelivery({ objectId: entry.objectId, threadId: "owner", visibleText: "xxxx" });
+    await store.confirmModelVisibleRetrievals({ threadId: "owner", output: delivery!.text });
+  };
+  store.recordParentRequestUsage({ threadId: "other", requestEpoch: "session", cumulativeInputTokens: 200_000, cachedInputTokens: 199_000 });
+  await confirm();
+  expect((await store.readMetadata(entry.objectId))?.retrievalRequestCachedTokens).toBeUndefined();
+  store.recordParentRequestUsage({ threadId: "owner", requestEpoch: "session", cumulativeInputTokens: 200_000, cachedInputTokens: 199_000 });
+  store.recordParentRequestUsage({ threadId: "owner", requestEpoch: "session", cumulativeInputTokens: 400_000 });
+  await confirm();
+  expect((await store.readMetadata(entry.objectId))?.retrievalRequestCachedTokens).toBe(0);
+  store.recordParentRequestUsage({ threadId: "owner", requestEpoch: "session", cumulativeInputTokens: 600_000, cachedInputTokens: 198_000 });
+  store.recordParentRequestUsage({ threadId: "owner", requestEpoch: "restarted", cumulativeInputTokens: 1_000 });
+  await confirm();
+  expect((await store.readMetadata(entry.objectId))?.retrievalRequestCachedTokens).toBe(0);
+  store.recordParentRequestUsage({ threadId: "owner", requestEpoch: "restarted", cumulativeInputTokens: 200_000, cachedInputTokens: 199_000 });
+  store.startTurn("owner", "next-turn");
+  const next = await store.store({ ...params, turnId: "next-turn" });
+  const delivery = await store.prepareRetrievalDelivery({ objectId: next.objectId, threadId: "owner", visibleText: "xxxx" });
+  await store.confirmModelVisibleRetrievals({ threadId: "owner", output: delivery!.text });
+  expect((await store.readMetadata(next.objectId))?.retrievalRequestCachedTokens).toBeUndefined();
+});

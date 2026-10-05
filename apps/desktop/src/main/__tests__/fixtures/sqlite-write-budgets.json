@@ -984,6 +984,7 @@
     "rowsChanged": 1,
     "statements": 1
   },
+  "token-miser-retrieval-request": {"commits": 1, "note": "Full cached prompt attribution shares one existing retrieval commit (~5.9 MB/day at one retrieval/minute); zero additional commits or MB/day.", "observedWalBytes": 4120, "rowsChanged": 1, "statements": 1},
   "token-miser-turn-flush": {
     "commits": 1,
     "note": "Flush ten gate counters in one turn-boundary transaction.",

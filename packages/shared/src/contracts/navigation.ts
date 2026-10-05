@@ -345,6 +345,7 @@ export type TokenMiserSubAgentAccounting = {
   revealedParentTokens: number;
   revealedParentCostMicros: number;
   cachedRevealedTokens?: number;
+  /** Cached revealed cost includes full prompt replay overhead on retrieval requests. */
   cachedRevealedCostMicros?: number;
   savingsMicros: number;
 };
