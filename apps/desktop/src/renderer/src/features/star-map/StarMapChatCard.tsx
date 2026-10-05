@@ -228,6 +228,12 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
   // that is deleted or taken back to edit never runs, so its optimistic
   // copy has to be retired by hand. Keyed by queued-row id.
   const queuedOptimisticIdsRef = useRef(new Map<string, string>());
+  // Rows with an Edit or Delete in flight. A second click would cancel an
+  // entry the first already took and report it as no longer waiting. The
+  // ref is the guard; the state only disables the row's buttons.
+  const queuedRowActionIdsRef = useRef(new Set<string>());
+  const [queuedRowActionIds, setQueuedRowActionIds] =
+    useState<ReadonlySet<string>>(() => new Set());
   const [draftRestore, setDraftRestore] =
     useState<CompactComposerDraftRestore>();
   const onDraftRestoreApplied = useCallback((id: number) => {
@@ -1299,18 +1305,38 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     [desktopApi, federationTarget, thread.id, thread.source],
   );
 
+  /** Runs one Edit or Delete per row; a click while one runs is dropped. */
+  const runQueuedRowAction = useCallback(
+    async (
+      queued: ComposerQueuedTurnSnapshot,
+      action: () => Promise<void>,
+    ): Promise<void> => {
+      const inFlight = queuedRowActionIdsRef.current;
+      if (inFlight.has(queued.id)) return;
+      inFlight.add(queued.id);
+      setQueuedRowActionIds(new Set(inFlight));
+      try {
+        await action();
+      } finally {
+        inFlight.delete(queued.id);
+        setQueuedRowActionIds(new Set(inFlight));
+      }
+    },
+    [],
+  );
+
   const deleteQueuedTurn = useCallback(
-    async (queued: ComposerQueuedTurnSnapshot) => {
+    (queued: ComposerQueuedTurnSnapshot) => runQueuedRowAction(queued, async () => {
       setSendError(undefined);
       if (await cancelQueuedTurn(queued)) {
         forgetQueuedTurn(queued);
       }
-    },
-    [cancelQueuedTurn, forgetQueuedTurn],
+    }),
+    [cancelQueuedTurn, forgetQueuedTurn, runQueuedRowAction],
   );
 
   const editQueuedTurn = useCallback(
-    async (queued: ComposerQueuedTurnSnapshot) => {
+    (queued: ComposerQueuedTurnSnapshot) => runQueuedRowAction(queued, async () => {
       setSendError(undefined);
       let editable = queued;
       let contentHash: string | undefined;
@@ -1346,8 +1372,16 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         imageAttachments: editable.imageAttachments,
         fileAttachments: editable.fileAttachments,
       }));
-    },
-    [cancelQueuedTurn, desktopApi, federationTarget, forgetQueuedTurn, thread.id, thread.source],
+    }),
+    [
+      cancelQueuedTurn,
+      desktopApi,
+      federationTarget,
+      forgetQueuedTurn,
+      runQueuedRowAction,
+      thread.id,
+      thread.source,
+    ],
   );
 
   const interrupt = useCallback(async () => {
@@ -1946,7 +1980,11 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
                   <>
                     <QueuedRowIconButton
                       label="Edit"
-                      disabled={queued.backendQueuePending || composerDisabled}
+                      disabled={
+                        queued.backendQueuePending
+                        || composerDisabled
+                        || queuedRowActionIds.has(queued.id)
+                      }
                       onClick={() => {
                         void editQueuedTurn(queued);
                       }}
@@ -1956,7 +1994,10 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
                     <QueuedRowIconButton
                       label="Delete"
                       tone="danger"
-                      disabled={queued.backendQueuePending}
+                      disabled={
+                        queued.backendQueuePending
+                        || queuedRowActionIds.has(queued.id)
+                      }
                       onClick={() => {
                         void deleteQueuedTurn(queued);
                       }}

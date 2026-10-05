@@ -8923,6 +8923,34 @@ describe("Composer", () => {
     expect(startTurn.mock.calls[0]?.[0].input).toEqual(input);
   });
 
+  it.each(["Edit", "Delete"])("runs a double-clicked owner-queued %s once", async (action) => {
+    const draftStore = createComposerDraftStore();
+    const scopeKey = buildThreadComposerScopeKey("codex", "thread-1");
+    draftStore.setQueuedTurns(scopeKey, [{ id: "mirror", queueEntryId: "owner-entry", text: "queued words", imageAttachments: [], fileAttachments: [] }]);
+    const readQueuedTurn = vi.fn().mockResolvedValue({ queueEntryId: "owner-entry", contentHash: "hash", input: [{ type: "text", text: "queued words" }] });
+    // The first cancel is held open; once the entry is gone the owner answers not_found.
+    let releaseCancel!: () => void;
+    const cancelQueuedTurn = vi.fn()
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        releaseCancel = () => resolve({ queueEntryId: "owner-entry", cancelled: true, disposition: "cancelled" });
+      }))
+      .mockResolvedValue({ queueEntryId: "owner-entry", cancelled: false, disposition: "not_found" });
+    render(<Composer activeTurnId="active" backends={[backendSummary("codex")]} draftStore={draftStore}
+      desktopApi={{ readQueuedTurn, cancelQueuedTurn, onAgentEvent: () => () => undefined }} disabled={false} skills={[]}
+      thread={{ id: "thread-1", title: "Recipient", titleSource: "explicit", source: "codex", linkedDirectories: [], inbox: { inInbox: false } }} />);
+    const button = screen.getByRole("button", { name: action });
+    fireEvent.click(button);
+    fireEvent.click(button);
+    await waitFor(() => expect(cancelQueuedTurn).toHaveBeenCalled());
+    await act(async () => {
+      releaseCancel();
+    });
+    await waitFor(() => expect(draftStore.getQueuedTurns(scopeKey)).toHaveLength(0));
+    expect(cancelQueuedTurn).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("The queued turn is no longer waiting.")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Reply")).toHaveValue(action === "Edit" ? "queued words" : "");
+  });
+
   it("cancels the owning peer's queued turn before remote steering", async () => {
     const federationTarget = {
       scope: "remote" as const,

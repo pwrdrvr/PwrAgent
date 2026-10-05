@@ -1949,6 +1949,110 @@ describe("StarMapChatCard start-turn queue handling", () => {
     expect(screen.queryByLabelText("Queued message")).toBeNull();
   });
 
+  /**
+   * The first cancel is held open, so a second click lands while the row is
+   * still on screen. Each later cancel answers the way the owner does once
+   * the entry is gone.
+   */
+  function heldCancel() {
+    const firstCancel =
+      deferred<Awaited<ReturnType<NonNullable<DesktopApi["cancelQueuedTurn"]>>>>();
+    const cancelQueuedTurn = vi.fn()
+      .mockImplementationOnce(() => firstCancel.promise)
+      .mockImplementation(async () => ({
+        queueEntryId: "queue-owner-1",
+        cancelled: false,
+        disposition: "not_found" as const,
+      }));
+    return { cancelQueuedTurn, firstCancel };
+  }
+
+  it("takes a double-clicked Edit back into the composer once", async () => {
+    const readQueuedTurn = vi.fn(async () => ({
+      queueEntryId: "queue-owner-1",
+      contentHash: "hash-1",
+      input: [{ type: "text" as const, text: "wait your turn, in full" }],
+    }));
+    const { cancelQueuedTurn, firstCancel } = heldCancel();
+    const { input, row } = await queueOne({ cancelQueuedTurn, readQueuedTurn });
+    const edit = within(row).getByRole("button", { name: "Edit" }) as HTMLButtonElement;
+
+    // One act: the second click reaches the button before React re-renders
+    // it disabled, which is what a fast double-click does.
+    await act(async () => {
+      fireEvent.click(edit);
+      fireEvent.click(edit);
+    });
+    expect(edit.disabled).toBe(true);
+    expect(
+      (within(row).getByRole("button", { name: "Delete" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+
+    await act(async () => {
+      firstCancel.resolve({
+        queueEntryId: "queue-owner-1",
+        cancelled: true,
+        disposition: "cancelled",
+      });
+    });
+
+    await waitFor(() => {
+      expect(input.value).toBe("wait your turn, in full");
+    });
+    expect(readQueuedTurn).toHaveBeenCalledTimes(1);
+    expect(cancelQueuedTurn).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByLabelText("Queued message")).toBeNull();
+  });
+
+  it("deletes a double-clicked queued message once", async () => {
+    const { cancelQueuedTurn, firstCancel } = heldCancel();
+    const { row } = await queueOne({ cancelQueuedTurn });
+    const remove = within(row).getByRole("button", { name: "Delete" }) as HTMLButtonElement;
+
+    await act(async () => {
+      fireEvent.click(remove);
+      fireEvent.click(remove);
+    });
+    expect(remove.disabled).toBe(true);
+
+    await act(async () => {
+      firstCancel.resolve({
+        queueEntryId: "queue-owner-1",
+        cancelled: true,
+        disposition: "cancelled",
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByLabelText("Queued message")).toBeNull();
+    });
+    expect(cancelQueuedTurn).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("re-enables a row's actions when its cancel fails", async () => {
+    const cancelQueuedTurn = vi.fn(async () => ({
+      queueEntryId: "queue-owner-1",
+      cancelled: false,
+      disposition: "content_changed" as const,
+    }));
+    const { row } = await queueOne({ cancelQueuedTurn });
+
+    await act(async () => {
+      fireEvent.click(within(row).getByRole("button", { name: "Delete" }));
+    });
+
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "The queued message changed.",
+    );
+    expect(
+      (within(row).getByRole("button", { name: "Delete" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
+  });
+
   it("clears a remote queue entry only for its owning peer's lifecycle event", async () => {
     const listeners: Array<(event: AgentEvent) => void> = [];
     const onAgentEvent = vi.fn((listener: (event: AgentEvent) => void) => {
