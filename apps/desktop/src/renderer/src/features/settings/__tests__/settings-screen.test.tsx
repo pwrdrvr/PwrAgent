@@ -31,6 +31,8 @@ import { GIT_LFS_UNAVAILABLE_REASON } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { pressEscape, tabEscapes } from "../../../test/tab-walk";
 import { SettingsScreen } from "../SettingsScreen";
+import { AppNoticeToast, type AppNoticeToastNotice } from "../../notifications/AppNoticeToast";
+import { CodexLaunchNotice } from "../../notifications/CodexLaunchNotice";
 import type { ConfirmSettingsLeave } from "../UnsavedSettingsChanges";
 import type { DesktopSettingsState } from "../useDesktopSettings";
 
@@ -1118,7 +1120,32 @@ describe("SettingsScreen", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("refreshes only Codex from the focused Codex screen", async () => {
+  it("rediscovers a repaired executable before refreshing Codex models and settings", async () => {
+    const repairedSnapshot = createSnapshot();
+    const brokenSnapshot = createSnapshot();
+    const command = repairedSnapshot.models.codex.discovery!.selectedCommand!;
+    brokenSnapshot.models.codex.discovery = {
+      candidates: [{
+        command,
+        executable: false,
+        selected: false,
+        source: "path",
+        failureReason: `Command failed: ${command} --version`,
+      }],
+    };
+    let cachedSnapshot = brokenSnapshot;
+    let finishDiscovery!: () => void;
+    const refreshCodexDiscovery = vi.fn<NonNullable<DesktopApi["refreshCodexDiscovery"]>>(
+      () => new Promise((resolve) => {
+        finishDiscovery = () => {
+          cachedSnapshot = repairedSnapshot;
+          resolve({ snapshot: repairedSnapshot });
+        };
+      }),
+    );
+    const refreshSettings = vi.fn();
+    const noop = () => undefined;
+    const settings = createSettingsState(brokenSnapshot);
     const listBackends = vi.fn<NonNullable<DesktopApi["listBackends"]>>(
       async () => ({ fetchedAt: 1000, backends: [] }),
     );
@@ -1126,14 +1153,29 @@ describe("SettingsScreen", () => {
       async () => ({ fetchedAt: 1000, entries: [] }),
     );
 
-    render(
-      <SettingsScreen
-        desktopApi={{ listAcpAgents, listBackends }}
-        initialSection="models"
-        settings={createSettingsState()}
-        onClose={() => undefined}
-      />,
-    );
+    const desktopApi = { listAcpAgents, listBackends, refreshCodexDiscovery };
+    function RecoveryHarness() {
+      const [snapshot, setSnapshot] = useState(brokenSnapshot);
+      const [notice, setNotice] = useState<AppNoticeToastNotice>();
+      refreshSettings.mockImplementation(async () => setSnapshot(cachedSnapshot));
+      return (
+        <>
+          <SettingsScreen
+            desktopApi={desktopApi}
+            initialSection="models"
+            settings={{ ...settings, snapshot, refresh: refreshSettings }}
+            onClose={noop}
+          />
+          <CodexLaunchNotice
+            discovery={snapshot.models.codex.discovery}
+            onNoticeChanged={setNotice}
+            onOpenCodexSettings={noop}
+          />
+          <AppNoticeToast notice={notice} onDismiss={noop} />
+        </>
+      );
+    }
+    render(<RecoveryHarness />);
 
     const nav = screen.getByRole("navigation", { name: "Settings sections" });
     fireEvent.click(within(nav).getByRole("button", { name: "Codex" }));
@@ -1141,9 +1183,18 @@ describe("SettingsScreen", () => {
       name: "Refresh Codex",
     });
     await waitFor(() => expect(listBackends).toHaveBeenCalled());
+    expect(refreshCodexDiscovery).not.toHaveBeenCalled();
     listBackends.mockClear();
     listAcpAgents.mockClear();
     fireEvent.click(refresh);
+
+    expect(refreshCodexDiscovery).toHaveBeenCalledExactlyOnceWith({
+      discoveryIntent: "settings-user-action",
+    });
+    expect(listBackends).not.toHaveBeenCalled();
+    expect(refreshSettings).not.toHaveBeenCalled();
+    expect(screen.getByRole("status")).toHaveTextContent("Codex installation failed to start");
+    await act(async () => finishDiscovery());
 
     await waitFor(() => {
       expect(listBackends).toHaveBeenCalledExactlyOnceWith({
@@ -1152,7 +1203,35 @@ describe("SettingsScreen", () => {
         refreshModels: "codex",
       });
     });
+    await waitFor(() => expect(refreshSettings).toHaveBeenCalledOnce());
+    expect(screen.queryByText("Codex installation failed to start")).not.toBeInTheDocument();
     expect(listAcpAgents).not.toHaveBeenCalled();
+  });
+
+  it("reports executable rediscovery failure without refreshing the stale Codex catalog", async () => {
+    const settings = createSettingsState();
+    const refreshCodexDiscovery = vi.fn(async () => {
+      throw new Error("Codex executable rediscovery failed.");
+    });
+    const listBackends = vi.fn(async () => ({ fetchedAt: 1000, backends: [] }));
+    render(
+      <SettingsScreen
+        desktopApi={{ listBackends, refreshCodexDiscovery }}
+        initialSection="models"
+        initialSubsection="codex"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+    const refresh = await screen.findByRole("button", { name: "Refresh Codex" });
+    await waitFor(() => expect(refresh).toBeEnabled());
+    listBackends.mockClear();
+    fireEvent.click(refresh);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Codex executable rediscovery failed.");
+    expect(listBackends).not.toHaveBeenCalled();
+    expect(settings.refresh).not.toHaveBeenCalled();
+    expect(refresh).toBeEnabled();
   });
 
   it("names the active PwrAgent Codex path environment override", () => {
