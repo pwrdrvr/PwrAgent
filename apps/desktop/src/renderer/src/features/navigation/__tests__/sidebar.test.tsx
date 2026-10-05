@@ -1122,6 +1122,9 @@ describe("Sidebar", () => {
       // thread list, so it is not counted as a thread.
       expect(startChat.closest(".sidebar-list--dense")).not.toBeNull();
       expect(startChat.closest('[role="list"]')).toBeNull();
+      // The lane already pads the rows; the list inside it must not pad them
+      // again, or every lens's first row drops 12px.
+      expect(row.closest('[role="list"]')).toHaveClass("sidebar-list--compact");
     });
 
     it("stays out of the way until a provider can start a chat", () => {

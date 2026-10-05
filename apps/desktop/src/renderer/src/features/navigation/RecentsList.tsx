@@ -447,7 +447,7 @@ export function RecentsList(props: RecentsListProps) {
 
   return (
     <div className="sidebar-list sidebar-list--dense">
-      <div className="sidebar-list" role="list">
+      <div className="sidebar-list sidebar-list--compact" role="list">
         {startingRootThreads.map((creation) => (
           <div key={creation.selectionKey} className="thread-group">
             <StartingThreadRow
