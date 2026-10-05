@@ -100,8 +100,11 @@ describe("stageNativePrebuilds", () => {
     ]);
     expect(readFileSync(join(ptyDir, "build", "Release", "pty.node"), "utf8"))
       .toBe("pty darwin-arm64");
-    expect(statSync(join(ptyDir, "build", "Release", "spawn-helper")).mode & 0o777)
-      .toBe(0o755);
+    // Windows has no POSIX mode bits; Darwin packaging only runs on macOS.
+    if (process.platform !== "win32") {
+      expect(statSync(join(ptyDir, "build", "Release", "spawn-helper")).mode & 0o777)
+        .toBe(0o755);
+    }
   });
 
   it("keeps Windows conpty files beside the binding and drops debug symbols", () => {
