@@ -11,7 +11,7 @@ import type {
 } from "@pwragent/shared";
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
-import { mkdir, open, readFile, realpath, stat, writeFile } from "node:fs/promises";
+import { copyFile, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -96,6 +96,16 @@ export type TranscriptImageMaterializerDependencies = {
     backend: AppServerBackendKind;
     threadId: string;
   }) => string;
+  /**
+   * The same thread's image directories in the other PwrAgent profiles.
+   * Profiles that share a Codex home restore the same threads, and a
+   * Markdown-linked image's source is often a temporary file that macOS has
+   * since swept away: the first profile to render it may hold the only copy.
+   */
+  resolveSiblingRoots?: (request: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }) => Promise<readonly string[]>;
   mkdir: (dirPath: string, options: { recursive: true }) => Promise<unknown>;
   resolveLocalImageLink: (
     sourcePath: string,
@@ -122,21 +132,59 @@ type MaterializedMarkdownLinkedImage = {
 
 type ApprovedLocalImageRootResolver = () => Promise<readonly string[]>;
 
+function threadImagesSegment(backend: AppServerBackendKind, threadId: string): string {
+  return path.join(
+    "state",
+    "thread-images",
+    encodePathSegment(backend),
+    encodePathSegment(threadId),
+  );
+}
+
 const defaultMaterializerDependencies: TranscriptImageMaterializerDependencies = {
   fetch: async (url, init) => await globalThis.fetch(url, init),
   resolveRoot: ({ backend, threadId }) =>
-    resolveActiveProfilePath(
-      path.join(
-        "state",
-        "thread-images",
-        encodePathSegment(backend),
-        encodePathSegment(threadId),
-      ),
-    ),
+    resolveActiveProfilePath(threadImagesSegment(backend, threadId)),
+  resolveSiblingRoots: async ({ backend, threadId }) => {
+    const profilesDir = path.join(resolvePwragentRoot(), "profiles");
+    const activeRoot = resolveActiveProfilePath(threadImagesSegment(backend, threadId));
+    let profileNames: string[];
+    try {
+      profileNames = await readdir(profilesDir);
+    } catch {
+      return [];
+    }
+    return profileNames
+      .map((name) => path.join(profilesDir, name, threadImagesSegment(backend, threadId)))
+      .filter((root) => root !== activeRoot);
+  },
   mkdir,
   resolveLocalImageLink: resolveTranscriptImageFile,
   writeFile,
 };
+
+/** One read is one thread, so every missed image shares one profile scan. */
+function withMemoizedSiblingRoots(
+  deps: TranscriptImageMaterializerDependencies,
+): TranscriptImageMaterializerDependencies {
+  const resolveSiblingRoots = deps.resolveSiblingRoots;
+  if (!resolveSiblingRoots) {
+    return deps;
+  }
+  const roots = new Map<string, Promise<readonly string[]>>();
+  return {
+    ...deps,
+    resolveSiblingRoots: (request) => {
+      const key = `${request.backend}\0${request.threadId}`;
+      let resolved = roots.get(key);
+      if (!resolved) {
+        resolved = resolveSiblingRoots(request).catch(() => []);
+        roots.set(key, resolved);
+      }
+      return resolved;
+    },
+  };
+}
 
 function createApprovedLocalImageRootResolver(
   options: TranscriptImageMaterializationOptions,
@@ -208,7 +256,7 @@ export async function materializeTranscriptImageUrlsForRenderer(
   dependencies: Partial<TranscriptImageMaterializerDependencies> = {},
   options: TranscriptImageMaterializationOptions = {},
 ): Promise<AppServerReadThreadResponse> {
-  const deps = { ...defaultMaterializerDependencies, ...dependencies };
+  const deps = withMemoizedSiblingRoots({ ...defaultMaterializerDependencies, ...dependencies });
   const resolveApprovedLocalImageRoots = createApprovedLocalImageRootResolver(options);
   const materializedFileWrites = new Map<string, Promise<void>>();
   const fetchedLoopbackImages = new Map<
@@ -803,23 +851,73 @@ async function readCachedMarkdownLinkedImage(
     response,
     deps,
   );
-  try {
-    const fileStat = await stat(filePath);
-    if (
-      !fileStat.isFile()
-      || fileStat.size === 0
-      || fileStat.size > MAX_FETCHED_TRANSCRIPT_IMAGE_BYTES
-    ) {
+  if (!await isUsableCachedImage(filePath)) {
+    const adopted = await adoptSiblingCachedMarkdownLinkedImage(filePath, response, deps);
+    if (!adopted) {
       return undefined;
     }
-  } catch {
-    return undefined;
   }
 
   return {
     sourceUrl,
     url: toTranscriptImageProtocolUrl(pathToFileURL(filePath).toString()),
   };
+}
+
+async function isRegularFile(filePath: string): Promise<boolean> {
+  try {
+    return (await lstat(filePath)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+async function isUsableCachedImage(filePath: string): Promise<boolean> {
+  try {
+    const fileStat = await stat(filePath);
+    return fileStat.isFile()
+      && fileStat.size > 0
+      && fileStat.size <= MAX_FETCHED_TRANSCRIPT_IMAGE_BYTES;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Copies another profile's snapshot of this message's linked image into the
+ * active profile's cache. The cache name hashes the message id and source URL,
+ * so a match is the same link in the same message, captured when its source
+ * still existed. It is copied rather than referenced so the image outlives
+ * that profile.
+ */
+async function adoptSiblingCachedMarkdownLinkedImage(
+  filePath: string,
+  response: AppServerReadThreadResponse,
+  deps: TranscriptImageMaterializerDependencies,
+): Promise<boolean> {
+  const request = { backend: response.backend, threadId: response.threadId };
+  const siblingRoots = await deps.resolveSiblingRoots?.(request) ?? [];
+  for (const siblingRoot of siblingRoots) {
+    const siblingPath = path.join(siblingRoot, path.basename(filePath));
+    // A regular file only: a symlink here could name any file on disk, and
+    // the copy would launder it past the protocol's root containment.
+    if (!await isRegularFile(siblingPath) || !await isUsableCachedImage(siblingPath)) {
+      continue;
+    }
+    // Staged and renamed, so a concurrent read never finds a partial copy at
+    // the cache path and serves it as complete.
+    const stagingPath = `${filePath}.${process.pid}.${Date.now()}.adopting`;
+    try {
+      await deps.mkdir(path.dirname(filePath), { recursive: true });
+      await copyFile(siblingPath, stagingPath);
+      await rename(stagingPath, filePath);
+      return true;
+    } catch {
+      await rm(stagingPath, { force: true }).catch(() => undefined);
+      return false;
+    }
+  }
+  return false;
 }
 
 async function writeCachedMarkdownLinkedImage(

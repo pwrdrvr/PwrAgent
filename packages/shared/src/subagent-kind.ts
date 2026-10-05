@@ -28,6 +28,13 @@ export function isSystemTitleHelperSubAgent(
   return subAgent.monitorId.startsWith("system:title-helper:");
 }
 
+/** The per-thread row that names long queued messages. */
+export function isSystemQueuedMessageTitleHelperSubAgent(
+  subAgent: Pick<ThreadSubAgentSummary, "monitorId">,
+): boolean {
+  return subAgent.monitorId.startsWith("system:queued-message-titles:");
+}
+
 export function isTokenMiserSubAgent(
   subAgent: Pick<ThreadSubAgentSummary, "monitorId">,
 ): boolean {
@@ -52,7 +59,10 @@ export function subAgentLens(subAgent: ThreadSubAgentSummary): SubAgentLens {
 export function subAgentOriginLabel(
   subAgent: ThreadSubAgentSummary,
 ): string | undefined {
-  if (isSystemTitleHelperSubAgent(subAgent)) {
+  if (
+    isSystemTitleHelperSubAgent(subAgent)
+    || isSystemQueuedMessageTitleHelperSubAgent(subAgent)
+  ) {
     return "PwrAgent system helper";
   }
   if (isTokenMiserSubAgent(subAgent)) {
@@ -75,7 +85,10 @@ export function subAgentOriginSentence(
 }
 
 export function subAgentUsageLabel(subAgent: ThreadSubAgentSummary): string {
-  if (isSystemTitleHelperSubAgent(subAgent)) {
+  if (
+    isSystemTitleHelperSubAgent(subAgent)
+    || isSystemQueuedMessageTitleHelperSubAgent(subAgent)
+  ) {
     return "System";
   }
   if (isTokenMiserSubAgent(subAgent)) {
@@ -95,6 +108,9 @@ export function subAgentPricingUsageTitle(
 ): string {
   if (isSystemTitleHelperSubAgent(subAgent)) {
     return "Thread naming";
+  }
+  if (isSystemQueuedMessageTitleHelperSubAgent(subAgent)) {
+    return "Queued message titles";
   }
   if (isTokenMiserSubAgent(subAgent)) {
     return "Token Miser gate";

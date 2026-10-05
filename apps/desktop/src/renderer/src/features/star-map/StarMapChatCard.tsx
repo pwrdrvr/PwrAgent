@@ -20,9 +20,10 @@ import {
   type NavigationLaunchpadFileAttachment,
   type NavigationLaunchpadImageAttachment,
   type NavigationThreadSummary,
+  type ReadQueuedTurnResponse,
   type ThreadExecutionMode,
 } from "@pwragent/shared";
-import { CelestialIcon } from "../../icons";
+import { CelestialIcon, PencilIcon, TrashIcon } from "../../icons";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { buildDirectoryReferenceMarkdown } from "../../lib/directory-references";
@@ -33,8 +34,14 @@ import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import {
   CompactComposer,
   type CompactComposerAction,
+  type CompactComposerDraftRestore,
   type CompactComposerSettingsMenu,
 } from "../composer/CompactComposer";
+import {
+  QueuedMessageInspector,
+  QueuedRowIconButton,
+} from "../composer/QueuedMessageInspector";
+import { restoreQueuedMessage } from "../composer/queued-message-content";
 import { useOwnedComposerDraftStore } from "../composer/useOwnedComposerDraftStore";
 import { useNavigationSelectedDetail } from "../../lib/useNavigationSelectedDetail";
 import {
@@ -216,6 +223,22 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
   // backend, so the card says which one happened.
   const [sendNotice, setSendNotice] = useState<string | undefined>(undefined);
   const startRequestPendingRef = useRef(false);
+  // A queued send shows in the transcript at once, as an optimistic message
+  // that the thread's replay retires when the turn runs. A queued message
+  // that is deleted or taken back to edit never runs, so its optimistic
+  // copy has to be retired by hand. Keyed by queued-row id.
+  const queuedOptimisticIdsRef = useRef(new Map<string, string>());
+  // Rows with an Edit or Delete in flight. A second click would cancel an
+  // entry the first already took and report it as no longer waiting. The
+  // ref is the guard; the state only disables the row's buttons.
+  const queuedRowActionIdsRef = useRef(new Set<string>());
+  const [queuedRowActionIds, setQueuedRowActionIds] =
+    useState<ReadonlySet<string>>(() => new Set());
+  const [draftRestore, setDraftRestore] =
+    useState<CompactComposerDraftRestore>();
+  const onDraftRestoreApplied = useCallback((id: number) => {
+    setDraftRestore((current) => current?.id === id ? undefined : current);
+  }, []);
   const onAttachmentError = useCallback((message?: string): void => {
     setAttachmentError(message);
     if (message) {
@@ -428,31 +451,73 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         return;
       }
       const notification = event.notification.params as {
+        displayText?: unknown;
+        inputUpdated?: unknown;
         queueEntryId?: unknown;
         status?: unknown;
         threadId?: unknown;
+        title?: unknown;
       };
       if (
         typeof notification.threadId !== "string"
         || typeof notification.queueEntryId !== "string"
         || !agentEventMatchesThread(event, thread, notification.threadId)
-        || (
-          notification.status !== "started"
-          && notification.status !== "failed"
-          && notification.status !== "cancelled"
-          && notification.status !== "terminal"
-        )
       ) {
         return;
       }
       const current = ownedComposerDraftStore?.getQueuedTurns(
         composerScopeKey,
       ) ?? [];
+      if (notification.status === "queued" || notification.status === "held") {
+        // A title or input refresh for a row already shown. The snapshot
+        // projection keeps a title it has when a snapshot has none (the
+        // snapshot may predate the title), so a cleared title clears here,
+        // as it does in the main composer.
+        const title =
+          typeof notification.title === "string" && notification.title
+            ? notification.title
+            : undefined;
+        const inputUpdated = notification.inputUpdated === true;
+        if (!title && !inputUpdated) return;
+        let changed = false;
+        const next = current.map((queued) => {
+          if (queued.queueEntryId !== notification.queueEntryId) return queued;
+          changed = true;
+          return {
+            ...queued,
+            ...(inputUpdated && typeof notification.displayText === "string"
+              ? { text: notification.displayText }
+              : {}),
+            title,
+          };
+        });
+        if (changed) {
+          ownedComposerDraftStore?.setQueuedTurns(composerScopeKey, next);
+        }
+        return;
+      }
+      if (
+        notification.status !== "started"
+        && notification.status !== "failed"
+        && notification.status !== "cancelled"
+        && notification.status !== "terminal"
+      ) {
+        return;
+      }
       const next = current.filter(
         (queued) => queued.queueEntryId !== notification.queueEntryId,
       );
       if (next.length !== current.length) {
         ownedComposerDraftStore?.setQueuedTurns(composerScopeKey, next);
+      }
+      for (const removed of current) {
+        if (removed.queueEntryId !== notification.queueEntryId) continue;
+        const optimisticId = queuedOptimisticIdsRef.current.get(removed.id);
+        queuedOptimisticIdsRef.current.delete(removed.id);
+        // Cancelled from another surface: it will never reach the replay.
+        if (optimisticId && notification.status === "cancelled") {
+          sessionRef.current.removeOptimisticMessage(optimisticId);
+        }
       }
     });
   }, [composerScopeKey, desktopApi, ownedComposerDraftStore, thread]);
@@ -1079,6 +1144,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         displayText,
         imageParts,
       );
+      queuedOptimisticIdsRef.current.set(queuedProjection.id, optimisticId);
       try {
         const response = await desktopApi.startTurn({
           backend: thread.source,
@@ -1117,6 +1183,9 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
             );
           }
         }
+        if (response.queueStatus !== "queued") {
+          queuedOptimisticIdsRef.current.delete(queuedProjection.id);
+        }
         reportAcceptedReply();
         return true;
       } catch (error) {
@@ -1128,6 +1197,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
               .filter((queued) => queued.id !== queuedProjection.id),
           );
         }
+        queuedOptimisticIdsRef.current.delete(queuedProjection.id);
         sessionRef.current.removeOptimisticMessage(optimisticId);
         setSendError(
           error instanceof Error
@@ -1152,6 +1222,165 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
       thread.linkedDirectories,
       thread.source,
       ownedComposerDraftStore,
+    ],
+  );
+
+  const forgetQueuedTurn = useCallback(
+    (queued: ComposerQueuedTurnSnapshot) => {
+      ownedComposerDraftStore?.removeQueuedTurnById(composerScopeKey, queued.id);
+      const optimisticId = queuedOptimisticIdsRef.current.get(queued.id);
+      queuedOptimisticIdsRef.current.delete(queued.id);
+      if (optimisticId) {
+        sessionRef.current.removeOptimisticMessage(optimisticId);
+      }
+    },
+    [composerScopeKey, ownedComposerDraftStore],
+  );
+
+  /** True once the owner has taken the message out of its queue. */
+  const cancelQueuedTurn = useCallback(
+    async (
+      queued: ComposerQueuedTurnSnapshot,
+      expectedContentHash?: string,
+    ): Promise<boolean> => {
+      if (!queued.queueEntryId) return true;
+      if (!desktopApi?.cancelQueuedTurn) {
+        setSendError("Queued turn cancellation is unavailable.");
+        return false;
+      }
+      try {
+        const response = await desktopApi.cancelQueuedTurn({
+          ...(federationTarget ? { federationTarget } : {}),
+          queueEntryId: queued.queueEntryId,
+          expectedContentHash,
+        });
+        if (response.cancelled) return true;
+        if (response.disposition === "already_admitted") {
+          // It is running. Its `started` event retires the row; once there
+          // is a turn id, nothing is left to wait for.
+          if (response.turnId) {
+            ownedComposerDraftStore?.removeQueuedTurnById(
+              composerScopeKey,
+              queued.id,
+            );
+          }
+          return false;
+        }
+        setSendError(
+          response.disposition === "content_changed"
+            ? "The queued message changed. Open it again before editing."
+            : "The queued turn is no longer waiting.",
+        );
+        return false;
+      } catch (error) {
+        setSendError(error instanceof Error ? error.message : String(error));
+        return false;
+      }
+    },
+    [composerScopeKey, desktopApi, federationTarget, ownedComposerDraftStore],
+  );
+
+  /** The owner's full input; a row not yet acknowledged shows its own copy. */
+  const readQueuedMessage = useCallback(
+    async (queued: ComposerQueuedTurnSnapshot): Promise<ReadQueuedTurnResponse> => {
+      if (!queued.queueEntryId || queued.backendQueuePending) {
+        return {
+          queueEntryId: queued.id,
+          contentHash: "",
+          input: queued.input ?? [{ type: "text", text: queued.text }],
+        };
+      }
+      if (!desktopApi?.readQueuedTurn) {
+        throw new Error(
+          "Full queued message content is unavailable. The message remains queued.",
+        );
+      }
+      return await desktopApi.readQueuedTurn({
+        backend: thread.source,
+        threadId: thread.id,
+        queueEntryId: queued.queueEntryId,
+        ...(federationTarget ? { federationTarget } : {}),
+      });
+    },
+    [desktopApi, federationTarget, thread.id, thread.source],
+  );
+
+  /** Runs one Edit or Delete per row; a click while one runs is dropped. */
+  const runQueuedRowAction = useCallback(
+    async (
+      queued: ComposerQueuedTurnSnapshot,
+      action: () => Promise<void>,
+    ): Promise<void> => {
+      const inFlight = queuedRowActionIdsRef.current;
+      if (inFlight.has(queued.id)) return;
+      inFlight.add(queued.id);
+      setQueuedRowActionIds(new Set(inFlight));
+      try {
+        await action();
+      } finally {
+        inFlight.delete(queued.id);
+        setQueuedRowActionIds(new Set(inFlight));
+      }
+    },
+    [],
+  );
+
+  const deleteQueuedTurn = useCallback(
+    (queued: ComposerQueuedTurnSnapshot) => runQueuedRowAction(queued, async () => {
+      setSendError(undefined);
+      if (await cancelQueuedTurn(queued)) {
+        forgetQueuedTurn(queued);
+      }
+    }),
+    [cancelQueuedTurn, forgetQueuedTurn, runQueuedRowAction],
+  );
+
+  const editQueuedTurn = useCallback(
+    (queued: ComposerQueuedTurnSnapshot) => runQueuedRowAction(queued, async () => {
+      setSendError(undefined);
+      let editable = queued;
+      let contentHash: string | undefined;
+      if (queued.queueEntryId) {
+        if (!desktopApi?.readQueuedTurn) {
+          setSendError(
+            "Full queued message content is unavailable. The message remains queued.",
+          );
+          return;
+        }
+        try {
+          // The row holds a display preview; only the owner's input is
+          // editable content.
+          const content = await desktopApi.readQueuedTurn({
+            backend: thread.source,
+            threadId: thread.id,
+            queueEntryId: queued.queueEntryId,
+            forEdit: true,
+            ...(federationTarget ? { federationTarget } : {}),
+          });
+          contentHash = content.contentHash;
+          editable = restoreQueuedMessage(queued, content);
+        } catch (error) {
+          setSendError(error instanceof Error ? error.message : String(error));
+          return;
+        }
+      }
+      if (!(await cancelQueuedTurn(queued, contentHash))) return;
+      forgetQueuedTurn(queued);
+      setDraftRestore((current) => ({
+        id: (current?.id ?? 0) + 1,
+        draft: editable.text,
+        imageAttachments: editable.imageAttachments,
+        fileAttachments: editable.fileAttachments,
+      }));
+    }),
+    [
+      cancelQueuedTurn,
+      desktopApi,
+      federationTarget,
+      forgetQueuedTurn,
+      runQueuedRowAction,
+      thread.id,
+      thread.source,
     ],
   );
 
@@ -1713,48 +1942,90 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
           />
         </div>
 
-        <MemoizedActiveSubAgentsStrip
-          desktopApi={desktopApi}
-          onRefreshNavigation={props.onRefreshNavigation}
-          thread={thread}
-        />
+        {/* The band above the compact composer: capped and scrolling, so no
+            queue length can push the composer out of the card. */}
+        <div className="star-map-chat-card__band">
+          <MemoizedActiveSubAgentsStrip
+            desktopApi={desktopApi}
+            onRefreshNavigation={props.onRefreshNavigation}
+            thread={thread}
+          />
 
-        {sendError || attachmentError || readinessError ? (
-          <p className="star-map-chat-card__error" role="alert">
-            {sendError ?? attachmentError ?? readinessError}
-            {readinessError ? <button onClick={() => {
-              void selectedDetail.refresh();
-              void queueReadiness.refresh();
-            }} type="button">Retry thread</button> : undefined}
-          </p>
-        ) : sendNotice ? (
-          <p className="star-map-chat-card__notice" role="status">
-            {sendNotice}
-          </p>
-        ) : undefined}
+          {sendError || attachmentError || readinessError ? (
+            <p className="star-map-chat-card__error" role="alert">
+              {sendError ?? attachmentError ?? readinessError}
+              {readinessError ? <button onClick={() => {
+                void selectedDetail.refresh();
+                void queueReadiness.refresh();
+              }} type="button">Retry thread</button> : undefined}
+            </p>
+          ) : sendNotice ? (
+            <p className="star-map-chat-card__notice" role="status">
+              {sendNotice}
+            </p>
+          ) : undefined}
 
-        {queuedTurns.map((queued, index) => (
-          <div
-            aria-label={
-              index === 0 ? "Queued message" : `Queued message ${index + 1}`
-            }
-            className="composer__queued"
-            key={queued.id}
-          >
-            <div className="composer__queued-copy">
-              <span className="composer__queued-label">
-                {queued.backendQueuePending
-                  ? "Sending…"
-                  : index === 0
-                    ? "Queued next"
-                    : `Queued #${index + 1}`}
-              </span>
-              <span className="composer__queued-text">
-                {queuedTurnPreview(queued)}
-              </span>
+          {queuedTurns.map((queued, index) => (
+            <div
+              aria-label={
+                index === 0 ? "Queued message" : `Queued message ${index + 1}`
+              }
+              className="composer__queued composer__queued--message composer__queued--compact"
+              key={queued.id}
+            >
+              <QueuedMessageInspector
+                load={() => readQueuedMessage(queued)}
+                desktopApi={desktopApi}
+                actions={
+                  <>
+                    <QueuedRowIconButton
+                      label="Edit"
+                      disabled={
+                        queued.backendQueuePending
+                        || composerDisabled
+                        || queuedRowActionIds.has(queued.id)
+                      }
+                      onClick={() => {
+                        void editQueuedTurn(queued);
+                      }}
+                    >
+                      <PencilIcon size={14} />
+                    </QueuedRowIconButton>
+                    <QueuedRowIconButton
+                      label="Delete"
+                      tone="danger"
+                      disabled={
+                        queued.backendQueuePending
+                        || queuedRowActionIds.has(queued.id)
+                      }
+                      onClick={() => {
+                        void deleteQueuedTurn(queued);
+                      }}
+                    >
+                      <TrashIcon size={14} />
+                    </QueuedRowIconButton>
+                  </>
+                }
+              >
+                <span className="composer__queued-label">
+                  {queued.backendQueuePending
+                    ? "Sending…"
+                    : index === 0
+                      ? "Next"
+                      : `#${index + 1}`}
+                </span>
+                <span
+                  className={[
+                    "composer__queued-text",
+                    queued.title ? "" : "composer__queued-text--raw",
+                  ].filter(Boolean).join(" ")}
+                >
+                  {queued.title ?? queuedTurnPreview(queued)}
+                </span>
+              </QueuedMessageInspector>
             </div>
-          </div>
-        ))}
+          ))}
+        </div>
 
         <MemoizedCompactComposer
           busy={session.threadBusy}
@@ -1763,6 +2034,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
           }
           canSteer={canSteer}
           disabled={composerDisabled}
+          draftRestore={draftRestore}
           draftScopeKey={composerScopeKey}
           draftStore={ownedComposerDraftStore}
           executionMode={threadExecutionMode}
@@ -1775,6 +2047,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
           model={threadModel}
           normalizeImageForUpload={desktopApi?.normalizeImageForUpload}
           onAttachmentError={onAttachmentError}
+          onDraftRestoreApplied={onDraftRestoreApplied}
           onInterrupt={onInterrupt}
           onSend={send}
           pastedImageMaxPatches={props.pastedImageMaxPatches}

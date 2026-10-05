@@ -23,7 +23,7 @@ import {
   getLaunchpadScopeDirectoryKey,
   isStartingLaunchpadComposerScopeKey,
 } from "./launchpad-composer-scope";
-import { QueuedMessageInspector } from "./QueuedMessageInspector";
+import { QueuedMessageInspector, QueuedRowIconButton } from "./QueuedMessageInspector";
 import { notificationIncludesDraftContent, restoreQueuedMessage } from "./queued-message-content";
 import {
   Fragment,
@@ -84,6 +84,7 @@ import {
   parseCodexAsyncQuestionReply,
   readCodexEnvironmentActionRuns,
   summarizeCodexAsyncQuestionReply,
+  withoutSupersededCodexEnvironmentActionRuns,
 } from "@pwragent/shared";
 import {
   BranchIcon,
@@ -94,12 +95,14 @@ import {
   FolderIcon,
   LightningIcon,
   MoreVerticalIcon,
+  PencilIcon,
   PlanIcon,
   PlayIcon,
   PlusIcon,
   PullRequestIcon,
   SearchIcon,
   ThreadIcon,
+  TrashIcon,
   CelestialIcon,
 } from "../../icons";
 import { AppIcon } from "../../components/AppIcon";
@@ -623,6 +626,7 @@ type QueuedTurnDraft = {
   errorMessage?: string;
   manualReleaseRequired?: boolean;
   holdReason?: string;
+  title?: string;
   input?: AppServerTurnInputItem[];
   imageAttachments: ComposerImageAttachment[];
   fileAttachments: ComposerFileAttachment[];
@@ -1385,9 +1389,24 @@ function formatDraftPreview(draft: QueuedTurnDraft): string {
 
 function QueuedImageAttachments(props: {
   attachments: ComposerImageAttachment[];
+  /** One thumbnail and a count, for a row that must stay one line tall. */
+  chip?: boolean;
 }): ReactNode {
   if (props.attachments.length === 0) {
     return null;
+  }
+
+  if (props.chip) {
+    const first = props.attachments[0]!;
+    return (
+      <span
+        className="composer__queued-image-chip"
+        aria-label={`Queued image attachments: ${props.attachments.length}`}
+      >
+        <img src={first.url} alt={formatPastedImageAlt(first, 0)} />
+        {props.attachments.length > 1 ? props.attachments.length : null}
+      </span>
+    );
   }
 
   const visibleAttachments = props.attachments.slice(0, 3);
@@ -1465,7 +1484,11 @@ export function EnvActionAnchorList(props: {
   onMoveToSidebar?: () => void;
   onStopRun?: (run: CodexEnvironmentActionRun, mode: "stop" | "terminate") => void;
 }): ReactNode {
-  const runs = readCodexEnvironmentActionRuns(props.runtime);
+  // Superseded first, then dismissed: dismissing the newest result must not
+  // bring back the one it replaced.
+  const runs = withoutSupersededCodexEnvironmentActionRuns(
+    readCodexEnvironmentActionRuns(props.runtime),
+  );
   const visible = runs.filter((run) => {
     if (props.hiddenRunIds?.has(run.runId)) return false;
     if (dismissedEnvActionAnchorKeys.has(run.runId)) return false;
@@ -2797,6 +2820,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const activeTurnIdRef = useRef<string | undefined>(props.activeTurnId);
   const confirmedActiveTurnIdRef = useRef<string | undefined>(undefined);
   const terminalTurnKeysRef = useRef(new Set<string>());
+  // Queued rows with an owner-side Edit or Delete in flight. A second click
+  // would cancel an entry the first already took and report it as no longer
+  // waiting.
+  const queuedRowActionIdsRef = useRef(new Set<string>());
   const activeReviewTurnIdRef = useRef<string | undefined>(undefined);
   const inFlightReviewSubmissionKeyRef = useRef<string | undefined>(undefined);
   const autocompleteOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -4388,6 +4415,20 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       return "failed";
     }
   };
+  /** Runs one owner-side Edit or Delete per row; a click while one runs is dropped. */
+  const runQueuedRowAction = async (
+    queued: QueuedTurnDraft,
+    action: () => Promise<void>,
+  ): Promise<void> => {
+    const inFlight = queuedRowActionIdsRef.current;
+    if (inFlight.has(queued.id)) return;
+    inFlight.add(queued.id);
+    try {
+      await action();
+    } finally {
+      inFlight.delete(queued.id);
+    }
+  };
   const acknowledgeQueuedFailure = (queued: QueuedTurnDraft): void => {
     turnFailureAcknowledgements.dismissMatching(failureScope, queued.holdReason ?? queued.errorMessage);
   };
@@ -5515,6 +5556,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           ? (event.notification.params as {
               displayText?: unknown;
               inputUpdated?: unknown;
+              title?: unknown;
               errorMessage?: unknown;
               manualReleaseRequired?: unknown;
               queueEntryId?: unknown;
@@ -5553,6 +5595,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           && typeof turnQueueRecord.errorMessage === "string"
             ? turnQueueRecord.errorMessage
             : undefined;
+        const title =
+          typeof turnQueueRecord.title === "string" && turnQueueRecord.title
+            ? turnQueueRecord.title
+            : undefined;
         if (matchingIndex >= 0) {
           const next = mirrorCurrent.map((queued, index) =>
             index === matchingIndex
@@ -5562,6 +5608,13 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                     && typeof turnQueueRecord.displayText === "string"
                     ? { text: turnQueueRecord.displayText }
                     : {}),
+                  // An input edit retires the old title; a title refresh
+                  // brings the new one. Admission events carry neither.
+                  ...(title
+                    ? { title }
+                    : turnQueueRecord.inputUpdated === true
+                      ? { title: undefined }
+                      : {}),
                   manualReleaseRequired,
                   holdReason,
                 }
@@ -5577,6 +5630,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 : {}),
               manualReleaseRequired,
               holdReason,
+              ...(title ? { title } : {}),
               text:
                 typeof turnQueueRecord.displayText === "string"
                   ? turnQueueRecord.displayText
@@ -11310,8 +11364,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           : scheduledSendAt
           ? `Scheduled · sends in ${formatScheduledSendCountdown(scheduledSendAt, scheduleNow)}`
           : index === 0
-            ? "Queued next"
-            : `Queued #${index + 1}`;
+            ? "Next"
+            : `#${index + 1}`;
+        const failed = Boolean(queued.errorMessage || queued.manualReleaseRequired);
 
         return (
           <div
@@ -11319,9 +11374,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               "composer__queued",
               "composer__queued--message",
               scheduledSendAt ? "composer__queued--scheduled" : "",
-              queued.errorMessage || queued.manualReleaseRequired
-                ? "composer__queued--failed"
-                : "",
+              failed ? "composer__queued--failed" : "",
+              // Rows waiting on an answer keep their actions on screen.
+              failed || scheduledSendAt ? "composer__queued--pinned-actions" : "",
             ]
               .filter(Boolean)
               .join(" ")}
@@ -11340,25 +11395,22 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             }
             key={queued.id}
           >
-            <div className="composer__queued-copy">
-              <span className="composer__queued-label" role="status">
-                {queuedLabel}
-              </span>
-              <span className="composer__queued-text">
-                {formatDraftPreview(queued)}
-              </span>
-              {queued.errorMessage ? (
-                <LinkedTurnFailureMessage scope={failureScope} className="composer__queued-error" message={queued.errorMessage} />
-              ) : null}
-              {queued.holdReason ? (
-                <LinkedTurnFailureMessage scope={failureScope} className="composer__queued-error" message={queued.holdReason} />
-              ) : null}
-            </div>
-            <QueuedImageAttachments attachments={queued.imageAttachments} />
             <QueuedMessageInspector
               load={() => readQueuedMessage(queued)}
               desktopApi={props.desktopApi}
-            >
+              detail={
+                queued.errorMessage || queued.holdReason ? (
+                  <div className="composer__queued-detail">
+                    {queued.errorMessage ? (
+                      <LinkedTurnFailureMessage scope={failureScope} className="composer__queued-error" message={queued.errorMessage} />
+                    ) : null}
+                    {queued.holdReason ? (
+                      <LinkedTurnFailureMessage scope={failureScope} className="composer__queued-error" message={queued.holdReason} />
+                    ) : null}
+                  </div>
+                ) : null
+              }
+              actions={<>
               {isLaunchpad ? (
                 supportsSteering ? (
                   <button
@@ -11429,10 +11481,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   Send now
                 </button>
               ) : null}
-              <button
-                className="composer__secondary-action"
+              <QueuedRowIconButton
+                label="Edit"
                 disabled={queued.backendQueuePending}
-                type="button"
                 onClick={() => {
                   const editQueuedTurn = (editable = queued): void => {
                     acknowledgeQueuedFailure(queued);
@@ -11469,7 +11520,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                     editQueuedTurn();
                     return;
                   }
-                  void (async () => {
+                  void runQueuedRowAction(queued, async () => {
                     let editable: QueuedTurnDraft;
                     let contentHash: string;
                     try {
@@ -11489,22 +11540,22 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                       return;
                     }
                     editQueuedTurn(editable);
-                  })();
+                  });
                 }}
               >
-                Edit
-              </button>
-              <button
-                className="composer__secondary-action"
+                <PencilIcon size={14} />
+              </QueuedRowIconButton>
+              <QueuedRowIconButton
+                label="Delete"
+                tone="danger"
                 disabled={queued.backendQueuePending}
-                type="button"
                 onClick={() => {
                   if (!backendOwned) {
                     acknowledgeQueuedFailure(queued);
                     removeQueuedTurnAt(index);
                     return;
                   }
-                  void (async () => {
+                  void runQueuedRowAction(queued, async () => {
                     const cancellation = await cancelServerManagedQueuedTurn(
                       queued,
                       queuedScopeKey,
@@ -11513,11 +11564,25 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                       acknowledgeQueuedFailure(queued);
                       removeQueuedTurnInScope(queuedScopeKey, queued);
                     }
-                  })();
+                  });
                 }}
               >
-                Delete
-              </button>
+                <TrashIcon size={14} />
+              </QueuedRowIconButton>
+              </>}
+            >
+              <span className="composer__queued-label" role="status">
+                {queuedLabel}
+              </span>
+              <span
+                className={[
+                  "composer__queued-text",
+                  queued.title ? "" : "composer__queued-text--raw",
+                ].filter(Boolean).join(" ")}
+              >
+                {queued.title ?? formatDraftPreview(queued)}
+              </span>
+              <QueuedImageAttachments attachments={queued.imageAttachments} chip />
             </QueuedMessageInspector>
           </div>
         );

@@ -95,6 +95,8 @@ describe("desktop settings contracts", () => {
         },
         codexProfileModel: { value: "shared", source: "default" },
         messagingAcknowledgment: { value: null, source: "default" },
+        interactiveSvgSkipNotice: { value: false, source: "default" },
+        interactiveSvgAutoOpen: { value: false, source: "default" },
       },
       onboarding: {
         completed: { value: true, source: "default" },

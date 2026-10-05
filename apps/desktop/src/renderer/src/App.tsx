@@ -119,6 +119,10 @@ import {
 } from "./lib/useNavigationHistory";
 import { TranscriptLinkProvider } from "./lib/transcript-links";
 import { MarkdownRenderingOptionsProvider } from "./lib/markdown-rendering-options";
+import {
+  InteractiveSvgPreferencesProvider,
+  type InteractiveSvgPreferences,
+} from "./lib/interactive-svg-preferences";
 import { useThreadNavigation } from "./lib/useThreadNavigation";
 import { usePwrAgentProfiles } from "./lib/usePwrAgentProfiles";
 import { usePullRequestRefresh } from "./features/pr-status/usePullRequestRefresh";
@@ -1549,6 +1553,15 @@ function DesktopAppShell(props: {
   // writeConfig call is fire-and-forget; a failed write just means the
   // preference isn't remembered next launch.
   const writeConfig = settings.writeConfig;
+  const interactiveSvgSkipNotice =
+    settings.snapshot?.general.interactiveSvgSkipNotice?.value ?? false;
+  const interactiveSvgAutoOpen =
+    settings.snapshot?.general.interactiveSvgAutoOpen?.value ?? false;
+  const interactiveSvgPreferences = useMemo<InteractiveSvgPreferences>(() => ({
+    skipNotice: interactiveSvgSkipNotice,
+    autoOpen: interactiveSvgAutoOpen,
+    save: (patch) => writeConfig({ general: patch }),
+  }), [interactiveSvgAutoOpen, interactiveSvgSkipNotice, writeConfig]);
   // Thread-jump palette (⌘K anywhere, ⌘F while the sidebar is focused). Owns
   // its own open state and the sidebar peek a jump's landing scroll needs.
   const threadJump = useThreadJump({ sidebarHidden, setSidebarHidden });
@@ -3631,7 +3644,9 @@ function DesktopAppShell(props: {
                 settings.snapshot?.experimental.markdownMathRendering?.value ?? true
               }
             >
-              <ThreadViewComponent {...threadViewProps} />
+              <InteractiveSvgPreferencesProvider value={interactiveSvgPreferences}>
+                <ThreadViewComponent {...threadViewProps} />
+              </InteractiveSvgPreferencesProvider>
             </MarkdownRenderingOptionsProvider>
           ) : null}
         </main>

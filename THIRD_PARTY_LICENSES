@@ -688,7 +688,7 @@ MIT
 - @mattermost/client@11.9.0 | https://github.com/mattermost/mattermost
 - @mattermost/types@11.9.0 | https://github.com/mattermost/mattermost
 - @mermaid-js/parser@1.2.1 | https://github.com/mermaid-js/mermaid
-- @modelcontextprotocol/sdk@1.30.0 | https://github.com/modelcontextprotocol/typescript-sdk
+- @modelcontextprotocol/sdk@1.30.1 | https://github.com/modelcontextprotocol/typescript-sdk
 - @napi-rs/canvas@1.0.9 | https://github.com/Brooooooklyn/canvas
 - @napi-rs/canvas-android-arm64@1.0.9 | https://github.com/Brooooooklyn/canvas
 - @napi-rs/canvas-darwin-arm64@1.0.9 | https://github.com/Brooooooklyn/canvas
@@ -858,7 +858,7 @@ MIT
 - content-disposition@1.1.0 | jshttp/content-disposition
 - content-type@1.0.5 | jshttp/content-type
 - content-type@2.1.0 | jshttp/content-type
-- content-type@3.0.0 | jshttp/content-type
+- content-type@3.1.1 | jshttp/content-type
 - cookie@0.7.2 | jshttp/cookie
 - cookie-signature@1.2.2 | https://github.com/visionmedia/node-cookie-signature
 - cors@2.8.6 | expressjs/cors
@@ -902,9 +902,9 @@ MIT
 - eventemitter3@4.0.7 | https://github.com/primus/eventemitter3
 - eventemitter3@5.0.4 | https://github.com/primus/eventemitter3
 - eventsource@3.0.7 | https://git@github.com/EventSource/eventsource
-- eventsource-parser@3.1.0 | https://github.com/rexxars/eventsource-parser
+- eventsource-parser@3.1.1 | https://github.com/rexxars/eventsource-parser
 - express@5.2.1 | expressjs/express
-- express-rate-limit@8.6.0 | https://github.com/express-rate-limit/express-rate-limit
+- express-rate-limit@8.7.0 | https://github.com/express-rate-limit/express-rate-limit
 - extend@3.0.2 | https://github.com/justmoon/node-extend
 - fast-deep-equal@3.1.3 | https://github.com/epoberezkin/fast-deep-equal
 - fast-equals@5.4.2 | https://github.com/planttheidea/fast-equals
@@ -956,13 +956,13 @@ MIT
 - is-hexadecimal@2.0.1 | wooorm/is-hexadecimal
 - is-plain-obj@4.1.0 | sindresorhus/is-plain-obj
 - is-promise@4.0.0 | https://github.com/then/is-promise
-- jose@6.2.3 | panva/jose
+- jose@6.2.12 | panva/jose
 - js-yaml@4.3.2 | nodeca/js-yaml
 - json-schema-traverse@1.0.0 | https://github.com/epoberezkin/json-schema-traverse
 - json-with-bigint@3.5.12 | https://github.com/Ivan-Korolenko/json-with-bigint
 - jsonfile@6.2.1 | https://github.com/jprichardson/node-jsonfile
 - katex@0.16.47 | https://github.com/KaTeX/KaTeX
-- katex@0.18.7 | https://github.com/KaTeX/KaTeX
+- katex@0.18.9 | https://github.com/KaTeX/KaTeX
 - khroma@2.1.0 | github:fabiospampinato/khroma
 - layout-base@1.0.2 | https://github.com/iVis-at-Bilkent/layout-base
 - layout-base@2.0.1 | https://github.com/iVis-at-Bilkent/layout-base
@@ -998,7 +998,7 @@ MIT
 - mdast-util-to-hast@13.2.1 | syntax-tree/mdast-util-to-hast
 - mdast-util-to-markdown@2.1.2 | syntax-tree/mdast-util-to-markdown
 - mdast-util-to-string@4.0.0 | syntax-tree/mdast-util-to-string
-- media-typer@1.1.0 | jshttp/media-typer
+- media-typer@1.1.1 | jshttp/media-typer
 - merge-descriptors@2.0.0 | sindresorhus/merge-descriptors
 - mermaid@11.17.2 | https://github.com/mermaid-js/mermaid
 - micromark@4.0.2 | https://github.com/micromark/micromark/tree/main/packages/micromark
@@ -1042,6 +1042,7 @@ MIT
 - ms@2.1.3 | vercel/ms
 - napi-build-utils@2.0.0 | https://github.com/inspiredware/napi-build-utils
 - negotiator@1.0.0 | jshttp/negotiator
+- negotiator@1.1.0 | jshttp/negotiator
 - node-abi@3.94.0 | https://github.com/electron/node-abi
 - node-addon-api@7.1.1 | https://github.com/nodejs/node-addon-api
 - node-fetch@2.7.0 | https://github.com/bitinn/node-fetch
@@ -1083,7 +1084,7 @@ MIT
 - prosemirror-transform@1.12.0 | https://github.com/prosemirror/prosemirror-transform
 - prosemirror-transform@1.12.1 | https://code.haverbeke.berlin/prosemirror/prosemirror-transform
 - prosemirror-view@1.41.9 | https://code.haverbeke.berlin/prosemirror/prosemirror-view
-- proxy-addr@2.0.7 | jshttp/proxy-addr
+- proxy-addr@2.0.8 | jshttp/proxy-addr
 - proxy-agent-negotiate@1.1.0 | https://github.com/TooTallNate/proxy-agents
 - proxy-from-env@2.1.0 | https://github.com/Rob--W/proxy-from-env
 - pump@3.0.4 | https://github.com/mafintosh/pump
@@ -1150,7 +1151,7 @@ MIT
 - tuf-js@6.0.0 | https://github.com/theupdateframework/tuf-js
 - type-is@2.1.0 | jshttp/type-is
 - undici@6.28.1 | https://github.com/nodejs/undici
-- undici@8.10.2 | https://github.com/nodejs/undici
+- undici@8.11.2 | https://github.com/nodejs/undici
 - undici-types@7.18.2 | https://github.com/nodejs/undici
 - undici-types@7.24.6 | https://github.com/nodejs/undici
 - unified@11.0.5 | unifiedjs/unified
@@ -3580,13 +3581,13 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-@modelcontextprotocol/sdk@1.30.0 (MIT)
+@modelcontextprotocol/sdk@1.30.1 (MIT)
 --------------------------------------
 
 Applies to:
-- @modelcontextprotocol/sdk@1.30.0 (MIT)
+- @modelcontextprotocol/sdk@1.30.1 (MIT)
 
-Representative file: @modelcontextprotocol/sdk@1.30.0/LICENSE
+Representative file: @modelcontextprotocol/sdk@1.30.1/LICENSE
 
 MIT License
 
@@ -5872,7 +5873,7 @@ content-disposition@1.1.0 (MIT)
 Applies to:
 - content-disposition@1.1.0 (MIT)
 - forwarded@0.2.0 (MIT)
-- media-typer@1.1.0 (MIT)
+- media-typer@1.1.1 (MIT)
 - vary@1.1.2 (MIT)
 
 Representative file: content-disposition@1.1.0/LICENSE
@@ -5906,7 +5907,7 @@ content-type@1.0.5 (MIT)
 Applies to:
 - content-type@1.0.5 (MIT)
 - content-type@2.1.0 (MIT)
-- content-type@3.0.0 (MIT)
+- content-type@3.1.1 (MIT)
 
 Representative file: content-type@1.0.5/LICENSE
 
@@ -7647,7 +7648,7 @@ etag@1.8.1 (MIT)
 
 Applies to:
 - etag@1.8.1 (MIT)
-- proxy-addr@2.0.7 (MIT)
+- proxy-addr@2.0.8 (MIT)
 
 Representative file: etag@1.8.1/LICENSE
 
@@ -7766,13 +7767,13 @@ LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-eventsource-parser@3.1.0 (MIT)
+eventsource-parser@3.1.1 (MIT)
 ------------------------------
 
 Applies to:
-- eventsource-parser@3.1.0 (MIT)
+- eventsource-parser@3.1.1 (MIT)
 
-Representative file: eventsource-parser@3.1.0/LICENSE
+Representative file: eventsource-parser@3.1.1/LICENSE
 
 MIT License
 
@@ -7859,15 +7860,15 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
 TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-express-rate-limit@8.6.0 (MIT)
+express-rate-limit@8.7.0 (MIT)
 ------------------------------
 
 Applies to:
-- express-rate-limit@8.6.0 (MIT)
+- express-rate-limit@8.7.0 (MIT)
 
-Representative file: express-rate-limit@8.6.0/license.md
+Representative file: express-rate-limit@8.7.0/license
 
-# MIT License
+MIT License
 
 Copyright 2023 Nathan Friedly, Vedant K
 
@@ -7882,11 +7883,12 @@ The above copyright notice and this permission notice shall be included in all
 copies or substantial portions of the Software.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
-FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
-COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
-IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
-CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
 extend@3.0.2 (MIT)
 ------------------
@@ -9154,13 +9156,13 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
-jose@6.2.3 (MIT)
-----------------
+jose@6.2.12 (MIT)
+-----------------
 
 Applies to:
-- jose@6.2.3 (MIT)
+- jose@6.2.12 (MIT)
 
-Representative file: jose@6.2.3/LICENSE.md
+Representative file: jose@6.2.12/LICENSE.md
 
 The MIT License (MIT)
 
@@ -9339,7 +9341,7 @@ katex@0.16.47 (MIT)
 
 Applies to:
 - katex@0.16.47 (MIT)
-- katex@0.18.7 (MIT)
+- katex@0.18.9 (MIT)
 
 Representative file: katex@0.16.47/LICENSE
 
@@ -10355,6 +10357,7 @@ negotiator@1.0.0 (MIT)
 
 Applies to:
 - negotiator@1.0.0 (MIT)
+- negotiator@1.1.0 (MIT)
 
 Representative file: negotiator@1.0.0/LICENSE
 
@@ -12794,7 +12797,7 @@ undici@6.28.1 (MIT)
 
 Applies to:
 - undici@6.28.1 (MIT)
-- undici@8.10.2 (MIT)
+- undici@8.11.2 (MIT)
 - undici-types@7.18.2 (MIT)
 - undici-types@7.24.6 (MIT)
 

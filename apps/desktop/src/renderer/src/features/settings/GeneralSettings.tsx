@@ -117,6 +117,10 @@ export function GeneralSettings(props: {
   snapshot: DesktopSettingsSnapshot;
   onConfirmQuitWithInProgressThreadsChange: (value: boolean) => Promise<void>;
   onAttentionPromoteOnTurnEndChange: (value: boolean) => Promise<void>;
+  onInteractiveSvgChange: (patch: {
+    interactiveSvgSkipNotice?: boolean;
+    interactiveSvgAutoOpen?: boolean;
+  }) => Promise<void>;
   onPdfAnalysisEnabledChange: (value: boolean) => Promise<void>;
   onPastedImageMaxPatchesChange: (value: number) => Promise<void>;
   onNotificationsEnabledChange: (value: boolean) => Promise<void>;
@@ -128,6 +132,18 @@ export function GeneralSettings(props: {
     props.snapshot.general.confirmQuitWithInProgressThreads;
   const attentionPromoteOnTurnEnd =
     props.snapshot.general.attentionPromoteOnTurnEnd;
+  const interactiveSvgSkipNotice =
+    props.snapshot.general.interactiveSvgSkipNotice;
+  const interactiveSvgAutoOpen = props.snapshot.general.interactiveSvgAutoOpen;
+  // An older profile can hold auto-open without skip-notice; auto-open has
+  // always implied it, as the lightbox reads it.
+  const trustsSvgScripts =
+    interactiveSvgSkipNotice.value || interactiveSvgAutoOpen.value;
+  // The badge names whichever key turned trust on.
+  const svgTrustSource =
+    interactiveSvgSkipNotice.value || !interactiveSvgAutoOpen.value
+      ? interactiveSvgSkipNotice
+      : interactiveSvgAutoOpen;
   const pdfAnalysisEnabled = props.snapshot.general.pdfAnalysisEnabled;
   const notificationsEnabled = props.snapshot.general.notificationsEnabled;
   const messagingAcknowledgment =
@@ -219,6 +235,43 @@ export function GeneralSettings(props: {
             source={sourceBadge(attentionPromoteOnTurnEnd)}
             onChange={(next) => {
               return props.onAttentionPromoteOnTurnEndChange(next);
+            }}
+          />
+        </div>
+      </SettingsSection>
+
+      <SettingsSection
+        eyebrow="General"
+        title="Interactive SVGs"
+        chip={sourceBadge(interactiveSvgAutoOpen.source === "default"
+          ? interactiveSvgSkipNotice
+          : interactiveSvgAutoOpen)}
+      >
+        <div className="settings-fields">
+          <ToggleField
+            checked={trustsSvgScripts}
+            disabled={props.saving}
+            label="Run SVG scripts without asking"
+            sub="Clicking an SVG runs its scripts in an isolated frame, with no notice first."
+            source={sourceBadge(svgTrustSource)}
+            onChange={(next) => {
+              // Opening interactive runs scripts too, so it goes off with trust.
+              return props.onInteractiveSvgChange(next
+                ? { interactiveSvgSkipNotice: true }
+                : { interactiveSvgSkipNotice: false, interactiveSvgAutoOpen: false });
+            }}
+          />
+          <ToggleField
+            checked={interactiveSvgAutoOpen.value}
+            disabled={props.saving}
+            label="Open SVGs interactive"
+            sub="Skip the static preview when an SVG has scripts."
+            lockedReason={trustsSvgScripts
+              ? undefined
+              : "Needs \u201cRun SVG scripts without asking\u201d: opening an SVG runs its scripts."}
+            source={sourceBadge(interactiveSvgAutoOpen)}
+            onChange={(next) => {
+              return props.onInteractiveSvgChange({ interactiveSvgAutoOpen: next });
             }}
           />
         </div>
