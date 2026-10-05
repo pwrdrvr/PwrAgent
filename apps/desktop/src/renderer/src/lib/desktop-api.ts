@@ -367,6 +367,8 @@ import type {
   ListWorktreeUnpublishedCommitsResponse,
   GetWorktreeUnpublishedCommitDiffRequest,
   GetWorktreeUnpublishedCommitDiffResponse,
+  ReadWorktreeImageRequest,
+  ReadWorktreeImageResponse,
   NavigationSnapshot,
   ResetDirectoryLaunchpadRequest,
   ResetDirectoryLaunchpadResponse,
@@ -1380,6 +1382,10 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   getWorktreeUnpublishedCommitDiff?: (
     request: GetWorktreeUnpublishedCommitDiffRequest
   ) => Promise<GetWorktreeUnpublishedCommitDiffResponse>;
+  /** One side of an image diff, for the Edits rail's previews and lightbox. */
+  readWorktreeImage?: (
+    request: ReadWorktreeImageRequest
+  ) => Promise<ReadWorktreeImageResponse>;
   getGlabStatus?: (request?: GetGlabStatusRequest) => Promise<GlabStatus>;
   pickGlabCommand?: () => Promise<PickGhCommandResponse>;
   getGhStatus?: (request?: GetGhStatusRequest) => Promise<GhStatus>;

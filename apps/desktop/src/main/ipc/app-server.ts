@@ -200,6 +200,8 @@ import {
   type ListWorktreeUnpublishedCommitsResponse,
   type GetWorktreeUnpublishedCommitDiffRequest,
   type GetWorktreeUnpublishedCommitDiffResponse,
+  type ReadWorktreeImageRequest,
+  type ReadWorktreeImageResponse,
   type ResolveMissingCodexThreadsRequest,
   type ResolveMissingCodexThreadsResponse,
   type RestoreThreadRequest,
@@ -234,6 +236,7 @@ import {
   rankInboxThreadKeys,
 } from "@pwragent/shared";
 import { registerDirectoryFromDisk } from "../app-server/directory-registration-service";
+import { readWorktreeImage } from "../app-server/worktree-image-reader";
 import {
   disposeDesktopBackendRegistry,
   getExistingDesktopBackendRegistry,
@@ -304,6 +307,7 @@ import {
   NAVIGATION_GET_WORKTREE_OTHER_CHANGE_DIFF_CHANNEL,
   NAVIGATION_LIST_WORKTREE_UNPUBLISHED_COMMITS_CHANNEL,
   NAVIGATION_GET_WORKTREE_UNPUBLISHED_COMMIT_DIFF_CHANNEL,
+  NAVIGATION_READ_WORKTREE_IMAGE_CHANNEL,
   FEDERATION_JUMP_SEARCH_CHANNEL,
   FEDERATION_JUMP_SEARCH_PROGRESS_CHANNEL,
   NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL,
@@ -2701,6 +2705,12 @@ class DesktopAppServerService {
         maxFilesPerCommit: request.maxFilesPerCommit,
       },
     );
+  }
+
+  async readWorktreeImage(
+    request: ReadWorktreeImageRequest,
+  ): Promise<ReadWorktreeImageResponse> {
+    return await readWorktreeImage(request);
   }
 
   async getWorktreeUnpublishedCommitDiff(
@@ -9133,6 +9143,21 @@ export function registerAppServerIpcHandlers(): void {
       return await appServerService.getWorktreeUnpublishedCommitDiff(request);
     },
   );
+  ipcMain.removeHandler(NAVIGATION_READ_WORKTREE_IMAGE_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_READ_WORKTREE_IMAGE_CHANNEL,
+    async (
+      event,
+      request: ReadWorktreeImageRequest,
+    ): Promise<ReadWorktreeImageResponse> => {
+      // Image bytes are read from this machine's disk only. A remote thread's
+      // worktree path names a directory on its owner, never on the viewer.
+      if (isFederationWindowWebContents(event?.sender)) {
+        throw new Error("Worktree image reads are not available for remote threads.");
+      }
+      return await appServerService.readWorktreeImage(request);
+    },
+  );
   ipcMain.removeHandler(NAVIGATION_GET_GH_STATUS_CHANNEL);
   ipcMain.handle(
     NAVIGATION_GET_GH_STATUS_CHANNEL,
@@ -9461,6 +9486,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(NAVIGATION_GET_WORKTREE_OTHER_CHANGE_DIFF_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_LIST_WORKTREE_UNPUBLISHED_COMMITS_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_GET_WORKTREE_UNPUBLISHED_COMMIT_DIFF_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_READ_WORKTREE_IMAGE_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_GET_GLAB_STATUS_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_GET_GH_STATUS_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL);

@@ -1364,6 +1364,69 @@ export type GetWorktreeUnpublishedCommitDiffResponse = {
   detail?: AppServerThreadActivityDetail;
 };
 
+/** Which revision of a worktree file to read image bytes from. */
+export type WorktreeImageRevision =
+  | { kind: "worktree" }
+  | { kind: "head" }
+  | { kind: "commit"; sha: string }
+  /** The commit's first parent: the "before" of a commit's change. */
+  | { kind: "commitParent"; sha: string };
+
+export type ReadWorktreeImageRequest = {
+  worktreePath: string;
+  /** Absolute path inside `worktreePath`. */
+  path: string;
+  revision: WorktreeImageRevision;
+};
+
+/**
+ * One side of an image diff. `missing` is the ordinary answer for the other
+ * side of an add or a delete, not an error, so callers can ask for both sides
+ * unconditionally.
+ */
+export type ReadWorktreeImageResponse =
+  | { kind: "image"; mediaType: string; bytes: Uint8Array }
+  | { kind: "missing" }
+  | { kind: "tooLarge"; sizeBytes: number }
+  | { kind: "lfsPointer" }
+  | { kind: "unsupported" };
+
+const WORKTREE_IMAGE_MEDIA_TYPES = new Map<string, string>([
+  ["apng", "image/apng"],
+  ["avif", "image/avif"],
+  ["bmp", "image/bmp"],
+  ["gif", "image/gif"],
+  ["ico", "image/x-icon"],
+  ["jfif", "image/jpeg"],
+  ["jpeg", "image/jpeg"],
+  ["jpg", "image/jpeg"],
+  ["png", "image/png"],
+  ["webp", "image/webp"],
+]);
+
+/**
+ * Media type for a raster image path the renderer can preview, or undefined.
+ * Extension-based on purpose: git says a blob is binary, not what it is. SVG
+ * is left out — it is text, and its edits already read as a text diff.
+ */
+export function worktreeImageMediaType(filePath: string): string | undefined {
+  const name = filePath.slice(
+    Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\")) + 1,
+  );
+  const dot = name.lastIndexOf(".");
+  if (dot <= 0) {
+    return undefined;
+  }
+  return WORKTREE_IMAGE_MEDIA_TYPES.get(name.slice(dot + 1).toLowerCase());
+}
+
+/**
+ * Ceiling on one previewed side. The bytes are copied across IPC and decoded
+ * twice (thumbnail and pixel diff), so a repository's 200 MB PSD-like asset
+ * must not stall the renderer for a picture nobody can see anyway.
+ */
+export const WORKTREE_IMAGE_MAX_BYTES = 16 * 1024 * 1024;
+
 const ACP_BACKEND_ID_PREFIX = "acp:";
 const ACP_REGISTRY_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
 

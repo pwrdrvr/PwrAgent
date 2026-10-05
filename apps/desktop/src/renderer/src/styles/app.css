@@ -199,6 +199,15 @@
   --scrim-strong: color-mix(in srgb, var(--shadow-base) 62%, transparent);
   --scrim-opaque: color-mix(in srgb, var(--shadow-base) 88%, transparent);
 
+  /* Image diff legend. The pixel-diff worker bakes these exact values into
+     its PNG (`image-diff/pixel-diff-options.ts`), so they do not flip with
+     the theme: the swatch has to match the picture it explains. Magenta, not
+     pixelmatch's red, because game art and UI screenshots already carry red. */
+  --image-diff-changed: #ff2d9b;
+  --image-diff-aa: #ffe14d;
+  /* The dark square of the transparency checkerboard behind a preview. */
+  --image-diff-checker: color-mix(in srgb, var(--text-primary) 7%, transparent);
+
   /* Scrollbar tones — thumb + track for the native (`scrollbar-color`)
      thin scrollbars; no hover tone since the OS handles thumb hover. */
   --scrollbar-track: color-mix(in srgb, var(--text-primary) 5%, transparent);
@@ -34169,6 +34178,236 @@ button.pricing-token-miser__folded:focus-visible {
   .image-lightbox__nav--next {
     right: 8px;
   }
+}
+
+/* Image rows in the Edits rail. The rail is far too narrow to compare in, so
+   an expanded image row shows a pair of small frames — enough to say which
+   picture this is and that it changed — and each frame opens the image diff
+   lightbox on itself. Always two columns: a lone Added or Deleted frame keeps
+   the scale of a pair instead of stretching across the rail. */
+.image-diff-preview {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.image-diff-preview__side {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: zoom-in;
+}
+
+.image-diff-preview__side:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* Transparent sprites are most of what this shows, so the frame is a
+   checkerboard rather than a flat panel that hides where the alpha is. */
+.image-diff-preview__frame {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 112px;
+  padding: 4px;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background-color: var(--bg-panel);
+  background-image: conic-gradient(
+    var(--image-diff-checker) 25%,
+    transparent 0 50%,
+    var(--image-diff-checker) 0 75%,
+    transparent 0
+  );
+  background-size: 12px 12px;
+}
+
+.image-diff-preview__side:hover .image-diff-preview__frame {
+  border-color: var(--accent-border);
+}
+
+/* Filled, not capped at natural size: a 24px sprite would otherwise be a dot
+   in a 112px frame. Pixel art upscales pixelated; anything big enough to be
+   downscaled keeps smooth sampling. */
+.image-diff-preview__frame img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.image-diff-preview__frame[data-small="true"] img {
+  image-rendering: pixelated;
+}
+
+.image-diff-preview__caption {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.image-diff-preview__label {
+  flex: none;
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.image-diff-preview__meta {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The image diff lightbox rides `.image-lightbox` — same bands, cookie, edge
+   controls and bottom cluster — and adds one canvas that every revision of a
+   file is drawn into, so the gestures' view is shared by Before, After and
+   Diff. */
+.image-diff-lightbox__canvas {
+  position: relative;
+  background-color: var(--bg-panel);
+  background-image: conic-gradient(
+    var(--image-diff-checker) 25%,
+    transparent 0 50%,
+    var(--image-diff-checker) 0 75%,
+    transparent 0
+  );
+  background-size: 16px 16px;
+}
+
+/* The pointer belongs to the canvas, which owns the pan; a layer that took it
+   would also offer the browser's image drag. */
+.image-diff-lightbox__layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* Hidden, not unmounted: the inactive revision stays decoded, so a flip is
+   instant and the diff never waits on a side nobody has looked at. */
+.image-diff-lightbox__layer[data-active="false"] {
+  visibility: hidden;
+}
+
+/* Past 2x the honest picture is the pixels, not the browser's guess at what
+   lay between them. */
+.image-diff-lightbox__canvas[data-pixelated="true"] .image-diff-lightbox__layer {
+  image-rendering: pixelated;
+}
+
+.image-diff-lightbox__note {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  margin: 0;
+  padding: 6px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-panel-elevated) 88%, transparent);
+  color: var(--text-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+/* The path gives way first; the numbers are what the plate is for. */
+.image-diff-lightbox__detail {
+  flex: none;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.image-diff-lightbox__legend {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.image-diff-lightbox__swatch {
+  width: 9px;
+  height: 9px;
+  margin-left: 4px;
+  border-radius: 2px;
+}
+
+.image-diff-lightbox__swatch[data-kind="changed"] {
+  background: var(--image-diff-changed);
+}
+
+.image-diff-lightbox__swatch[data-kind="aa"] {
+  background: var(--image-diff-aa);
+}
+
+.image-diff-lightbox__items {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.image-diff-lightbox__item {
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.image-diff-lightbox__item:hover {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+/* `--accent-bright`, not `--accent`: it is the accent floored for text on
+   the `--accent-soft` tint, which plain `--accent` misses in light theme. */
+.image-diff-lightbox__item[aria-pressed="true"],
+.image-diff-lightbox__stretch[aria-pressed="true"] {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+  font-weight: 600;
+}
+
+.image-diff-lightbox__item:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+/* A file with one side has nothing to switch to, so its name is a label. */
+.image-diff-lightbox__single {
+  padding: 0 8px 0 10px;
+  color: var(--text-secondary);
+  font-size: 12px;
 }
 
 .composer__setup {
