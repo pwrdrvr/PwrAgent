@@ -498,6 +498,119 @@ describe("App", () => {
     ).toBeInTheDocument();
   });
 
+  it("puts the caret in the new-thread composer after jumping to a project", async () => {
+    const threadViewImported = createDeferred<void>();
+    const project = (label: string) => ({
+      key: `directory:/Users/me/repos/${label}`,
+      kind: "directory" as const,
+      label,
+      path: `/Users/me/repos/${label}`,
+      threadKeys: [],
+      needsAttentionCount: 0,
+      latestUpdatedAt: 1,
+    });
+    const ensureDirectoryLaunchpad = vi.fn(
+      async (request: EnsureDirectoryLaunchpadRequest) => ({
+        launchpad: {
+          directoryKey: request.directoryKey,
+          directoryKind: request.directoryKind,
+          directoryLabel: request.directoryLabel,
+          directoryPath: request.directoryPath,
+          backend: "codex" as const,
+          executionMode: "default" as const,
+          prompt: "",
+          workMode: "local" as const,
+          createdAt: 1,
+          updatedAt: 2,
+        },
+        defaults: {
+          backend: "codex" as const,
+          executionMode: "default" as const,
+        },
+      }),
+    );
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: ownerApi({
+        platform: "darwin",
+        listBackends: async () => ({ fetchedAt: Date.now(), backends: [] }),
+        getNavigationSnapshot: async () => ({
+          backend: "all" as const,
+          fetchedAt: Date.now(),
+          unchanged: false,
+          inboxThreadKeys: [],
+          threads: [],
+          directories: [project("PwrAgent"), project("PwrSnap")],
+          launchpadDefaults: {
+            backend: "codex" as const,
+            executionMode: "default" as const,
+          },
+        }),
+        ensureDirectoryLaunchpad,
+        recordStartupProfileEvent: (event: string) => {
+          if (event === "thread-view-import:end") {
+            threadViewImported.resolve(undefined);
+          }
+        },
+      }),
+    });
+
+    render(<App />);
+
+    const jumpTo = async (label: string): Promise<void> => {
+      fireEvent.keyDown(window, {
+        metaKey: true,
+        code: "KeyK",
+        key: "k",
+      });
+      const quickSearch = await screen.findByRole("dialog", {
+        name: "Jump to thread or project",
+      });
+      const field = within(quickSearch).getByRole("textbox", {
+        name: "Jump to thread or project",
+      });
+      fireEvent.change(field, { target: { value: label } });
+      await within(quickSearch).findByRole("option", { name: new RegExp(label) });
+      fireEvent.keyDown(field, { key: "Enter" });
+      await waitFor(() => expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith(
+        expect.objectContaining({ directoryLabel: label }),
+      ));
+    };
+    const settle = async (): Promise<void> => {
+      await act(async () => {
+        await new Promise<void>((resolve) => {
+          window.requestAnimationFrame(() => {
+            window.requestAnimationFrame(() => {
+              window.setTimeout(resolve, 0);
+            });
+          });
+        });
+      });
+    };
+
+    // The first jump loads the thread view. The second runs at the speed an
+    // operator sees, where the composer focuses itself before the sidebar
+    // reveals the project a frame later. The reveal must leave the caret
+    // where the operator will type.
+    await jumpTo("PwrAgent");
+    await threadViewImported.promise;
+    await flushReactUpdates();
+    await waitFor(() => {
+      expect(screen.getByRole("textbox", { name: "New thread" })).toHaveFocus();
+    });
+    await settle();
+
+    await jumpTo("PwrSnap");
+    await waitFor(() => {
+      expect(
+        document.querySelector(".directory-row__summary.is-selected"),
+      ).toHaveTextContent("PwrSnap");
+    });
+    await settle();
+    await settle();
+    expect(screen.getByRole("textbox", { name: "New thread" })).toHaveFocus();
+  });
+
   // Settings and Automations draw over the whole shell. The sidebar and main
   // go inert under them, so Tab cannot walk the invisible controls behind,
   // and focus goes back to the control that opened the layer on exit.

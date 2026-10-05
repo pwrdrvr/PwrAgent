@@ -2233,7 +2233,9 @@ export function Sidebar(props: SidebarProps) {
           projects={props.directories}
           onJumpToProject={(directory) => {
             props.onBrowseModeChange("directories");
-            setProjectReveal({ key: directory.key });
+            // Reveal, but leave focus alone: the launchpad's composer takes
+            // it, so the operator can type the new thread straight away.
+            setProjectReveal({ key: directory.key, focus: false });
             if (props.onJumpToProject) props.onJumpToProject(directory);
             else void props.onOpenLaunchpad(directory);
           }}
