@@ -2789,7 +2789,10 @@ export function useThreadNavigation(
   desktopApi?: DesktopApi,
   options: UseThreadNavigationOptions = {}
 ): {
+  /** The lens the sidebar shows: the saved lens, or Directories while `threadLensesEmpty`. */
   browseMode: BrowseMode;
+  /** The owner index has settled on zero threads, so every thread lens would be empty. */
+  threadLensesEmpty: boolean;
   directoryDisclosure: NavigationDirectoryDisclosure;
   /** Identity key of the card to highlight as the open composer's source. */
   composerSourceThreadKey?: string;
@@ -3435,6 +3438,14 @@ export function useThreadNavigation(
         ...(thread.federation?.ref.target.scope === "remote" ? { ownerInstanceId: thread.federation.ref.target.instanceId } : {}) })),
     draftRefs,
   });
+  // With no threads every thread lens is empty, and an empty saved lens reads
+  // as "your threads are gone". Show Directories instead, without saving it:
+  // a provider that briefly lists nothing must not move the operator off
+  // their lens for good. Unknown counts and providers still checking keep the
+  // saved lens, so an ordinary launch never shows Directories and jumps back.
+  const ownerIndexPage = boundedNavigation.resources.get("directory-index")?.state.page;
+  const threadLensesEmpty = ownerIndexPage?.counts.total === 0 && ownerIndexPage.coverage.state !== "checking";
+  const shownBrowseMode: BrowseMode = threadLensesEmpty ? "directories" : browseMode;
   const acceptedPagesRef = useRef(new Map<string, unknown>());
   const acceptedDefaultsRef = useRef<unknown>(undefined);
   const acceptedDraftHydrationRef = useRef<number | undefined>(undefined);
@@ -8899,7 +8910,8 @@ export function useThreadNavigation(
   }, []);
 
   return {
-    browseMode,
+    browseMode: shownBrowseMode,
+    threadLensesEmpty,
     directoryDisclosure,
     composerSourceThreadKey,
     createThread,
@@ -8921,8 +8933,8 @@ export function useThreadNavigation(
     worktreeArchiveError,
     loading: state.loading,
     loaded: Boolean(state.rows),
-    providerRefresh: boundedNavigation.resources.get("directory-index")?.state.page?.coverage
-      ? { ...boundedNavigation.resources.get("directory-index")!.state.page!.coverage, state: boundedNavigation.resources.get("directory-index")!.state.page!.coverage.state === "complete" ? "ready" : boundedNavigation.resources.get("directory-index")!.state.page!.coverage.state as "checking" | "degraded" } : undefined,
+    providerRefresh: ownerIndexPage?.coverage
+      ? { ...ownerIndexPage.coverage, state: ownerIndexPage.coverage.state === "complete" ? "ready" : ownerIndexPage.coverage.state } : undefined,
     refreshing: state.refreshing,
     refresh: refreshNavigation,
     materializeDirectoryLaunchpad,

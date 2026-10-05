@@ -4290,6 +4290,16 @@ a.button {
   background: var(--bg-panel-hover);
 }
 
+/* A thread lens with no threads to show. `aria-disabled` keeps the tab
+   focusable so its tooltip can say why; restate the muted treatment over the
+   hover fill above so it never looks actionable. */
+.lens-switch__button[aria-disabled="true"],
+.lens-switch__button[aria-disabled="true"]:hover {
+  background: transparent;
+  color: var(--text-muted);
+  cursor: default;
+}
+
 .button--secondary {
   border-color: var(--border-subtle);
   background: var(--bg-panel-elevated);
