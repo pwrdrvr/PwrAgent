@@ -75,6 +75,7 @@ const DARK_THEME_OPTIONS: readonly SelectOption<DarkThemePreference>[] = [
   themeOption("tangerine-dark", "Tangerine", PWRAGENT_THEMES, "PwrAgent default"),
   themeOption("gray-dark", "Gray", PWRAGENT_THEMES, "Charcoal surfaces"),
   themeOption("blue-dark", "Blue", PWRAGENT_THEMES, "Navy surfaces"),
+  themeOption("matrix-dark", "Matrix", PWRAGENT_THEMES, "Phosphor green on black"),
   themeOption("catppuccin-mocha", "Catppuccin Mocha", COMMUNITY_THEMES),
   themeOption("solarized-dark", "Solarized Dark", COMMUNITY_THEMES),
 ];
@@ -87,8 +88,9 @@ const LIGHT_THEME_OPTIONS: readonly SelectOption<LightThemePreference>[] = [
   themeOption("solarized-light", "Solarized Light", COMMUNITY_THEMES),
 ];
 
-/** Each theme's other half: picking one offers it for the other scheme. */
-const LIGHT_PAIR: Record<DarkThemePreference, LightThemePreference> = {
+/** Each theme's other half: picking one offers it for the other scheme. A
+ *  dark-only theme (Matrix) has no light half, so picking it offers none. */
+const LIGHT_PAIR: Partial<Record<DarkThemePreference, LightThemePreference>> = {
   "tangerine-dark": "tangerine-light",
   "gray-dark": "gray-light",
   "blue-dark": "blue-light",
@@ -356,7 +358,7 @@ export function GeneralSettings(props: {
                     props.appearanceController?.setDarkTheme(value);
                     const pair = LIGHT_PAIR[value];
                     setPairOffer(
-                      appearance.lightTheme === pair
+                      pair === undefined || appearance.lightTheme === pair
                         ? null
                         : { scheme: "light", theme: pair, pairedWith: themeLabel(value) },
                     );

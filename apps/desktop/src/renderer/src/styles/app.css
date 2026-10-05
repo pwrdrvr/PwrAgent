@@ -342,6 +342,10 @@
   --theme-swatch-blue-light-sidebar: #e8eff8;
   --theme-swatch-blue-light-accent: #1c56ac;
   --theme-swatch-blue-light-text: #0f223b;
+  --theme-swatch-matrix-dark-app: #050a06;
+  --theme-swatch-matrix-dark-sidebar: #030704;
+  --theme-swatch-matrix-dark-accent: #00ff41;
+  --theme-swatch-matrix-dark-text: #c8f5d0;
 }
 
 /* =============================================================}
@@ -616,6 +620,11 @@
    Gray and Blue are PwrAgent designs. Gray keeps the Tangerine accent on
    neutral charcoal or light-gray surfaces; Blue uses a blue accent on navy
    or pale-blue surfaces. Their terminals keep the Tangerine ANSI colors.
+
+   Matrix is a PwrAgent design after the film's look, dark only: the
+   phosphor code green (#00ff41) as the accent and terminal ink on
+   green-tinted near-black, with the red and blue pills as danger and info.
+   It borrows no published palette, so it carries no license notice.
    =========================================================================== */
 :root[data-color-theme="catppuccin-mocha"] {
   color-scheme: dark;
@@ -1206,6 +1215,71 @@
   --usage-series-3: #11806f;
   --usage-series-4: #7250b0;
   --usage-series-5: #8a6d12;
+}
+
+:root[data-color-theme="matrix-dark"] {
+  color-scheme: dark;
+
+  /* Surfaces */
+  --bg-app: #050a06;
+  --bg-sidebar: #030704;
+  --bg-panel: #070d08;
+  --bg-panel-elevated: #0c160e;
+  --bg-panel-hover: #112014;
+  --bg-row-active: #06250e;
+  --bg-input: #040805;
+
+  /* Borders */
+  --border-subtle: color-mix(in srgb, var(--text-primary) 10%, transparent);
+  --border-strong: color-mix(in srgb, var(--text-primary) 20%, transparent);
+
+  /* Text */
+  --text-primary: #c8f5d0;
+  --text-secondary: #8fd49c;
+  --text-muted: #7db187;
+  --text-subtle: color-mix(in srgb, var(--text-primary) 61%, transparent);
+
+  /* Accent */
+  --accent: #00ff41;
+  --accent-strong: #48ff77;
+  --accent-bright: #6aff90;
+  --accent-on: #021a06;
+  --button-text: #021a06;
+  --focus-ring: var(--accent);
+
+  /* Integrated terminal */
+  --terminal-bg: #050a06;
+  --terminal-fg: #33ff66;
+  --terminal-cursor: #00ff41;
+  --terminal-cursor-accent: #050a06;
+
+  /* Semantic */
+  --danger-base: #c4302b;
+  --danger-soft: color-mix(in srgb, var(--danger-base) 24%, transparent);
+  --danger-border: color-mix(in srgb, var(--danger-base) 45%, transparent);
+  --danger-text: #e6908d;
+  --danger-text-light: #ff827b;
+  --success-soft: color-mix(in srgb, #7bd88f 18%, transparent);
+  --success-border: color-mix(in srgb, #7bd88f 32%, transparent);
+  --success-text: #84db96;
+  --info-soft: color-mix(in srgb, #4f8dff 16%, transparent);
+  --info-border: color-mix(in srgb, #4f8dff 28%, transparent);
+  --info-text: #8eb6ff;
+  --info-teal: #3fd9c0;
+  --brand-purple: #b39ddb;
+
+  /* Status */
+  --status-ok: #7bd88f;
+  --status-warning: #e0b040;
+  --status-error: #ff908a;
+  --status-suspended: #4f7358;
+  --status-warning-text: var(--status-warning);
+  --savings-over: var(--status-warning);
+  --usage-series-1: var(--accent);
+  --usage-series-2: #4f8dff;
+  --usage-series-3: #3fd9c0;
+  --usage-series-4: #b39ddb;
+  --usage-series-5: #e0b040;
 }
 
 /* =============================================================}

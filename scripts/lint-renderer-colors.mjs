@@ -53,6 +53,7 @@ const ALLOWED_TOP_LEVEL_SELECTORS = new Set([
   ':root[data-color-theme="gray-light"]',
   ':root[data-color-theme="blue-dark"]',
   ':root[data-color-theme="blue-light"]',
+  ':root[data-color-theme="matrix-dark"]',
 ]);
 
 // Selector substrings whose rules are allowed to carry raw color

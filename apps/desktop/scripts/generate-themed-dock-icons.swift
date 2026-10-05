@@ -43,6 +43,8 @@ let icons = [
   ThemedIcon(theme: "gray-dark", tileTop: (50, 50, 54), tileBottom: (28, 28, 30), accent: (255, 169, 90)),
   // Blue's raised surface -> its sidebar, its accent.
   ThemedIcon(theme: "blue-dark", tileTop: (22, 33, 51), tileBottom: (11, 18, 29), accent: (91, 170, 255)),
+  // Matrix's raised surface -> its sidebar, its phosphor code green.
+  ThemedIcon(theme: "matrix-dark", tileTop: (12, 22, 14), tileBottom: (3, 7, 4), accent: (0, 255, 65)),
 ]
 
 /// The mark: the `<rect>`s of logo-pwragnt.svg, in its 128-unit viewBox,

@@ -220,6 +220,20 @@ export const COLOR_THEME_QUIT_DIALOG_PALETTES: Record<
     accentBright: "#1a4f9f",
     buttonText: "#ffffff",
   },
+  "matrix-dark": {
+    bg: "#050a06",
+    sidebar: "#030704",
+    surface: "#0c160e",
+    rowActive: "#06250e",
+    panelHover: "#112014",
+    border: "rgba(200, 245, 208, 0.1)",
+    textPrimary: "#c8f5d0",
+    textSecondary: "#8fd49c",
+    textMuted: "#7db187",
+    accent: "#00ff41",
+    accentBright: "#6aff90",
+    buttonText: "#021a06",
+  },
 };
 
 function quitDialogPalette(

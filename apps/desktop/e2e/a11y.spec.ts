@@ -127,6 +127,7 @@ const AUDIT_DARK_THEMES = [
   "solarized-dark",
   "gray-dark",
   "blue-dark",
+  "matrix-dark",
 ] as const satisfies readonly DesktopDarkTheme[];
 const AUDIT_LIGHT_THEMES = [
   "catppuccin-latte",

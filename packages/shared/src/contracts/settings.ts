@@ -320,6 +320,7 @@ export const DESKTOP_DARK_THEMES = [
   "solarized-dark",
   "gray-dark",
   "blue-dark",
+  "matrix-dark",
 ] as const;
 export type DesktopDarkTheme = (typeof DESKTOP_DARK_THEMES)[number];
 export const DESKTOP_DARK_THEME_DEFAULT: DesktopDarkTheme = "tangerine-dark";

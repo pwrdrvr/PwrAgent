@@ -43,6 +43,7 @@ export const COLOR_THEME_WINDOW_COLORS: Record<
   "gray-dark": { window: "#2b2b2e", titleBar: "#252528" },
   "gray-light": { window: "#ebebed", titleBar: "#e2e2e5" },
   "blue-dark": { window: "#0f1724", titleBar: "#0b121d" },
+  "matrix-dark": { window: "#050a06", titleBar: "#030704" },
   "blue-light": { window: "#f3f7fc", titleBar: "#e8eff8" },
 };
 
