@@ -84,6 +84,29 @@ describe("COMPOSER_TIPS", () => {
     }
   });
 
+  it("renders each shortcut in the platform's own form when shown", () => {
+    const win = window as Window & { pwragent?: { platform?: string } };
+    const saved = win.pwragent;
+    try {
+      win.pwragent = { platform: "darwin" };
+      const mac = COMPOSER_TIPS.map((render) => render()).join("\n");
+      expect(mac).toContain("⌘K finds threads");
+      expect(mac).toContain("⌘⇧F searches the text of every transcript");
+      expect(mac).not.toContain("Ctrl+");
+      win.pwragent = { platform: "win32" };
+      const windows = COMPOSER_TIPS.map((render) => render()).join("\n");
+      expect(windows).toContain("Ctrl+K finds threads");
+      expect(windows).toContain("Ctrl+Shift+F searches the text of every transcript");
+      expect(windows).not.toMatch(/[⌘⇧⌥]/);
+    } finally {
+      if (saved === undefined) {
+        delete win.pwragent;
+      } else {
+        win.pwragent = saved;
+      }
+    }
+  });
+
   it("has no duplicate tips", () => {
     const tips = COMPOSER_TIPS.map((render) => render());
     expect(new Set(tips).size).toBe(tips.length);
