@@ -195,7 +195,11 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     };
     installApi({ readThread: async () => response });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
-    render(<ToolOutputIncidentExplorerWindow />);
+    // The Savings region is ready before the selected invocation output is.
+    // Own both resolved IPC reads before asserting on the initial render.
+    await act(async () => {
+      render(<ToolOutputIncidentExplorerWindow />);
+    });
     await screen.findByRole("region", { name: "Code Mode" });
     expect(savingsSection("Code Mode").getByRole("button"))
       .toHaveTextContent(/Unavailable command cells.*Unavailable dispatch clusters/);
@@ -251,7 +255,11 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     };
     installApi({ readThread: async () => response });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
-    render(<ToolOutputIncidentExplorerWindow />);
+    // The Savings region is ready before the selected invocation output is.
+    // Own both resolved IPC reads before asserting on the initial render.
+    await act(async () => {
+      render(<ToolOutputIncidentExplorerWindow />);
+    });
 
     await screen.findByRole("region", { name: "Code Mode" });
     expect(savingsSection("Code Mode").getByRole("button"))
@@ -322,7 +330,11 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     };
     installApi({ readThread: async () => response });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
-    render(<ToolOutputIncidentExplorerWindow />);
+    // The Savings region is ready before the selected invocation output is.
+    // Own both resolved IPC reads before asserting on the initial render.
+    await act(async () => {
+      render(<ToolOutputIncidentExplorerWindow />);
+    });
 
     // Folded, each section leads with its own headline counts. Code Mode
     // calls, command cells and reducer decisions are three different numbers
@@ -379,7 +391,11 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     } as never;
     installApi({ readThread: async () => response });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Near%20limit";
-    render(<ToolOutputIncidentExplorerWindow />);
+    // The Savings region is ready before the selected invocation output is.
+    // Own both resolved IPC reads before asserting on the initial render.
+    await act(async () => {
+      render(<ToolOutputIncidentExplorerWindow />);
+    });
 
     await screen.findByRole("region", { name: "Context boundaries" });
     openSavingsSection("Context boundaries");

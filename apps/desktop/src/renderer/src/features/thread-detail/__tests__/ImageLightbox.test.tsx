@@ -438,7 +438,7 @@ describe("ImageLightbox, SVG script notice", () => {
     await renderScriptedSvg(undefined, onClose);
     const interact = screen.getByRole("button", { name: "Interact with SVG" });
 
-    interact.focus();
+    act(() => interact.focus());
     fireEvent.click(interact);
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(scriptNotice()).toBeNull();
@@ -519,7 +519,7 @@ describe("ImageLightbox, SVG script notice", () => {
   it("keeps the original opener when asked again while asking", async () => {
     await renderScriptedSvg({ skipNotice: false, autoOpen: false, save: vi.fn() });
     const interact = screen.getByRole("button", { name: "Interact with SVG" });
-    interact.focus();
+    act(() => interact.focus());
     fireEvent.click(interact);
 
     pressAndClick(stubPointerCapture(screen.getByRole("img", { name: "Flamegraph" })));
@@ -532,7 +532,7 @@ describe("ImageLightbox, SVG script notice", () => {
   it("returns focus to the opener once the scripts run", async () => {
     await renderScriptedSvg({ skipNotice: false, autoOpen: false, save: vi.fn() });
     const interact = screen.getByRole("button", { name: "Interact with SVG" });
-    interact.focus();
+    act(() => interact.focus());
     fireEvent.click(interact);
     fireEvent.click(screen.getByRole("button", { name: "Run Once" }));
 

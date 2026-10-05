@@ -571,7 +571,9 @@ describe("App", () => {
       });
       fireEvent.change(field, { target: { value: label } });
       await within(quickSearch).findByRole("option", { name: new RegExp(label) });
-      fireEvent.keyDown(field, { key: "Enter" });
+      await act(async () => {
+        fireEvent.keyDown(field, { key: "Enter" });
+      });
       await waitFor(() => expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith(
         expect.objectContaining({ directoryLabel: label }),
       ));
@@ -608,8 +610,9 @@ describe("App", () => {
     // reveals the project a frame later. The reveal must leave the caret
     // where the operator will type.
     await jumpTo("PwrAgent");
-    await threadViewImported.promise;
-    await flushReactUpdates();
+    // The import event precedes React's component update. Keep the deferred
+    // renderer readiness and import completion in the same act scope.
+    await act(async () => { await threadViewImported.promise; });
     await waitFor(() => {
       expect(screen.getByRole("textbox", { name: "New thread" })).toHaveFocus();
     });
