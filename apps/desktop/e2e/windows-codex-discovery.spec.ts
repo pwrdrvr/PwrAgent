@@ -79,7 +79,7 @@ test("PATH discovery launches one version probe and starts a real thread", async
       return findFakeCodexRequests(log, "__launch__").length;
     }).toBe(1);
 
-    await app.window.getByRole("button", { name: "New thread" }).click();
+    await app.window.getByRole("button", { name: "New thread", exact: true }).click();
     const prompt = app.window.getByRole("textbox", { name: "New thread" });
     await prompt.fill("Windows Codex discovery works");
     await app.window.getByRole("button", { name: "Start thread" }).click();
