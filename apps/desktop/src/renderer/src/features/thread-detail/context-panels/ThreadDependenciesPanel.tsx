@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { NavigationThreadSummary, ThreadDependency, ThreadDependencyCondition } from "@pwragent/shared";
+import type { NavigationRow, NavigationThreadSummary, ThreadDependency, ThreadDependencyCondition } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { Select } from "../../../components/Select";
 import { readRendererFederationTarget } from "../../../lib/federation-window";
@@ -10,11 +10,14 @@ const CONDITIONS = [
   { value: "ci_passed", label: "PR passes CI" },
   { value: "pr_merged", label: "PR is merged" },
 ] as const;
+let nextTargetQuery = 0;
 
 export function ThreadDependenciesPanel({ thread, desktopApi }: { thread: NavigationThreadSummary; desktopApi?: DesktopApi }) {
   const [dependencies, setDependencies] = useState<ThreadDependency[]>([]);
   const [open, setOpen] = useState(false);
-  const [targets, setTargets] = useState<NavigationThreadSummary[]>([]);
+  const [targets, setTargets] = useState<NavigationRow[]>([]);
+  const [targetFilter, setTargetFilter] = useState("");
+  const [targetsIncomplete, setTargetsIncomplete] = useState(false);
   const [targetKey, setTargetKey] = useState("");
   const [when, setWhen] = useState<ThreadDependencyCondition["when"]>("ci_passed");
   const [prUrl, setPrUrl] = useState("");
@@ -33,6 +36,7 @@ export function ThreadDependenciesPanel({ thread, desktopApi }: { thread: Naviga
   useEffect(() => {
     let disposed = false;
     setDependencies([]); setOpen(false); setConditions([]); setTargets([]);
+    setTargetFilter(""); setTargetsIncomplete(false);
     setTargetKey(""); setError(undefined); setBusy(false); setContinuation(""); setPrUrl("");
     const refresh = async () => {
       if (!available) return;
@@ -53,14 +57,24 @@ export function ThreadDependenciesPanel({ thread, desktopApi }: { thread: Naviga
 
   const loadTargets = async () => {
     setOpen(true); setBusy(true); setError(undefined);
+    const consumerId = `thread-dependency-targets:${++nextTargetQuery}`;
     try {
-      const snapshot = await desktopApi?.getNavigationSnapshot?.();
+      if (!desktopApi?.getNavigationQueryPage || !desktopApi.releaseNavigationQuery) {
+        throw new Error("Thread selection requires bounded navigation support. Upgrade this instance.");
+      }
+      const page = await desktopApi.getNavigationQueryPage({
+        protocol: 2, consumer: "search", inventory: "owner",
+        query: { kind: "lens", lens: "recents", ...(targetFilter.trim() ? { filter: targetFilter.trim() } : {}) },
+        pageSize: 100,
+      }, consumerId);
       if (currentKey.current !== key) return;
-      setTargets((snapshot?.threads ?? []).filter((candidate) => candidate.federation?.ref.target.scope !== "remote"
+      setTargets(page.entries.map((entry) => entry.row).filter((candidate) => candidate.federation?.ref.target.scope !== "remote"
         && (candidate.id !== thread.id || candidate.source !== thread.source)));
+      setTargetsIncomplete(!page.complete || page.coverage.state !== "complete");
     } catch (reason) {
       if (currentKey.current === key) setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
+      await desktopApi?.releaseNavigationQuery?.(consumerId).catch(() => {});
       if (currentKey.current === key) setBusy(false);
     }
   };
@@ -112,6 +126,11 @@ export function ThreadDependenciesPanel({ thread, desktopApi }: { thread: Naviga
       ))}
       {!open ? <button className="context-list__action" type="button" disabled={!available || busy} onClick={() => void loadTargets()}>Continue after…</button> : (
         <form className="thread-dependencies__form" onSubmit={(event) => { event.preventDefault(); void submit("create"); }}>
+          <label>Find thread
+            <input value={targetFilter} onChange={(event) => setTargetFilter(event.target.value)} disabled={busy} placeholder="Filter recent threads by title" />
+          </label>
+          <button type="button" className="context-list__action" disabled={busy} onClick={() => void loadTargets()}>Find threads</button>
+          {targetsIncomplete ? <p className="context-list__meta">Showing a bounded page. Refine the filter to find another thread.</p> : null}
           <label>Prerequisite thread
             <Select value={targetKey} onChange={setTargetKey} disabled={busy} options={[
               { value: "", label: "Choose a thread" },
