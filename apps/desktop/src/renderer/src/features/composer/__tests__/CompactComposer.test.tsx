@@ -386,36 +386,140 @@ describe("CompactComposer", () => {
     ).toBeNull();
   });
 
-  it("offers Steer alongside Stop while a turn is running", () => {
+  it("offers Queue and Steer alongside Stop while a turn is running", () => {
     const onInterrupt = vi.fn();
-    renderComposer({ busy: true, onInterrupt });
+    renderComposer({ busy: true, onInterrupt, onSteer: vi.fn() });
     // Stop used to be the only control, which read as "you cannot say
-    // anything until this finishes".
+    // anything until this finishes". Queue is the primary, as in the main
+    // composer, and Steer the secondary.
     expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Queue" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Steer" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Stop" }));
     expect(onInterrupt).toHaveBeenCalledTimes(1);
   });
 
+  it("queues the typed text behind the running turn", async () => {
+    const onSteer = vi.fn();
+    const { onSend } = renderComposer({
+      busy: true,
+      onInterrupt: vi.fn(),
+      onSteer,
+    });
+    const input = screen.getByRole("textbox", { name: "Message Thread t1" });
+    fireEvent.change(input, { target: { value: "after this, deploy" } });
+    fireEvent.click(screen.getByRole("button", { name: "Queue" }));
+    await waitFor(() => {
+      expect(onSend).toHaveBeenCalledWith("after this, deploy");
+    });
+    expect(onSteer).not.toHaveBeenCalled();
+  });
+
+  it("queues on Enter while a turn is running", async () => {
+    const onSteer = vi.fn();
+    const { onSend } = renderComposer({ busy: true, onSteer });
+    const input = screen.getByRole("textbox", { name: "Message Thread t1" });
+    fireEvent.change(input, { target: { value: "after this, deploy" } });
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "Enter" });
+    });
+    expect(onSend).toHaveBeenCalledWith("after this, deploy");
+    expect(onSteer).not.toHaveBeenCalled();
+  });
+
   it("steers the typed text into the running turn", async () => {
-    const { onSend } = renderComposer({ busy: true, onInterrupt: vi.fn() });
+    const onSteer = vi.fn();
+    const { onSend } = renderComposer({
+      busy: true,
+      onInterrupt: vi.fn(),
+      onSteer,
+    });
     const input = screen.getByRole("textbox", { name: "Message Thread t1" });
     fireEvent.change(input, { target: { value: "also check the logs" } });
     fireEvent.click(screen.getByRole("button", { name: "Steer" }));
     await waitFor(() => {
-      expect(onSend).toHaveBeenCalledWith("also check the logs");
+      expect(onSteer).toHaveBeenCalledWith("also check the logs");
     });
+    expect(onSend).not.toHaveBeenCalled();
   });
 
-  it("disables Steer when the running turn cannot take one", () => {
-    renderComposer({ busy: true, canSteer: false, onInterrupt: vi.fn() });
+  it("steers on Cmd+Enter while a turn is running, as the main composer does", async () => {
+    const onSteer = vi.fn();
+    const { onSend } = renderComposer({ busy: true, onSteer });
+    const input = screen.getByRole("textbox", { name: "Message Thread t1" });
+    fireEvent.change(input, { target: { value: "also check the logs" } });
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "Enter", metaKey: true });
+    });
+    expect(onSteer).toHaveBeenCalledWith("also check the logs");
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("sends on Cmd+Enter when no turn is running", async () => {
+    const onSteer = vi.fn();
+    const { onSend } = renderComposer({ onSteer });
+    const input = screen.getByRole("textbox", { name: "Message Thread t1" });
+    expect(screen.queryByRole("button", { name: "Steer" })).toBeNull();
+    fireEvent.change(input, { target: { value: "ship it" } });
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "Enter", metaKey: true });
+    });
+    expect(onSend).toHaveBeenCalledWith("ship it");
+    expect(onSteer).not.toHaveBeenCalled();
+  });
+
+  it("disables Steer, but not Queue, when the running turn cannot take one", async () => {
+    const onSteer = vi.fn();
+    const { onSend } = renderComposer({
+      busy: true,
+      canSteer: false,
+      onInterrupt: vi.fn(),
+      onSteer,
+    });
     const input = screen.getByRole("textbox", { name: "Message Thread t1" });
     fireEvent.change(input, { target: { value: "no route for this" } });
-    // Better a dead button than a send that is guaranteed to bounce.
+    // Better a dead button than a steer that is guaranteed to bounce. The
+    // owner's turn queue does not depend on steering.
     expect(
       (screen.getByRole("button", { name: "Steer" }) as HTMLButtonElement)
         .disabled,
     ).toBe(true);
+    expect(
+      (screen.getByRole("button", { name: "Queue" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
+    // Cmd+Enter asks to steer, so it must not quietly queue instead.
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "Enter", metaKey: true });
+    });
+    expect(onSteer).not.toHaveBeenCalled();
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("names only the delivery in flight", async () => {
+    let resolveSteer: (delivered: boolean) => void = () => undefined;
+    const onSteer = vi.fn(
+      () => new Promise<boolean>((resolve) => { resolveSteer = resolve; }),
+    );
+    renderComposer({ busy: true, onSteer });
+    const input = screen.getByRole("textbox", { name: "Message Thread t1" });
+    fireEvent.change(input, { target: { value: "also check the logs" } });
+    fireEvent.click(screen.getByRole("button", { name: "Steer" }));
+    expect(await screen.findByRole("button", { name: "Steering…" })).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: "Queue" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+    await act(async () => {
+      resolveSteer(true);
+    });
+    expect(screen.getByRole("button", { name: "Steer" })).toBeTruthy();
+  });
+
+  it("omits Steer for a host that cannot steer at all", () => {
+    renderComposer({ busy: true, onInterrupt: vi.fn() });
+    expect(screen.queryByRole("button", { name: "Steer" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Queue" })).toBeTruthy();
   });
 
   it("keeps Stop hidden when the host offers no way to interrupt", () => {

@@ -99,9 +99,9 @@ export type CompactComposerDraftRestore = {
 export type CompactComposerProps = {
   busy?: boolean;
   /**
-   * Whether a send during a live turn can reach the backend at all. False
-   * disables the primary button while busy rather than letting the operator
-   * fire a send that is guaranteed to bounce.
+   * Whether a steer can reach the running turn at all. False disables Steer
+   * (and Cmd+Enter) rather than letting the operator fire a steer that is
+   * guaranteed to bounce. Queue does not depend on it.
    */
   canSteer?: boolean;
   canAttachLocalFiles?: boolean;
@@ -147,6 +147,17 @@ export type CompactComposerProps = {
    * reached the backend must not cost the operator what they typed.
    */
   onSend: (
+    text: string,
+    images?: NavigationLaunchpadImageAttachment[],
+    files?: NavigationLaunchpadFileAttachment[],
+  ) => void | boolean | Promise<boolean | void>;
+  /**
+   * Delivers into the running turn instead of behind it. While busy, a host
+   * that supplies this gets a Steer button beside Queue and Cmd+Enter, the
+   * main composer's pair; `onSend` stays the primary path and queues. Same
+   * `false` contract as `onSend`.
+   */
+  onSteer?: (
     text: string,
     images?: NavigationLaunchpadImageAttachment[],
     files?: NavigationLaunchpadFileAttachment[],
@@ -218,7 +229,8 @@ export function CompactComposer(props: CompactComposerProps) {
     NavigationLaunchpadFileAttachment[]
   >([]);
   const [normalizingImageBatches, setNormalizingImageBatches] = useState(0);
-  const [sending, setSending] = useState(false);
+  // Which delivery is in flight, so only the button that started it says so.
+  const [sending, setSending] = useState<false | "send" | "steer">(false);
   const sendingRef = useRef(false);
   const normalizingImages = normalizingImageBatches > 0;
   const hasAttachments =
@@ -259,8 +271,10 @@ export function CompactComposer(props: CompactComposerProps) {
     normalizeImageForUpload,
     onAttachmentError,
     onSend,
+    onSteer,
     pastedImageMaxPatches,
   } = props;
+  const steerAvailable = Boolean(props.busy && onSteer);
   const imagesSupported = props.imagesSupported !== false;
   const imagesUnsupportedMessage = `${
     props.imagesUnsupportedLabel ?? "This mode"
@@ -307,8 +321,13 @@ export function CompactComposer(props: CompactComposerProps) {
     Boolean(segment),
   );
 
-  const send = useCallback(async (commandText?: string) => {
+  const send = useCallback(async (
+    commandText?: string,
+    delivery: "send" | "steer" = "send",
+  ) => {
     if (sendingRef.current || props.disabled) return;
+    const steering = delivery === "steer" && Boolean(onSteer);
+    const deliver = steering && onSteer ? onSteer : onSend;
     // The serialized text, not the plain draft: a mention chip is
     // zero-width until this splices its markdown back in.
     const text = (commandText ?? mentions.text).trim();
@@ -326,7 +345,7 @@ export function CompactComposer(props: CompactComposerProps) {
     const previousImages = imageAttachments;
     const previousFiles = fileAttachments;
     sendingRef.current = true;
-    setSending(true);
+    setSending(steering ? "steer" : "send");
     mentions.clear();
     setImageAttachments([]);
     setFileAttachments([]);
@@ -336,8 +355,8 @@ export function CompactComposer(props: CompactComposerProps) {
     try {
       const delivered = await (
         previousImages.length > 0 || previousFiles.length > 0
-          ? onSend(text, previousImages, previousFiles)
-          : onSend(text)
+          ? deliver(text, previousImages, previousFiles)
+          : deliver(text)
       );
       if (delivered === false) {
         const currentMentionSnapshot = latestMentionSnapshotRef.current;
@@ -380,6 +399,7 @@ export function CompactComposer(props: CompactComposerProps) {
     normalizingImages,
     onAttachmentError,
     onSend,
+    onSteer,
     props.disabled,
     props.draftScopeKey,
     props.draftStore,
@@ -632,7 +652,7 @@ export function CompactComposer(props: CompactComposerProps) {
       // An open mention popover claims the arrows, Enter, Tab, and Escape
       // before the send path sees them.
       if (mentions.handleKeyDown(event)) return;
-      if (event.key !== "Enter" || event.metaKey || event.ctrlKey) return;
+      if (event.key !== "Enter" || event.ctrlKey) return;
       // The button checks this too. A disabled `<textarea>` used to swallow
       // the keydown for us; the editor only stops taking new text, and still
       // forwards Enter from a field that was focused before it was disabled.
@@ -642,9 +662,16 @@ export function CompactComposer(props: CompactComposerProps) {
       }
       if (props.disabled) return;
       event.preventDefault();
+      // Cmd+Enter steers, as in the main composer. With no running turn to
+      // steer into it is an ordinary send; with one that cannot take a
+      // steer it does nothing rather than quietly queueing instead.
+      if (event.metaKey && steerAvailable) {
+        if (props.canSteer !== false) void send(undefined, "steer");
+        return;
+      }
       void send();
     },
-    [mentions, props.disabled, send],
+    [mentions, props.canSteer, props.disabled, send, steerAvailable],
   );
 
   const toggleMenu = useCallback(() => {
@@ -662,6 +689,17 @@ export function CompactComposer(props: CompactComposerProps) {
     },
     [closeMenu],
   );
+
+  const sendDisabled =
+    props.disabled
+    || sending !== false
+    || normalizingImages
+    || (!imagesSupported && imageAttachments.length > 0)
+    || (
+      mentions.text.trim().length === 0
+      && imageAttachments.length === 0
+      && fileAttachments.length === 0
+    );
 
   const actions = props.secondaryActions ?? [];
   // A section renders only when its mutation callback exists. The option
@@ -1106,27 +1144,26 @@ export function CompactComposer(props: CompactComposerProps) {
           </button>
         ) : null}
         {/* A live turn used to leave Stop as the only control, which read as
-            "you cannot say anything until this finishes". Sending stays
-            available and becomes a steer; the host reports back whether the
-            backend took it into the running turn or held it for the next. */}
+            "you cannot say anything until this finishes". The primary
+            action queues behind the running turn, as the main composer's
+            does; Steer is the secondary that delivers into it. */}
+        {steerAvailable ? (
+          <button
+            className="compact-composer__steer"
+            disabled={sendDisabled || props.canSteer === false}
+            onClick={() => void send(undefined, "steer")}
+            type="button"
+          >
+            {sending === "steer" ? "Steering…" : "Steer"}
+          </button>
+        ) : null}
         <button
           className="compact-composer__send"
-          disabled={
-            props.disabled
-            || sending
-            || normalizingImages
-            || (!imagesSupported && imageAttachments.length > 0)
-            || (
-              mentions.text.trim().length === 0
-              && imageAttachments.length === 0
-              && fileAttachments.length === 0
-            )
-            || (props.busy && props.canSteer === false)
-          }
+          disabled={sendDisabled}
           onClick={() => void send()}
           type="button"
         >
-          {sending ? "Sending…" : props.busy ? "Steer" : "Send"}
+          {sending === "send" ? "Sending…" : props.busy ? "Queue" : "Send"}
         </button>
       </div>
     </div>
