@@ -1048,6 +1048,10 @@ export class DesktopSettingsService {
           lightTheme: this.resolveLightTheme(
             config.general?.appearance?.lightTheme,
           ),
+          themedDockIcon: this.resolveConfigBoolean(
+            config.general?.appearance?.themedDockIcon,
+            true,
+          ),
           density: this.resolveAppearanceDensity(
             config.general?.appearance?.density,
           ),

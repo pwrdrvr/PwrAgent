@@ -716,6 +716,9 @@ export type DesktopAppearanceSnapshot = {
   theme: DesktopSettingsValue<DesktopAppearanceTheme>;
   darkTheme: DesktopSettingsValue<DesktopDarkTheme>;
   lightTheme: DesktopSettingsValue<DesktopLightTheme>;
+  /** macOS: a running instance's Dock icon follows its dark theme, so two
+   *  profiles in two themes are told apart in the Dock. On by default. */
+  themedDockIcon: DesktopSettingsValue<boolean>;
   density: DesktopSettingsValue<DesktopAppearanceDensity>;
   sidebarTextSize: DesktopSettingsValue<DesktopTextSize>;
   transcriptTextSize: DesktopSettingsValue<DesktopTextSize>;
@@ -1487,6 +1490,7 @@ export type DesktopSettingsConfigPatch = {
       theme?: DesktopAppearanceTheme;
       darkTheme?: DesktopDarkTheme;
       lightTheme?: DesktopLightTheme;
+      themedDockIcon?: boolean;
       density?: DesktopAppearanceDensity;
       sidebarTextSize?: DesktopTextSize;
       transcriptTextSize?: DesktopTextSize;

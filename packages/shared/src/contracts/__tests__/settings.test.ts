@@ -91,6 +91,7 @@ describe("desktop settings contracts", () => {
           theme: { value: "system", source: "default" },
           darkTheme: { value: "tangerine-dark", source: "default" },
           lightTheme: { value: "tangerine-light", source: "default" },
+          themedDockIcon: { value: true, source: "default" },
           density: { value: "mission-control", source: "default" },
           sidebarTextSize: { value: "md", source: "default" },
           transcriptTextSize: { value: "md", source: "default" },

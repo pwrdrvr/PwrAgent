@@ -125,6 +125,7 @@ export type DesktopSettingsConfig = {
       theme?: DesktopAppearanceTheme;
       darkTheme?: DesktopDarkTheme;
       lightTheme?: DesktopLightTheme;
+      themedDockIcon?: boolean;
       density?: DesktopAppearanceDensity;
       sidebarTextSize?: DesktopTextSize;
       transcriptTextSize?: DesktopTextSize;
@@ -892,6 +893,17 @@ export function desktopSettingsPatchToEdits(
     // replaced before any release read it. Drop it once the operator picks
     // a theme so it does not linger as a setting nothing reads.
     edits.push({ op: "delete", path: ["general", "appearance", "palette"] });
+  }
+  if (patch.general?.appearance?.themedDockIcon !== undefined) {
+    // On by default, so only the opt-out is written.
+    if (patch.general.appearance.themedDockIcon) {
+      edits.push({
+        op: "delete",
+        path: ["general", "appearance", "themed_dock_icon"],
+      });
+    } else {
+      set(["general", "appearance", "themed_dock_icon"], false);
+    }
   }
   if (patch.onboarding?.completed !== undefined) {
     set(["onboarding", "completed"], patch.onboarding.completed);
@@ -1979,6 +1991,7 @@ function normalizeDesktopConfig(
         theme: readAppearanceTheme(generalAppearance?.theme),
         darkTheme: readDarkTheme(generalAppearance?.dark_theme),
         lightTheme: readLightTheme(generalAppearance?.light_theme),
+        themedDockIcon: readBoolean(generalAppearance?.themed_dock_icon),
         density: readAppearanceDensity(generalAppearance?.density),
         sidebarTextSize: readTextSize(
           generalAppearance?.sidebar_text_size,

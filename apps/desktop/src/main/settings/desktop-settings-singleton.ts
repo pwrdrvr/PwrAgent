@@ -5,6 +5,7 @@ import { DesktopSettingsService } from "./desktop-settings-service";
 import { DbBackedSafeStorageSecretStore } from "../state/secret-store-sqlite";
 import { getAppStateDb, getAppStateMode } from "../state/app-state";
 import { broadcastAppearanceChange } from "../appearance-broadcast";
+import { syncThemedDockIcon } from "../themed-dock-icon";
 import { resolveBootstrapProfilePath } from "../profile";
 import {
   isE2eMemorySecretStorageEnabled,
@@ -96,7 +97,9 @@ export function getDesktopSettingsService(): DesktopSettingsService {
     });
     configStore.subscribe(["general"], ({ values }) => {
       broadcastAppearanceChange(values.general.appearance);
+      syncThemedDockIcon(values.general.appearance);
     });
+    syncThemedDockIcon(configStore.read("general").appearance);
     configStore.subscribeUpdates(
       ({ version, configRevision, changedDomains }) => {
         const payload = {
