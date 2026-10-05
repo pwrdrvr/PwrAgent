@@ -248,8 +248,8 @@ importers:
         version: 8.22.0
     devDependencies:
       '@agentclientprotocol/sdk':
-        specifier: 1.5.0
-        version: 1.5.0(zod@4.4.3)
+        specifier: 1.5.1
+        version: 1.5.1(zod@4.4.3)
       '@axe-core/playwright':
         specifier: ^4.11.3
         version: 4.13.0(playwright-core@1.63.0(patch_hash=8554b4c8ba32f72c901e65b8d75d007a24c94f013f9df9983f0dda077f94c82d))
@@ -425,8 +425,8 @@ packages:
     peerDependencies:
       zod: ^3.25.0 || ^4.0.0
 
-  '@agentclientprotocol/sdk@1.5.0':
-    resolution: {integrity: sha512-524jwbB2iYWA+kWWyv9fhKbhU89dH/lu9u5EXwVNmfYzopV8BujCDxByBDZhxRUkB7RWIJzISCnwivdDk+bdVg==}
+  '@agentclientprotocol/sdk@1.5.1':
+    resolution: {integrity: sha512-nSUIrC1fOR9+ppKfx9KdwjBBND2sAPzFHo4yVQrGbXZHnayUYpwL8CDVR5LSxbapY/oKMOzNP0wvwfyx3PS2KA==}
     peerDependencies:
       zod: ^3.25.0 || ^4.0.0
 
@@ -4947,7 +4947,7 @@ snapshots:
     dependencies:
       zod: 4.4.3
 
-  '@agentclientprotocol/sdk@1.5.0(zod@4.4.3)':
+  '@agentclientprotocol/sdk@1.5.1(zod@4.4.3)':
     dependencies:
       zod: 4.4.3
 
