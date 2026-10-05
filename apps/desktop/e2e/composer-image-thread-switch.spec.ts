@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
+import { mastheadAction } from "./fixtures/window-chrome";
 
 async function createComposerImageThreadSwitchFixture(): Promise<{
   cleanup: () => Promise<void>;
@@ -304,7 +305,7 @@ test("keeps a pasted composer image after switching away from a newly created th
       }),
     ).toBeVisible();
 
-    await app.window.getByRole("button", { name: "New thread" }).click();
+    await mastheadAction(app.window, "New thread").click();
     await app.window
       .getByRole("textbox", { name: "New thread" })
       .fill("Start the regression thread");

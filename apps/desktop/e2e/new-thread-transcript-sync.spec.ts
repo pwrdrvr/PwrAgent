@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
+import { mastheadAction } from "./fixtures/window-chrome";
 
 async function createNewThreadTranscriptFixture(): Promise<{
   cleanup: () => Promise<void>;
@@ -418,7 +419,7 @@ test("top-level new thread rereads the created thread until the assistant reply 
       app.window.getByRole("region", { name: "Transcript" }).getByText("Existing Codex thread"),
     ).toBeVisible();
 
-    await app.window.getByRole("button", { name: "New thread" }).click();
+    await mastheadAction(app.window, "New thread").click();
 
     await expect(
       app.window.getByRole("heading", { level: 2, name: "New thread" }),
@@ -470,7 +471,7 @@ test("top-level new thread cycles deleted no-project drafts only from the recove
   });
 
   try {
-    await app.window.getByRole("button", { name: "New thread" }).click();
+    await mastheadAction(app.window, "New thread").click();
     await expect(
       app.window.getByRole("heading", { level: 2, name: "New thread" }),
     ).toBeVisible();
@@ -608,7 +609,7 @@ test("does not move focus back to a new thread after the user selects another th
       };
     });
 
-    await app.window.getByRole("button", { name: "New thread" }).click();
+    await mastheadAction(app.window, "New thread").click();
     await app.window
       .getByRole("textbox", { name: "New thread" })
       .fill("Start the focus regression thread");
