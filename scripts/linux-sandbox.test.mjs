@@ -82,7 +82,7 @@ describe("Linux sandbox setup", () => {
     const desktop = JSON.parse(readFileSync(new URL("../apps/desktop/package.json", import.meta.url), "utf8"));
     expect(root.scripts["fix:linux-sandbox"]).toBe("node ./scripts/linux-sandbox.mjs --fix");
     expect(root.scripts["check:linux-sandbox"]).toBe("node ./scripts/linux-sandbox.mjs --warn");
-    expect(desktop.scripts.postinstall).toBe("node scripts/ensure-electron-runtime.mjs && node scripts/rebuild-native-for-electron.mjs && node ../../scripts/linux-sandbox.mjs --warn");
+    expect(desktop.scripts.postinstall).toBe("node scripts/ensure-electron-runtime.mjs && node ../../scripts/linux-sandbox.mjs --warn");
     expect(desktop.scripts.preview).toBe("node ../../scripts/linux-sandbox.mjs --warn && electron-vite preview");
   });
 });

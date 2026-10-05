@@ -10,7 +10,6 @@ import {
 } from "@pwragent/shared";
 import { NAVIGATION_BACKEND_METADATA_SCHEMA } from "./navigation-backend-metadata.js";
 import { THREAD_NAVIGATION_RELATIONSHIPS_SCHEMA } from "./thread-navigation-relationships.js";
-import { getNativeBinding } from "./native-binding.js";
 import { STORAGE_RETENTION_SCHEMA } from "./storage-maintenance.js";
 import { migratePrReferenceIdentities } from "./migrate-pr-reference-identities.js";
 import {
@@ -1351,8 +1350,7 @@ export class StateDb {
 
   static open(dbPath: string, options?: { profileName?: string }): StateDb {
     fs.mkdirSync(path.dirname(dbPath), { recursive: true });
-    const nativeBinding = getNativeBinding();
-    const db = new Database(dbPath, nativeBinding ? { nativeBinding } : {});
+    const db = new Database(dbPath);
 
     // FIRST, ahead of every other pragma. SQLite honours `auto_vacuum` only
     // while the file still has no database header; once one exists the

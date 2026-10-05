@@ -91,13 +91,20 @@ if (missingRuntimeFiles.length > 0) {
     }
   }
   console.error(
-    "\nKeep platform-native optional dependencies explicit in apps/desktop/package.json.",
+    "\nKeep platform-native optional dependencies explicit in apps/desktop/package.json,",
   );
+  console.error("and let beforePack stage native prebuilds under build/Release.");
   process.exit(1);
 }
 // Each rule: [label, regex]. Anything matching → fail.
 const forbidden = [
-  ["SQLite build source", /\/node_modules\/better-sqlite3\/deps\/sqlite3\/[^/]+\.[ch]$/],
+  // beforePack stages one architecture under build/Release; a multi-arch
+  // prebuild directory breaks the macOS universal merge.
+  ["Native prebuild directory", /\/node_modules\/(better-sqlite3|node-pty)\/prebuilds\//],
+  [
+    "Native build input",
+    /\/node_modules\/(better-sqlite3\/(binding\.gyp$|deps\/|src\/)|node-pty\/(binding\.gyp$|scripts\/|src\/|third_party\/)|node-addon-api\/)/,
+  ],
   ["TypeScript source", /\.tsx?$/],
   ["TypeScript declaration", /\.d\.ts$/],
   ["Sourcemap", /\.map$/],

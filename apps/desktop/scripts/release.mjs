@@ -1090,10 +1090,18 @@ runChecked("codesign", [
   "--verbose=2",
   dockTilePlugin,
 ]);
-verifyMacSlices(join(
-  builtApp, "Contents", "Resources", "app.asar.unpacked", "node_modules",
-  "better-sqlite3", "build", "Release", "better_sqlite3.node",
-));
+// beforePack stages each architecture's Node-API prebuilds at these paths, and
+// @electron/universal lipo-merges them.
+for (const nativeFile of [
+  ["better-sqlite3", "build", "Release", "better_sqlite3.node"],
+  ["node-pty", "build", "Release", "pty.node"],
+  ["node-pty", "build", "Release", "spawn-helper"],
+]) {
+  verifyMacSlices(join(
+    builtApp, "Contents", "Resources", "app.asar.unpacked", "node_modules",
+    ...nativeFile,
+  ));
+}
 for (const { binding, lipoArch, packageName } of macCanvasBindings) {
   runChecked("lipo", [
     join(

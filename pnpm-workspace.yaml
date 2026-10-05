@@ -56,11 +56,16 @@ minimumReleaseAgeExclude:
 globalPnpmfile: ''
 ignoreScripts: false
 ignoredBuiltDependencies:
+  # better-sqlite3 13 and node-pty ship Node-API prebuilds that load in Node
+  # and Electron alike. pnpm otherwise infers `node-gyp rebuild` from
+  # better-sqlite3's binding.gyp although the package declares
+  # `gypfile: false`, and node-pty's install script only falls back to
+  # node-gyp. Packaging stages the target's prebuilds in beforePack.
+  - better-sqlite3
   - electron-winstaller
+  - node-pty
   - protobufjs
 onlyBuiltDependencies:
   - dugite
-  - better-sqlite3
   - electron
   - esbuild
-  - node-pty

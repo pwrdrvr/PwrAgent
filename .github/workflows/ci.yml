@@ -121,7 +121,6 @@ jobs:
             pnpm-workspace.yaml
             scripts/linux-sandbox.mjs
             apps/desktop/scripts/ensure-electron-runtime.mjs
-            apps/desktop/scripts/rebuild-native-for-electron.mjs
           sparse-checkout-cone-mode: false
 
       - name: Install Node.js and dependencies
@@ -265,7 +264,6 @@ jobs:
             pnpm-workspace.yaml
             scripts/linux-sandbox.mjs
             apps/desktop/scripts/ensure-electron-runtime.mjs
-            apps/desktop/scripts/rebuild-native-for-electron.mjs
           sparse-checkout-cone-mode: false
 
       - name: Install Node.js and dependencies
@@ -381,10 +379,7 @@ jobs:
     # PRs/pushes, so the ~15-minute packaging cost is paid only on demand.
     needs: changes
     if: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:windows-package') }}
-    # node-pty's Electron rebuild currently pulls node-gyp 11.x, which does
-    # not recognize Visual Studio 2026 on windows-latest/windows-2025.
-    # Keep installer packaging on VS 2022 until that toolchain catches up.
-    runs-on: windows-2022
+    runs-on: windows-latest
     timeout-minutes: 45
     steps:
       - name: Checkout repository
@@ -610,7 +605,6 @@ jobs:
             pnpm-workspace.yaml
             scripts/linux-sandbox.mjs
             apps/desktop/scripts/ensure-electron-runtime.mjs
-            apps/desktop/scripts/rebuild-native-for-electron.mjs
           sparse-checkout-cone-mode: false
 
       - name: Install Node.js and dependencies

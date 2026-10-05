@@ -836,8 +836,8 @@ pnpm --filter @pwragent/desktop exec playwright test \
   -c playwright.config.ts e2e/a11y.spec.ts
 ```
 
-(The package's `test:e2e` script does a full Electron rebuild + Vite
-build first; the `playwright test` form above skips that when you've
+(The package's `test:e2e` script checks the Electron runtime and runs a
+Vite build first; the `playwright test` form above skips that when you've
 already built once.)
 
 ### Modal dialogs and overlays

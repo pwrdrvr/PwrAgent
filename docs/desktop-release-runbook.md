@@ -689,9 +689,11 @@ APP=apps/desktop/release-stage/dist/mac-universal/PwrAgent.app
 # Identity must be PwrDrvr LLC
 codesign -dv --verbose=4 "$APP"
 
-# Main executable and native addon must contain both Apple Silicon and Intel slices
+# Main executable and native addons must contain both Apple Silicon and Intel slices
 lipo -archs "$APP/Contents/MacOS/PwrAgent"
 lipo -archs "$APP/Contents/Resources/app.asar.unpacked/node_modules/better-sqlite3/build/Release/better_sqlite3.node"
+lipo -archs "$APP/Contents/Resources/app.asar.unpacked/node_modules/node-pty/build/Release/pty.node"
+lipo -archs "$APP/Contents/Resources/app.asar.unpacked/node_modules/node-pty/build/Release/spawn-helper"
 
 # Gatekeeper-approved (Notarized Developer ID)
 spctl -a -vv "$APP"
