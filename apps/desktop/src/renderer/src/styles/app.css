@@ -19777,6 +19777,26 @@ a.button {
   flex: 0 0 auto;
 }
 
+/* The machine chip, beside the backend chip. The launchpad composer portals
+   its machine picker in here, and the thread header puts the fixed chip in
+   the same place, so starting a thread moves nothing. It never shrinks, like
+   the chips above, and sits at their 24px height. */
+.thread-header__eyebrow-row > .thread-header__machine {
+  display: inline-flex;
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.thread-header__machine:empty {
+  display: none;
+}
+
+.thread-header__machine .composer-dropdown__button,
+.thread-header__machine .composer__fixed-value {
+  min-height: 24px;
+  font-size: 12px;
+}
+
 /* Baseline, not centre: the 12px project eyebrow and the 14px title are one
    line of text and must share a baseline. The title's cap-height trim puts
    its capitals on the y=20 centreline, and the eyebrow rides its baseline.
@@ -19994,7 +20014,7 @@ a.button {
    The setup row lives in the composer band, which can give up height, so
    reserve one readable history-error row and let the band take the deficit.
    Longer errors scroll inside `.transcript-error` instead of escaping it. */
-.thread-view__primary:has(> .composer .environment-setup-row)
+.thread-view__primary:has(> .thread-view__composer-slot > .composer .environment-setup-row)
   > .transcript-panel:has(.transcript-error) {
   flex-basis: 132px;
   min-height: 132px;
@@ -31979,9 +31999,16 @@ button.pricing-token-miser__folded:focus-visible {
 /* In the thread column the composer may shrink — only its band can — so a
    column over budget takes the deficit out of the band rather than pushing the
    composer's content past the clipped bottom edge. */
-.thread-view__primary > .composer {
+.thread-view__composer-slot > .composer {
   flex: 0 1 auto;
   min-height: 0;
+}
+
+/* The slot generates no box, so the composer stays a flex item of
+   `.thread-view__primary`. It exists for its React key: see
+   `features/thread-detail/composer-slot.ts`. */
+.thread-view__composer-slot {
+  display: contents;
 }
 
 .integrated-terminal {
@@ -34508,6 +34535,17 @@ button.pricing-token-miser__folded:focus-visible {
   border-radius: 8px;
   background: var(--bg-panel-elevated);
   box-shadow: var(--shadow-popover);
+}
+
+/* Opens downward from a trigger near the top of the window; the component
+   sets `top` and `right` from the trigger's rect. */
+.composer-dropdown__menu--below {
+  position: fixed;
+  z-index: 31;
+  bottom: auto;
+  left: auto;
+  min-width: 260px;
+  max-height: min(420px, calc(100dvh - 96px));
 }
 
 .composer-dropdown__menu--other {

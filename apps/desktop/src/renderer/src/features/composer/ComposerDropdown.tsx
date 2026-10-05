@@ -77,6 +77,12 @@ export function ComposerDropdown(props: {
   id?: string;
   kind?: "branch";
   /**
+   * `below` is for a trigger near the top of the window, such as the thread
+   * header's machine chip. The menu is then `position: fixed` under the
+   * trigger, so a clipping row (the header's eyebrow row clips) cannot cut it.
+   */
+  menuPlacement?: "above" | "below";
+  /**
    * `danger` is Full Access. `remote` marks a chip whose choice routes the
    * thread to another machine: an accent rim and an accent icon, louder than
    * a neutral chip and quieter than the solid Full Access fill. `offline`
@@ -95,6 +101,8 @@ export function ComposerDropdown(props: {
   const [open, setOpen] = useState(false);
   const [showOther, setShowOther] = useState(false);
   const [otherMenuPosition, setOtherMenuPosition] = useState({ left: 0, top: 0 });
+  const [belowMenuPosition, setBelowMenuPosition] = useState({ right: 0, top: 0 });
+  const buttonRef = useRef<HTMLButtonElement>(null);
   const [tooltipOption, setTooltipOption] = useState<string>();
   const listboxId = useId();
   const otherListboxId = useId();
@@ -270,6 +278,7 @@ export function ComposerDropdown(props: {
         aria-label={props.ariaLabel}
         className="composer-dropdown__button"
         data-value={props.value}
+        ref={buttonRef}
         disabled={props.disabled || props.options.length + otherOptions.length === 0}
         id={props.id}
         type="button"
@@ -283,6 +292,14 @@ export function ComposerDropdown(props: {
         onClick={() => {
           hide();
           const nextOpen = !open;
+          const trigger = buttonRef.current?.getBoundingClientRect();
+          if (nextOpen && props.menuPlacement === "below" && trigger) {
+            // Right-aligned to the trigger: it sits toward the window's right.
+            setBelowMenuPosition({
+              right: Math.max(8, window.innerWidth - trigger.right),
+              top: trigger.bottom + 8,
+            });
+          }
           setOpen(nextOpen);
           if (nextOpen) {
             setShowOther(false);
@@ -307,9 +324,12 @@ export function ComposerDropdown(props: {
       {open ? (
         <div
           aria-label={props.ariaLabel}
-          className="composer-dropdown__menu"
+          className={`composer-dropdown__menu${
+            props.menuPlacement === "below" ? " composer-dropdown__menu--below" : ""
+          }`}
           id={listboxId}
           role="listbox"
+          style={props.menuPlacement === "below" ? belowMenuPosition : undefined}
         >
           {renderOptions(props.options, listboxId, false)}
           {otherOptions.length > 0 ? (

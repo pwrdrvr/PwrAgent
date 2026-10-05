@@ -60,7 +60,10 @@ import {
   type SendThreadToMachineSource,
 } from "./features/federation/SendThreadToMachineDialog";
 import type { FederationProjectDirectory } from "./features/chrome/useFederationProjectStates";
-import type { LaunchpadMachineControl } from "./features/composer/LaunchpadMachineChip";
+import type {
+  LaunchpadMachineControl,
+  MachineChipValue,
+} from "./features/composer/LaunchpadMachineChip";
 import { findPeerCounterpartDirectory } from "./lib/federation-project-match";
 import type { HistoryNavControls } from "./features/chrome/HistoryNavButtons";
 import { useFindHotkeys } from "./features/chrome/useFindHotkeys";
@@ -2787,6 +2790,42 @@ function DesktopAppShell(props: {
         : {}),
     };
   })();
+  // The thread header names the thread's machine wherever the launchpad
+  // showed its machine chip, so starting a thread leaves the machine put.
+  const selectedThreadForMachine = navigation.selectedThread;
+  const threadMachine = ((): MachineChipValue | undefined => {
+    const windowTarget = readRendererFederationTarget();
+    if (!selectedThreadForMachine
+      || (!windowTarget && newThreadFederationTargets.length === 0)) {
+      return undefined;
+    }
+    const target = selectedThreadForMachine.federation?.ref.target;
+    const ownerId = target && isRemoteFederationTarget(target)
+      ? target.instanceId
+      : windowTarget?.instanceId;
+    if (!ownerId) {
+      return {
+        label: liveFederationHealth?.localLabel ?? "This machine",
+        shortLabel: federationLocalDisplayLabel(liveFederationHealth),
+        celestialIcon: liveFederationHealth?.localCelestialIcon,
+        instanceId: liveFederationHealth?.instanceId,
+      };
+    }
+    const owner = buildFederationThreadTargets(liveFederationHealth).find(
+      (candidate) => candidate.instanceId === ownerId,
+    );
+    return {
+      label: owner?.label
+        ?? selectedThreadForMachine.federation?.instanceLabel
+        ?? readRendererFederationLabel()
+        ?? ownerId,
+      shortLabel: owner?.shortLabel,
+      celestialIcon: owner?.celestialIcon,
+      instanceId: ownerId,
+      remote: true,
+      offline: owner?.availability === "offline",
+    };
+  })();
   const mastheadActions = {
     voiceControl: directorVoiceControl,
     addingProjectDirectory: navigation.pickingDirectory,
@@ -3068,6 +3107,7 @@ function DesktopAppShell(props: {
     selectedDirectory: navigation.selectedDirectory,
     selectedLaunchpad: navigation.selectedLaunchpad,
     launchpadMachine,
+    threadMachine,
     selectedThread: navigation.selectedThread,
     threads: navigation.threads,
     suppressBranchDriftDialog: mainView === "settings",

@@ -22,6 +22,7 @@ import { FederationRemoteBadge } from "../chrome/FederationRemoteBadge";
 import { MastheadActions, type MastheadActionsProps } from "../chrome/MastheadActions";
 import { formatAutomationRelative } from "../automations/automation-format";
 import { BrandLockup } from "../chrome/BrandLockup";
+import { FixedMachineChip, type MachineChipValue } from "../composer/LaunchpadMachineChip";
 
 type ThreadHeaderLayoutControls = {
   sidebarOpen: boolean;
@@ -56,6 +57,11 @@ type ThreadHeaderProps = {
   hasApprovalRequest?: boolean;
   projectLabel?: string;
   thread: NavigationThreadSummary;
+  /**
+   * The machine the thread runs on, shown wherever the launchpad showed its
+   * machine chip, so starting a thread leaves the machine where it was.
+   */
+  machine?: MachineChipValue;
   backends?: BackendSummary[];
   /** Forwarded to MessagingStatusBar - opens Messaging Activity. */
   onOpenMessagingActivity?: (platform?: MessagingChannelKind) => void;
@@ -203,6 +209,11 @@ export function ThreadHeader(props: ThreadHeaderProps) {
                 )}
               </h2>
             </div>
+            {props.machine ? (
+              <span className="thread-header__machine">
+                <FixedMachineChip machine={props.machine} />
+              </span>
+            ) : null}
             <span className="chip chip--backend">
               {formatBackendLabel(props.thread.source)}
             </span>

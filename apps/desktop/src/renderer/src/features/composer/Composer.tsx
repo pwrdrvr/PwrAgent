@@ -303,6 +303,13 @@ type ComposerProps = {
   launchpad?: NavigationLaunchpadDraft;
   /** Which machine the launchpad starts its thread on, and how to move it. */
   launchpadMachine?: LaunchpadMachineControl;
+  /**
+   * Where the machine chip renders instead of the settings row. ThreadView
+   * puts it in the title rail, where the thread header names the machine
+   * after creation, so starting a thread neither moves the chip nor changes
+   * the composer's height. `null` while that slot is mounting.
+   */
+  launchpadMachineChipHost?: HTMLElement | null;
   launchpadError?: string;
   launchpadConfigurationError?: string;
   onReloadLaunchpadConfiguration?: () => Promise<void>;
@@ -5209,7 +5216,15 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       // Nothing to load into it. Returning to a starting thread that holds
       // a follow-up swaps content, which needs the remount.
       && !draftStore.hasDraftContent(composerScopeKey);
-    if (!followsSubmission) {
+    // The second exception: the launchpad this editor was typing into just
+    // became its thread, and `handoffLaunchpadComposer` already moved the
+    // draft to the thread's scope. The editor goes with it. A rebuild would
+    // drop the caret and any keys typed while the new editor mounted.
+    const followsMaterialization =
+      Boolean(props.thread)
+      && resolveLaunchpadComposerScope(draftStore, previousScopeKey)
+        === composerScopeKey;
+    if (!followsSubmission && !followsMaterialization) {
       setEditorScopeKey((mounted) =>
         mounted === composerScopeKey
           ? `${composerScopeKey}#${++editorRemountSequenceRef.current}`
@@ -10595,6 +10610,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   // durable text and attachments while federation reconnects.
   const composerDisabled = false;
   const launchpadMachine = props.launchpadMachine;
+  const launchpadMachineChipHost = props.launchpadMachineChipHost;
+  const renderLaunchpadMachineChip = (chip: ReactNode): ReactNode =>
+    launchpadMachineChipHost ? createPortal(chip, launchpadMachineChipHost) : chip;
   const launchpadRemoteMachineLabel = launchpadMachine?.currentInstanceId
     ? launchpadMachine.targets.find(
       (target) => target.instanceId === launchpadMachine.currentInstanceId,
@@ -12610,24 +12628,27 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           className="composer__setup"
           aria-label={props.launchpad ? "New thread settings" : "Thread settings"}
         >
-          {props.launchpad && launchpadMachine ? (
-            <LaunchpadMachineChip
-              control={launchpadMachine}
-              disabled={launchpadSubmitting}
-              onRetarget={(instanceId) => {
-                void (async () => {
-                  const sourceScopeKey = latestDraftSnapshotRef.current.scopeKey;
-                  const plan = await launchpadMachine.planRetarget?.(instanceId);
-                  // The peer read can take a while. A draft only follows the
-                  // operator if they are still on the launchpad it came from.
-                  if (!plan || latestDraftSnapshotRef.current.scopeKey !== sourceScopeKey) {
-                    return;
-                  }
-                  prepareDraftRetarget(plan.directoryKey);
-                  await plan.open();
-                })();
-              }}
-            />
+          {props.launchpad && launchpadMachine && props.launchpadMachineChipHost !== null ? (
+            renderLaunchpadMachineChip(
+              <LaunchpadMachineChip
+                control={launchpadMachine}
+                disabled={launchpadSubmitting}
+                menuPlacement={props.launchpadMachineChipHost ? "below" : undefined}
+                onRetarget={(instanceId) => {
+                  void (async () => {
+                    const sourceScopeKey = latestDraftSnapshotRef.current.scopeKey;
+                    const plan = await launchpadMachine.planRetarget?.(instanceId);
+                    // The peer read can take a while. A draft only follows the
+                    // operator if they are still on the launchpad it came from.
+                    if (!plan || latestDraftSnapshotRef.current.scopeKey !== sourceScopeKey) {
+                      return;
+                    }
+                    prepareDraftRetarget(plan.directoryKey);
+                    await plan.open();
+                  })();
+                }}
+              />,
+            )
           ) : null}
           {props.launchpad && providerOptions.length > 0 ? (
             <ComposerDropdown
@@ -13311,12 +13332,6 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       ) : null}
       {!props.skillError && props.skillLoading ? (
         <p className="composer__meta">Loading skills…</p>
-      ) : null}
-      {props.launchpad &&
-      launchpadSubmitting &&
-      props.launchpad.codexEnvironmentId &&
-      selectedCodexEnvironment?.setupScript ? (
-        <p className="composer__meta">Running environment setup…</p>
       ) : null}
       {props.updatingExecutionMode ? (
         <p className="composer__meta">
