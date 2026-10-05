@@ -852,9 +852,9 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
   /**
    * Structural only: whether this bridge can steer at all. Deliberately NOT
    * "and we know which turn to aim at" — that is a moment-to-moment fact,
-   * and gating Steer on it leaves a dead button in a state the operator
-   * cannot see or get out of. A steer that cannot be aimed yet is
-   * reported, not silently unavailable.
+   * and gating the steer chord on it would make it silently do nothing in
+   * a state the operator cannot see or get out of. A steer that cannot be
+   * aimed yet is reported, not silently unavailable.
    *
    * Backends that cannot steer reject the request, so even this is an
    * optimistic gate rather than a capability check; the rejection is

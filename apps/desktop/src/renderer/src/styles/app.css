@@ -18999,12 +18999,11 @@ a.button {
   background: var(--button-text);
 }
 
-/* Send, Steer, and Stop wear the main composer's action-pill recipe
+/* Send and Stop wear the main composer's action-pill recipe
    (.composer__actions .button / .composer__primary-action), scaled to the
    card's 22px control height, so the strip reads as one family with the
    full view. Shared metrics here; each button carries only its own tone. */
 .compact-composer__send,
-.compact-composer__steer,
 .compact-composer__stop {
   flex: 0 0 auto;
   min-height: 22px;
@@ -19033,24 +19032,17 @@ a.button {
   cursor: default;
 }
 
-/* Steer and Stop sit beside Queue during a live turn, so they read as
-   secondaries rather than as more accent buttons competing with it. */
-.compact-composer__steer,
+/* Sits beside Send during a live turn, so it reads as the secondary of the
+   two rather than as a second accent button competing with it. */
 .compact-composer__stop {
   border: 1px solid var(--border-subtle);
   background: transparent;
   color: var(--text-secondary);
 }
 
-.compact-composer__steer:hover:not(:disabled),
 .compact-composer__stop:hover {
   border-color: var(--accent-border);
   color: var(--text-primary);
-}
-
-.compact-composer__steer:disabled {
-  color: var(--text-muted);
-  cursor: default;
 }
 
 /* Bottom-right resize grip. Sized for a comfortable pointer target

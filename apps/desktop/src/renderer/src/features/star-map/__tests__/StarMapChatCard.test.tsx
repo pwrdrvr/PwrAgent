@@ -270,15 +270,19 @@ async function typeAndSend(title: string, text: string) {
   return input as HTMLElement & { value: string };
 }
 
-/** A live turn's secondary path: Enter queues, so steering is the button. */
+/**
+ * A live turn's secondary path: Enter queues, so steering is the chord.
+ * With no desktop platform in jsdom the chord accepts either modifier.
+ */
 async function typeAndSteer(title: string, text: string) {
+  // Queue is the label only a busy card wears; pressing the chord before
+  // the card knows the turn is running would be an ordinary send.
+  await screen.findByRole("button", { name: "Queue" });
   const input = await findReadyTextbox( { name: `Message ${title}` });
   await waitFor(() => expect(input.getAttribute("contenteditable")).toBe("true"));
-  fireEvent.change(input, { target: { value: text } });
-  const steer = screen.getByRole("button", { name: "Steer" }) as HTMLButtonElement;
-  await waitFor(() => expect(steer.disabled).toBe(false));
   await act(async () => {
-    fireEvent.click(steer);
+    fireEvent.change(input, { target: { value: text } });
+    fireEvent.keyDown(input, { key: "Enter", metaKey: true });
   });
   return input as HTMLElement & { value: string };
 }
@@ -2380,7 +2384,8 @@ describe("satellite toggles", () => {
 
 /**
  * A card over a running turn. Queue, the primary, hands the message to the
- * owner's turn queue, which holds it behind the running turn; Steer hands it
+ * owner's turn queue, which holds it behind the running turn; the steer
+ * chord hands it
  * to the running turn itself. Neither starts a second conversation.
  */
 describe("StarMapChatCard sending into a live turn", () => {
@@ -2426,12 +2431,11 @@ describe("StarMapChatCard sending into a live turn", () => {
     } as unknown as Partial<DesktopApi>);
   }
 
-  it("steers the running turn from Steer instead of starting a second one", async () => {
+  it("steers the running turn on the chord instead of starting a second one", async () => {
     const desktopApi = busyApi();
     const onUserRepliedToThread = vi.fn();
     const thread = localThread(BUSY);
     renderCard({ desktopApi, onUserRepliedToThread, thread });
-    await screen.findByRole("button", { name: "Steer" });
     await typeAndSteer("Local work", "also check the logs");
 
     await waitFor(() => {
@@ -2463,7 +2467,6 @@ describe("StarMapChatCard sending into a live turn", () => {
     } as unknown as Partial<DesktopApi>);
     const thread = localThread(BUSY);
     renderCard({ desktopApi, onUserRepliedToThread, thread });
-    await screen.findByRole("button", { name: "Steer" });
     await typeAndSteer("Local work", "and then deploy");
 
     // Steered and queued are both accepted sends that land in different
@@ -2484,7 +2487,6 @@ describe("StarMapChatCard sending into a live turn", () => {
       onUserRepliedToThread,
       thread: localThread(BUSY),
     });
-    await screen.findByRole("button", { name: "Steer" });
     const input = await typeAndSteer("Local work", "do not lose me");
 
     await waitFor(() => {
@@ -2504,7 +2506,6 @@ describe("StarMapChatCard sending into a live turn", () => {
   it("keeps a peer's steer pointed at that peer", async () => {
     const desktopApi = busyApi();
     renderCard({ desktopApi, thread: remoteThread(BUSY) });
-    await screen.findByRole("button", { name: "Steer" });
     await typeAndSteer("Remote work", "over there");
 
     await waitFor(() => {
@@ -2546,32 +2547,6 @@ describe("StarMapChatCard sending into a live turn", () => {
     });
   });
 
-  it("leaves the control live so that refusal is reachable", async () => {
-    // Disabling here would hide the state behind a dead button the operator
-    // can neither use nor understand.
-    const desktopApi = busyApi({
-      readThread: vi.fn(async () => ({
-        backend: "codex",
-        threadId: "t-local",
-        replay: {
-          entries: [],
-          messages: [],
-          pagination: { supportsPagination: false, hasPreviousPage: false },
-        },
-      })),
-    } as unknown as Partial<DesktopApi>);
-    renderCard({ desktopApi, thread: localThread(BUSY) });
-    const steer = (await screen.findByRole("button", {
-      name: "Steer",
-    })) as HTMLButtonElement;
-    const input = await findReadyTextbox( { name: "Message Local work" });
-    fireEvent.change(input, { target: { value: "let me through" } });
-
-    await waitFor(() => {
-      expect(steer.disabled).toBe(false);
-    });
-  });
-
   it("drops the landing notice once that turn is over", async () => {
     // The notice describes a turn. Left alone it would sit on an idle card
     // for hours still claiming something is in flight.
@@ -2589,7 +2564,6 @@ describe("StarMapChatCard sending into a live turn", () => {
       }),
     } as unknown as Partial<DesktopApi>);
     renderCard({ desktopApi, thread: localThread(BUSY) });
-    await screen.findByRole("button", { name: "Steer" });
     await typeAndSteer("Local work", "also check the logs");
     expect(
       await screen.findByText("Steered into the running turn."),
@@ -2610,18 +2584,14 @@ describe("StarMapChatCard sending into a live turn", () => {
     });
   });
 
-  it("disables Steer, and only Steer, when the bridge cannot steer at all", async () => {
+  it("ignores the steer chord, but not Queue, when the bridge cannot steer", async () => {
     const desktopApi = busyApi({ steerTurn: undefined });
     renderCard({ desktopApi, thread: localThread(BUSY) });
-    const steer = (await screen.findByRole("button", {
-      name: "Steer",
-    })) as HTMLButtonElement;
-    const input = await findReadyTextbox( { name: "Message Local work" });
-    fireEvent.change(input, { target: { value: "no route for this" } });
+    const input = await typeAndSteer("Local work", "no route for this");
 
-    await waitFor(() => {
-      expect(steer.disabled).toBe(true);
-    });
+    // Asked to steer, so it must not quietly queue instead; the text stays.
+    expect(desktopApi.startTurn).not.toHaveBeenCalled();
+    expect(input.value).toBe("no route for this");
     // The owner's turn queue does not need steering.
     expect(
       (screen.getByRole("button", { name: "Queue" }) as HTMLButtonElement)
@@ -2761,7 +2731,7 @@ describe("StarMapChatCard sending into a live turn", () => {
   });
 
   it("queues before the running turn is identified", async () => {
-    // Unlike Steer, Queue never aims at a turn id: the owner decides what
+    // Unlike a steer, Queue never aims at a turn id: the owner decides what
     // the message waits behind.
     const startTurn = queuedStartTurn();
     const desktopApi = busyApi({

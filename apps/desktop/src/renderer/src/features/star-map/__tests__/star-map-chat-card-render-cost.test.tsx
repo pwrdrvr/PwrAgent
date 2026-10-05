@@ -229,13 +229,11 @@ describe("StarMapChatCard streaming render cost", () => {
       });
     }
 
-    const steer = (await screen.findByRole("button", {
-      name: "Steer",
-    })) as HTMLButtonElement;
+    await screen.findByRole("button", { name: "Queue" });
     fireEvent.change(input, { target: { value: "and check the logs" } });
-    // Enter queues mid-turn now; Steer is the path that aims at the turn id.
-    await waitFor(() => expect(steer.disabled).toBe(false));
-    fireEvent.click(steer);
+    // Enter queues mid-turn now; the steer chord is the path that aims at
+    // the turn id.
+    fireEvent.keyDown(input, { key: "Enter", metaKey: true });
 
     await waitFor(() => {
       expect(steerTurn).toHaveBeenCalledWith(

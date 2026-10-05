@@ -23,6 +23,7 @@ import {
   CloseIcon,
 } from "../../icons";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
+import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import {
   normalizeImageFile,
   type ImageFallbackRequest,
@@ -43,6 +44,10 @@ import {
   useComposerMentions,
   type ComposerMentionSources,
 } from "./useComposerMentions";
+import {
+  formatQueueButtonTooltip,
+  isSteerShortcut,
+} from "./steer-shortcut";
 import type { ComposerDraftStore } from "./useComposerDraftStore";
 
 export type CompactComposerAction = {
@@ -99,9 +104,10 @@ export type CompactComposerDraftRestore = {
 export type CompactComposerProps = {
   busy?: boolean;
   /**
-   * Whether a steer can reach the running turn at all. False disables Steer
-   * (and Cmd+Enter) rather than letting the operator fire a steer that is
-   * guaranteed to bounce. Queue does not depend on it.
+   * Whether a steer can reach the running turn at all. False turns the steer
+   * chord off (and drops it from Queue's tooltip) rather than letting the
+   * operator fire a steer that is guaranteed to bounce. Queue does not
+   * depend on it.
    */
   canSteer?: boolean;
   canAttachLocalFiles?: boolean;
@@ -153,9 +159,9 @@ export type CompactComposerProps = {
   ) => void | boolean | Promise<boolean | void>;
   /**
    * Delivers into the running turn instead of behind it. While busy, a host
-   * that supplies this gets a Steer button beside Queue and Cmd+Enter, the
-   * main composer's pair; `onSend` stays the primary path and queues. Same
-   * `false` contract as `onSend`.
+   * that supplies this gets the main composer's steer chord (⌘Enter on
+   * macOS, Ctrl+Enter elsewhere), named in Queue's tooltip; `onSend` stays
+   * the primary path and queues. Same `false` contract as `onSend`.
    */
   onSteer?: (
     text: string,
@@ -229,7 +235,7 @@ export function CompactComposer(props: CompactComposerProps) {
     NavigationLaunchpadFileAttachment[]
   >([]);
   const [normalizingImageBatches, setNormalizingImageBatches] = useState(0);
-  // Which delivery is in flight, so only the button that started it says so.
+  // Which delivery is in flight, so the button names the one under way.
   const [sending, setSending] = useState<false | "send" | "steer">(false);
   const sendingRef = useRef(false);
   const normalizingImages = normalizingImageBatches > 0;
@@ -275,6 +281,13 @@ export function CompactComposer(props: CompactComposerProps) {
     pastedImageMaxPatches,
   } = props;
   const steerAvailable = Boolean(props.busy && onSteer);
+  const canSteerNow = steerAvailable && props.canSteer !== false;
+  const queueTooltip = useViewportTooltip({ className: "viewport-tooltip" });
+  // A turn that ends under the pointer must not leave the hint up.
+  const hideQueueTooltip = queueTooltip.hide;
+  useEffect(() => {
+    if (!canSteerNow) hideQueueTooltip();
+  }, [canSteerNow, hideQueueTooltip]);
   const imagesSupported = props.imagesSupported !== false;
   const imagesUnsupportedMessage = `${
     props.imagesUnsupportedLabel ?? "This mode"
@@ -652,7 +665,11 @@ export function CompactComposer(props: CompactComposerProps) {
       // An open mention popover claims the arrows, Enter, Tab, and Escape
       // before the send path sees them.
       if (mentions.handleKeyDown(event)) return;
-      if (event.key !== "Enter" || event.ctrlKey) return;
+      if (event.key !== "Enter") return;
+      const steerChord = isSteerShortcut(event);
+      // Any other modified Enter (Ctrl on macOS, the Windows key elsewhere)
+      // stays inert rather than reading as a plain send.
+      if ((event.metaKey || event.ctrlKey) && !steerChord) return;
       // The button checks this too. A disabled `<textarea>` used to swallow
       // the keydown for us; the editor only stops taking new text, and still
       // forwards Enter from a field that was focused before it was disabled.
@@ -662,16 +679,16 @@ export function CompactComposer(props: CompactComposerProps) {
       }
       if (props.disabled) return;
       event.preventDefault();
-      // Cmd+Enter steers, as in the main composer. With no running turn to
+      // The chord steers, as in the main composer. With no running turn to
       // steer into it is an ordinary send; with one that cannot take a
       // steer it does nothing rather than quietly queueing instead.
-      if (event.metaKey && steerAvailable) {
-        if (props.canSteer !== false) void send(undefined, "steer");
+      if (steerChord && steerAvailable) {
+        if (canSteerNow) void send(undefined, "steer");
         return;
       }
       void send();
     },
-    [mentions, props.canSteer, props.disabled, send, steerAvailable],
+    [canSteerNow, mentions, props.disabled, send, steerAvailable],
   );
 
   const toggleMenu = useCallback(() => {
@@ -1146,25 +1163,39 @@ export function CompactComposer(props: CompactComposerProps) {
         {/* A live turn used to leave Stop as the only control, which read as
             "you cannot say anything until this finishes". The primary
             action queues behind the running turn, as the main composer's
-            does; Steer is the secondary that delivers into it. */}
-        {steerAvailable ? (
-          <button
-            className="compact-composer__steer"
-            disabled={sendDisabled || props.canSteer === false}
-            onClick={() => void send(undefined, "steer")}
-            type="button"
-          >
-            {sending === "steer" ? "Steering…" : "Steer"}
-          </button>
-        ) : null}
+            does; the steer chord, named in its tooltip, delivers into it. */}
         <button
+          aria-describedby={
+            canSteerNow && queueTooltip.visible
+              ? queueTooltip.tooltipId
+              : undefined
+          }
           className="compact-composer__send"
           disabled={sendDisabled}
+          onBlur={queueTooltip.hide}
           onClick={() => void send()}
+          onFocus={(event) => {
+            if (canSteerNow) {
+              queueTooltip.show(event.currentTarget, formatQueueButtonTooltip());
+            }
+          }}
+          onMouseEnter={(event) => {
+            if (canSteerNow) {
+              queueTooltip.show(event.currentTarget, formatQueueButtonTooltip());
+            }
+          }}
+          onMouseLeave={queueTooltip.hide}
           type="button"
         >
-          {sending === "send" ? "Sending…" : props.busy ? "Queue" : "Send"}
+          {sending === "steer"
+            ? "Steering…"
+            : sending === "send"
+              ? "Sending…"
+              : props.busy
+                ? "Queue"
+                : "Send"}
         </button>
+        {queueTooltip.tooltipNode}
       </div>
     </div>
   );
