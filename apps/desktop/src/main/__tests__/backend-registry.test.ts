@@ -48946,6 +48946,7 @@ script = "printf setup"
             data: {
               source: "pwragent_task_monitor",
               monitorId,
+              parentTurnId: "turn-1",
               task: "Watch PR #123 checks until they finish.",
             },
           },

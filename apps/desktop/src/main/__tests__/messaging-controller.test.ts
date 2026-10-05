@@ -3199,6 +3199,34 @@ describe("MessagingController", () => {
     return { channel, harness, resolvePrivateConversation };
   }
 
+  it.each([false, true])("withholds monitor lifecycle notices from a private-response parent (delivered=%s)", async (delivered) => {
+    const { harness } = await createSlackPrivateResponseHarness({ toolUpdateDefaultMode: "show_all" });
+    try {
+      if (delivered) {
+        await harness.controller.handlePwrAgentMessagingRequest({
+          operation: "send_private_response",
+          context: { backend: "codex", threadId: "thread-1", turnId: "turn-1" },
+          args: { text: "Private details" },
+        });
+      }
+      harness.delivered.length = 0;
+      await harness.controller.handleBackendEvent(buildMonitorLifecycleEvent({ parentTurnId: "turn-1" }));
+      expect(JSON.stringify(harness.delivered)).not.toContain("Secret monitor task");
+      await harness.controller.handleBackendEvent({
+        backend: "codex",
+        notification: { method: "turn/started", params: { threadId: "thread-1", turnId: "turn-2", turn: { id: "turn-2" } } },
+      });
+      // Resolve a delayed creation against its actual parent, not the new turn.
+      await harness.controller.handleBackendEvent(buildMonitorLifecycleEvent({ monitorId: "delayed-monitor", parentTurnId: "turn-1" }));
+      for (const outcome of ["success", "failure"] as const) {
+        await harness.controller.handleBackendEvent(buildMonitorLifecycleEvent({ parentTurnId: "turn-1", outcome }));
+      }
+      expect(JSON.stringify(harness.delivered)).not.toContain("Secret monitor task");
+    } finally {
+      harness.controller.dispose();
+    }
+  });
+
   it("uses normalized Agent metadata for private response identity", async () => {
     const { harness } = await createSlackPrivateResponseHarness({
       agentName: "Signals Agent",
@@ -19318,6 +19346,44 @@ describe("MessagingController", () => {
       },
     );
 
+    it.each([false, true])("withholds lifecycle notices owned by automation (suppressBindingBroadcast=%s)", async (suppressBindingBroadcast) => {
+      const harness = await monitorHarness("show_all");
+      try {
+        await harness.controller.handleBackendEvent({
+          backend: "codex",
+          notification: {
+            method: "thread/turnQueue/updated",
+            params: { threadId: "thread-1", queueEntryId: "headless:run-1", origin: "automation", status: "started", turnId: "automation-turn", suppressBindingBroadcast },
+          },
+        });
+        harness.delivered.length = 0;
+        await harness.controller.handleBackendEvent(buildMonitorLifecycleEvent({ parentTurnId: "automation-turn" }));
+        expect(harness.delivered).toHaveLength(0);
+        await harness.controller.handleBackendEvent({
+          backend: "codex",
+          notification: {
+            method: "thread/turnQueue/updated",
+            params: { threadId: "thread-1", queueEntryId: "headless:run-1", origin: "automation", status: "terminal", turnId: "automation-turn", suppressBindingBroadcast, terminalStatus: "turn/completed", finalText: "Expected automation final" },
+          },
+        });
+        harness.delivered.length = 0;
+        await harness.controller.handleBackendEvent({
+          backend: "codex",
+          notification: { method: "turn/started", params: { threadId: "thread-1", turnId: "operator-turn", turn: { id: "operator-turn" } } },
+        });
+        harness.delivered.length = 0;
+        // The original automation has been forgotten; its monitor still owns
+        // the same suppression decision after an operator turn starts.
+        await harness.controller.handleBackendEvent(buildMonitorLifecycleEvent({ parentTurnId: "automation-turn", outcome: "success" }));
+        await harness.controller.handleBackendEvent(buildMonitorLifecycleEvent({ parentTurnId: "automation-turn", outcome: "failure" }));
+        expect(harness.delivered).toHaveLength(0);
+        await harness.controller.handleBackendEvent(buildMonitorLifecycleEvent({ monitorId: "operator-monitor", parentTurnId: "operator-turn" }));
+        expect(harness.delivered).toHaveLength(1);
+      } finally {
+        harness.controller.dispose();
+      }
+    });
+
     it("coalesces repeated standalone lifecycle notices at Some without a completion bypass", async () => {
       vi.useFakeTimers();
       const harness = await monitorHarness("show_some");
@@ -26857,6 +26923,35 @@ async function createHarness<
     submitServerRequest,
     updateDirectoryLaunchpad,
     store,
+  };
+}
+
+function buildMonitorLifecycleEvent(params: {
+  monitorId?: string;
+  parentTurnId: string;
+  outcome?: "success" | "failure";
+}): AgentEvent {
+  const monitorId = params.monitorId ?? "private-monitor";
+  return {
+    backend: "codex",
+    notification: {
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: `monitor:${monitorId}`,
+        item: {
+          id: `${monitorId}:${params.outcome ?? "created"}`,
+          type: params.outcome ? "taskMonitorCompletion" : "taskMonitorCreated",
+          data: {
+            source: "pwragent_task_monitor",
+            monitorId,
+            parentTurnId: params.parentTurnId,
+            task: "Secret monitor task",
+            ...(params.outcome ? { outcome: params.outcome } : {}),
+          },
+        },
+      },
+    },
   };
 }
 
