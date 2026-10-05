@@ -128,8 +128,18 @@ export function ImageDiffLightbox({
 
   const moveTo = useCallback((index: number) => {
     const target = sequence[index];
-    if (target) setStop(target);
-  }, [sequence]);
+    if (!target) return;
+    // A new file remounts its view, taking a focused zoom control with it;
+    // the trap would then pull focus onto some control in the new view and
+    // raise its tooltip mid-walk. The frame is where focus started.
+    const dialog = dialogRef.current;
+    if (target.entryKey !== current?.entryKey
+      && dialog && document.activeElement !== dialog
+      && dialog.contains(document.activeElement)) {
+      dialog.focus({ preventScroll: true });
+    }
+    setStop(target);
+  }, [current?.entryKey, dialogRef, sequence]);
 
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;

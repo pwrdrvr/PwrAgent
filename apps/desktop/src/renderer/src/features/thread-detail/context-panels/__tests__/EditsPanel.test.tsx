@@ -784,8 +784,12 @@ describe("EditsPanel", () => {
       expect(walkStatus()).toHaveTextContent("Added, crate.png, 4 of 4");
       expect(within(dialog).getByRole("button", { name: "Next" })).toHaveAttribute("aria-disabled", "true");
 
+      // A file step remounts the view under a focused zoom control; focus
+      // goes back to the frame rather than onto a control in the new view.
+      within(dialog).getByRole("button", { name: "Fit to window" }).focus();
       fireEvent.keyDown(window, { key: "ArrowLeft", shiftKey: true });
       expect(walkStatus()).toHaveTextContent("Before, boiler.png, 1 of 4");
+      expect(document.activeElement).toBe(dialog);
 
       fireEvent.click(within(dialog).getByRole("button", { name: "Diff" }));
       expect(pressed()).toEqual(["Diff"]);
