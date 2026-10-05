@@ -142,112 +142,59 @@ describe("image input files", () => {
     }
   });
 
-  it("does not delete a reused stale cached image while materializing it", async () => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-image-inputs-"));
-    const unlinkedPaths: string[] = [];
-    try {
-      const [materialized] = await materializeLocalImageInputs(
-        [{ type: "image", url: "data:image/png;base64,AQID" }],
-        { resolveRoot: () => tempDir },
-      );
-      const imagePath = materialized?.type === "localImage" ? materialized.path : "";
-      await writeFileFs(imagePath, Buffer.from([9, 9, 9]));
-
-      const [reused] = await materializeLocalImageInputs(
-        [{ type: "image", url: "data:image/png;base64,AQID" }],
-        {
-          now: () => 10 * 24 * 60 * 60 * 1000,
-          readdir: async () => [path.basename(imagePath)],
-          resolveRoot: () => tempDir,
-          stat: async () => ({
-            isFile: () => true,
-            mtimeMs: 0,
-          }),
-          unlink: async (filePath) => {
-            unlinkedPaths.push(String(filePath));
-          },
-        },
-      );
-      await new Promise((resolve) => setTimeout(resolve, 0));
-
-      expect(reused).toEqual({ type: "localImage", path: imagePath });
-      expect(unlinkedPaths).not.toContain(imagePath);
-      await expect(readFile(imagePath)).resolves.toEqual(Buffer.from([1, 2, 3]));
-    } finally {
-      await rm(tempDir, { recursive: true, force: true });
-    }
-  });
-
-  it("does not delete an old named-image directory when a child image is fresh", async () => {
+  it.each(["named", "unnamed"])("preserves old %s transcript images when a different image is submitted", async (layout) => {
     const root = "/tmp/pwragent-image-inputs";
-    const now = 10 * 24 * 60 * 60 * 1000;
-    const stats = new Map<string, { kind: "dir" | "file"; mtimeMs: number }>();
+    const now = 30 * 24 * 60 * 60 * 1000;
+    const oldPath = layout === "named"
+      ? path.join(root, "old-digest", "old-screenshot.png")
+      : path.join(root, "old-unnamed.png");
+    const oldBytes = Buffer.from([1, 2, 3]);
+    const files = new Map<string, Buffer>([[oldPath, oldBytes]]);
+    const directories = new Set([root, path.dirname(oldPath)]);
     const removedPaths: string[] = [];
-
     const dependencies = {
       now: () => now,
       resolveRoot: () => root,
       mkdir: async (dirPath: string) => {
-        stats.set(dirPath, { kind: "dir", mtimeMs: 0 });
+        directories.add(dirPath);
+      },
+      writeFile: async (filePath: string, data: Buffer) => {
+        files.set(filePath, data);
       },
       readdir: async (dirPath: string) => {
         const prefix = `${dirPath}${path.sep}`;
-        const entries = new Set<string>();
-        for (const candidate of stats.keys()) {
-          if (!candidate.startsWith(prefix)) {
-            continue;
-          }
-          const child = candidate.slice(prefix.length);
-          if (child && !child.includes(path.sep)) {
-            entries.add(child);
-          }
-        }
-        return [...entries];
+        return [...new Set([...files.keys(), ...directories])]
+          .filter((candidate) => candidate.startsWith(prefix))
+          .map((candidate) => candidate.slice(prefix.length))
+          .filter((candidate) => candidate && !candidate.includes(path.sep));
       },
-      stat: async (filePath: string) => {
-        const info = stats.get(filePath);
-        if (!info) {
-          throw new Error(`missing stat for ${filePath}`);
-        }
-        return {
-          isFile: () => info.kind === "file",
-          isDirectory: () => info.kind === "dir",
-          mtimeMs: info.mtimeMs,
-        };
-      },
-      writeFile: async (filePath: string) => {
-        stats.set(path.dirname(filePath), { kind: "dir", mtimeMs: 0 });
-        stats.set(filePath, { kind: "file", mtimeMs: now });
-      },
+      stat: async (filePath: string) => ({
+        isFile: () => files.has(filePath),
+        isDirectory: () => directories.has(filePath),
+        mtimeMs: 0,
+      }),
       unlink: async (filePath: string) => {
-        stats.delete(filePath);
-      },
-      rm: async (filePath: string) => {
         removedPaths.push(filePath);
-        const prefix = `${filePath}${path.sep}`;
-        for (const candidate of [...stats.keys()]) {
-          if (candidate === filePath || candidate.startsWith(prefix)) {
-            stats.delete(candidate);
+        files.delete(filePath);
+      },
+      rm: async (dirPath: string) => {
+        removedPaths.push(dirPath);
+        for (const filePath of files.keys()) {
+          if (filePath.startsWith(`${dirPath}${path.sep}`)) {
+            files.delete(filePath);
           }
         }
       },
     };
 
-    const [first] = await materializeLocalImageInputs(
-      [{ type: "image", name: "original-paste.png", url: "data:image/png;base64,AQID" }],
-      dependencies,
-    );
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    const firstPath = first?.type === "localImage" ? first.path : "";
     await materializeLocalImageInputs(
-      [{ type: "image", name: "different.png", url: "data:image/png;base64,BAUG" }],
+      [{ type: "image", name: "new.png", url: "data:image/png;base64,BwgJ" }],
       dependencies,
     );
+    // Let the former fire-and-forget expiry sweep finish against this in-memory filesystem.
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(path.basename(firstPath)).toBe("original-paste.png");
-    expect(removedPaths).not.toContain(path.dirname(firstPath));
-    expect(stats.has(firstPath)).toBe(true);
+    expect(removedPaths).toEqual([]);
+    expect(files.get(oldPath)).toEqual(oldBytes);
   });
 });
