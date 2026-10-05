@@ -151,8 +151,8 @@ importers:
         specifier: ^0.4.0
         version: 0.4.0
       '@shutterstock/p-map-iterable':
-        specifier: ^1.1.2
-        version: 1.1.2(aggregate-error@3.1.0)
+        specifier: ^1.2.0
+        version: 1.2.0(aggregate-error@3.1.0)
       '@tiptap/extension-mention':
         specifier: ^3.22.5
         version: 3.31.3(@tiptap/core@3.31.3(@tiptap/pm@3.31.3))(@tiptap/pm@3.31.3)(@tiptap/suggestion@3.31.3(@floating-ui/dom@1.8.0)(@tiptap/core@3.31.3(@tiptap/pm@3.31.3))(@tiptap/pm@3.31.3))
@@ -1396,10 +1396,10 @@ packages:
     resolution: {integrity: sha512-xzvBr1Q1c4lCe7i6sRnrofxeO1QTP/LKQ6A6qy0iB4x5yfiSfARMEQEghojzTNALDTcv8En04qYNIco9/K9eZQ==}
     engines: {node: '>=v14.0.0', npm: '>=7.0.0'}
 
-  '@shutterstock/p-map-iterable@1.1.2':
-    resolution: {integrity: sha512-zNPPB2cro7fr+gPsNPoEir6pzYfJngkik7EnsSD5uMqwzGB8qtMmausS5XO10KM5c1Hfw/hpe1oXf/UoHNZFlg==}
+  '@shutterstock/p-map-iterable@1.2.0':
+    resolution: {integrity: sha512-waqNJVOz35MaGZgxNl+kxDCxeBLOOVHL/XvgcZDAy9gazjRRkt9ZmUz48S3AoejC3EUJKjEYgjQW1UtRKJLb0g==}
     peerDependencies:
-      aggregate-error: ^3.0.0
+      aggregate-error: ^3.1.0
 
   '@sigstore/bundle@5.0.0':
     resolution: {integrity: sha512-wefjygudENbzbQMks1t5u34EP0fFoD0XvaEP7DOUP/sXKvogzEJYFw5E6pegGyp3onGWzVEYKVa3bNZWyTYX+A==}
@@ -5916,7 +5916,7 @@ snapshots:
 
   '@sapphire/snowflake@3.5.5': {}
 
-  '@shutterstock/p-map-iterable@1.1.2(aggregate-error@3.1.0)':
+  '@shutterstock/p-map-iterable@1.2.0(aggregate-error@3.1.0)':
     dependencies:
       aggregate-error: 3.1.0
 
