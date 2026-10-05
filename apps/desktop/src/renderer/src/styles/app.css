@@ -299,6 +299,49 @@
      Labels (13px) and code (12px) deliberately stay fixed so the
      subordinate hierarchy survives every notch. */
   --transcript-text-size: 14px;
+  /* Theme picker swatches (GeneralSettings): each color theme's canvas,
+     sidebar, accent, and primary text, readable while any other theme
+     renders. The contract test holds each to its theme block. */
+  --theme-swatch-tangerine-dark-app: #000000;
+  --theme-swatch-tangerine-dark-sidebar: #050505;
+  --theme-swatch-tangerine-dark-accent: #ff8a1f;
+  --theme-swatch-tangerine-dark-text: #f7f3eb;
+  --theme-swatch-tangerine-light-app: #ffffff;
+  --theme-swatch-tangerine-light-sidebar: #f7f4ef;
+  --theme-swatch-tangerine-light-accent: #b74c00;
+  --theme-swatch-tangerine-light-text: #1a1612;
+  --theme-swatch-catppuccin-mocha-app: #1e1e2e;
+  --theme-swatch-catppuccin-mocha-sidebar: #181825;
+  --theme-swatch-catppuccin-mocha-accent: #d99d7a;
+  --theme-swatch-catppuccin-mocha-text: #d0d8f5;
+  --theme-swatch-catppuccin-latte-app: #eff1f5;
+  --theme-swatch-catppuccin-latte-sidebar: #e6e9ef;
+  --theme-swatch-catppuccin-latte-accent: #983801;
+  --theme-swatch-catppuccin-latte-text: #343648;
+  --theme-swatch-solarized-dark-app: #002b36;
+  --theme-swatch-solarized-dark-sidebar: #073642;
+  --theme-swatch-solarized-dark-accent: #dba600;
+  --theme-swatch-solarized-dark-text: #bcc5c5;
+  --theme-swatch-solarized-light-app: #fdf6e3;
+  --theme-swatch-solarized-light-sidebar: #eee8d5;
+  --theme-swatch-solarized-light-accent: #9a3911;
+  --theme-swatch-solarized-light-text: #3c4c50;
+  --theme-swatch-gray-dark-app: #2b2b2e;
+  --theme-swatch-gray-dark-sidebar: #252528;
+  --theme-swatch-gray-dark-accent: #ffa95a;
+  --theme-swatch-gray-dark-text: #ececee;
+  --theme-swatch-gray-light-app: #ebebed;
+  --theme-swatch-gray-light-sidebar: #e2e2e5;
+  --theme-swatch-gray-light-accent: #8a3900;
+  --theme-swatch-gray-light-text: #1d1d20;
+  --theme-swatch-blue-dark-app: #0f1724;
+  --theme-swatch-blue-dark-sidebar: #0b121d;
+  --theme-swatch-blue-dark-accent: #5baaff;
+  --theme-swatch-blue-dark-text: #e4ecf8;
+  --theme-swatch-blue-light-app: #f3f7fc;
+  --theme-swatch-blue-light-sidebar: #e8eff8;
+  --theme-swatch-blue-light-accent: #1c56ac;
+  --theme-swatch-blue-light-text: #0f223b;
 }
 
 /* =============================================================}
@@ -12917,6 +12960,45 @@ a.button {
   color: var(--text-muted);
   font-size: 11.5px;
   overflow-wrap: anywhere;
+}
+
+/* A group heading (`SelectOption.group`): the eyebrow type the Settings
+   section heads use, aligned with the option labels' check column. */
+.select-group__label {
+  padding: 8px 10px 3px 6px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.select-listbox > [role="group"]:not(:first-child) > .select-group__label {
+  margin-top: 4px;
+}
+
+.select-option__leading,
+.select-trigger__leading {
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 1lh;
+  align-items: center;
+}
+
+/* The four-color strip on a theme option (GeneralSettings): app canvas,
+   sidebar, accent, primary text. Colors are the `--theme-swatch-*` tokens
+   on `:root`, each held to its theme block by the contract test. */
+.theme-swatch {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+}
+
+.theme-swatch > i {
+  display: block;
+  width: 7px;
+  height: 12px;
 }
 
 .settings-input--invalid {

@@ -660,19 +660,20 @@ describe("SettingsScreen color themes", () => {
     // Each picker offers only its own scheme's themes.
     const dark = screen.getByRole("combobox", { name: "Dark theme" });
     const light = screen.getByRole("combobox", { name: "Light theme" });
+    // PwrAgent's own pairs first, then the community palettes.
     expect(selectOptionLabels(dark)).toEqual([
       "Tangerine",
-      "Catppuccin Mocha",
-      "Solarized Dark",
       "Gray",
       "Blue",
+      "Catppuccin Mocha",
+      "Solarized Dark",
     ]);
     expect(selectOptionLabels(light)).toEqual([
       "Tangerine",
-      "Catppuccin Latte",
-      "Solarized Light",
       "Gray",
       "Blue",
+      "Catppuccin Latte",
+      "Solarized Light",
     ]);
 
     chooseSelectOption(dark, "Solarized Dark");
@@ -681,6 +682,62 @@ describe("SettingsScreen color themes", () => {
 
     chooseSelectOption(light, /Blue/);
     expect(controller.setLightTheme).toHaveBeenCalledWith("blue-light");
+  });
+
+  it("marks the row on screen, credits community palettes, and offers the pair", () => {
+    const controller: AppearanceController = {
+      appearance: {
+        theme: "dark",
+        darkTheme: "catppuccin-mocha",
+        lightTheme: "tangerine-light",
+        density: "mission-control",
+        sidebarTextSize: "md",
+        transcriptTextSize: "md",
+        resolvedTheme: "dark",
+      },
+      setTheme: vi.fn(),
+      setDarkTheme: vi.fn(),
+      setLightTheme: vi.fn(),
+      setDensity: vi.fn(),
+      setSidebarTextSize: vi.fn(),
+      setTranscriptTextSize: vi.fn(),
+      setAppearance: vi.fn(),
+    };
+    render(
+      <SettingsScreen
+        appearanceController={controller}
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "General" }));
+
+    const darkRow = screen.getByRole("combobox", { name: "Dark theme" })
+      .closest(".settings-field") as HTMLElement;
+    const lightRow = screen.getByRole("combobox", { name: "Light theme" })
+      .closest(".settings-field") as HTMLElement;
+    expect(within(darkRow).getByText("Showing")).toBeInTheDocument();
+    expect(within(lightRow).queryByText("Showing")).toBeNull();
+    expect(within(lightRow).getByText(/Not used while Theme is Dark\./)).toBeInTheDocument();
+    expect(within(darkRow).getByRole("link", { name: "Catppuccin" }))
+      .toHaveAttribute("href", "https://catppuccin.com/licensing/");
+    expect(within(lightRow).queryByRole("link")).toBeNull();
+
+    // Picking a theme offers its pair for the other scheme, and only a
+    // click applies it.
+    chooseSelectOption(screen.getByRole("combobox", { name: "Dark theme" }), "Solarized Dark");
+    expect(controller.setLightTheme).not.toHaveBeenCalled();
+    fireEvent.click(within(darkRow).getByRole("button", { name: "Use Solarized Light" }));
+    expect(controller.setLightTheme).toHaveBeenCalledWith("solarized-light");
+    expect(within(darkRow).queryByRole("button", { name: "Use Solarized Light" })).toBeNull();
+
+    // Catppuccin Latte is already the dark theme's pair, so nothing is offered.
+    chooseSelectOption(screen.getByRole("combobox", { name: "Light theme" }), "Catppuccin Latte");
+    expect(within(lightRow).queryByRole("button", { name: /^Use / })).toBeNull();
+    chooseSelectOption(screen.getByRole("combobox", { name: "Light theme" }), /Blue/);
+    fireEvent.click(within(lightRow).getByRole("button", { name: "Not now" }));
+    expect(controller.setDarkTheme).toHaveBeenCalledTimes(1);
+    expect(within(lightRow).queryByRole("button", { name: /^Use / })).toBeNull();
   });
 });
 

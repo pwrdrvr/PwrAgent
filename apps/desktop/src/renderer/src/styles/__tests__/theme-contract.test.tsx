@@ -2648,6 +2648,31 @@ describe("color theme contract", () => {
     }
   });
 
+  it("draws each theme picker swatch from its theme's own tokens", () => {
+    // The swatches show every theme while one renders, so they are literal
+    // copies on :root; a retuned block must retune its swatch too.
+    const root = extractRootTokens(css);
+    const swatched = {
+      "tangerine-dark": root,
+      "tangerine-light": {
+        ...root,
+        ...extractTokensForSelector(css, ':root[data-theme="light"]'),
+      },
+      ...themes,
+    };
+    for (const [name, theme] of Object.entries(swatched)) {
+      for (const [part, token] of [
+        ["app", "bg-app"],
+        ["sidebar", "bg-sidebar"],
+        ["accent", "accent"],
+        ["text", "text-primary"],
+      ]) {
+        expect(root[`theme-swatch-${name}-${part}`], `${name}: ${part}`)
+          .toBe(theme[token]);
+      }
+    }
+  });
+
   it("never paints hover or raised surfaces in the color they sit on", () => {
     // Thread rows hover in the sidebar and the panel, and secondary buttons
     // and cards sit raised on the panel. A hover or raised token equal to
