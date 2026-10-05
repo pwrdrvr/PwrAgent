@@ -124,7 +124,7 @@
     "@vitejs/plugin-react": "^5.2.0",
     "axe-core": "^4.11.4",
     "electron": "^44.4.5",
-    "electron-builder": "26.16.1",
+    "electron-builder": "26.17.0",
     "electron-vite": "^5.0.0",
     "tsx": "^4.20.6",
     "vite": "^7.3.2"
