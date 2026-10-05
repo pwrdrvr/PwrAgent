@@ -204,6 +204,7 @@ describe("probeWorktreeWorkingState", () => {
     const primary = path.join(root, "primary");
     const remote = path.join(root, "remote.git");
     const worktree = path.join(root, "feature-worktree");
+    const publisher = path.join(root, "publisher");
 
     try {
       await mkdir(primary);
@@ -219,9 +220,12 @@ describe("probeWorktreeWorkingState", () => {
       const staleRemoteHead = (await git(worktree, "rev-parse", "origin/feature")).trim();
       await git(worktree, "commit", "--allow-empty", "-m", "published feature");
       const publishedHead = (await git(worktree, "rev-parse", "HEAD")).trim();
-      // A push to the URL publishes the commit without advancing origin's
-      // local tracking ref, matching an agent that pushes outside that remote.
-      await git(worktree, "push", remote, "HEAD:refs/heads/feature");
+      // Publish from a separate clone, matching an agent that pushes outside
+      // this checkout's remote. No push updates another repository's refs, so
+      // origin/feature stays stale. Since Git 2.56, a push from this checkout
+      // to a URL that matches origin's advances it.
+      await git(root, "clone", primary, publisher);
+      await git(publisher, "push", remote, `${publishedHead}:refs/heads/feature`);
       expect((await git(worktree, "ls-remote", remote, "refs/heads/feature"))
         .split(/\s+/)[0]).toBe(publishedHead);
       expect((await git(worktree, "rev-parse", "origin/feature")).trim()).toBe(staleRemoteHead);
