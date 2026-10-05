@@ -10062,6 +10062,122 @@ describe("Composer", () => {
     ).toBeUndefined();
   });
 
+  describe("steer chord by platform", () => {
+    type PwrWindow = Window & { pwragent?: { platform?: string } };
+    afterEach(() => {
+      delete (window as PwrWindow).pwragent;
+    });
+
+    function renderSteerable(platform: string) {
+      (window as PwrWindow).pwragent = { platform };
+      const steerTurn = vi.fn(async () => ({
+        backend: "codex" as const,
+        threadId: "thread-1",
+        turnId: "turn-1",
+      }));
+      const startTurn = vi.fn(async () => ({
+        backend: "codex" as const,
+        threadId: "thread-1",
+        turnId: "queue-1",
+        queueStatus: "queued" as const,
+        queueEntryId: "queue-1",
+      }));
+      const element = (activeTurnId: string | undefined) => (
+        <Composer
+          activeTurnId={activeTurnId}
+          backends={[
+            {
+              ...backendSummary("codex", {
+                models: [
+                  {
+                    id: "gpt-5.5",
+                    label: "GPT-5.5",
+                    current: true,
+                    supportsReasoning: true,
+                    supportsSteering: true,
+                  },
+                ],
+              }),
+              capabilities: {
+                ...backendSummary("codex").capabilities,
+                steerTurn: true,
+              },
+            },
+          ]}
+          desktopApi={{
+            onAgentEvent: () => () => undefined,
+            startTurn,
+            steerTurn,
+          }}
+          disabled={false}
+          skills={[]}
+          thread={{
+            id: "thread-1",
+            title: "Steerable thread",
+            titleSource: "explicit",
+            source: "codex",
+            executionMode: "default",
+            linkedDirectories: [],
+            inbox: { inInbox: false },
+          }}
+        />
+      );
+      const view = render(element("turn-1"));
+      const textarea = screen.getByLabelText("Reply");
+      fireEvent.change(textarea, { target: { value: "Change direction" } });
+      return {
+        endTurn: () => view.rerender(element(undefined)),
+        startTurn,
+        steerTurn,
+        textarea,
+      };
+    }
+
+    it("steers on Ctrl+Enter on Windows", async () => {
+      const { startTurn, steerTurn, textarea } = renderSteerable("win32");
+      fireEvent.keyDown(textarea, { key: "Enter", ctrlKey: true });
+
+      await waitFor(() => {
+        expect(steerTurn).toHaveBeenCalledWith(expect.objectContaining({
+          expectedTurnId: "turn-1",
+          input: [{ type: "text", text: "Change direction" }],
+        }));
+      });
+      expect(startTurn).not.toHaveBeenCalled();
+    });
+
+    it("keeps Ctrl+Enter a plain queue on macOS", async () => {
+      const { startTurn, steerTurn, textarea } = renderSteerable("darwin");
+      fireEvent.keyDown(textarea, { key: "Enter", ctrlKey: true });
+
+      await waitFor(() => {
+        expect(startTurn).toHaveBeenCalledTimes(1);
+      });
+      expect(steerTurn).not.toHaveBeenCalled();
+    });
+
+    it("names the chord in Queue's tooltip", async () => {
+      renderSteerable("win32");
+      fireEvent.mouseEnter(screen.getByRole("button", { name: "Queue" }));
+      expect((await screen.findByRole("tooltip")).textContent).toBe(
+        "Queue after this turn · Ctrl+Enter to steer it in",
+      );
+    });
+
+    it("takes the tooltip down when the turn ends under the pointer", async () => {
+      const { endTurn } = renderSteerable("darwin");
+      fireEvent.mouseEnter(screen.getByRole("button", { name: "Queue" }));
+      expect(await screen.findByRole("tooltip")).toBeInTheDocument();
+
+      endTurn();
+
+      expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument();
+      await waitFor(() => {
+        expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+      });
+    });
+  });
+
   it("steers Command Enter during an active turn when supported", async () => {
     let agentEventHandler:
       | ((event: {

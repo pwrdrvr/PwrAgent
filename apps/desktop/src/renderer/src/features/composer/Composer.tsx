@@ -246,6 +246,7 @@ import {
   type ComposerQueuedTurnSnapshot,
 } from "./useComposerDraftStore";
 import { useComposerMentionSources } from "./useComposerMentionSources";
+import { isSteerShortcut, useQueueSteerTooltip } from "./steer-shortcut";
 import { useComposerPopoverClamp } from "./useComposerPopoverClamp";
 import { useOwnedComposerDraftStore } from "./useOwnedComposerDraftStore";
 
@@ -10070,6 +10071,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           : props.launchpad
             ? "Start thread"
             : "Send";
+  // Queue is the primary mid-turn; the steer chord is its keyboard-only
+  // sibling, so the button is where it gets named.
+  const submitButtonSteerHint =
+    submitButtonLabel === "Queue" && Boolean(activeTurnId) && supportsSteering;
+  const submitTooltip = useQueueSteerTooltip(submitButtonSteerHint);
   const launchpadWorkspaceOptions = props.launchpad
     ? buildLaunchpadWorkspaceOptions(props.launchpad, props.directory)
     : [];
@@ -10748,7 +10754,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
 
       if (event.key === "Enter" && !event.shiftKey && !event.altKey) {
         event.preventDefault();
-        void submitTurn(event.metaKey ? "steer" : "default", {
+        void submitTurn(isSteerShortcut(event) ? "steer" : "default", {
           restoreComposerFocus: true,
         });
       }
@@ -13611,6 +13617,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 </button>
               ) : null}
               <button
+                {...submitTooltip.buttonProps}
                 className="button composer__send-submit-button"
                 disabled={sendButtonDisabled}
                 type="submit"
@@ -13623,6 +13630,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 ) : null}
                 {submitButtonLabel}
               </button>
+              {submitTooltip.tooltipNode}
             </div>
             {scheduleAffordanceVisible && scheduleMenuOpen ? (
               <div className="composer__schedule-menu" role="menu">

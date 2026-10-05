@@ -852,8 +852,8 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
   /**
    * Structural only: whether this bridge can steer at all. Deliberately NOT
    * "and we know which turn to aim at" — that is a moment-to-moment fact,
-   * and gating the button on it disables the card's only send control in a
-   * state the operator cannot see or get out of. A send that cannot be
+   * and gating the steer chord on it would make it silently do nothing in
+   * a state the operator cannot see or get out of. A steer that cannot be
    * aimed yet is reported, not silently unavailable.
    *
    * Backends that cannot steer reject the request, so even this is an
@@ -947,17 +947,19 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
    * the transcript must not keep an optimistic message for a turn that
    * never started.
    *
-   * While a turn is running this steers instead of starting a new turn.
-   * `steerTurn` reports back whether the backend injected the message into
-   * the running turn or held it for the next one; either way the operator
-   * gets to type during a turn, which starting a second turn would not
-   * allow.
+   * While a turn is running the default delivery queues, as the main
+   * composer's Queue does: `startTurn` reaches the owner's turn queue,
+   * which holds it behind the running turn whether that turn is local, a
+   * peer's, or a messaging adapter's, and the band shows it as a queued
+   * row. `"steer"` instead hands it to the running turn; `steerTurn`
+   * reports back whether the backend injected it or held it for the next.
    */
   const send = useCallback(
     async (
       text: string,
       imageAttachments: NavigationLaunchpadImageAttachment[] = [],
       fileAttachments: NavigationLaunchpadFileAttachment[] = [],
+      delivery: "queue" | "steer" = "queue",
     ): Promise<boolean> => {
       if (!composerReadinessRef.current) {
         setSendError("Still loading thread configuration and its queue. Try again when ready.");
@@ -1072,7 +1074,9 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         }
       }
 
-      if (sessionRef.current.threadBusy) {
+      // A steer whose turn ended before the click has nothing to steer
+      // into, so it starts the next turn like any other send.
+      if (delivery === "steer" && sessionRef.current.threadBusy) {
         if (!desktopApi?.steerTurn) {
           setSendError("This thread is busy and steering is unavailable.");
           return false;
@@ -1080,10 +1084,10 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         if (!activeTurnId) {
           // Do NOT fall through to `startTurn` here. A thread can report
           // busy before its turn id is hydrated — a peer's or a messaging
-          // adapter's turn does exactly that — and starting a turn in that
-          // window is the second-turn-on-a-running-thread this whole branch
-          // exists to prevent. The id arrives with the next thread read, so
-          // this is worth retrying rather than routing around.
+          // adapter's turn does exactly that — and the operator asked for
+          // this message to land inside that turn, not behind it. The id
+          // arrives with the next thread read, so this is worth retrying
+          // rather than quietly queueing instead.
           setSendError(
             "Still identifying the running turn — try again in a moment.",
           );
@@ -1122,7 +1126,16 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         }
       }
 
-      if (!desktopApi?.startTurn || startRequestPendingRef.current) return false;
+      // Say why, as the steer branch does: the primary mid-turn action lands
+      // here, and a bare `false` only hands the text back without a reason.
+      if (!desktopApi?.startTurn) {
+        setSendError("Sending is not available for this thread.");
+        return false;
+      }
+      if (startRequestPendingRef.current) {
+        setSendError("Still sending the previous message — try again in a moment.");
+        return false;
+      }
       startRequestPendingRef.current = true;
       const queueEntryId = createQueuedTurnId();
       const queuedProjection: ComposerQueuedTurnSnapshot = {
@@ -1140,9 +1153,13 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
           queuedProjection,
         ]);
       }
+      // Pinned to the queue entry, not left to default to the running turn:
+      // a message queued behind a turn is not part of it, and would
+      // otherwise fold into that turn's own prompt when the text matches.
       const optimisticId = sessionRef.current.addOptimisticUserMessage(
         displayText,
         imageParts,
+        queueEntryId,
       );
       queuedOptimisticIdsRef.current.set(queuedProjection.id, optimisticId);
       try {
@@ -1223,6 +1240,15 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
       thread.source,
       ownedComposerDraftStore,
     ],
+  );
+
+  const steer = useCallback(
+    (
+      text: string,
+      imageAttachments?: NavigationLaunchpadImageAttachment[],
+      fileAttachments?: NavigationLaunchpadFileAttachment[],
+    ) => send(text, imageAttachments, fileAttachments, "steer"),
+    [send],
   );
 
   const forgetQueuedTurn = useCallback(
@@ -2050,6 +2076,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
           onDraftRestoreApplied={onDraftRestoreApplied}
           onInterrupt={onInterrupt}
           onSend={send}
+          onSteer={steer}
           pastedImageMaxPatches={props.pastedImageMaxPatches}
           reasoningEffort={threadReasoningEffort}
           secondaryActions={secondaryActions}
