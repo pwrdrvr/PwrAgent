@@ -25345,10 +25345,10 @@ a.transcript-message__messaging-origin:focus-visible {
   transform: rotate(45deg);
 }
 
-.environment-setup-row__tail {
-  color: var(--text-muted);
-  font-family: var(--font-mono);
-  font-size: 11.5px;
+/* The elapsed counter ticks every second; fixed-width digits keep the
+   summary from shifting as it does. */
+.environment-setup-row .composer__queued-text {
+  font-variant-numeric: tabular-nums;
 }
 
 .composer__queued-env-action-actions .environment-setup-row__retry,

@@ -2644,7 +2644,10 @@ describe("ThreadView", () => {
     act(() => setupProgress({ ...event, phase: "started" }));
     act(() => setupProgress({ ...event, phase: "failed", exitCode: 1, error: "ERR_PNPM_IGNORED_BUILDS" }));
     const failed = screen.getByLabelText("Env setup failed");
-    expect(failed).toHaveTextContent("ERR_PNPM_IGNORED_BUILDS");
+    // The collapsed summary says it failed; the error itself is in the body.
+    expect(failed).not.toHaveTextContent("ERR_PNPM_IGNORED_BUILDS");
+    fireEvent.click(within(failed).getByRole("button", { expanded: false }));
+    expect(screen.getByLabelText("Env setup output")).toHaveTextContent("ERR_PNPM_IGNORED_BUILDS");
 
     fireEvent.click(within(failed).getByRole("button", { name: "Retry" }));
     await waitFor(() => {
