@@ -168,6 +168,8 @@ import {
   type SetThreadPinResponse,
   type SetThreadReactionRequest,
   type SetThreadReactionResponse,
+  type SetThreadLockRequest,
+  type SetThreadLockResponse,
   type SetThreadToolIncidentNoticeRequest,
   type SetThreadToolIncidentNoticeResponse,
   type AcknowledgeThreadEnvironmentFailureRequest,
@@ -333,6 +335,7 @@ import {
   NAVIGATION_SET_THREAD_MONITOR_JOB_SUGGESTIONS_CHANNEL,
   NAVIGATION_SET_THREAD_PIN_CHANNEL,
   NAVIGATION_SET_THREAD_REACTION_CHANNEL,
+  NAVIGATION_SET_THREAD_LOCK_CHANNEL,
   NAVIGATION_SET_THREAD_TOOL_INCIDENT_NOTICE_CHANNEL,
   NAVIGATION_PENDING_THREAD_SPEND_ALERTS_CHANNEL,
   NAVIGATION_ACKNOWLEDGE_THREAD_SPEND_ALERT_CHANNEL,
@@ -6571,6 +6574,26 @@ class DesktopAppServerService {
     };
   }
 
+  async setThreadLock(
+    request: SetThreadLockRequest,
+  ): Promise<SetThreadLockResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .setThreadLock(remoteRequest);
+    }
+    return await getDesktopBackendRegistry().setThreadLock({
+      backend: request.backend ?? "codex",
+      threadId: request.threadId,
+      locked: request.locked,
+      ...(request.note !== undefined ? { note: request.note } : {}),
+    }, { source: "operator" });
+  }
+
   async setThreadPin(
     request: SetThreadPinRequest,
   ): Promise<SetThreadPinResponse> {
@@ -8724,6 +8747,16 @@ export function registerAppServerIpcHandlers(): void {
       return await appServerService.setThreadReaction(request);
     },
   );
+  ipcMain.removeHandler(NAVIGATION_SET_THREAD_LOCK_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_SET_THREAD_LOCK_CHANNEL,
+    async (
+      _event,
+      request: SetThreadLockRequest,
+    ): Promise<SetThreadLockResponse> => {
+      return await appServerService.setThreadLock(request);
+    },
+  );
   ipcMain.removeHandler(NAVIGATION_SET_THREAD_TOOL_INCIDENT_NOTICE_CHANNEL);
   ipcMain.handle(
     NAVIGATION_SET_THREAD_TOOL_INCIDENT_NOTICE_CHANNEL,
@@ -9474,6 +9507,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(NAVIGATION_SET_BROWSE_MODE_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_MARK_THREAD_SEEN_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SET_THREAD_REACTION_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_SET_THREAD_LOCK_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SET_THREAD_AGENT_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_REFRESH_THREAD_GIT_WORKING_STATE_CHANNEL);

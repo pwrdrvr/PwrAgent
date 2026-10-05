@@ -1061,6 +1061,26 @@ function createOverlayStoreMock(params?: {
       overlays.set(key, next);
       return next;
     },
+    setThreadLock: async ({
+      backend,
+      threadId,
+      lock,
+    }: {
+      backend: AppServerBackendKind;
+      threadId: string;
+      lock: ThreadOverlayState["lock"];
+    }) => {
+      const key = `${backend}:${threadId}`;
+      const { lock: _previous, ...current } = overlays.get(key) ?? {
+        backend,
+        threadId,
+        executionMode: "default" as const,
+        extraLinkedDirectories: [],
+      };
+      const next = (lock ? { ...current, lock } : current) as ThreadOverlayState;
+      overlays.set(key, next);
+      return next;
+    },
     setThreadPin: async ({
       backend,
       threadId,
@@ -3099,6 +3119,55 @@ describe("DesktopBackendRegistry", () => {
       throw new Error("transfer failed");
     })).rejects.toThrow("transfer failed");
     await expect(registry.withThreadHandoff(params.threadId, async () => "released")).resolves.toBe("released");
+  });
+
+  it("refuses every turn source on a locked thread, naming the note, until it is unlocked", async () => {
+    const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore: createOverlayStoreMock() });
+    onTestFinished(() => registry.close());
+    const params = { backend: "codex" as const, threadId: "parked", input: [{ type: "text" as const, text: "Continue" }] };
+    await registry.setThreadLock({ ...params, locked: true, note: "Worktree handed to the repair thread" }, { source: "operator" });
+    const refusal = "This thread is locked: Worktree handed to the repair thread. Unlock it before starting a turn.";
+
+    await expect(registry.submitTurn(params)).rejects.toThrow(refusal);
+    await expect(registry.submitTurnIfIdle(params)).rejects.toThrow(refusal);
+    await expect(registry.submitHeldTurn({ ...params, queueEntryId: "held", holdReason: "manual" })).rejects.toThrow(refusal);
+    await expect(registry.startTurn(params)).rejects.toThrow(refusal);
+    await expect(registry.steerTurn({ ...params, expectedTurnId: "turn-1", requestId: "steer-1" })).rejects.toThrow(refusal);
+    await expect(registry.startReview({ backend: "codex", threadId: "parked", target: { type: "uncommittedChanges" } }))
+      .rejects.toThrow(refusal);
+
+    await registry.setThreadLock({ ...params, locked: false }, { source: "operator" });
+    await expect(registry.submitHeldTurn({ ...params, queueEntryId: "held", holdReason: "manual" }))
+      .resolves.toMatchObject({ status: "queued" });
+  });
+
+  it("publishes each lock change and keeps the original time and source when the note changes", async () => {
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore });
+    onTestFinished(() => registry.close());
+    const events: AgentEvent[] = [];
+    const unsubscribe = registry.onEvent((event) => {
+      if (event.notification.method === "thread/lock/updated") events.push(event);
+    });
+    onTestFinished(unsubscribe);
+    const thread = { backend: "codex" as const, threadId: "parked" };
+
+    const locked = await registry.setThreadLock({ ...thread, locked: true }, { source: "agent_tool" });
+    expect(locked.lock).toMatchObject({ source: "agent_tool" });
+    expect(locked.lock).not.toHaveProperty("note");
+    const renoted = await registry.setThreadLock({ ...thread, locked: true, note: "  Parked for the repair.  " }, { source: "operator" });
+    expect(renoted.lock).toEqual({ note: "Parked for the repair.", lockedAt: locked.lock!.lockedAt, source: "agent_tool" });
+    // Locking again without a note keeps the note; an unchanged lock publishes nothing.
+    await registry.setThreadLock({ ...thread, locked: true }, { source: "operator" });
+    await registry.setThreadLock({ ...thread, locked: false }, { source: "operator" });
+    await registry.setThreadLock({ ...thread, locked: false }, { source: "operator" });
+
+    expect(events.map((event) => (event.notification.params as { lock?: unknown }).lock)).toEqual([
+      locked.lock,
+      renoted.lock,
+      undefined,
+    ]);
+    expect(await overlayStore.getThreadOverlayState(thread)).not.toHaveProperty("lock");
   });
 
   it("rejects handoff while a turn start is awaiting its provider", async () => {
@@ -47278,19 +47347,20 @@ script = "printf setup"
           ? { archivedThreads: options.archivedThreads }
           : {}),
       });
+      const overlayStore = createOverlayStoreMock({
+        overlays: {
+          "codex:agent-thread": createAgentOverlay(),
+          "codex:target-thread": {
+            backend: "codex",
+            threadId: "target-thread",
+            executionMode: "default",
+            extraLinkedDirectories: [],
+          },
+        },
+      });
       const registry = new DesktopBackendRegistry({
         codexClient,
-        overlayStore: createOverlayStoreMock({
-          overlays: {
-            "codex:agent-thread": createAgentOverlay(),
-            "codex:target-thread": {
-              backend: "codex",
-              threadId: "target-thread",
-              executionMode: "default",
-              extraLinkedDirectories: [],
-            },
-          },
-        }),
+        overlayStore,
       });
       const archiver = vi.fn(async (request: ArchiveThreadRequest) => ({
         backend: request.backend,
@@ -47370,11 +47440,51 @@ script = "printf setup"
         codexClient,
         handoff,
         markThreadSeen,
+        overlayStore,
         registry,
         restore,
         setThreadPin,
       };
     }
+
+    it("locks a thread with a note as the agent tool, and unlocks it", async () => {
+      const { call, overlayStore, registry } = await setup();
+      const target = { backend: "codex" as const, threadId: "target-thread" };
+
+      const locked = await call({ lockNote: "Worktree handed to the repair thread." });
+      expect(locked.success).toBe(true);
+      expect(locked.payload.mutation.changes).toEqual([
+        { field: "locked", status: "applied", to: true },
+        { field: "lock_note", status: "applied", to: "Worktree handed to the repair thread." },
+      ]);
+      expect((await overlayStore.getThreadOverlayState(target))?.lock).toMatchObject({
+        note: "Worktree handed to the repair thread.",
+        source: "agent_tool",
+      });
+
+      const unlocked = await call({ locked: false });
+      expect(unlocked.payload.mutation.changes).toEqual([
+        { field: "locked", status: "applied", to: false },
+      ]);
+      expect((await overlayStore.getThreadOverlayState(target))?.lock).toBeUndefined();
+      await registry.close();
+    });
+
+    it("refuses a lock note beside an unlock, and previews a lock without making it", async () => {
+      const { call, overlayStore, registry } = await setup();
+
+      const refused = await call({ locked: false, lockNote: "Parked" });
+      expect(refused.success).toBe(false);
+      expect(refused.payload.code).toBe("invalid_arguments");
+
+      const preview = await call({ locked: true, dryRun: true });
+      expect(preview.payload.mutation.changes).toEqual([
+        { field: "locked", status: "would_apply", to: true },
+      ]);
+      expect((await overlayStore.getThreadOverlayState({ backend: "codex", threadId: "target-thread" }))?.lock)
+        .toBeUndefined();
+      await registry.close();
+    });
 
     it("archives a local thread through the app's own archive path", async () => {
       const { archiver, call, registry } = await setup();

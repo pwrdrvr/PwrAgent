@@ -157,6 +157,8 @@ import {
   summarizeActivityStatus,
 } from "./live-transcript-activity";
 import { findTranscriptCommandDetailEntryIndex } from "./tool-call-details";
+import { ThreadLockCard } from "../thread-lock/ThreadLockCard";
+import { ThreadLockDialog } from "../thread-lock/ThreadLockDialog";
 
 import {
   collectThreadImageGallery,
@@ -969,6 +971,8 @@ export type ThreadViewProps = {
     >
   ) => Promise<void>;
   onSetThreadPrAutoDispatch?: (enabled: boolean) => Promise<void>;
+  /** Locks (or re-notes) the selected thread when `locked`, else unlocks it. */
+  onSetThreadLock?: (locked: boolean, note?: string) => Promise<void>;
   onCancelThreadPrAutoDispatch?: (fingerprint: string) => Promise<void>;
   onSendThreadPrAutoDispatchNow?: (fingerprint: string) => Promise<void>;
   onArchiveWorktree?: (
@@ -1401,6 +1405,9 @@ export function ThreadView(props: ThreadViewProps) {
     !pendingForkEnvironmentSetup && !composerLaunchpad && !selectedThread;
   const composerView = !pendingForkEnvironmentSetup && !emptyView;
   const threadView = composerView && !composerLaunchpad;
+  const threadLock = threadView ? selectedThread?.lock : undefined;
+  // Keyed to the thread, so switching threads never carries the editor over.
+  const [lockNoteEditorThreadId, setLockNoteEditorThreadId] = useState<string>();
   // The composer slot's key: the thread a launchpad becomes keeps the
   // composer being typed in, and every other switch mounts a fresh one. See
   // `composer-slot.ts`.
@@ -4223,12 +4230,35 @@ export function ThreadView(props: ThreadViewProps) {
             contextRailPinned ? " has-pinned-context-rail" : ""
           }${contextRailResizing ? " is-resizing-context-rail" : ""}`}
         >
-          <div className="thread-view__primary">
+          <div className={`thread-view__primary${threadLock ? " thread-view__primary--locked" : ""}`}>
             <CelestialWatermark
               icon={threadView ? celestialWatermarkIcon : launchpadWatermarkIcon}
             />
             {primaryContent}
             {composerSlotElement}
+            {threadLock ? (
+              <ThreadLockCard
+                lock={threadLock}
+                {...(props.onSetThreadLock
+                  ? {
+                      onUnlock: async () => await props.onSetThreadLock?.(false),
+                      onEditNote: () => setLockNoteEditorThreadId(selectedThread?.id),
+                    }
+                  : {})}
+              />
+            ) : null}
+            {threadLock && selectedThread && lockNoteEditorThreadId === selectedThread.id ? (
+              <ThreadLockDialog
+                initialNote={threadLock.note}
+                mode="edit"
+                threadTitle={selectedThread.title}
+                onCancel={() => setLockNoteEditorThreadId(undefined)}
+                onSubmit={async (note) => {
+                  await props.onSetThreadLock?.(true, note);
+                  setLockNoteEditorThreadId(undefined);
+                }}
+              />
+            ) : null}
             {threadView ? terminals.panes.map((terminal) => {
               const terminalVisible =
                 terminal.threadKey === selectedThreadKey &&

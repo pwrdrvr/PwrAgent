@@ -11,7 +11,7 @@ const ROW_CHANGE_METHODS = new Set([
   "navigation/invalidated", "federation/eventStream/changed",
   "thread/started", "thread/archived", "thread/deleted", "thread/unarchived", "thread/status/changed",
   "navigation/thread/seen", "thread/name/updated", "thread/rewound",
-  "thread/pullRequests/updated", "pullRequest/status/updated", "thread/reactions/updated",
+  "thread/pullRequests/updated", "pullRequest/status/updated", "thread/reactions/updated", "thread/lock/updated",
   "thread/pin/added", "thread/pin/removed", "thread/pin/reordered",
   "thread/agent/updated", "thread/parent/set", "thread/parent/cleared", "thread/turnQueue/updated",
   "thread/subthreadOrder/updated", "thread/subthreadsCollapsed/updated", "thread/subAgents/updated",
@@ -38,7 +38,7 @@ export function navigationQueryEventRequiresRefresh(method: string, params?: unk
 // discovery coverage even when the new child's identity is not subscribed yet.
 const THREAD_ROW_ONLY_METHODS = new Set([
   "thread/status/changed", "thread/name/updated", "navigation/thread/seen",
-  "thread/pullRequests/updated", "thread/reactions/updated", "thread/agent/updated",
+  "thread/pullRequests/updated", "thread/reactions/updated", "thread/lock/updated", "thread/agent/updated",
   "thread/modelSettings/updated", "thread/executionMode/updated", "thread/executionMode/queued",
   "thread/executionMode/queueCleared", "thread/prAutoDispatch/updated", "thread/prAutoDispatch/pendingUpdated",
   "thread/turnQueue/updated", "navigation/threadGitWorkingState/updated", "navigation/directoryGitStatus/updated",

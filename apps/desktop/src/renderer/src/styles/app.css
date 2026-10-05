@@ -6250,6 +6250,17 @@ a.button {
   fill: currentColor;
 }
 
+/* A locked thread: the padlock follows the title, before the pin, in the
+   accent the pin uses. Hoverable through the header's pointer transparency
+   so the viewport tooltip can show the lock note. */
+.thread-row__lock {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  color: var(--accent);
+  pointer-events: auto;
+}
+
 /* A command that outlived its turn (a dev server, a watcher). Quiet on
    purpose: the turn is done, so this is a pointer to the Actions rail, not
    a second activity indicator. */
@@ -8460,6 +8471,73 @@ a.button {
   justify-content: flex-end;
   gap: 10px;
   margin-top: 18px;
+}
+
+/* Lock Thread / Edit Lock Note: the rename dialog's frame with a note field. */
+.thread-lock-dialog {
+  width: min(480px, 100%);
+}
+
+.thread-lock-dialog__lede,
+.thread-lock-dialog__hint {
+  margin: 8px 0 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.thread-lock-dialog__hint {
+  margin-top: 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.thread-lock-dialog textarea {
+  width: 100%;
+  min-height: 76px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font: inherit;
+  font-weight: 400;
+  line-height: 1.45;
+  resize: vertical;
+}
+
+.thread-lock-dialog textarea:focus,
+.thread-lock-dialog textarea:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.thread-lock-dialog__blocks {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: var(--bg-panel-hover);
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.thread-lock-dialog__blocks p {
+  margin: 0 0 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.thread-lock-dialog__blocks ul {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 
 .app-main {
@@ -20920,7 +20998,8 @@ a.button {
 }
 
 .thread-view__primary {
-  /* Positioning context for the absolutely-placed in-thread find bar (⌘F). */
+  /* Positioning context for the absolutely-placed in-thread find bar (⌘F)
+     and the lock card. */
   position: relative;
   display: flex;
   flex: 1;
@@ -20933,6 +21012,95 @@ a.button {
   gap: 0;
   min-width: 0;
   min-height: 0;
+}
+
+/* A locked thread. Everything in the primary column dims together (the
+   transcript, banners, and the composer, which the lock also disables) and
+   the lock card sits centered over it. Opacity only: a filter would make each
+   dimmed pane a containing block for its fixed-position descendants. */
+.thread-view__primary--locked > :not(.thread-lock-layer):not(.celestial-watermark) {
+  opacity: 0.45;
+}
+
+/* Pointer-transparent, so the transcript under the dim still scrolls and
+   selects; only the card takes the pointer. */
+.thread-lock-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: var(--scrim-subtle);
+  pointer-events: none;
+}
+
+.thread-lock-card {
+  display: grid;
+  gap: 10px;
+  width: min(440px, 100%);
+  padding: 14px 16px;
+  border: 1px solid var(--accent-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 7%, var(--bg-panel-elevated));
+  box-shadow: var(--shadow-popover);
+  color: var(--text-primary);
+  pointer-events: auto;
+}
+
+.thread-lock-card__heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.thread-lock-card__heading svg {
+  flex: 0 0 auto;
+  color: var(--accent);
+}
+
+.thread-lock-card__note {
+  max-height: 40vh;
+  margin: 0;
+  overflow: auto;
+  padding: 8px 10px;
+  border-left: 2px solid var(--accent);
+  border-radius: 0 6px 6px 0;
+  background: var(--bg-panel);
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.thread-lock-card__note--empty {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.thread-lock-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.thread-lock-card__origin {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.thread-lock-card__error {
+  margin: 0;
+  color: var(--danger-text);
+  font-size: 13px;
+  line-height: 1.35;
 }
 
 /* A failed environment setup can coincide with a failed first history read.

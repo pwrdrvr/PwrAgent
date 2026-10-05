@@ -34,6 +34,7 @@ import { resolvePullRequestReview } from "./pull-request-review";
 import { publishedPrCommitShas } from "../../shared/pull-request-publication";
 import { priceLocalModelUsage } from "@pwragent/shared";
 import { codexNativeSubAgentName, readCodexNativeSubAgentName } from "@pwragent/shared";
+import { normalizeThreadLockNote, threadLockRefusalMessage } from "@pwragent/shared";
 import { navigationWorkingStatePath as resolveThreadWorkingStatePath } from "@pwragent/shared";
 import { validateCodexConfigOverrides } from "../settings/codex-config-overrides";
 import {
@@ -144,6 +145,10 @@ import {
   type MarkThreadSeenRequest,
   type MarkThreadSeenResponse,
   type SetThreadPinRequest,
+  type SetThreadLockResponse,
+  type FederationInstanceId,
+  type ThreadLock,
+  type ThreadLockSource,
   type SetThreadPinResponse,
   type AppServerListSkillsResponse,
   type AppServerNotification,
@@ -14640,6 +14645,7 @@ export class DesktopBackendRegistry {
   }
 
   private async handoffThreadWorkspaceWithoutArchiveLock(request: HandoffThreadWorkspaceRequest): Promise<HandoffThreadWorkspaceResponse> {
+    await this.assertThreadNotLocked(request.backend, request.threadId);
     this.assertThreadNotHandingOff(request.backend, request.threadId);
     if (this.threadHasActiveTurn(request.threadId, request.backend)) {
       throw new Error(ACTIVE_TURN_HANDOFF_ERROR);
@@ -17171,6 +17177,20 @@ export class DesktopBackendRegistry {
     };
   }
 
+  /**
+   * Refuses a new, queued, steered or review turn on a locked thread. Every
+   * turn source reaches one of the callers, so a lock needs no per-feature
+   * check. The overlay row is read on each call: the lock can be written by
+   * any window, an agent tool, or a peer, and a stale cache would let a turn
+   * through.
+   */
+  private async assertThreadNotLocked(backend: AppServerBackendKind, threadId: string): Promise<void> {
+    const lock = (await this.overlayStore.getThreadOverlayState({ backend, threadId }))?.lock;
+    if (lock) {
+      throw new Error(threadLockRefusalMessage(lock));
+    }
+  }
+
   private assertThreadNotHandingOff(backend: AppServerBackendKind, threadId: string): void {
     this.cancelAutomaticArchive(backend, threadId);
     if (this.threadHandoffReservations.has(buildThreadIdentityKey(backend, threadId))) {
@@ -17540,6 +17560,7 @@ export class DesktopBackendRegistry {
     messageOrigin?: AppServerThreadMessageOrigin;
     delivery?: "new_turn";
   }): Promise<ThreadTurnQueueSubmissionResult> {
+    await this.assertThreadNotLocked(params.backend, params.threadId);
     this.assertThreadNotHandingOff(params.backend, params.threadId);
     const { origin = "manual", queueEntryId, delivery, ...entry } = params;
     const hasTurnSettings = [
@@ -17583,6 +17604,7 @@ export class DesktopBackendRegistry {
     fastMode?: boolean;
     messageOrigin?: AppServerThreadMessageOrigin;
   }): Promise<Extract<ThreadTurnQueueSubmissionResult, { status: "queued" }>> {
+    await this.assertThreadNotLocked(params.backend, params.threadId);
     this.assertThreadNotHandingOff(params.backend, params.threadId);
     const {
       holdReason,
@@ -17604,6 +17626,7 @@ export class DesktopBackendRegistry {
     origin?: ThreadTurnQueueOrigin;
     messageOrigin?: AppServerThreadMessageOrigin;
   }): Promise<ThreadTurnQueueImmediateSubmissionResult> {
+    await this.assertThreadNotLocked(params.backend, params.threadId);
     this.assertThreadNotHandingOff(params.backend, params.threadId);
     const { origin = "manual", ...entry } = params;
     if (
@@ -18471,6 +18494,10 @@ export class DesktopBackendRegistry {
     const key = buildThreadIdentityKey(params.backend, params.threadId);
     this.handoffTurnStarts.set(key, (this.handoffTurnStarts.get(key) ?? 0) + 1);
     try {
+      // Checked after the handoff count is raised, so a handoff cannot slip
+      // into the await. A queued entry that reaches here is held with this
+      // refusal as its reason, and waits for an explicit release.
+      await this.assertThreadNotLocked(params.backend, params.threadId);
       return await this.withThreadLifecycleMutation(params, async () => await this.startTurnWithoutHandoff(params));
     } finally {
       const count = (this.handoffTurnStarts.get(key) ?? 1) - 1;
@@ -19416,6 +19443,7 @@ export class DesktopBackendRegistry {
     trustedSnapshot: boolean,
   ): Promise<StartReviewResponse> {
     this.assertNotBootstrap("startReview");
+    await this.assertThreadNotLocked(params.backend, params.threadId);
     params = await this.prepareReviewRequest(params, trustedSnapshot);
     const acpManagedMode =
       isAcpBackendId(params.backend)
@@ -20046,6 +20074,7 @@ export class DesktopBackendRegistry {
       }
   > {
     const { idempotencyKey, ...incoming } = params;
+    await this.assertThreadNotLocked(incoming.backend, incoming.threadId);
     const request = await this.prepareReviewRequest(incoming, trustedSnapshot);
     const activeTurn = this.getActiveTurnForThread({
       backend: request.backend,
@@ -21185,6 +21214,7 @@ export class DesktopBackendRegistry {
     params: SteerTurnRequest,
     messageOrigin?: AppServerThreadMessageOrigin,
   ): Promise<SteerTurnResponse> {
+    await this.assertThreadNotLocked(params.backend, params.threadId);
     const review = this.findReviewForParentTurn({
       backend: params.backend,
       parentThreadId: params.threadId,
@@ -22702,6 +22732,58 @@ export class DesktopBackendRegistry {
         ? { modelSettingsManuallyUpdatedAt }
         : {}),
     });
+  }
+
+  /**
+   * Locks, re-notes or unlocks a thread. Every lock write lands here (the
+   * sidebar menu, the thread's lock card, the `mutate_thread` agent tool and
+   * a peer), so windows, messaging status surfaces and federation viewers
+   * all hear one `thread/lock/updated` event. Changing the note of a locked
+   * thread keeps its original time and source. The lock itself is enforced
+   * by `assertThreadNotLocked`.
+   */
+  async setThreadLock(
+    request: {
+      backend: AppServerBackendKind;
+      threadId: string;
+      locked: boolean;
+      note?: string;
+    },
+    origin: { source: ThreadLockSource; sourceInstanceId?: FederationInstanceId },
+  ): Promise<SetThreadLockResponse> {
+    const identity = { backend: request.backend, threadId: request.threadId };
+    const current = (await this.overlayStore.getThreadOverlayState(identity))?.lock;
+    let lock: ThreadLock | undefined;
+    if (request.locked) {
+      const note = request.note === undefined
+        ? current?.note
+        : normalizeThreadLockNote(request.note);
+      lock = {
+        ...(note ? { note } : {}),
+        lockedAt: current?.lockedAt ?? Date.now(),
+        source: current?.source ?? origin.source,
+        ...(current
+          ? current.sourceInstanceId ? { sourceInstanceId: current.sourceInstanceId } : {}
+          : origin.sourceInstanceId ? { sourceInstanceId: origin.sourceInstanceId } : {}),
+      };
+      if (current && current.note === lock.note) {
+        return { ...identity, lock: current };
+      }
+    } else if (!current) {
+      return identity;
+    }
+    await this.overlayStore.setThreadLock({ ...identity, lock });
+    await this.emit({
+      backend: request.backend,
+      notification: {
+        method: "thread/lock/updated",
+        params: {
+          threadId: request.threadId,
+          ...(lock ? { lock } : {}),
+        },
+      },
+    });
+    return { ...identity, ...(lock ? { lock } : {}) };
   }
 
   async setThreadPrAutoDispatch(
@@ -41469,7 +41551,7 @@ export class DesktopBackendRegistry {
       projectPath = args.projectPath.trim();
     }
 
-    for (const field of ["archive", "pinned", "unread"] as const) {
+    for (const field of ["archive", "pinned", "unread", "locked"] as const) {
       if (Object.hasOwn(args, field) && typeof args[field] !== "boolean") {
         return threadInspectionFailure(
           "invalid_arguments",
@@ -41482,6 +41564,21 @@ export class DesktopBackendRegistry {
     const archive = args.archive;
     const pinned = args.pinned;
     const unread = args.unread;
+    const lockNoteProvided = Object.hasOwn(args, "lockNote");
+    if (lockNoteProvided && typeof args.lockNote !== "string") {
+      return threadInspectionFailure(
+        "invalid_arguments",
+        "lockNote must be a string when provided.",
+      );
+    }
+    if (lockNoteProvided && args.locked === false) {
+      return threadInspectionFailure(
+        "invalid_arguments",
+        "lockNote cannot be combined with locked false. Unlocking drops the note.",
+      );
+    }
+    const lockNote = lockNoteProvided ? normalizeThreadLockNote(args.lockNote) ?? "" : undefined;
+    const locked = args.locked ?? (lockNoteProvided ? true : undefined);
 
     const changes: ThreadMutationAppliedChange[] = [];
     if (title !== undefined) {
@@ -41533,6 +41630,20 @@ export class DesktopBackendRegistry {
         to: unread,
       });
     }
+    if (locked !== undefined) {
+      changes.push({
+        field: "locked",
+        status: dryRun ? "would_apply" : "applied",
+        to: locked,
+      });
+    }
+    if (lockNote !== undefined) {
+      changes.push({
+        field: "lock_note",
+        status: dryRun ? "would_apply" : "applied",
+        to: lockNote,
+      });
+    }
 
     if (changes.length === 0) {
       return {
@@ -41540,7 +41651,7 @@ export class DesktopBackendRegistry {
         error: {
           code: "invalid_arguments",
           message:
-            "At least one mutation field is required: title, model, serviceTier, reasoningEffort, fastMode, executionMode, projectPath, archive, pinned, or unread.",
+            "At least one mutation field is required: title, model, serviceTier, reasoningEffort, fastMode, executionMode, projectPath, archive, pinned, unread, locked, or lockNote.",
         },
       };
     }
@@ -41604,6 +41715,8 @@ export class DesktopBackendRegistry {
           ...(archive !== undefined ? { archive } : {}),
           ...(pinned !== undefined ? { pinned } : {}),
           ...(unread !== undefined ? { unread } : {}),
+          ...(locked !== undefined ? { locked } : {}),
+          ...(lockNote !== undefined ? { lockNote } : {}),
           dryRun,
         });
       } catch (error) {
@@ -41683,6 +41796,16 @@ export class DesktopBackendRegistry {
       }
     }
 
+    // An unlock lands before the move, which a lock refuses; a lock lands
+    // last, after the move it would otherwise refuse.
+    if (mutateLocally && locked === false && !dryRun) {
+      await this.setThreadLock({
+        backend: args.backend,
+        threadId,
+        locked: false,
+      }, { source: "agent_tool" });
+    }
+
     // First, and before anything else changes: the destination is checked on
     // disk, and a move that fails should leave the title and settings as
     // they were rather than half the request applied.
@@ -41741,6 +41864,15 @@ export class DesktopBackendRegistry {
         threadId,
         ...threadSeenWatermark(localSummary?.updatedAt, unread),
       });
+    }
+
+    if (mutateLocally && locked === true && !dryRun) {
+      await this.setThreadLock({
+        backend: args.backend,
+        threadId,
+        locked: true,
+        ...(lockNote !== undefined ? { note: lockNote } : {}),
+      }, { source: "agent_tool" });
     }
 
     return {

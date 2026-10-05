@@ -20,6 +20,7 @@ import type {
   PrSummary,
   NavigationThreadGitWorkingStateUpdatedNotification,
   ThreadPrAutoDispatchEventKind,
+  ThreadLock,
   ThreadPrAutoDispatchPending,
   ThreadSubAgentSummary,
 } from "./navigation";
@@ -2339,6 +2340,14 @@ export type AppServerNotification =
         threadId: string;
         /** Complete reaction set, ordered by insertion. */
         reactions: string[];
+      };
+    }
+  | {
+      method: "thread/lock/updated";
+      params: {
+        threadId: string;
+        /** Absent once the thread is unlocked. */
+        lock?: ThreadLock;
       };
     }
   | {

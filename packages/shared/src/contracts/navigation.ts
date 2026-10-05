@@ -250,6 +250,8 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
   };
   /** Per-thread emoji reactions, ordered by insertion. */
   reactions?: string[];
+  /** Present while the thread is locked against new turns. */
+  lock?: ThreadLock;
   /** Pull requests known for this thread's linked directories + branch history. */
   prs?: PrSummary[];
   /** Codex environments discovered from the active thread workspace. */
@@ -1801,6 +1803,7 @@ export type NavigationRow = {
   subthreadsCollapsed?: boolean;
   reactions?: string[];
   reactionsTruncated?: boolean;
+  lock?: ThreadLock;
   prs?: PrSummary[];
   prsTruncated?: boolean;
   messagingBindings?: MessagingThreadBindingSummary[];
@@ -2169,6 +2172,44 @@ export type SetThreadReactionResponse = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   reactions: string[];
+};
+
+/** Who set a thread lock. */
+export type ThreadLockSource = "operator" | "agent_tool" | "peer";
+
+/**
+ * A lock parks a thread: every path that starts or steers a turn refuses it
+ * until the thread is unlocked. The operator uses it when the thread's
+ * worktree has been handed to another agent, so nothing (a habitual reply,
+ * CI auto-repair, PR auto-fix, a queued message, messaging, a peer, or an
+ * agent tool) touches the worktree from here meanwhile. A running turn is not
+ * interrupted.
+ */
+export type ThreadLock = {
+  /** Why the thread is locked, shown on the thread and in the sidebar. */
+  note?: string;
+  /** Epoch milliseconds. */
+  lockedAt: number;
+  source: ThreadLockSource;
+  /** For `source: "peer"`: the instance that locked it. */
+  sourceInstanceId?: FederationInstanceId;
+};
+
+export type SetThreadLockRequest = {
+  backend?: AppServerBackendKind;
+  federationTarget?: FederationTarget;
+  threadId: ThreadIdentifier;
+  /** true locks the thread, or replaces the note of a locked thread; false unlocks it. */
+  locked: boolean;
+  /** Ignored when unlocking. Omitted keeps a locked thread's note; blank clears it. */
+  note?: string;
+};
+
+export type SetThreadLockResponse = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  /** Absent once unlocked. */
+  lock?: ThreadLock;
 };
 
 export type SetThreadPinRequest = {
@@ -2798,6 +2839,8 @@ export type ThreadOverlayState = {
    * (e.g., "needs follow-up"), not multi-user voting.
    */
   reactions?: string[];
+  /** Present while the thread is locked against new turns. See {@link ThreadLock}. */
+  lock?: ThreadLock;
   /**
    * Consolidated tool-output incident state for this thread: when it first
    * warned, what the operator dismissed, and what they muted. Persisted so an

@@ -16,7 +16,7 @@ import type {
   PrSummary,
 } from "@pwragent/shared";
 import { isKeptAtTopThread } from "@pwragent/shared";
-import { MoreVerticalIcon, PinIcon, SmileyIcon } from "../../icons";
+import { LockIcon, MoreVerticalIcon, PinIcon, SmileyIcon } from "../../icons";
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
 import {
   formatMessagingPlatformName,
@@ -234,6 +234,11 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
       ? "Kept at top. Unpin thread"
       : pinAction;
   const pinTooltipController = useViewportTooltip({ className: "viewport-tooltip" });
+  const lockTooltipController = useViewportTooltip({ className: "viewport-tooltip" });
+  const threadLock = props.thread.lock;
+  const lockLabel = threadLock
+    ? threadLock.note ? `Locked: ${threadLock.note}` : "Locked"
+    : undefined;
   const [pickerOpen, setPickerOpen] = useState(false);
   const rowRef = useRef<HTMLDivElement>(null);
   const openButtonRef = useRef<HTMLButtonElement>(null);
@@ -517,6 +522,18 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
                 &gt;_
               </span>
             ) : null}
+            {lockLabel ? (
+              <span
+                aria-label={lockLabel}
+                className="thread-row__lock"
+                role="img"
+                onMouseEnter={(event) => lockTooltipController.show(event.currentTarget, lockLabel)}
+                onMouseLeave={lockTooltipController.hide}
+              >
+                <LockIcon size={11} aria-hidden="true" />
+              </span>
+            ) : null}
+            {lockTooltipController.tooltipNode}
             {hasHeadingPin ? (
               onSetThreadPin ? (
                 <button

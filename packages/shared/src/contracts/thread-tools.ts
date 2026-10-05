@@ -226,6 +226,20 @@ export type MutateThreadToolArgs = {
    */
   unread?: boolean;
   /**
+   * `true` locks the thread: every new, queued or steered turn on it is
+   * refused, from the operator, automations, messaging, peers and agent
+   * tools, until it is unlocked. A running turn is not interrupted. `false`
+   * unlocks it and drops the note. Use it to park a thread whose worktree has
+   * been handed to another agent.
+   */
+  locked?: boolean;
+  /**
+   * Why the thread is locked, shown to the operator on the thread. Locks the
+   * thread when `locked` is omitted, and replaces the note of a thread that
+   * is already locked. Cannot be combined with `locked: false`.
+   */
+  lockNote?: string;
+  /**
    * Validate and report the requested mutations without applying them.
    */
   dryRun?: boolean;
@@ -348,7 +362,9 @@ export type ThreadMutationField =
   | "project"
   | "archive"
   | "pinned"
-  | "unread";
+  | "unread"
+  | "locked"
+  | "lock_note";
 
 export type ThreadMutationChangeStatus =
   | "would_apply"

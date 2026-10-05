@@ -836,6 +836,11 @@ const THREAD_MUTATION_FIELD_PERMISSIONS: Record<
   archive: () => ["thread.control.archive"],
   pinned: () => ["thread.control.organize"],
   unread: () => ["thread.control.organize"],
+  // A lock refuses every turn on the thread, the operator's included, and
+  // exists to park a thread whose worktree went to another agent. That is a
+  // handoff decision, not organizing, so it takes the handoff permission.
+  locked: () => ["thread.control.handoff"],
+  lockNote: () => ["thread.control.handoff"],
 };
 
 /**

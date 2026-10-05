@@ -7336,6 +7336,86 @@ describe("Sidebar", () => {
     expect(onRenameThread).toHaveBeenCalledWith(sharedThread, "Renamed cleanup");
   });
 
+  it("locks a thread with a note from the thread context menu", async () => {
+    const onSetThreadLock = vi.fn(async () => undefined);
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onSetThreadLock={onSetThreadLock}
+      />
+    );
+
+    fireEvent.contextMenu(threadCard(screen.getByText("Cross-project cleanup")), { clientX: 12, clientY: 34 });
+    expect(screen.queryByRole("menuitem", { name: "Unlock Thread" })).toBeNull();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Lock Thread…" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Lock Thread" });
+    const note = within(dialog).getByLabelText("Note");
+    expect(note).toHaveFocus();
+    fireEvent.change(note, { target: { value: "Worktree handed to another agent." } });
+    // Enter adds a line to the note; only ⌘Enter submits.
+    fireEvent.keyDown(note, { key: "Enter" });
+    expect(onSetThreadLock).not.toHaveBeenCalled();
+    fireEvent.keyDown(note, { key: "Enter", metaKey: true });
+
+    await waitFor(() => {
+      expect(onSetThreadLock).toHaveBeenCalledWith(sharedThread, true, "Worktree handed to another agent.");
+    });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Lock Thread" })).toBeNull());
+  });
+
+  it("shows a locked thread's note on its row and offers unlock and note editing", async () => {
+    const onSetThreadLock = vi.fn(async () => undefined);
+    const lockedThread: NavigationThreadSummary = {
+      ...sharedThread,
+      lock: { note: "Worktree handed to another agent.", lockedAt: 1, source: "operator" },
+    };
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        directories={directories}
+        inboxThreads={[lockedThread]}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[lockedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onSetThreadLock={onSetThreadLock}
+      />
+    );
+
+    expect(screen.getByRole("img", { name: "Locked: Worktree handed to another agent." })).toBeInTheDocument();
+
+    fireEvent.contextMenu(threadCard(screen.getByText("Cross-project cleanup")), { clientX: 12, clientY: 34 });
+    expect(screen.queryByRole("menuitem", { name: "Lock Thread…" })).toBeNull();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Edit Lock Note…" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit Lock Note" });
+    expect(within(dialog).getByLabelText("Note")).toHaveValue("Worktree handed to another agent.");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(onSetThreadLock).not.toHaveBeenCalled();
+
+    fireEvent.contextMenu(threadCard(screen.getByText("Cross-project cleanup")), { clientX: 12, clientY: 34 });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Unlock Thread" }));
+    expect(onSetThreadLock).toHaveBeenCalledWith(lockedThread, false);
+  });
+
   it("offers rename for ACP threads when the backend supports local renaming", () => {
     const onRenameThread = vi.fn(async () => undefined);
     const acpThread = {
