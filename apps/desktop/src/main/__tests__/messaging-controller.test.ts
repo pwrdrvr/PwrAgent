@@ -3211,6 +3211,7 @@ describe("MessagingController", () => {
       }
       harness.delivered.length = 0;
       await harness.controller.handleBackendEvent(buildMonitorLifecycleEvent({ parentTurnId: "turn-1" }));
+      await harness.controller.handleBackendEvent(buildMonitorLifecycleEvent({ monitorId: "legacy-monitor" }));
       expect(JSON.stringify(harness.delivered)).not.toContain("Secret monitor task");
       await harness.controller.handleBackendEvent({
         backend: "codex",
@@ -3221,6 +3222,7 @@ describe("MessagingController", () => {
       for (const outcome of ["success", "failure"] as const) {
         await harness.controller.handleBackendEvent(buildMonitorLifecycleEvent({ parentTurnId: "turn-1", outcome }));
       }
+      await harness.controller.handleBackendEvent(buildMonitorLifecycleEvent({ monitorId: "legacy-monitor", outcome: "success" }));
       expect(JSON.stringify(harness.delivered)).not.toContain("Secret monitor task");
     } finally {
       harness.controller.dispose();
@@ -26928,7 +26930,7 @@ async function createHarness<
 
 function buildMonitorLifecycleEvent(params: {
   monitorId?: string;
-  parentTurnId: string;
+  parentTurnId?: string;
   outcome?: "success" | "failure";
 }): AgentEvent {
   const monitorId = params.monitorId ?? "private-monitor";
@@ -26945,7 +26947,7 @@ function buildMonitorLifecycleEvent(params: {
           data: {
             source: "pwragent_task_monitor",
             monitorId,
-            parentTurnId: params.parentTurnId,
+            ...(params.parentTurnId ? { parentTurnId: params.parentTurnId } : {}),
             task: "Secret monitor task",
             ...(params.outcome ? { outcome: params.outcome } : {}),
           },

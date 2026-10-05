@@ -1114,6 +1114,10 @@ export class MessagingController {
     string,
     MessagingWorkingCardState
   >();
+  private readonly taskMonitorMessagingOrigins = new Map<
+    string,
+    { parentTurnId: string; suppressed: boolean }
+  >();
   private readonly turnAdmission: MessagingTurnAdmission;
   private readonly pendingNewThreadPrompts = new Map<string, PendingNewThreadPromptWindow>();
   private readonly pendingFullAccessNewThreadPrompts = new Map<
@@ -1778,8 +1782,21 @@ export class MessagingController {
     // completions. Sharing the active turn also shares its Some allowance.
     const monitorLifecycle = taskMonitorLifecycleActivityForBackendEvent(event);
     if (monitorLifecycle) {
+      // Remember suppression even without bindings: a monitor may complete
+      // after its parent's private/automation tracking has been cleared.
+      if (this.suppressTaskMonitorLifecycle(event, threadId, monitorLifecycle)) {
+        return;
+      }
       for (const binding of bindings) {
         const activeTurn = this.getActiveTurn(binding);
+        if (this.suppressTaskMonitorLifecycle(
+          event,
+          threadId,
+          monitorLifecycle,
+          activeTurn?.turnId,
+        )) {
+          continue;
+        }
         const turnId = activeTurn?.status === "working"
           ? activeTurn.turnId
           : `monitor-lifecycle:${threadId}`;
@@ -1788,7 +1805,7 @@ export class MessagingController {
           await this.resolveToolUpdateDefaultMode(binding.targetKind ?? "thread"),
         );
         const deliveries = this.toolUpdatePolicy.processActivity({
-          activity: monitorLifecycle,
+          activity: monitorLifecycle.activity,
           bindingId: binding.id,
           mode,
           turnId,
@@ -8302,6 +8319,7 @@ export class MessagingController {
     this.pendingNewThreadPrompts.clear();
     this.pendingFullAccessNewThreadPrompts.clear();
     this.toolUpdatePolicy.dispose();
+    this.taskMonitorMessagingOrigins.clear();
     this.activeAgentMessagingOriginsByTurnKey.clear();
     this.startingAgentMessagingOriginsByThreadKey.clear();
     this.pendingTurnFailureHandlersByThreadKey.clear();
@@ -16700,21 +16718,53 @@ export class MessagingController {
     );
   }
 
+  private suppressTaskMonitorLifecycle(
+    event: AgentEvent,
+    threadId: ThreadIdentifier,
+    lifecycle: MessagingTaskMonitorLifecycle,
+    fallbackParentTurnId?: string,
+  ): boolean {
+    const key = `${threadKeyForBackendEvent(event, threadId)}\0${lifecycle.monitorId}`;
+    const previous = this.taskMonitorMessagingOrigins.get(key);
+    const parentTurnId = lifecycle.parentTurnId ?? previous?.parentTurnId ?? fallbackParentTurnId;
+    if (!parentTurnId) {
+      return false;
+    }
+    const suppressed = Boolean(
+      previous?.suppressed
+      || this.isTerminalPrivateResponseTurn(event.backend, threadId, parentTurnId)
+      || this.isPrivateResponseFallbackTurn(event.backend, threadId, parentTurnId)
+      || this.isPrivateReplyCompletionTurn(event.backend, threadId, parentTurnId)
+      || this.isAutomationTurn(event.backend, threadId, parentTurnId),
+    );
+    rememberBoundedMap(
+      this.taskMonitorMessagingOrigins,
+      key,
+      { parentTurnId, suppressed },
+      MAX_TRACKED_TURN_PROSE,
+    );
+    return suppressed;
+  }
+
+  private isAutomationTurn(
+    backend: AppServerBackendKind,
+    threadId: ThreadIdentifier,
+    turnId: string | undefined,
+  ): boolean {
+    return Boolean(turnId && this.automationTurnsByTurnKey.has(
+      automationTurnKey({ backend, threadId, turnId }),
+    ));
+  }
+
   private isAutomationTurnEvent(
     event: AgentEvent,
     binding: MessagingBindingRecord,
     fallbackTurnId?: string,
   ): boolean {
-    const turnId = turnIdForBackendEvent(event) ?? fallbackTurnId;
-    if (!turnId) {
-      return false;
-    }
-    return this.automationTurnsByTurnKey.has(
-      automationTurnKey({
-        backend: event.backend,
-        threadId: binding.threadId,
-        turnId,
-      }),
+    return this.isAutomationTurn(
+      event.backend,
+      binding.threadId,
+      turnIdForBackendEvent(event) ?? fallbackTurnId,
     );
   }
 
@@ -22274,9 +22324,15 @@ function taskMonitorItemData(item: unknown): Record<string, unknown> | undefined
   return data?.source === "pwragent_task_monitor" ? data : undefined;
 }
 
+type MessagingTaskMonitorLifecycle = {
+  activity: MessagingToolActivity;
+  monitorId: string;
+  parentTurnId?: string;
+};
+
 function taskMonitorLifecycleActivityForBackendEvent(
   event: AgentEvent,
-): MessagingToolActivity | undefined {
+): MessagingTaskMonitorLifecycle | undefined {
   if (event.notification.method !== "item/completed") {
     return undefined;
   }
@@ -22294,11 +22350,15 @@ function taskMonitorLifecycleActivityForBackendEvent(
   const task = typeof data.task === "string" ? data.task : "Job";
   const phase = created ? "Created" : data.outcome === "failure" ? "Failed" : "Succeeded";
   return {
-    // Dedup lifecycle replays independently of timestamped backend item ids.
-    id: `monitor:${data.monitorId}:${phase}`,
-    kind: "tool",
-    status: data.outcome === "failure" ? "failed" : "completed",
-    title: `Monitor · ${task} · ${phase}`,
+    monitorId: data.monitorId,
+    ...(typeof data.parentTurnId === "string" ? { parentTurnId: data.parentTurnId } : {}),
+    activity: {
+      // Dedup lifecycle replays independently of timestamped backend item ids.
+      id: `monitor:${data.monitorId}:${phase}`,
+      kind: "tool",
+      status: data.outcome === "failure" ? "failed" : "completed",
+      title: `Monitor · ${task} · ${phase}`,
+    },
   };
 }
 

@@ -49038,6 +49038,19 @@ script = "printf setup"
 
     expect(completionResponse).toMatchObject({ success: true });
     expect(codexClient.injectedThreadItems).toHaveLength(0);
+    expect(events).toContainEqual(expect.objectContaining({
+      notification: expect.objectContaining({
+        method: "item/completed",
+        params: expect.objectContaining({
+          threadId: "thread-1",
+          turnId: `monitor:${monitorId}`,
+          item: expect.objectContaining({
+            type: "taskMonitorCompletion",
+            data: expect.objectContaining({ monitorId, parentTurnId: "turn-1", outcome: "failure" }),
+          }),
+        }),
+      }),
+    }));
     const completionUsageEvent = events.find((event) => {
       if (event.notification.method !== "item/completed") {
         return false;
