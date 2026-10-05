@@ -3377,6 +3377,94 @@ describe("ThreadView", () => {
     }
   });
 
+  // The handoff test above covers the one move that keeps a composer. Every
+  // other move between a launchpad and a thread mounts a fresh one. Composer
+  // rebuilds its editor on any other scope change, so the editor cannot tell
+  // a kept composer from a fresh one. Its root can: it survives only while
+  // React keeps the Composer instance. Each case starts on a different side,
+  // so each direction fails on its own when the composer is reused.
+  it.each(["launchpad", "thread"] as const)("mounts a fresh composer when a %s switches sides", (start) => {
+    const { result } = renderHook(useComposerDraftStore);
+    const launchpad: NavigationLaunchpadDraft = {
+      backend: "codex", directoryKey: "directory:/repo", directoryKind: "directory",
+      directoryLabel: "Example", directoryPath: "/repo", executionMode: "default",
+      prompt: "", workMode: "local", createdAt: 1, updatedAt: 1,
+    };
+    const props: Omit<ThreadViewProps, "terminals"> = {
+      addOptimisticUserMessage: () => "optimistic-1",
+      backends: [],
+      clearPendingRequest: () => undefined,
+      composerDisabled: false,
+      composerDraftStore: result.current,
+      transcriptEntries: [],
+      loading: false,
+      loadingMore: false,
+      messageCount: 0,
+      selectedDirectory: {
+        key: "directory:/repo", kind: "directory", label: "Example", path: "/repo",
+      },
+      selectedLaunchpad: launchpad,
+      onLoadOlder: async () => undefined,
+      removeOptimisticMessage: () => undefined,
+      skills: [],
+    };
+    const composerRoot = () =>
+      screen.getByRole("textbox", { name: /^(New thread|Reply)$/ }).closest(".composer");
+    const showThread = (id: string) => (
+      <ThreadView
+        {...props}
+        selectedLaunchpad={undefined}
+        selectedThread={buildTimestampTargetThread(id, id)}
+      />
+    );
+
+    if (start === "launchpad") {
+      const view = render(<ThreadView {...props} />);
+      const launchpadComposer = composerRoot();
+      expect(launchpadComposer).not.toBeNull();
+      // No handoff names this thread, so it gets its own composer.
+      view.rerender(showThread("first-thread"));
+      expect(composerRoot()).not.toBe(launchpadComposer);
+    } else {
+      const view = render(showThread("first-thread"));
+      const threadComposer = composerRoot();
+      expect(threadComposer).not.toBeNull();
+      // Threads share theirs.
+      view.rerender(showThread("second-thread"));
+      expect(composerRoot()).toBe(threadComposer);
+      view.rerender(<ThreadView {...props} />);
+      expect(composerRoot()).not.toBe(threadComposer);
+    }
+  });
+
+  // A starting launchpad can be selected before its directory row loads.
+  // With no thread either, nothing can render the thread view.
+  it("shows the empty state for a launchpad whose directory has not loaded", () => {
+    render(
+      <ThreadView
+        addOptimisticUserMessage={() => "optimistic-1"}
+        backends={[]}
+        clearPendingRequest={() => undefined}
+        composerDisabled={false}
+        loading={false}
+        loadingMore={false}
+        messageCount={0}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={() => undefined}
+        selectedLaunchpad={{
+          backend: "codex", directoryKey: "directory:/repo", directoryKind: "directory",
+          directoryLabel: "Example", directoryPath: "/repo", executionMode: "default",
+          prompt: "", workMode: "local", createdAt: 1, updatedAt: 1,
+        }}
+        skills={[]}
+        transcriptEntries={[]}
+      />,
+    );
+
+    expect(screen.getByRole("heading", { name: "Select a thread" })).toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: /^(New thread|Reply)$/ })).toBeNull();
+  });
+
   it("opens submitted image previews while the launchpad is materializing", () => {
     const dataUrl = "data:image/png;base64,aGVsbG8=";
     render(
