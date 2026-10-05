@@ -34,7 +34,8 @@ import {
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const iconsDir = path.resolve(testDir, "../../../build/dock-icons");
 const originalPlatform = process.platform;
-const resources = process as NodeJS.Process & { resourcesPath?: string };
+// Electron types `resourcesPath` as always set; under vitest it is absent.
+const originalResourcesPath = Object.getOwnPropertyDescriptor(process, "resourcesPath");
 
 function appliedFiles(): string[] {
   return electronMocks.setIcon.mock.calls.map(([icon]) => (icon as { file: string }).file);
@@ -50,7 +51,11 @@ describe("themed dock icon", () => {
 
   afterEach(() => {
     Object.defineProperty(process, "platform", { value: originalPlatform });
-    delete resources.resourcesPath;
+    if (originalResourcesPath) {
+      Object.defineProperty(process, "resourcesPath", originalResourcesPath);
+    } else {
+      Reflect.deleteProperty(process, "resourcesPath");
+    }
   });
 
   it("ships an icon for every dark theme but Tangerine", () => {
@@ -79,7 +84,10 @@ describe("themed dock icon", () => {
 
   it("restores the bundle icon in a packaged app when the operator opts out", () => {
     electronMocks.isPackaged = true;
-    resources.resourcesPath = "/Applications/PwrAgent.app/Contents/Resources";
+    Object.defineProperty(process, "resourcesPath", {
+      value: "/Applications/PwrAgent.app/Contents/Resources",
+      configurable: true,
+    });
     syncThemedDockIcon({ darkTheme: "solarized-dark", themedDockIcon: true });
     expect(appliedFiles().at(-1)).toBe(
       "/Applications/PwrAgent.app/Contents/Resources/dock-icons/solarized-dark.png",
