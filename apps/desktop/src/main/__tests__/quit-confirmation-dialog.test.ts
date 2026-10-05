@@ -149,7 +149,11 @@ vi.mock("../window-show-quit-blockers", () => ({
 }));
 
 vi.mock("../settings/appearance-bootstrap", () => ({
-  readBootstrapAppearance: () => ({ theme: "dark" }),
+  readBootstrapAppearance: () => ({
+    theme: "dark",
+    darkTheme: "tangerine-dark",
+    lightTheme: "tangerine-light",
+  }),
 }));
 
 import { app, BrowserWindow, type WebContents } from "electron";
