@@ -11291,6 +11291,17 @@ a.button {
   line-height: 1.45;
 }
 
+/* A link inside the description, such as a theme's palette credit. It
+   sits in muted prose, so it keeps its underline as well as the accent. */
+.settings-field__sub a {
+  color: var(--accent-bright);
+  text-underline-offset: 2px;
+}
+
+.settings-field__sub a:focus-visible {
+  border-radius: 3px;
+}
+
 .settings-field__control {
   display: flex;
   flex-direction: column;
