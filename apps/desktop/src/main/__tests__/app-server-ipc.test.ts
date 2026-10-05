@@ -714,6 +714,7 @@ const setThreadPullRequestStatusToolHandler = vi.fn();
 const setThreadPullRequestCanonicalizer = vi.fn();
 const setLocalPullRequestAuthorityResolver = vi.fn();
 const setThreadPullRequestWatchToolHandler = vi.fn();
+const setThreadDependencyToolHandler = vi.fn();
 const setThreadPrAutoDispatchHandler = vi.fn();
 const setThreadPullRequestDetachHandler = vi.fn();
 const setThreadPullRequestRefreshHandler = vi.fn();
@@ -1159,6 +1160,7 @@ vi.mock("../app-server/backend-registry", () => {
     setThreadPrimaryGitRepositoryReader: vi.fn(),
     setLocalPullRequestAuthorityResolver,
     setThreadPullRequestWatchToolHandler,
+    setThreadDependencyToolHandler,
     setThreadPrAutoDispatchHandler,
     setThreadPullRequestDetachHandler,
     setThreadPullRequestRefreshHandler,
@@ -1366,6 +1368,7 @@ describe("app server ipc", () => {
     setThreadPullRequestCanonicalizer.mockClear();
     setLocalPullRequestAuthorityResolver.mockClear();
     setThreadPullRequestWatchToolHandler.mockClear();
+    setThreadDependencyToolHandler.mockClear();
     setThreadPrAutoDispatchHandler.mockClear();
     setThreadPullRequestDetachHandler.mockClear();
     setThreadPullRequestRefreshHandler.mockClear();
@@ -1713,9 +1716,19 @@ describe("app server ipc", () => {
     expect(setThreadPullRequestWatchToolHandler).toHaveBeenCalledWith(
       expect.any(Function),
     );
+    expect(setThreadDependencyToolHandler).toHaveBeenCalledWith(expect.any(Function));
     expect(setThreadPullRequestCanonicalizer).toHaveBeenCalledWith(
       expect.any(Function),
     );
+  });
+
+  it("guards dependency IPC against remote windows and malformed consumers", async () => {
+    registerAppServerIpcHandlers();
+    const handler = handlers.get("thread:dependencies")!;
+    await expect(handler({ sender: { id: 999 } }, { action: "list", backend: "codex", threadId: "waiting" })).rejects.toThrow("local window");
+    await expect(handler({ sender: { id: 1 } }, { action: "create", backend: "codex", threadId: "" })).rejects.toThrow("waiting threadId");
+    const tool = setThreadDependencyToolHandler.mock.calls.at(-1)?.[0];
+    await expect(tool({ action: "create", backend: "codex", threadId: "" })).resolves.toMatchObject({ ok: false, error: { code: "invalid_arguments" } });
   });
 
   it("does not publish unchanged directory Git probes", async () => {
