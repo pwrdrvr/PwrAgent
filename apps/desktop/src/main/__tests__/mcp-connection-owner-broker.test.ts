@@ -5,7 +5,7 @@ import { createServer, type Socket } from "node:net";
 import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { RuntimeLeaseManager } from "../runtime-lease-manager";
-import { AppRuntimeInstanceStore } from "../state/app-runtime-instance-store";
+import { AppRuntimeInstanceStore, RUNTIME_LEASE_DEAD_OWNER_GRACE_MS } from "../state/app-runtime-instance-store";
 import {
   McpConnectionBrokerDiscovery,
 } from "../mcp-connections/mcp-connection-broker-discovery";
@@ -40,6 +40,85 @@ function createSettings() {
 }
 
 describe("MCP connection owner broker", () => {
+  it("keeps the dead-owner safety grace and recovers when it expires", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-grace-"));
+    const stateDb = openInMemoryStateDb({ profileName: "dev" });
+    const store = new AppRuntimeInstanceStore(stateDb);
+    const discovery = new McpConnectionBrokerDiscovery({ filePath: path.join(directory, "broker.json") });
+    let now = 10_000;
+    let ownerAlive = true;
+    const lease = (instanceId: string, processId: number) => new RuntimeLeaseManager({
+      instanceId, processId, profileName: "dev", store, now: () => now, systemBootedAt: 0,
+      runtimeIdentityIsAlive: () => ownerAlive,
+    });
+    const ownerLease = lease("owner", 101);
+    ownerLease.acquire("mcp_connections");
+    const viewer = new McpConnectionGatewayService({
+      brokerDiscovery: discovery, leaseManager: lease("viewer", 202),
+      registry: new McpConnectionRegistry({ configPath: path.join(directory, "config.toml") }),
+      settings: createSettings(),
+    });
+    try {
+      discovery.publish({
+        version: 1, ownerInstanceId: "owner", brokerToken: "x".repeat(32), publishedAt: now,
+        socketPath: process.platform === "win32"
+          ? `\\\\.\\pipe\\pwragent-mcp-grace-${randomUUID()}`
+          : path.join(directory, "missing.sock"),
+      });
+      // A refused socket alone must never displace a live owner.
+      await expect(viewer.listConnections()).rejects.toThrow("PwrAgent profile \"dev\"");
+      expect(store.getMcpConnectionsLease()?.ownerInstanceId).toBe("owner");
+      ownerAlive = false;
+      await expect(viewer.listConnections()).rejects.toThrow("temporarily unavailable");
+      now += RUNTIME_LEASE_DEAD_OWNER_GRACE_MS - 1;
+      await expect(viewer.listConnections()).rejects.toThrow("temporarily unavailable");
+      expect(store.getMcpConnectionsLease()?.ownerInstanceId).toBe("owner");
+      now += 1;
+      await expect(viewer.listConnections()).resolves.toEqual(
+        expect.arrayContaining([expect.objectContaining({ id: "pwrsnap" })]),
+      );
+      expect(discovery.read()?.ownerInstanceId).toBe("viewer");
+    } finally {
+      await viewer.close();
+      stateDb.close();
+      fs.rmSync(directory, { force: true, recursive: true });
+    }
+  });
+
+  it.each(["released", "replaced"])("refreshes a cached owner after its lease is %s without failing a request", async (handoff) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-handoff-"));
+    const stateDb = openInMemoryStateDb({ profileName: "dev" });
+    const store = new AppRuntimeInstanceStore(stateDb);
+    const discovery = new McpConnectionBrokerDiscovery({ filePath: path.join(directory, "broker.json") });
+    const service = (instanceId: string, processId: number) => new McpConnectionGatewayService({
+      brokerDiscovery: discovery,
+      leaseManager: new RuntimeLeaseManager({
+        instanceId, processId, profileName: "dev", runtimeIdentityIsAlive: () => true, store,
+      }),
+      registry: new McpConnectionRegistry({ configPath: path.join(directory, "config.toml") }),
+      settings: createSettings(),
+    });
+    const owner = service("owner", 101);
+    const viewer = service("viewer", 202);
+    const replacement = service("replacement", 303);
+    try {
+      await owner.start();
+      await viewer.listConnections();
+      await owner.close();
+      if (handoff === "replaced") await replacement.start();
+      await expect(viewer.listConnections()).resolves.toEqual(
+        expect.arrayContaining([expect.objectContaining({ id: "pwrsnap" })]),
+      );
+      expect(discovery.read()?.ownerInstanceId).toBe(handoff === "replaced" ? "replacement" : "viewer");
+    } finally {
+      await viewer.close();
+      await replacement.close();
+      await owner.close();
+      stateDb.close();
+      fs.rmSync(directory, { force: true, recursive: true });
+    }
+  });
+
   it.each(["interrupt", "deadline"])("closes stalled registration on gateway %s", async (reason) => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-cancel-"));
     const socketPath = process.platform === "win32"
@@ -134,7 +213,7 @@ describe("MCP connection owner broker", () => {
         (error: unknown) => error as Error,
       );
       expect(failure?.message).toBe(
-        "Another PwrAgent instance manages MCP connections for this profile and is not responding.",
+        "MCP connections for PwrAgent profile \"dev\" are temporarily unavailable: its managing instance is not responding.",
       );
       expect(failure?.message).not.toContain(socketPath);
       expect(failure?.cause).toMatchObject({ code: "ENOENT" });

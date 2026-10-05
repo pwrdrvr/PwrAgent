@@ -389,6 +389,7 @@ import {
 } from "./federation-ssh";
 import { noiseKeyPairFromRawPrivate } from "./federation-noise";
 import { federationReconnectDelayMs } from "./federation-reconnect-policy";
+import { FederationConnectionFailureLog } from "./federation-connection-failure-log";
 import { federationLocalNetworkFailureHint, federationLocalNetworkNotice } from "./federation-local-network";
 
 const log = getMainLogger("pwragent:federation-runtime");
@@ -1091,6 +1092,7 @@ export class DesktopFederationRuntime {
   private parked = false;
   private connectionAttempt?: symbol;
   private reconnectAttempt = 0;
+  private readonly connectionFailureLog = new FederationConnectionFailureLog();
   private connectionGeneration = 0;
   /** Bumped only by stop(), so an in-flight endpoint walk can detect teardown. */
   private walkEpoch = 0;
@@ -1470,6 +1472,7 @@ export class DesktopFederationRuntime {
     this.receivedEventStreams.clear();
     this.relayedEventSubscriptions.clear();
     this.reconnectAttempt = 0;
+    this.connectionFailureLog.reset();
     this.lastConnectionError = undefined;
     this.lastConnectionFailureKind = undefined;
     this.gatewayListenerError = undefined;
@@ -3820,6 +3823,7 @@ export class DesktopFederationRuntime {
 
   // Track the active connection without changing configured endpoint priority.
   private markEndpointConnected(gatewayUrl: string): void {
+    this.connectionFailureLog.reset();
     this.endpointStatuses.set(gatewayUrl, {
       ...this.endpointStatuses.get(gatewayUrl),
       state: "active",
@@ -3883,26 +3887,35 @@ export class DesktopFederationRuntime {
       createdAt: Date.now(),
       detail: this.lastConnectionError,
     });
-    log.warn("federation client connection failed", {
-      endpoints: this.configuredEndpoints.length,
-      error: this.lastConnectionError,
-    });
     // Nothing a retry changes, and no other path to try: stop instead of
-    // logging the same local failure every thirty seconds, indefinitely.
+    // logging the same local failure every minute, indefinitely.
     if (
       (error instanceof CloudflareSignInRequiredError || error instanceof CloudflareAccessRefusedError)
       && this.configuredEndpoints.length === 1
     ) {
       this.parked = true;
+      log.warn("federation client connection failed", {
+        endpoints: this.configuredEndpoints.length,
+        error: this.lastConnectionError,
+      });
       log.info("federation client stopped dialing until sign-in or settings change");
       return;
     }
-    this.scheduleReconnect();
+    const retryDelayMs = this.scheduleReconnect();
+    if (retryDelayMs === undefined) return;
+    const message = this.connectionFailureLog.recordFailure(Date.now(), retryDelayMs);
+    if (message) {
+      if (this.lastConnectionFailureKind === "auth") {
+        log.warn(message, { error: this.lastConnectionError });
+      } else {
+        log.warn(message);
+      }
+    }
   }
 
   // Backoff applies per full cycle through the endpoint list; every cycle
   // re-walks the endpoints in configured order via connectToGateway.
-  private scheduleReconnect(): void {
+  private scheduleReconnect(): number | undefined {
     if (this.stopping || this.reconnectTimer) return;
     if (
       this.lastConnectedAt !== undefined
@@ -3920,6 +3933,7 @@ export class DesktopFederationRuntime {
         this.handleClientConnectionFailure(error);
       });
     }, delayMs);
+    return delayMs;
   }
 
   private registerGatewayConnection(connection: FederationGatewayConnection): void {
