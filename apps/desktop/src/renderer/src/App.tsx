@@ -3387,6 +3387,7 @@ function DesktopAppShell(props: {
           backends={backendSummaries.backends}
           onRefreshRateLimits={backendSummaries.refreshRateLimits}
           browseMode={navigation.browseMode}
+          threadLensesEmpty={navigation.threadLensesEmpty}
           creatingThread={navigation.creatingThread}
           pagedNavigation={navigation.pagedNavigation}
           selectedThreadDirectoryKeys={navigation.pagedNavigation.selectedDirectoryKeys}
