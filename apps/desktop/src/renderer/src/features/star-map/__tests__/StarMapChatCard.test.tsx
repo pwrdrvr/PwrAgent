@@ -2682,6 +2682,60 @@ describe("StarMapChatCard sending into a live turn", () => {
     expect(onUserRepliedToThread).toHaveBeenCalledWith(thread);
   });
 
+  it("keeps a queued copy apart from a running prompt with the same text", async () => {
+    // The running turn's own prompt is "continue". Queueing "continue" again
+    // is a second message, not that one, so it keeps its own transcript copy.
+    const startTurn = queuedStartTurn();
+    const desktopApi = busyApi({
+      readThread: vi.fn(async () => ({
+        backend: "codex",
+        threadId: "t-local",
+        threadStatus: "active",
+        replay: {
+          entries: [
+            {
+              type: "message",
+              id: "m-prompt",
+              role: "user",
+              text: "continue",
+              parts: [{ type: "text", text: "continue" }],
+              createdAt: 1,
+              turn: { id: "turn-live", status: "in_progress" },
+            },
+            {
+              type: "message",
+              id: "m-live",
+              role: "assistant",
+              text: "working on it",
+              parts: [{ type: "text", text: "working on it" }],
+              createdAt: 2,
+              turn: { id: "turn-live", status: "in_progress" },
+            },
+          ],
+          messages: [],
+          pagination: { supportsPagination: false, hasPreviousPage: false },
+        },
+      })),
+      startTurn,
+    } as unknown as Partial<DesktopApi>);
+    const { result } = renderHook(() => useComposerDraftStore());
+    renderCard({
+      composerDraftStore: result.current,
+      desktopApi,
+      thread: localThread(BUSY),
+    });
+    await screen.findByText("working on it");
+    await screen.findByRole("button", { name: "Queue" });
+    await typeAndSend("Local work", "continue");
+
+    await screen.findByLabelText("Queued message");
+    await waitFor(() => {
+      expect(
+        screen.getAllByText("continue", { ignore: IGNORE_COMPOSER }).length,
+      ).toBe(3);
+    });
+  });
+
   it("queues from the Queue button too", async () => {
     const startTurn = queuedStartTurn();
     const desktopApi = busyApi({ startTurn });

@@ -1144,9 +1144,13 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
           queuedProjection,
         ]);
       }
+      // Pinned to the queue entry, not left to default to the running turn:
+      // a message queued behind a turn is not part of it, and would
+      // otherwise fold into that turn's own prompt when the text matches.
       const optimisticId = sessionRef.current.addOptimisticUserMessage(
         displayText,
         imageParts,
+        queueEntryId,
       );
       queuedOptimisticIdsRef.current.set(queuedProjection.id, optimisticId);
       try {
