@@ -3,7 +3,7 @@ import type {
   AppServerThreadActivityDetail,
   AppServerThreadSubAgentCallDetail,
 } from "@pwragent/shared";
-import { shortSubAgentThreadId } from "@pwragent/shared";
+import { hasDurableSubAgentTranscript, shortSubAgentThreadId } from "@pwragent/shared";
 import { useDesktopApi } from "../../lib/desktop-api";
 import { RailStatusChip, type RailChipTone } from "./context-panels/RailStatusChip";
 import type { ThreadLinkSource } from "../../lib/thread-links";
@@ -75,7 +75,7 @@ export function TranscriptSubAgentCall(props: TranscriptSubAgentCallProps) {
                     {state.label}
                   </RailStatusChip>
                 ) : null}
-                {openSubAgentTranscriptWindow ? (
+                {openSubAgentTranscriptWindow && hasDurableSubAgentTranscript(call) ? (
                   <button
                     aria-label={`Open transcript for ${agentLabel}`}
                     className="button button--ghost transcript-subagent__action"

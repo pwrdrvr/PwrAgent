@@ -5,6 +5,7 @@ import type {
   FederationTarget,
   ThreadSubAgentSummary,
 } from "@pwragent/shared";
+import { hasDurableSubAgentTranscript, isCodexNativeSubAgent } from "@pwragent/shared";
 import { CloseIcon } from "../../../icons";
 import { formatBackendLabel } from "../../../lib/backend-label";
 import { copyText } from "../../../lib/copy-text";
@@ -68,11 +69,10 @@ export function SubAgentDetailsModal(props: SubAgentDetailsModalProps) {
   const model = subAgent.preferredModel ?? usage?.model ?? usage?.cost?.model;
   const fastMode = subAgent.preferredFastMode ?? usage?.fastMode;
   const running = !isTerminalSubAgent(subAgent);
-  // Managed Codex monitors and reviews are ephemeral; only native Codex
-  // subagents and ACP workers have reloadable child transcripts.
-  const hasDurableTranscript =
-    (subAgent.backend ?? props.defaultBackend) !== "codex"
-    || subAgent.monitorId.startsWith("codex-native:");
+  const hasDurableTranscript = hasDurableSubAgentTranscript({
+    backend: subAgent.backend ?? props.defaultBackend,
+    origin: isCodexNativeSubAgent(subAgent) ? "codex-native" : "pwragent",
+  });
   const transcriptThreadId =
     hasDurableTranscript &&
     subAgent.monitorThreadId &&
