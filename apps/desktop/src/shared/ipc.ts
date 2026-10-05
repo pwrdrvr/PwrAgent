@@ -357,6 +357,8 @@ export const NAVIGATION_LIST_WORKTREE_UNPUBLISHED_COMMITS_CHANNEL =
   "navigation:list-worktree-unpublished-commits";
 export const NAVIGATION_GET_WORKTREE_UNPUBLISHED_COMMIT_DIFF_CHANNEL =
   "navigation:get-worktree-unpublished-commit-diff";
+export const NAVIGATION_READ_WORKTREE_IMAGE_CHANNEL =
+  "navigation:read-worktree-image";
 export const MESSAGING_GET_PLATFORM_STATUSES_CHANNEL =
   "messaging:get-platform-statuses";
 export const MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL =

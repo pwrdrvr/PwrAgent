@@ -340,6 +340,8 @@ import type {
   ListWorktreeUnpublishedCommitsResponse,
   GetWorktreeUnpublishedCommitDiffRequest,
   GetWorktreeUnpublishedCommitDiffResponse,
+  ReadWorktreeImageRequest,
+  ReadWorktreeImageResponse,
   NavigationSnapshot,
   NavigationSnapshotTransportResponse,
   ResetDirectoryLaunchpadRequest,
@@ -845,6 +847,7 @@ import {
   NAVIGATION_LIST_WORKTREE_UNPUBLISHED_COMMITS_CHANNEL,
   NAVIGATION_MENTION_SOURCES_CHANGED_EVENT_CHANNEL,
   NAVIGATION_GET_WORKTREE_UNPUBLISHED_COMMIT_DIFF_CHANNEL,
+  NAVIGATION_READ_WORKTREE_IMAGE_CHANNEL,
   FEDERATION_JUMP_SEARCH_CHANNEL,
   FEDERATION_JUMP_SEARCH_PROGRESS_CHANNEL,
   NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL,
@@ -2462,6 +2465,10 @@ const desktopApi = Object.freeze({
       NAVIGATION_GET_WORKTREE_UNPUBLISHED_COMMIT_DIFF_CHANNEL,
       request,
     ),
+  readWorktreeImage: async (
+    request: ReadWorktreeImageRequest,
+  ): Promise<ReadWorktreeImageResponse> =>
+    await ipcRenderer.invoke(NAVIGATION_READ_WORKTREE_IMAGE_CHANNEL, request),
   getGhStatus: async (request?: GetGhStatusRequest): Promise<GhStatus> =>
     await invokeWithStartupProfileTiming(
       "getGhStatus",

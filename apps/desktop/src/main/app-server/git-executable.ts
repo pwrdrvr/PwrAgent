@@ -81,6 +81,37 @@ export async function runGitCommand(
   }
 }
 
+/**
+ * `runGitCommand` for a command whose stdout is bytes rather than text — a
+ * blob read with `cat-file blob`. Decoding an image as utf8 replaces every
+ * invalid sequence, so the text runner cannot be reused for this.
+ */
+export async function runGitCommandBinary(
+  cwd: string,
+  args: string[],
+  options: {
+    env?: NodeJS.ProcessEnv;
+    timeout?: number;
+    maxBuffer?: number;
+  } = {},
+): Promise<Buffer> {
+  const env = gitEnvironment(options.env ?? process.env);
+  const git = await resolveGitExecutable(options.env ?? process.env);
+  try {
+    const { stdout } = await execFile(git, ["-C", cwd, ...args], {
+      encoding: "buffer",
+      env,
+      cwd: os.tmpdir(),
+      windowsHide: true,
+      timeout: options.timeout ?? 120_000,
+      maxBuffer: options.maxBuffer ?? 1024 * 1024 * 10,
+    });
+    return stdout;
+  } finally {
+    noteBundledGitCommand(cwd, args, options.env ?? process.env);
+  }
+}
+
 /** Bounded metadata streams retain only what their consumer accepts. Returning
  * false stops the owned process tree, and completion waits for cleanup. */
 export async function streamGitCommand(
