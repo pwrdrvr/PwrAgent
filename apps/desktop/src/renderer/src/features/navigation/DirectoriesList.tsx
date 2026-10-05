@@ -1340,7 +1340,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
     );
   });
 
-  if (visibleDirectories.length === 0) {
+  // A starting thread with no loaded project still needs its row: an empty
+  // index is exactly when navigation shows this lens for the first thread.
+  if (visibleDirectories.length === 0 && unplacedStartingThreads.length === 0) {
     return <p className="sidebar-empty">No directory-linked threads.</p>;
   }
 

@@ -1050,6 +1050,14 @@ describe("Sidebar", () => {
     expect((await screen.findByRole("tooltip")).textContent).toBe(
       "Updated — all threads, most recently updated first\nNo threads yet"
     );
+    fireEvent.blur(updatedTab);
+
+    // Attention hovers a card, not a line of text, so it carries the reason
+    // as the card's footer.
+    const attentionTab = within(tablist).getByRole("tab", { name: /^Attention/ });
+    fireEvent.focus(attentionTab);
+    expect((await screen.findByRole("tooltip")).querySelector(".attention-card__footer"))
+      .toHaveTextContent("No threads yet");
   });
 
   it("reveals the New Thread flyout on hover when a directory is in context", async () => {
