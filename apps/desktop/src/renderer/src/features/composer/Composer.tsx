@@ -211,6 +211,8 @@ import { EnvironmentSetupRow, type EnvironmentSetupRowModel } from "./Environmen
 import { LinkedTurnFailureMessage } from "../notifications/LinkedTurnFailureMessage";
 import { turnFailureAcknowledgements, turnFailureScopeKey } from "../notifications/turn-failure-acknowledgements";
 import { findSlashCommandTrigger } from "./composer-slash-commands";
+import { parseForkCommand, type ComposerForkCommand } from "./composer-fork-command";
+import type { ThreadWorkspaceMode } from "../../lib/subthread-launchpads";
 import { ComposerTiptapInput } from "./ComposerTiptapInput";
 import { ProjectDestinationCombobox } from "./ProjectDestinationCombobox";
 import { ProjectPicker } from "./ProjectPicker";
@@ -250,7 +252,7 @@ import { isSteerShortcut, useQueueSteerTooltip } from "./steer-shortcut";
 import { useComposerPopoverClamp } from "./useComposerPopoverClamp";
 import { useOwnedComposerDraftStore } from "./useOwnedComposerDraftStore";
 
-type ComposerProps = {
+export type ComposerProps = {
   activeTurnId?: string;
   addOptimisticReviewEntry?: (displayText: string) => string;
   addOptimisticUserMessage?: (
@@ -360,6 +362,15 @@ type ComposerProps = {
    */
   onUserRepliedToThread?: (thread: NavigationThreadSummary) => void;
   onRefreshNavigation?: () => Promise<void>;
+  onForkThread?: (
+    thread: NavigationThreadSummary,
+    mode: ThreadWorkspaceMode,
+  ) => Promise<boolean>;
+  onCreateSubthread?: (
+    thread: NavigationThreadSummary,
+    mode: ThreadWorkspaceMode,
+  ) => Promise<boolean>;
+  readThreadWorktreeAvailability?: (thread: NavigationThreadSummary) => Promise<boolean>;
   pastedImageMaxPatches?: number;
   pdfAnalysisEnabled?: boolean;
   /** Token Miser experiment availability gate. */
@@ -693,6 +704,7 @@ type ModelOption = NonNullable<
 >[number];
 
 type SlashCommandSuggestion = {
+  argumentHint?: string;
   aliases?: string[];
   description: string;
   id: string;
@@ -862,6 +874,23 @@ const SLASH_COMMANDS: SlashCommandSuggestion[] = [
     sourceLabel: "PwrAgent",
   },
 ];
+
+const FORK_SLASH_COMMANDS: SlashCommandSuggestion[] = [
+  ["", "[--wt same|new] [--no-history]", "Fork with history in the same workspace (default)"],
+  [" --wt same", "--wt same", "Fork with history in the same worktree or directory"],
+  [" --wt new", "--wt new", "Fork with history in a new worktree"],
+  [" --no-history", "--no-history", "Start a sub-thread without history in the same workspace"],
+  [" --wt same --no-history", "--wt same --no-history", "Start a sub-thread without history in the same worktree or directory"],
+  [" --wt new --no-history", "--wt new --no-history", "Start a sub-thread without history in a new worktree"],
+].map(([args, argumentHint, description]) => ({
+  id: `fork${args}`,
+  label: `/fork${args}`,
+  insertText: `/fork${args}`,
+  argumentHint,
+  description,
+  source: "pwragent",
+  sourceLabel: "PwrAgent",
+}));
 
 const CODEX_MCP_SLASH_COMMANDS: SlashCommandSuggestion[] = [
   {
@@ -3099,6 +3128,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const setSendError = useCallback((message?: string) => {
     setSendErrorState((current) => ({ message, occurrence: current.occurrence + 1 }));
   }, []);
+  const [forkingScopeKey, setForkingScopeKey] = useState<string>();
+  const forking = forkingScopeKey === composerScopeKey;
+  const forkSubmissionInFlightRef = useRef(false);
   const [agentThreadError, setAgentThreadError] = useState<string>();
   // `selectedEnvironmentId` marks a failed environment selection, so the
   // setup row can claim the one failure it already reports.
@@ -3275,6 +3307,15 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         (!props.thread || !command.backend || command.backend === props.thread.source)
       );
     })
+  );
+  const supportsForkCommand = Boolean(
+    !isLaunchpad
+    && props.thread
+    && backend?.capabilities.forkThread
+    && props.onForkThread,
+  );
+  const supportsSubthreadCommand = Boolean(
+    !isLaunchpad && props.thread && props.onCreateSubthread,
   );
   const supportsMcpInventory =
     !isLaunchpad
@@ -4733,20 +4774,27 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     if (supportsMcpInventory) {
       localCommands.push(...CODEX_MCP_SLASH_COMMANDS);
     }
+    localCommands.push(...FORK_SLASH_COMMANDS.filter((command) =>
+      command.insertText.includes("--no-history")
+        ? supportsSubthreadCommand
+        : supportsForkCommand,
+    ));
     return [...localCommands, ...commands];
   }, [
     props.backends,
     props.providerCommands,
     supportsMcpInventory,
     supportsReview,
+    supportsForkCommand,
+    supportsSubthreadCommand,
   ]);
   const filteredSlashCommands = useMemo(() => {
     if (!slashTrigger) {
       return [];
     }
 
-    const typed = `/${slashTrigger.query}`.toLowerCase();
-    const query = slashTrigger.query.toLowerCase();
+    const query = slashTrigger.query.toLowerCase().trimEnd();
+    const typed = `/${query}`;
     return slashCommandSuggestions.filter((command) => {
       const aliases = command.aliases ?? [];
       return (
@@ -5033,6 +5081,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   );
   const parsedReviewCommand = supportsReview ? parseReviewCommand(draft) : undefined;
   const isBareReviewCommand = draft.trim() === "/review";
+  const forkCommand = parseForkCommand(draft);
   const isCompactCommand = supportsCompactCommand && draft.trim() === "/compact";
   const mcpInventoryDetail: CodexMcpInventoryDetail | undefined =
     supportsMcpInventory && draft.trim().toLowerCase() === "/mcp"
@@ -6275,6 +6324,63 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       updateActiveTurnId(undefined);
       props.onActiveTurnIdChange?.(undefined);
       setSendError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const submitForkCommand = async (command: ComposerForkCommand): Promise<void> => {
+    if (props.disabled || forkSubmissionInFlightRef.current) return;
+    if (command.error) {
+      setSendError(command.error);
+      return;
+    }
+    if (imageAttachments.length > 0 || fileAttachments.length > 0 || skillTokens.length > 0) {
+      setSendError("/fork does not accept attachments or skill references.");
+      return;
+    }
+    const thread = props.thread;
+    const action = command.noHistory ? props.onCreateSubthread : props.onForkThread;
+    if (!thread || isLaunchpad || !action) {
+      setSendError("/fork is only available in an existing thread.");
+      return;
+    }
+    if (!command.noHistory && !supportsForkCommand) {
+      setSendError("This provider cannot fork history. Use /fork --no-history to start a sub-thread.");
+      return;
+    }
+
+    const submittedScopeKey = composerScopeKey;
+    const submittedSnapshot = latestDraftSnapshotRef.current.snapshot;
+    forkSubmissionInFlightRef.current = true;
+    setForkingScopeKey(submittedScopeKey);
+    setSendError(undefined);
+    try {
+      const mode: ThreadWorkspaceMode = command.worktree === "new"
+        ? "new-worktree"
+        : thread.linkedDirectories.some((directory) => directory.kind === "worktree")
+          ? "same-worktree"
+          : "local";
+      if (mode === "new-worktree"
+        && !await props.readThreadWorktreeAvailability?.(thread)) {
+        if (latestDraftSnapshotRef.current.scopeKey === submittedScopeKey) {
+          setSendError("This thread cannot create a new worktree. Use /fork --wt same.");
+        }
+        return;
+      }
+      if (!await action(thread, mode)) return;
+      recordComposerDraftHistory(submittedScopeKey, submittedSnapshot, "sent");
+      // Navigation may already have selected the child; clear only the source draft.
+      if (latestDraftSnapshotRef.current.scopeKey === submittedScopeKey) {
+        resetComposerDraftAndState(submittedScopeKey);
+      } else {
+        clearComposerDraftSnapshot(submittedScopeKey);
+      }
+    } catch (error) {
+      if (latestDraftSnapshotRef.current.scopeKey === submittedScopeKey) {
+        setSendError(error instanceof Error ? error.message : String(error));
+      }
+    } finally {
+      forkSubmissionInFlightRef.current = false;
+      setForkingScopeKey(undefined);
     }
   };
 
@@ -8064,6 +8170,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     mode: "default" | "steer" = "default",
     options?: { restoreComposerFocus?: boolean },
   ): Promise<void> => {
+    if (forkCommand) {
+      await submitForkCommand(forkCommand);
+      return;
+    }
     const reviewCommand = parsedReviewCommand;
     if (turnPayloadPreparationInFlightRef.current || sendPreparationRef.current) {
       return;
@@ -8499,7 +8609,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       return;
     }
 
-    if (shouldQueueThreadSubmit()) {
+    if (!command.id.startsWith("fork") && shouldQueueThreadSubmit()) {
       void queueCurrentDraft();
       return;
     }
@@ -10032,6 +10142,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       : []),
   ];
   const sendButtonDisabled =
+    forking ||
     preparingSend ||
     props.disabled ||
     steering ||
@@ -10044,7 +10155,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     launchpadSubmitting ||
     (!props.thread && !props.launchpad) ||
     Boolean(props.launchpad && !props.onMaterializeLaunchpad) ||
-    isCompactCommand;
+    isCompactCommand || Boolean(forkCommand);
   // Only surface the schedule caret where scheduling actually applies. In the
   // compact command or a thread-less composer there is nothing to schedule,
   // so the split collapses to a plain Send pill instead of parking a
@@ -10055,7 +10166,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     Boolean(
       props.thread
       || (props.launchpad && props.onMaterializeLaunchpad)
-    ) && !isCompactCommand;
+    ) && !isCompactCommand && !forkCommand;
   // A pending draft schedule (e.g. after editing a scheduled item) surfaces as
   // a checkable toggle between the caret and Send rather than hijacking the
   // Send label into a countdown. Armed → Send keeps the schedule; unarmed →
@@ -10070,7 +10181,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const effectiveScheduledSendAt = scheduleArmed
     ? futureScheduledDraftSendAt
     : undefined;
-  const submitButtonLabel = preparingSend
+  const turnSubmitButtonLabel = preparingSend
     ? "Preparing…"
     : launchpadSubmitting ||
       activeTurnId ||
@@ -10086,6 +10197,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           : props.launchpad
             ? "Start thread"
             : "Send";
+  const submitButtonLabel = forking
+    ? "Forking…"
+    : forkCommand
+      ? "Fork"
+      : turnSubmitButtonLabel;
   // Queue is the primary mid-turn; the steer chord is its keyboard-only
   // sibling, so the button is where it gets named.
   const submitButtonSteerHint =
@@ -10405,7 +10521,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     }
 
     const currentSlashText = slashTrigger
-      ? `/${slashTrigger.query}`.toLowerCase()
+      ? `/${slashTrigger.query}`.trimEnd().toLowerCase()
       : undefined;
     const exactSlashCommand = currentSlashText
       ? filteredSlashCommands.find((command) =>
@@ -10420,6 +10536,13 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   };
 
   const runSlashCommand = (command: SlashCommandSuggestion): boolean => {
+    if (command.id.startsWith("fork")) {
+      if (!forkCommand || command.insertText.toLowerCase() !== draft.trim().toLowerCase()) {
+        return false;
+      }
+      void submitForkCommand(forkCommand);
+      return true;
+    }
     if (command.id === "review-current") {
       enterReviewComposer();
       return true;
@@ -10449,7 +10572,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     }
 
     const currentSlashText = slashTrigger
-      ? `/${slashTrigger.query}`.toLowerCase()
+      ? `/${slashTrigger.query}`.trimEnd().toLowerCase()
       : undefined;
     return (
       (currentSlashText
@@ -12198,7 +12321,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             ariaControls={autocompleteListboxId}
             ariaExpanded={Boolean(autocompleteKind)}
             disabled={composerDisabled}
-            readOnly={preparingSend}
+            readOnly={preparingSend || forking}
             label={isLaunchpad ? "New thread" : "Reply"}
             markdownConversion
             placeholder={composerPlaceholder}
@@ -12323,9 +12446,14 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               >
                 <span className="composer__autocomplete-title">
                   <HighlightedAutocompleteLabel
-                    label={command.label}
+                    label={command.argumentHint ? "/fork" : command.label}
                     query={slashTrigger ? `/${slashTrigger.query}` : "/"}
                   />
+                  {command.argumentHint ? (
+                    <span className="composer__autocomplete-arguments">
+                      {command.argumentHint}
+                    </span>
+                  ) : null}
                   <span
                     className={`composer__autocomplete-source composer__autocomplete-source--${command.source}`}
                   >

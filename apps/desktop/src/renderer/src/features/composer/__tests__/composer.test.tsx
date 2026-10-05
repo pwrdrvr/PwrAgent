@@ -14967,6 +14967,188 @@ describe("Composer", () => {
     expect(within(commands).getByText(providerLabel)).toBeInTheDocument();
   });
 
+  describe("fork slash commands", () => {
+    const thread: NavigationThreadSummary = {
+      id: "fork-source",
+      title: "Fork source",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [{ id: "repo", label: "Repo", path: "/fixture/repo", kind: "local" }],
+      inbox: { inInbox: false },
+    };
+    const backend: BackendSummary = {
+      kind: "codex",
+      label: "Codex",
+      available: true,
+      methods: [],
+      executionModes: [],
+      capabilities: {
+        listThreads: true,
+        createThread: true,
+        resumeThread: true,
+        renameThread: true,
+        readThread: true,
+        startTurn: true,
+        interruptTurn: true,
+        steerTurn: true,
+        transcriptPagination: true,
+        toolUse: true,
+        approvalRequests: true,
+        multiDirectoryThreads: true,
+        forkThread: true,
+      },
+    };
+    function renderForkComposer(overrides: Partial<ComponentProps<typeof ProductionComposer>> = {}) {
+      const onForkThread = vi.fn(async () => true);
+      const onCreateSubthread = vi.fn(async () => true);
+      const startTurn = vi.fn();
+      const readThreadWorktreeAvailability = vi.fn(async () => true);
+      const props = {
+        backends: [backend],
+        disabled: false,
+        skills: [],
+        thread,
+        desktopApi: { startTurn, onAgentEvent: () => () => undefined },
+        onForkThread,
+        onCreateSubthread,
+        readThreadWorktreeAvailability,
+        ...overrides,
+      };
+      const view = render(<Composer {...props} />);
+      return { ...view, onForkThread, onCreateSubthread, startTurn, readThreadWorktreeAvailability };
+    }
+
+    it.each([
+      ["/fork", "local", false],
+      ["/fork --wt same", "local", false],
+      ["/fork --wt new", "new-worktree", false],
+      ["/fork --no-history", "local", true],
+      ["/fork --wt new --no-history", "new-worktree", true],
+      ["/fork --no-history --wt same", "local", true],
+    ] as const)("routes %s to the workspace action without starting a turn", async (text, mode, noHistory) => {
+      const { onForkThread, onCreateSubthread, startTurn } = renderForkComposer({ activeTurnId: "running-turn" });
+      const input = screen.getByLabelText("Reply");
+      fireEvent.change(input, { target: { value: text } });
+      expect(screen.queryByRole("button", { name: "Schedule send" })).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Fork" }));
+      await waitFor(() => expect(noHistory ? onCreateSubthread : onForkThread).toHaveBeenCalledWith(thread, mode));
+      expect(noHistory ? onForkThread : onCreateSubthread).not.toHaveBeenCalled();
+      expect(startTurn).not.toHaveBeenCalled();
+      await waitFor(() => expect(input).toHaveValue(""));
+    });
+
+    it("defaults to the source worktree rather than the repository checkout", async () => {
+      const worktreeThread: NavigationThreadSummary = {
+        ...thread,
+        linkedDirectories: [{ id: "wt", label: "Repo", path: "/fixture/repo", worktreePath: "/fixture/wt", kind: "worktree" }],
+      };
+      const { onForkThread } = renderForkComposer({ thread: worktreeThread });
+      fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "/fork" } });
+      fireEvent.click(screen.getByRole("button", { name: "Fork" }));
+      await waitFor(() => expect(onForkThread).toHaveBeenCalledWith(worktreeThread, "same-worktree"));
+    });
+
+    it("shows muted parameters and completes an argument before executing", async () => {
+      const { onForkThread, container } = renderForkComposer();
+      const input = screen.getByLabelText("Reply");
+      fireEvent.change(input, { target: { value: "/fork " } });
+      const commands = screen.getByRole("listbox", { name: "Commands" });
+      expect(within(commands).getByText("[--wt same|new] [--no-history]")).toHaveClass("composer__autocomplete-arguments");
+      fireEvent.change(input, { target: { value: "/fork --wt n" } });
+      expect(container.querySelector(".composer__autocomplete-arguments")).toHaveTextContent("--wt new");
+      fireEvent.keyDown(input, { key: "Enter" });
+      expect(input).toHaveValue("/fork --wt new ");
+      expect(onForkThread).not.toHaveBeenCalled();
+      await flushReactUpdates();
+      fireEvent.keyDown(input, { key: "Enter" });
+      await waitFor(() => expect(onForkThread).toHaveBeenCalledWith(thread, "new-worktree"));
+    });
+
+    it.each(["/fork --wt", "/fork --wt other", "/fork unexpected", "/fork --no-history --no-history"])("retains invalid command %s and never sends it to the agent", async (text) => {
+      const { onForkThread, startTurn } = renderForkComposer();
+      const input = screen.getByLabelText("Reply");
+      fireEvent.change(input, { target: { value: text } });
+      fireEvent.click(screen.getByRole("button", { name: "Fork" }));
+      expect(await screen.findByText("Use /fork [--wt same|new] [--no-history].")).toBeInTheDocument();
+      expect(input).toHaveValue(text);
+      expect(onForkThread).not.toHaveBeenCalled();
+      expect(startTurn).not.toHaveBeenCalled();
+    });
+
+    it("retains the command when a new worktree is unavailable", async () => {
+      const { onForkThread } = renderForkComposer({ readThreadWorktreeAvailability: async () => false });
+      fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "/fork --wt new" } });
+      fireEvent.click(screen.getByRole("button", { name: "Fork" }));
+      expect(await screen.findByText("This thread cannot create a new worktree. Use /fork --wt same.")).toBeInTheDocument();
+      expect(screen.getByLabelText("Reply")).toHaveValue("/fork --wt new");
+      expect(onForkThread).not.toHaveBeenCalled();
+    });
+
+    it("offers fresh sub-threads when history forks are unsupported", async () => {
+      const { onCreateSubthread, startTurn } = renderForkComposer({ backends: [{ ...backend, capabilities: { ...backend.capabilities, forkThread: false } }] });
+      const input = screen.getByLabelText("Reply");
+      fireEvent.change(input, { target: { value: "/fork" } });
+      const options = within(screen.getByRole("listbox", { name: "Commands" })).getAllByRole("option");
+      expect(options).toHaveLength(3);
+      for (const option of options) expect(option).toHaveTextContent("--no-history");
+      fireEvent.click(screen.getByRole("button", { name: "Fork" }));
+      expect(await screen.findByText("This provider cannot fork history. Use /fork --no-history to start a sub-thread.")).toBeInTheDocument();
+      expect(startTurn).not.toHaveBeenCalled();
+      fireEvent.change(input, { target: { value: "/fork --no-history" } });
+      fireEvent.click(screen.getByRole("button", { name: "Fork" }));
+      await waitFor(() => expect(onCreateSubthread).toHaveBeenCalledWith(thread, "local"));
+    });
+
+    it("rejects attachments without losing the command or sending a turn", async () => {
+      const { onForkThread, startTurn } = renderForkComposer();
+      const input = screen.getByLabelText("Reply");
+      fireEvent.paste(input, {
+        clipboardData: {
+          files: [new File([new Uint8Array([1, 2, 3])], "fixture.png", { type: "image/png" })],
+          items: [],
+          getData: () => "",
+        },
+      });
+      await screen.findByRole("button", { name: "Remove fixture.png" });
+      fireEvent.change(input, { target: { value: "/fork" } });
+      fireEvent.click(screen.getByRole("button", { name: "Fork" }));
+      expect(await screen.findByText("/fork does not accept attachments or skill references.")).toBeInTheDocument();
+      expect(input).toHaveValue("/fork");
+      expect(onForkThread).not.toHaveBeenCalled();
+      expect(startTurn).not.toHaveBeenCalled();
+    });
+
+    it("preserves a different thread's draft when fork navigation finishes", async () => {
+      const pending = createDeferred<boolean>();
+      const onForkThread = vi.fn(() => pending.promise);
+      const { result } = renderHook(() => useComposerDraftStore());
+      const draftStore = result.current;
+      const deleteDraft = vi.spyOn(draftStore, "delete");
+      const { rerender } = renderForkComposer({ onForkThread, draftStore });
+      fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "/fork" } });
+      fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter" });
+      rerender(<Composer disabled={false} skills={[]} thread={{ ...thread, id: "child" }} draftStore={draftStore} />);
+      fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "Child draft" } });
+      await act(async () => pending.resolve(true));
+      expect(screen.getByLabelText("Reply")).toHaveValue("Child draft");
+      expect(deleteDraft).toHaveBeenCalledWith(buildThreadComposerScopeKey("codex", thread.id));
+    });
+
+    it("keeps failed forks editable and prevents duplicate submissions while pending", async () => {
+      const pending = createDeferred<boolean>();
+      const onForkThread = vi.fn(() => pending.promise);
+      renderForkComposer({ onForkThread });
+      const input = screen.getByLabelText("Reply");
+      fireEvent.change(input, { target: { value: "/fork" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+      fireEvent.keyDown(input, { key: "Enter" });
+      expect(onForkThread).toHaveBeenCalledTimes(1);
+      await act(async () => pending.resolve(false));
+      expect(input).toHaveValue("/fork");
+      expect(screen.getByRole("button", { name: "Fork" })).toBeEnabled();
+    });
+  });
+
   it("routes Codex compact slash commands to thread compaction", async () => {
     const compactThread = vi.fn(async (request: CompactThreadRequest) => ({
       backend: request.backend,

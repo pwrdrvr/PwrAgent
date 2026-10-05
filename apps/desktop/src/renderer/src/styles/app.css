@@ -36657,6 +36657,13 @@ button.pricing-token-miser__folded:focus-visible {
   color: var(--accent-bright);
 }
 
+.composer__autocomplete-arguments {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 400;
+}
+
 .composer__autocomplete-title {
   display: inline-flex;
   align-items: center;

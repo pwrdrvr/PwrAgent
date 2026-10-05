@@ -140,6 +140,40 @@ test("thread reply Tiptap slash review autocomplete stays open on exact command 
   }
 });
 
+test("thread reply Tiptap fork autocomplete shows parameters and completes workspace flags", async () => {
+  const app = await launchElectronApp({
+    fixturePath,
+    windowSize: { width: 1180, height: 760 },
+  });
+
+  try {
+    await openSkillAutocompleteThread(app);
+    const textbox = app.window.getByRole("textbox", { name: "Reply", exact: true });
+    const tiptapInput = app.window.getByTestId("composer-tiptap-input");
+    await textbox.fill("/fork ");
+    const commands = app.window.getByRole("listbox", { name: "Commands" });
+    await expect(commands).toBeVisible();
+    await expect(commands.getByRole("option")).toHaveCount(6);
+    await expect(commands.locator(".composer__autocomplete-arguments").first())
+      .toHaveText("[--wt same|new] [--no-history]");
+    await expect(commands.getByRole("option", { name: /Start a sub-thread without history in a new worktree/ }))
+      .toBeVisible();
+    await app.window.screenshot({ path: test.info().outputPath("fork-command-menu.png") });
+
+    await textbox.fill("/fork --wt n");
+    await expect(commands.getByRole("option")).toHaveCount(2);
+    await textbox.press("Tab");
+    await expect(tiptapInput).toHaveAttribute("data-value", "/fork --wt new ");
+    await expect(commands.getByRole("option").first()).toContainText("Fork with history in a new worktree");
+    await expect(commands.getByRole("option").first()).toHaveAttribute("aria-selected", "true");
+    await expect(app.window.getByRole("button", { name: "Fork", exact: true })).toBeVisible();
+    // Completion inserts a command; it must not submit a provider turn.
+    expect(await app.getLastStartTurn()).toBeUndefined();
+  } finally {
+    await app.close();
+  }
+});
+
 test("thread reply Tiptap skill insertion preserves rich Markdown blocks", async () => {
   const app = await launchElectronApp({
     fixturePath,

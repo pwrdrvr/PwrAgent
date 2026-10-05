@@ -90,7 +90,7 @@ import type { PendingForkEnvironmentSetup, PendingLaunchpadCreation } from "../.
 import { useTranscriptWindow } from "./useTranscriptWindow";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { resolvePreferredEditor } from "../../lib/preferred-application";
-import { Composer } from "../composer/Composer";
+import { Composer, type ComposerProps } from "../composer/Composer";
 import type { EnvironmentSetupRowModel } from "../composer/EnvironmentSetupRow";
 import {
   describeLaunchpadMachineOffline,
@@ -759,6 +759,9 @@ export type ThreadViewProps = {
   initialLoadDurationMs?: number;
   launchpadError?: string;
   onShowNotice?: (notice: AppNoticeToastNotice) => void;
+  onForkThread?: ComposerProps["onForkThread"];
+  onCreateSubthread?: ComposerProps["onCreateSubthread"];
+  readThreadWorktreeAvailability?: ComposerProps["readThreadWorktreeAvailability"];
   onProviderSelected?: (
     backend: NavigationLaunchpadDraft["backend"],
   ) => BackendSummary | undefined | Promise<BackendSummary | undefined>;
@@ -3602,6 +3605,9 @@ export function ThreadView(props: ThreadViewProps) {
           activeTurnId: props.activeTurnId,
           addOptimisticReviewEntry: props.addOptimisticReviewEntry,
           addOptimisticUserMessage: props.addOptimisticUserMessage,
+          onForkThread: props.onForkThread,
+          onCreateSubthread: props.onCreateSubthread,
+          readThreadWorktreeAvailability: props.readThreadWorktreeAvailability,
           onShowMcpInventory: showMcpInventory,
           mcpConnectionCount: threadMcpConnectionCount,
           replySubmission: asyncQuestionReply,

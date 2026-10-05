@@ -9496,7 +9496,7 @@ describe("useThreadNavigation", () => {
       expect(result.current.selectedThread?.id).toBe("thread-parent");
     });
 
-    let forkPromise: Promise<void> | undefined;
+    let forkPromise: Promise<boolean> | undefined;
     await act(async () => {
       forkPromise = result.current.forkThread(parentThread, "new-worktree");
     });
