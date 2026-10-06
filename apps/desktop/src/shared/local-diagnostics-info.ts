@@ -6,7 +6,7 @@ import {
   type FederationRemoteTarget,
   type NavigationThreadSummary,
 } from "@pwragent/shared";
-import type { AppMetadata } from "./app-metadata";
+import type { AppBuildMetadata, AppMetadata } from "./app-metadata";
 
 export type LocalThreadDiagnosticsContext = {
   backend?: AppServerBackendKind;
@@ -31,7 +31,10 @@ function available(value: string | undefined): string {
   return value?.trim() || "Unavailable";
 }
 
-function buildIdentityLines(metadata: AppMetadata, prefix = ""): string[] {
+export function buildAppIdentityDiagnosticsLines(
+  metadata: Partial<AppBuildMetadata>,
+  prefix = "",
+): string[] {
   const identity = metadata.buildIdentity;
   const buildKind = identity?.kind === "development" ? "Development"
     : identity?.kind === "packaged" ? "Packaged" : "Unavailable";
@@ -58,7 +61,7 @@ function processIdLines(metadata: AppMetadata): string[] {
 
 function viewerSupportLines(metadata: AppMetadata): string[] {
   return [
-    ...buildIdentityLines(metadata, "Viewer "),
+    ...buildAppIdentityDiagnosticsLines(metadata, "Viewer "),
     `Viewer PwrAgent profile: ${metadata.activeProfileName}`,
     `Viewer main process PID: ${metadata.mainProcessId}`,
     ...(metadata.rendererProcessId === undefined
@@ -154,7 +157,7 @@ export function buildTroubleshootingDiagnosticsInfo(
 ): string {
   return [
     `Collected at (UTC): ${new Date().toISOString()}`,
-    ...buildIdentityLines(metadata),
+    ...buildAppIdentityDiagnosticsLines(metadata),
     `PwrAgent profile: ${metadata.activeProfileName}`,
     ...processIdLines(metadata),
     `PwrAgent log path: ${available(metadata.logFilePath)}`,
@@ -174,7 +177,7 @@ export function buildStarMapDiagnosticsInfo(
   return [
     `Collected at (UTC): ${new Date().toISOString()}`,
     "Surface: Federation Star Map",
-    ...buildIdentityLines(metadata),
+    ...buildAppIdentityDiagnosticsLines(metadata),
     ...(intakeTarget
       ? [
           "Thread creation state: Intake open; no thread created yet",
@@ -205,7 +208,7 @@ export function buildLocalThreadDiagnosticsInfo(
     ...(remoteThreadContext
       ? viewerSupportLines(metadata)
       : [
-          ...buildIdentityLines(metadata),
+          ...buildAppIdentityDiagnosticsLines(metadata),
           `PwrAgent profile: ${metadata.activeProfileName}`,
           ...processIdLines(metadata),
           `PwrAgent log path: ${available(metadata.logFilePath)}`,
