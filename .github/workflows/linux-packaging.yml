@@ -1,6 +1,9 @@
 name: Linux Packaging
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
   pull_request:
     # Adding ci:linux-packages starts packaging; subsequent pushes and reopens
@@ -16,7 +19,8 @@ permissions:
 concurrency:
   # An unrelated label creates a skipped run; keep it from cancelling active
   # packaging or replacing a pending packaging run in the PR's queue.
-  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.ref }}${{ github.event.action == 'labeled' && github.event.label.name != 'ci:linux-packages' && '-unrelated-label' || '' }}
+  # Main pushes use the commit SHA so each merged commit gets a smoke run.
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.event_name == 'pull_request' && github.event.pull_request.number || github.ref }}${{ github.event.action == 'labeled' && github.event.label.name != 'ci:linux-packages' && '-unrelated-label' || '' }}
   cancel-in-progress: true
 
 jobs:
@@ -25,6 +29,7 @@ jobs:
     if: >-
       ${{
         github.event_name == 'workflow_dispatch'
+        || (github.event_name == 'push' && github.ref == 'refs/heads/main')
         || (
           github.event_name == 'pull_request'
           && github.event.pull_request.head.repo.full_name == github.repository
