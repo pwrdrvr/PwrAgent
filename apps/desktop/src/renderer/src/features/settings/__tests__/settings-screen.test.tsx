@@ -165,6 +165,7 @@ function createSnapshot(
         darkTheme: { value: "tangerine-dark", source: "default" },
         lightTheme: { value: "tangerine-light", source: "default" },
         themedDockIcon: { value: true, source: "default" },
+        terminalMinimumContrast: { value: false, source: "default" },
         density: { value: "mission-control", source: "default" },
         sidebarTextSize: { value: "md", source: "default" },
         transcriptTextSize: { value: "md", source: "default" },
@@ -1390,6 +1391,47 @@ describe("SettingsScreen", () => {
       ),
     ).toBeInTheDocument();
     expect(screen.queryByText(/PWRDRVR_CODEX_COMMAND/)).not.toBeInTheDocument();
+  });
+
+  it("leaves terminal contrast off by default and writes only the opt-in", async () => {
+    const controller: AppearanceController = {
+      appearance: {
+        theme: "system",
+        darkTheme: "tangerine-dark",
+        lightTheme: "tangerine-light",
+        density: "mission-control",
+        sidebarTextSize: "md",
+        transcriptTextSize: "md",
+        resolvedTheme: "dark",
+      },
+      setTheme: vi.fn(),
+      setDarkTheme: vi.fn(),
+      setLightTheme: vi.fn(),
+      setDensity: vi.fn(),
+      setSidebarTextSize: vi.fn(),
+      setTranscriptTextSize: vi.fn(),
+      setAppearance: vi.fn(),
+    };
+    const settings = createSettingsState();
+    render(
+      <SettingsScreen
+        appearanceController={controller}
+        initialSection="general"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    const toggle = screen.getByRole("switch", {
+      name: "Raise low-contrast terminal text",
+    });
+    expect(toggle).not.toBeChecked();
+    fireEvent.click(toggle);
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: { appearance: { terminalMinimumContrast: true } },
+      });
+    });
   });
 
   it("turns opening SVGs interactive off with trust in their scripts", async () => {

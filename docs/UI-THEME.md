@@ -136,6 +136,25 @@ The pane's background follows the theme through CSS either way; before the
 reread, a terminal opened under a dark theme kept dark-theme text on the
 light canvas after a scheme change.
 
+Settings → General → Appearance → **Raise low-contrast terminal text**
+(`[general.appearance] terminal_minimum_contrast`, off by default) sets
+xterm's `minimumContrastRatio` to 4.5. xterm then lightens or darkens any
+cell's text that falls below 4.5:1 on that cell's own background, in every
+theme, as it draws. It skips powerline and box-drawing glyphs, so prompt
+segments stay seamless. It is off by default because it changes how the
+published Catppuccin and Solarized ANSI colors render.
+
+The terminal's font stack is `--font-mono` plus one installed Nerd Font,
+found with the Local Font Access API (`lib/nerd-font-fallback.ts`). Shell
+prompts draw their icons from Nerd Font private-use codepoints, which no font
+in `--font-mono` carries, and Chromium does not fall back to a system font
+for a private-use glyph on its own. The Nerd Font goes just ahead of the
+generic `monospace`, so Geist Mono still draws every glyph it has and sets
+the cell size. A glyph Geist Mono lacks now comes from the Nerd Font rather
+than the system monospace (Menlo on macOS). The lookup takes about 1.5s, so
+the first terminal in a window opens without it and picks it up when it
+returns. A machine with no Nerd Font keeps `--font-mono` unchanged.
+
 | Token | Dark | Light |
 |---|---|---|
 | `--terminal-bg` | `#000000` | `#ffffff` |
@@ -369,6 +388,9 @@ because they need 3:1 on the surface with no ink to carry them.
 The integrated terminal keeps each palette's own ANSI colors, even below AA
 on its canvas. Programs pick ANSI colors without knowing the background,
 and the terminal is where operators compare PwrAgent with their own setup.
+An operator who wants readability over fidelity turns on **Raise
+low-contrast terminal text** (see Integrated Terminal above); the palettes
+themselves do not change.
 
 Per theme:
 

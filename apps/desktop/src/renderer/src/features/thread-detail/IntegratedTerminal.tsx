@@ -2,6 +2,15 @@ import "@xterm/xterm/css/xterm.css";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { copyText } from "../../lib/copy-text";
+import {
+  discoverNerdFontFamily,
+  discoveredNerdFontFamily,
+  withNerdFontFallback,
+} from "../../lib/nerd-font-fallback";
+import {
+  TERMINAL_MINIMUM_CONTRAST_RATIO,
+  useTerminalMinimumContrast,
+} from "../../lib/terminal-preferences";
 import type { IntegratedTerminalPaneRemote } from "../../lib/useIntegratedTerminals";
 import { InstanceChip } from "../federation/InstanceGlyph";
 import type { ITheme, Terminal } from "@xterm/xterm";
@@ -74,11 +83,22 @@ export function IntegratedTerminal({
   // must not tear down a live xterm when the pane object identity changes.
   const remoteTargetRef = useRef(remote?.target);
   remoteTargetRef.current = remote?.target;
+  // A display preference, applied live: read at creation from the ref, then
+  // pushed into the running xterm by the effect below.
+  const minimumContrast = useTerminalMinimumContrast();
+  const minimumContrastRef = useRef(minimumContrast);
+  minimumContrastRef.current = minimumContrast;
   const [status, setStatus] = useState<string>("Starting shell...");
 
   useEffect(() => {
     visibleRef.current = visible;
   }, [visible]);
+
+  useEffect(() => {
+    const terminal = terminalRef.current;
+    if (!terminal) return;
+    terminal.options.minimumContrastRatio = minimumContrastRatio(minimumContrast);
+  }, [minimumContrast]);
 
   useLayoutEffect(() => {
     const container = containerRef.current;
@@ -103,10 +123,14 @@ export function IntegratedTerminal({
           allowTransparency: true,
           cursorBlink: true,
           cursorStyle: "block",
-          fontFamily: cssVariable("--font-mono"),
+          fontFamily: withNerdFontFallback(
+            cssVariable("--font-mono"),
+            discoveredNerdFontFamily(),
+          ),
           fontSize: 12,
           lineHeight: 1.25,
           macOptionIsMeta: true,
+          minimumContrastRatio: minimumContrastRatio(minimumContrastRef.current),
           scrollback: 5_000,
           theme: readTerminalTheme(),
         });
@@ -201,6 +225,20 @@ export function IntegratedTerminal({
           attributes: true,
           attributeFilter: ["data-theme", "data-color-theme"],
         });
+
+        // The first terminal in a window opens before the Nerd Font lookup
+        // returns. The fallback sits behind Geist Mono, so adding it changes
+        // no cell size; the refit only confirms that.
+        if (!discoveredNerdFontFamily()) {
+          void discoverNerdFontFamily().then((family) => {
+            if (disposed || !family) return;
+            terminal.options.fontFamily = withNerdFontFallback(
+              cssVariable("--font-mono"),
+              family,
+            );
+            scheduleFitAndResize();
+          });
+        }
 
         const dimensions = fitAddon.proposeDimensions();
         void createIntegratedTerminal({
@@ -421,6 +459,11 @@ export function IntegratedTerminal({
       </div>
     </section>
   );
+}
+
+/** 1 is xterm's "leave every color alone". */
+function minimumContrastRatio(enabled: boolean): number {
+  return enabled ? TERMINAL_MINIMUM_CONTRAST_RATIO : 1;
 }
 
 function readTerminalTheme(): ITheme {

@@ -126,6 +126,7 @@ export type DesktopSettingsConfig = {
       darkTheme?: DesktopDarkTheme;
       lightTheme?: DesktopLightTheme;
       themedDockIcon?: boolean;
+      terminalMinimumContrast?: boolean;
       density?: DesktopAppearanceDensity;
       sidebarTextSize?: DesktopTextSize;
       transcriptTextSize?: DesktopTextSize;
@@ -904,6 +905,17 @@ export function desktopSettingsPatchToEdits(
       });
     } else {
       set(["general", "appearance", "themed_dock_icon"], false);
+    }
+  }
+  if (patch.general?.appearance?.terminalMinimumContrast !== undefined) {
+    // Off by default, so only the opt-in is written.
+    if (patch.general.appearance.terminalMinimumContrast) {
+      set(["general", "appearance", "terminal_minimum_contrast"], true);
+    } else {
+      edits.push({
+        op: "delete",
+        path: ["general", "appearance", "terminal_minimum_contrast"],
+      });
     }
   }
   if (patch.onboarding?.completed !== undefined) {
@@ -1996,6 +2008,9 @@ function normalizeDesktopConfig(
         darkTheme: readDarkTheme(generalAppearance?.dark_theme),
         lightTheme: readLightTheme(generalAppearance?.light_theme),
         themedDockIcon: readBoolean(generalAppearance?.themed_dock_icon),
+        terminalMinimumContrast: readBoolean(
+          generalAppearance?.terminal_minimum_contrast,
+        ),
         density: readAppearanceDensity(generalAppearance?.density),
         sidebarTextSize: readTextSize(
           generalAppearance?.sidebar_text_size,

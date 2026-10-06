@@ -1056,6 +1056,10 @@ export class DesktopSettingsService {
             config.general?.appearance?.themedDockIcon,
             true,
           ),
+          terminalMinimumContrast: this.resolveConfigBoolean(
+            config.general?.appearance?.terminalMinimumContrast,
+            false,
+          ),
           density: this.resolveAppearanceDensity(
             config.general?.appearance?.density,
           ),

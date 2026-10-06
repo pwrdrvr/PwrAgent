@@ -721,6 +721,10 @@ export type DesktopAppearanceSnapshot = {
   /** macOS: a running instance's Dock icon follows its dark theme, so two
    *  profiles in two themes are told apart in the Dock. On by default. */
   themedDockIcon: DesktopSettingsValue<boolean>;
+  /** The integrated terminal lifts text that falls below 4.5:1 on its
+   *  background (xterm's `minimumContrastRatio`). Off by default, so each
+   *  theme's own ANSI colors render as published. */
+  terminalMinimumContrast: DesktopSettingsValue<boolean>;
   density: DesktopSettingsValue<DesktopAppearanceDensity>;
   sidebarTextSize: DesktopSettingsValue<DesktopTextSize>;
   transcriptTextSize: DesktopSettingsValue<DesktopTextSize>;
@@ -1498,6 +1502,7 @@ export type DesktopSettingsConfigPatch = {
       darkTheme?: DesktopDarkTheme;
       lightTheme?: DesktopLightTheme;
       themedDockIcon?: boolean;
+      terminalMinimumContrast?: boolean;
       density?: DesktopAppearanceDensity;
       sidebarTextSize?: DesktopTextSize;
       transcriptTextSize?: DesktopTextSize;

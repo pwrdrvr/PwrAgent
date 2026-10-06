@@ -130,6 +130,7 @@ import {
   InteractiveSvgPreferencesProvider,
   type InteractiveSvgPreferences,
 } from "./lib/interactive-svg-preferences";
+import { TerminalPreferencesProvider } from "./lib/terminal-preferences";
 import { useThreadNavigation, type SubthreadLaunchpadDraft } from "./lib/useThreadNavigation";
 import { usePwrAgentProfiles } from "./lib/usePwrAgentProfiles";
 import { usePullRequestRefresh } from "./features/pr-status/usePullRequestRefresh";
@@ -3880,7 +3881,14 @@ function DesktopAppShell(props: {
               }
             >
               <InteractiveSvgPreferencesProvider value={interactiveSvgPreferences}>
-                <ThreadViewComponent {...threadViewProps} />
+                <TerminalPreferencesProvider
+                  minimumContrast={
+                    settings.snapshot?.general.appearance.terminalMinimumContrast
+                      ?.value ?? false
+                  }
+                >
+                  <ThreadViewComponent {...threadViewProps} />
+                </TerminalPreferencesProvider>
               </InteractiveSvgPreferencesProvider>
             </MarkdownRenderingOptionsProvider>
           ) : null}
