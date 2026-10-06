@@ -13,9 +13,16 @@ There is no Job Monitor, model-driven polling, or new timer.
   ],
   "mode": "all",
   "onFailure": "wait",
-  "continuation": "Continue the previously authorized dependency upgrades."
+  "continuation": "When the foundation PR passes CI, rebase this branch onto its head and switch the upgrade to its new retry helper."
 }
 ```
+
+`continuation` is required when an agent creates a dependency. It is what the
+resumed turn should do, written for a reader without the registering
+conversation, which may be compacted by then. The continuation prompt leads
+with it on success. On failure the prompt asks for a failure report and quotes
+the plan as work not to start. The desktop form keeps it optional; without it
+the prompt asks the thread to continue the previously authorized work.
 
 `backend` and `threadId` identify the waiting thread and default to the
 trusted calling thread. `action: "list"` returns its registrations and
