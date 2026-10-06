@@ -87,6 +87,79 @@ function readZIndex(rule: string): number {
   return Number(rule.match(/z-index:\s*(\d+);/)?.[1] ?? Number.NaN);
 }
 
+interface CssRule {
+  selector: string;
+  body: string;
+  line: number;
+}
+
+/**
+ * Every innermost `selector { body }` block in a stylesheet, in source
+ * order, with the 1-based line its selector starts on. Comments are blanked
+ * first, so a brace in prose cannot open a block. An at-rule wrapper such as
+ * `@media` contributes its inner rules, not itself. For the whole-file
+ * sweeps that hold a token to its role, where `extractRuleBody` (first
+ * top-level match) would see one rule of many.
+ */
+function collectRules(source: string): CssRule[] {
+  const text = source.replace(/\/\*[\s\S]*?\*\//g, (comment) =>
+    comment.replace(/[^\n]/g, " "),
+  );
+  const rules: CssRule[] = [];
+  const open: Array<{ preludeStart: number; brace: number; line: number; nested: boolean }> = [];
+  let preludeStart = 0;
+  let preludeLine = 0;
+  let line = 1;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (char === "\n") {
+      line += 1;
+    } else if (char === "{") {
+      if (open.length > 0) {
+        open[open.length - 1].nested = true;
+      }
+      open.push({ preludeStart, brace: index, line: preludeLine, nested: false });
+      preludeStart = index + 1;
+      preludeLine = 0;
+    } else if (char === "}") {
+      const block = open.pop();
+      if (block && !block.nested) {
+        rules.push({
+          selector: text.slice(block.preludeStart, block.brace).trim().replace(/\s+/g, " "),
+          body: text.slice(block.brace + 1, index),
+          line: block.line,
+        });
+      }
+      preludeStart = index + 1;
+      preludeLine = 0;
+    } else if (char === ";" && open.length === 0) {
+      preludeStart = index + 1;
+      preludeLine = 0;
+    } else if (preludeLine === 0 && !/\s/.test(char)) {
+      preludeLine = line;
+    }
+  }
+  return rules;
+}
+
+/**
+ * The class names on each selector's subject, the compound after its last
+ * combinator, one array per selector in the list. Parenthesized arguments
+ * and attribute values are dropped first: a class inside `:not(…)` does not
+ * name the element, and a comma or space inside `:is(…)` or `[…="…"]` does
+ * not split the selector.
+ */
+function subjectClasses(selectorList: string): string[][] {
+  let flat = selectorList.replace(/\[[^\]]*\]/g, "[]");
+  while (/\([^()]*\)/.test(flat)) {
+    flat = flat.replace(/\([^()]*\)/g, "");
+  }
+  return flat.split(",").map((selector) => {
+    const subject = selector.trim().split(/\s*[>+~]\s*|\s+/).pop() ?? "";
+    return [...subject.matchAll(/\.([\w-]+)/g)].map(([, name]) => name);
+  });
+}
+
 function expandHex(hex: string): string {
   const normalized = hex.replace("#", "");
   if (normalized.length === 3) {
@@ -688,6 +761,68 @@ describe("Tangerine Terminal theme contract", () => {
     expect(card).not.toContain("--status-warning");
     expect(extractRuleBody(css, ".codex-config-warning-banner__eyebrow"))
       .toContain("color: var(--status-warning-text);");
+  });
+
+  it("keeps every floating surface frame out of the status tones", () => {
+    // State by emphasis and badges, not colored panels (desktop style
+    // guide). The status tones are per-theme hues, so a frame drawn in one
+    // changes character with the theme: blue-dark's salmon --danger-base
+    // turned the detach-PR dialog into an orange box (#2600), and an 8%
+    // amber tint turned the Codex config warning into a beige panel in
+    // blue-light (#2620). The accent tokens follow each theme's own hue and
+    // stay allowed; the update banner frames itself in them on purpose.
+    const rules = collectRules(css);
+    const frames: string[][] = [];
+    for (const rule of rules) {
+      const fixed = /(?:^|[;{\s])position:\s*fixed\b/.test(rule.body);
+      for (const classes of subjectClasses(rule.selector)) {
+        if (fixed && classes.length > 0) {
+          frames.push(classes);
+        }
+        // A dialog inside a fixed scrim is the frame the eye reads, though
+        // only its modal parent is fixed. `__element` parts are its contents.
+        for (const name of classes) {
+          if (/dialog|modal|banner|toast/.test(name) && !name.includes("__")) {
+            frames.push([name]);
+          }
+        }
+      }
+    }
+    const isFrame = (classes: string[]): boolean =>
+      frames.some((frame) => frame.every((name) => classes.includes(name)));
+    // A walker that found nothing would pass everything.
+    for (const selector of [".pr-detach-warning-dialog", ".codex-config-warning-banner", ".app-notice-toast", ".jump-palette"]) {
+      expect(isFrame(subjectClasses(selector)[0]), `${selector} is a floating frame`).toBe(true);
+    }
+
+    const statusTone =
+      /var\(--(?:status-(?:warning|error|ok)|danger|success|info|warning|savings)(?:-[a-z0-9-]+)?\)/;
+    const frameDeclaration =
+      /(?:^|[;{\s])((?:border(?:-(?:top|right|bottom|left))?|outline)(?:-color)?|background(?:-color)?)\s*:\s*([^;]+)/g;
+    const offenders: string[] = [];
+    for (const rule of rules) {
+      if (!subjectClasses(rule.selector).some(isFrame)) {
+        continue;
+      }
+      for (const [, property, value] of rule.body.matchAll(frameDeclaration)) {
+        if (statusTone.test(value)) {
+          offenders.push(`app.css:${rule.line} ${rule.selector} { ${property}: ${value.trim()} }`);
+        }
+      }
+    }
+    expect(offenders, "floating frames drawn in a status tone").toEqual([]);
+  });
+
+  it("colors warning text with --status-warning-text, never the stroke token", () => {
+    // --status-warning is for dots, strokes, and meters (UI-THEME.md).
+    // Tangerine light gives text its own darker amber, because the stroke
+    // amber fails AA as type; every other theme aliases the two.
+    const offenders = collectRules(css).flatMap((rule) =>
+      [...rule.body.matchAll(/(?:^|[;{\s])color\s*:\s*([^;]+)/g)]
+        .filter(([, value]) => /var\(--status-warning\)/.test(value))
+        .map(([, value]) => `app.css:${rule.line} ${rule.selector} { color: ${value.trim()} }`),
+    );
+    expect(offenders, "color: reads --status-warning instead of --status-warning-text").toEqual([]);
   });
 
   it("carries notice tone on the title-row dot, not the card", () => {
