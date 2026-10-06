@@ -231,7 +231,7 @@ export class ThreadTurnQueue {
   async submitGroupedSteer(
     input: Omit<ThreadTurnQueueEntry, "id" | "createdAt"> &
       Partial<Pick<ThreadTurnQueueEntry, "id" | "createdAt">>,
-    options?: { deferStart?: boolean },
+    options?: { deferStart?: boolean; onAdmission?: () => void },
   ): Promise<ThreadTurnQueueSubmissionResult> {
     const message: QueuedAgentMessage = {
       input: structuredClone(input.input),
@@ -270,11 +270,14 @@ export class ThreadTurnQueue {
         && !this.heldQueues.has(key)
         && !(this.options.isThreadActive?.(entry) ?? false)
       ) {
-        const started = await this.startEntry(entry);
+        const starting = this.startEntry(entry);
+        options?.onAdmission?.();
+        const started = await starting;
         return { status: "started", entry, turnId: started.turnId };
       }
       if (current) queue[index] = entry;
       else queue.push(entry);
+      options?.onAdmission?.();
       const position = current ? index + 1 : queue.length;
       await this.emit({ type: "queued", entry, position, ...(current ? { inputUpdated: true } : {}) });
       return { status: "queued", entry, position };
@@ -290,6 +293,7 @@ export class ThreadTurnQueue {
   async submit(
     input: Omit<ThreadTurnQueueEntry, "id" | "createdAt"> &
       Partial<Pick<ThreadTurnQueueEntry, "id" | "createdAt">>,
+    options?: { onAdmission?: () => void },
   ): Promise<ThreadTurnQueueSubmissionResult> {
     const entry: ThreadTurnQueueEntry = {
       ...input,
@@ -309,12 +313,15 @@ export class ThreadTurnQueue {
           }
         : entry;
       queue.push(queuedEntry);
+      options?.onAdmission?.();
       const position = queue.length;
       await this.emit({ type: "queued", entry: queuedEntry, position });
       return { status: "queued", entry: queuedEntry, position };
     }
 
-    const started = await this.startEntry(entry);
+    const starting = this.startEntry(entry);
+    options?.onAdmission?.();
+    const started = await starting;
     return {
       status: "started",
       entry,
@@ -326,6 +333,7 @@ export class ThreadTurnQueue {
     input: Omit<ThreadTurnQueueEntry, "id" | "createdAt"> &
       Partial<Pick<ThreadTurnQueueEntry, "id" | "createdAt">>,
     reason: string,
+    options?: { onAdmission?: () => void },
   ): Promise<Extract<ThreadTurnQueueSubmissionResult, { status: "queued" }>> {
     const entry: ThreadTurnQueueEntry = {
       ...input,
@@ -343,6 +351,7 @@ export class ThreadTurnQueue {
       ) {
         throw new Error(`Queued turn id ${entry.id} was reused with different input`);
       }
+      options?.onAdmission?.();
       return {
         status: "queued",
         entry: existing.entry,
@@ -354,6 +363,7 @@ export class ThreadTurnQueue {
     this.heldQueues.set(key, reason);
     const queue = this.queueFor(key);
     queue.unshift(entry);
+    options?.onAdmission?.();
     await this.emit({ type: "queued", entry, position: 1 });
     await this.holdQueue(key, reason);
     return {
@@ -371,6 +381,7 @@ export class ThreadTurnQueue {
   async submitIfIdle(
     input: Omit<ThreadTurnQueueEntry, "id" | "createdAt"> &
       Partial<Pick<ThreadTurnQueueEntry, "id" | "createdAt">>,
+    options?: { onAdmission?: () => void },
   ): Promise<ThreadTurnQueueImmediateSubmissionResult> {
     const entry: ThreadTurnQueueEntry = {
       ...input,
@@ -381,9 +392,12 @@ export class ThreadTurnQueue {
       backend: entry.backend,
       threadId: entry.threadId,
     })) {
+      options?.onAdmission?.();
       return { status: "busy" };
     }
-    const started = await this.startEntry(entry);
+    const starting = this.startEntry(entry);
+    options?.onAdmission?.();
+    const started = await starting;
     return {
       status: "started",
       entry,

@@ -15977,9 +15977,13 @@ describe("Composer", () => {
   });
 
   it("keeps Move to Project keyboard-contained, and gives Escape to its destination list first", async () => {
-    const getNavigationQueryPage = vi.fn(async (request) => navigationQueryFixture(request, {
-      directories: [{ key: "/projects/demo", kind: "directory", label: "Demo", path: "/projects/demo" }],
-    }));
+    const projectPageReady = createDeferred<void>();
+    const getNavigationQueryPage = vi.fn(async (request) => {
+      await projectPageReady.promise;
+      return navigationQueryFixture(request, {
+        directories: [{ key: "/projects/demo", kind: "directory", label: "Demo", path: "/projects/demo" }],
+      });
+    });
     render(
       <Composer
         backends={[]}
@@ -16005,7 +16009,13 @@ describe("Composer", () => {
 
     const destination = within(dialog).getByRole("combobox", { name: "Destination project" });
     act(() => destination.focus());
-    await within(dialog).findByRole("option", { name: /Demo/ });
+    // A visible option does not guarantee its passive Escape layer has run.
+    // Settle the owner's page and its React effects before pressing the key.
+    await act(async () => {
+      projectPageReady.resolve();
+      await projectPageReady.promise;
+    });
+    expect(within(dialog).getByRole("option", { name: /Demo/ })).toBeInTheDocument();
     pressEscape();
     expect(within(dialog).queryByRole("listbox")).not.toBeInTheDocument();
     expect(screen.getByRole("dialog", { name: "Move to Project" })).toBeInTheDocument();

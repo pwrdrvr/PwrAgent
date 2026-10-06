@@ -20,7 +20,6 @@ import {
   stageTurnInputAttachment,
   portableTurnInputAttachments,
   stageQueuedFileInputs,
-  TURN_INPUT_ATTACHMENT_MAX_AGE_MS,
   turnInputAttachmentRoot,
 } from "../app-server/turn-input-attachment-files";
 import {
@@ -398,7 +397,7 @@ describe("federation turn input attachments", () => {
     expect((await stat(replaced.path, { bigint: true })).ino).toBe(verifiedInode);
   });
 
-  it("refreshes reused local staging directories before age cleanup", async () => {
+  it("refreshes reused local staging directories", async () => {
     await createTestRoot();
     const data = Uint8Array.from([7, 8, 9]);
     const staged = await stageTurnInputAttachment({
@@ -406,7 +405,7 @@ describe("federation turn input attachments", () => {
       data,
       name: "reused.png",
     });
-    const staleDate = new Date(Date.now() - TURN_INPUT_ATTACHMENT_MAX_AGE_MS - 1);
+    const staleDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
     await utimes(staged.path, staleDate, staleDate);
     await utimes(path.dirname(staged.path), staleDate, staleDate);
 
