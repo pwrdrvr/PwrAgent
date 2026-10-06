@@ -198,6 +198,12 @@ Desktop Settings let operators pick a **channel** (Stable or Beta) and a
 | Beta · Latest | `v1.1.0-beta.3` | Pre-release |
 | Beta · Prerelease | `v1.1.0-alpha.7` | Pre-release |
 
+Beta · Prerelease also takes a `-prerelease.N` Stable RC that outranks Stable
+Latest when no alpha or beta is higher, so it never shows an older build than
+Stable · Prerelease. Semver orders `prerelease` after `alpha` and `beta`, so
+after a `v1.2.0-prerelease.N` tag, later `v1.2.0-alpha.N` and `v1.2.0-beta.N`
+tags sort below it and Beta · Prerelease stays on the RC.
+
 CI publishes **every** release as a GitHub `Pre-release`, including a
 suffix-free stable tag. A suffix-free tag left at `prerelease: true` lands in
 Stable · Prerelease, so Stable · Latest keeps serving the previous stable
