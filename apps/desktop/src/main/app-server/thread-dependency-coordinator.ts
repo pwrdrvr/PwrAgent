@@ -307,10 +307,13 @@ export function buildDependencyPrompt(item: ThreadDependency): string {
       return `- ${name} ${CONDITION_PHRASES[entry.condition.when]}: ${entry.reason}${entry.prUrl ? `; PR: ${entry.prUrl}` : ""}${entry.headSha ? `; observed head: ${entry.headSha}` : ""}`;
     }),
     "",
-    satisfied
-      ? "Continue the previously authorized work. Recheck the prerequisite head before using it; a new commit can arrive after this notification."
-      : "Report the prerequisite failure. Do not bypass the dependency or begin dependent work; repair only if the operator already authorized it.",
-    ...(item.continuation ? ["", "Requested continuation:", item.continuation] : []),
+    ...satisfied
+      ? item.continuation
+        ? ["Do what was planned when this dependency was registered:", item.continuation, "",
+          "Recheck the prerequisite head before using it; a new commit can arrive after this notification."]
+        : ["Continue the previously authorized work. Recheck the prerequisite head before using it; a new commit can arrive after this notification."]
+      : ["Report the prerequisite failure. Do not bypass the dependency or begin dependent work; repair only if the operator already authorized it.",
+        ...item.continuation ? ["", "The work planned for success, not to start now:", item.continuation] : []],
     "Do not poll this dependency or start a Job Monitor for it.",
     `Dependency ${item.id} (mode ${item.mode}, outcome ${item.outcome}); prerequisites: ${item.conditions.map((condition) => `${condition.backend}:${condition.threadId} (${condition.when})`).join(", ")}.`,
   ].join("\n");
