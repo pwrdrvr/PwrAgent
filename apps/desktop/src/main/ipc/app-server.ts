@@ -6386,6 +6386,13 @@ class DesktopAppServerService {
     const canonical = this.canonicalizePrs(merged);
     this.recordPrCheck(canonical, "background poll");
     await this.handlePrAutoDispatchSnapshots(canonical, fetchedAt);
+    // An unchanged accepted poll refreshes CI freshness without publishing a
+    // field-change event. Dependencies still need that observation for admission.
+    for (const pr of canonical) {
+      if (this.prStatusRegistry.get(getPrStatusKey(pr))?.fetchedAt === fetchedAt) {
+        await this.threadDependencyCoordinator?.handlePrEvent(pr.url);
+      }
+    }
     if (changed.length === 0) {
       return [];
     }
@@ -8162,7 +8169,19 @@ class DesktopAppServerService {
     const notification = event.notification as AppServerNotification;
     let task: Promise<void> | undefined;
     if (notification.method === "turn/completed" || notification.method === "turn/failed" || notification.method === "turn/cancelled") {
-      task = this.getThreadDependencyCoordinator().handleThreadEvent({ backend: event.backend, threadId: notification.params.threadId }, { id: notification.params.turnId ?? "", status: notification.method === "turn/completed" ? "completed" : notification.method === "turn/failed" ? "failed" : "cancelled" });
+      // Codex also completes interrupted turns through this method. Missing
+      // terminal metadata must reconcile through provider history, not imply success.
+      const turn = notification.params.turn;
+      const observedStatus = turn && typeof turn === "object" && "status" in turn ? turn.status : undefined;
+      const status = typeof observedStatus === "string" && ["completed", "failed", "cancelled", "interrupted"].includes(observedStatus)
+        ? observedStatus as AppServerThreadTurnMetadata["status"]
+        : notification.method === "turn/failed" ? "failed" : notification.method === "turn/cancelled" ? "cancelled" : undefined;
+      const turnId = notification.params.turnId;
+      task = this.getThreadDependencyCoordinator().handleThreadEvent(
+        { backend: event.backend, threadId: notification.params.threadId },
+        status && turnId ? { id: turnId, status } : undefined,
+        true,
+      );
     } else if (notification.method === "thread/pullRequests/updated") {
       task = this.getThreadDependencyCoordinator().handleThreadEvent({ backend: event.backend, threadId: notification.params.threadId });
     } else if (notification.method === "thread/status/changed") {

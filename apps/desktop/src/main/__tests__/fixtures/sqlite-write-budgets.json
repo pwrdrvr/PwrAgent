@@ -1070,5 +1070,6 @@
     "observedWalBytes": 4120,
     "rowsChanged": 2,
     "statements": 2
-  }
+  },
+  "thread-dependencies-unchanged-service-polls": {"commits": 0, "note": "100 accepted unchanged passing service polls with a busy consumer: zero commits and 0 MB/day idle.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0}
 }

@@ -1750,7 +1750,7 @@ export type AppServerNotification =
         turnId: string;
         turn: {
           id: string;
-          status: "completed";
+          status: "completed" | "interrupted" | "cancelled";
           startedAt?: number | null;
           completedAt?: number | null;
           durationMs?: number | null;

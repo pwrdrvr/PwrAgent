@@ -8,6 +8,7 @@ import type {
   ArchiveThreadRequest,
   AppServerListThreadsRequest,
   AppServerReadThreadResponse,
+  AppServerNotification,
   AppServerThreadSummary,
   FederationJumpSearchProgress,
   FederationJumpSearchRequest,
@@ -1724,6 +1725,132 @@ describe("app server ipc", () => {
     await expect(handler({ sender: { id: 1 } }, { action: "create", backend: "codex", threadId: "" })).rejects.toThrow("waiting threadId");
     const tool = setThreadDependencyToolHandler.mock.calls.at(-1)?.[0];
     await expect(tool({ action: "create", backend: "codex", threadId: "" })).resolves.toMatchObject({ ok: false, error: { code: "invalid_arguments" } });
+  });
+
+  it.each(["completed", "interrupted", "cancelled", undefined] as const)("uses prerequisite terminal status %s instead of the completion method", async (status) => {
+    const { appServerService } = await import("../ipc/app-server");
+    const appState = await import("../state/app-state");
+    const { StateDb } = await import("../state/state-db");
+    const { ThreadDependencyStore } = await import("../state/thread-dependency-store");
+    const { ThreadDependencyCoordinator } = await import("../app-server/thread-dependency-coordinator");
+    const db = StateDb.open(":memory:");
+    const store = new ThreadDependencyStore(db.raw);
+    const submit = vi.fn(async (_request: unknown) => ({ status: "started" as const, turnId: "continuation" }));
+    const agent = new ThreadDependencyCoordinator({
+      store, submit, changed: async () => undefined,
+      readThread: async (condition) => ({
+        turns: condition.threadId === "prerequisite" ? [{ id: "watched", status: "interrupted" as const }] : [], prs: [],
+      }),
+    });
+    // Registration pins an in-flight turn. The provider history is the fallback
+    // when an older notification contains no terminal metadata.
+    const item = store.register({ id: "terminal-status", backend: "codex", threadId: "consumer",
+      conditions: [{ backend: "codex", threadId: "prerequisite", when: "turn_completed", turnId: "watched" }],
+      mode: "all", onFailure: "notify", status: "waiting", evidence: [], createdAt: 1, updatedAt: 1,
+    });
+    const mode = vi.spyOn(appState, "getAppStateMode").mockReturnValue("active-profile");
+    const service = appServerService as unknown as { getThreadDependencyCoordinator: () => typeof agent };
+    const coordinator = vi.spyOn(service, "getThreadDependencyCoordinator").mockReturnValue(agent);
+    try {
+      // Older/raw provider notifications can omit the required turn payload.
+      const notification = {
+        method: "turn/completed", params: { threadId: "prerequisite", turnId: "watched",
+          ...(status ? { turn: { id: "watched", status, output: [] } } : {}),
+        },
+      } as AppServerNotification;
+      appServerService.handleAgentEventForDependencies({ backend: "codex", notification });
+      await agent.reconcile();
+      const outcome = status === "completed" ? "success" : "failure";
+      expect(store.get("codex", "consumer", item.id)).toMatchObject({ status: "delivered", outcome });
+      expect(submit).toHaveBeenCalledTimes(1);
+      expect(submit.mock.calls[0][0]).toMatchObject({ input: [{ type: "text", text: expect.stringContaining(
+        outcome === "success" ? "Continue the previously authorized work" : "Do not bypass the dependency or begin dependent work",
+      ) }] });
+    } finally {
+      coordinator.mockRestore(); mode.mockRestore(); db.close();
+    }
+  });
+
+  it.each(["stale-registration", "busy-consumer"])("admits %s on an unchanged fresh CI poll without idle writes", async (scenario) => {
+    const { appServerService } = await import("../ipc/app-server");
+    const { StateDb } = await import("../state/state-db");
+    const { ThreadDependencyStore } = await import("../state/thread-dependency-store");
+    const { ThreadDependencyCoordinator } = await import("../app-server/thread-dependency-coordinator");
+    const { createTempStateDb, removeTempStateDbDir } = await import("./sqlite-test-utils");
+    const { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } = await import("../state/sqlite-write-metrics");
+    const { expectSqliteWriteBudget } = await import("./fixtures/sqlite-write-budget");
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const fixture = createTempStateDb("dependency-service-polls-");
+    const db = StateDb.open(fixture.dbPath);
+    const store = new ThreadDependencyStore(db.raw);
+    let now = 100_000;
+    let busy = scenario === "busy-consumer";
+    const pr: PrSummary = { provider: "github.com", org: "fixture", repo: "dependency-observations", number: 1,
+      url: "https://github.com/fixture/dependency-observations/pull/1", state: "passing", checkState: "passing",
+      lifecycleState: "open", reviewState: "ready_for_review", headSha: "1".repeat(40),
+    };
+    const service = appServerService as unknown as {
+      prStatusRegistry: Map<string, { pr: PrSummary; fetchedAt: number }>;
+      threadDependencyCoordinator?: InstanceType<typeof ThreadDependencyCoordinator>;
+      applyPolledPrStatuses: (prs: PrSummary[], fetchedAt: number) => Promise<string[]>;
+      handlePrAutoDispatchSnapshots: (prs: PrSummary[], fetchedAt: number) => Promise<void>;
+      writePrStatusesToCache: (prs: PrSummary[], fetchedAt: number) => Promise<void>;
+      publishPullRequestStatusUpdates: (params: { backend: string; prs: PrSummary[] }) => Promise<void>;
+    };
+    const previousRegistry = service.prStatusRegistry;
+    const previousCoordinator = service.threadDependencyCoordinator;
+    service.prStatusRegistry = new Map(); service.threadDependencyCoordinator = undefined;
+    const autoDispatch = vi.spyOn(service, "handlePrAutoDispatchSnapshots").mockResolvedValue(undefined);
+    const cache = vi.spyOn(service, "writePrStatusesToCache").mockResolvedValue(undefined);
+    const publish = vi.spyOn(service, "publishPullRequestStatusUpdates").mockResolvedValue(undefined);
+    const submit = vi.fn(async () => ({ status: "started" as const, turnId: "continuation" }));
+    const agent = new ThreadDependencyCoordinator({
+      store, submit, changed: async () => undefined, now: () => now, isConsumerBusy: () => busy,
+      readThread: async (condition) => ({ turns: [], prs: condition.threadId === "prerequisite" ? [...service.prStatusRegistry.values()] : [] }),
+    });
+    try {
+      await service.applyPolledPrStatuses([pr], busy ? now : now - 61_000);
+      service.threadDependencyCoordinator = agent;
+      const register = (threadId: string) => agent.manage({ action: "create", backend: "codex", threadId,
+        conditions: [{ backend: "codex", threadId: "prerequisite", when: "ci_passed" }], mode: "all", onFailure: "wait",
+      });
+      await register("consumer");
+      if (busy) {
+        now += 61_000; busy = false;
+        await agent.handleThreadEvent({ backend: "codex", threadId: "consumer" }, undefined, true);
+      }
+      expect(submit).not.toHaveBeenCalled();
+      cache.mockClear(); publish.mockClear();
+      await expect(service.applyPolledPrStatuses([pr], now)).resolves.toEqual([]);
+      expect(store.list("codex", "consumer")[0].evidence[0]).toMatchObject({ state: "satisfied" });
+      expect(submit).toHaveBeenCalledTimes(1);
+      expect(store.list("codex", "consumer")[0]).toMatchObject({ status: "delivered", outcome: "success" });
+      expect(cache).not.toHaveBeenCalled(); expect(publish).not.toHaveBeenCalled();
+
+      // Keep a real ready dependency active while observations are refreshed.
+      // This proves the service wiring retains the zero-write idle budget.
+      busy = true;
+      await register("busy-consumer");
+      const { writes } = await measureSqliteWrites(async () => {
+        for (let index = 0; index < 100; index++) {
+          now += 100;
+          await service.applyPolledPrStatuses([pr], now);
+        }
+      });
+      expectSqliteWriteBudget({ scenario: "thread-dependencies-unchanged-service-polls", writes,
+        note: "100 accepted unchanged passing service polls with a busy consumer: zero commits and 0 MB/day idle.",
+      });
+      expect(submit).toHaveBeenCalledTimes(1);
+      expect(cache).not.toHaveBeenCalled(); expect(publish).not.toHaveBeenCalled();
+      const refresh = vi.spyOn(agent, "handlePrEvent");
+      await service.applyPolledPrStatuses([pr], now - 1);
+      expect(refresh).not.toHaveBeenCalled();
+      refresh.mockRestore();
+    } finally {
+      autoDispatch.mockRestore(); cache.mockRestore(); publish.mockRestore();
+      service.prStatusRegistry = previousRegistry; service.threadDependencyCoordinator = previousCoordinator;
+      db.close(); removeTempStateDbDir(fixture.tempDir); vi.unstubAllEnvs();
+    }
   });
 
   it("does not publish unchanged directory Git probes", async () => {

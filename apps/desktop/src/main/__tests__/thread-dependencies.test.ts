@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PrSummary, ThreadDependencyCondition } from "@pwragent/shared";
+import type { PrSummary, ThreadDependency, ThreadDependencyCondition } from "@pwragent/shared";
 import { StateDb } from "../state/state-db";
 import { ThreadDependencyStore } from "../state/thread-dependency-store";
 import { ThreadDependencyCoordinator, type DependencyThreadSnapshot } from "../app-server/thread-dependency-coordinator";
@@ -23,7 +23,7 @@ const pr = (overrides: Partial<PrSummary> = {}): PrSummary => ({
   headSha: "head-one", ...overrides,
 });
 
-function coordinator(dependencyStore = store): ThreadDependencyCoordinator {
+function coordinator(dependencyStore = store, changed: (item: ThreadDependency) => Promise<void> = async () => undefined): ThreadDependencyCoordinator {
   return new ThreadDependencyCoordinator({
     store: dependencyStore,
     readThread: async (target) => {
@@ -33,7 +33,7 @@ function coordinator(dependencyStore = store): ThreadDependencyCoordinator {
     },
     isConsumerBusy: () => busy,
     submit,
-    changed: async () => undefined,
+    changed,
     now: () => now,
     hasDeliveryReceipt: (item) => dependencyStore.hasDeliveryReceipt(item),
   });
@@ -173,6 +173,53 @@ describe("durable thread dependencies", () => {
     await agent.handlePrEvent();
     expect(submit).not.toHaveBeenCalled();
     expect(store.list("codex", "dependencies")[0].status).toBe("cancelled");
+  });
+
+  it.each(["cancel", "dismiss"] as const)("publishes %s for an old dependency outside terminal history", async (action) => {
+    const changed = vi.fn(async (item: ThreadDependency) => { expect(item.backend).toBe("codex"); });
+    const agent = coordinator(store, changed);
+    const { dependencies: [item] } = await create(agent);
+    if (action === "dismiss") store.replace(item, { ...item, status: "dispatching", error: "Admission is uncertain" });
+    const insert = db.raw.prepare("INSERT INTO thread_dependencies(dependency_id, backend, thread_id, status, created_at, payload) VALUES (?, ?, ?, ?, ?, ?)");
+    db.raw.transaction(() => {
+      for (let index = 0; index < 132; index++) {
+        const terminal = { ...item, id: `newer-${index}`, status: "delivered", createdAt: item.createdAt + index + 1 };
+        insert.run(terminal.id, terminal.backend, terminal.threadId, terminal.status, terminal.createdAt, JSON.stringify(terminal));
+      }
+    })();
+    expect(store.list("codex", "dependencies").some((entry) => entry.id === item.id)).toBe(true);
+    changed.mockClear();
+    const response = await agent.manage({ action, backend: "codex", threadId: "dependencies", dependencyId: item.id });
+    const status = action === "cancel" ? "cancelled" : "dismissed";
+    expect(response.dependencies.some((entry) => entry.id === item.id)).toBe(false);
+    expect(store.get("codex", "dependencies", item.id)?.status).toBe(status);
+    expect(changed).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ id: item.id, status }));
+    expect(submit).not.toHaveBeenCalled();
+    if (action === "cancel") {
+      await agent.manage({ action, backend: "codex", threadId: "dependencies", dependencyId: item.id });
+      expect(store.get("codex", "dependencies", item.id)?.status).toBe("cancelled");
+    }
+  });
+
+  it.each(["detached", "unavailable"])("retains the selected PR through a %s observation and restart", async (missing) => {
+    const agent = coordinator();
+    snapshots.get("foundation")!.prs = [{ pr: pr(), fetchedAt: now }];
+    const { dependencies: [item] } = await create(agent);
+    if (missing === "detached") snapshots.get("foundation")!.prs = [];
+    else snapshots.delete("foundation");
+    await agent.handleThreadEvent(condition("foundation"));
+    expect(store.get("codex", "dependencies", item.id)?.evidence[0]).toMatchObject({ state: "waiting", prUrl: pr().url });
+    db.close(); db = StateDb.open(dbPath); store = new ThreadDependencyStore(db.raw);
+    const resumed = coordinator();
+    const other = pr({ number: 2, url: "https://github.com/example/fixture/pull/2", state: "passing", checkState: "passing" });
+    snapshots.set("foundation", { turns: [], prs: [{ pr: other, fetchedAt: now }] });
+    await resumed.reconcile();
+    expect(submit).not.toHaveBeenCalled();
+    expect(store.get("codex", "dependencies", item.id)?.evidence[0]).toMatchObject({ state: "waiting", prUrl: pr().url });
+    snapshots.get("foundation")!.prs.push({ pr: pr({ state: "passing", checkState: "passing" }), fetchedAt: now });
+    await resumed.handlePrEvent(pr().url);
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(store.get("codex", "dependencies", item.id)?.evidence[0].prUrl).toBe(pr().url);
   });
 
   it("holds a ready notification while its consumer is busy and rechecks the PR before admission", async () => {
