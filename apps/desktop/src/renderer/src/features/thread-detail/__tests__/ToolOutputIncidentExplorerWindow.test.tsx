@@ -39,6 +39,18 @@ function openSavingsSection(label: string) {
   fireEvent.click(savingsSection(label).getByRole("button"));
 }
 
+/**
+ * The lens appears before its selected-output effect completes. All fixture
+ * reads resolve immediately, so own the mount and dependent reads together.
+ */
+async function renderExplorer() {
+  let view!: ReturnType<typeof render>;
+  await act(async () => {
+    view = render(<ToolOutputIncidentExplorerWindow />);
+  });
+  return view;
+}
+
 describe("ToolOutputIncidentExplorerWindow", () => {
   it.each([true, false])("includes historical usage in the savings comparison (provider summary: %s)", async (hasSummary) => {
     const response = buildResponse();
@@ -48,7 +60,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     response.toolAccounting!.tokenMiser = accounting;
     installApi({ readThread: async () => response });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
-    render(<ToolOutputIncidentExplorerWindow />);
+    await renderExplorer();
 
     await screen.findByRole("tab", { name: /Savings/, selected: true });
     expect(document.querySelector(".incident-explorer__savings-split-caption"))
@@ -68,7 +80,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     });
     window.location.hash =
       "#tool-output-incidents/acp%3Agrok/thread-1/Noisy%20work/PwrAgent";
-    render(<ToolOutputIncidentExplorerWindow />);
+    await renderExplorer();
 
     expect(await screen.findByLabelText(
       "PwrAgent > Noisy work > Tool Output Incidents",
@@ -104,7 +116,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     installApi({ readThread: async () => response });
     window.location.hash =
       "#tool-output-incidents/codex/thread-1/Noisy%20work/PwrAgent";
-    render(<ToolOutputIncidentExplorerWindow />);
+    await renderExplorer();
 
     await screen.findByRole("tab", { name: /Savings/, selected: true });
     expect(screen.getByLabelText(
@@ -120,9 +132,9 @@ describe("ToolOutputIncidentExplorerWindow", () => {
   it("shows Codex output whose normalized detail id extends the invocation item id", async () => {
     installApi({ readThread: async () => buildResponse() });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
-    render(<ToolOutputIncidentExplorerWindow />);
+    await renderExplorer();
 
-    expect(await screen.findByText("failure")).toBeInTheDocument();
+    expect(screen.getByText("failure")).toBeInTheDocument();
     expect(screen.getByText("warning")).toBeInTheDocument();
     expect(screen.queryByText(/Only the truncated output retained/))
       .not.toBeInTheDocument();
@@ -144,7 +156,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     };
     installApi({ readThread: async () => response });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
-    render(<ToolOutputIncidentExplorerWindow />);
+    await renderExplorer();
 
     fireEvent.click(await screen.findByRole("tab", { name: /Incidents/ }));
     expect(
@@ -168,7 +180,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     };
     installApi({ readThread: async () => response });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
-    render(<ToolOutputIncidentExplorerWindow />);
+    await renderExplorer();
 
     fireEvent.click(await screen.findByRole("tab", { name: /Incidents/ }));
     // More gated than accounted-for calls cannot be stated as a ratio, so the
@@ -195,7 +207,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     };
     installApi({ readThread: async () => response });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
-    render(<ToolOutputIncidentExplorerWindow />);
+    await renderExplorer();
     await screen.findByRole("region", { name: "Code Mode" });
     expect(savingsSection("Code Mode").getByRole("button"))
       .toHaveTextContent(/Unavailable command cells.*Unavailable dispatch clusters/);
@@ -251,7 +263,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     };
     installApi({ readThread: async () => response });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
-    render(<ToolOutputIncidentExplorerWindow />);
+    await renderExplorer();
 
     await screen.findByRole("region", { name: "Code Mode" });
     expect(savingsSection("Code Mode").getByRole("button"))
@@ -322,7 +334,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     };
     installApi({ readThread: async () => response });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
-    render(<ToolOutputIncidentExplorerWindow />);
+    await renderExplorer();
 
     // Folded, each section leads with its own headline counts. Code Mode
     // calls, command cells and reducer decisions are three different numbers
@@ -379,7 +391,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     } as never;
     installApi({ readThread: async () => response });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Near%20limit";
-    render(<ToolOutputIncidentExplorerWindow />);
+    await renderExplorer();
 
     await screen.findByRole("region", { name: "Context boundaries" });
     openSavingsSection("Context boundaries");
@@ -445,7 +457,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     };
     installApi({ readThread: async () => response });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Context%20history";
-    render(<ToolOutputIncidentExplorerWindow />);
+    await renderExplorer();
 
     const chart = await screen.findByRole("region", {
       name: "Token Miser context by turn",
@@ -487,7 +499,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     const readThread = vi.fn(async () => response);
     installApi({ readThread });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
-    render(<ToolOutputIncidentExplorerWindow />);
+    await renderExplorer();
     await screen.findByRole("button", { name: /expiring-output/ });
     vi.useFakeTimers();
     try {
@@ -543,7 +555,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     const inspectTokenMiserOutput = vi.fn(async () => ({ available: true, text: "Retained original", offset: 0, totalCharacters: 17 }));
     installApi({ readThread: async () => response, inspectTokenMiserOutput });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
-    render(<ToolOutputIncidentExplorerWindow />);
+    await renderExplorer();
 
     await screen.findByRole("tab", { name: /Savings/, selected: true });
     expect(screen.getByRole("button", { name: /^All\s*3$/ })).toBeInTheDocument();
@@ -611,7 +623,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     };
     installApi({ readThread: async () => response });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Adaptive%20proof";
-    render(<ToolOutputIncidentExplorerWindow />);
+    await renderExplorer();
 
     await screen.findByRole("region", { name: "Decisions" });
     expect(savingsSection("Decisions").getByRole("button")).toHaveTextContent(
@@ -669,7 +681,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
   it("folds every reference section so the results list is not squeezed", async () => {
     installApi({ readThread: async () => buildSavingsResponse() });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
-    render(<ToolOutputIncidentExplorerWindow />);
+    await renderExplorer();
 
     await screen.findByRole("region", { name: "Decisions" });
     for (const label of ["Decisions", "Context boundaries", "Code Mode"]) {
@@ -690,7 +702,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
   it("remembers which sections the operator unfolded", async () => {
     installApi({ readThread: async () => buildSavingsResponse() });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
-    const first = render(<ToolOutputIncidentExplorerWindow />);
+    const first = await renderExplorer();
 
     await screen.findByRole("region", { name: "Code Mode" });
     openSavingsSection("Code Mode");
@@ -698,7 +710,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
       .toBeInTheDocument();
     first.unmount();
 
-    render(<ToolOutputIncidentExplorerWindow />);
+    await renderExplorer();
     await screen.findByRole("region", { name: "Code Mode" });
     expect(savingsSection("Code Mode").getByRole("button"))
       .toHaveAttribute("aria-expanded", "true");
@@ -709,7 +721,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
   it("clamps the grip so the results list keeps its floor", async () => {
     installApi({ readThread: async () => buildSavingsResponse() });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
-    render(<ToolOutputIncidentExplorerWindow />);
+    await renderExplorer();
 
     const grip = await screen.findByRole("separator", {
       name: "Resize the Token Miser detail rows",
@@ -746,7 +758,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
   it("resizes the detail stack while the pointer is down", async () => {
     installApi({ readThread: async () => buildSavingsResponse() });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
-    render(<ToolOutputIncidentExplorerWindow />);
+    await renderExplorer();
 
     const grip = await screen.findByRole("separator", {
       name: "Resize the Token Miser detail rows",
@@ -772,7 +784,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
   it("stops resizing when a drag is cancelled instead of released", async () => {
     installApi({ readThread: async () => buildSavingsResponse() });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
-    render(<ToolOutputIncidentExplorerWindow />);
+    await renderExplorer();
 
     const grip = await screen.findByRole("separator", {
       name: "Resize the Token Miser detail rows",
@@ -832,7 +844,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     };
     installApi({ readThread: async () => response });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
-    render(<ToolOutputIncidentExplorerWindow />);
+    await renderExplorer();
 
     await screen.findByRole("tab", { name: /Savings/, selected: true });
     expect(screen.getByText("Estimated same-trajectory savings"))
@@ -935,7 +947,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     };
     installApi({ readThread: async () => response });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
-    render(<ToolOutputIncidentExplorerWindow />);
+    await renderExplorer();
 
     await screen.findByText("Estimated same-trajectory overhead");
     expect(screen.getByText("33.3% more").parentElement).toHaveTextContent(
@@ -977,7 +989,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     };
     installApi({ readThread: async () => response });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
-    render(<ToolOutputIncidentExplorerWindow />);
+    await renderExplorer();
 
     await screen.findByRole("tab", { name: /Savings/, selected: true });
     expect(
@@ -1022,7 +1034,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     };
     installApi({ readThread: async () => response });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
-    render(<ToolOutputIncidentExplorerWindow />);
+    await renderExplorer();
 
     // Gating happened, so the savings lens opens first rather than the
     // raw-output view: the question the operator has here is what it bought.
@@ -1105,7 +1117,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     };
     installApi({ readThread: async () => response });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
-    render(<ToolOutputIncidentExplorerWindow />);
+    await renderExplorer();
 
     fireEvent.click(await screen.findByRole("tab", { name: /Incidents/ }));
     expect(screen.getByText("Gated by Token Miser")).toBeInTheDocument();
@@ -1125,7 +1137,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     response.toolAccounting!.invocations[0]!.estimatedOutputTokens = 15_117;
     installApi({ readThread: async () => response });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
-    render(<ToolOutputIncidentExplorerWindow />);
+    await renderExplorer();
 
     expect(await screen.findByText(
       /Raw emitted: 60,465 characters\. Estimated parent-visible payload after the standard cap: up to 40,000 characters/,
@@ -1147,7 +1159,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     }
     installApi({ readThread: async () => response });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
-    render(<ToolOutputIncidentExplorerWindow />);
+    await renderExplorer();
 
     expect(await screen.findByText("retained historical output"))
       .toBeInTheDocument();
@@ -1164,7 +1176,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     }
     installApi({ readThread: async () => response });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
-    render(<ToolOutputIncidentExplorerWindow />);
+    await renderExplorer();
 
     expect(await screen.findByText("legacy retained output"))
       .toBeInTheDocument();
@@ -1178,7 +1190,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     }));
     installApi({ readThread: async () => buildResponse("turn-1"), steerTurn });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
-    render(<ToolOutputIncidentExplorerWindow />);
+    await renderExplorer();
 
     const steerButton = await screen.findByRole("button", { name: "Steer exact active turn" });
     await waitFor(() => expect(steerButton).toBeEnabled());
@@ -1204,7 +1216,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
       steerTurn,
     });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
-    render(<ToolOutputIncidentExplorerWindow />);
+    await renderExplorer();
 
     expect(await screen.findByText(/cannot steer the active turn/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Send next turn" })).toBeDisabled();
@@ -1225,7 +1237,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
       steerTurn,
     });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
-    render(<ToolOutputIncidentExplorerWindow />);
+    await renderExplorer();
 
     const sendButton = await screen.findByRole("button", { name: "Send next turn" });
     await waitFor(() => expect(sendButton).toBeEnabled());
@@ -1252,7 +1264,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
       },
     });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
-    render(<ToolOutputIncidentExplorerWindow />);
+    await renderExplorer();
     const metrics = await screen.findByLabelText("Incident metrics");
 
     expect(within(metrics).getByText("1")).toBeInTheDocument();
@@ -1291,7 +1303,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     });
     window.location.hash =
       "#tool-output-incidents/codex/thread-1/Noisy%20work/PwrAgent";
-    render(<ToolOutputIncidentExplorerWindow />);
+    await renderExplorer();
 
     await screen.findByRole("tab", { name: /Savings/, selected: true });
     fireEvent.click(screen.getByRole("tab", { name: /Incidents/ }));
@@ -1335,7 +1347,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     installApi({ readThread: async () => response });
     window.location.hash =
       "#tool-output-incidents/codex/thread-1/Noisy%20work/PwrAgent/incidents";
-    render(<ToolOutputIncidentExplorerWindow />);
+    await renderExplorer();
 
     expect(
       await screen.findByRole("tab", { name: /Incidents/, selected: true }),
@@ -1358,7 +1370,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
       readThread: async () => initial,
     });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
-    render(<ToolOutputIncidentExplorerWindow />);
+    await renderExplorer();
     expect(await screen.findByText("Raw output from flagged calls"))
       .toBeInTheDocument();
 
@@ -1408,7 +1420,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
   it("ranks cases by output size and measures each against the output cap", async () => {
     installApi({ readThread: async () => buildMultiTurnResponse() });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
-    render(<ToolOutputIncidentExplorerWindow />);
+    await renderExplorer();
 
     const cases = await screen.findByLabelText("Incident cases");
     const rows = within(cases).getAllByRole("button", { name: /chars/ });
@@ -1420,7 +1432,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
   it("reports round trips per turn, counting calls that were never flagged", async () => {
     installApi({ readThread: async () => buildMultiTurnResponse() });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
-    render(<ToolOutputIncidentExplorerWindow />);
+    await renderExplorer();
 
     const turns = await screen.findByLabelText("Cost by turn");
     /* turn-1 holds one flagged call plus two quiet ones; the quiet calls
@@ -1450,7 +1462,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     };
     installApi({ readThread: async () => response });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
-    render(<ToolOutputIncidentExplorerWindow />);
+    await renderExplorer();
 
     const turns = await screen.findByLabelText("Cost by turn");
     expect(within(turns).getByRole("button", { name: /Turn 2.*compacted/ }))
@@ -1478,7 +1490,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     };
     installApi({ readThread: async () => response });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
-    render(<ToolOutputIncidentExplorerWindow />);
+    await renderExplorer();
 
     const timeline = await screen.findByRole("group", {
       name: "Tool cost per turn, in order",
@@ -1506,7 +1518,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     });
     installApi({ readThread: async () => response });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
-    render(<ToolOutputIncidentExplorerWindow />);
+    await renderExplorer();
 
     const turns = await screen.findByLabelText("Cost by turn");
     expect(within(turns).queryByRole("button", { name: /Turn 3/ })).toBeNull();
@@ -1521,7 +1533,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
   it("filters cases from the chronological timeline spark", async () => {
     installApi({ readThread: async () => buildMultiTurnResponse() });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
-    render(<ToolOutputIncidentExplorerWindow />);
+    await renderExplorer();
 
     const timeline = await screen.findByRole("group", {
       name: "Tool cost per turn, in order",
@@ -1545,7 +1557,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
   it("filters the case list to a single turn", async () => {
     installApi({ readThread: async () => buildMultiTurnResponse() });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
-    render(<ToolOutputIncidentExplorerWindow />);
+    await renderExplorer();
 
     const turns = await screen.findByLabelText("Cost by turn");
     const cases = screen.getByLabelText("Incident cases");
@@ -1568,7 +1580,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
   it("filters by category from the composition legend", async () => {
     installApi({ readThread: async () => buildMultiTurnResponse() });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
-    render(<ToolOutputIncidentExplorerWindow />);
+    await renderExplorer();
 
     const legend = await screen.findByRole("group", { name: "Filter by category" });
     fireEvent.click(within(legend).getByRole("button", { name: /Tests & builds/ }));
@@ -1792,7 +1804,7 @@ describe("analysis coverage reporting", () => {
       readThread: async () => buildMultiTurnResponse(),
     });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
-    render(<ToolOutputIncidentExplorerWindow />);
+    await renderExplorer();
 
     fireEvent.click(await screen.findByRole("button", { name: /Analyze history/ }));
 
@@ -1825,7 +1837,7 @@ describe("ToolOutputIncidentExplorerWindow federation", () => {
     installApi({ analyzeThreadToolHistory, readThread });
     window.location.hash =
       "#tool-output-incidents/codex/thread-1/Noisy%20work/PwrAgent//peer-instance";
-    render(<ToolOutputIncidentExplorerWindow />);
+    await renderExplorer();
 
     await waitFor(() => expect(readThread).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1846,7 +1858,7 @@ describe("ToolOutputIncidentExplorerWindow federation", () => {
     const readThread = vi.fn(async () => buildMultiTurnResponse());
     installApi({ readThread });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
-    render(<ToolOutputIncidentExplorerWindow />);
+    await renderExplorer();
 
     await waitFor(() => expect(readThread).toHaveBeenCalled());
     expect(readThread).not.toHaveBeenCalledWith(
@@ -1862,7 +1874,7 @@ describe("turn selection is shared across both turn controls", () => {
        column itself stayed unmarked, so it read as a dead control. */
     installApi({ readThread: async () => buildMultiTurnResponse() });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
-    render(<ToolOutputIncidentExplorerWindow />);
+    await renderExplorer();
 
     const turns = await screen.findByLabelText("Cost by turn");
     const timeline = screen.getByRole("group", {

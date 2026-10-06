@@ -143,6 +143,7 @@ export default defineConfig({
       {
         test: {
           name: "desktop-renderer",
+          runner: "apps/desktop/src/renderer/src/test/act-warning-runner.ts",
           pool: "threads",
           globals: true,
           testTimeout: TEST_TIMEOUT_MS,
