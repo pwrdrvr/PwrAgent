@@ -8,6 +8,17 @@ import {
 } from "../useBackendSummaries";
 
 describe("useBackendSummaries", () => {
+  it("requests fresh quotas and account metadata when the provider tab opens", async () => {
+    const listBackends = vi.fn().mockResolvedValue({ fetchedAt: 1, backends: [] });
+    const desktopApi = { listBackends };
+    const { unmount } = renderHook(() => useBackendSummaries(desktopApi));
+    await act(async () => {});
+    listBackends.mockClear();
+    await act(async () => { window.dispatchEvent(new Event(BACKEND_SUMMARIES_REFRESH_EVENT)); });
+    expect(listBackends).toHaveBeenCalledWith({ includeUnavailable: true, refreshRateLimits: true });
+    unmount();
+  });
+
   it("refreshes quotas while visible and stops when the sidebar closes", async () => {
     vi.useFakeTimers();
     const listBackends = vi.fn().mockResolvedValue({ fetchedAt: 1, backends: [] });

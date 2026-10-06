@@ -28767,17 +28767,53 @@ export class DesktopBackendRegistry {
 
   private async refreshCodexQuotas(): Promise<void> {
     // Quota reads must not launch discovery or persist provider observations.
-    if (this.closed || !this.codexBackendSummary?.available) return;
+    // A failed startup thread read can leave only the selected executable's
+    // projection. It still authorizes account reads on that selected runtime.
+    if (this.closed || !this.readCodexBackendSummary().available) return;
+    if (this.codexClient.isAuthenticationRequired?.()) return;
     if (this.codexQuotaRefresh) return await this.codexQuotaRefresh;
     if (
       this.codexQuotaRefreshAt !== undefined
       && Date.now() - this.codexQuotaRefreshAt < 5_000
     ) return;
     this.codexQuotaRefreshAt = Date.now();
-    const work = this.refetchCodexRateLimits({
-      backendGeneration: this.codexBackendGeneration,
-      notificationVersion: this.codexRateLimitsNotificationVersion,
-    }).then(() => undefined);
+    const backendGeneration = this.codexBackendGeneration;
+    const work = (async () => {
+      let account: BackendAccountSummary | undefined;
+      try {
+        account = await readClientAccount(this.codexClient);
+      } catch (error) {
+        backendRegistryLog.warn("Codex account refresh failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      if (this.closed || backendGeneration !== this.codexBackendGeneration) return;
+      const currentSummary = this.readCodexBackendSummary();
+      if (isMeaningfulAccountSummary(account)) {
+        const previous = currentSummary.account;
+        const accountChanged = previous?.type !== account.type
+          || previous?.email !== account.email
+          || previous?.label !== account.label;
+        const withoutChatgptQuotas = account.type === "apiKey"
+          || (!account.type && typeof account.requiresOpenaiAuth === "boolean");
+        this.codexBackendSummary = {
+          ...currentSummary,
+          account,
+          ...(accountChanged || withoutChatgptQuotas ? { rateLimits: [] } : {}),
+        };
+        if (accountChanged || withoutChatgptQuotas) {
+          this.codexRateLimitsObservedAt = undefined;
+          this.pendingCodexRateLimits = undefined;
+        }
+        if (withoutChatgptQuotas) return;
+      } else if (!this.codexBackendSummary) {
+        this.codexBackendSummary = currentSummary;
+      }
+      await this.refetchCodexRateLimits({
+        backendGeneration,
+        notificationVersion: this.codexRateLimitsNotificationVersion,
+      });
+    })();
     this.codexQuotaRefresh = work;
     try {
       await work;

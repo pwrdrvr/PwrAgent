@@ -7578,6 +7578,101 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("recovers account and quotas after startup thread refresh fails", async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "pwragent-account-recovery-"));
+    const configStore = new DesktopConfigStore({ configPath: path.join(tempRoot, "config.toml") });
+    const command = path.join(tempRoot, "codex");
+    configStore.recordProviderDiscovery("codex", {
+      candidates: [{ command, source: "path", version: "0.160.0" }],
+      selectedCommand: command,
+      selectedVersion: "0.160.0",
+    });
+    const codexClient = new MockBackendClient({
+      listThreadsError: new Error("codex app server client closed"),
+      account: { type: "chatgpt", email: "user@example.com", planType: "pro" },
+      rateLimits: [{ name: "Weekly limit", usedPercent: 22 }],
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, configStore, overlayStore: createOverlayStoreMock() });
+    onTestFinished(async () => {
+      await registry.close();
+      configStore.dispose();
+      await rm(tempRoot, { recursive: true, force: true });
+    });
+    await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
+    expect((await registry.listBackends()).backends[0].account).toBeUndefined();
+    const response = await registry.listBackends({ refreshRateLimits: true });
+    expect(response.backends[0]).toMatchObject({
+      account: { type: "chatgpt", email: "user@example.com", planType: "pro" },
+      rateLimits: [{ name: "Weekly limit", usedPercent: 22 }],
+    });
+    expect(codexClient.listModelsCallCount).toBe(0);
+  });
+
+  it("recovers a failed account read and retains it when a later read fails", async () => {
+    const codexClient = new MockBackendClient({ rateLimits: [{ name: "Weekly limit", usedPercent: 22 }] });
+    const accountRead = vi.spyOn(codexClient, "readAccount").mockRejectedValueOnce(new Error("temporary failure"));
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    onTestFinished(async () => { await registry.close(); });
+    await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
+    accountRead.mockResolvedValue({ type: "chatgpt", email: "user@example.com", planType: "pro" });
+    const recovered = await registry.listBackends({ refreshRateLimits: true });
+    expect(recovered.backends[0].account?.planType).toBe("pro");
+    await registry.listBackends({ refreshRateLimits: true });
+    expect(accountRead).toHaveBeenCalledTimes(2);
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 6_000);
+    onTestFinished(() => { clock.mockRestore(); });
+    accountRead.mockRejectedValueOnce(new Error("temporary failure"));
+    const retained = await registry.listBackends({ refreshRateLimits: true });
+    expect(retained.backends[0].account).toEqual(recovered.backends[0].account);
+  });
+
+  it("clears old quotas when the account becomes signed out", async () => {
+    const codexClient = new MockBackendClient({
+      account: { type: "chatgpt", email: "user@example.com", planType: "pro", requiresOpenaiAuth: true },
+      rateLimits: [{ name: "Weekly limit", usedPercent: 54 }],
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    onTestFinished(async () => { await registry.close(); });
+    await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
+    vi.spyOn(codexClient, "readAccount").mockResolvedValue({ requiresOpenaiAuth: true });
+    const quotaRead = vi.spyOn(codexClient, "readRateLimits");
+    const response = await registry.listBackends({ refreshRateLimits: true });
+    expect(response.backends[0].account).toEqual({ requiresOpenaiAuth: true });
+    expect(response.backends[0].rateLimits).toEqual([]);
+    expect(quotaRead).not.toHaveBeenCalled();
+  });
+
+  it("does not relabel old quotas when a new account's quota read fails", async () => {
+    const codexClient = new MockBackendClient({
+      account: { type: "chatgpt", email: "previous@example.com", planType: "pro" },
+      rateLimits: [{ name: "Weekly limit", usedPercent: 54 }],
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    onTestFinished(async () => { await registry.close(); });
+    await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
+    vi.spyOn(codexClient, "readAccount").mockResolvedValue({ type: "chatgpt", email: "current@example.com", planType: "free" });
+    vi.spyOn(codexClient, "readRateLimits").mockRejectedValueOnce(new Error("temporary failure"));
+    const response = await registry.listBackends({ refreshRateLimits: true });
+    expect(response.backends[0].account?.planType).toBe("free");
+    expect(response.backends[0].rateLimits).toEqual([]);
+  });
+
+  it("discards an account refresh from an invalidated runtime", async () => {
+    const codexClient = new MockBackendClient({ account: { type: "chatgpt", planType: "pro" } });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    onTestFinished(async () => { await registry.close(); });
+    await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
+    const pending = createDeferred<BackendAccountSummary>();
+    const read = vi.spyOn(codexClient, "readAccount").mockReturnValueOnce(pending.promise);
+    const refresh = registry.listBackends({ includeUnavailable: true, refreshRateLimits: true });
+    await vi.waitFor(() => expect(read).toHaveBeenCalledOnce());
+    await registry.invalidateProviderRuntimeSelections({ codex: true, acp: false });
+    pending.resolve({ type: "chatgpt", email: "obsolete@example.com", planType: "free" });
+    const response = await refresh;
+    expect(response.backends[0].account).toBeUndefined();
+    expect(response.backends[0].rateLimits).toBeUndefined();
+  });
+
   it("refreshes idle Codex quotas without rediscovery and coalesces repeated reads", async () => {
     const codexClient = new MockBackendClient({
       rateLimits: [{ name: "Weekly limit", remaining: 91 }],
