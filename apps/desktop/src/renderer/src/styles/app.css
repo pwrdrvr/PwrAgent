@@ -21514,7 +21514,7 @@ a.button {
 .todo-split__chevron:hover,
 .todo-split__primary:hover,
 .todo-split--open .todo-split__chevron {
-  background: var(--accent);
+  background: var(--accent-fill);
   color: var(--button-text);
 }
 
@@ -21850,7 +21850,7 @@ button.thread-todos-panel__row-main:focus-visible {
   right: 1px;
   padding: 0 3px;
   border-radius: 7px;
-  background: var(--accent);
+  background: var(--accent-fill);
   color: var(--button-text);
   font-size: 9.5px;
   font-weight: 700;
