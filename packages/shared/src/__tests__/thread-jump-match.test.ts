@@ -113,6 +113,20 @@ describe("threadMatchesQuery", () => {
     expect(threadMatchesQuery(sessionIdOnly, "session_")).toBe(false);
   });
 
+  it.each([
+    ["PwrSuiteLab", "PWS"],
+    ["PwrSuiteLab", "pwsl"],
+    ["PwrAgent", "pa"],
+    ["PwrSnap", "Ps"],
+    ["trading-system", "TS"],
+  ])("matches %s by abbreviation %s in title and directory metadata", (name, query) => {
+    expect(threadMatchesQuery(thread({ title: `Fix ${name} search` }), query)).toBe(true);
+    expect(threadMatchesQuery(thread({ linkedDirectories: [
+      { id: "project", kind: "local", label: name, path: `/repos/${name}` },
+    ] }), query)).toBe(true);
+    expect(threadMatchesQuery(thread({ gitBranch: `fix/${name}` }), query)).toBe(true);
+  });
+
   it("returns false for non-matches and empty queries", () => {
     expect(threadMatchesQuery(t, "zzz")).toBe(false);
     expect(threadMatchesQuery(t, "   ")).toBe(false);

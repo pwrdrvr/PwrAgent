@@ -15,6 +15,7 @@ import { createPortal } from "react-dom";
 import {
   isSubthreadLaunchpadKey,
   threadHasExactPrNumberMatch,
+  textMatchesJumpQuery,
   type NavigationThreadSummary,
 } from "@pwragent/shared";
 import { FolderIcon, SearchIcon } from "../../icons";
@@ -120,7 +121,7 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
       (directory.kind === "directory" || directory.kind === "workspace")
       && directory.localAvailability !== "unconfigured"
       && !isSubthreadLaunchpadKey(directory.key)
-      && [directory.label, directory.path ?? ""].some((text) => text.toLowerCase().includes(query)))
+      && [directory.label, directory.path].some((text) => textMatchesJumpQuery(text, query)))
       .sort((left, right) => rank(left) - rank(right) || left.label.localeCompare(right.label))
       .slice(0, MAX_RESULTS);
   }, [trimmed, props.projects, props.onJumpToProject, projectSearch.state]);

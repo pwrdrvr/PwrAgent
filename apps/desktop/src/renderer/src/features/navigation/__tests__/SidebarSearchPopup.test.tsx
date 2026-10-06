@@ -864,6 +864,34 @@ describe("SidebarSearchPopup, focus", () => {
 describe("project destinations", () => {
   const project = { key: "directory:/repos/PwrAgnt", kind: "directory" as const, label: "PwrAgnt", path: "/repos/PwrAgnt" };
 
+  it.each([
+    ["PwrSuiteLab", "PWS"], ["PwrAgent", "pa"], ["PwrSnap", "Ps"], ["trading-system", "ts"],
+  ])("opens the loaded project %s by initials %s", async (name, query) => {
+    const destination = { ...project, label: name, path: `/repos/${name}` };
+    const select = vi.fn();
+    render(<SidebarSearchPopup projects={[destination]} threads={[]}
+      onJumpToProject={select} onJumpToThread={vi.fn()} onClose={vi.fn()} />);
+    const input = screen.getByRole("textbox");
+    fireEvent.change(input, { target: { value: query } });
+    await settleRemoteSearch();
+    expect(screen.getAllByRole("option")[0]).toHaveTextContent(name);
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(select).toHaveBeenCalledWith(destination);
+  });
+
+  it("keeps an unloaded owner project when its initials match a mixed-case query", async () => {
+    const destination = { ...project, label: "PwrSuiteLab", path: "/repos/PwrSuiteLab" };
+    getNavigationQueryPage.mockResolvedValue({ protocol: 2, queryKey: "projects", generation: "generation", ownerEpoch: "owner",
+      countsRevision: "counts", counts: { total: 0, active: 0, unread: 0, review: 0 }, coverage: { state: "complete" },
+      entries: [], directories: [{ ...destination, counts: { total: 0, active: 0, unread: 0, review: 0 },
+        pinnedRootCount: 0, unpinnedRootCount: 0, launchpadPresent: false }], complete: true });
+    render(<SidebarSearchPopup projects={[]} threads={[]}
+      onJumpToProject={vi.fn()} onJumpToThread={vi.fn()} onClose={vi.fn()} />);
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "PwS" } });
+    await settleRemoteSearch();
+    expect(screen.getAllByRole("option")[0]).toHaveTextContent("PwrSuiteLab");
+  });
+
   it("ranks a case-insensitive exact project before prefix projects and thread metadata, and Enter opens it", async () => {
     const onJumpToProject = vi.fn();
     const onJumpToThread = vi.fn();

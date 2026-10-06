@@ -59,6 +59,7 @@ export * from "./skill-origin";
 export * from "./subagent-visibility";
 export * from "./subthreads";
 export * from "./thread-jump-match";
+export * from "./jump-search-text";
 export * from "./thread-pins";
 export * from "./thread-terminal";
 export * from "./thread-titles";

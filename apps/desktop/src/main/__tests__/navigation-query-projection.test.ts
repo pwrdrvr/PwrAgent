@@ -60,6 +60,19 @@ function request(
 }
 
 describe("navigation query projection", () => {
+  it.each([
+    ["PwrSuiteLab", "pws"], ["PwrAgent", "PA"], ["PwrSnap", "ps"], ["trading-system", "TS"],
+  ])("finds owner threads and directory-index projects by initials: %s / %s", (name, text) => {
+    const source = snapshot([thread("match", { linkedDirectories: [
+      { id: "repo", kind: "local", label: "Project", path: `/repos/${name}` },
+    ] }), thread("unrelated")]);
+    source.directories = [{ ...source.directories[0]!, label: name, path: `/repos/${name}`, threadKeys: ["codex:match"] }];
+    const threads = projectNavigationQuery({ index: source, request: request({ kind: "search", text }) });
+    expect(threads.entries.map(({ row }) => row.id)).toEqual(["match"]);
+    const projects = projectNavigationQuery({ index: source, request: request({ kind: "directory-index", filter: text }) });
+    expect(projects.directories.map((directory) => directory.label)).toEqual([name]);
+  });
+
   it("counts worker-only parents once and includes them in Attention without changing turn status", () => {
     const source = snapshot([
       thread("worker-only", { threadStatus: "idle", hasActiveSubAgent: true }),
