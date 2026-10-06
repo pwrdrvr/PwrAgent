@@ -12,6 +12,7 @@ import { useDesktopApi } from "../../lib/desktop-api";
 import { ThreadMarkdown } from "./ThreadMarkdown";
 import { BrandLockup } from "../chrome/BrandLockup";
 import { useMarkdownFileSource } from "./useMarkdownFileSource";
+import { isJsonFilePath, JsonFilePreview } from "./JsonFilePreview";
 
 type LoadState =
   | { status: "idle" | "loading" }
@@ -99,7 +100,7 @@ export function MarkdownFilesWindow() {
         if (response.error || response.content === undefined) {
           setLoadState({
             status: "error",
-            error: response.error ?? "Markdown file could not be read.",
+            error: response.error ?? "File could not be read.",
           });
           return;
         }
@@ -109,7 +110,7 @@ export function MarkdownFilesWindow() {
         if (cancelled) return;
         setLoadState({
           status: "error",
-          error: error instanceof Error ? error.message : "Markdown file could not be read.",
+          error: error instanceof Error ? error.message : "File could not be read.",
         });
       });
 
@@ -259,7 +260,9 @@ export function MarkdownFilesWindow() {
                   {loadState.error}
                 </p>
               ) : null}
-              {loadState.status === "loaded" ? (
+              {loadState.status === "loaded" ? (isJsonFilePath(selectedPath ?? "") ? (
+                <JsonFilePreview content={loadState.content} desktopApi={viewerApi} />
+              ) : (
                 <ThreadMarkdown
                   applications={markdownApplications}
                   className="markdown-files-window__markdown"
@@ -268,7 +271,7 @@ export function MarkdownFilesWindow() {
                   text={loadState.content}
                   variant="summary"
                 />
-              ) : null}
+              )) : null}
             </div>
           </article>
         </main>

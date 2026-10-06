@@ -47,7 +47,7 @@ import {
   openDesktopApplication,
 } from "../settings/application-discovery";
 
-const MAX_MARKDOWN_FILE_BYTES = 2 * 1024 * 1024;
+const MAX_PREVIEW_FILE_BYTES = 2 * 1024 * 1024;
 
 /**
  * Open a filesystem path with the OS default handler. The fallback the
@@ -92,6 +92,8 @@ async function revealPathInFolder(
   return { opened: true };
 }
 
+// The existing file-viewer channel also serves JSON previews. Keep the channel
+// name stable for preload and federation clients.
 async function readMarkdownFile(
   request: ReadMarkdownFileRequest,
 ): Promise<ReadMarkdownFileResponse> {
@@ -99,7 +101,7 @@ async function readMarkdownFile(
     try {
       return await getDesktopFederationRuntime().pullMarkdownFile(request.federationTarget, request);
     } catch (error) {
-      return { path: request.path, error: error instanceof Error ? error.message : "Remote Markdown file could not be read." };
+      return { path: request.path, error: error instanceof Error ? error.message : "Remote file could not be read." };
     }
   }
   const target = request.path?.trim();
@@ -107,8 +109,8 @@ async function readMarkdownFile(
     return { path: "", error: "No file path was provided." };
   }
 
-  if (!/\.(?:md|markdown)$/i.test(target)) {
-    return { path: target, error: "Only Markdown files can be previewed." };
+  if (!/\.(?:md|markdown|json)$/i.test(target)) {
+    return { path: target, error: "Only Markdown and JSON files can be previewed." };
   }
 
   try {
@@ -116,8 +118,8 @@ async function readMarkdownFile(
     if (!fileStat.isFile()) {
       return { path: target, error: `Path is not a file: ${target}` };
     }
-    if (fileStat.size > MAX_MARKDOWN_FILE_BYTES) {
-      return { path: target, error: "Markdown file is too large to preview." };
+    if (fileStat.size > MAX_PREVIEW_FILE_BYTES) {
+      return { path: target, error: "File is too large to preview." };
     }
 
     return {

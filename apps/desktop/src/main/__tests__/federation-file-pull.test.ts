@@ -35,6 +35,20 @@ describe("Federation file pull", () => {
     expect(resolveThread).toHaveBeenCalledWith("codex", "owner-thread");
   });
 
+  it("previews JSON with the same owner permission and size checks", async () => {
+    const filePath = path.join(directory, "widget.JSON");
+    const content = '{"title":"Owner widget"}';
+    await writeFile(filePath, content);
+    expect(await pull(filePath)).toEqual({ path: filePath, content });
+    const outside = path.join(root, "outside.json");
+    await writeFile(outside, content);
+    await expect(pull(outside)).rejects.toThrow("outside the thread");
+    await writeFile(filePath, Buffer.alloc(FILE_PULL_MAX_BYTES + 1));
+    await expect(pull(filePath)).rejects.toThrow("too large");
+    permissions.filePull = false;
+    await expect(pull(filePath)).rejects.toThrow("File pull is disabled");
+  });
+
   it("continues authorized previews after the owning thread is archived", async () => {
     const registry = {
       resolveThread: vi.fn(async () => thread),
@@ -138,10 +152,10 @@ describe("Federation file pull", () => {
     await expect(pull(path.join(directory, "report.md"))).rejects.toThrow("outside the thread");
   });
 
-  it("rejects directories, non-Markdown paths and oversized files", async () => {
+  it("rejects directories, unsupported paths and oversized files", async () => {
     await mkdir(path.join(directory, "folder.md"));
     await expect(pull(path.join(directory, "folder.md"))).rejects.toThrow("regular file");
-    await expect(pull(path.join(directory, "plain.txt"))).rejects.toThrow("Markdown file path");
+    await expect(pull(path.join(directory, "plain.txt"))).rejects.toThrow("Markdown or JSON file path");
     await writeFile(path.join(directory, "large.md"), Buffer.alloc(FILE_PULL_MAX_BYTES + 1));
     await expect(pull(path.join(directory, "large.md"))).rejects.toThrow("too large");
   });

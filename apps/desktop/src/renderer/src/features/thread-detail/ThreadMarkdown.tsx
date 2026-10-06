@@ -63,6 +63,7 @@ import { remarkTableProfile } from "./remark-table-profile";
 import { TranscriptCopyButton } from "./TranscriptCopyButton";
 import { MermaidDiagram } from "./MermaidDiagram";
 import { useMarkdownFileSource } from "./useMarkdownFileSource";
+import { isJsonFilePath, JsonFilePreview } from "./JsonFilePreview";
 
 type ThreadMarkdownProps = {
   applications?: DesktopApplicationsSnapshot;
@@ -327,8 +328,8 @@ const markdownComponents: Components = {
     const pullRequestLinks = usePullRequestLinks();
     const href = typeof anchorProps.href === "string" ? anchorProps.href : "";
     const localTarget = localFileTargetFromHref(href);
-    const isLocalMarkdownFile = Boolean(
-      localTarget && isMarkdownFilePath(localTarget.path)
+    const isLocalPreviewFile = Boolean(
+      localTarget && isPreviewFilePath(localTarget.path)
     );
     const skillPath = localTarget?.path;
     const label = extractTextContent(anchorProps.children).trim();
@@ -465,7 +466,7 @@ const markdownComponents: Components = {
         }}
         rel="noopener noreferrer"
         target="_blank"
-        title={isLocalMarkdownFile && localTarget
+        title={isLocalPreviewFile && localTarget
           ? tildifyPath(localTarget.path)
           : href || undefined}
       >
@@ -473,7 +474,7 @@ const markdownComponents: Components = {
       </a>
     );
 
-    if (isLocalMarkdownFile && localTarget) {
+    if (isLocalPreviewFile && localTarget) {
       return (
         <span className="thread-markdown__file-link">
           {link}
@@ -730,7 +731,7 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
         return;
       }
 
-      if (isMarkdownFilePath(target.path) && props.desktopApi?.readMarkdownFile) {
+      if (isPreviewFilePath(target.path) && props.desktopApi?.readMarkdownFile) {
         event.preventDefault();
         setMarkdownViewerTarget({
           ...target,
@@ -869,6 +870,7 @@ function MarkdownDocumentModal(props: {
   // reads the latest one on Escape. The effect it replaced depended on it, so
   // any re-render of the message sent focus back to the first control.
   const contentRef = useModalDialog({ onClose: props.onClose });
+  const documentKind = isJsonFilePath(props.target.path) ? "JSON" : "Markdown";
   const [loadState, setLoadState] = useState<
     | { status: "loading" }
     | { status: "loaded"; content: string }
@@ -884,7 +886,7 @@ function MarkdownDocumentModal(props: {
     if (!readMarkdownFile) {
       setLoadState({
         status: "error",
-        error: "Markdown preview is unavailable.",
+        error: "File preview is unavailable.",
       });
       return () => {
         cancelled = true;
@@ -901,7 +903,7 @@ function MarkdownDocumentModal(props: {
         if (response.error || response.content === undefined) {
           setLoadState({
             status: "error",
-            error: response.error ?? "Markdown file could not be read.",
+            error: response.error ?? "File could not be read.",
           });
           return;
         }
@@ -912,7 +914,7 @@ function MarkdownDocumentModal(props: {
         if (cancelled) return;
         setLoadState({
           status: "error",
-          error: error instanceof Error ? error.message : "Markdown file could not be read.",
+          error: error instanceof Error ? error.message : "File could not be read.",
         });
       });
 
@@ -930,7 +932,7 @@ function MarkdownDocumentModal(props: {
       className="markdown-document-modal"
       role="dialog"
       aria-modal="true"
-      aria-label={`Markdown document: ${props.target.label}`}
+      aria-label={`${documentKind} document: ${props.target.label}`}
       onClick={props.onClose}
     >
       <div
@@ -1028,7 +1030,9 @@ function MarkdownDocumentModal(props: {
               {loadState.error}
             </p>
           ) : null}
-          {loadState.status === "loaded" ? (
+          {loadState.status === "loaded" ? (documentKind === "JSON" ? (
+            <JsonFilePreview content={loadState.content} desktopApi={props.desktopApi} />
+          ) : (
             <ThreadMarkdown
               applications={props.applications}
               className="markdown-document-modal__markdown"
@@ -1038,7 +1042,7 @@ function MarkdownDocumentModal(props: {
               text={loadState.content}
               variant="summary"
             />
-          ) : null}
+          )) : null}
         </div>
       </div>
     </div>,
@@ -1194,8 +1198,8 @@ function findMarkdownLinkedImagePart(
   });
 }
 
-function isMarkdownFilePath(filePath: string): boolean {
-  return /\.(?:md|markdown)$/i.test(filePath);
+function isPreviewFilePath(filePath: string): boolean {
+  return /\.(?:md|markdown)$/i.test(filePath) || isJsonFilePath(filePath);
 }
 
 function fileNameFromPath(filePath: string): string {

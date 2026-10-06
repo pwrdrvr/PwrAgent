@@ -23624,6 +23624,40 @@ a.transcript-message__messaging-origin:focus-visible {
   color: var(--danger-text);
 }
 
+.json-file-preview__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.json-file-preview__error {
+  flex: 1;
+  margin: 0;
+  color: var(--danger-text);
+  font-size: 13px;
+}
+
+.json-file-preview__toolbar .transcript-copy-button {
+  opacity: 1;
+}
+
+.json-file-preview__code {
+  margin: 0;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--transcript-text-size);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  tab-size: 2;
+}
+
+.json-file-preview__code:focus-visible {
+  outline-offset: 2px;
+}
+
 .markdown-files-window {
   height: 100vh;
 }

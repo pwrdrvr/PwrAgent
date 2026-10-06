@@ -58,8 +58,8 @@ export class FederationFilePullReader {
     if (!permissions.filePull) throw new Error("File pull is disabled on the owning machine. Enable Allow file pull in its Federation settings.");
     const request = input as { path?: unknown; thread?: { backend?: unknown; threadId?: unknown } } | null;
     if (!request || typeof request.path !== "string" || !path.isAbsolute(request.path)
-      || request.path.includes("\0") || !/\.(md|markdown)$/i.test(request.path)) {
-      throw new Error("Select an absolute Markdown file path.");
+      || request.path.includes("\0") || !/\.(md|markdown|json)$/i.test(request.path)) {
+      throw new Error("Select an absolute Markdown or JSON file path.");
     }
     const identity = request.thread;
     if (!identity || typeof identity.backend !== "string" || !isAppServerBackendKind(identity.backend)
@@ -86,7 +86,7 @@ export class FederationFilePullReader {
     try {
       const before = await file.stat();
       if (!before.isFile()) throw new Error("File pull requires a regular file.");
-      if (before.size > FILE_PULL_MAX_BYTES) throw new Error("Markdown file is too large to preview (maximum 2 MiB).");
+      if (before.size > FILE_PULL_MAX_BYTES) throw new Error("File is too large to preview (maximum 2 MiB).");
       const buffer = Buffer.alloc(FILE_PULL_MAX_BYTES + 1);
       let size = 0;
       while (size < buffer.length) {

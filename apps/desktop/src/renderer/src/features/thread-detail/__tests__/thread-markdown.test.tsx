@@ -492,13 +492,15 @@ describe("ThreadMarkdown", () => {
     expect(openApplication).not.toHaveBeenCalled();
   });
 
-  it("opens markdown file links in a document modal and keeps the editor icon separate", async () => {
+  it.each(["Markdown", "JSON"])("opens %s file links in a document modal and keeps the editor icon separate", async (kind) => {
+    const fileName = kind === "JSON" ? "widget.json" : "AGENTS.md";
+    const content = kind === "JSON" ? '{"title":"Widget","enabled":true}' : "# AGENTS\n\nUse the repo guidance.";
     const openApplication = vi.fn(async () => ({ opened: true as const }));
     const openMarkdownFileViewer = vi.fn(async () => ({ opened: true as const }));
     const copyPath = vi.fn(async () => undefined);
     const readMarkdownFile = vi.fn(async (request: { path: string }) => ({
       path: request.path,
-      content: "# AGENTS\n\nUse the repo guidance.",
+      content,
     }));
 
     render(
@@ -539,43 +541,49 @@ describe("ThreadMarkdown", () => {
           threadTitle: "Thread title",
           projectPath: "/repo/PwrAgent",
         }}
-        text={"I updated [AGENTS.md](/repo/PwrAgent/AGENTS.md:17)."}
+        text={`I updated [${fileName}](${kind === "JSON" ? "file://" : ""}/repo/PwrAgent/${fileName}:17).`}
       />
     );
 
-    expect(screen.getByRole("link", { name: "AGENTS.md" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: fileName })).toHaveAttribute(
       "title",
-      "/repo/PwrAgent/AGENTS.md"
+      `/repo/PwrAgent/${fileName}`
     );
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Open file in Zed: AGENTS.md" })
+      screen.getByRole("button", { name: `Open file in Zed: ${fileName}` })
     );
 
     await waitFor(() => {
       expect(openApplication).toHaveBeenCalledWith({
         applicationId: "zed",
         kind: "editor",
-        targetPath: "/repo/PwrAgent/AGENTS.md",
+        targetPath: `/repo/PwrAgent/${fileName}`,
         targetLine: 17,
         targetColumn: undefined,
       });
     });
 
     openApplication.mockClear();
-    fireEvent.click(screen.getByRole("link", { name: "AGENTS.md" }));
+    fireEvent.click(screen.getByRole("link", { name: fileName }));
 
-    expect(await screen.findByRole("dialog", { name: "Markdown document: AGENTS.md" }))
+    expect(await screen.findByRole("dialog", { name: `${kind} document: ${fileName}` }))
       .toBeInTheDocument();
     expect(readMarkdownFile).toHaveBeenCalledWith({
-      path: "/repo/PwrAgent/AGENTS.md",
+      path: `/repo/PwrAgent/${fileName}`,
     });
-    expect(screen.getByRole("heading", { name: "AGENTS" })).toBeInTheDocument();
+    if (kind === "JSON") {
+      expect(await screen.findByLabelText("JSON contents")).toHaveTextContent('"title": "Widget"');
+      fireEvent.click(screen.getByRole("button", { name: "Copy JSON" }));
+      await waitFor(() => expect(copyPath).toHaveBeenCalledWith(content));
+    } else {
+      expect(screen.getByRole("heading", { name: "AGENTS" })).toBeInTheDocument();
+    }
     expect(openApplication).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Copy path" }));
     await waitFor(() => {
-      expect(copyPath).toHaveBeenCalledWith("/repo/PwrAgent/AGENTS.md");
+      expect(copyPath).toHaveBeenCalledWith(`/repo/PwrAgent/${fileName}`);
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Open in detached files window" }));
@@ -593,8 +601,8 @@ describe("ThreadMarkdown", () => {
           name: "Zed",
         }),
         file: {
-          path: "/repo/PwrAgent/AGENTS.md",
-          label: "AGENTS.md",
+          path: `/repo/PwrAgent/${fileName}`,
+          label: fileName,
           line: 17,
           column: undefined,
         },
