@@ -24685,6 +24685,70 @@ describe("MessagingController", () => {
     });
   });
 
+  it("locks and unlocks the bound thread from the status card's toggle", async () => {
+    const navigation = buildNavigationSnapshot();
+    const harness = await createHarness({ navigation });
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "status:lock" }));
+    expect(harness.setThreadLock).toHaveBeenLastCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      locked: true,
+    });
+
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      lock: { note: "Parked", lockedAt: 1_000, source: "operator" },
+    };
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/lock/updated",
+        params: { threadId: "thread-1", lock: navigation.threads[0].lock },
+      },
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Locked: Parked"),
+      actions: expect.arrayContaining([expect.objectContaining({ id: "status:lock", label: "Unlock" })]),
+    });
+
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "status:lock" }));
+    expect(harness.setThreadLock).toHaveBeenLastCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      locked: false,
+    });
+
+    // A button carries the state it was drawn for: a stale or repeated Lock
+    // on a now-locked thread locks again rather than unlocking it.
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:lock", value: { locked: true } }),
+    );
+    expect(harness.setThreadLock).toHaveBeenLastCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      locked: true,
+    });
+  });
+
+  it("reports a lock refusal whose note reads like a busy thread instead of queueing it", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    const refusal = "This thread is locked: Repair in progress in another agent. Unlock it before starting a turn.";
+    harness.startTurn.mockRejectedValueOnce(new Error(refusal));
+
+    await harness.controller.handleInboundEvent(buildTextEvent("keep going"));
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "error",
+      title: "Turn could not start",
+      body: refusal,
+    });
+    expect(harness.startTurn).toHaveBeenCalledTimes(1);
+  });
+
   it("starts compaction through the backend bridge", async () => {
     const harness = await createHarness();
     await bindThread(harness);
@@ -26297,6 +26361,7 @@ async function createHarness<
 }): Promise<{
   controller: MessagingController;
   compactThread: ReturnType<typeof vi.fn>;
+  setThreadLock: ReturnType<typeof vi.fn>;
   cancelThreadExecutionModeQueue: ReturnType<typeof vi.fn>;
   delivered: MessagingSurfaceIntent[];
   ensureDirectoryLaunchpad: ReturnType<typeof vi.fn>;
@@ -26603,6 +26668,10 @@ async function createHarness<
     turnId: "compact-turn-1",
     itemId: "compact-item-1",
   }));
+  const setThreadLock = vi.fn(async (request: { backend?: AppServerBackendKind; threadId: string }) => ({
+    backend: request.backend ?? "codex",
+    threadId: request.threadId,
+  }));
   const interruptTurn = vi.fn(async (request) => request);
   const listSkills =
     options?.listSkills === false
@@ -26801,6 +26870,7 @@ async function createHarness<
   const backend: MessagingBackendBridge = {
     cancelScheduledThreadAction,
     compactThread,
+    setThreadLock,
     cancelThreadExecutionModeQueue,
     ensureDirectoryLaunchpad,
     getNavigationSnapshot,
@@ -26891,6 +26961,7 @@ async function createHarness<
   return {
     controller,
     compactThread,
+    setThreadLock,
     cancelThreadExecutionModeQueue,
     delivered,
     ensureDirectoryLaunchpad,

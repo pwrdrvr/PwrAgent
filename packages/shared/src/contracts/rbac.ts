@@ -672,6 +672,9 @@ export const STATUS_ACTION_PERMISSIONS: Record<string, MessagingPermissionId> = 
   "status:compact": "thread.control.compact",
   "status:stop": "thread.control.stop",
   "status:handoff": "thread.control.handoff",
+  // As for mutate_thread's lock fields: a lock parks the thread for someone
+  // else's work, and only who may hand a thread off may park it.
+  "status:lock": "thread.control.handoff",
 };
 
 /**
@@ -836,6 +839,11 @@ const THREAD_MUTATION_FIELD_PERMISSIONS: Record<
   archive: () => ["thread.control.archive"],
   pinned: () => ["thread.control.organize"],
   unread: () => ["thread.control.organize"],
+  // A lock refuses every turn on the thread, the operator's included, and
+  // exists to park a thread whose worktree went to another agent. That is a
+  // handoff decision, not organizing, so it takes the handoff permission.
+  locked: () => ["thread.control.handoff"],
+  lockNote: () => ["thread.control.handoff"],
 };
 
 /**

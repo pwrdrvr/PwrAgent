@@ -43,6 +43,7 @@ import type {
   PrSummary,
   ThreadAgentMetadata,
   ThreadExecutionMode,
+  ThreadLock,
   ThreadSubAgentSummary,
 } from "@pwragent/shared";
 import {
@@ -812,6 +813,18 @@ function prSummariesEqual(
   });
 }
 
+function threadLocksEqual(
+  left: NavigationThreadSummary["lock"],
+  right: NavigationThreadSummary["lock"]
+): boolean {
+  return left === right || (
+    left?.note === right?.note
+    && left?.lockedAt === right?.lockedAt
+    && left?.source === right?.source
+    && left?.sourceInstanceId === right?.sourceInstanceId
+  );
+}
+
 function reactionsEqual(
   left: NavigationThreadSummary["reactions"],
   right: NavigationThreadSummary["reactions"]
@@ -971,6 +984,7 @@ function threadSummariesEqual(
     threadAgentsEqual(left.agent, right.agent) &&
     prSummariesEqual(left.prs, right.prs) &&
     reactionsEqual(left.reactions, right.reactions) &&
+    threadLocksEqual(left.lock, right.lock) &&
     subAgentsEqual(left.subAgents, right.subAgents) &&
     subAgentsEqual(left.activeSubAgents, right.activeSubAgents) &&
     permissionTransitionLogsEqual(
@@ -1128,6 +1142,37 @@ function applyThreadGitWorkingStateUpdate(
     }
     const { gitWorkingState: _removed, ...rest } = thread;
     return { ...rest, gitWorkingStateFetchedAt: params.fetchedAt };
+  });
+
+  return changed ? { ...snapshot, threadRows: indexLoadedThreadRows(threads) } : snapshot;
+}
+
+function updateThreadLockInLoadedRows(
+  snapshot: NavigationLoadedRows | undefined,
+  params: {
+    backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
+    threadId: string;
+    lock: ThreadLock | undefined;
+  },
+): NavigationLoadedRows | undefined {
+  if (!snapshot) {
+    return snapshot;
+  }
+
+  const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+  let changed = false;
+  const threads = loadedThreadRows(snapshot).map((thread) => {
+    if (
+      buildThreadIdentityKey(thread.source, thread.id) !== threadKey
+      || !federationTargetsEqual(thread.federation?.ref.target, params.federationTarget)
+      || threadLocksEqual(thread.lock, params.lock)
+    ) {
+      return thread;
+    }
+    changed = true;
+    const { lock: _previous, ...rest } = thread;
+    return params.lock ? { ...rest, lock: params.lock } : rest;
   });
 
   return changed ? { ...snapshot, threadRows: indexLoadedThreadRows(threads) } : snapshot;
@@ -3039,6 +3084,17 @@ export function useThreadNavigation(
     emoji: string,
     present: boolean,
   ) => Promise<void>;
+  /**
+   * Locks (or re-notes) the thread when `locked`, else unlocks it. Rejects
+   * with the owner's error so the caller can report it; the row is patched
+   * only from the owner's answer, since a lock that silently failed would
+   * leave the operator believing the thread is parked.
+   */
+  setThreadLock: (
+    thread: NavigationThreadSummary,
+    locked: boolean,
+    note?: string,
+  ) => Promise<void>;
   setThreadPin: (
     thread: NavigationThreadSummary,
     pinned: boolean,
@@ -3862,6 +3918,7 @@ export function useThreadNavigation(
           || method === "thread/name/updated"
           || method === "thread/pullRequests/updated"
           || method === "thread/reactions/updated"
+          || method === "thread/lock/updated"
           || method === "thread/prAutoDispatch/pendingUpdated"
           || method === "thread/prAutoDispatch/updated"
           || method === "thread/status/changed"
@@ -4033,6 +4090,23 @@ export function useThreadNavigation(
           };
         });
         scheduleEventRefresh();
+        return;
+      }
+
+      if (method === "thread/lock/updated") {
+        const { threadId, lock } = event.notification.params as {
+          threadId: string;
+          lock?: ThreadLock;
+        };
+        setState((current) => ({
+          ...current,
+          rows: updateThreadLockInLoadedRows(current.rows, {
+            backend: event.backend,
+            federationTarget: event.federationTarget,
+            threadId,
+            lock,
+          }),
+        }));
         return;
       }
 
@@ -8100,6 +8174,7 @@ export function useThreadNavigation(
   );
 
   const setThreadReactionRequest = desktopApi?.setThreadReaction;
+  const setThreadLockRequest = desktopApi?.setThreadLock;
   const setThreadPinRequest = desktopApi?.setThreadPin;
   const setRemoteThreadLocalPinRequest = desktopApi?.setRemoteThreadLocalPin;
   const setThreadAgentRequest = desktopApi?.setThreadAgent;
@@ -8162,6 +8237,37 @@ export function useThreadNavigation(
       }
     },
     [setThreadReactionRequest],
+  );
+
+  const setThreadLock = useCallback(
+    async (
+      thread: NavigationThreadSummary,
+      locked: boolean,
+      note?: string,
+    ): Promise<void> => {
+      if (!setThreadLockRequest) {
+        throw new Error("Locking threads is not available in this window.");
+      }
+      const federationTarget = thread.federation?.ref.target
+        ?? readRendererFederationTarget();
+      const result = await setThreadLockRequest({
+        backend: thread.source,
+        federationTarget,
+        threadId: thread.id,
+        locked,
+        ...(note !== undefined ? { note } : {}),
+      });
+      setState((current) => ({
+        ...current,
+        rows: updateThreadLockInLoadedRows(current.rows, {
+          backend: thread.source,
+          federationTarget,
+          threadId: thread.id,
+          lock: result.lock,
+        }),
+      }));
+    },
+    [setThreadLockRequest],
   );
 
   const setThreadPin = useCallback(
@@ -9002,6 +9108,7 @@ export function useThreadNavigation(
     handoffThreadWorkspace,
     renameThread,
     setThreadReaction,
+    setThreadLock,
     setThreadPin,
     setThreadAgent,
     reorderThreadPins,

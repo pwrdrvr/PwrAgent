@@ -3006,6 +3006,10 @@ function DesktopAppShell(props: {
     const thread = navigation.selectedThread;
     if (thread) await navigation.setThreadPrAutoDispatch(thread, enabled);
   });
+  const handleSetThreadLock = useEventCallback(async (locked: boolean, note?: string) => {
+    const thread = navigation.selectedThread;
+    if (thread) await navigation.setThreadLock(thread, locked, note);
+  });
   const handleCancelThreadPrAutoDispatch = useEventCallback(async (
     fingerprint: Parameters<NonNullable<ThreadViewProps["onCancelThreadPrAutoDispatch"]>>[0],
   ) => {
@@ -3052,6 +3056,8 @@ function DesktopAppShell(props: {
       // A remote thread cannot accept input while its owning instance is
       // unreachable — typing would only queue into a dead RPC.
       remoteReadsSuspended ||
+      // A locked thread refuses every turn; its lock card says why.
+      Boolean(navigation.selectedThread?.lock) ||
       !backendSummaries.backends.some(
         (backend) =>
           backend.kind === navigation.selectedThread?.source &&
@@ -3252,6 +3258,7 @@ function DesktopAppShell(props: {
     onCancelExecutionModeQueue: navigation.selectedThread ? handleCancelExecutionModeQueue : undefined,
     onSetThreadModelSettings: navigation.selectedThread ? handleSetThreadModelSettings : undefined,
     onSetThreadPrAutoDispatch: navigation.selectedThread ? handleSetThreadPrAutoDispatch : undefined,
+    onSetThreadLock: navigation.selectedThread ? handleSetThreadLock : undefined,
     onCancelThreadPrAutoDispatch: navigation.selectedThread ? handleCancelThreadPrAutoDispatch : undefined,
     onSendThreadPrAutoDispatchNow: navigation.selectedThread ? handleSendThreadPrAutoDispatchNow : undefined,
     onRestoreWorktree: navigation.restoreWorktree,
@@ -3569,6 +3576,7 @@ function DesktopAppShell(props: {
           }
           onRenameThread={navigation.renameThread}
           onSetThreadReaction={navigation.setThreadReaction}
+          onSetThreadLock={navigation.setThreadLock}
           onSetThreadPin={navigation.setThreadPin}
           onReorderThreadPins={navigation.reorderThreadPins}
           onSetThreadParent={navigation.setThreadParent}

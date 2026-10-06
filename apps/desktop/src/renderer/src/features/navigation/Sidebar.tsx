@@ -185,6 +185,7 @@ function useRevealListChange<Args extends unknown[], Result>(
 
 import type { NavigationDirectoryDisclosure } from "../../lib/useNavigationDirectoryDisclosure";
 import { BrandLockup } from "../chrome/BrandLockup";
+import { ThreadLockDialog } from "../thread-lock/ThreadLockDialog";
 
 type SidebarProps = {
   /** Director voice's mic, rendered first in the masthead; it subscribes to voice itself. */
@@ -339,6 +340,12 @@ type SidebarProps = {
     thread: NavigationThreadSummary,
     emoji: string,
     present: boolean,
+  ) => Promise<void>;
+  /** Locks (or re-notes) the thread when `locked`, else unlocks it. */
+  onSetThreadLock?: (
+    thread: NavigationThreadSummary,
+    locked: boolean,
+    note?: string,
   ) => Promise<void>;
   onSetThreadPin?: (
     thread: NavigationThreadSummary,
@@ -592,6 +599,10 @@ export function Sidebar(props: SidebarProps) {
     | undefined
   >();
   const [renameThread, setRenameThread] = useState<NavigationThreadSummary>();
+  const [lockDialog, setLockDialog] = useState<{
+    thread: NavigationThreadSummary;
+    mode: "lock" | "edit";
+  }>();
   const [renameDraft, setRenameDraft] = useState("");
   const [renameValidationError, setRenameValidationError] = useState<string>();
   const renameDialogRef = useModalDialog<HTMLElement>({
@@ -1388,6 +1399,21 @@ export function Sidebar(props: SidebarProps) {
     setRenameValidationError(undefined);
   };
 
+  const requestLockFromContextMenu = (
+    thread: NavigationThreadSummary,
+    mode: "lock" | "edit",
+  ): void => {
+    setContextMenu(undefined);
+    setLockDialog({ thread, mode });
+  };
+
+  const unlockFromContextMenu = (thread: NavigationThreadSummary): void => {
+    setContextMenu(undefined);
+    // A failed unlock leaves the lock glyph and the thread's lock card in
+    // place, which is the report: the card's own Unlock shows the error.
+    void props.onSetThreadLock?.(thread, false).catch(() => undefined);
+  };
+
   const archiveFromContextMenu = (
     thread: NavigationThreadSummary,
     options?: ArchiveThreadOptions,
@@ -1765,6 +1791,14 @@ export function Sidebar(props: SidebarProps) {
       ? canRenameThread(contextMenu.thread)
         && contextMenuCanRouteRemoteCapability("turn_control")
       : false;
+  // A lock refuses turns on the owner, so a remote row needs the same grant
+  // as starting one there.
+  const contextMenuCanLock = Boolean(
+    contextMenu
+      && !contextMenuIsBulk
+      && props.onSetThreadLock
+      && contextMenuCanRouteRemoteCapability("turn_control"),
+  );
   const contextMenuCanArchive =
     contextMenu && !contextMenuIsBulk
       ? canArchiveThread(contextMenu.thread)
@@ -2150,6 +2184,7 @@ export function Sidebar(props: SidebarProps) {
     contextMenuCanUnlinkSubthread ||
     contextMenuShowMoveItems ||
     contextMenuCanRename ||
+    contextMenuCanLock ||
     contextMenuCanMarkRead ||
     contextMenuCanMarkUnread ||
     contextMenuCanSendToMachine ||
@@ -3004,6 +3039,36 @@ export function Sidebar(props: SidebarProps) {
                       Rename Thread
                     </button>
                   ) : null}
+                  {contextMenuCanLock && contextMenu.thread.lock ? (
+                    <>
+                      <button
+                        role="menuitem"
+                        type="button"
+                        onClick={() => unlockFromContextMenu(contextMenu.thread)}
+                      >
+                        Unlock Thread
+                      </button>
+                      <button
+                        role="menuitem"
+                        type="button"
+                        onClick={() =>
+                          requestLockFromContextMenu(contextMenu.thread, "edit")
+                        }
+                      >
+                        Edit Lock Note…
+                      </button>
+                    </>
+                  ) : contextMenuCanLock ? (
+                    <button
+                      role="menuitem"
+                      type="button"
+                      onClick={() =>
+                        requestLockFromContextMenu(contextMenu.thread, "lock")
+                      }
+                    >
+                      Lock Thread…
+                    </button>
+                  ) : null}
                   {contextMenuCanMarkUnread ? (
                     <button
                       role="menuitem"
@@ -3379,6 +3444,20 @@ export function Sidebar(props: SidebarProps) {
             </div>
           ) : null}
         </div>
+      ) : null}
+
+      {lockDialog ? (
+        <ThreadLockDialog
+          initialNote={lockDialog.thread.lock?.note}
+          mode={lockDialog.mode}
+          returnFocus={contextMenuOpenerRef}
+          threadTitle={lockDialog.thread.title}
+          onCancel={() => setLockDialog(undefined)}
+          onSubmit={async (note) => {
+            await props.onSetThreadLock?.(lockDialog.thread, true, note);
+            setLockDialog(undefined);
+          }}
+        />
       ) : null}
 
       {renameThread ? (

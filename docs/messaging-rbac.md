@@ -47,7 +47,7 @@ code side).
 | `thread.settings.skills` | settings | Open the skills browser and change enabled skills (all `skills:*` sub-actions). |
 | `thread.control.stop` | control | Interrupt the running turn. |
 | `thread.control.compact` | control | Compact the thread's context. |
-| `thread.control.handoff` | control | Move a thread between local/worktree/branches (all `handoff:*` actions), or to another project (`mutate_thread` `projectPath`). |
+| `thread.control.handoff` | control | Move a thread between local/worktree/branches (all `handoff:*` actions), or to another project (`mutate_thread` `projectPath`). Lock or unlock a thread (the status card's Lock/Unlock toggle, `status:lock`, and `mutate_thread` `locked` and `lockNote`). |
 | `thread.control.archive` | control (danger: med) | Let the agent archive a thread (`mutate_thread` `archive: true`), removing the worktrees PwrAgent created for it, or restore an archived one (`archive: false`). Admin only by default. |
 | `thread.control.organize` | control | Let the agent pin or unpin a thread (`mutate_thread` `pinned`), mark it read or unread (`unread`), and mark an entire project read (`mark_project_read`). |
 | `thread.control.schedule` | control | Queue a message to the bound thread for later (`/schedule`) and list or cancel the queue (`/scheduled`). |

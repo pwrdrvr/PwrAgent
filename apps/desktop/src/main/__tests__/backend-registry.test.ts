@@ -1,4 +1,5 @@
 import { DEFAULT_THREAD_ARCHIVE_POLICY } from "@pwragent/shared";
+import { threadLockRefusalMessage } from "@pwragent/shared";
 import { ThreadCorrespondenceStore } from "../app-server/thread-correspondence-store";
 import { execFile as execFileCallback } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -1058,6 +1059,26 @@ function createOverlayStoreMock(params?: {
         parentThreadBackend,
       parentThreadInstanceId,
       } as ThreadOverlayState;
+      overlays.set(key, next);
+      return next;
+    },
+    setThreadLock: async ({
+      backend,
+      threadId,
+      lock,
+    }: {
+      backend: AppServerBackendKind;
+      threadId: string;
+      lock: ThreadOverlayState["lock"];
+    }) => {
+      const key = `${backend}:${threadId}`;
+      const { lock: _previous, ...current } = overlays.get(key) ?? {
+        backend,
+        threadId,
+        executionMode: "default" as const,
+        extraLinkedDirectories: [],
+      };
+      const next = (lock ? { ...current, lock } : current) as ThreadOverlayState;
       overlays.set(key, next);
       return next;
     },
@@ -3099,6 +3120,90 @@ describe("DesktopBackendRegistry", () => {
       throw new Error("transfer failed");
     })).rejects.toThrow("transfer failed");
     await expect(registry.withThreadHandoff(params.threadId, async () => "released")).resolves.toBe("released");
+  });
+
+  it("refuses every turn source on a locked thread, naming the note, until it is unlocked", async () => {
+    const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore: createOverlayStoreMock() });
+    onTestFinished(() => registry.close());
+    const params = { backend: "codex" as const, threadId: "parked", input: [{ type: "text" as const, text: "Continue" }] };
+    await registry.setThreadLock({ ...params, locked: true, note: "Worktree handed to the repair thread" }, { source: "operator" });
+    const refusal = "This thread is locked: Worktree handed to the repair thread. Unlock it before starting a turn.";
+
+    await expect(registry.submitTurn(params)).rejects.toThrow(refusal);
+    // Automations see a lock as busy, so a PR watch waits without spending an attempt.
+    await expect(registry.submitTurnIfIdle(params)).resolves.toEqual({ status: "busy" });
+    await expect(registry.startTurn(params)).rejects.toThrow(refusal);
+    await expect(registry.steerTurn({ ...params, expectedTurnId: "turn-1", requestId: "steer-1" })).rejects.toThrow(refusal);
+    await expect(registry.startReview({ backend: "codex", threadId: "parked", target: { type: "uncommittedChanges" } }))
+      .rejects.toThrow(refusal);
+    await expect(registry.compactThread({ backend: "codex", threadId: "parked" })).rejects.toThrow(refusal);
+
+    await registry.setThreadLock({ ...params, locked: false }, { source: "operator" });
+    await expect(registry.submitTurnIfIdle(params)).resolves.toMatchObject({ status: "started" });
+  });
+
+  it("holds a delivery on a locked thread and starts it once unlocked", async () => {
+    const codexClient = new MockBackendClient({});
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    onTestFinished(() => registry.close());
+    const params = { backend: "codex" as const, threadId: "parked", input: [{ type: "text" as const, text: "Monitor result" }] };
+    const { lock } = await registry.setThreadLock({ ...params, locked: true, note: "Parked" }, { source: "operator" });
+
+    // A monitor's result for a locked parent is held, not refused.
+    await expect(registry.submitHeldTurn({
+      ...params,
+      queueEntryId: "monitor-result",
+      holdReason: threadLockRefusalMessage(lock!),
+    })).resolves.toMatchObject({ status: "queued" });
+    // A release while locked keeps it held.
+    await expect(registry.releaseQueuedTurnWithDisposition("monitor-result"))
+      .resolves.toMatchObject({ disposition: "blocked" });
+    expect(codexClient.startTurnCallCount).toBe(0);
+
+    await registry.setThreadLock({ ...params, locked: false }, { source: "operator" });
+    await vi.waitFor(() => expect(codexClient.startTurnCallCount).toBe(1));
+  });
+
+  it("leaves a queue held for another reason alone on unlock", async () => {
+    const codexClient = new MockBackendClient({});
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    onTestFinished(() => registry.close());
+    const params = { backend: "codex" as const, threadId: "parked", input: [{ type: "text" as const, text: "Retry me" }] };
+    await registry.submitHeldTurn({ ...params, queueEntryId: "failed-turn", holdReason: "The previous turn failed." });
+    await registry.setThreadLock({ ...params, locked: true }, { source: "operator" });
+    await registry.setThreadLock({ ...params, locked: false }, { source: "operator" });
+
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(codexClient.startTurnCallCount).toBe(0);
+  });
+
+  it("publishes each lock change and keeps the original time and source when the note changes", async () => {
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore });
+    onTestFinished(() => registry.close());
+    const events: AgentEvent[] = [];
+    const unsubscribe = registry.onEvent((event) => {
+      if (event.notification.method === "thread/lock/updated") events.push(event);
+    });
+    onTestFinished(unsubscribe);
+    const thread = { backend: "codex" as const, threadId: "parked" };
+
+    const locked = await registry.setThreadLock({ ...thread, locked: true }, { source: "agent_tool" });
+    expect(locked.lock).toMatchObject({ source: "agent_tool" });
+    expect(locked.lock).not.toHaveProperty("note");
+    const renoted = await registry.setThreadLock({ ...thread, locked: true, note: "  Parked for the repair.  " }, { source: "operator" });
+    expect(renoted.lock).toEqual({ note: "Parked for the repair.", lockedAt: locked.lock!.lockedAt, source: "agent_tool" });
+    // Locking again without a note keeps the note; an unchanged lock publishes nothing.
+    await registry.setThreadLock({ ...thread, locked: true }, { source: "operator" });
+    await registry.setThreadLock({ ...thread, locked: false }, { source: "operator" });
+    await registry.setThreadLock({ ...thread, locked: false }, { source: "operator" });
+
+    expect(events.map((event) => (event.notification.params as { lock?: unknown }).lock)).toEqual([
+      locked.lock,
+      renoted.lock,
+      undefined,
+    ]);
+    expect(await overlayStore.getThreadOverlayState(thread)).not.toHaveProperty("lock");
   });
 
   it("rejects handoff while a turn start is awaiting its provider", async () => {
@@ -47278,19 +47383,20 @@ script = "printf setup"
           ? { archivedThreads: options.archivedThreads }
           : {}),
       });
+      const overlayStore = createOverlayStoreMock({
+        overlays: {
+          "codex:agent-thread": createAgentOverlay(),
+          "codex:target-thread": {
+            backend: "codex",
+            threadId: "target-thread",
+            executionMode: "default",
+            extraLinkedDirectories: [],
+          },
+        },
+      });
       const registry = new DesktopBackendRegistry({
         codexClient,
-        overlayStore: createOverlayStoreMock({
-          overlays: {
-            "codex:agent-thread": createAgentOverlay(),
-            "codex:target-thread": {
-              backend: "codex",
-              threadId: "target-thread",
-              executionMode: "default",
-              extraLinkedDirectories: [],
-            },
-          },
-        }),
+        overlayStore,
       });
       const archiver = vi.fn(async (request: ArchiveThreadRequest) => ({
         backend: request.backend,
@@ -47370,11 +47476,51 @@ script = "printf setup"
         codexClient,
         handoff,
         markThreadSeen,
+        overlayStore,
         registry,
         restore,
         setThreadPin,
       };
     }
+
+    it("locks a thread with a note as the agent tool, and unlocks it", async () => {
+      const { call, overlayStore, registry } = await setup();
+      const target = { backend: "codex" as const, threadId: "target-thread" };
+
+      const locked = await call({ lockNote: "Worktree handed to the repair thread." });
+      expect(locked.success).toBe(true);
+      expect(locked.payload.mutation.changes).toEqual([
+        { field: "locked", status: "applied", to: true },
+        { field: "lock_note", status: "applied", to: "Worktree handed to the repair thread." },
+      ]);
+      expect((await overlayStore.getThreadOverlayState(target))?.lock).toMatchObject({
+        note: "Worktree handed to the repair thread.",
+        source: "agent_tool",
+      });
+
+      const unlocked = await call({ locked: false });
+      expect(unlocked.payload.mutation.changes).toEqual([
+        { field: "locked", status: "applied", to: false },
+      ]);
+      expect((await overlayStore.getThreadOverlayState(target))?.lock).toBeUndefined();
+      await registry.close();
+    });
+
+    it("refuses a lock note beside an unlock, and previews a lock without making it", async () => {
+      const { call, overlayStore, registry } = await setup();
+
+      const refused = await call({ locked: false, lockNote: "Parked" });
+      expect(refused.success).toBe(false);
+      expect(refused.payload.code).toBe("invalid_arguments");
+
+      const preview = await call({ locked: true, dryRun: true });
+      expect(preview.payload.mutation.changes).toEqual([
+        { field: "locked", status: "would_apply", to: true },
+      ]);
+      expect((await overlayStore.getThreadOverlayState({ backend: "codex", threadId: "target-thread" }))?.lock)
+        .toBeUndefined();
+      await registry.close();
+    });
 
     it("archives a local thread through the app's own archive path", async () => {
       const { archiver, call, registry } = await setup();
@@ -47635,6 +47781,48 @@ script = "printf setup"
         message: "Select a Git project checkout or worktree as the destination.",
       });
       expect(codexClient.lastRenameThreadParams).toBeUndefined();
+      await registry.close();
+    });
+
+    it("puts an unlocked lock back as it was when the move is refused", async () => {
+      const { call, handoff, overlayStore, registry } = await setup();
+      const target = { backend: "codex" as const, threadId: "target-thread" };
+      const { lock } = await registry.setThreadLock({ ...target, locked: true, note: "Parked" }, { source: "operator" });
+      handoff.mockRejectedValueOnce(
+        new Error("Select a Git project checkout or worktree as the destination."),
+      );
+
+      const result = await call({ locked: false, projectPath: "/tmp/not-a-repo" });
+
+      expect(result.success).toBe(false);
+      expect((await overlayStore.getThreadOverlayState(target))?.lock).toEqual(lock);
+      await registry.close();
+    });
+
+    it("resumes what the lock held only after an unlock's move lands", async () => {
+      const { call, codexClient, handoff, registry } = await setup();
+      const target = { backend: "codex" as const, threadId: "target-thread" };
+      const { lock } = await registry.setThreadLock({ ...target, locked: true, note: "Parked" }, { source: "operator" });
+      await registry.submitHeldTurn({
+        ...target,
+        input: [{ type: "text", text: "Held while parked" }],
+        queueEntryId: "held-while-parked",
+        holdReason: threadLockRefusalMessage(lock!),
+      });
+      let startsDuringMove: number | undefined;
+      handoff.mockImplementationOnce(async () => {
+        // Give a drain scheduled by the unlock every chance to run.
+        await new Promise((resolve) => setImmediate(resolve));
+        await new Promise((resolve) => setImmediate(resolve));
+        startsDuringMove = codexClient.startTurnCallCount;
+        return {} as HandoffThreadWorkspaceResponse;
+      });
+
+      const result = await call({ locked: false, projectPath: "/Users/fixture-user/repos/app" });
+
+      expect(result.success).toBe(true);
+      expect(startsDuringMove).toBe(0);
+      await vi.waitFor(() => expect(codexClient.startTurnCallCount).toBe(1));
       await registry.close();
     });
 
@@ -49336,6 +49524,82 @@ script = "printf setup"
       ],
     });
     await registry.close();
+  });
+
+  it("holds a task monitor's result for a locked parent and delivers it on unlock", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      models: TEST_TASK_MONITOR_MODELS,
+      startThreadResult: { threadId: "monitor-thread" },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+    onTestFinished(() => registry.close());
+    const turnEvent = async (method: "turn/started" | "turn/completed") =>
+      await registry.publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method,
+          params: {
+            threadId: "thread-1",
+            turnId: "parent-turn",
+            turn: method === "turn/started"
+              ? { id: "parent-turn" }
+              : { id: "parent-turn", status: "completed", output: [] },
+          },
+        },
+      } as AgentEvent);
+    const toolCall = async (threadId: string, tool: string, args: Record<string, unknown>) => {
+      const response = await codexClient.emitRequest({
+        method: "item/tool/call",
+        params: {
+          threadId,
+          turnId: threadId === "thread-1" ? "parent-turn" : "turn-1",
+          callId: `call-${tool}`,
+          requestId: `call-${tool}`,
+          namespace: "pwragent_task_monitors",
+          tool,
+          arguments: args,
+        },
+      } as AppServerPendingRequestNotification);
+      return {
+        response,
+        payload: JSON.parse(
+          (response as { contentItems: Array<{ text: string }> }).contentItems[0]?.text ?? "{}",
+        ) as Record<string, unknown>,
+      };
+    };
+    await turnEvent("turn/started");
+    const created = await toolCall("thread-1", "create_monitor_delegation", {
+      task: "Watch an asynchronous task until it finishes.",
+    });
+    await turnEvent("turn/completed");
+    await registry.setThreadLock({
+      backend: "codex",
+      threadId: "thread-1",
+      locked: true,
+      note: "Worktree handed to the repair thread.",
+    }, { source: "operator" });
+
+    const completed = await toolCall("monitor-thread", "complete_monitoring", {
+      monitorId: created.payload.monitorId,
+      outcome: "success",
+      summary: "The monitored task finished.",
+    });
+
+    expect(completed.response).toMatchObject({ success: true });
+    expect(completed.payload).toMatchObject({ parentTurn: { status: "queued", position: 1 } });
+    // Only the monitor's own turn has started.
+    expect(codexClient.startTurnCallCount).toBe(1);
+
+    await registry.setThreadLock({ backend: "codex", threadId: "thread-1", locked: false }, { source: "operator" });
+    await expect.poll(() => codexClient.startTurnCallCount).toBe(2);
+    expect(codexClient.lastStartTurnParams).toMatchObject({
+      threadId: "thread-1",
+      input: [{ type: "text", text: expect.stringContaining("The monitored task finished.") }],
+    });
   });
 
   it("lets only the active parent cancel a managed monitor without waking another turn", async () => {

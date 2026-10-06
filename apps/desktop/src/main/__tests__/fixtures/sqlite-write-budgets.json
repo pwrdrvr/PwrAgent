@@ -894,6 +894,13 @@
     "rowsChanged": 5,
     "statements": 5
   },
+  "thread-lock-toggle": {
+    "commits": 2,
+    "note": "An operator or agent lock and unlock: one commit each, never on a timer or per turn; a redundant unlock writes nothing. 50 toggles/day at ~4 KiB/commit is ~0.4 MB/day",
+    "observedWalBytes": 0,
+    "rowsChanged": 2,
+    "statements": 2
+  },
   "thread-pricing-lazy-repair": {
     "commits": 1,
     "note": "one thread load lazily reprices 25 usage rows in ten-row progress batches; a second load is read-only",

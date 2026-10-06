@@ -178,6 +178,8 @@ import {
   type SetThreadPinRequest,
   type SetThreadPinResponse,
   type SetThreadReactionRequest,
+  type SetThreadLockRequest,
+  type SetThreadLockResponse,
   type SetThreadReactionResponse,
   type SetThreadPrAutoDispatchRequest,
   type SetThreadPrAutoDispatchResponse,
@@ -651,6 +653,7 @@ const NAVIGATION_EVENT_METHODS = new Set<string>([
   "thread/executionMode/queueCleared",
   "thread/executionMode/queued",
   "thread/executionMode/updated",
+  "thread/lock/updated",
   "thread/modelSettings/updated",
   "thread/name/updated",
   "thread/parent/cleared",
@@ -6435,6 +6438,20 @@ function localBackendOperations(): FederationBackendOperations {
         threadId: request.threadId,
         pinnedRank: overlay.pinnedRank,
       };
+    },
+    async setThreadLock(
+      request: SetThreadLockRequest,
+      options?: { requesterInstanceId?: string },
+    ): Promise<SetThreadLockResponse> {
+      return await getDesktopBackendRegistry().setThreadLock({
+        backend: request.backend ?? "codex",
+        threadId: request.threadId,
+        locked: request.locked,
+        ...(request.note !== undefined ? { note: request.note } : {}),
+      }, {
+        source: "peer",
+        ...(options?.requesterInstanceId ? { sourceInstanceId: options.requesterInstanceId } : {}),
+      });
     },
     async setThreadReaction(
       request: SetThreadReactionRequest,

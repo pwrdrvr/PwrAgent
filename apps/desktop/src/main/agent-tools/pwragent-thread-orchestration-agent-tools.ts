@@ -114,6 +114,7 @@ export class PwrAgentFederatedThreadMessageError extends Error {
   constructor(
     readonly code:
       | "ambiguous_owner"
+      | "forbidden"
       | "internal_error"
       | "invalid_arguments"
       | "no_active_turn"

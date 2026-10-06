@@ -133,6 +133,13 @@ describe("federated thread mutation service", () => {
         setThreadPin: vi.fn(async (request) => request),
         markThreadSeen: vi.fn(async (request) => request),
         handoffThreadWorkspace: vi.fn(async () => ({})),
+        setThreadLock: vi.fn(async (request: { locked: boolean }) => ({
+          backend: "codex",
+          threadId: "remote-thread",
+          ...(request.locked ? {} : {
+            previousLock: { note: "Parked", lockedAt: 1, source: "operator" },
+          }),
+        })),
       };
       const target = { scope: "remote" as const, instanceId: "pwr_owner" };
       const runtime = {
@@ -299,6 +306,25 @@ describe("federated thread mutation service", () => {
         targetPath: "/Users/studio/repos/app",
       });
       expect(backend.renameThread).not.toHaveBeenCalled();
+    });
+
+    it("locks the peer's thread again with its note when an unlock's move is refused", async () => {
+      const { backend, handler } = peerOwning("idle");
+      backend.handoffThreadWorkspace.mockRejectedValueOnce(
+        new Error("Move to Project requires an existing directory."),
+      );
+
+      await expect(handler({
+        backend: "codex",
+        threadId: "remote-thread",
+        locked: false,
+        projectPath: "/Users/studio/repos/app",
+        dryRun: false,
+      })).rejects.toThrow("requires an existing directory");
+      expect(backend.setThreadLock.mock.calls.map(([request]) => request)).toEqual([
+        { backend: "codex", threadId: "remote-thread", locked: false },
+        { backend: "codex", threadId: "remote-thread", locked: true, note: "Parked" },
+      ]);
     });
   });
 });

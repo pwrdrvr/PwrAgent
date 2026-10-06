@@ -270,6 +270,7 @@ function projectNavigationRow(params: {
       : {}),
     ...(reactions.items ? { reactions: reactions.items } : {}),
     ...(reactions.truncated ? { reactionsTruncated: true } : {}),
+    ...(thread.lock ? { lock: thread.lock } : {}),
     ...(prs.items ? { prs: prs.items } : {}),
     ...(prs.truncated ? { prsTruncated: true } : {}),
     ...(messagingBindings.items
