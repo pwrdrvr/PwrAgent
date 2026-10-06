@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.2.0-prerelease.1 - 2026-10-06
+
+- Thread To-dos - Turn agent follow-ups into visible reminders with actions to start reviews, merge pull requests, or hand work to another thread or machine.
+- Thread Control - Lock a thread with an explanatory note to prevent new turns while its workspace is handed off. Added /fork with workspace choices and clearer sub-thread creation.
+- Color Themes - Choose independent dark and light themes, including Catppuccin, Solarized, Gray, and Blue, with automatic switching alongside the OS.
+- Telegram and Messaging - Added richer replies with tables, formulas, footnotes, collapsible sections, and mixed media. Private monitor and sub-agent updates no longer leak into chat delivery.
+- Image Review - Inspect local image edits with Before, After, and pixel-difference views, synchronized zoom, and navigation across changed images.
+- Queues and Star Map - Added readable queued-message titles, grouped cross-thread guidance, and queue-or-steer controls directly on Star Map cards.
+- Performance and Recovery - Reduced repeated navigation reads and unnecessary Star Map redraws. Failed interface windows can recover automatically without stopping running agents.
+- Linux Updates - Added update checking, downloads, and explicitly authorized installation for DEB, RPM, and pacman packages, with copyable terminal fallback commands.
+- Usage and Cost - Added estimated pricing for previously unobserved Codex threads, improved usage-chart responsiveness, and corrected Token Miser retrieval accounting.
+- MCP Reliability - Improved connection recovery across instance changes, preserved authorization choices, and stopped canceled requests from making healthy connections appear unavailable.
+
 ## v1.1.6 - 2026-10-02
 
 - Live Voice - Talk to local Codex threads, or use Director voice to check on work, start threads, and steer agents across connected machines, with transcripts and action receipts.
