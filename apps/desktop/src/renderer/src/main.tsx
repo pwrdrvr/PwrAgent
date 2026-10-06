@@ -252,10 +252,13 @@ mountRendererRoot(
     <RendererRecoveryStateProvider draftsEnabled={rendererRoot.type === App || rendererRoot.type === StarMapWindow}>
       <RendererErrorBoundary>
         <Suspense fallback={null}>{rendererRoot}</Suspense>
-        {/* Every window's `.tooltip-target[data-tooltip]` controls, drawn on
-            document.body so no pane can clip or out-stack them. */}
-        <DataTooltipLayer />
       </RendererErrorBoundary>
+      {/* Every window's `.tooltip-target[data-tooltip]` controls, drawn on
+          document.body so no pane can clip or out-stack them. A sibling of
+          the boundary, not a child: it is window chrome that keeps serving
+          the recovery fallback, and the boundary's only child stays the
+          Suspense the renderer-recovery E2E injects its fault into. */}
+      <DataTooltipLayer />
     </RendererRecoveryStateProvider>
   </React.StrictMode>,
   (container) => ReactDOM.createRoot(container),
