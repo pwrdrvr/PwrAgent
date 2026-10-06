@@ -28,8 +28,10 @@ function buildThreadRowDragPreview(
   const clone = row.cloneNode(true) as HTMLElement;
   clone.classList.add("thread-row--drag-image");
   clone.classList.remove("thread-row--compact");
-  clone.querySelector(".thread-row__actions")?.remove();
+  // The hover controls go; the pin mark and the timestamp share the title
+  // line's actions with them and stay, so the held card reads as the row.
   clone.querySelector(".thread-row__chip--add-reaction")?.remove();
+  clone.querySelector(".thread-row__pin-button")?.remove();
   clone.querySelector(".thread-row__overflow-button")?.remove();
   clone.setAttribute("aria-hidden", "true");
   clone.style.width = `${rect.width}px`;

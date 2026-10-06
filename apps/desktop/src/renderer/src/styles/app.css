@@ -1329,10 +1329,10 @@
    one pending state nothing but the operator will ever resolve, so hiding it
    in the denser view is exactly where it would be lost.
    (The pin is absent from this list because it is no longer a chip in ANY
-   density: pinned state and the unpin control are the in-title
-   `.thread-row__heading-pin` button, and the hover actions cluster's
-   `.thread-row__pin-button` renders only on UNPINNED rows to pin them —
-   a lone pin pill used to keep a whole second chip row alive.)
+   density: pinned state and the unpin control are the title line's
+   `.thread-row__pin` button, and `.thread-row__pin-button` renders in
+   the same slot only on UNPINNED rows to pin them — a lone pin pill used
+   to keep a whole second chip row alive.)
 
    Surviving chips carry the `thread-row__chip--persistent` marker class
    in TSX — ONE source of truth shared with the gap-zeroing rule below,
@@ -1355,8 +1355,9 @@
 /* Tighten thread-row vertical real estate. The row keeps its column
    layout (title row → chips row when chips remain), but the title→chips
    gap shrinks. Block padding matches the 4px Mission Control base, so
-   `.thread-row__actions` / `.thread-row__subthread-toggle` need no
-   compact offset overrides and only padding-left differs here. The
+   `.thread-row__subthread-toggle` needs no compact offset override (the
+   title line's actions ride the line itself) and only padding-left
+   differs here. The
    hidden-chips selector zeroes the column gap for rows where every chip
    is suppressed — the `--persistent` marker (same source of truth as
    the suppression rule above) plus `.pr-chip` are the only things that
@@ -5411,13 +5412,15 @@ a.button {
 .thread-row__subthread-toggle {
   position: absolute;
   /* Center the toggle on the title's FIRST line, not the row's geometric
-     center — same anchoring (and the same token-derived math) as
-     .thread-row__actions: title-line midpoint = 1px card border + 4px
-     padding + (size × 1.25 line + 2px descender pad) / 2, minus half the
-     toggle's 18px height, rounded to a whole pixel (same golden-stability
-     rationale as the actions rule; the border term is explained there,
-     since this toggle is positioned against the shell too). Resolves to
-     5px at the md notch and tracks every user-selected notch of
+     center: title-line midpoint = 1px card border + 4px padding +
+     (size × 1.25 line + 2px descender pad) / 2, minus half the toggle's
+     18px height, rounded to a whole pixel so the toggle never sits on a
+     fractional boundary (which would antialias-shift the visual
+     goldens). The border term matters because this toggle is positioned
+     against the SHELL, whose edge is the card's outer border edge;
+     `.thread-row__open` measures from the card's padding box, where 4px
+     alone is right. Resolves to 5px at the md notch and tracks every
+     user-selected notch of
      `--sidebar-title-size`. */
   top: round(calc(5px + (var(--sidebar-title-size) * 1.25 + 2px) / 2 - 9px), 1px);
   left: 8px;
@@ -5537,8 +5540,8 @@ a.button {
      text-to-text between rows — the inter-card air was the loosest
      measurement left on the surface once the type and chips shrank.
      Both densities share this padding; they differ in what they SHOW,
-     not how the card breathes. (`.thread-row__actions` top is kept in
-     step with the block padding — see that rule.) */
+     not how the card breathes. (`.thread-row__subthread-toggle` top is
+     kept in step with the block padding — see that rule.) */
   padding: 4px 10px;
   border: 1px solid transparent;
   border-radius: 8px;
@@ -5703,38 +5706,53 @@ a.button {
   display: none !important;
 }
 
+/* The row's controls ride the END of the title line, in one fixed order:
+   add reaction · pin · timestamp-or-kebab (see ThreadRow). The pin must
+   not move when the row is hovered. It used to follow the title, and a
+   hover reserve re-truncated the title to clear the revealed cluster, so
+   the pin slid up to 46px left at the moment the pointer arrived and a
+   click aimed at the title unpinned the thread. Now nothing right of the
+   pin changes width: the timestamp and the kebab share
+   `.thread-row__time-lane`, and the hover-only controls open toward the
+   title, which re-truncates instead.
+
+   The controls are 24px targets (WCAG 2.5.8) in a title line of
+   size × 1.25 + 2px descender pad (18.25px at md, 15.75px at xs). The
+   negative block margin gives back the overhang at every notch, so the
+   line, and the card, keep their height at rest and on hover in both
+   densities. The overhang is largest at xs (4.1px), which leaves the
+   controls 0.9px inside the card's outer edge — where the absolutely
+   positioned cluster used to sit — and the inset focus ring clear of
+   the card's border at every notch. */
 .thread-row__actions {
-  position: absolute;
-  /* Align the pin/overflow buttons + add-reaction chip with the title
-     line, not the row's geometric center. The cluster sits so its
-     vertical midpoint matches the title's line midpoint. When the
-     row is multi-line (chips present) the title is still the FIRST
-     line, so the same offset keeps the cluster anchored to it. Derived
-     from the user-adjustable title token so every notch stays aligned:
-     title-line midpoint = 1px card border + 4px padding + (size × 1.25
-     line + 2px descender pad) / 2; subtract half the 24px cluster
-     height, rounded to a whole pixel so the cluster never sits on a
-     fractional boundary (which would antialias-shift the visual
-     goldens). At the md notch (13px) this resolves to 2. The border
-     term matters because this cluster is positioned against the SHELL,
-     whose edge is the card's outer border edge. `.thread-row__open`
-     measures from the card's padding box, where 4px alone is right.
-     Without the border the cluster sat 0.5-2px above the title
-     midpoint and touched the card's top border at the xs notch. */
-  top: round(calc(5px + (var(--sidebar-title-size) * 1.25 + 2px) / 2 - 12px), 1px);
-  /* 11px (from 9): the card's own right inset is 10px padding + 1px
-     border, so 9 put the kebab's edge 2px inside the border while its
-     6px corner radius sat against the card's 8px one — the two curves
-     read as touching. 11 lines the cluster's right edge up with the
-     content edge every chip and the timestamp already respect, giving
-     the same visible air the row's left side keeps. The pinned-row
-     heading reserve below derives from this offset — move both. */
-  right: 11px;
-  z-index: 3;
   display: flex;
+  flex: 0 0 auto;
+  align-self: center;
   align-items: center;
-  gap: 4px;
-  pointer-events: none;
+  margin-block: calc((var(--sidebar-title-size) * 1.25 + 2px - 24px) / 2);
+}
+
+/* The timestamp and the kebab share one grid cell; hover fades one out
+   and the other in. 26px is the kebab's width, so the lane is as wide at
+   rest as on hover and the pin to its left never moves. A timestamp wider
+   than the kebab ("Sep 30") widens the lane in both states alike. */
+.thread-row__time-lane {
+  display: grid;
+  min-width: 26px;
+  align-items: center;
+  justify-items: end;
+}
+
+.thread-row__time-lane > .thread-row__time,
+.thread-row__time-lane > .thread-row__overflow-button {
+  grid-area: 1 / 1;
+}
+
+/* The lane centres on the title's line box, which carries a 2px descender
+   pad, so the time's glyphs sat 1px below the title's. Same nudge as the
+   status indicator, for the same reason. */
+.thread-row__time-lane > .thread-row__time {
+  translate: 0 -1px;
 }
 
 /* One base chrome + reveal mechanic for both hover-revealed row action
@@ -5768,39 +5786,47 @@ a.button {
 }
 
 .thread-row__overflow-button {
-  /* 26px is the pinned cluster-side literal the pinned-row heading
-     reserve derives from, and the 24px-tall button reads as a
-     slightly wider pill next to the square 24px add-reaction chip on
-     purpose. */
+  /* 26px, a touch wider than the 24px pin beside it on purpose. It is
+     also the time lane's floor (`.thread-row__time-lane`): change both
+     together, or the lane grows on hover and pushes the pin left. */
   width: 26px;
 }
 
-/* The hover-only add-reaction chip rides in the same cluster; match the
-   24px cluster height so the three controls read as one unit (and stay
-   on the WCAG 2.5.8 target floor together). */
+/* The hover-only add-reaction chip rides in the same cluster at its 24px
+   height, so the controls read as one unit (and stay on the WCAG 2.5.8
+   target floor together). At rest it takes no width, so the title keeps
+   the space; revealed (see the reveal rule below the chip's own block),
+   it opens to a 30px pill, the 14px smiley plus the chip's usual 8px
+   inline padding, to the LEFT of the pin. */
 .thread-row__actions .thread-row__chip--add-reaction {
+  width: 0;
   height: 24px;
-  min-width: 24px;
+  justify-content: center;
+  margin-right: 0;
+  padding: 0;
+  transition:
+    width 120ms ease,
+    margin-right 120ms ease,
+    background 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease;
 }
 
-/* Timestamp fade — the union of every state that reveals a cluster
-   control over the time's lane. Adding a reveal state here? The pinned
-   rows' heading-reserve rule below keeps the in-title unpin pin clear
-   of the revealed cluster and mirrors this state set (minus the
-   cluster pin, which pinned rows never render) — extend it in the same
-   commit or the new state re-covers the pin. */
-.thread-row-shell:has(.thread-row__pin-button:focus-visible) .thread-row__time,
-.thread-row-shell:hover .thread-row__time,
-.thread-row-shell:has(.thread-row__overflow-button:focus-visible) .thread-row__time,
-.thread-row-shell:has(.thread-row__chip--add-reaction:focus-visible) .thread-row__time,
-.thread-row-shell:has(.thread-row__chip--add-reaction.is-open) .thread-row__time,
-.thread-row-shell:has(.thread-row__overflow-button[aria-expanded="true"]) .thread-row__time {
+/* The timestamp fades exactly when the kebab that shares its lane is
+   shown: on row hover, while the kebab has keyboard focus, and while its
+   menu is open (focus has moved into the menu, so without that arm the
+   time faded back in under the trigger of the menu it opened). Scoped to
+   the lane, so a row without a kebab (Starting, Draft) keeps its label on
+   hover, and focusing the reaction chip or the pin leaves the time alone:
+   neither covers it any more. */
+.thread-row-shell:hover .thread-row__time-lane > .thread-row__time,
+.thread-row__time-lane:has(> .thread-row__overflow-button:focus-visible) > .thread-row__time,
+.thread-row__time-lane:has(> .thread-row__overflow-button[aria-expanded="true"]) > .thread-row__time {
   opacity: 0;
 }
 
-/* Cluster reveal. New reveal states must also join the fade list above
-   and the pinned-row heading-reserve rule below — see the fade list's
-   comment. */
+/* Cluster reveal. A new kebab reveal state must also join the timestamp
+   fade list above, or the time paints under the kebab. */
 .thread-row-shell:hover .thread-row__pin-button,
 .thread-row__pin-button:focus-visible,
 .thread-row-shell:hover .thread-row__overflow-button,
@@ -5808,53 +5834,6 @@ a.button {
 .thread-row__overflow-button[aria-expanded="true"] {
   opacity: 1;
   pointer-events: auto;
-}
-
-/* Keep the in-title unpin pin clickable while the hover cluster is
-   shown. The pin sits after the title, so a long (truncated) title
-   parks it at the heading's right edge — exactly where the revealed
-   add-reaction + kebab cluster paints, covering the unpin control at
-   the moment the pointer arrives to use it. Reserving heading padding
-   during the reveal re-truncates the title and docks the pin left of
-   the cluster. Short titles never reach the boundary, so nothing moves
-   for them; the transition on `.thread-row__heading` glides the dock
-   in step with the cluster's 120ms fade.
-
-   46px derivation, all border-box worst case. The cluster zone spans
-   71px from the card's right border: 11px offset + 26px kebab + 4px
-   gap + the add-reaction chip's RENDERED width of 30px (its
-   `min-width: 24px` is a floor — the 14px smiley plus the base chip's
-   0 8px padding is what actually paints). The pin's border box must
-   clear that zone: card padding 10px + header gap 12px + timestamp +
-   reserve − the pin's 3px `margin-right: -3px` overhang ≥ 71px + 4px
-   air. The narrowest timestamp ("1h"/"2d") measures ~13px at its fixed
-   12px font, giving reserve ≥ 43px; 46px leaves 3px of real slack at
-   every title-size notch. The cluster-side literals in this arithmetic
-   are pinned by theme-contract next to this rule's own pin, so a
-   cluster resize fails a test instead of silently re-covering the pin.
-
-   Scoped by the row's `--pinned` or `--retained` modifier (set by
-   ThreadRow when it renders an in-title pin — a plain class match instead
-   of a per-hover `:has()` subtree scan, same optimization as the
-   directory-row header modifiers). The selector list mirrors the
-   cluster's reveal states in the fade/reveal rules above (the cluster
-   pin's states are absent because pinned rows never render it).
-   Deliberate over-reserve: on a surface without a reaction handler the
-   revealed cluster is kebab-only (37px zone) and the rest-state gap
-   already clears it, so the reserve protects nothing there — accepted,
-   since every production surface wires reactions and a narrower
-   conditional would re-add the `:has()` scan this class avoids. */
-.thread-row-shell:hover .thread-row--retained .thread-row__heading,
-.thread-row-shell:has(.thread-row__overflow-button:focus-visible) .thread-row--retained .thread-row__heading,
-.thread-row-shell:has(.thread-row__chip--add-reaction:focus-visible) .thread-row--retained .thread-row__heading,
-.thread-row-shell:has(.thread-row__chip--add-reaction.is-open) .thread-row--retained .thread-row__heading,
-.thread-row-shell:has(.thread-row__overflow-button[aria-expanded="true"]) .thread-row--retained .thread-row__heading,
-.thread-row-shell:hover .thread-row--pinned .thread-row__heading,
-.thread-row-shell:has(.thread-row__overflow-button:focus-visible) .thread-row--pinned .thread-row__heading,
-.thread-row-shell:has(.thread-row__chip--add-reaction:focus-visible) .thread-row--pinned .thread-row__heading,
-.thread-row-shell:has(.thread-row__chip--add-reaction.is-open) .thread-row--pinned .thread-row__heading,
-.thread-row-shell:has(.thread-row__overflow-button[aria-expanded="true"]) .thread-row--pinned .thread-row__heading {
-  padding-right: 46px;
 }
 
 .thread-row__pin-button:hover,
@@ -5871,15 +5850,16 @@ a.button {
    hovered and drew Chromium's `outline: auto` ring.
 
    Every control in the card's title band rings INSET. The band has no
-   room for an outset ring: the cluster and the subthread toggle sit 1-6px
-   below the card's outer edge, and the in-title pin's 24px box overhangs
-   its 18px line slot by 3px. Measured before this rule, the rings (1px
+   room for an outset ring: the subthread toggle and the title line's
+   24px controls sit 1-6px below the card's outer edge (the controls
+   overhang their 18px line by 3px at md, 4px at xs). Measured before
+   this rule, the rings (1px
    and 2px offsets) crossed that edge by up to 4px at every title-size
    notch, drawing the kebab's ring over the selected card's border. At
    -2px the ring's reach is 0, so it clears the card's 1px border wherever
    the control itself does. */
 .thread-row__subthread-toggle:focus-visible,
-.thread-row__heading-pin:focus-visible,
+.thread-row__pin:focus-visible,
 .thread-row__pin-button:focus-visible,
 .thread-row__chip--add-reaction:focus-visible,
 .thread-row__overflow-button:focus-visible {
@@ -5945,6 +5925,8 @@ a.button {
 .thread-row-shell:hover .thread-row__chip--add-reaction,
 .thread-row__chip--add-reaction:focus-visible,
 .thread-row__chip--add-reaction.is-open {
+  width: 30px;
+  margin-right: 4px;
   opacity: 1;
   pointer-events: auto;
 }
@@ -6077,8 +6059,8 @@ a.button {
 /* Title line — a sibling of the open-thread overlay since the
    transcript-gaps pass, exactly like `.thread-row__chips`: the container
    is transparent to the pointer (clicks fall through to the overlay
-   button) and only the in-title pin button and the status indicator opt
-   back in. The indicator's opt-in exists solely so its native `title`
+   button) and only the row's actions (pin, add reaction, kebab) and the
+   status indicator opt back in. The indicator's opt-in exists solely so its native `title`
    tooltip ("Thinking" / "Unread update") keeps working — the sidebar's
    only sighted-hover explanation of the marks; its clicks bubble to the
    header's onClick in ThreadRow, which forwards to the same select
@@ -6094,8 +6076,8 @@ a.button {
 }
 
 /* The row's open-thread action: an EMPTY button stretched over the whole
-   card. The visible title line, the chip flow, and the actions cluster
-   are all siblings, because they carry their own buttons (unpin, copy
+   card. The visible title line (which holds the row's actions) and the
+   chip flow are its siblings, because they carry their own buttons (unpin, copy
    path, copy branch, unbind, reactions, PR links) and nesting a control
    inside this one made the row invalid and unoperable (axe
    `nested-interactive`). `.star-map-card-shell` solves the same problem
@@ -6171,61 +6153,64 @@ a.button {
      brings the two surfaces to parity. */
   gap: 2px;
   flex: 1 1 auto;
-  /* Glides the pinned-row hover reserve (see the `--pinned` rule near
-     the reveal lists) in step with the cluster's 120ms opacity fade,
-     instead of the title/pin snapping while the buttons are still
-     fading in. Inert on unpinned rows — nothing changes their
-     padding. */
-  transition: padding-right 120ms ease;
 }
 
-/* Always-visible in-title pin on pinned rows — and since the
-   transcript-gaps pass, the actual UNPIN control (the title line is a
-   sibling of the open-thread overlay now, so a real button here is
-   valid). The hover cluster's pin button only renders on UNPINNED rows,
-   so each row shows exactly one pin affordance.
+/* A pinned row's pin, and the dashed pin on a selection-retained row: the
+   actual unpin (or pin) control, visible at rest in `.thread-row__actions`
+   between the add-reaction chip and the timestamp lane. The title line is
+   a sibling of the open-thread overlay, so a real button here is valid.
+   The hover cluster's `.thread-row__pin-button` renders only on the other
+   unpinned rows, in this same slot, so each row shows exactly one pin
+   affordance and it is always in the same place.
 
-   The box is a real 24×24 WCAG 2.5.8 target — axe's target-size rule
-   does not extend the inline exception to a flex-item button, so an
-   18px box would fail the a11y gate the first time an audited fixture
-   pins a thread. The negative margins collapse the layout footprint
-   back to the 18px line slot the title line was tuned around
-   (footprint: -1 + 24 - 3 = 20px wide, 24 - 3 - 3 = 18px tall, icon
-   center unchanged), so the heading's height and spacing don't move. */
-.thread-row__heading-pin {
-  display: inline-flex;
+   A real 24×24 WCAG 2.5.8 target: axe's target-size rule does not extend
+   the inline exception to a flex-item button, so an 18px box would fail
+   the a11y gate the first time an audited fixture pins a thread. The
+   cluster's negative block margin absorbs the overhang. On row hover it
+   takes the cluster's button chrome so it reads as one of the row's
+   controls; only the paint changes, never the box. */
+.thread-row__pin {
+  display: grid;
   width: 24px;
   height: 24px;
   flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  /* The heading gap is tuned for the status-indicator lane's slack;
-     this control has none, so give it back a little air after the
-     title (2px slot air = 2px margin-left on the old 18px box). */
-  margin: -3px -3px -3px -1px;
+  place-items: center;
+  margin-right: 4px;
   padding: 0;
-  border: 0;
-  border-radius: 4px;
+  border: 1px solid transparent;
+  border-radius: 6px;
   background: transparent;
   color: var(--accent-bright);
   pointer-events: auto;
   cursor: pointer;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease;
 }
 
-.thread-row__heading-pin:hover,
-.thread-row__heading-pin:focus-visible {
-  background: var(--accent-soft);
+.thread-row-shell:hover .thread-row__pin {
+  border-color: var(--border-subtle);
+  background: var(--bg-panel-elevated);
+}
+
+.thread-row__pin:hover,
+.thread-row__pin:focus-visible {
+  border-color: var(--accent-border);
+  background: var(--bg-row-active);
 }
 
 /* Read-only variant for surfaces without a pin handler — same mark,
-   no interaction. */
-.thread-row__heading-pin--static {
+   no interaction, and no control chrome on hover. */
+.thread-row__pin--static,
+.thread-row-shell:hover .thread-row__pin--static {
+  border-color: transparent;
+  background: transparent;
   pointer-events: none;
   cursor: default;
 }
 
 /* A pin kept at top: the same glyph, filled. */
-.thread-row__heading-pin--kept path {
+.thread-row__pin--kept path {
   fill: currentColor;
 }
 
@@ -6512,12 +6497,31 @@ a.button {
   font-weight: 600;
 }
 
-/* Pin affordance — hover-revealed on UNPINNED rows only (a pinned row's
-   in-title pin is the unpin control). Base chrome, reveal, and
-   hover-accent rules are SHARED with `.thread-row__overflow-button`
-   (see that block) — only the width lives here. */
+/* Pin affordance — hover-revealed on UNPINNED rows only, in the slot a
+   pinned row's `.thread-row__pin` holds at rest, so pin and unpin sit in
+   one place. Base chrome, reveal, and hover-accent rules are SHARED with
+   `.thread-row__overflow-button` (see that block). At rest it takes no
+   width, so the title keeps the space; revealed, it opens toward the
+   title like the add-reaction chip. */
 .thread-row__pin-button {
+  width: 0;
+  margin-right: 0;
+  border-width: 0;
+  overflow: hidden;
+  transition:
+    width 120ms ease,
+    margin-right 120ms ease,
+    background 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease,
+    opacity 120ms ease;
+}
+
+.thread-row-shell:hover .thread-row__pin-button,
+.thread-row__pin-button:focus-visible {
   width: 24px;
+  margin-right: 4px;
+  border-width: 1px;
 }
 
 .thread-row__chip--approval,
@@ -40853,8 +40857,8 @@ button.composer__subthread-source-parent:hover {
 }
 
 /* Real-app-mimic chips used in the preview cards. The visual contract
-   mirrors the live ThreadRow primitive — the pin is the in-title accent
-   marker (`.thread-row__heading-pin` in the live sidebar), PR chip uses
+   mirrors the live ThreadRow primitive — the pin is the title line's
+   accent marker (`.thread-row__pin` in the live sidebar), PR chip uses
    a small status dot + #number, Meta chips are gray-on-near-black for
    OpenAI / directory / branch slots. */
 .onboarding-wizard__mini-pin {

@@ -338,47 +338,41 @@ describe("Tangerine Terminal theme contract", () => {
     ).toMatch(/height:\s*24px;/);
     expect(
       extractRuleBody(css, ".thread-row__actions .thread-row__chip--add-reaction"),
-    ).toMatch(/height:\s*24px;[\s\S]*min-width:\s*24px;/);
+    ).toMatch(/height:\s*24px;/);
 
-    // The in-title unpin control is a real 24x24 target too (axe's
+    // The title-line unpin control is a real 24x24 target too (axe's
     // target-size rule gives no inline exception to flex-item buttons);
-    // its negative margins collapse the layout footprint back to the
-    // 18px line slot, so the heading's geometry doesn't move.
-    expect(extractRuleBody(css, ".thread-row__heading-pin")).toMatch(
+    // the actions' negative block margin collapses the layout footprint
+    // back to the title's line, so the card's height doesn't move.
+    expect(extractRuleBody(css, ".thread-row__pin")).toMatch(
       /width:\s*24px;[\s\S]*height:\s*24px;/,
     );
 
-    // A 24px target is worthless while something paints over it — the
-    // pinned-row hover reserve keeps the revealed cluster off the
-    // in-title unpin pin. Pinned (all five reveal arms + the value + the
-    // cluster-side literals it is derived from) so a cluster resize or a
-    // dropped keyboard arm revisits the derivation in the rule's comment
-    // in the same commit.
+    // The pin must not move when the row is hovered: a pin that slid left
+    // as the pointer arrived turned clicks on the title into unpins. It
+    // holds still because nothing right of it changes width — the
+    // timestamp and the kebab share one lane, floored at the kebab's
+    // width so the lane is as wide at rest as on hover. Pin the floor to
+    // the kebab's own width so resizing one without the other fails here
+    // instead of sliding the pin again.
+    const kebabWidth = css.match(
+      /(?:^|\n)\.thread-row__overflow-button \{[^}]*width:\s*(\d+)px;/,
+    )?.[1];
+    expect(kebabWidth).toBe("26");
+    expect(extractRuleBody(css, ".thread-row__time-lane")).toMatch(
+      new RegExp(`min-width:\\s*${kebabWidth}px;`),
+    );
     expect(
       extractRuleBody(
         css,
-        ".thread-row-shell:hover .thread-row--pinned .thread-row__heading,\n"
-          + ".thread-row-shell:has(.thread-row__overflow-button:focus-visible) .thread-row--pinned .thread-row__heading,\n"
-          + ".thread-row-shell:has(.thread-row__chip--add-reaction:focus-visible) .thread-row--pinned .thread-row__heading,\n"
-          + ".thread-row-shell:has(.thread-row__chip--add-reaction.is-open) .thread-row--pinned .thread-row__heading,\n"
-          + ".thread-row-shell:has(.thread-row__overflow-button[aria-expanded=\"true\"]) .thread-row--pinned .thread-row__heading",
+        ".thread-row__time-lane > .thread-row__time,\n.thread-row__time-lane > .thread-row__overflow-button",
       ),
-    ).toMatch(/padding-right:\s*46px;/);
+    ).toMatch(/grid-area:\s*1 \/ 1;/);
+    // The 24px controls give their overhang back at every title notch, so
+    // revealing them never changes the card's height.
     expect(extractRuleBody(css, ".thread-row__actions")).toMatch(
-      /right:\s*11px;[\s\S]*gap:\s*4px;/,
+      /margin-block:\s*calc\(\(var\(--sidebar-title-size\) \* 1\.25 \+ 2px - 24px\) \/ 2\);/,
     );
-    // The cluster's 11px offset and the reserve inequality's first term
-    // both derive from the card's inline padding (10px + 1px border), so
-    // that literal belongs in the same pin set: shrink the card padding
-    // and 11/46 stay green while the kebab drifts off the content edge
-    // and the pin loses its clearance.
-    expect(extractRuleBody(css, ".thread-row")).toMatch(
-      /padding:\s*4px 10px;/,
-    );
-    // Not extractRuleBody: the bare selector would match the shared
-    // pin+kebab chrome rule first; this anchors the standalone width
-    // rule's own body.
-    expect(css).toMatch(/(?:^|\n)\.thread-row__overflow-button \{[^}]*width:\s*26px;/);
 
     // And the open-thread overlay keeps the explicit floor the old
     // in-flow button carried: at the XS title notch a chipless card
@@ -1085,9 +1079,14 @@ describe("Tangerine Terminal theme contract", () => {
   });
 
   it("keeps hidden thread row actions from stealing row clicks", () => {
-    const actionsRule = extractRuleBody(css, ".thread-row__actions");
-
-    expect(actionsRule).toContain("pointer-events: none;");
+    // The actions inherit the title line's pointer transparency; each
+    // hover control opts back in only while it is revealed.
+    expect(extractRuleBody(css, ".thread-row__header")).toContain(
+      "pointer-events: none;",
+    );
+    expect(
+      extractRuleBody(css, ".thread-row__pin-button,\n.thread-row__overflow-button"),
+    ).toContain("pointer-events: none;");
     expect(css).toMatch(
       /\.thread-row-shell:hover \.thread-row__chip--add-reaction,\s*\.thread-row__chip--add-reaction:focus-visible,\s*\.thread-row__chip--add-reaction\.is-open\s*\{[\s\S]*?pointer-events:\s*auto;[\s\S]*?\}/
     );
@@ -1096,16 +1095,23 @@ describe("Tangerine Terminal theme contract", () => {
     );
   });
 
-  it("hides thread row timestamps behind focused or open row actions", () => {
-    // Pins the FULL six-selector fade list (it once silently grew a
-    // pin-button arm this regex didn't describe, so the test matched a
-    // suffix and stopped being the authoritative statement of the
-    // list). The pinned-row heading reserve mirrors this state set —
-    // its own pin lives with the target-size block above. The last arm
-    // is ⋮ with its menu open: focus has moved into the menu, so without
-    // it the trigger faded out from under the menu it opened.
+  it("hides thread row timestamps exactly while the kebab in their lane shows", () => {
+    // Pins the FULL fade list. The last arm is ⋮ with its menu open:
+    // focus has moved into the menu, so without it the time faded back
+    // in under the trigger of the menu it opened. Scoped to the lane, so
+    // the reaction chip and the pin, which no longer cover the time,
+    // leave it alone, and a kebab-less Starting or Draft row keeps its
+    // label on hover.
+    expect(
+      extractRuleBody(
+        css,
+        ".thread-row-shell:hover .thread-row__time-lane > .thread-row__time,\n"
+          + ".thread-row__time-lane:has(> .thread-row__overflow-button:focus-visible) > .thread-row__time,\n"
+          + ".thread-row__time-lane:has(> .thread-row__overflow-button[aria-expanded=\"true\"]) > .thread-row__time",
+      ),
+    ).toMatch(/opacity:\s*0;/);
     expect(css).toMatch(
-      /\.thread-row-shell:has\(\.thread-row__pin-button:focus-visible\) \.thread-row__time,\s*\.thread-row-shell:hover \.thread-row__time,\s*\.thread-row-shell:has\(\.thread-row__overflow-button:focus-visible\) \.thread-row__time,\s*\.thread-row-shell:has\(\.thread-row__chip--add-reaction:focus-visible\) \.thread-row__time,\s*\.thread-row-shell:has\(\.thread-row__chip--add-reaction\.is-open\) \.thread-row__time,\s*\.thread-row-shell:has\(\.thread-row__overflow-button\[aria-expanded="true"\]\) \.thread-row__time\s*\{[\s\S]*?opacity:\s*0;[\s\S]*?\}/
+      /\.thread-row-shell:hover \.thread-row__overflow-button,\s*\.thread-row__overflow-button:focus-visible,\s*\.thread-row__overflow-button\[aria-expanded="true"\]\s*\{[\s\S]*?opacity:\s*1;[\s\S]*?\}/
     );
   });
 
@@ -1177,20 +1183,21 @@ describe("Tangerine Terminal theme contract", () => {
     expect(css).not.toMatch(/\.star-map-card:focus-visible\s*\{/);
   });
 
-  // The card's title band has no room for an outset ring. The hover cluster
-  // and the subthread toggle sit 1-6px below the card's outer edge, and the
-  // in-title pin's 24px box overhangs its 18px line slot by 3px. At their
+  // The card's title band has no room for an outset ring. The subthread
+  // toggle and the title line's 24px controls sit 1-6px below the card's
+  // outer edge (the controls overhang their 18px line by 3px at md). At their
   // old 1px and 2px offsets, every one of those rings crossed the card's
   // top edge at some title-size notch. The kebab's ring crossed it by 2px
   // at md and was drawn over the selected card's border. One shared rule
-  // rings all five inset. The cluster also needs its `top` to count the
-  // card's border: it is positioned against the shell, whose edge is the
-  // card's OUTER edge. Without the border it sat on that border at the xs
-  // notch, and even an inset ring landed on the border there.
+  // rings all five inset. The subthread toggle also needs its `top` to count
+  // the card's border: it is positioned against the shell, whose edge is the
+  // card's OUTER edge. Without the border the old absolutely positioned
+  // actions cluster sat on that border at the xs notch, and even an inset
+  // ring landed on the border there.
   it("keeps the thread card's title-band focus rings inside the card", () => {
     const controls = [
       ".thread-row__subthread-toggle",
-      ".thread-row__heading-pin",
+      ".thread-row__pin",
       ".thread-row__pin-button",
       ".thread-row__chip--add-reaction",
       ".thread-row__overflow-button",
@@ -1223,15 +1230,12 @@ describe("Tangerine Terminal theme contract", () => {
     const cardBorder = Number(card.match(/border:\s*(\d+)px\s+solid/)?.[1]);
     const cardBlockPadding = Number(card.match(/padding:\s*(\d+)px\s/)?.[1]);
     expect(cardBorder).toBeGreaterThan(0);
-    for (const selector of [
-      ".thread-row__actions",
-      ".thread-row__subthread-toggle",
-    ]) {
-      const titleBandStart = Number(
-        extractRuleBody(css, selector).match(/top:\s*round\(calc\((\d+)px \+/)?.[1],
-      );
-      expect(titleBandStart, selector).toBe(cardBorder + cardBlockPadding);
-    }
+    const titleBandStart = Number(
+      extractRuleBody(css, ".thread-row__subthread-toggle").match(
+        /top:\s*round\(calc\((\d+)px \+/,
+      )?.[1],
+    );
+    expect(titleBandStart).toBe(cardBorder + cardBlockPadding);
   });
 
   it("does not pull an unpinned first directory thread under the sticky header", () => {
