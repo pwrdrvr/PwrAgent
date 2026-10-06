@@ -7128,10 +7128,14 @@ a.button {
   background: var(--scrim-strong);
 }
 
+/* Neutral frame, like every other confirm modal: danger tone belongs on the
+   confirm button. Detaching changes nothing on the provider, so it does not
+   take the Settings danger stripe either. A whole-frame --danger-border
+   reads as an orange box in blue-dark and the other tinted themes. */
 .pr-detach-warning-dialog {
   width: min(420px, 100%);
   padding: 18px;
-  border: 1px solid var(--danger-border);
+  border: 1px solid var(--border-subtle);
   border-radius: 8px;
   background: var(--bg-panel);
   box-shadow: var(--shadow-popover);
