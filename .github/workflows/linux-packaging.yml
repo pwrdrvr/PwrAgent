@@ -1,25 +1,47 @@
 name: Linux Packaging
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
   pull_request:
-    paths:
-      - ".github/workflows/linux-packaging.yml"
-      - ".github/workflows/release.yml"
-      - "apps/desktop/electron-builder.yml"
-      - "apps/desktop/scripts/release.mjs"
-      - "apps/desktop/scripts/linux-release-artifacts*"
+    # Adding ci:linux-packages starts packaging; subsequent pushes and reopens
+    # keep it current while the label remains. Other labels do not rerun it.
+    types:
+      - labeled
+      - synchronize
+      - reopened
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  # An unrelated label creates a skipped run; keep it from cancelling active
+  # packaging or replacing a pending packaging run in the PR's queue.
+  # Main pushes use the commit SHA so each merged commit gets a smoke run.
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.event_name == 'pull_request' && github.event.pull_request.number || github.ref }}${{ github.event.action == 'labeled' && github.event.label.name != 'ci:linux-packages' && '-unrelated-label' || '' }}
   cancel-in-progress: true
 
 jobs:
   package:
     name: Linux packages (${{ matrix.arch }})
+    if: >-
+      ${{
+        github.event_name == 'workflow_dispatch'
+        || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+        || (
+          github.event_name == 'pull_request'
+          && github.event.pull_request.head.repo.full_name == github.repository
+          && (
+            (github.event.action == 'labeled' && github.event.label.name == 'ci:linux-packages')
+            || (
+              github.event.action != 'labeled'
+              && contains(github.event.pull_request.labels.*.name, 'ci:linux-packages')
+            )
+          )
+        )
+      }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     strategy:
