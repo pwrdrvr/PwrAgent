@@ -284,6 +284,77 @@ describe("IntegratedTerminal", () => {
     });
   });
 
+  it("repaints from the live tokens when the theme changes", async () => {
+    // The pane's background follows the theme through CSS, but xterm draws
+    // text from the palette it was handed. A terminal opened under Blue Dark
+    // kept Blue Dark's pale ink on Blue Light's pale canvas.
+    const root = document.documentElement;
+    const setTokens = (tokens: Record<string, string>) => {
+      for (const [token, value] of Object.entries(tokens)) {
+        root.style.setProperty(token, value);
+      }
+    };
+    setTokens({
+      "--terminal-bg": "#0f1724",
+      "--terminal-fg": "#c9d6ea",
+      "--terminal-cursor": "#7fbcff",
+      "--terminal-ansi-yellow": "#e5c06a",
+    });
+    root.setAttribute("data-color-theme", "blue-dark");
+
+    const { unmount } = render(
+      <IntegratedTerminal
+        desktopApi={{
+          createIntegratedTerminal: vi.fn(async () => ({
+            sessionId: "session-1",
+            threadKey: "codex:thread-a",
+            cwd: "/repo/a",
+            shell: "/bin/zsh",
+          })),
+          resizeIntegratedTerminal: vi.fn(async () => undefined),
+        }}
+        threadKey="codex:thread-a"
+        height={260}
+        onClose={() => undefined}
+        onExit={() => undefined}
+      />,
+    );
+    await waitFor(() => expect(xtermState.instances).toHaveLength(1));
+    const options = xtermState.instances[0]!.options as {
+      theme: Record<string, string>;
+    };
+    expect(options.theme).toMatchObject({ foreground: "#c9d6ea", yellow: "#e5c06a" });
+
+    // `applyAppearanceAttributes` flips both attributes for a scheme change.
+    setTokens({
+      "--terminal-bg": "#f3f7fc",
+      "--terminal-fg": "#1f2f47",
+      "--terminal-cursor": "#1f5fbf",
+      "--terminal-ansi-yellow": "#8a6100",
+    });
+    root.setAttribute("data-theme", "light");
+    root.setAttribute("data-color-theme", "blue-light");
+    await waitFor(() => expect(options.theme).toMatchObject({
+      background: "#f3f7fc",
+      foreground: "#1f2f47",
+      cursor: "#1f5fbf",
+      yellow: "#8a6100",
+    }));
+
+    // A switch between two themes of the same scheme changes only
+    // `data-color-theme`, and must repaint too.
+    setTokens({ "--terminal-fg": "#2e2e33" });
+    root.setAttribute("data-color-theme", "gray-light");
+    await waitFor(() => expect(options.theme.foreground).toBe("#2e2e33"));
+
+    unmount();
+    setTokens({ "--terminal-fg": "#333333" });
+    root.removeAttribute("data-color-theme");
+    await Promise.resolve();
+    expect(options.theme.foreground).toBe("#2e2e33");
+    root.removeAttribute("data-theme");
+  });
+
   it("opens xterm only after the mono faces load", async () => {
     // xterm measures its cells once, at open(), and never again when a web
     // font arrives, so opening first would size the grid for the fallback.

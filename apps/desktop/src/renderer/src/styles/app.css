@@ -1011,6 +1011,22 @@
   --terminal-fg: #d4d4d8;
   --terminal-cursor: #ffb35c;
   --terminal-cursor-accent: #2b2b2e;
+  --terminal-ansi-black: #18181b;
+  --terminal-ansi-red: #f47a72;
+  --terminal-ansi-green: #6fd08c;
+  --terminal-ansi-yellow: #e6c36a;
+  --terminal-ansi-blue: #6eaaf5;
+  --terminal-ansi-magenta: #d58fe0;
+  --terminal-ansi-cyan: #5fcbd6;
+  --terminal-ansi-white: #d4d4d8;
+  --terminal-ansi-bright-black: #9696a0;
+  --terminal-ansi-bright-red: #ff9b94;
+  --terminal-ansi-bright-green: #93e2a9;
+  --terminal-ansi-bright-yellow: #f3d78e;
+  --terminal-ansi-bright-blue: #96c3ff;
+  --terminal-ansi-bright-magenta: #e5b0ee;
+  --terminal-ansi-bright-cyan: #8ddfe7;
+  --terminal-ansi-bright-white: #f4f4f5;
 
   /* Semantic */
   --danger-base: #ff9b8a;
@@ -1076,6 +1092,22 @@
   --terminal-fg: #2e2e33;
   --terminal-cursor: #d96d00;
   --terminal-cursor-accent: #ebebed;
+  --terminal-ansi-black: #18181b;
+  --terminal-ansi-red: #b42318;
+  --terminal-ansi-green: #1a7032;
+  --terminal-ansi-yellow: #7f5c00;
+  --terminal-ansi-blue: #1f5bb5;
+  --terminal-ansi-magenta: #8a3aa8;
+  --terminal-ansi-cyan: #0b6b72;
+  --terminal-ansi-white: #4a4a52;
+  --terminal-ansi-bright-black: #5c5c66;
+  --terminal-ansi-bright-red: #c4321f;
+  --terminal-ansi-bright-green: #1b7536;
+  --terminal-ansi-bright-yellow: #856000;
+  --terminal-ansi-bright-blue: #2a68c6;
+  --terminal-ansi-bright-magenta: #9846b8;
+  --terminal-ansi-bright-cyan: #0c7078;
+  --terminal-ansi-bright-white: #7c7c86;
 
   /* Semantic */
   --danger-base: #8a1f12;
@@ -1141,6 +1173,22 @@
   --terminal-fg: #c9d6ea;
   --terminal-cursor: #7fbcff;
   --terminal-cursor-accent: #0f1724;
+  --terminal-ansi-black: #22314a;
+  --terminal-ansi-red: #f2777a;
+  --terminal-ansi-green: #5fcf8f;
+  --terminal-ansi-yellow: #e5c06a;
+  --terminal-ansi-blue: #5baaff;
+  --terminal-ansi-magenta: #c79af2;
+  --terminal-ansi-cyan: #4fd0d6;
+  --terminal-ansi-white: #c9d6ea;
+  --terminal-ansi-bright-black: #7c8ca6;
+  --terminal-ansi-bright-red: #ff9a9c;
+  --terminal-ansi-bright-green: #86e3ab;
+  --terminal-ansi-bright-yellow: #f2d58c;
+  --terminal-ansi-bright-blue: #8cc4ff;
+  --terminal-ansi-bright-magenta: #dbb8ff;
+  --terminal-ansi-bright-cyan: #82e3e8;
+  --terminal-ansi-bright-white: #eef3fa;
 
   /* Semantic */
   --danger-base: #ffa99a;
@@ -1206,6 +1254,22 @@
   --terminal-fg: #1f2f47;
   --terminal-cursor: #1f5fbf;
   --terminal-cursor-accent: #f3f7fc;
+  --terminal-ansi-black: #0f223b;
+  --terminal-ansi-red: #b3261e;
+  --terminal-ansi-green: #1d7a3a;
+  --terminal-ansi-yellow: #8a6100;
+  --terminal-ansi-blue: #1c56ac;
+  --terminal-ansi-magenta: #8e3fb0;
+  --terminal-ansi-cyan: #0e7178;
+  --terminal-ansi-white: #4d5d75;
+  --terminal-ansi-bright-black: #5a6b85;
+  --terminal-ansi-bright-red: #c4362c;
+  --terminal-ansi-bright-green: #1f7e43;
+  --terminal-ansi-bright-yellow: #8e6400;
+  --terminal-ansi-bright-blue: #2a66c2;
+  --terminal-ansi-bright-magenta: #9d4fc0;
+  --terminal-ansi-bright-cyan: #107880;
+  --terminal-ansi-bright-white: #8a99b0;
 
   /* Semantic */
   --danger-base: #9a2516;

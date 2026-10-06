@@ -130,6 +130,12 @@ The integrated terminal has its own canvas and ANSI tokens. The ANSI values
 mirror VS Code's light/dark defaults so common shell output remains readable
 when the app theme changes.
 
+xterm takes its palette as values, not as CSS, so `IntegratedTerminal` rereads
+these tokens whenever `data-theme` or `data-color-theme` changes on `<html>`.
+The pane's background follows the theme through CSS either way; before the
+reread, a terminal opened under a dark theme kept dark-theme text on the
+light canvas after a scheme change.
+
 | Token | Dark | Light |
 |---|---|---|
 | `--terminal-bg` | `#000000` | `#ffffff` |
@@ -390,7 +396,11 @@ Per theme:
 - **Gray** and **Blue** are PwrAgent designs, and keep their designed values
   wherever those already clear the floor. Blue is an explicit product
   choice. Its navy surfaces stay low-saturation, so the anti-pattern below
-  against saturated navy dashboards still holds.
+  against saturated navy dashboards still holds. With no upstream terminal
+  to match, each sets its own ANSI colors rather than borrowing Tangerine's,
+  which are tuned for pure black and pure white. Every color clears 4.5:1 on
+  its canvas except the one drawn as a background: black in Dark, bright
+  white in Light.
 - **Phosphor** is a PwrAgent design after a green-phosphor CRT terminal, and
   an explicit product request. Its accent and terminal ink are phosphor
   green `#00ff41`, on green-tinted near-black surfaces, with red for danger

@@ -4,7 +4,7 @@ import type { DesktopApi } from "../../lib/desktop-api";
 import { copyText } from "../../lib/copy-text";
 import type { IntegratedTerminalPaneRemote } from "../../lib/useIntegratedTerminals";
 import { InstanceChip } from "../federation/InstanceGlyph";
-import type { Terminal } from "@xterm/xterm";
+import type { ITheme, Terminal } from "@xterm/xterm";
 import type {
   CSSProperties,
   KeyboardEvent as ReactKeyboardEvent,
@@ -108,29 +108,7 @@ export function IntegratedTerminal({
           lineHeight: 1.25,
           macOptionIsMeta: true,
           scrollback: 5_000,
-          theme: {
-            background: cssVariable("--terminal-bg"),
-            foreground: cssVariable("--terminal-fg"),
-            cursor: cssVariable("--terminal-cursor"),
-            cursorAccent: cssVariable("--terminal-cursor-accent"),
-            selectionBackground: cssVariable("--accent"),
-            black: cssVariable("--terminal-ansi-black"),
-            red: cssVariable("--terminal-ansi-red"),
-            green: cssVariable("--terminal-ansi-green"),
-            yellow: cssVariable("--terminal-ansi-yellow"),
-            blue: cssVariable("--terminal-ansi-blue"),
-            magenta: cssVariable("--terminal-ansi-magenta"),
-            cyan: cssVariable("--terminal-ansi-cyan"),
-            white: cssVariable("--terminal-ansi-white"),
-            brightBlack: cssVariable("--terminal-ansi-bright-black"),
-            brightRed: cssVariable("--terminal-ansi-bright-red"),
-            brightGreen: cssVariable("--terminal-ansi-bright-green"),
-            brightYellow: cssVariable("--terminal-ansi-bright-yellow"),
-            brightBlue: cssVariable("--terminal-ansi-bright-blue"),
-            brightMagenta: cssVariable("--terminal-ansi-bright-magenta"),
-            brightCyan: cssVariable("--terminal-ansi-bright-cyan"),
-            brightWhite: cssVariable("--terminal-ansi-bright-white"),
-          },
+          theme: readTerminalTheme(),
         });
         const fitAddon = new fitModule.FitAddon();
         terminal.attachCustomKeyEventHandler((event) => {
@@ -211,6 +189,19 @@ export function IntegratedTerminal({
         const resizeObserver = new ResizeObserver(scheduleFitAndResize);
         resizeObserver.observe(container);
 
+        // The pane's background follows the theme through CSS, but xterm
+        // paints text from the palette it was handed. Without a re-read, a
+        // terminal opened under a dark theme kept dark-theme ink on the light
+        // canvas after the window switched scheme. A color change repaints
+        // every row, scrollback included.
+        const themeObserver = new MutationObserver(() => {
+          terminal.options.theme = readTerminalTheme();
+        });
+        themeObserver.observe(document.documentElement, {
+          attributes: true,
+          attributeFilter: ["data-theme", "data-color-theme"],
+        });
+
         const dimensions = fitAddon.proposeDimensions();
         void createIntegratedTerminal({
           threadKey,
@@ -255,6 +246,7 @@ export function IntegratedTerminal({
 
         cleanupTerminal = () => {
           resizeObserver.disconnect();
+          themeObserver.disconnect();
           if (resizeFrame !== undefined) window.cancelAnimationFrame(resizeFrame);
           dataDisposable.dispose();
           terminal.dispose();
@@ -429,6 +421,32 @@ export function IntegratedTerminal({
       </div>
     </section>
   );
+}
+
+function readTerminalTheme(): ITheme {
+  return {
+    background: cssVariable("--terminal-bg"),
+    foreground: cssVariable("--terminal-fg"),
+    cursor: cssVariable("--terminal-cursor"),
+    cursorAccent: cssVariable("--terminal-cursor-accent"),
+    selectionBackground: cssVariable("--accent"),
+    black: cssVariable("--terminal-ansi-black"),
+    red: cssVariable("--terminal-ansi-red"),
+    green: cssVariable("--terminal-ansi-green"),
+    yellow: cssVariable("--terminal-ansi-yellow"),
+    blue: cssVariable("--terminal-ansi-blue"),
+    magenta: cssVariable("--terminal-ansi-magenta"),
+    cyan: cssVariable("--terminal-ansi-cyan"),
+    white: cssVariable("--terminal-ansi-white"),
+    brightBlack: cssVariable("--terminal-ansi-bright-black"),
+    brightRed: cssVariable("--terminal-ansi-bright-red"),
+    brightGreen: cssVariable("--terminal-ansi-bright-green"),
+    brightYellow: cssVariable("--terminal-ansi-bright-yellow"),
+    brightBlue: cssVariable("--terminal-ansi-bright-blue"),
+    brightMagenta: cssVariable("--terminal-ansi-bright-magenta"),
+    brightCyan: cssVariable("--terminal-ansi-bright-cyan"),
+    brightWhite: cssVariable("--terminal-ansi-bright-white"),
+  };
 }
 
 function cssVariable(name: string): string {

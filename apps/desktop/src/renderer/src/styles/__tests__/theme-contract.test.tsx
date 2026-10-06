@@ -2841,6 +2841,29 @@ describe("color theme contract", () => {
     });
   });
 
+  it("gives Gray and Blue their own ANSI colors, readable on their canvas", () => {
+    // Gray and Blue have no upstream terminal. Borrowing Tangerine's, which
+    // is tuned for pure black and pure white, put yellow and bright green
+    // near 2:1 on both light canvases and red under 3:1 on Gray Dark.
+    const ansi = [
+      "black", "red", "green", "yellow", "blue", "magenta", "cyan", "white",
+    ].flatMap((color) => [color, `bright-${color}`]);
+    for (const theme of ["gray-dark", "gray-light", "blue-dark", "blue-light"]) {
+      const light = LIGHT_THEMES.includes(theme);
+      const block = blockFor(theme);
+      for (const color of ansi) {
+        expect(block[`terminal-ansi-${color}`], `${theme}: ${color}`).toMatch(/^#[0-9a-f]{6}$/);
+        // Black on a dark canvas and bright white on a light one are drawn
+        // as backgrounds (VS Code's convention), not as text.
+        if (color === (light ? "bright-white" : "black")) continue;
+        expect(
+          contrastRatio(block[`terminal-ansi-${color}`], themes[theme]["terminal-bg"]),
+          `${theme}: ${color}`,
+        ).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+
   it("puts --button-text and --accent-on ink only on --accent-fill", () => {
     // Latte fills with peach under dark ink and reads accent as a darker
     // orange; a rule that paints ink on --accent is dark text on rust.
