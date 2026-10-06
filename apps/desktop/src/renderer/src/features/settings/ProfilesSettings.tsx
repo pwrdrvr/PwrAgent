@@ -105,7 +105,7 @@ export function ProfilesSettings(props: {
     setMoveAnnouncement(
       `${movedProfile?.displayName || moved} moved to position ${position} of ${order.length}.`,
     );
-    void runProfileAction(moved, () => profiles.reorderProfiles(order));
+    return runProfileAction(moved, () => profiles.reorderProfiles(order));
   };
 
   const moveByKeyboard = (
@@ -119,11 +119,18 @@ export function ProfilesSettings(props: {
     const order = profileList.map((profile) => profile.name);
     const from = order.indexOf(name);
     const to = from + offset;
-    if (from < 0 || to < 0 || to >= order.length || busyProfile) return;
+    if (from < 0 || to < 0 || to >= order.length) return;
     order.splice(from, 1);
     order.splice(to, 0, name);
     refocusGripRef.current = name;
-    commitOrder(order, name);
+    // A move that never changes the list (stale order, failed refresh) never
+    // runs the layout effect, so the request would outlive it and the next
+    // unrelated list change would pull focus back to this grip.
+    void commitOrder(order, name)?.finally(() => {
+      if (refocusGripRef.current === name) {
+        refocusGripRef.current = undefined;
+      }
+    });
   };
 
   const dropPositionFor = (
@@ -153,7 +160,7 @@ export function ProfilesSettings(props: {
       dragged,
     );
     refocusGripRef.current = undefined;
-    commitOrder(order, dragged);
+    void commitOrder(order, dragged);
   };
 
   const canReorder = profileList.length > 1;

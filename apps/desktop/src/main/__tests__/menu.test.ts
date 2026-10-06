@@ -12,6 +12,7 @@ function buildTemplate(
     isMac?: boolean;
     actions?: Partial<ApplicationMenuActions>;
     federationPeers?: Array<{ instanceId: string; label: string }>;
+    focusedRemoteWindow?: boolean;
     openFederationWindow?: (peer: {
       instanceId: string;
       label: string;
@@ -29,6 +30,7 @@ function buildTemplate(
     developerMode,
     isMac: options?.isMac ?? true,
     federationPeers: options?.federationPeers ?? [],
+    focusedRemoteWindow: options?.focusedRemoteWindow,
     profiles: options?.profiles ?? [
       profile("default", { active: true, default: true }),
       profile("personal"),
@@ -398,6 +400,18 @@ describe("buildApplicationMenuTemplate", () => {
         true,
         false,
       ]);
+    });
+
+    it("checks no local profile while a remote instance's window is focused", () => {
+      const items = submenuItems(
+        buildTemplate(false, {
+          federationPeers: [{ instanceId: "pwr_a", label: "Studio-Mac / default" }],
+          focusedRemoteWindow: true,
+        }),
+        "Profiles",
+      );
+
+      expect(items.filter((item) => item.checked)).toEqual([]);
     });
 
     it("gives the first nine shown profiles ⌘1–⌘9 and the rest no shortcut", () => {

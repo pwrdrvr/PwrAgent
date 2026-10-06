@@ -524,6 +524,14 @@ function DesktopAppShell(props: {
   const clearProfileCreateRequest = useCallback(() => {
     setProfileCreateRequested(false);
   }, []);
+  // Settings can close before the Profiles pane ever mounts (an unsaved-edits
+  // prompt kept another pane open, then Exit Settings). The request goes with
+  // it, or a later visit to Profiles would open a form nobody asked for.
+  useEffect(() => {
+    if (mainView !== "settings") {
+      setProfileCreateRequested(false);
+    }
+  }, [mainView]);
   const [threadViewReady, setThreadViewReady] = useState(false);
   // Onboarding wizard overlay state. Three paths into it:
   //  (1) auto-launch on first snapshot if `onboarding.completed` is

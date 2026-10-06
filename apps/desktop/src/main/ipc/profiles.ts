@@ -100,8 +100,17 @@ export function listDesktopPwrAgentProfiles(): ListDesktopPwrAgentProfilesRespon
 function listOrderedProfileEntries(): ProfileEntry[] {
   const activeProfile = resolveActiveProfileName();
   const defaultProfile = resolveDefaultProfileName();
-  const entries = [...readProfilesRegistry().profiles];
-  const listed = new Set(entries.map((profile) => profile.name));
+  // First entry wins, as the Map this replaced did: a name the registry
+  // repeats (two instances racing an append) must list once, or every
+  // reorder would be refused as stale.
+  const entries: ProfileEntry[] = [];
+  const listed = new Set<string>();
+  for (const entry of readProfilesRegistry().profiles) {
+    if (!listed.has(entry.name)) {
+      entries.push(entry);
+      listed.add(entry.name);
+    }
+  }
   if (!listed.has(activeProfile)) {
     entries.push({ name: activeProfile });
     listed.add(activeProfile);
@@ -116,8 +125,8 @@ function listOrderedProfileEntries(): ProfileEntry[] {
   // other not-in-registry profile name) when the directory is
   // actually present.
   if (
-    !listed.has(defaultProfile) &&
-    fs.existsSync(resolveProfileDir(defaultProfile))
+    !listed.has(defaultProfile)
+    && fs.existsSync(resolveProfileDir(defaultProfile))
   ) {
     entries.push({ name: defaultProfile });
   }

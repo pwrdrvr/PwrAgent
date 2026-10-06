@@ -10,6 +10,7 @@ type SettingsProps = {
   initialSubsection?: string;
   profileCreateRequested?: boolean;
   onProfileCreateRequestHandled?: () => void;
+  onClose?: () => void;
 };
 
 const settingsProps: SettingsProps[] = [];
@@ -133,6 +134,30 @@ describe("menu pushes into Settings", () => {
 
     await api.push("profiles");
 
+    expect(await screen.findByTestId("settings-screen")).toHaveTextContent(
+      /^profiles$/,
+    );
+  });
+
+  it("drops an unanswered New Profile… request when Settings closes", async () => {
+    const api = installDesktopApi();
+    render(<App />);
+
+    await api.push("profiles", "new");
+    expect(await screen.findByTestId("settings-screen")).toHaveTextContent(
+      "profiles create",
+    );
+
+    // Exit Settings without the pane ever reporting the form open.
+    await act(async () => {
+      settingsProps.at(-1)?.onClose?.();
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId("settings-screen")).toBeNull();
+    });
+
+    await api.push("profiles");
     expect(await screen.findByTestId("settings-screen")).toHaveTextContent(
       /^profiles$/,
     );

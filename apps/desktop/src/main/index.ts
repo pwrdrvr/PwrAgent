@@ -190,7 +190,11 @@ import {
   recordBootDecision,
 } from "./state/app-state";
 import type { AutoVacuumConversion } from "./state/state-db";
-import { createMainWindow, stopWindowDiagnostics } from "./window";
+import {
+  createMainWindow,
+  isFederationWindowWebContents,
+  stopWindowDiagnostics,
+} from "./window";
 import { registerManagedGrokSignatureRejectionBroadcast } from "./managed-grok-signature-broadcast";
 import { registerManagedRuntimeProgressBroadcast } from "./managed-runtime-progress-broadcast";
 import { subscribersForChannel } from "./window-channels";
@@ -255,7 +259,6 @@ import {
 configureBundledGit(app.isPackaged ? process.resourcesPath : undefined);
 
 const APP_NAME = "PwrAgent";
-const APP_COPYRIGHT = "Copyright © 2026 PwrDrvr LLC.";
 const PWRAGENT_SOURCE_URL = "https://github.com/pwrdrvr/PwrAgent";
 const PWRAGENT_ISSUE_REPORTER_URL = `${PWRAGENT_SOURCE_URL}/issues/new`;
 // GitHub private vulnerability reporting, per SECURITY.md: never a public issue.
@@ -1115,6 +1118,14 @@ function installApplicationMenu(): void {
     getDesktopConfigStore().read("general").settings.developerMode
     ?? !app.isPackaged;
   const profiles = listDesktopPwrAgentProfiles().profiles;
+  // The Profiles check marks the focused window's profile. A remote
+  // instance's window runs a profile that is not one of these rows.
+  const focusedWindow = BrowserWindow.getFocusedWindow();
+  const focusedRemoteWindow = Boolean(
+    focusedWindow
+    && !focusedWindow.isDestroyed()
+    && isFederationWindowWebContents(focusedWindow.webContents),
+  );
   const windows = BrowserWindow.getAllWindows()
     .filter((window) => !window.isDestroyed())
     .map((window) => ({
@@ -1141,6 +1152,7 @@ function installApplicationMenu(): void {
     developerMode,
     isMac,
     federationPeers,
+    focusedRemoteWindow,
     profiles,
     windows,
     actions: {
@@ -1320,11 +1332,6 @@ export function bootstrapApp(): void {
   setUpdateInstallPreparationHandler(prepareForUpdateInstallShutdown);
   rejectDevOnlyEnvVarsInProduction();
   app.setName(APP_NAME);
-  app.setAboutPanelOptions({
-    applicationName: APP_NAME,
-    applicationVersion: app.getVersion(),
-    copyright: APP_COPYRIGHT,
-  });
   const bootDecision = resolveProfileBootDecision();
   initializeMainLogger({
     profileName: resolveMainLogProfileName(bootDecision),

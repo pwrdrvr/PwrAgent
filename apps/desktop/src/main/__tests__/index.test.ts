@@ -200,7 +200,6 @@ const shellOpenPathMock = vi.fn(async () => "");
 const shellShowItemInFolderMock = vi.fn();
 const showMessageBoxSyncMock = vi.fn(() => 0);
 const setNameMock = vi.fn();
-const setAboutPanelOptionsMock = vi.fn();
 const showAboutPanelMock = vi.fn();
 const appFocusMock = vi.fn();
 const getAppPathMock = vi.fn(() => "/test/app");
@@ -273,7 +272,6 @@ const writeDockProfileSnapshotMock = vi.fn();
 vi.mock("electron", () => ({
   app: {
     setName: setNameMock,
-    setAboutPanelOptions: setAboutPanelOptionsMock,
     isPackaged: false,
     getAppPath: getAppPathMock,
     getVersion: getVersionMock,
@@ -294,6 +292,7 @@ vi.mock("electron", () => ({
   },
   BrowserWindow: {
     getAllWindows: getAllWindowsMock,
+    getFocusedWindow: vi.fn(() => null),
   },
   safeStorage: {
     isEncryptionAvailable: isEncryptionAvailableMock,
@@ -327,6 +326,7 @@ vi.mock("../linux-password-store", () => ({
 
 vi.mock("../window", () => ({
   createMainWindow: createMainWindowMock,
+  isFederationWindowWebContents: vi.fn(() => false),
   stopWindowDiagnostics: stopWindowDiagnosticsMock,
   syncHotCpuProfilersFromSettings: vi.fn(),
 }));
@@ -903,7 +903,6 @@ describe("bootstrapApp", () => {
     showMessageBoxSyncMock.mockReturnValue(0);
     buildFromTemplateMock.mockClear();
     setNameMock.mockReset();
-    setAboutPanelOptionsMock.mockReset();
     showAboutPanelMock.mockReset();
     appFocusMock.mockReset();
     getAppPathMock.mockClear();
@@ -1234,19 +1233,6 @@ describe("bootstrapApp", () => {
       "startup failed before the main window appeared",
       expect.objectContaining({ reason: "whenReady" }),
     );
-  });
-
-  it("sets the About panel version without duplicating it as a build value", async () => {
-    startupProfilerInstance.start.mockResolvedValue();
-
-    await import("../index");
-    await flushMicrotasks();
-
-    expect(setAboutPanelOptionsMock).toHaveBeenCalledWith({
-      applicationName: "PwrAgent",
-      applicationVersion: "1.0.0-alpha.0",
-      copyright: "Copyright © 2026 PwrDrvr LLC.",
-    });
   });
 
   it("uses the PwrAgent icon for the development Dock icon on macOS", async () => {

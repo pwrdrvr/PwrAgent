@@ -63,6 +63,8 @@ export type ApplicationMenuOptions = {
   isMac: boolean;
   /** Connected federation peers; empty hides the Remote Instances section. */
   federationPeers: ApplicationMenuFederationPeer[];
+  /** A remote instance's window is focused, so no local profile is checked. */
+  focusedRemoteWindow?: boolean;
   profiles: DesktopPwrAgentProfileSummary[];
   windows: ApplicationMenuWindow[];
   actions: ApplicationMenuActions;
@@ -213,9 +215,10 @@ function buildProfilesMenu(options: ApplicationMenuOptions): MenuItemConstructor
       return {
         label: profile.displayName || profile.name,
         type: "checkbox",
-        // Each profile runs in its own process with its own menu bar, so
-        // the active profile is the focused window's profile.
-        checked: profile.active,
+        // Each profile runs in its own process with its own menu bar, so a
+        // local window's profile is the active one. A focused remote window
+        // runs a peer's profile, which none of these rows is.
+        checked: profile.active && !options.focusedRemoteWindow,
         accelerator: digit === undefined ? undefined : `CmdOrCtrl+${digit}`,
         click: () => {
           void options.actions.openProfile(profile.name);
