@@ -250,7 +250,6 @@ describe("buildApplicationMenuTemplate", () => {
     it("pins Window with the open windows", () => {
       expect(flatten(submenuItems(template, "Window"))).toEqual([
         "role:minimize",
-        "role:close",
         "---",
         "PwrAgent",
         "Logs",
@@ -323,6 +322,10 @@ describe("buildApplicationMenuTemplate", () => {
     expect(items.find((item) => item.label === "Close Window")?.role).toBe(
       "close",
     );
+    // Ctrl+W is bound once: File → Close Window, not again in Window.
+    expect(
+      items.filter((item) => item.role === "close").map((item) => item.label),
+    ).toEqual(["Close Window"]);
   });
 
   it.each([true, false])("routes the standard's items to their actions (isMac: %s)", (isMac) => {
@@ -514,7 +517,6 @@ describe("buildApplicationMenuTemplate", () => {
 
       expect(flatten(items)).toEqual([
         "role:minimize",
-        "role:close",
         "---",
         "No Open Windows",
       ]);

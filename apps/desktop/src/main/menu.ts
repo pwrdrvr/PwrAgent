@@ -304,11 +304,12 @@ function buildWindowMenu(options: ApplicationMenuOptions): MenuItemConstructorOp
         },
       ];
 
+  // No Close: File → Close Window already owns Ctrl+W, and a second row with
+  // the same action and key is noise (the macOS Window menu has none either).
   return {
     label: "Window",
     submenu: [
       { role: "minimize" },
-      { role: "close" },
       { type: "separator" },
       ...windowItems,
     ],
