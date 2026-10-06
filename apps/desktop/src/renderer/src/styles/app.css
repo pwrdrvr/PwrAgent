@@ -38462,9 +38462,13 @@ button.composer__subthread-source-parent:hover {
 }
 
 /* The kind badge is the row's only classifier, so it never shrinks — the
-   title label absorbs the width instead. */
+   title label absorbs the width instead. The auto margin pins it to the
+   row's right edge: the label shrink-wraps, so without it a short title
+   left the badge one gap after its last word while a clamped one put it
+   flush right. It resolves to zero once the label overflows. */
 .composer__autocomplete--hash-references .composer__autocomplete-source {
   flex: none;
+  margin-left: auto;
 }
 
 .composer__autocomplete--directories .composer__autocomplete-option:not(.composer__autocomplete-option--action) {
