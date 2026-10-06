@@ -23,6 +23,7 @@ describe("Dock profile menu", () => {
           displayName: "Personal",
           name: "personal",
           profileDir: "/tmp/personal",
+          showInMenu: true,
         },
         {
           active: false,
@@ -40,6 +41,7 @@ describe("Dock profile menu", () => {
           default: false,
           name: "work",
           profileDir: "/tmp/work",
+          showInMenu: true,
         },
       ],
       openProfile,

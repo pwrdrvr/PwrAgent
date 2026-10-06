@@ -67,6 +67,8 @@ export type ProfileEntry = {
   name: string;
   display_name?: string;
   last_used?: string;
+  /** Written only as `false`; an absent key means the menu shows it. */
+  show_in_menu?: boolean;
 };
 
 export type ProfilesRegistry = {
@@ -998,6 +1000,7 @@ function parseProfilesToml(contents: string): ProfilesRegistry {
     if (key === "name") current.name = value;
     else if (key === "display_name") current.display_name = value;
     else if (key === "last_used") current.last_used = value;
+    else if (key === "show_in_menu" && value === "false") current.show_in_menu = false;
   }
 
   if (current?.name) profiles.push(current as ProfileEntry);
@@ -1086,6 +1089,7 @@ function stringifyProfilesToml(registry: ProfilesRegistry): string {
     const lines = ["[[profiles]]", `name = "${entry.name}"`];
     if (entry.display_name) lines.push(`display_name = "${entry.display_name}"`);
     if (entry.last_used) lines.push(`last_used = "${entry.last_used}"`);
+    if (entry.show_in_menu === false) lines.push("show_in_menu = false");
     return lines.join("\n");
   });
   return [...header, ...sections]

@@ -1,4 +1,5 @@
-// Help -> Check for Updates, end to end.
+// Check for Updates…, end to end. The item sits in the PwrAgent menu on macOS
+// and in Help elsewhere, so the spec looks through every top-level menu.
 //
 // The app under test is unpackaged, so the check runs the dev/QA fake
 // (`simulateDevUpdateCheck`) rather than reaching GitHub — which is the point:
@@ -68,14 +69,14 @@ async function checkForUpdates(app: ElectronApplication): Promise<void> {
   await app.evaluate(({ Menu }) => {
     for (const top of Menu.getApplicationMenu()?.items ?? []) {
       const item = top.submenu?.items.find(
-        (candidate) => candidate.label === "Check for Updates",
+        (candidate) => candidate.label === "Check for Updates…",
       );
       if (item !== undefined) {
         item.click();
         return;
       }
     }
-    throw new Error("Menu item not found: Check for Updates");
+    throw new Error("Menu item not found: Check for Updates…");
   });
 }
 

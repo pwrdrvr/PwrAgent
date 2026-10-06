@@ -12,10 +12,14 @@ import type {
   ListDesktopPwrAgentProfilesResponse,
   OpenDesktopPwrAgentProfileRequest,
   OpenDesktopPwrAgentProfileResponse,
+  ReorderDesktopPwrAgentProfilesRequest,
+  ReorderDesktopPwrAgentProfilesResponse,
   SetDesktopPwrAgentProfileCodexProfileRequest,
   SetDesktopPwrAgentProfileCodexProfileResponse,
   SetDefaultDesktopPwrAgentProfileRequest,
   SetDefaultDesktopPwrAgentProfileResponse,
+  SetDesktopPwrAgentProfileMenuVisibilityRequest,
+  SetDesktopPwrAgentProfileMenuVisibilityResponse,
   WriteDesktopSecretsToProfileRequest,
   WriteDesktopSecretsToProfileResponse,
 } from "@pwragent/shared";
@@ -25,8 +29,10 @@ import {
   PROFILES_GRADUATE_BOOTSTRAP_CONFIG_CHANNEL,
   PROFILES_LIST_CHANNEL,
   PROFILES_OPEN_CHANNEL,
+  PROFILES_REORDER_CHANNEL,
   PROFILES_SET_CODEX_PROFILE_CHANNEL,
   PROFILES_SET_DEFAULT_CHANNEL,
+  PROFILES_SET_MENU_VISIBILITY_CHANNEL,
   PROFILES_WRITE_SECRETS_CHANNEL,
 } from "../../shared/ipc";
 import { StateDb } from "../state/state-db";
@@ -45,6 +51,8 @@ import {
   resolveDefaultProfileName,
   resolveProfileDir,
   setDefaultProfileName,
+  writeProfilesRegistry,
+  type ProfileEntry,
 } from "../profile";
 import { resolveDesktopConfigPath } from "../settings/desktop-config";
 import {
@@ -65,12 +73,38 @@ type ProfilesIpcHandlerOptions = {
 export function listDesktopPwrAgentProfiles(): ListDesktopPwrAgentProfilesResponse {
   const activeProfile = resolveActiveProfileName();
   const defaultProfile = resolveDefaultProfileName();
-  const registry = readProfilesRegistry();
-  const byName = new Map(
-    registry.profiles.map((profile) => [profile.name, profile]),
-  );
-  if (!byName.has(activeProfile)) {
-    byName.set(activeProfile, { name: activeProfile });
+
+  return {
+    activeProfile,
+    defaultProfile,
+    profiles: listOrderedProfileEntries().map((profile) => ({
+      name: profile.name,
+      displayName: profile.display_name,
+      lastUsed: profile.last_used,
+      active: profile.name === activeProfile,
+      default: profile.name === defaultProfile,
+      profileDir: resolveProfileDir(profile.name),
+      canDelete: profile.name !== activeProfile && profile.name !== "default",
+      codexProfile: readPwrAgentProfileCodexProfile(profile.name),
+      showInMenu: profile.show_in_menu !== false,
+    })),
+  };
+}
+
+/**
+ * Every listed profile in the operator's order, which is the registry's own
+ * order. `ensureNamedProfileExists` appends each new profile, so the order
+ * starts as creation order and a new profile lands at the bottom: adding one
+ * never renumbers another profile's menu shortcut.
+ */
+function listOrderedProfileEntries(): ProfileEntry[] {
+  const activeProfile = resolveActiveProfileName();
+  const defaultProfile = resolveDefaultProfileName();
+  const entries = [...readProfilesRegistry().profiles];
+  const listed = new Set(entries.map((profile) => profile.name));
+  if (!listed.has(activeProfile)) {
+    entries.push({ name: activeProfile });
+    listed.add(activeProfile);
   }
   // Pre-#524, this code unconditionally added a "default" entry
   // because the silent boot-time mkdir guaranteed `~/.pwragent/profiles/default/`
@@ -82,32 +116,61 @@ export function listDesktopPwrAgentProfiles(): ListDesktopPwrAgentProfilesRespon
   // other not-in-registry profile name) when the directory is
   // actually present.
   if (
-    !byName.has(defaultProfile) &&
+    !listed.has(defaultProfile) &&
     fs.existsSync(resolveProfileDir(defaultProfile))
   ) {
-    byName.set(defaultProfile, { name: defaultProfile });
+    entries.push({ name: defaultProfile });
+  }
+  return entries;
+}
+
+export function reorderDesktopPwrAgentProfiles(
+  request: ReorderDesktopPwrAgentProfilesRequest,
+): ReorderDesktopPwrAgentProfilesResponse {
+  const current = listOrderedProfileEntries();
+  const byName = new Map(current.map((profile) => [profile.name, profile]));
+  const order = Array.isArray(request.order) ? request.order : [];
+  // Another window or instance can add or delete a profile between this
+  // renderer's list and its drop. Writing a partial order would silently
+  // move a profile the operator never saw, so the request must name the
+  // current set exactly, once each.
+  if (
+    order.length !== current.length
+    || new Set(order).size !== order.length
+    || order.some((name) => !byName.has(name))
+  ) {
+    throw new Error(
+      "The profile list changed while you were reordering it. Review the current order and try again.",
+    );
   }
 
-  return {
-    activeProfile,
-    defaultProfile,
-    profiles: [...byName.values()]
-      .sort((left, right) => {
-        if (left.name === activeProfile) return -1;
-        if (right.name === activeProfile) return 1;
-        return left.name.localeCompare(right.name);
-      })
-      .map((profile) => ({
-        name: profile.name,
-        displayName: profile.display_name,
-        lastUsed: profile.last_used,
-        active: profile.name === activeProfile,
-        default: profile.name === defaultProfile,
-        profileDir: resolveProfileDir(profile.name),
-        canDelete: profile.name !== activeProfile && profile.name !== "default",
-        codexProfile: readPwrAgentProfileCodexProfile(profile.name),
-      })),
-  };
+  const registry = readProfilesRegistry();
+  registry.profiles = order.map((name) => byName.get(name)!);
+  writeProfilesRegistry(registry);
+  return { order };
+}
+
+export function setDesktopPwrAgentProfileMenuVisibility(
+  request: SetDesktopPwrAgentProfileMenuVisibilityRequest,
+): SetDesktopPwrAgentProfileMenuVisibilityResponse {
+  const profile = normalizeProfileName(request.profile);
+  const current = listOrderedProfileEntries();
+  if (!current.some((entry) => entry.name === profile)) {
+    throw new Error(`Profile "${request.profile}" does not exist.`);
+  }
+  const showInMenu = request.showInMenu !== false;
+
+  // Rewrite from the listed order, not the bare registry, so a listed
+  // profile the registry never recorded (an on-disk `default`) keeps the
+  // place the operator saw it in.
+  const registry = readProfilesRegistry();
+  registry.profiles = current.map((entry) => {
+    if (entry.name !== profile) return entry;
+    const { show_in_menu: _previous, ...rest } = entry;
+    return showInMenu ? rest : { ...rest, show_in_menu: false };
+  });
+  writeProfilesRegistry(registry);
+  return { profile, showInMenu };
 }
 
 function readPwrAgentProfileCodexProfile(profileName: string) {
@@ -519,6 +582,32 @@ export function registerProfilesIpcHandlers(
       request: DeleteDesktopPwrAgentProfileRequest,
     ): Promise<DeleteDesktopPwrAgentProfileResponse> => {
       const response = await deleteDesktopPwrAgentProfile(request);
+      options.onProfilesChanged?.();
+      return response;
+    },
+  );
+
+  ipcMain.removeHandler(PROFILES_REORDER_CHANNEL);
+  ipcMain.handle(
+    PROFILES_REORDER_CHANNEL,
+    async (
+      _event,
+      request: ReorderDesktopPwrAgentProfilesRequest,
+    ): Promise<ReorderDesktopPwrAgentProfilesResponse> => {
+      const response = reorderDesktopPwrAgentProfiles(request);
+      options.onProfilesChanged?.();
+      return response;
+    },
+  );
+
+  ipcMain.removeHandler(PROFILES_SET_MENU_VISIBILITY_CHANNEL);
+  ipcMain.handle(
+    PROFILES_SET_MENU_VISIBILITY_CHANNEL,
+    async (
+      _event,
+      request: SetDesktopPwrAgentProfileMenuVisibilityRequest,
+    ): Promise<SetDesktopPwrAgentProfileMenuVisibilityResponse> => {
+      const response = setDesktopPwrAgentProfileMenuVisibility(request);
       options.onProfilesChanged?.();
       return response;
     },

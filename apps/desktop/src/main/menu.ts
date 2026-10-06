@@ -1,5 +1,8 @@
 import type { MenuItemConstructorOptions } from "electron";
-import type { DesktopPwrAgentProfileSummary } from "@pwragent/shared";
+import {
+  profileMenuShortcutDigits,
+  type DesktopPwrAgentProfileSummary,
+} from "@pwragent/shared";
 
 export type ApplicationMenuFederationPeer = {
   instanceId: string;
@@ -27,14 +30,20 @@ export type ApplicationMenuActions = {
   openDocumentation: () => void | Promise<void>;
   openFederationWindow: (peer: ApplicationMenuFederationPeer) => void;
   openIssueReporter: () => void | Promise<void>;
+  /** Settings → Profiles with the create form already open. */
+  openNewProfile: () => void;
   openNewThread: () => void;
   openProfile: (profile: string) => void | Promise<void>;
+  /** Settings → Profiles, on the list. */
   openProfilesSettings: () => void;
+  openSecurityReporter: () => void | Promise<void>;
   openSettings: () => void;
+  openSource: () => void | Promise<void>;
   openWebsite: () => void | Promise<void>;
   quit: () => void | Promise<void>;
   replayOnboarding: () => void;
-  showAboutPanel: () => void;
+  /** Settings → About, on every platform. */
+  showAbout: () => void;
   showChangelogWindow: () => void;
   showLicenseWindow: () => void;
   showLogsWindow: () => void;
@@ -59,6 +68,13 @@ export type ApplicationMenuOptions = {
   actions: ApplicationMenuActions;
 };
 
+/**
+ * The PwrSuite menu standard (v1), shared with PwrGit and PwrSnap:
+ * [App] · File · Edit · View · Profiles · Window · Help. On macOS the app menu
+ * holds About, updates, Settings and the account items; elsewhere File holds
+ * Settings and the account items and Help ends with updates and About.
+ * `menu.test.ts` pins the exact label and separator order per platform.
+ */
 export function buildApplicationMenuTemplate(
   options: ApplicationMenuOptions,
 ): MenuItemConstructorOptions[] {
@@ -66,7 +82,7 @@ export function buildApplicationMenuTemplate(
     ...(options.isMac ? [buildMacAppMenu(options)] : []),
     buildFileMenu(options),
     { role: "editMenu" },
-    buildViewMenu(options.developerMode),
+    buildViewMenu(options),
     buildProfilesMenu(options),
     buildWindowMenu(options),
     buildHelpMenu(options),
@@ -81,27 +97,14 @@ function buildMacAppMenu(
     submenu: [
       {
         label: `About ${options.appName}`,
-        click: options.actions.showAboutPanel,
+        click: options.actions.showAbout,
+      },
+      {
+        label: "Check for Updates…",
+        click: options.actions.checkForUpdates,
       },
       { type: "separator" },
-      // "Settings…" sits where macOS users expect it — directly under
-      // the About item, separated from About by a divider and from
-      // the Services/Hide cluster below by another divider. The "…"
-      // suffix is the standard hint that the item opens a configurable
-      // surface (mirrors Mail, Safari, System Settings). Mapped to
-      // ⌘, by `accelerator: "CmdOrCtrl+,"` which is the universal
-      // Mac "preferences" shortcut.
-      {
-        label: "Settings…",
-        accelerator: "CmdOrCtrl+,",
-        click: options.actions.openSettings,
-      },
-      // Account limits and spend across instances. It sits beside Settings
-      // because it is about the account, not about any one window.
-      {
-        label: "Usage Activity",
-        click: options.actions.showUsageActivityWindow,
-      },
+      ...buildSettingsItems(options),
       { type: "separator" },
       { role: "services" },
       { type: "separator" },
@@ -120,6 +123,29 @@ function buildMacAppMenu(
   };
 }
 
+/**
+ * Settings and the account items. They sit in the macOS app menu and at the
+ * same place in File elsewhere, so an operator who switches platforms finds
+ * them in the same group.
+ */
+function buildSettingsItems(
+  options: ApplicationMenuOptions,
+): MenuItemConstructorOptions[] {
+  return [
+    {
+      label: "Settings…",
+      accelerator: "CmdOrCtrl+,",
+      click: options.actions.openSettings,
+    },
+    // Account limits and spend across instances. It sits beside Settings
+    // because it is about the account, not about any one window.
+    {
+      label: "Usage Activity",
+      click: options.actions.showUsageActivityWindow,
+    },
+  ];
+}
+
 function buildFileMenu(options: ApplicationMenuOptions): MenuItemConstructorOptions {
   return {
     label: "File",
@@ -130,11 +156,13 @@ function buildFileMenu(options: ApplicationMenuOptions): MenuItemConstructorOpti
         click: options.actions.openNewThread,
       },
       { type: "separator" },
-      { role: "close" },
+      ...(options.isMac
+        ? []
+        : [...buildSettingsItems(options), { type: "separator" as const }]),
+      { role: "close", label: "Close Window" },
       ...(options.isMac
         ? []
         : [
-            { type: "separator" as const },
             {
               label: "Quit",
               accelerator: "CmdOrCtrl+Q",
@@ -147,62 +175,77 @@ function buildFileMenu(options: ApplicationMenuOptions): MenuItemConstructorOpti
   };
 }
 
-function buildViewMenu(developerMode: boolean): MenuItemConstructorOptions {
+function buildViewMenu(options: ApplicationMenuOptions): MenuItemConstructorOptions {
   return {
     label: "View",
     submenu: [
       // Recovery must remain reachable when the renderer cannot draw controls.
       { label: "Reload Window", role: "reload" },
-      ...(developerMode
+      ...(options.developerMode
         ? [
             { role: "forceReload" as const },
             { role: "toggleDevTools" as const },
-            { type: "separator" as const },
           ]
         : []),
+      { type: "separator" },
       { role: "resetZoom" },
       { role: "zoomIn" },
       { role: "zoomOut" },
       { type: "separator" },
+      // Kept on macOS too. The standard drops it there only if macOS adds a
+      // second one, and it does not: on macOS 26 with Electron 44, a View
+      // menu without this item has no full-screen entry at all, and Window
+      // gains only Full Screen Tile.
       { role: "togglefullscreen" },
     ],
   };
 }
 
 function buildProfilesMenu(options: ApplicationMenuOptions): MenuItemConstructorOptions {
-  const profiles = orderProfilesForMenu(options.profiles);
-  const profileItems: MenuItemConstructorOptions[] = profiles.length
-    ? profiles.map((profile, index) => ({
+  // `profiles` arrives in the operator's order from Settings → Profiles. A
+  // profile switched out of the menu takes no row and no shortcut, so the
+  // next shown profile takes its number.
+  const shortcutDigits = profileMenuShortcutDigits(options.profiles);
+  const profileItems: MenuItemConstructorOptions[] = options.profiles
+    .filter((profile) => profile.showInMenu)
+    .map((profile) => {
+      const digit = shortcutDigits.get(profile.name);
+      return {
         label: profile.displayName || profile.name,
         type: "checkbox",
+        // Each profile runs in its own process with its own menu bar, so
+        // the active profile is the focused window's profile.
         checked: profile.active,
-        accelerator: index < 3 ? `CmdOrCtrl+${index + 1}` : undefined,
+        accelerator: digit === undefined ? undefined : `CmdOrCtrl+${digit}`,
         click: () => {
           void options.actions.openProfile(profile.name);
         },
-      }))
-    : [
-        {
-          label: "No Profiles Found",
-          enabled: false,
-        },
-      ];
+      };
+    });
 
-  return {
-    label: "Profiles",
-    submenu: [
-      ...profileItems,
-      ...buildFederationPeerItems(options),
-      { type: "separator" },
+  // Local profiles, then Remote Instances, then New/Manage. An empty group
+  // takes its separator with it: every profile can be switched out of the
+  // menu, and an operator who never paired an instance sees no heading.
+  const groups = [
+    profileItems,
+    buildFederationPeerItems(options),
+    [
       {
         label: "New Profile…",
-        click: options.actions.openProfilesSettings,
+        click: options.actions.openNewProfile,
       },
       {
         label: "Manage Profiles…",
         click: options.actions.openProfilesSettings,
       },
     ],
+  ].filter((group) => group.length > 0);
+
+  return {
+    label: "Profiles",
+    submenu: groups.flatMap((group, index) =>
+      index === 0 ? group : [{ type: "separator" as const }, ...group],
+    ),
   };
 }
 
@@ -213,8 +256,7 @@ function buildProfilesMenu(options: ApplicationMenuOptions): MenuItemConstructor
  * switching this window's profile, so they sit under their own heading
  * rather than merging into the checkbox list above.
  *
- * Returns nothing when no peer is connected, so an operator who has never
- * paired an instance never sees the heading.
+ * Returns nothing when no peer is connected.
  */
 function buildFederationPeerItems(
   options: ApplicationMenuOptions,
@@ -233,7 +275,6 @@ function buildFederationPeerItems(
   }));
 
   return [
-    { type: "separator" },
     // Past the inline budget the flat list crowds out the local profiles
     // it sits under, so the same heading becomes the submenu that holds
     // them. The heading label stays put either way — an operator hunting
@@ -281,9 +322,9 @@ function buildWindowMenu(options: ApplicationMenuOptions): MenuItemConstructorOp
  * federation restart. The menu rebuilds on every peer status change, so
  * leaving that order alone would let rows swap under the pointer and turn
  * a muscle-memory click into the wrong machine's remote window. Sort by
- * label, matching the local profiles these rows now sit beside, with the
- * instance id breaking ties so two identically labelled peers hold still
- * too.
+ * label, with the instance id breaking ties so two identically labelled
+ * peers hold still too. Local profiles keep the operator's own order; peers
+ * have no order to keep, because they come and go with connectivity.
  */
 function orderPeersForMenu(
   peers: ApplicationMenuFederationPeer[],
@@ -295,70 +336,48 @@ function orderPeersForMenu(
   );
 }
 
-function orderProfilesForMenu(
-  profiles: DesktopPwrAgentProfileSummary[],
-): DesktopPwrAgentProfileSummary[] {
-  return [...profiles].sort((left, right) => {
-    if (left.name === "default") return -1;
-    if (right.name === "default") return 1;
-    return left.name.localeCompare(right.name);
-  });
-}
-
 function buildHelpMenu(options: ApplicationMenuOptions): MenuItemConstructorOptions {
   return {
     role: "help",
     submenu: [
-      ...(!options.isMac
-        ? [
-            {
-              label: `About ${options.appName}`,
-              click: options.actions.showAboutPanel,
-            },
-            { type: "separator" as const },
-            // Non-Mac platforms don't get the macOS app-menu treatment
-            // — surface Settings here next to About + its standard
-            // shortcut so the menu path stays discoverable.
-            {
-              label: "Settings…",
-              accelerator: "CmdOrCtrl+," as const,
-              click: options.actions.openSettings,
-            },
-            {
-              label: "Usage Activity",
-              click: options.actions.showUsageActivityWindow,
-            },
-            { type: "separator" as const },
-          ]
-        : []),
       {
-        label: "Check for Updates",
-        click: options.actions.checkForUpdates,
+        label: `${options.appName} Documentation`,
+        click: options.actions.openDocumentation,
       },
       {
         label: "Changelog",
         click: options.actions.showChangelogWindow,
       },
-      { type: "separator" },
-      {
-        label: "Documentation",
-        click: options.actions.openDocumentation,
-      },
       {
         label: "Replay Onboarding…",
         click: options.actions.replayOnboarding,
       },
+      { type: "separator" },
       {
-        label: "Report an Issue",
+        label: "Report an Issue…",
         click: options.actions.openIssueReporter,
       },
       {
-        label: "Copy Local Diagnostics Info",
-        click: options.actions.copyLocalDiagnosticsInfo,
+        label: "Report a Security Vulnerability…",
+        click: options.actions.openSecurityReporter,
       },
       {
-        label: "PwrAgent Website",
+        label: "Copy Diagnostics Info",
+        click: options.actions.copyLocalDiagnosticsInfo,
+      },
+      // No accelerator: PwrSnap owns ⇧⌘L across the suite.
+      {
+        label: "Logs",
+        click: options.actions.showLogsWindow,
+      },
+      { type: "separator" },
+      {
+        label: `${options.appName} Website`,
         click: options.actions.openWebsite,
+      },
+      {
+        label: "View Source",
+        click: options.actions.openSource,
       },
       { type: "separator" },
       {
@@ -369,10 +388,21 @@ function buildHelpMenu(options: ApplicationMenuOptions): MenuItemConstructorOpti
         label: "Third-Party Notices",
         click: options.actions.showThirdPartyNoticesWindow,
       },
-      {
-        label: "Logs",
-        click: options.actions.showLogsWindow,
-      },
+      // macOS keeps these in the app menu. Elsewhere Help is their home, and
+      // About closes the menu, as it does across the suite.
+      ...(options.isMac
+        ? []
+        : [
+            { type: "separator" as const },
+            {
+              label: "Check for Updates…",
+              click: options.actions.checkForUpdates,
+            },
+            {
+              label: `About ${options.appName}`,
+              click: options.actions.showAbout,
+            },
+          ]),
     ],
   };
 }

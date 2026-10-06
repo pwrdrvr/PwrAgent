@@ -1723,42 +1723,66 @@ describe("bootstrapApp", () => {
     await import("../index");
     await flushMicrotasks();
 
+    type TemplateItem = {
+      label?: string;
+      click?: () => void | Promise<void>;
+      submenu?: TemplateItem[];
+    };
     const template = buildFromTemplateMock.mock.calls[0]?.[0] as
-      | Array<{
-          role?: string;
-          submenu?: Array<{
-            label?: string;
-            click?: () => void | Promise<void>;
-          }>;
-        }>
+      | TemplateItem[]
       | undefined;
-    const helpMenu = template?.find((item) => item.role === "help");
-    const item = (label: string) =>
-      helpMenu?.submenu?.find((menuItem) => menuItem.label === label);
+    // Check for Updates… and About sit in the app menu on macOS and in Help
+    // elsewhere, so look through every menu rather than Help alone.
+    const flat = (items: TemplateItem[]): TemplateItem[] =>
+      items.flatMap((entry) => [entry, ...flat(entry.submenu ?? [])]);
+    const items = flat(template ?? []);
+    const item = (label: string) => {
+      const found = items.find((menuItem) => menuItem.label === label);
+      if (!found) {
+        throw new Error(`Menu item not found: ${label}`);
+      }
+      return found;
+    };
 
-    item("Check for Updates")?.click?.();
+    item("Check for Updates…").click?.();
     expect(checkForAppUpdatesNowMock).toHaveBeenCalledWith("menu");
 
-    item("Third-Party Notices")?.click?.();
+    item("About PwrAgent").click?.();
+    expect(requestOpenSettingsMock).toHaveBeenCalledWith("about");
+    expect(showAboutPanelMock).not.toHaveBeenCalled();
+
+    item("Third-Party Notices").click?.();
     expect(showThirdPartyNoticesWindowMock).toHaveBeenCalledOnce();
 
-    item("View License")?.click?.();
+    item("View License").click?.();
     expect(showLicenseWindowMock).toHaveBeenCalledOnce();
 
-    await item("PwrAgent Website")?.click?.();
+    await item("PwrAgent Website").click?.();
     expect(shellOpenExternalMock).toHaveBeenCalledWith("https://pwragent.ai");
 
-    await item("Documentation")?.click?.();
+    await item("PwrAgent Documentation").click?.();
     expect(shellOpenExternalMock).toHaveBeenCalledWith(
       "https://docs.pwragent.ai",
     );
 
-    await item("Report an Issue")?.click?.();
+    await item("Report an Issue…").click?.();
     expect(shellOpenExternalMock).toHaveBeenCalledWith(
       "https://github.com/pwrdrvr/PwrAgent/issues/new",
     );
 
-    expect(item(["Visit", "Website"].join(" "))).toBeUndefined();
+    await item("Report a Security Vulnerability…").click?.();
+    expect(shellOpenExternalMock).toHaveBeenCalledWith(
+      "https://github.com/pwrdrvr/PwrAgent/security/advisories/new",
+    );
+
+    await item("View Source").click?.();
+    expect(shellOpenExternalMock).toHaveBeenCalledWith(
+      "https://github.com/pwrdrvr/PwrAgent",
+    );
+
+    expect(
+      items.find((menuItem) => menuItem.label === ["Visit", "Website"].join(" ")),
+    ).toBeUndefined();
   });
 
   it("wires the Profiles menu to profile opening and profile settings", async () => {
@@ -1783,6 +1807,7 @@ describe("bootstrapApp", () => {
           default: true,
           name: "default",
           profileDir: "/profiles/default",
+          showInMenu: true,
         },
         {
           active: false,
@@ -1800,6 +1825,7 @@ describe("bootstrapApp", () => {
           default: false,
           name: "work",
           profileDir: "/profiles/work",
+          showInMenu: true,
         },
       ],
     });
@@ -1828,7 +1854,10 @@ describe("bootstrapApp", () => {
     expect(setApplicationMenuMock).toHaveBeenCalledTimes(2);
 
     item("Manage Profiles…")?.click?.();
-    expect(requestOpenSettingsMock).toHaveBeenCalledWith("profiles");
+    expect(requestOpenSettingsMock).toHaveBeenLastCalledWith("profiles");
+
+    item("New Profile…")?.click?.();
+    expect(requestOpenSettingsMock).toHaveBeenLastCalledWith("profiles", "new");
   });
 
   it("logs startup thread list prewarm failures without blocking startup", async () => {

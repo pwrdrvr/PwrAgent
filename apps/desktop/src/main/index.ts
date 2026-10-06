@@ -196,6 +196,7 @@ import { registerManagedRuntimeProgressBroadcast } from "./managed-runtime-progr
 import { subscribersForChannel } from "./window-channels";
 import { requestOpenNewThread } from "./window-open-new-thread";
 import { requestOpenSettings } from "./window-open-settings";
+import { PROFILES_SETTINGS_CREATE_SUBSECTION } from "../shared/settings-routes";
 import { requestReplayOnboarding } from "./window-replay-onboarding";
 import { requestCopyLocalDiagnosticsInfo } from "./window-copy-local-diagnostics-info";
 import { buildApplicationMenuTemplate } from "./menu";
@@ -255,8 +256,11 @@ configureBundledGit(app.isPackaged ? process.resourcesPath : undefined);
 
 const APP_NAME = "PwrAgent";
 const APP_COPYRIGHT = "Copyright © 2026 PwrDrvr LLC.";
-const PWRAGENT_ISSUE_REPORTER_URL =
-  "https://github.com/pwrdrvr/PwrAgent/issues/new";
+const PWRAGENT_SOURCE_URL = "https://github.com/pwrdrvr/PwrAgent";
+const PWRAGENT_ISSUE_REPORTER_URL = `${PWRAGENT_SOURCE_URL}/issues/new`;
+// GitHub private vulnerability reporting, per SECURITY.md: never a public issue.
+const PWRAGENT_SECURITY_REPORTER_URL =
+  `${PWRAGENT_SOURCE_URL}/security/advisories/new`;
 const isMac = process.platform === "darwin";
 const isDevelopment = process.env.NODE_ENV !== "production";
 const mainLog = getMainLogger("pwragent:main");
@@ -1172,6 +1176,9 @@ function installApplicationMenu(): void {
       openIssueReporter: async () => {
         await shell.openExternal(PWRAGENT_ISSUE_REPORTER_URL);
       },
+      openNewProfile: () => {
+        requestOpenSettings("profiles", PROFILES_SETTINGS_CREATE_SUBSECTION);
+      },
       openNewThread: () => {
         requestOpenNewThread();
       },
@@ -1181,8 +1188,14 @@ function installApplicationMenu(): void {
       openProfilesSettings: () => {
         requestOpenSettings("profiles");
       },
+      openSecurityReporter: async () => {
+        await shell.openExternal(PWRAGENT_SECURITY_REPORTER_URL);
+      },
       openSettings: () => {
         requestOpenSettings();
+      },
+      openSource: async () => {
+        await shell.openExternal(PWRAGENT_SOURCE_URL);
       },
       openWebsite: async () => {
         await shell.openExternal(PWRAGENT_HOMEPAGE_URL);
@@ -1193,8 +1206,10 @@ function installApplicationMenu(): void {
       replayOnboarding: () => {
         requestReplayOnboarding();
       },
-      showAboutPanel: () => {
-        app.showAboutPanel();
+      // The app's own About page on every platform: the native panel shows a
+      // name and a version, and on Linux a bare GTK dialog.
+      showAbout: () => {
+        requestOpenSettings("about");
       },
       showChangelogWindow,
       showLicenseWindow,

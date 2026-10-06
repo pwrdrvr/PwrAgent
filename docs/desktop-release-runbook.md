@@ -762,7 +762,7 @@ older selected release as a **switch back** rather than "no update":
   points the feed at the selected release, and downloads it. Every check that
   resolves to a newer release sets `allowDowngrade` back to `false`.
 - The offer is made only for an operator-initiated check — the Settings
-  "Check for Update" button, the app menu **Check for Updates**, or the app
+  "Check for Update" button, the menu bar's **Check for Updates…**, or the app
   management tool. Startup and hourly background checks still report
   "You're up to date" so an operator who deliberately installed a newer build
   is not asked to move back down on every poll. Tell an operator who is

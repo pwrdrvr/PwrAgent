@@ -7,11 +7,17 @@ import {
   PWRAGENT_PROFILE_ENV,
   ensureNamedProfileExists,
   resetCachedActiveProfileNameForTests,
+  readProfilesRegistry,
   setDefaultProfileName,
   startProfileRuntimeHeartbeat,
+  updateLastUsed,
 } from "../profile";
 import { SECRET_STORAGE_DISABLED_ENV } from "../settings/desktop-secret-store";
-import { PROFILES_SET_DEFAULT_CHANNEL } from "../../shared/ipc";
+import {
+  PROFILES_REORDER_CHANNEL,
+  PROFILES_SET_DEFAULT_CHANNEL,
+  PROFILES_SET_MENU_VISIBILITY_CHANNEL,
+} from "../../shared/ipc";
 
 const spawnMock = vi.fn(() => ({
   unref: vi.fn(),
@@ -172,6 +178,165 @@ describe("profile IPC helpers", () => {
       listDesktopPwrAgentProfiles().profiles.find((profile) => profile.name === "work")
         ?.default,
     ).toBe(true);
+  });
+
+  describe("operator order and Profiles menu visibility", () => {
+    function seedProfiles(active: string, names: string[]): NodeJS.ProcessEnv {
+      const root = createRoot();
+      const env = { [PWRAGENT_HOME_ENV]: root } as NodeJS.ProcessEnv;
+      for (const name of names) {
+        ensureNamedProfileExists(name, { env });
+      }
+      vi.stubEnv(PWRAGENT_HOME_ENV, root);
+      vi.stubEnv(PWRAGENT_PROFILE_ENV, active);
+      return env;
+    }
+
+    it("lists profiles in creation order, not active-first or alphabetical", async () => {
+      seedProfiles("dev", ["work", "dev", "alpha"]);
+      const { listDesktopPwrAgentProfiles } = await import("../ipc/profiles");
+
+      const profiles = listDesktopPwrAgentProfiles().profiles;
+
+      expect(profiles.map((profile) => profile.name)).toEqual([
+        "work",
+        "dev",
+        "alpha",
+      ]);
+      expect(profiles.map((profile) => profile.showInMenu)).toEqual([
+        true,
+        true,
+        true,
+      ]);
+    });
+
+    it("persists a reorder, and a new profile lands at the bottom", async () => {
+      const env = seedProfiles("dev", ["dev", "work", "alpha"]);
+      const {
+        listDesktopPwrAgentProfiles,
+        reorderDesktopPwrAgentProfiles,
+      } = await import("../ipc/profiles");
+
+      expect(
+        reorderDesktopPwrAgentProfiles({ order: ["alpha", "dev", "work"] }),
+      ).toEqual({ order: ["alpha", "dev", "work"] });
+      ensureNamedProfileExists("beta", { env });
+
+      expect(
+        listDesktopPwrAgentProfiles().profiles.map((profile) => profile.name),
+      ).toEqual(["alpha", "dev", "work", "beta"]);
+    });
+
+    it.each([
+      ["missing a profile", ["dev", "work"]],
+      ["naming an unknown profile", ["dev", "work", "alpha", "ghost"]],
+      ["repeating a profile", ["dev", "work", "work"]],
+    ])("refuses a stale order %s and leaves the registry alone", async (_case, order) => {
+      seedProfiles("dev", ["dev", "work", "alpha"]);
+      const {
+        listDesktopPwrAgentProfiles,
+        reorderDesktopPwrAgentProfiles,
+      } = await import("../ipc/profiles");
+
+      expect(() => reorderDesktopPwrAgentProfiles({ order })).toThrow(
+        "The profile list changed while you were reordering it.",
+      );
+      expect(
+        listDesktopPwrAgentProfiles().profiles.map((profile) => profile.name),
+      ).toEqual(["dev", "work", "alpha"]);
+    });
+
+    it("hides a profile from the menu without moving it, and survives a last-used stamp", async () => {
+      const env = seedProfiles("dev", ["dev", "scratch", "work"]);
+      const {
+        listDesktopPwrAgentProfiles,
+        setDesktopPwrAgentProfileMenuVisibility,
+      } = await import("../ipc/profiles");
+
+      expect(
+        setDesktopPwrAgentProfileMenuVisibility({
+          profile: "scratch",
+          showInMenu: false,
+        }),
+      ).toEqual({ profile: "scratch", showInMenu: false });
+      // Another launch of that profile stamps last_used through the same
+      // registry; the flag must ride along.
+      updateLastUsed("scratch", { env });
+
+      expect(
+        listDesktopPwrAgentProfiles().profiles.map((profile) => [
+          profile.name,
+          profile.showInMenu,
+        ]),
+      ).toEqual([
+        ["dev", true],
+        ["scratch", false],
+        ["work", true],
+      ]);
+      expect(
+        readProfilesRegistry({ env }).profiles.find(
+          (entry) => entry.name === "scratch",
+        )?.show_in_menu,
+      ).toBe(false);
+
+      setDesktopPwrAgentProfileMenuVisibility({
+        profile: "scratch",
+        showInMenu: true,
+      });
+
+      // Shown is the default, so the key leaves the file rather than
+      // turning into `show_in_menu = true`.
+      const registryText = fs.readFileSync(
+        path.join(env[PWRAGENT_HOME_ENV]!, "profiles.toml"),
+        "utf8",
+      );
+      expect(registryText).not.toContain("show_in_menu");
+    });
+
+    it("refuses to change the visibility of a profile that does not exist", async () => {
+      seedProfiles("dev", ["dev"]);
+      const { setDesktopPwrAgentProfileMenuVisibility } = await import(
+        "../ipc/profiles"
+      );
+
+      expect(() =>
+        setDesktopPwrAgentProfileMenuVisibility({
+          profile: "ghost",
+          showInMenu: false,
+        }),
+      ).toThrow('Profile "ghost" does not exist.');
+    });
+
+    it("rebuilds the menus after a reorder or a visibility change, and only on success", async () => {
+      seedProfiles("dev", ["dev", "work"]);
+      const { registerProfilesIpcHandlers } = await import("../ipc/profiles");
+      const onProfilesChanged = vi.fn();
+      registerProfilesIpcHandlers({ onProfilesChanged });
+      const handler = (channel: string) => {
+        const found = ipcMainHandleMock.mock.calls.find(
+          ([candidate]) => candidate === channel,
+        )?.[1] as
+          | ((event: unknown, request: unknown) => Promise<unknown>)
+          | undefined;
+        if (!found) {
+          throw new Error(`${channel} handler was not registered`);
+        }
+        return found;
+      };
+
+      await expect(
+        handler(PROFILES_REORDER_CHANNEL)({}, { order: ["work"] }),
+      ).rejects.toThrow("The profile list changed");
+      expect(onProfilesChanged).not.toHaveBeenCalled();
+
+      await handler(PROFILES_REORDER_CHANNEL)({}, { order: ["work", "dev"] });
+      await handler(PROFILES_SET_MENU_VISIBILITY_CHANNEL)(
+        {},
+        { profile: "work", showInMenu: false },
+      );
+
+      expect(onProfilesChanged).toHaveBeenCalledTimes(2);
+    });
   });
 
   it("notifies profile listeners after changing the default profile", async () => {

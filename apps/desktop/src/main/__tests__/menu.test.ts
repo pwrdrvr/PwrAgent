@@ -1,22 +1,21 @@
 import { describe, expect, it, vi } from "vitest";
 import type { MenuItemConstructorOptions } from "electron";
 import type { DesktopPwrAgentProfileSummary } from "@pwragent/shared";
-import { buildApplicationMenuTemplate } from "../menu";
+import {
+  buildApplicationMenuTemplate,
+  type ApplicationMenuActions,
+} from "../menu";
 
 function buildTemplate(
   developerMode: boolean,
   options?: {
     isMac?: boolean;
-    copyLocalDiagnosticsInfo?: () => void;
+    actions?: Partial<ApplicationMenuActions>;
     federationPeers?: Array<{ instanceId: string; label: string }>;
     openFederationWindow?: (peer: {
       instanceId: string;
       label: string;
     }) => void;
-    openNewThread?: () => void;
-    openProfile?: (profile: string) => void;
-    openProfilesSettings?: () => void;
-    openSettings?: () => void;
     profiles?: DesktopPwrAgentProfileSummary[];
     windows?: Array<{
       focused: boolean;
@@ -31,9 +30,9 @@ function buildTemplate(
     isMac: options?.isMac ?? true,
     federationPeers: options?.federationPeers ?? [],
     profiles: options?.profiles ?? [
-      profile("work"),
       profile("default", { active: true, default: true }),
       profile("personal"),
+      profile("work"),
     ],
     windows: options?.windows ?? [
       { focused: true, id: 1, title: "PwrAgent" },
@@ -41,24 +40,28 @@ function buildTemplate(
     ],
     actions: {
       checkForUpdates: vi.fn(),
-      copyLocalDiagnosticsInfo: options?.copyLocalDiagnosticsInfo ?? vi.fn(),
+      copyLocalDiagnosticsInfo: vi.fn(),
       focusWindow: vi.fn(),
       openDocumentation: vi.fn(),
       openFederationWindow: options?.openFederationWindow ?? vi.fn(),
       openIssueReporter: vi.fn(),
-      openNewThread: options?.openNewThread ?? vi.fn(),
-      openProfile: options?.openProfile ?? vi.fn(),
-      openProfilesSettings: options?.openProfilesSettings ?? vi.fn(),
-      openSettings: options?.openSettings ?? vi.fn(),
+      openNewProfile: vi.fn(),
+      openNewThread: vi.fn(),
+      openProfile: vi.fn(),
+      openProfilesSettings: vi.fn(),
+      openSecurityReporter: vi.fn(),
+      openSettings: vi.fn(),
+      openSource: vi.fn(),
       openWebsite: vi.fn(),
       quit: vi.fn(),
       replayOnboarding: vi.fn(),
-      showAboutPanel: vi.fn(),
+      showAbout: vi.fn(),
       showChangelogWindow: vi.fn(),
       showLicenseWindow: vi.fn(),
       showLogsWindow: vi.fn(),
       showThirdPartyNoticesWindow: vi.fn(),
       showUsageActivityWindow: vi.fn(),
+      ...options?.actions,
     },
   });
 }
@@ -83,288 +86,424 @@ function profile(
     default: false,
     name,
     profileDir: `/profiles/${name}`,
+    showInMenu: true,
     ...options,
   };
 }
 
-function submenuRoles(
-  template: MenuItemConstructorOptions[],
-  label: string,
-): Array<string | undefined> {
-  const menu = template.find((item) => item.label === label);
-  const submenu = Array.isArray(menu?.submenu) ? menu.submenu : [];
-  return submenu.map((item) => item.role);
+/** A menu item as the standard names it: its label, else its role. */
+function nameOf(item: MenuItemConstructorOptions): string {
+  return item.label ?? `role:${item.role ?? "?"}`;
+}
+
+/** Labels, roles and separators in order — the shape the standard pins. */
+function flatten(items: MenuItemConstructorOptions[]): string[] {
+  return items.map((item) => (item.type === "separator" ? "---" : nameOf(item)));
 }
 
 function submenuItems(
   template: MenuItemConstructorOptions[],
-  label: string,
+  name: string,
 ): MenuItemConstructorOptions[] {
-  const menu = template.find((item) => item.label === label);
+  const menu = template.find((item) => nameOf(item) === name);
   return Array.isArray(menu?.submenu) ? menu.submenu : [];
 }
 
-function findSubmenuByRole(
-  template: MenuItemConstructorOptions[],
-  role: string,
+function allItems(
+  items: MenuItemConstructorOptions[],
 ): MenuItemConstructorOptions[] {
-  const menu = template.find((item) => item.role === role);
-  return Array.isArray(menu?.submenu) ? menu.submenu : [];
+  return items.flatMap((item) => [
+    item,
+    ...(Array.isArray(item.submenu) ? allItems(item.submenu) : []),
+  ]);
 }
+
+function click(
+  items: MenuItemConstructorOptions[],
+  label: string,
+): void {
+  const item = items.find((candidate) => candidate.label === label);
+  if (!item) {
+    throw new Error(`Menu item not found: ${label}`);
+  }
+  (item.click as (() => void) | undefined)?.();
+}
+
+const HELP_SHARED = [
+  "PwrAgent Documentation",
+  "Changelog",
+  "Replay Onboarding…",
+  "---",
+  "Report an Issue…",
+  "Report a Security Vulnerability…",
+  "Copy Diagnostics Info",
+  "Logs",
+  "---",
+  "PwrAgent Website",
+  "View Source",
+  "---",
+  "View License",
+  "Third-Party Notices",
+];
 
 describe("buildApplicationMenuTemplate", () => {
-  it("places Profiles between View and Window", () => {
-    const labels = buildTemplate(false).map((item) => item.label ?? item.role);
+  // The PwrSuite menu standard (v1). PwrGit and PwrSnap pin the same order
+  // in their own menu tests; a change here is a change to the suite standard.
+  describe("PwrSuite menu standard on macOS", () => {
+    const template = buildTemplate(false, { isMac: true });
 
-    expect(labels).toEqual([
-      "PwrAgent",
-      "File",
-      "editMenu",
-      "View",
-      "Profiles",
-      "windowMenu",
-      "help",
-    ]);
-  });
-
-  it("orders profiles with default pinned, checks the active profile, and assigns first shortcuts", () => {
-    const items = submenuItems(buildTemplate(false), "Profiles");
-    const profileItems = items.slice(0, 3);
-
-    expect(profileItems.map((item) => item.label)).toEqual([
-      "default",
-      "personal",
-      "work",
-    ]);
-    expect(profileItems.map((item) => item.type)).toEqual([
-      "checkbox",
-      "checkbox",
-      "checkbox",
-    ]);
-    expect(profileItems.map((item) => item.checked)).toEqual([
-      true,
-      false,
-      false,
-    ]);
-    expect(profileItems.map((item) => item.accelerator)).toEqual([
-      "CmdOrCtrl+1",
-      "CmdOrCtrl+2",
-      "CmdOrCtrl+3",
-    ]);
-  });
-
-  it("routes profile menu clicks through the shared profile opener", () => {
-    const openProfile = vi.fn();
-    const items = submenuItems(buildTemplate(false, { openProfile }), "Profiles");
-
-    (items.find((item) => item.label === "work")?.click as
-      | (() => void)
-      | undefined)?.();
-
-    expect(openProfile).toHaveBeenCalledWith("work");
-  });
-
-  it("opens the profile settings surface from profile management menu items", () => {
-    const openProfilesSettings = vi.fn();
-    const items = submenuItems(
-      buildTemplate(false, { openProfilesSettings }),
-      "Profiles",
-    );
-
-    (items.find((item) => item.label === "New Profile…")?.click as
-      | (() => void)
-      | undefined)?.();
-    (items.find((item) => item.label === "Manage Profiles…")?.click as
-      | (() => void)
-      | undefined)?.();
-
-    expect(openProfilesSettings).toHaveBeenCalledTimes(2);
-  });
-
-  it("keeps window recovery available and hides developer-only View items when Developer Mode is off", () => {
-    const roles = submenuRoles(buildTemplate(false), "View");
-
-    expect(roles.filter((role) => role === "reload")).toHaveLength(1);
-    expect(roles).not.toContain("forceReload");
-    expect(roles).not.toContain("toggleDevTools");
-    expect(roles.filter((role) => role === "togglefullscreen")).toHaveLength(1);
-  });
-
-  it("includes developer-only View items when Developer Mode is on", () => {
-    const roles = submenuRoles(buildTemplate(true), "View");
-
-    expect(roles).toContain("reload");
-    expect(roles).toContain("forceReload");
-    expect(roles).toContain("toggleDevTools");
-    expect(roles.filter((role) => role === "togglefullscreen")).toHaveLength(1);
-  });
-
-  describe("New Thread menu item", () => {
-    it("places New Thread at the top of File with CmdOrCtrl+N", () => {
-      const items = submenuItems(buildTemplate(false), "File");
-
-      expect(items[0]?.label).toBe("New Thread");
-      expect(items[0]?.accelerator).toBe("CmdOrCtrl+N");
-      expect(items[1]?.type).toBe("separator");
-      expect(items[2]?.role).toBe("close");
+    it("orders the menu bar", () => {
+      expect(template.map(nameOf)).toEqual([
+        "PwrAgent",
+        "File",
+        "role:editMenu",
+        "View",
+        "Profiles",
+        "role:windowMenu",
+        "role:help",
+      ]);
     });
 
-    it("invokes the openNewThread action on click", () => {
-      const openNewThread = vi.fn();
-      const items = submenuItems(buildTemplate(false, { openNewThread }), "File");
-
-      (items.find((item) => item.label === "New Thread")?.click as
-        | (() => void)
-        | undefined)?.();
-
-      expect(openNewThread).toHaveBeenCalledOnce();
+    it("pins the app menu", () => {
+      expect(flatten(submenuItems(template, "PwrAgent"))).toEqual([
+        "About PwrAgent",
+        "Check for Updates…",
+        "---",
+        "Settings…",
+        "Usage Activity",
+        "---",
+        "role:services",
+        "---",
+        "role:hide",
+        "role:hideOthers",
+        "role:unhide",
+        "---",
+        "Quit PwrAgent",
+      ]);
     });
 
-    it("keeps Quit available on non-Mac platforms after inserting New Thread", () => {
-      const items = submenuItems(buildTemplate(false, { isMac: false }), "File");
-
-      expect(items.map((item) => item.label ?? item.role ?? item.type)).toEqual([
+    it("pins File", () => {
+      expect(flatten(submenuItems(template, "File"))).toEqual([
         "New Thread",
-        "separator",
-        "close",
-        "separator",
+        "---",
+        "Close Window",
+      ]);
+    });
+
+    it("pins View, keeping the one full-screen item", () => {
+      // Decision E: drop the stock item on macOS only if macOS adds its own.
+      // It does not, so this is the only full-screen entry the menu bar has.
+      expect(flatten(submenuItems(template, "View"))).toEqual([
+        "Reload Window",
+        "---",
+        "role:resetZoom",
+        "role:zoomIn",
+        "role:zoomOut",
+        "---",
+        "role:togglefullscreen",
+      ]);
+    });
+
+    it("pins Help", () => {
+      expect(flatten(submenuItems(template, "role:help"))).toEqual(HELP_SHARED);
+    });
+  });
+
+  describe("PwrSuite menu standard on Linux and Windows", () => {
+    const template = buildTemplate(false, { isMac: false });
+
+    it("orders the menu bar", () => {
+      expect(template.map(nameOf)).toEqual([
+        "File",
+        "role:editMenu",
+        "View",
+        "Profiles",
+        "Window",
+        "role:help",
+      ]);
+    });
+
+    it("pins File", () => {
+      expect(flatten(submenuItems(template, "File"))).toEqual([
+        "New Thread",
+        "---",
+        "Settings…",
+        "Usage Activity",
+        "---",
+        "Close Window",
         "Quit",
+      ]);
+    });
+
+    it("pins View", () => {
+      expect(flatten(submenuItems(template, "View"))).toEqual([
+        "Reload Window",
+        "---",
+        "role:resetZoom",
+        "role:zoomIn",
+        "role:zoomOut",
+        "---",
+        "role:togglefullscreen",
+      ]);
+    });
+
+    it("pins Window with the open windows", () => {
+      expect(flatten(submenuItems(template, "Window"))).toEqual([
+        "role:minimize",
+        "role:close",
+        "---",
+        "PwrAgent",
+        "Logs",
+      ]);
+    });
+
+    it("pins Help, ending with updates and then About", () => {
+      expect(flatten(submenuItems(template, "role:help"))).toEqual([
+        ...HELP_SHARED,
+        "---",
+        "Check for Updates…",
+        "About PwrAgent",
       ]);
     });
   });
 
-  describe("Settings menu item placement", () => {
-    it("places Settings… and Usage Activity under About on the macOS app menu with separators", () => {
-      const items = submenuItems(buildTemplate(false), "PwrAgent");
-      const labels = items.map((item) => item.label ?? item.role ?? item.type);
-
-      // About → separator → Settings… → Usage Activity → separator → services …
-      const aboutIndex = labels.indexOf("About PwrAgent");
-      const settingsIndex = labels.indexOf("Settings…");
-      expect(aboutIndex).toBeGreaterThanOrEqual(0);
-      expect(settingsIndex).toBe(aboutIndex + 2);
-      expect(items[aboutIndex + 1]?.type).toBe("separator");
-      expect(labels[settingsIndex + 1]).toBe("Usage Activity");
-      expect(items[settingsIndex + 2]?.type).toBe("separator");
-    });
-
-    it("gives the Mac Settings item the universal ⌘, accelerator", () => {
-      const items = submenuItems(buildTemplate(false), "PwrAgent");
-      const settings = items.find((item) => item.label === "Settings…");
-      expect(settings?.accelerator).toBe("CmdOrCtrl+,");
-    });
-
-    it("invokes the openSettings action on click", () => {
-      const openSettings = vi.fn();
-      const items = submenuItems(buildTemplate(false, { openSettings }), "PwrAgent");
-      const settings = items.find((item) => item.label === "Settings…");
-      expect(settings).toBeDefined();
-      // `click` on MenuItemConstructorOptions takes (menuItem, browserWindow, event)
-      // — we don't need the args here, just that our action gets called.
-      (settings?.click as () => void | undefined)?.();
-      expect(openSettings).toHaveBeenCalledOnce();
-    });
-
-    it("routes macOS Quit through the shared quit action", () => {
-      const quit = vi.fn();
-      const template = buildApplicationMenuTemplate({
-        appName: "PwrAgent",
-        developerMode: false,
-        isMac: true,
-        federationPeers: [],
-        profiles: [],
-        windows: [],
-        actions: {
-          checkForUpdates: vi.fn(),
-          copyLocalDiagnosticsInfo: vi.fn(),
-          focusWindow: vi.fn(),
-          openDocumentation: vi.fn(),
-          openFederationWindow: vi.fn(),
-          openIssueReporter: vi.fn(),
-          openNewThread: vi.fn(),
-          openProfile: vi.fn(),
-          openProfilesSettings: vi.fn(),
-          openSettings: vi.fn(),
-          openWebsite: vi.fn(),
-          quit,
-          replayOnboarding: vi.fn(),
-          showAboutPanel: vi.fn(),
-          showChangelogWindow: vi.fn(),
-          showLicenseWindow: vi.fn(),
-          showLogsWindow: vi.fn(),
-          showThirdPartyNoticesWindow: vi.fn(),
-          showUsageActivityWindow: vi.fn(),
-        },
-      });
-      const quitItem = submenuItems(template, "PwrAgent").find(
-        (item) => item.label === "Quit PwrAgent",
-      );
-
-      expect(quitItem?.accelerator).toBe("Command+Q");
-      (quitItem?.click as () => void | undefined)?.();
-      expect(quit).toHaveBeenCalledOnce();
-    });
-
-    it("surfaces Settings in Help → About cluster on non-Mac platforms", () => {
-      const helpItems = findSubmenuByRole(
-        buildTemplate(false, { isMac: false }),
-        "help",
-      );
-      const labels = helpItems.map((item) => item.label ?? item.type);
-      const aboutIndex = labels.indexOf("About PwrAgent");
-      const settingsIndex = labels.indexOf("Settings…");
-      expect(aboutIndex).toBeGreaterThanOrEqual(0);
-      expect(settingsIndex).toBeGreaterThan(aboutIndex);
-      // About → separator → Settings… → Usage Activity → separator → Check for Updates …
-      expect(helpItems[aboutIndex + 1]?.type).toBe("separator");
-      expect(labels[settingsIndex + 1]).toBe("Usage Activity");
-      expect(helpItems[settingsIndex + 2]?.type).toBe("separator");
-    });
-
-    it("does NOT add Settings to the PwrAgent menu on non-Mac (no app menu there)", () => {
-      const template = buildTemplate(false, { isMac: false });
-      const appMenu = template.find((item) => item.label === "PwrAgent");
-      expect(appMenu).toBeUndefined();
-    });
+  it.each([true, false])("pins the shared Profiles menu (isMac: %s)", (isMac) => {
+    expect(
+      flatten(submenuItems(buildTemplate(false, { isMac }), "Profiles")),
+    ).toEqual([
+      "default",
+      "personal",
+      "work",
+      "---",
+      "New Profile…",
+      "Manage Profiles…",
+    ]);
   });
 
-  it("routes Help → Copy Local Diagnostics Info through the shared action", () => {
-    const copyLocalDiagnosticsInfo = vi.fn();
-    const items = findSubmenuByRole(
-      buildTemplate(false, { copyLocalDiagnosticsInfo }),
-      "help",
+  it.each([true, false])(
+    "adds Force Reload and Toggle Developer Tools only in Developer Mode (isMac: %s)",
+    (isMac) => {
+      const view = flatten(submenuItems(buildTemplate(true, { isMac }), "View"));
+
+      expect(view.slice(0, 4)).toEqual([
+        "Reload Window",
+        "role:forceReload",
+        "role:toggleDevTools",
+        "---",
+      ]);
+      expect(
+        flatten(submenuItems(buildTemplate(false, { isMac }), "View")),
+      ).not.toContain("role:forceReload");
+    },
+  );
+
+  it.each([true, false])("keeps the standard's accelerators (isMac: %s)", (isMac) => {
+    const items = allItems(buildTemplate(false, { isMac }));
+    const accelerator = (label: string) =>
+      items.find((item) => item.label === label)?.accelerator;
+
+    expect(accelerator("Settings…")).toBe("CmdOrCtrl+,");
+    expect(accelerator("New Thread")).toBe("CmdOrCtrl+N");
+    expect(accelerator(isMac ? "Quit PwrAgent" : "Quit")).toBe(
+      isMac ? "Command+Q" : "CmdOrCtrl+Q",
+    );
+    // PwrSnap owns ⇧⌘L across the suite.
+    expect(accelerator("Logs")).toBeUndefined();
+    expect(
+      items.filter((item) => item.accelerator === "CmdOrCtrl+Shift+L"),
+    ).toEqual([]);
+  });
+
+  it("keeps Reload Window and Close Window on their roles", () => {
+    const items = allItems(buildTemplate(false, { isMac: false }));
+
+    expect(items.find((item) => item.label === "Reload Window")?.role).toBe(
+      "reload",
+    );
+    expect(items.find((item) => item.label === "Close Window")?.role).toBe(
+      "close",
+    );
+  });
+
+  it.each([true, false])("routes the standard's items to their actions (isMac: %s)", (isMac) => {
+    const actions = {
+      checkForUpdates: vi.fn(),
+      copyLocalDiagnosticsInfo: vi.fn(),
+      openDocumentation: vi.fn(),
+      openIssueReporter: vi.fn(),
+      openSecurityReporter: vi.fn(),
+      openSettings: vi.fn(),
+      openSource: vi.fn(),
+      openWebsite: vi.fn(),
+      quit: vi.fn(),
+      replayOnboarding: vi.fn(),
+      showAbout: vi.fn(),
+      showLogsWindow: vi.fn(),
+      showUsageActivityWindow: vi.fn(),
+    };
+    // No window titled "Logs", or the Window menu's row for it answers first.
+    const items = allItems(
+      buildTemplate(false, {
+        isMac,
+        actions,
+        windows: [{ focused: true, id: 1, title: "PwrAgent" }],
+      }),
     );
 
-    (items.find((item) => item.label === "Copy Local Diagnostics Info")?.click as
-      | (() => void)
-      | undefined)?.();
+    click(items, "About PwrAgent");
+    click(items, "Check for Updates…");
+    click(items, "Settings…");
+    click(items, "Usage Activity");
+    click(items, "PwrAgent Documentation");
+    click(items, "Replay Onboarding…");
+    click(items, "Report an Issue…");
+    click(items, "Report a Security Vulnerability…");
+    click(items, "Copy Diagnostics Info");
+    click(items, "Logs");
+    click(items, "PwrAgent Website");
+    click(items, "View Source");
+    click(items, isMac ? "Quit PwrAgent" : "Quit");
 
-    expect(copyLocalDiagnosticsInfo).toHaveBeenCalledOnce();
+    for (const action of Object.values(actions)) {
+      expect(action).toHaveBeenCalledOnce();
+    }
+  });
+
+  describe("Profiles", () => {
+    it("lists profiles in the operator's order, not default-first or alphabetical", () => {
+      const items = submenuItems(
+        buildTemplate(false, {
+          profiles: [
+            profile("work"),
+            profile("default", { active: true, default: true }),
+            profile("alpha"),
+          ],
+        }),
+        "Profiles",
+      );
+
+      expect(flatten(items).slice(0, 3)).toEqual(["work", "default", "alpha"]);
+      expect(items.slice(0, 3).map((item) => item.type)).toEqual([
+        "checkbox",
+        "checkbox",
+        "checkbox",
+      ]);
+      // The check marks the profile this process — so every window of this
+      // menu bar — runs.
+      expect(items.slice(0, 3).map((item) => item.checked)).toEqual([
+        false,
+        true,
+        false,
+      ]);
+    });
+
+    it("gives the first nine shown profiles ⌘1–⌘9 and the rest no shortcut", () => {
+      const profiles = Array.from({ length: 11 }, (_unused, index) =>
+        profile(`p${index + 1}`),
+      );
+      const items = submenuItems(buildTemplate(false, { profiles }), "Profiles");
+
+      expect(items.slice(0, 11).map((item) => item.accelerator)).toEqual([
+        "CmdOrCtrl+1",
+        "CmdOrCtrl+2",
+        "CmdOrCtrl+3",
+        "CmdOrCtrl+4",
+        "CmdOrCtrl+5",
+        "CmdOrCtrl+6",
+        "CmdOrCtrl+7",
+        "CmdOrCtrl+8",
+        "CmdOrCtrl+9",
+        undefined,
+        undefined,
+      ]);
+    });
+
+    it("gives a hidden profile no row and passes its number to the next shown one", () => {
+      const items = submenuItems(
+        buildTemplate(false, {
+          profiles: [
+            profile("default", { active: true }),
+            profile("scratch", { showInMenu: false }),
+            profile("work"),
+          ],
+        }),
+        "Profiles",
+      );
+
+      expect(flatten(items)).toEqual([
+        "default",
+        "work",
+        "---",
+        "New Profile…",
+        "Manage Profiles…",
+      ]);
+      expect(items.slice(0, 2).map((item) => item.accelerator)).toEqual([
+        "CmdOrCtrl+1",
+        "CmdOrCtrl+2",
+      ]);
+    });
+
+    it("drops the separator when every profile is hidden", () => {
+      const items = submenuItems(
+        buildTemplate(false, {
+          profiles: [profile("default", { active: true, showInMenu: false })],
+        }),
+        "Profiles",
+      );
+
+      expect(flatten(items)).toEqual(["New Profile…", "Manage Profiles…"]);
+    });
+
+    it("routes profile rows through the shared profile opener", () => {
+      const openProfile = vi.fn();
+      const items = submenuItems(
+        buildTemplate(false, { actions: { openProfile } }),
+        "Profiles",
+      );
+
+      click(items, "work");
+
+      expect(openProfile).toHaveBeenCalledWith("work");
+    });
+
+    it("opens the create form from New Profile… and the list from Manage Profiles…", () => {
+      const openNewProfile = vi.fn();
+      const openProfilesSettings = vi.fn();
+      const items = submenuItems(
+        buildTemplate(false, {
+          actions: { openNewProfile, openProfilesSettings },
+        }),
+        "Profiles",
+      );
+
+      click(items, "New Profile…");
+      expect(openNewProfile).toHaveBeenCalledOnce();
+      expect(openProfilesSettings).not.toHaveBeenCalled();
+
+      click(items, "Manage Profiles…");
+      expect(openProfilesSettings).toHaveBeenCalledOnce();
+      expect(openNewProfile).toHaveBeenCalledOnce();
+    });
   });
 
   describe("Window menu", () => {
     it("keeps the native Window menu role on macOS", () => {
-      const windowMenu = buildTemplate(false).find(
-        (item) => item.role === "windowMenu",
-      );
+      const template = buildTemplate(false, { isMac: true });
 
-      expect(windowMenu).toBeDefined();
+      expect(template.find((item) => item.role === "windowMenu")).toBeDefined();
+      expect(template.find((item) => item.label === "Window")).toBeUndefined();
     });
 
-    it("lists open windows on non-Mac platforms", () => {
-      const items = submenuItems(buildTemplate(false, { isMac: false }), "Window");
+    it("focuses an open window from its row on non-Mac platforms", () => {
+      const focusWindow = vi.fn();
+      const items = submenuItems(
+        buildTemplate(false, { isMac: false, actions: { focusWindow } }),
+        "Window",
+      );
 
-      expect(items.map((item) => item.label ?? item.role ?? item.type)).toEqual([
-        "minimize",
-        "close",
-        "separator",
-        "PwrAgent",
-        "Logs",
-      ]);
-      expect(items[3]?.type).toBeUndefined();
-      expect(items[3]?.checked).toBeUndefined();
-      expect(items[4]?.type).toBeUndefined();
-      expect(items[4]?.checked).toBeUndefined();
+      click(items, "Logs");
+
+      expect(focusWindow).toHaveBeenCalledWith(2);
     });
 
     it("shows an empty state when no windows are open on non-Mac platforms", () => {
@@ -373,7 +512,12 @@ describe("buildApplicationMenuTemplate", () => {
         "Window",
       );
 
-      expect(items.at(-1)?.label).toBe("No Open Windows");
+      expect(flatten(items)).toEqual([
+        "role:minimize",
+        "role:close",
+        "---",
+        "No Open Windows",
+      ]);
       expect(items.at(-1)?.enabled).toBe(false);
     });
   });
@@ -401,11 +545,12 @@ describe("buildApplicationMenuTemplate", () => {
         buildTemplate(false, { federationPeers: peers(1) }),
         "File",
       );
+      // Federation peers belong to Profiles; File stays the standard's.
 
-      expect(items.map((item) => item.label ?? item.role ?? item.type)).toEqual([
+      expect(flatten(items)).toEqual([
         "New Thread",
-        "separator",
-        "close",
+        "---",
+        "Close Window",
       ]);
     });
 
@@ -419,15 +564,15 @@ describe("buildApplicationMenuTemplate", () => {
         "Profiles",
       );
 
-      expect(items.map((item) => item.label ?? item.type)).toEqual([
+      expect(flatten(items)).toEqual([
         "default",
         "personal",
         "work",
-        "separator",
+        "---",
         "Remote Instances",
         "Studio-Mac-1 / default",
         "Studio-Mac-2 / default",
-        "separator",
+        "---",
         "New Profile…",
         "Manage Profiles…",
       ]);
@@ -514,6 +659,24 @@ describe("buildApplicationMenuTemplate", () => {
       ).toEqual(peers(5).map((entry) => entry.label));
     });
 
+    it("leads with Remote Instances when every local profile is hidden", () => {
+      const items = submenuItems(
+        buildTemplate(false, {
+          federationPeers: peers(1),
+          profiles: [profile("default", { active: true, showInMenu: false })],
+        }),
+        "Profiles",
+      );
+
+      expect(flatten(items)).toEqual([
+        "Remote Instances",
+        "Studio-Mac-1 / default",
+        "---",
+        "New Profile…",
+        "Manage Profiles…",
+      ]);
+    });
+
     it("collapses past five peers into a Remote Instances submenu", () => {
       const openFederationWindow = vi.fn();
       const items = submenuItems(
@@ -524,13 +687,13 @@ describe("buildApplicationMenuTemplate", () => {
         "Profiles",
       );
 
-      expect(items.map((item) => item.label ?? item.type)).toEqual([
+      expect(flatten(items)).toEqual([
         "default",
         "personal",
         "work",
-        "separator",
+        "---",
         "Remote Instances",
-        "separator",
+        "---",
         "New Profile…",
         "Manage Profiles…",
       ]);
