@@ -46,6 +46,13 @@ export class ThreadDependencyStore {
     ).all(backend, threadId));
   }
 
+  get(backend: string, threadId: string, id: string): ThreadDependency | undefined {
+    const row = this.db.prepare(
+      "SELECT payload FROM thread_dependencies WHERE dependency_id = ? AND backend = ? AND thread_id = ?",
+    ).get(id, backend, threadId) as { payload: string } | undefined;
+    return row ? JSON.parse(row.payload) as ThreadDependency : undefined;
+  }
+
   hasDeliveryReceipt(item: ThreadDependency): boolean {
     return Boolean(this.db.prepare(
       "SELECT 1 FROM thread_message_origins WHERE backend = ? AND thread_id = ? AND json_extract(payload, '$.dependencyId') = ? LIMIT 1",
@@ -91,22 +98,26 @@ export class ThreadDependencyStore {
     ).run(next.status, JSON.stringify(next), previous.id, JSON.stringify(previous)).changes === 1;
   }
 
-  cancel(backend: string, threadId: string, id: string, now: number): void {
-    const item = this.list(backend, threadId).find((dependency) => dependency.id === id);
+  cancel(backend: string, threadId: string, id: string, now: number): ThreadDependency {
+    const item = this.get(backend, threadId, id);
     if (!item) throw new Error("Dependency not found for this thread.");
     if (item.status === "dispatching" || item.status === "delivered") {
       throw new Error("The continuation has already been admitted and cannot be cancelled here.");
     }
-    if (item.status === "cancelled") return;
-    if (!this.replace(item, { ...item, status: "cancelled", updatedAt: now })) {
+    if (item.status === "cancelled") return item;
+    const next = { ...item, status: "cancelled" as const, updatedAt: now };
+    if (!this.replace(item, next)) {
       throw new Error("Dependency changed while cancelling. Read its current state first.");
     }
+    return next;
   }
 
-  dismiss(backend: string, threadId: string, id: string, now: number): void {
-    const item = this.list(backend, threadId).find((dependency) => dependency.id === id);
+  dismiss(backend: string, threadId: string, id: string, now: number): ThreadDependency {
+    const item = this.get(backend, threadId, id);
     if (!item || item.status !== "dispatching" || !item.error) throw new Error("Only an uncertain delivery can be dismissed after review.");
-    if (!this.replace(item, { ...item, status: "dismissed", updatedAt: now })) throw new Error("Dependency changed while dismissing. Read its current state first.");
+    const next = { ...item, status: "dismissed" as const, updatedAt: now };
+    if (!this.replace(item, next)) throw new Error("Dependency changed while dismissing. Read its current state first.");
+    return next;
   }
 
   private decode(rows: unknown[]): ThreadDependency[] {
