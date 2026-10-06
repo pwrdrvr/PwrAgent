@@ -15,6 +15,8 @@ export type ThreadDependencyCondition = {
   prUrl?: string;
   /** Omit to follow the PR's current head; supply to require an exact head. */
   headSha?: string;
+  /** Display-only title captured at registration; never part of identity. */
+  title?: string;
 };
 
 export type ThreadDependencyEvidence = {
@@ -58,4 +60,6 @@ export type ManageThreadDependenciesRequest = {
 
 export type ManageThreadDependenciesResponse = {
   dependencies: ThreadDependency[];
+  /** Active registrations on other threads that wait on this thread. */
+  dependents?: ThreadDependency[];
 };
