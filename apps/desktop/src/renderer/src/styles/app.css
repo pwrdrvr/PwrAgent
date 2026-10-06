@@ -20308,6 +20308,22 @@ a.button {
   user-select: text;
 }
 
+.settings-gh-setup__commands > summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+}
+
+.settings-gh-setup__commands .settings-copyvalue {
+  margin-top: 8px;
+  max-width: 100%;
+}
+
+.settings-gh-setup__commands .settings-copyvalue__value {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
 .settings-pill {
   align-self: flex-start;
   padding: 2px 8px;

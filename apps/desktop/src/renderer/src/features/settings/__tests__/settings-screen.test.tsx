@@ -4585,6 +4585,7 @@ describe("SettingsScreen", () => {
     expect(within(ghPanel).getAllByText("/opt/homebrew/bin/gh").length).toBeGreaterThanOrEqual(1);
     expect(within(ghPanel).getAllByText("2.88.1").length).toBeGreaterThanOrEqual(1);
     expect(within(ghPanel).getByText("Signed in as")).toBeInTheDocument();
+    expect(within(ghPanel).getByText(/cannot attach images or videos to pull requests/)).toBeInTheDocument();
 
     fireEvent.click(
       within(ghPanel).getByRole("button", {
@@ -4601,6 +4602,52 @@ describe("SettingsScreen", () => {
       });
     });
     expect(getGhStatus).toHaveBeenCalledWith({ recheck: true });
+  });
+
+  it("clears the attachment warning after rechecking an upgraded selected gh", async () => {
+    const snapshot = createSnapshot();
+    const discovery = (version: string) => ({
+      selectedCommand: "/usr/bin/gh",
+      selectedSource: "path" as const,
+      candidates: [
+        { command: "/usr/bin/gh", source: "path" as const, executable: true, selected: true, version },
+        { command: "/usr/local/bin/gh", source: "user" as const, executable: true, selected: false, version: "2.46.0" },
+      ],
+    });
+    snapshot.applications.gh = {
+      enabled: { value: true, source: "default" },
+      path: { value: "", source: "default" },
+      discovery: discovery("2.98.0"),
+    };
+    let version = "2.98.0";
+    const getGhStatus = vi.fn(async () => ({
+      installed: true,
+      loggedIn: true,
+      scopes: ["repo"],
+      hasRepoScope: true,
+      version,
+      discovery: discovery(version),
+    }));
+    render(
+      <SettingsScreen
+        desktopApi={{ platform: "linux", getGhStatus }}
+        initialSection="git"
+        settings={createSettingsState(snapshot)}
+        onClose={() => undefined}
+      />,
+    );
+    const ghPanel = screen.getByRole("heading", { name: "GitHub CLI (gh)" }).closest("section")!;
+    expect(await within(ghPanel).findByText(/cannot attach images or videos to pull requests/)).toBeInTheDocument();
+    expect(within(ghPanel).getByText("Ubuntu / Debian commands")).toBeInTheDocument();
+    version = "2.99.0";
+    fireEvent.click(within(ghPanel).getByRole("button", { name: "Re-check" }));
+    await waitFor(() => {
+      expect(within(ghPanel).queryByText(/cannot attach images or videos to pull requests/)).not.toBeInTheDocument();
+      expect(within(ghPanel).queryByText("Upgrade GitHub CLI")).not.toBeInTheDocument();
+    });
+    // An older unselected binary keeps its row warning without making the
+    // selected, up-to-date command look unable to upload attachments.
+    expect(within(ghPanel).getAllByText("No PR attachments")).toHaveLength(1);
   });
 
   it("shows resolved glab discovery details and saves an alternate candidate", async () => {
