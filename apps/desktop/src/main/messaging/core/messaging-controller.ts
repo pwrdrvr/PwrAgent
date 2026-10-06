@@ -8346,6 +8346,15 @@ export class MessagingController {
   }
 
   /**
+   * Resolves once the tool-update batches that a flush timer already started
+   * have finished delivering, including their store writes. dispose() is
+   * synchronous and only stops new batches.
+   */
+  async whenToolUpdatesSettled(): Promise<void> {
+    await this.toolUpdatePolicy.whenIdle();
+  }
+
+  /**
    * Handle navigation callbacks on the paginated help surface
    * (Prev / Next / Cancel). The page index travels in
    * `event.value.pageIndex` so help has no persistent session

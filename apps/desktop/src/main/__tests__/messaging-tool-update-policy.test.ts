@@ -91,6 +91,38 @@ describe("MessagingToolUpdatePolicy", () => {
     ]);
   });
 
+  it("lets its owner wait for a timer-started batch after dispose", async () => {
+    const timers: Array<() => void> = [];
+    let finishDelivery!: () => void;
+    const onBatchReady = vi.fn(() => new Promise<void>((resolve) => {
+      finishDelivery = resolve;
+    }));
+    const policy = new MessagingToolUpdatePolicy({
+      now: () => 1000,
+      onBatchReady,
+      setTimer: (callback) => {
+        timers.push(callback);
+        return setTimeout(() => undefined, 1);
+      },
+    });
+
+    processTitles(policy, "show_less", ["first"]);
+    timers.shift()?.();
+    expect(onBatchReady).toHaveBeenCalledTimes(1);
+    policy.dispose();
+
+    let idle = false;
+    const whenIdle = policy.whenIdle().then(() => {
+      idle = true;
+    });
+    await Promise.resolve();
+    expect(idle).toBe(false);
+
+    finishDelivery();
+    await whenIdle;
+    expect(idle).toBe(true);
+  });
+
   it("delivers every Show All update immediately", () => {
     const policy = new MessagingToolUpdatePolicy({ now: () => 1000 });
 
