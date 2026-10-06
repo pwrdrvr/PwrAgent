@@ -321,10 +321,19 @@ export function auditChannels(api = ghJson) {
   const wingetVersion = wingetVersions.at(-1) ?? null;
   const installerPath = wingetVersion && `${WINGET_PATH}/${wingetVersion}/${PACKAGE_ID}.installer.yaml`;
   const winget = installerPath ? wingetMetadata(sourceText(api(path(WINGET_REPO, installerPath))), wingetVersion) : { version: null, installers: [] };
+  // Contents reads remain authoritative while GitHub's code-search index catches up.
+  const officialHomebrew = [];
+  for (const [repo, file] of [["Homebrew/homebrew-cask", "Casks/p/pwragent.rb"], ["Homebrew/homebrew-core", "Formula/p/pwragent.rb"]]) {
+    if (api(path(repo, file), true)) officialHomebrew.push({ repository: repo, path: file, html_url: source(repo, file) });
+  }
   const identities = {};
   // Sequential reads avoid bursting GitHub's separate code-search budget.
   for (const repo of repos.slice(1)) {
-    const matches = [...search("code", repo), ...search("code", repo, "", "\"pwragent.ai\"")];
+    const matches = [
+      ...officialHomebrew.filter((item) => item.repository === repo),
+      ...search("code", repo),
+      ...search("code", repo, "", "\"pwragent.ai\""),
+    ];
     identities[repo] = links([...new Map(matches.map((item) => [item.html_url, item])).values()]);
   }
   const blockers = [];

@@ -21,6 +21,7 @@ function fixture(files, published = true, override = () => undefined) {
     if (endpoint.includes("/releases?")) return [release];
     if (endpoint.startsWith("search/")) return result([]);
     if (endpoint.includes("/contents/")) {
+      if (endpoint.includes("repos/Homebrew/homebrew-")) return null;
       if (!published) return null;
       if (endpoint.includes("/Casks/pwragent.rb")) return encoded(files["Casks/pwragent.rb"]);
       if (endpoint.includes(".installer.yaml")) return encoded(files[`manifests/p/PwrDrvr/PwrAgent/${version}/PwrDrvr.PwrAgent.installer.yaml`]);
@@ -83,6 +84,24 @@ test("blocks alternate identities, official Homebrew ownership and checksum/sour
   assert.match(auditChannels(fixture(bad)).blockers[0], /checksum differs/);
   const alias = { ...files, "Casks/pwragent.rb": files["Casks/pwragent.rb"].replace("releases/download/v#{version}/PwrAgent-#{version}-#{arch}.dmg", "releases/latest/download/PwrAgent.dmg") };
   assert.equal(auditChannels(fixture(alias)).status, "blocked");
+});
+
+test("blocks directly published Homebrew entries before code-search indexing catches up", async () => {
+  const { auditChannels, renderPackages } = await lib;
+  const files = renderPackages(release, hashes);
+  for (const [repo, path] of [["Homebrew/homebrew-cask", "Casks/p/pwragent.rb"], ["Homebrew/homebrew-core", "Formula/p/pwragent.rb"]]) {
+    const calls = [];
+    const base = fixture(files, true, (endpoint) => endpoint === `repos/${repo}/contents/${path}?ref=main`
+      ? encoded("newly published PwrAgent entry") : undefined);
+    const audit = auditChannels((endpoint, optional) => {
+      calls.push({ endpoint, optional });
+      return base(endpoint);
+    });
+    assert.equal(audit.status, "blocked");
+    assert.match(audit.blockers[0], /reconcile ownership/);
+    assert.equal(calls.find((call) => call.endpoint === `repos/${repo}/contents/${path}?ref=main`).optional, true);
+    assert.ok(audit.identities[repo].some((item) => item.path === path && item.url === `https://github.com/${repo}/blob/main/${path}`));
+  }
 });
 
 test("refuses unknown source layouts and unreadable/private search repositories", async () => {
