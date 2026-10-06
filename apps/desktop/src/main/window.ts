@@ -29,6 +29,7 @@ import { RendererHeapMonitor } from "./diagnostics/renderer-heap-monitor";
 import { createMainProcessHotCpuTarget } from "./diagnostics/main-process-hot-cpu-target";
 import { SharedHotCpuProfiler } from "./diagnostics/shared-hot-cpu-profiler";
 import { HotCpuProfiler } from "./diagnostics/hot-cpu-profiler";
+import { resolveAppBuildMetadata } from "./app-build-metadata";
 import { isSafeExternalOpenUrl } from "./external-url-policy";
 import { getMainLogger } from "./log";
 import { mainWindowChromeOptions } from "./main-window-chrome";
@@ -554,11 +555,12 @@ export function createMainWindow(options?: {
     hotCpuConfig: Extract<ReturnType<typeof resolveHotCpuProfileConfig>, { enabled: true }>,
     target: "main" | "renderer",
   ): Promise<HotCpuProfilerLifecycle | null> => {
+    const appBuildMetadata = await resolveAppBuildMetadata();
     const created = await createHotCpuProfileSession({
       config: hotCpuConfig,
       target,
       versions: {
-        appVersion: app.getVersion(),
+        appVersion: appBuildMetadata.applicationVersion,
         electronVersion: process.versions.electron ?? "unknown",
         chromeVersion: process.versions.chrome ?? "unknown",
         nodeVersion: process.versions.node,
@@ -592,6 +594,7 @@ export function createMainWindow(options?: {
           subscriber.send(HOT_CPU_PROFILE_CAPTURED_EVENT_CHANNEL, {
             ...event,
             sourceHostname: hostname(),
+            appBuildMetadata,
           });
         }
       },

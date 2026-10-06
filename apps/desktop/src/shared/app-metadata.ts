@@ -36,6 +36,11 @@ export type AppMetadata = {
   codexProfilePath?: string;
 };
 
+export type AppBuildMetadata = Pick<
+  AppMetadata,
+  "applicationVersion" | "buildIdentity"
+>;
+
 export type AppLicenseDocumentKind = "license" | "third-party-licenses";
 
 export type AppLicenseDocument = {

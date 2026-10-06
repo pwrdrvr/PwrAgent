@@ -1,3 +1,6 @@
+import type { AppBuildMetadata } from "./app-metadata";
+import { buildAppIdentityDiagnosticsLines } from "./local-diagnostics-info";
+
 export type HotCpuProfileTriggerMode = "spike" | "sustained" | "slowburn";
 
 export type HotCpuProfileHeapSnapshotArtifact = {
@@ -9,6 +12,8 @@ export type HotCpuProfileHeapSnapshotArtifact = {
 export type HotCpuProfileCapturedEvent = {
   /** Host running the local Electron process that produced this capture. */
   sourceHostname?: string;
+  /** Startup identity of the local app that produced this capture. */
+  appBuildMetadata?: AppBuildMetadata;
   target?: "main" | "renderer";
   capturedAt: string;
   heapSnapshotArtifacts?: HotCpuProfileHeapSnapshotArtifact[];
@@ -78,6 +83,7 @@ export function buildHotCpuProfileHandoffMessage(
     `PwrAgent captured a ${event.target ?? "renderer"} CPU profile.`,
     `Source: Local app${event.sourceHostname ? ` on ${event.sourceHostname}` : ""}`,
     `Captured at: ${event.capturedAt}`,
+    ...buildAppIdentityDiagnosticsLines(event.appBuildMetadata ?? {}),
     `Trigger: ${formatHotCpuProfileTriggerSummary(event)}`,
     `Session basename: ${event.sessionDirectoryName}`,
     `Session directory path: ${event.sessionDirectory}`,
