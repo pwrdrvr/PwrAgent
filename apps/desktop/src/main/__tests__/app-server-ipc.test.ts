@@ -33,6 +33,7 @@ import {
   selectStaleWorktreeWorkingStatePaths,
 } from "../app-server/thread-working-state-refresh-policy";
 import { resolvePwragentRoot } from "../profile";
+import type { DirectoryGitStatusEntry } from "../app-server/git-directory-service";
 
 // `resolveScratchProjectsRoots` anchors the first two workspace roots at the
 // PwrAgent root, which vitest redirects to a disposable directory; only the
@@ -467,7 +468,7 @@ const directoryGitStatus = {
   syncState: "in-sync" as const,
   branches: ["main"],
 };
-const readDirectoryStatusEntries = vi.fn((directories: Array<{ key: string }>) =>
+const readDirectoryStatusEntries = vi.fn((directories: Array<{ key: string }>): AsyncIterable<DirectoryGitStatusEntry> =>
   (async function* () {
     for (const directory of directories) {
       yield {
@@ -9568,6 +9569,88 @@ describe("app server ipc", () => {
         }),
       }),
     );
+  });
+
+  it("opens a subthread launchpad in a non-Git workspace without a branch error", async () => {
+    const { NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL } = await import("../../shared/ipc");
+    const directoryKey = "subthread:codex:parent-thread:local";
+    readDirectoryStatusEntries.mockImplementationOnce((directories) =>
+      (async function* () {
+        yield {
+          directoryKey: directories[0]!.key,
+          gitStatus: undefined,
+        };
+      })(),
+    );
+
+    registerAppServerIpcHandlers();
+
+    const response = await handlers.get(
+      NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL,
+    )?.({}, {
+      directoryKey,
+      directoryKind: "directory",
+      directoryLabel: "Scratch workspace",
+      directoryPath: "/scratch/project",
+      gitStatusSourcePath: "/scratch/project",
+      parentThreadId: "parent-thread",
+      parentThreadBackend: "codex",
+      workMode: "local",
+    });
+
+    expect(response).toEqual(expect.objectContaining({
+      gitStatus: null,
+      launchpad: expect.objectContaining({
+        directoryKey,
+        directoryPath: "/scratch/project",
+        branchName: undefined,
+      }),
+    }));
+    expect(writeDirectoryGitStatusCacheEntry).toHaveBeenLastCalledWith({
+      directoryKey,
+      directoryPath: "/scratch/project",
+      fetchedAt: expect.any(Number),
+    });
+    expect(mockAppServerLog.warn).not.toHaveBeenCalledWith(
+      "launchpad branch status unavailable",
+      expect.anything(),
+    );
+  });
+
+  it.each(["status", "exception"])("reports a launchpad Git probe failure returned as %s", async (failureKind) => {
+    const { NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL } = await import("../../shared/ipc");
+    const gitStatus = {
+      syncState: "status-unavailable" as const,
+      statusUnavailableReason: "Git workspace probe failed",
+    };
+    readDirectoryStatusEntries.mockImplementationOnce((directories) =>
+      (async function* () {
+        if (failureKind === "exception") {
+          throw new Error(gitStatus.statusUnavailableReason);
+        }
+        yield {
+          directoryKey: directories[0]!.key,
+          gitStatus,
+        };
+      })(),
+    );
+
+    registerAppServerIpcHandlers();
+
+    const response = await handlers.get(
+      NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL,
+    )?.({}, {
+      directoryKey: "subthread:codex:parent-thread:local",
+      directoryKind: "directory",
+      directoryLabel: "app",
+      directoryPath: "/repo/app",
+      gitStatusSourcePath: "/repo/app",
+      parentThreadId: "parent-thread",
+      parentThreadBackend: "codex",
+      workMode: "local",
+    });
+
+    expect(response).toEqual(expect.objectContaining({ gitStatus }));
   });
 
   it("keeps owner branch inventory authoritative when viewer and owner paths match", async () => {

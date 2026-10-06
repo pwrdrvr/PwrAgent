@@ -3322,14 +3322,10 @@ class DesktopAppServerService {
       const registry = getDesktopBackendRegistry();
       for await (const entry of registry.readDirectoryStatusEntries([statusDirectory])) {
         const fetchedAt = Date.now();
-        let gitStatus = entry.gitStatus;
-        if (!gitStatus && request.gitStatusSourcePath) {
-          gitStatus = {
-            syncState: "status-unavailable",
-            statusUnavailableReason:
-              `Git branch information is unavailable for ${statusSourcePath}.`,
-          };
-        }
+        // Non-Git workspaces have no status; the reader reports actual probe
+        // failures as status-unavailable. An explicit source path is used for
+        // ordinary scratch-workspace subthreads too, so it does not imply Git.
+        const gitStatus = entry.gitStatus;
         try {
           await this.writeDirectoryGitStatusEntry({
             directory: cacheDirectory,
