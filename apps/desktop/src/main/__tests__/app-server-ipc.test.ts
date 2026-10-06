@@ -1774,9 +1774,8 @@ describe("app server ipc", () => {
   it("retries a ready continuation when its locked consumer is unlocked", async () => {
     const { appServerService } = await import("../ipc/app-server");
     const appState = await import("../state/app-state");
-    const { ThreadDependencyCoordinator } = await import("../app-server/thread-dependency-coordinator");
     const handleThreadEvent = vi.fn(async () => undefined);
-    const agent = { handleThreadEvent } as unknown as InstanceType<typeof ThreadDependencyCoordinator>;
+    const agent = { handleThreadEvent } as unknown as import("../app-server/thread-dependency-coordinator").ThreadDependencyCoordinator;
     const mode = vi.spyOn(appState, "getAppStateMode").mockReturnValue("active-profile");
     const service = appServerService as unknown as { getThreadDependencyCoordinator: () => typeof agent };
     const coordinator = vi.spyOn(service, "getThreadDependencyCoordinator").mockReturnValue(agent);
