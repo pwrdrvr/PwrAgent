@@ -361,6 +361,26 @@ describe("ThreadTodoService", () => {
       .toThrow(expect.objectContaining({ code: "not_found" }));
   });
 
+  it("refuses to resolve a card while its action runs", async () => {
+    let finishStart: () => void = () => undefined;
+    const service = createService({
+      mergePullRequest: vi.fn(),
+      startThread: vi.fn(() => new Promise<{ backend: "codex"; threadId: string }>((resolve) => {
+        finishStart = () => resolve({ backend: "codex", threadId: "child" });
+      })),
+    });
+    const todo = service.add({
+      ...THREAD,
+      input: { title: "Hand off", action: { type: "start_thread", prompt: "Go" } },
+    }).todo;
+
+    const run = service.runAction(todo.id);
+    expect(() => service.resolve({ id: todo.id, status: "dismissed" }))
+      .toThrow(expect.objectContaining({ code: "conflict" }));
+    finishStart();
+    await expect(run).resolves.toMatchObject({ status: "done", result: "Started thread" });
+  });
+
   it("lets a thread resolve only its own cards", () => {
     const service = createService();
     const todo = service.add({ ...THREAD, input: { key: "k", title: "Mine" } }).todo;

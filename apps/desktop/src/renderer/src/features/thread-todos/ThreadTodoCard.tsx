@@ -61,7 +61,7 @@ export type ThreadTodoCardHandlers = {
    * Sends a handoff's prompt to the card's own thread as a reply. Only the
    * thread on screen can take one, so other surfaces leave it out.
    */
-  onDoHere?: (todo: ThreadTodo) => void;
+  onDoHere?: (todo: ThreadTodo) => void | Promise<unknown>;
 };
 
 export type ThreadTodoCardProps = ThreadTodoCardHandlers & {

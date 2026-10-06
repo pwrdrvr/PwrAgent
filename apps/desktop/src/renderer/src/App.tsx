@@ -104,6 +104,7 @@ import { useBackendSummaries } from "./lib/useBackendSummaries";
 import { useDesktopApi, type DesktopApi } from "./lib/desktop-api";
 import { useDesktopApplications } from "./lib/useDesktopApplications";
 import { useEventCallback } from "./lib/useEventCallback";
+import { useExecutionModeSelection } from "./lib/useExecutionModeSelection";
 import {
   readRendererFederationLabel,
   readRendererFederationTarget,
@@ -2332,6 +2333,25 @@ function DesktopAppShell(props: {
       .map((target) => ({ instanceId: target.instanceId, label: target.label })),
     [newThreadFederationTargets],
   );
+  // A handoff card asking for Full Access passes the same confirmation as
+  // every other escalation: the agent proposed the mode, the operator has
+  // not chosen it yet. A declined dialog leaves the run's promise pending,
+  // which the card reads as "nothing happened".
+  const pendingFullAccessTodoRunRef = useRef<(() => void) | undefined>(undefined);
+  const {
+    fullAccessRiskDialog: todoFullAccessRiskDialog,
+    requestExecutionModeSelection: requestTodoExecutionMode,
+  } = useExecutionModeSelection({
+    applyExecutionMode: () => {
+      const run = pendingFullAccessTodoRunRef.current;
+      pendingFullAccessTodoRunRef.current = undefined;
+      run?.();
+    },
+    currentExecutionMode: "default",
+    desktopApi,
+    dismissed: settings.snapshot?.experimental.fullAccessRiskWarningDismissed.value ?? false,
+    onDismiss: () => handleDismissFullAccessRiskWarning(),
+  });
   const threadTodosView = useMemo<ThreadTodosView | undefined>(() => {
     if (!listThreadTodos || readRendererFederationTarget()) return undefined;
     const showTodoThread = (backend: AppServerBackendKind, threadId: string): void => {
@@ -2359,7 +2379,20 @@ function DesktopAppShell(props: {
           ?? "Untitled thread",
       resolve: (todo, status, resolution) =>
         threadTodoController.resolve(todo.id, status, resolution),
-      run: (todo, options) => threadTodoController.runAction(todo.id, options),
+      run: (todo, options) => {
+        if (
+          todo.action?.type !== "start_thread"
+          || todo.action.executionMode !== "full-access"
+        ) {
+          return threadTodoController.runAction(todo.id, options);
+        }
+        return new Promise((resolve, reject) => {
+          pendingFullAccessTodoRunRef.current = () => {
+            threadTodoController.runAction(todo.id, options).then(resolve, reject);
+          };
+          requestTodoExecutionMode("full-access");
+        });
+      },
       openThread: (todo) => showTodoThread(todo.backend, todo.threadId),
       openStartedThread: (todo) => {
         const started = todo.startedThread;
@@ -2387,6 +2420,7 @@ function DesktopAppShell(props: {
     configuredMergeMethod,
     listThreadTodos,
     localThreadTitles,
+    requestTodoExecutionMode,
     showThreadFromLink,
     threadTodoController,
     todoHandoffInstances,
@@ -4040,6 +4074,7 @@ function DesktopAppShell(props: {
         ) : null}
       </div>
 
+      {todoFullAccessRiskDialog}
     </TranscriptLinkProvider>
     </ThreadTodoCountsContext.Provider>
     </FederationDisplayLabelsProvider>

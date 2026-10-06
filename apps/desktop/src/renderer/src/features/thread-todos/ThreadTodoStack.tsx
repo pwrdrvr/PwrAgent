@@ -27,8 +27,11 @@ export type ThreadTodoStackProps = {
   todos: ThreadTodo[];
   view: ThreadTodosView;
   onStartReview: (todo: ThreadTodo) => void;
-  /** Sends a handoff's prompt to this thread as a reply. */
-  onDoHere?: (todo: ThreadTodo) => void;
+  /**
+   * Sends a handoff's prompt to this thread as a reply. Resolves false when
+   * the composer would not take it.
+   */
+  onDoHere?: (todo: ThreadTodo) => Promise<boolean>;
   /** Moves the stack below the find bar while it is open. */
   findOpen?: boolean;
 };
@@ -103,6 +106,20 @@ export function ThreadTodoStack(props: ThreadTodoStackProps) {
       console.warn("Running a to-do failed.", error);
     });
   };
+  const onDoHere = props.onDoHere;
+  const doHere = onDoHere
+    ? (target: ThreadTodo): void => {
+        void onDoHere(target).then((sent) => {
+          if (!sent) {
+            showNotice({
+              todo: target,
+              text: "The composer is busy. Try again once it is free.",
+              undoable: false,
+            });
+          }
+        });
+      }
+    : undefined;
   const className = `thread-todo-stack${props.findOpen ? " is-below-find" : ""}`;
 
   if (collapsed && todo) {
@@ -158,7 +175,7 @@ export function ThreadTodoStack(props: ThreadTodoStackProps) {
             onResolve={resolve}
             onRun={run}
             onStartReview={props.onStartReview}
-            onDoHere={props.onDoHere}
+            onDoHere={doHere}
           />
         </div>
       ) : null}

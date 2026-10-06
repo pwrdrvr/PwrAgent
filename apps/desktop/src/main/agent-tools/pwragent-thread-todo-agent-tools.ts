@@ -32,6 +32,7 @@ export const PWRAGENT_THREAD_TODO_UNAVAILABLE_MESSAGE =
 
 const KEY_MAX_LENGTH = 80;
 const PROJECT_MAX_LENGTH = 1_000;
+const MODEL_SETTING_MAX_LENGTH = 200;
 const EXECUTION_MODES = ["default", "auto", "full-access"] as const satisfies
   readonly ThreadExecutionMode[];
 const WORK_MODES = ["local", "worktree"] as const;
@@ -359,7 +360,7 @@ export function normalizeUpdateTodoArgs(
   if (threadTitle && !threadTitle.ok) return threadTitle;
   if (threadTitle) action.title = threadTitle.value;
   for (const field of ["model", "reasoningEffort"] as const) {
-    const parsed = readClearable(args[field], field, PROJECT_MAX_LENGTH);
+    const parsed = readClearable(args[field], field, MODEL_SETTING_MAX_LENGTH);
     if (parsed && !parsed.ok) return parsed;
     if (parsed) action[field] = parsed.value;
   }

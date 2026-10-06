@@ -10,6 +10,7 @@ import type {
 import {
   isThreadTodoMergeMethod,
   isThreadTodoResolution,
+  isThreadTodoStatus,
 } from "@pwragent/shared";
 import {
   THREAD_TODOS_CHANGED_EVENT_CHANNEL,
@@ -83,15 +84,21 @@ export function registerThreadTodoIpcHandlers(options: {
   ipcMain.removeHandler(THREAD_TODOS_RESOLVE_CHANNEL);
   ipcMain.handle(
     THREAD_TODOS_RESOLVE_CHANNEL,
-    (_event, request: ResolveThreadTodoRequest): ThreadTodoMutationResponse => ({
-      todo: getThreadTodoService().resolve({
-        id: request.id,
-        status: request.status,
-        ...(isThreadTodoResolution(request.resolution)
-          ? { resolution: request.resolution }
-          : {}),
-      }),
-    }),
+    (_event, request: ResolveThreadTodoRequest): ThreadTodoMutationResponse => {
+      // The status is written to the row as given, so it is checked here.
+      if (!isThreadTodoStatus(request.status)) {
+        throw new Error(`Unknown to-do status: ${String(request.status)}`);
+      }
+      return {
+        todo: getThreadTodoService().resolve({
+          id: request.id,
+          status: request.status,
+          ...(isThreadTodoResolution(request.resolution)
+            ? { resolution: request.resolution }
+            : {}),
+        }),
+      };
+    },
   );
 
   ipcMain.removeHandler(THREAD_TODOS_RUN_ACTION_CHANNEL);

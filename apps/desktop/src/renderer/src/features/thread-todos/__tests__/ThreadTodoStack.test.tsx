@@ -179,7 +179,7 @@ describe("ThreadTodoStack", () => {
     const view = createView([handoff], {
       instances: [{ instanceId: "peer-1", label: "Studio Mac" }],
     });
-    const onDoHere = vi.fn();
+    const onDoHere = vi.fn(async () => true);
     render(
       <ThreadTodoStack
         threadKey="codex:thread-a"
@@ -225,6 +225,31 @@ describe("ThreadTodoStack", () => {
 
     expect(screen.getByText("gpt-6.1-sol · xhigh")).toBeTruthy();
     expect(screen.getByText("Access").nextElementSibling?.textContent).toBe("Auto");
+  });
+
+  it("says so when Do it here cannot reach the composer", async () => {
+    const handoff = todo({
+      id: "h5",
+      kind: "handoff",
+      action: { type: "start_thread", prompt: "Build it" },
+    });
+    const onDoHere = vi.fn(async () => false);
+    render(
+      <ThreadTodoStack
+        threadKey="codex:thread-a"
+        todos={[handoff]}
+        view={createView([handoff])}
+        onStartReview={vi.fn()}
+        onDoHere={onDoHere}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Handoff options" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: "Do it here" }));
+    });
+    expect(onDoHere).toHaveBeenCalledWith(handoff);
+    expect(screen.getByRole("status").textContent).toContain("The composer is busy.");
   });
 
   it("copies the handoff prompt", async () => {
@@ -316,6 +341,32 @@ describe("ThreadTodosPanel", () => {
     expect(screen.getByRole("heading", { level: 3, name: "Mine" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Open thread: Elsewhere, in Beta" }));
     expect(view.openThread).toHaveBeenCalledWith(other);
+  });
+
+  it("reopens a card the operator marked handled elsewhere", async () => {
+    const handled = todo({
+      id: "r1",
+      status: "done",
+      title: "Handed off by hand",
+      result: "Handled elsewhere",
+      resolvedAt: Date.now(),
+    });
+    const merged = todo({
+      id: "r2",
+      status: "done",
+      title: "Merged it",
+      result: "Squash-merged #42",
+      resolvedAt: Date.now(),
+    });
+    const view = createView([], { listResolved: async () => [handled, merged] });
+    render(<ThreadTodosPanel view={view} threadKey="codex:thread-a" onStartReview={vi.fn()} />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Resolved" }));
+    });
+    expect(screen.getAllByRole("button", { name: "Reopen" })).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Reopen" }));
+    expect(view.resolve).toHaveBeenCalledWith(handled, "open");
   });
 
   it("shows a cross-project card in both projects and names both ends in All", () => {

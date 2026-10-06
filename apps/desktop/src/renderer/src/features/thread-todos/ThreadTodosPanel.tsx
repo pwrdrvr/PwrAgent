@@ -6,7 +6,10 @@ import {
   type KeyboardEvent,
 } from "react";
 import type { ThreadTodo, ThreadTodoKind } from "@pwragent/shared";
-import { buildThreadIdentityKey } from "@pwragent/shared";
+import {
+  THREAD_TODO_RESOLUTION_RESULTS,
+  buildThreadIdentityKey,
+} from "@pwragent/shared";
 import {
   HandoffIcon,
   MergeIcon,
@@ -33,6 +36,11 @@ const KIND_ICONS: Record<ThreadTodoKind, ComponentType<IconProps> | undefined> =
 
 const NO_PROJECT_KEY = "";
 
+/** Results an operator's own resolve wrote; those can be taken back. */
+const RESOLUTION_RESULTS: ReadonlySet<string> = new Set(
+  Object.values(THREAD_TODO_RESOLUTION_RESULTS),
+);
+
 /**
  * The lens the operator last picked. Module scope, so switching threads
  * keeps it; a reload starts again from Project.
@@ -52,7 +60,7 @@ export type ThreadTodosPanelProps = {
   /** Directory key of that thread's project, when it has one. */
   projectKey?: string;
   onStartReview: (todo: ThreadTodo) => void;
-  onDoHere?: (todo: ThreadTodo) => void;
+  onDoHere?: (todo: ThreadTodo) => void | Promise<unknown>;
 };
 
 /**
@@ -281,7 +289,9 @@ function TodoRow(props: {
               Open thread
             </button>
           ) : null}
-          {!todo.startedThread && !todo.result ? (
+          {/* A merge or a started thread happened; only a resolve can be
+              taken back, as the stack's Undo does. */}
+          {!todo.startedThread && (!todo.result || RESOLUTION_RESULTS.has(todo.result)) ? (
             <button
               type="button"
               className="thread-todos-panel__row-link"

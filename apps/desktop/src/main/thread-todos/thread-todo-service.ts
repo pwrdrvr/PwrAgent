@@ -233,6 +233,11 @@ export class ThreadTodoService {
     if (current.status === params.status) {
       return current;
     }
+    // The run would write its result over this when it ends: a dismissed
+    // card would come back done, or take the run's error after resolving.
+    if (this.running.has(current.id)) {
+      throw new ThreadTodoError("conflict", "This to-do's action is running now.");
+    }
     if (params.status === "open" && current.key) {
       const conflicting = this.store.findOpenByKey({
         backend: current.backend,

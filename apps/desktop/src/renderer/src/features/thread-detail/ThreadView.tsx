@@ -2532,14 +2532,20 @@ export function ThreadView(props: ThreadViewProps) {
   // "Do it here" sends a handoff's prompt through the same reply path an
   // answered question takes: start, steer or queue, as a typed reply would.
   // The card resolves only once the composer has taken it.
-  const doTodoHere = useEventCallback((todo: ThreadTodo) => {
-    if (todo.action?.type !== "start_thread") return;
-    void handleAnswerAsyncQuestions(todo.action.prompt).then((accepted) => {
-      if (!accepted) return;
-      return props.threadTodos?.resolve(todo, "done", "sent_here");
-    }).catch((error: unknown) => {
+  // Resolves false when the composer would not take it (disabled, or
+  // another answer still sending), so the card can say so.
+  const doTodoHere = useEventCallback(async (todo: ThreadTodo): Promise<boolean> => {
+    if (todo.action?.type !== "start_thread") return false;
+    try {
+      const accepted = await handleAnswerAsyncQuestions(todo.action.prompt);
+      if (accepted) {
+        await props.threadTodos?.resolve(todo, "done", "sent_here");
+      }
+      return accepted;
+    } catch (error) {
       console.warn("Sending the handoff here failed.", error);
-    });
+      return false;
+    }
   });
   const handleReplySubmissionSettled = useEventCallback((id: number, accepted: boolean) => {
     const settle = asyncQuestionReplySettlers.current.get(id);
