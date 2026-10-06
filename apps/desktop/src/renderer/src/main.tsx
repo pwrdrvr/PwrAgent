@@ -9,6 +9,7 @@ import type {
 } from "@pwragent/shared";
 import { App } from "./App";
 import { RendererErrorBoundary } from "./features/diagnostics/RendererErrorBoundary";
+import { DataTooltipLayer } from "./lib/DataTooltipLayer";
 import { RendererRecoveryStateProvider } from "./lib/RendererRecoveryState";
 import { applyAppearanceAttributes, resolveTheme } from "./lib/appearance";
 import { installDevPerformancePruning } from "./lib/dev-performance-pruning";
@@ -258,6 +259,12 @@ mountRendererRoot(
       <RendererErrorBoundary>
         <Suspense fallback={null}>{rendererRoot}</Suspense>
       </RendererErrorBoundary>
+      {/* Every window's `.tooltip-target[data-tooltip]` controls, drawn on
+          document.body so no pane can clip or out-stack them. A sibling of
+          the boundary, not a child: it is window chrome that keeps serving
+          the recovery fallback, and the boundary's only child stays the
+          Suspense the renderer-recovery E2E injects its fault into. */}
+      <DataTooltipLayer />
     </RendererRecoveryStateProvider>
   </React.StrictMode>,
   (container) => ReactDOM.createRoot(container),

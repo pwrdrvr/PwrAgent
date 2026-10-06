@@ -1505,13 +1505,19 @@ budget is a record of what a path costs, not permission for it to cost that.
   windows and profiles.
 - Reuse shell primitives instead of adding one-off page styling.
 - When in doubt, make the interface calmer, denser, and more editorial.
-- For tooltips inside clipped or layered surfaces (sidebar, scroll regions,
-  overflow-hidden chips, draggable rails, or anything that must escape the
-  left bar), use `src/renderer/src/lib/useViewportTooltip.tsx` with the
-  shared `.viewport-tooltip` class. CSS pseudo-element tooltips
-  (`tooltip-target` + `data-tooltip`) are only for elements whose ancestors
-  all render with `overflow: visible`; otherwise they get clipped or lose
-  z-order fights against the main surface.
+- Every tooltip is a portal on `document.body`. A plain-text tooltip is
+  `className="tooltip-target"` plus `data-tooltip={text}`:
+  [`DataTooltipLayer`](src/renderer/src/lib/DataTooltipLayer.tsx), mounted
+  once in `main.tsx`, draws it for every window. That works inside any
+  clipping pane and beside the sidebar. Anything richer (a `ReactNode`, a
+  card class, a hover delay, pointer-following placement) uses
+  `src/renderer/src/lib/useViewportTooltip.tsx` with the shared
+  `.viewport-tooltip` class. Never draw a tooltip with `::after` /
+  `content: attr(…)`: a pseudo-element is clipped by its pane and capped by
+  its stacking context. The composer's tooltips kept going under the left
+  bar until the declarative path moved onto the portal. When a tooltip is
+  clipped or buried, fix the layer it renders in. Do not move one
+  tooltip's x or raise one control's z-index.
   - **Structured hover cards pass their own class instead of
     `.viewport-tooltip`.** The hook takes a `ReactNode`, so a card with
     sections and meters (`.context-usage-card`, `.pr-status-card`) styles

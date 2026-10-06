@@ -5685,8 +5685,7 @@ a.button {
 }
 
 :root[data-native-drag-active] [role="tooltip"],
-:root[data-native-drag-active] [role="menu"],
-:root[data-native-drag-active] .tooltip-target[data-tooltip]::after {
+:root[data-native-drag-active] [role="menu"] {
   display: none !important;
 }
 
@@ -6606,66 +6605,13 @@ a.button {
   filter: brightness(1.06);
 }
 
-.tooltip-target[data-tooltip]::after {
-  content: attr(data-tooltip);
-  position: absolute;
-  left: 50%;
-  bottom: calc(100% + 10px);
-  z-index: 30;
-  width: max-content;
-  max-width: min(320px, calc(100vw - 32px));
-  padding: 8px 10px;
-  border: 1px solid var(--border-strong);
-  border-radius: 8px;
-  background: var(--popover-bg-soft);
-  box-shadow: 0 12px 28px var(--shadow-tint-soft);
-  color: var(--text-primary);
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 1.45;
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
-  text-align: left;
-  opacity: 0;
-  pointer-events: none;
-  transform: translateX(-50%) translateY(4px);
-  transition:
-    opacity 120ms ease,
-    transform 120ms ease;
-}
-
-/* Keyboard focus only. `:focus-within` also matches a button that took focus
-   from a mouse click, which pinned its tooltip open over the next control
-   until focus moved: after clicking the composer mic, its "End voice" tooltip
-   sat beside the voice bar's End voice and read as a second button. */
-.tooltip-target[data-tooltip]:hover::after,
-.tooltip-target[data-tooltip]:focus-visible::after,
-.tooltip-target[data-tooltip]:has(:focus-visible)::after {
-  opacity: 1;
-  transform: translateX(-50%) translateY(0);
-}
-
-.context-list__meta.tooltip-target[data-tooltip]::after {
-  right: 0;
-  left: auto;
-  transform: translateY(4px);
-}
-
-.context-list__meta.tooltip-target[data-tooltip]:hover::after,
-.context-list__meta.tooltip-target[data-tooltip]:focus-visible::after {
-  transform: translateY(0);
-}
-
-.context-panel .context-list__label.tooltip-target[data-tooltip]::after {
-  left: 0;
-  transform: translateY(4px);
-}
-
-.context-panel .context-list__label.tooltip-target[data-tooltip]:hover::after,
-.context-panel .context-list__label.tooltip-target[data-tooltip]:focus-visible::after {
-  transform: translateY(0);
-}
-
+/* `.tooltip-target[data-tooltip]` draws no tooltip of its own. DataTooltipLayer
+   (lib/DataTooltipLayer.tsx) shows that text in a portal on document.body.
+   It used to be an `::after` here, and a pseudo-element paints inside its
+   host: every `overflow` ancestor clipped it and every stacking context
+   around it capped it, which is how the composer's toggles kept drawing
+   their tooltips under the sidebar. Do not bring the pseudo-element back for
+   one control; anything this rule's old job needs belongs in that layer. */
 .tooltip-target:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
@@ -28695,10 +28641,9 @@ div.composer-error-row__toggle {
   background: var(--accent);
 }
 
-/* Portal-rendered tooltip rendered by the useViewportTooltip hook.
-   Used when a CSS-pseudo `tooltip-target` would get clipped by an
-   ancestor's overflow:hidden / overflow:auto (sidebar scroll
-   region, overflow-hidden chip with text-ellipsis, etc.). */
+/* Portal-rendered tooltip rendered by the useViewportTooltip hook, and by
+   DataTooltipLayer for every `tooltip-target[data-tooltip]`. It lives on
+   document.body, so no pane's overflow clips it. */
 .viewport-tooltip {
   position: fixed;
   z-index: 90;
@@ -28716,6 +28661,18 @@ div.composer-error-row__toggle {
   pointer-events: none;
   text-align: left;
   white-space: pre-wrap;
+}
+
+/* The DataTooltipLayer portal. One instance serves every declarative
+   `data-tooltip` control in the window, so it has to clear every surface
+   such a control can sit in: the composer and transcript, the director voice
+   panel (135), and the full-window Settings and Automations layers (120).
+   That is the 140 layer `.pr-status-card` and `.messaging-status-tooltip` use
+   for the same reason. `overflow-wrap` is for the path tooltips (directory
+   references, skill chips), which have no spaces to wrap at. */
+.viewport-tooltip.data-tooltip-layer {
+  z-index: 140;
+  overflow-wrap: anywhere;
 }
 
 /* Messaging appears inside full-window Settings/Automations surfaces whose

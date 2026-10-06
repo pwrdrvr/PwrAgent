@@ -278,9 +278,10 @@ function toTargetRect(rect: DOMRect | TooltipTargetRect): TooltipTargetRect {
 /**
  * Hook for portal-rendered tooltips that escape any clipping ancestor
  * (sidebar scroll regions, overflow:hidden chips, etc.) and clamp
- * themselves to viewport bounds. Use when CSS-pseudo-element tooltips
- * (`tooltip-target` + `data-tooltip` in app.css) get clipped by a
- * `overflow:hidden`/`overflow:auto` ancestor.
+ * themselves to viewport bounds. A plain-text tooltip needs none of this
+ * wiring: `tooltip-target` + `data-tooltip` reaches the same portal through
+ * `DataTooltipLayer`. Call the hook directly for `ReactNode` content, a card
+ * class, a hover delay, or a pointer-anchored tooltip.
  *
  * Pattern adapted from ThreadContextPanel's railTooltip — same
  * measure-then-clamp two-pass render, same portal target.
