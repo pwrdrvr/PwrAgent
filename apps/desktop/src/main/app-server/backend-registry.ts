@@ -17185,10 +17185,14 @@ export class DesktopBackendRegistry {
    * through.
    */
   private async assertThreadNotLocked(backend: AppServerBackendKind, threadId: string): Promise<void> {
-    const lock = (await this.overlayStore.getThreadOverlayState({ backend, threadId }))?.lock;
+    const lock = await this.readThreadLock(backend, threadId);
     if (lock) {
       throw new Error(threadLockRefusalMessage(lock));
     }
+  }
+
+  private async readThreadLock(backend: AppServerBackendKind, threadId: string): Promise<ThreadLock | undefined> {
+    return (await this.overlayStore.getThreadOverlayState({ backend, threadId }))?.lock;
   }
 
   private assertThreadNotHandingOff(backend: AppServerBackendKind, threadId: string): void {
@@ -17626,11 +17630,13 @@ export class DesktopBackendRegistry {
     origin?: ThreadTurnQueueOrigin;
     messageOrigin?: AppServerThreadMessageOrigin;
   }): Promise<ThreadTurnQueueImmediateSubmissionResult> {
-    await this.assertThreadNotLocked(params.backend, params.threadId);
     this.assertThreadNotHandingOff(params.backend, params.threadId);
     const { origin = "manual", ...entry } = params;
     if (
-      this.threadHasActiveTurn(params.threadId, params.backend)
+      // A lock reads as busy, not as a failure: the PR watch and auto-fix
+      // callers wait without spending an attempt, and resume once unlocked.
+      (await this.readThreadLock(params.backend, params.threadId))
+      || this.threadHasActiveTurn(params.threadId, params.backend)
       || this.threadHasBlockingWorkspaceMove(params)
     ) {
       return { status: "busy" };
@@ -20960,6 +20966,8 @@ export class DesktopBackendRegistry {
         "ACP backend " + params.backend + " does not support thread compaction",
       );
     }
+    // Compaction runs a backend turn, so a lock refuses it like any other.
+    await this.assertThreadNotLocked(params.backend, params.threadId);
     const compactWithClient = async (
       client: BackendClient,
     ): Promise<{ threadId: string; turnId: string; itemId?: string }> => {
@@ -22752,7 +22760,7 @@ export class DesktopBackendRegistry {
     origin: { source: ThreadLockSource; sourceInstanceId?: FederationInstanceId },
   ): Promise<SetThreadLockResponse> {
     const identity = { backend: request.backend, threadId: request.threadId };
-    const current = (await this.overlayStore.getThreadOverlayState(identity))?.lock;
+    const current = await this.readThreadLock(request.backend, request.threadId);
     let lock: ThreadLock | undefined;
     if (request.locked) {
       const note = request.note === undefined
@@ -22772,18 +22780,29 @@ export class DesktopBackendRegistry {
     } else if (!current) {
       return identity;
     }
+    await this.writeThreadLock(identity, lock);
+    return {
+      ...identity,
+      ...(lock ? { lock } : { previousLock: current }),
+    };
+  }
+
+  /** Stores a lock as given, or clears it, and publishes the change. */
+  private async writeThreadLock(
+    identity: { backend: AppServerBackendKind; threadId: string },
+    lock: ThreadLock | undefined,
+  ): Promise<void> {
     await this.overlayStore.setThreadLock({ ...identity, lock });
     await this.emit({
-      backend: request.backend,
+      backend: identity.backend,
       notification: {
         method: "thread/lock/updated",
         params: {
-          threadId: request.threadId,
+          threadId: identity.threadId,
           ...(lock ? { lock } : {}),
         },
       },
     });
-    return { ...identity, ...(lock ? { lock } : {}) };
   }
 
   async setThreadPrAutoDispatch(
@@ -41797,14 +41816,15 @@ export class DesktopBackendRegistry {
     }
 
     // An unlock lands before the move, which a lock refuses; a lock lands
-    // last, after the move it would otherwise refuse.
-    if (mutateLocally && locked === false && !dryRun) {
-      await this.setThreadLock({
-        backend: args.backend,
-        threadId,
-        locked: false,
-      }, { source: "agent_tool" });
-    }
+    // last, after the move it would otherwise refuse. A refused move puts
+    // the unlocked lock back as it was.
+    const unlockedLock = mutateLocally && locked === false && !dryRun
+      ? (await this.setThreadLock({
+          backend: args.backend,
+          threadId,
+          locked: false,
+        }, { source: "agent_tool" })).previousLock
+      : undefined;
 
     // First, and before anything else changes: the destination is checked on
     // disk, and a move that fails should leave the title and settings as
@@ -41818,6 +41838,9 @@ export class DesktopBackendRegistry {
           targetPath: projectPath,
         });
       } catch (error) {
+        if (unlockedLock) {
+          await this.writeThreadLock({ backend: args.backend, threadId }, unlockedLock);
+        }
         const message = error instanceof Error ? error.message : String(error);
         return threadInspectionFailure(
           message === ACTIVE_TURN_HANDOFF_ERROR ? "forbidden" : "invalid_arguments",

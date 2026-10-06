@@ -134,13 +134,13 @@ export function createFederatedThreadMutationHandler(
         );
       }
     }
-    const setLock = async (locked: boolean) => {
+    const setLock = async (locked: boolean, note = request.lockNote) => {
       try {
-        await match!.backend.setThreadLock({
+        return await match!.backend.setThreadLock({
           backend: request.backend,
           threadId: request.threadId,
           locked,
-          ...(locked && request.lockNote !== undefined ? { note: request.lockNote } : {}),
+          ...(locked && note !== undefined ? { note } : {}),
         });
       } catch (error) {
         if (!hasFederationErrorCode(error, "method_not_found")) throw error;
@@ -151,18 +151,25 @@ export function createFederatedThreadMutationHandler(
       }
     };
     // As locally: an unlock lands before the move a lock refuses.
-    if (request.locked === false && !request.dryRun) {
-      await setLock(false);
-    }
+    const unlockedLock = request.locked === false && !request.dryRun
+      ? (await setLock(false)).previousLock
+      : undefined;
     // First, as locally: the peer checks the destination on its own disk,
     // and a refused move should not leave the other changes half applied.
     if (request.projectPath !== undefined && !request.dryRun) {
-      await match.backend.handoffThreadWorkspace({
-        backend: request.backend,
-        threadId: request.threadId,
-        direction: "to-project",
-        targetPath: request.projectPath,
-      });
+      try {
+        await match.backend.handoffThreadWorkspace({
+          backend: request.backend,
+          threadId: request.threadId,
+          direction: "to-project",
+          targetPath: request.projectPath,
+        });
+      } catch (error) {
+        // The peer stamps the restored lock with this request's time and
+        // source; its note is what the operator reads, and that survives.
+        if (unlockedLock) await setLock(true, unlockedLock.note ?? "");
+        throw error;
+      }
     }
     if (!request.dryRun) {
       if (request.title !== undefined) {

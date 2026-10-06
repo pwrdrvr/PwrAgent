@@ -2210,6 +2210,8 @@ export type SetThreadLockResponse = {
   threadId: ThreadIdentifier;
   /** Absent once unlocked. */
   lock?: ThreadLock;
+  /** The lock an unlock removed, so a caller can put it back. */
+  previousLock?: ThreadLock;
 };
 
 export type SetThreadPinRequest = {

@@ -653,6 +653,7 @@ const NAVIGATION_EVENT_METHODS = new Set<string>([
   "thread/executionMode/queueCleared",
   "thread/executionMode/queued",
   "thread/executionMode/updated",
+  "thread/lock/updated",
   "thread/modelSettings/updated",
   "thread/name/updated",
   "thread/parent/cleared",

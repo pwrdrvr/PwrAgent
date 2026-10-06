@@ -3129,12 +3129,14 @@ describe("DesktopBackendRegistry", () => {
     const refusal = "This thread is locked: Worktree handed to the repair thread. Unlock it before starting a turn.";
 
     await expect(registry.submitTurn(params)).rejects.toThrow(refusal);
-    await expect(registry.submitTurnIfIdle(params)).rejects.toThrow(refusal);
+    // Automations see a lock as busy, so a PR watch waits without spending an attempt.
+    await expect(registry.submitTurnIfIdle(params)).resolves.toEqual({ status: "busy" });
     await expect(registry.submitHeldTurn({ ...params, queueEntryId: "held", holdReason: "manual" })).rejects.toThrow(refusal);
     await expect(registry.startTurn(params)).rejects.toThrow(refusal);
     await expect(registry.steerTurn({ ...params, expectedTurnId: "turn-1", requestId: "steer-1" })).rejects.toThrow(refusal);
     await expect(registry.startReview({ backend: "codex", threadId: "parked", target: { type: "uncommittedChanges" } }))
       .rejects.toThrow(refusal);
+    await expect(registry.compactThread({ backend: "codex", threadId: "parked" })).rejects.toThrow(refusal);
 
     await registry.setThreadLock({ ...params, locked: false }, { source: "operator" });
     await expect(registry.submitHeldTurn({ ...params, queueEntryId: "held", holdReason: "manual" }))
@@ -47745,6 +47747,21 @@ script = "printf setup"
         message: "Select a Git project checkout or worktree as the destination.",
       });
       expect(codexClient.lastRenameThreadParams).toBeUndefined();
+      await registry.close();
+    });
+
+    it("puts an unlocked lock back as it was when the move is refused", async () => {
+      const { call, handoff, overlayStore, registry } = await setup();
+      const target = { backend: "codex" as const, threadId: "target-thread" };
+      const { lock } = await registry.setThreadLock({ ...target, locked: true, note: "Parked" }, { source: "operator" });
+      handoff.mockRejectedValueOnce(
+        new Error("Select a Git project checkout or worktree as the destination."),
+      );
+
+      const result = await call({ locked: false, projectPath: "/tmp/not-a-repo" });
+
+      expect(result.success).toBe(false);
+      expect((await overlayStore.getThreadOverlayState(target))?.lock).toEqual(lock);
       await registry.close();
     });
 
