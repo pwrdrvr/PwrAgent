@@ -7,7 +7,7 @@ import { expect, it } from "vitest";
 
 it("keeps both release stages out of repeated paired pnpm deployments", () => {
   const pnpmCli = process.env.npm_execpath;
-  if (!pnpmCli || !/pnpm\.(?:c?js|mjs)$/.test(pnpmCli)) {
+  if (!pnpmCli || !/pnpm-native(?:\.exe)?$/.test(pnpmCli)) {
     throw new Error("Run deployment isolation tests through pnpm test");
   }
   const root = mkdtempSync(join(tmpdir(), "pwragent-deploy-isolation-"));
@@ -36,9 +36,8 @@ it("keeps both release stages out of repeated paired pnpm deployments", () => {
     for (const stage of [...stages, ...stages]) {
       const target = join(desktop, stage);
       rmSync(target, { recursive: true, force: true });
-      // Run the pinned pnpm JS entry directly; no Windows .cmd shell handoff.
-      const result = spawnSync(process.execPath, [
-        pnpmCli,
+      // Run the pinned native executable directly; no Windows .cmd handoff.
+      const result = spawnSync(pnpmCli, [
         "--filter", "deploy-isolation-fixture", "deploy", "--legacy",
         "--prod", "--offline", "--ignore-scripts", target,
       ], {
