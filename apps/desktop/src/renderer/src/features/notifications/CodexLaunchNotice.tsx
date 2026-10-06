@@ -1,4 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
+import {
+  isCodexVersionBelowMinimum,
+  isValidatedDiscoveryCandidate,
+  parseCodexVersionCore,
+} from "@pwragent/shared";
 import type { DesktopCodexDiscoverySnapshot } from "@pwragent/shared";
 import type { AppNoticeToastNotice } from "./AppNoticeToast";
 
@@ -18,6 +23,20 @@ export function isCodexLaunchFailureReason(reason: string): boolean {
 export function findCodexLaunchFailure(
   discovery: DesktopCodexDiscoverySnapshot | undefined,
 ): CodexLaunchFailure | undefined {
+  const selected = discovery?.candidates.find(
+    (candidate) => candidate.command === discovery.selectedCommand,
+  );
+  // A failed probe of an unused installation needs no action when the Codex
+  // we will launch is validated and supports the current model catalog. Keep
+  // the candidate's diagnostic in Settings without raising a startup toast.
+  if (
+    selected
+    && isValidatedDiscoveryCandidate(selected)
+    && parseCodexVersionCore(selected.version)
+    && !isCodexVersionBelowMinimum(selected.version)
+  ) {
+    return undefined;
+  }
   for (const candidate of discovery?.candidates ?? []) {
     const reason = candidate.failureReason ?? candidate.versionFailureReason;
     // Missing commands, old versions, and unfinished probes are not evidence

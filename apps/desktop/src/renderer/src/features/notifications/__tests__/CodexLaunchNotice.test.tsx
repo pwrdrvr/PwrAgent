@@ -70,18 +70,88 @@ describe("Codex launch recovery notice", () => {
     })).toMatchObject({ autoDismiss: false, copyText: `${command}\n${reason}` });
   });
 
-  it("still reports a broken wrapper when a validated fallback is selected", () => {
-    const fallback = "/standalone/codex";
+  it.each(["0.159.0", "0.159.0-alpha.2", "0.160.0", "codex-cli 0.160.0", "1.0.0"])(
+    "does not warn about an unused broken wrapper with selected Codex %s", (version) => {
+      const failedCommand = "/usr/local/bin/codex";
+      const discovery: DesktopCodexDiscoverySnapshot = {
+        selectedCommand: command,
+        candidates: [
+          { command, executable: true, selected: true, source: "application", version },
+          {
+            command: failedCommand,
+            executable: true,
+            selected: false,
+            source: "application",
+            versionFailureReason: `Command failed: ${failedCommand} --version\nenv: node: No such file or directory`,
+          },
+        ],
+      };
+      render(<NoticeHarness discovery={discovery} />);
+
+      expect(screen.queryByRole("status")).not.toBeInTheDocument();
+      expect(findCodexLaunchFailure(discovery)).toBeUndefined();
+    },
+  );
+
+  it.each(["0.144.0", "0.158.9", "garbage", undefined])(
+    "still reports a broken wrapper when selected Codex %s does not clear the model gate", (version) => {
+      const fallback = "/standalone/codex";
+      render(<NoticeHarness discovery={{
+        selectedCommand: fallback,
+        candidates: [
+          { command: fallback, executable: true, selected: true, source: "application", version },
+          { command, executable: true, selected: false, source: "path", versionFailureReason: reason },
+        ],
+      }} />);
+
+      expect(screen.getByRole("status")).toHaveAttribute("data-tone", "warning");
+      expect(screen.getByRole("status")).toHaveTextContent("Another working Codex installation is available.");
+    },
+  );
+
+  it("does not suppress a failure just because an unselected current installation exists", () => {
     render(<NoticeHarness discovery={{
-      selectedCommand: fallback,
+      ...broken,
       candidates: [
-        { command: fallback, executable: true, selected: true, source: "application", version: "0.160.0" },
-        { command, executable: true, selected: false, source: "path", versionFailureReason: reason },
+        ...broken.candidates,
+        { command: "/standalone/codex", executable: true, selected: false, source: "path", version: "0.160.0" },
       ],
     }} />);
 
-    expect(screen.getByRole("status")).toHaveAttribute("data-tone", "warning");
-    expect(screen.getByRole("status")).toHaveTextContent("Another working Codex installation is available.");
+    expect(screen.getByRole("status")).toHaveAttribute("data-tone", "error");
+  });
+
+  it.each([
+    { executable: false },
+    { failureReason: "not_executable" },
+    { versionFailureReason: reason },
+  ])("does not suppress a failure for an unvalidated selected candidate: %o", (failure) => {
+    render(<NoticeHarness discovery={{
+      selectedCommand: command,
+      candidates: [
+        { command, executable: true, selected: true, source: "path", version: "0.160.0", ...failure },
+        ...broken.candidates,
+      ],
+    }} />);
+
+    expect(screen.getByRole("status")).toHaveTextContent("Codex installation failed to start");
+  });
+
+  it("clears the warning after selecting a current runtime while the broken candidate remains", () => {
+    const { rerender } = render(<NoticeHarness discovery={broken} />);
+    expect(screen.getByRole("status")).toBeInTheDocument();
+
+    rerender(<NoticeHarness discovery={{
+      selectedCommand: "/standalone/codex",
+      candidates: [
+        ...broken.candidates,
+        { command: "/standalone/codex", executable: true, selected: true, source: "config", version: "0.160.0" },
+      ],
+    }} />);
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+
+    rerender(<NoticeHarness discovery={broken} />);
+    expect(screen.getByRole("status")).toHaveTextContent("Codex installation failed to start");
   });
 
   it.each([
