@@ -12,7 +12,8 @@ export type ThreadTodoModelResolution =
  *
  * The model may be named by id or by the label the composer shows, in any
  * case; the card stores the id. An effort is checked against the model it
- * will run on: the card's model, else the backend default.
+ * will run on: the card's model, else the raising thread's (`threadModel`,
+ * which a handoff inherits), else the backend default.
  *
  * An empty catalog (discovery has not answered, or the agent lists none)
  * cannot refute anything, so the values pass through as given.
@@ -20,6 +21,7 @@ export type ThreadTodoModelResolution =
 export function resolveThreadTodoModel(
   options: BackendLaunchpadOptions | undefined,
   requested: { model?: string; reasoningEffort?: string },
+  threadModel?: string,
 ): ThreadTodoModelResolution {
   const models = options?.models ?? [];
   if (models.length === 0) {
@@ -41,7 +43,10 @@ export function resolveThreadTodoModel(
   if (!requested.reasoningEffort) {
     return { ok: true, ...(model ? { model } : {}) };
   }
-  const effective = selected ?? models.find((entry) => entry.current) ?? models[0]!;
+  const effective = selected
+    ?? models.find((entry) => entry.id === threadModel)
+    ?? models.find((entry) => entry.current)
+    ?? models[0]!;
   if (effective.supportsReasoning === false) {
     return {
       ok: false,

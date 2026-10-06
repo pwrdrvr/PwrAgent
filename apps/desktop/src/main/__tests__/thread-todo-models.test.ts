@@ -47,6 +47,17 @@ describe("resolveThreadTodoModel", () => {
       .toMatchObject({ ok: false, message: "swift-mini (Swift Mini) does not take a reasoning effort." });
   });
 
+  it("checks an effort with no model against the raising thread's model", () => {
+    // The card runs on the raising thread's model, not the catalog default.
+    expect(resolveThreadTodoModel(OPTIONS, { reasoningEffort: "xhigh" }, "gpt-6.1-sol"))
+      .toEqual({ ok: true, reasoningEffort: "xhigh" });
+    expect(resolveThreadTodoModel(OPTIONS, { reasoningEffort: "high" }, "swift-mini"))
+      .toMatchObject({ ok: false, message: "swift-mini (Swift Mini) does not take a reasoning effort." });
+    // A thread model the catalog no longer lists falls back to the default.
+    expect(resolveThreadTodoModel(OPTIONS, { reasoningEffort: "xhigh" }, "retired-model"))
+      .toMatchObject({ ok: false });
+  });
+
   it("passes values through when the catalog is empty", () => {
     expect(resolveThreadTodoModel({ models: [] }, { model: "anything", reasoningEffort: "max" }))
       .toEqual({ ok: true, model: "anything", reasoningEffort: "max" });

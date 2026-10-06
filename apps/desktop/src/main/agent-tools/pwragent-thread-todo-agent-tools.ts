@@ -554,17 +554,17 @@ function inputSchemaForOperation(
               },
               model: {
                 type: "string",
-                description: "start_thread only: model id for the new thread. Defaults to this thread's backend default.",
+                description: "start_thread only: model id for the new thread. Omit to use this thread's model.",
               },
               reasoningEffort: {
                 type: "string",
-                description: "start_thread only: reasoning effort, such as medium, high or xhigh.",
+                description: "start_thread only: reasoning effort, such as medium, high or xhigh. Omit to use this thread's.",
               },
               executionMode: {
                 type: "string",
                 enum: [...EXECUTION_MODES],
                 description:
-                  "start_thread only: the new thread's permissions. Default Access is the default, auto is Auto, and full-access is Full Access.",
+                  "start_thread only: the new thread's permissions: default is Default Access, auto is Auto, and full-access is Full Access. Omit to use this thread's.",
               },
               workMode: {
                 type: "string",
@@ -593,16 +593,16 @@ function inputSchemaForOperation(
           threadTitle: { type: "string", description: "Handoff cards: the new thread's name. Empty clears it." },
           model: {
             type: "string",
-            description: "Handoff cards: model id or display name. Empty returns to the backend default.",
+            description: "Handoff cards: model id or display name. Empty returns to this thread's model.",
           },
           reasoningEffort: {
             type: "string",
-            description: "Handoff cards: reasoning effort, such as medium, high or xhigh. Empty returns to the default.",
+            description: "Handoff cards: reasoning effort, such as medium, high or xhigh. Empty returns to this thread's.",
           },
           executionMode: {
             type: "string",
             enum: [...EXECUTION_MODES, ""],
-            description: "Handoff cards: the new thread's permissions. Empty returns to Default Access.",
+            description: "Handoff cards: the new thread's permissions. Empty returns to this thread's.",
           },
           workMode: {
             type: "string",

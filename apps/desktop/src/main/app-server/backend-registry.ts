@@ -8008,6 +8008,15 @@ function threadOrchestrationFailure(
   };
 }
 
+/** See `DesktopBackendRegistry.readThreadHandoffSettings`. */
+export type HandoffSourceSettings = {
+  executionMode: ThreadExecutionMode;
+  model?: string;
+  reasoningEffort?: string;
+  serviceTier?: string;
+  fastMode?: boolean;
+};
+
 /** See `DesktopBackendRegistry.setAgentThreadActions`. */
 export type AgentThreadActions = {
   markProjectRead?: (args: MarkProjectReadToolArgs) => Promise<MarkProjectReadResult>;
@@ -10829,6 +10838,57 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind,
   ): Promise<BackendLaunchpadOptions | undefined> {
     return this.getBackendLaunchpadOptions(backend, "thread-todo-model");
+  }
+
+  /**
+   * What a thread handed off from this one inherits when the request names
+   * nothing: its access mode, model, reasoning effort, and speed. handoff_task
+   * and a to-do's Start thread both start from it, so a handoff from a Full
+   * Access thread on GPT-6.1-Sol does not quietly become a Default Access
+   * thread on the catalog's default model.
+   */
+  async readThreadHandoffSettings(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    /** The live turn asking, whose mode outranks the stored one. */
+    turnId?: string;
+  }): Promise<HandoffSourceSettings> {
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: params.backend,
+      threadId: params.threadId,
+    });
+    return {
+      executionMode: await this.resolveHandoffSourceExecutionMode({
+        ...params,
+        overlay,
+      }),
+      ...(overlay?.model ? { model: overlay.model } : {}),
+      ...(overlay?.reasoningEffort
+        ? { reasoningEffort: overlay.reasoningEffort }
+        : {}),
+      ...(overlay?.serviceTier ? { serviceTier: overlay.serviceTier } : {}),
+      ...(overlay?.fastMode !== undefined ? { fastMode: overlay.fastMode } : {}),
+    };
+  }
+
+  private async resolveHandoffSourceExecutionMode(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    turnId?: string;
+    overlay?: ThreadOverlayState;
+  }): Promise<ThreadExecutionMode> {
+    const { backend, threadId, turnId, overlay } = params;
+    return (
+      (backend === "codex" && turnId
+        ? this.activeCodexTurnModes.get(buildActiveTurnModeKey(threadId, turnId))
+        : undefined)
+      ?? overlay?.executionMode
+      ?? (backend === "codex"
+        ? await this.resolveCodexThreadExecutionModeForActiveTurn(threadId)
+        : isAcpBackendId(backend)
+          ? this.acpBackend.getSession(backend, threadId)?.executionMode ?? "default"
+          : "default")
+    );
   }
 
   /**
@@ -38381,18 +38441,12 @@ export class DesktopBackendRegistry {
     });
     const requestedOrInheritedExecutionMode =
       request.args.executionMode ??
-      (sourceBackend === "codex"
-        ? this.activeCodexTurnModes.get(
-            buildActiveTurnModeKey(sourceThreadId, sourceTurnId),
-          )
-        : undefined) ??
-      sourceOverlay.executionMode ??
-      (sourceBackend === "codex"
-        ? await this.resolveCodexThreadExecutionModeForActiveTurn(sourceThreadId)
-        : isAcpBackendId(sourceBackend)
-          ? this.acpBackend.getSession(sourceBackend, sourceThreadId)
-              ?.executionMode ?? "default"
-          : "default");
+      await this.resolveHandoffSourceExecutionMode({
+        backend: sourceBackend,
+        threadId: sourceThreadId,
+        turnId: sourceTurnId,
+        overlay: sourceOverlay,
+      });
     // Auto review belongs to Codex. An implicit cross-provider handoff keeps
     // approvals enabled using ACP's default mode; explicit Auto remains invalid.
     const executionMode =

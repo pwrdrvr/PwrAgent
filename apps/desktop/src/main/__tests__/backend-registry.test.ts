@@ -3110,6 +3110,20 @@ describe("DesktopBackendRegistry", () => {
     expect(recordCodexWorktreeOwnerThread).toHaveBeenCalledWith({ threadId: response.threadId, worktreePath });
   });
 
+  it("reads what a handoff inherits from its source thread", async () => {
+    const overlayStore = createOverlayStoreMock({ overlays: {
+      "codex:sol-source": {
+        backend: "codex", threadId: "sol-source", extraLinkedDirectories: [],
+        executionMode: "full-access", model: "gpt-6.1-sol", reasoningEffort: "high", fastMode: false,
+      },
+    } });
+    const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore });
+    onTestFinished(() => registry.close());
+    await expect(registry.readThreadHandoffSettings({ backend: "codex", threadId: "sol-source" })).resolves.toEqual({
+      executionMode: "full-access", model: "gpt-6.1-sol", reasoningEffort: "high", fastMode: false,
+    });
+  });
+
   it("reserves a handoff source against turn admission and releases on failure", async () => {
     const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({}), overlayStore: createOverlayStoreMock() });
     onTestFinished(() => registry.close());
