@@ -6388,11 +6388,10 @@ class DesktopAppServerService {
     await this.handlePrAutoDispatchSnapshots(canonical, fetchedAt);
     // An unchanged accepted poll refreshes CI freshness without publishing a
     // field-change event. Dependencies still need that observation for admission.
-    for (const pr of canonical) {
-      if (this.prStatusRegistry.get(getPrStatusKey(pr))?.fetchedAt === fetchedAt) {
-        await this.threadDependencyCoordinator?.handlePrEvent(pr.url);
-      }
-    }
+    const freshPrUrls = canonical
+      .filter((pr) => this.prStatusRegistry.get(getPrStatusKey(pr))?.fetchedAt === fetchedAt)
+      .map((pr) => pr.url);
+    if (freshPrUrls.length > 0) await this.threadDependencyCoordinator?.handlePrEvent(freshPrUrls);
     if (changed.length === 0) {
       return [];
     }
@@ -8153,10 +8152,10 @@ class DesktopAppServerService {
     if (request.action === "create") {
       validateDependencyCreate(request);
       if (request.conditions?.some((condition) => !isAppServerBackendKind(condition?.backend))) throw new Error("Prerequisites must use known local backends.");
-      // Validate prerequisites through the protocol once before registration,
-      // including PR-only conditions for threads not yet in the overlay.
+      // Validate PR-only prerequisites through the protocol before
+      // registration; the coordinator already reads turn prerequisites.
       for (const condition of request.conditions ?? []) {
-        await this.readDependencyThread({ backend: condition.backend, threadId: condition.threadId });
+        if (condition.when !== "turn_completed") await this.readDependencyThread({ backend: condition.backend, threadId: condition.threadId });
       }
       if (request.conditions?.some((condition) => condition.when !== "turn_completed") && !this.backgroundPrPollingEnabled) {
         throw new Error("Enable background PR polling before waiting for a PR prerequisite.");
@@ -8204,6 +8203,10 @@ class DesktopAppServerService {
       if (pr && typeof pr === "object" && "url" in pr && typeof pr.url === "string") {
         task = this.getThreadDependencyCoordinator().handlePrEvent(pr.url);
       }
+    } else if (notification.method === "thread/lock/updated" && !notification.params.lock) {
+      // A lock reads as busy at admission. Unlocking is the consumer's only
+      // availability signal when it stays idle.
+      task = this.getThreadDependencyCoordinator().handleThreadEvent({ backend: event.backend, threadId: notification.params.threadId }, undefined, true);
     } else if (notification.method === "navigation/providerThreads/refreshed") {
       task = this.getThreadDependencyCoordinator().reconcile();
     }

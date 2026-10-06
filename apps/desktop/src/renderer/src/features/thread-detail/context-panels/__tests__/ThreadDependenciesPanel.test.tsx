@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NavigationThreadSummary, ThreadDependency } from "@pwragent/shared";
 import type { DesktopApi } from "../../../../lib/desktop-api";
-import { chooseSelectOption } from "../../../../test/select";
+import { chooseSelectOption, selectOptionLabels } from "../../../../test/select";
 import { ThreadDependenciesPanel } from "../ThreadDependenciesPanel";
 
 afterEach(cleanup);
@@ -101,10 +101,11 @@ describe("Continue after", () => {
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
   });
 
-  it("requires a PR choice when the prerequisite has several PRs", async () => {
-    const withPrs = { ...target, prs: [
+  it("requires a PR choice among the primary-workspace PRs only", async () => {
+    const withPrs = { ...target, primaryGitRepository: "github.com/acme/widgets", prs: [
       { provider: "github.com", org: "acme", repo: "widgets", number: 4127, url: "https://github.com/acme/widgets/pull/4127" },
       { provider: "github.com", org: "acme", repo: "widgets", number: 4131, url: "https://github.com/acme/widgets/pull/4131" },
+      { provider: "github.com", org: "acme", repo: "docs", number: 77, url: "https://github.com/acme/docs/pull/77" },
     ] } as unknown as NavigationThreadSummary;
     const manage = vi.fn(async () => ({ dependencies: [] }));
     const api = { manageThreadDependencies: manage, getNavigationQueryPage: pageOf([withPrs]), releaseNavigationQuery: vi.fn(async () => {}) } as unknown as DesktopApi;
@@ -112,11 +113,24 @@ describe("Continue after", () => {
     fireEvent.click(screen.getByRole("button", { name: "Add prerequisites" }));
     fireEvent.click(await screen.findByRole("button", { name: "Foundation" }));
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(selectOptionLabels(screen.getByRole("combobox", { name: "Pull request for Foundation" }))).toEqual(["#4127", "#4131"]);
     chooseSelectOption(screen.getByRole("combobox", { name: "Pull request for Foundation" }), "#4131");
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(manage).toHaveBeenCalledWith(expect.objectContaining({
       conditions: [{ backend: "codex", threadId: "foundation", when: "ci_passed", title: "Foundation", prUrl: "https://github.com/acme/widgets/pull/4131" }],
     })));
+  });
+
+  it("does not offer a secondary-workspace PR the prerequisite cannot release on", async () => {
+    const secondaryOnly = { ...target, primaryGitRepository: "github.com/acme/widgets", prs: [
+      { provider: "github.com", org: "acme", repo: "docs", number: 77, url: "https://github.com/acme/docs/pull/77" },
+    ] } as unknown as NavigationThreadSummary;
+    const api = { manageThreadDependencies: vi.fn(async () => ({ dependencies: [] })), getNavigationQueryPage: pageOf([secondaryOnly]), releaseNavigationQuery: vi.fn(async () => {}) } as unknown as DesktopApi;
+    render(<ThreadDependenciesPanel thread={thread} desktopApi={api} />);
+    fireEvent.click(screen.getByRole("button", { name: "Add prerequisites" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Foundation" }));
+    expect(screen.getByText("Its PR can be attached later.")).toBeInTheDocument();
+    expect(screen.queryByText(/Follows #77/)).not.toBeInTheDocument();
   });
 
   it("lists threads waiting on this one and will not offer them as prerequisites", async () => {

@@ -85,6 +85,20 @@ describe("durable thread dependencies", () => {
     expect(prompt).toContain("prerequisites: codex:foundation (ci_passed)");
   });
 
+  it("rechecks every PR observed by one poll in a single pass", async () => {
+    snapshots.set("other", { turns: [], prs: [] });
+    snapshots.set("second-consumer", { turns: [], prs: [] });
+    const agent = coordinator();
+    await create(agent, [{ ...condition("foundation"), prUrl: "https://github.com/example/fixture/pull/1" }]);
+    await create(agent, [{ ...condition("other"), prUrl: "https://github.com/example/fixture/pull/2" }], { threadId: "second-consumer" });
+    snapshots.get("foundation")!.prs = [{ pr: pr({ checkState: "passing", state: "passing" }), fetchedAt: now }];
+    snapshots.get("other")!.prs = [{ pr: pr({ number: 2, url: "https://github.com/example/fixture/pull/2", checkState: "passing", state: "passing" }), fetchedAt: now }];
+    await agent.handlePrEvent([]);
+    expect(submit).not.toHaveBeenCalled();
+    await agent.handlePrEvent(["https://github.com/example/fixture/pull/1", "https://github.com/example/fixture/pull/2"]);
+    expect(submit.mock.calls.map(([params]) => params.threadId).sort()).toEqual(["dependencies", "second-consumer"]);
+  });
+
   it("lists active registrations that wait on a prerequisite thread", async () => {
     const agent = coordinator();
     await create(agent, [condition("foundation", "pr_merged")]);

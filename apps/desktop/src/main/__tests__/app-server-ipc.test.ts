@@ -1771,6 +1771,29 @@ describe("app server ipc", () => {
     }
   });
 
+  it("retries a ready continuation when its locked consumer is unlocked", async () => {
+    const { appServerService } = await import("../ipc/app-server");
+    const appState = await import("../state/app-state");
+    const { ThreadDependencyCoordinator } = await import("../app-server/thread-dependency-coordinator");
+    const handleThreadEvent = vi.fn(async () => undefined);
+    const agent = { handleThreadEvent } as unknown as InstanceType<typeof ThreadDependencyCoordinator>;
+    const mode = vi.spyOn(appState, "getAppStateMode").mockReturnValue("active-profile");
+    const service = appServerService as unknown as { getThreadDependencyCoordinator: () => typeof agent };
+    const coordinator = vi.spyOn(service, "getThreadDependencyCoordinator").mockReturnValue(agent);
+    try {
+      appServerService.handleAgentEventForDependencies({ backend: "codex", notification: {
+        method: "thread/lock/updated", params: { threadId: "consumer", lock: { note: "parked", lockedAt: 1 } },
+      } as AppServerNotification });
+      expect(handleThreadEvent).not.toHaveBeenCalled();
+      appServerService.handleAgentEventForDependencies({ backend: "codex", notification: {
+        method: "thread/lock/updated", params: { threadId: "consumer" },
+      } as AppServerNotification });
+      expect(handleThreadEvent).toHaveBeenCalledExactlyOnceWith({ backend: "codex", threadId: "consumer" }, undefined, true);
+    } finally {
+      coordinator.mockRestore(); mode.mockRestore();
+    }
+  });
+
   it.each(["stale-registration", "busy-consumer"])("admits %s on an unchanged fresh CI poll without idle writes", async (scenario) => {
     const { appServerService } = await import("../ipc/app-server");
     const { StateDb } = await import("../state/state-db");

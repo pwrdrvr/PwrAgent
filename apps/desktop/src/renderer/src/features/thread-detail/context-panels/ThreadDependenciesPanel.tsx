@@ -3,10 +3,12 @@ import type {
   AppServerBackendKind,
   NavigationRow,
   NavigationThreadSummary,
+  PrSummary,
   ThreadDependency,
   ThreadDependencyCondition,
   ThreadDependencyEvidence,
 } from "@pwragent/shared";
+import { isRepairableDependencyFailure } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { Select } from "../../../components/Select";
 import { readRendererFederationTarget } from "../../../lib/federation-window";
@@ -53,6 +55,16 @@ const threadKey = (value: { backend: string; threadId: string }): string => JSON
 const rowKey = (row: NavigationRow): string => threadKey({ backend: row.source, threadId: row.id });
 const messageFrom = (reason: unknown): string => reason instanceof Error ? reason.message : String(reason);
 
+/** Main follows only primary-workspace PRs, keyed like `collectPrPollTargets`. */
+function primaryPullRequests(row: NavigationRow): PrSummary[] {
+  return (row.prs ?? []).filter((pr) => {
+    const repository = pr.sourceRepository ?? pr;
+    const repositoryKey = [repository.provider, repository.org, repository.repo]
+      .map((part) => part.trim().toLowerCase()).join("/");
+    return Boolean(pr.url) && row.primaryGitRepository === repositoryKey;
+  });
+}
+
 /**
  * Thread Info → Continue after. Registers durable prerequisites for this
  * thread and lists the threads that wait on it. Picking a search result adds
@@ -85,15 +97,18 @@ export function ThreadDependenciesPanel({ thread, desktopApi }: { thread: Naviga
     setDependencies([]); setDependents([]); setOpen(false); setHistoryOpen(false); setRows([]); setTargets([]);
     setTargetFilter(""); setTargetsIncomplete(false); setSearching(false);
     setMode("all"); setOnFailure("wait"); setError(undefined); setBusy(false); setContinuation("");
+    // Updates arrive in bursts; apply only the newest list response.
+    let latestRefresh = 0;
     const refresh = async () => {
       if (!available) return;
+      const sequence = ++latestRefresh;
       try {
         const response = await desktopApi!.manageThreadDependencies!({ action: "list", backend: thread.source, threadId: thread.id });
-        if (disposed) return;
+        if (disposed || sequence !== latestRefresh) return;
         setDependencies(response.dependencies);
         setDependents(response.dependents ?? []);
       } catch (reason) {
-        if (!disposed) setError(messageFrom(reason));
+        if (!disposed && sequence === latestRefresh) setError(messageFrom(reason));
       }
     };
     void refresh();
@@ -155,7 +170,7 @@ export function ThreadDependenciesPanel({ thread, desktopApi }: { thread: Naviga
       backend: target.source, threadId: target.id,
       title: (target.title || target.id).slice(0, MAX_TITLE_LENGTH),
       when: "ci_passed", prUrl: "",
-      prs: (target.prs ?? []).filter((pr) => pr.url).map((pr) => ({ url: pr.url!, number: pr.number })),
+      prs: primaryPullRequests(target).map((pr) => ({ url: pr.url, number: pr.number })),
     }]);
   };
   const updateRow = (index: number, patch: Partial<DraftCondition>) => {
@@ -441,11 +456,11 @@ function describeStatus(dependency: ThreadDependency): { label: string; tone: Ra
     case "waiting":
       return { label: "Waiting", tone: "active", blink: true };
     case "ready":
-      if (dependency.outcome !== "failure") return { label: "Ready · continues after this turn", tone: "ok" };
-      return dependency.onFailure === "wait"
-        && dependency.evidence.filter((entry) => entry.state === "failed").every((entry) => entry.reason === "CI failed" || entry.reason === "Merge conflict")
+      // Admission can also wait on a lock or on PR polling, not only a turn.
+      if (dependency.outcome !== "failure") return { label: "Ready to continue", tone: "ok" };
+      return isRepairableDependencyFailure(dependency)
         ? { label: "Waiting for CI repair", tone: "warning" }
-        : { label: "Ready · reports the failure after this turn", tone: "error" };
+        : { label: "Ready to report the failure", tone: "error" };
     case "dispatching":
       return dependency.error
         ? { label: "Delivery needs review", tone: "error", alert: true }
