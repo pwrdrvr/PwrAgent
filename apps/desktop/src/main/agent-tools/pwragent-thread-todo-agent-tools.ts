@@ -36,6 +36,11 @@ const MODEL_SETTING_MAX_LENGTH = 200;
 const EXECUTION_MODES = ["default", "auto", "full-access"] as const satisfies
   readonly ThreadExecutionMode[];
 const WORK_MODES = ["local", "worktree"] as const;
+const TODO_WRITING_GUIDANCE = [
+  "Write titles, details, and handoff prompts in clear, natural language for the operator.",
+  "Use normal spacing and complete sentences, without compressed agent shorthand.",
+  "Organize longer prompts with Markdown headings, lists, and tables where helpful.",
+].join(" ");
 
 type ThreadTodoToolContext = {
   backend: AppServerBackendKind;
@@ -479,6 +484,7 @@ function descriptionForOperation(operation: PwrAgentThreadTodoOperationName): st
         "Use start_review when the work is ready for review.",
         "Use merge_pull_request when the PR is green and ready to land.",
         "Use start_thread to propose a follow-up thread with its full prompt.",
+        TODO_WRITING_GUIDANCE,
         "Omit the action for a reminder that must not be lost.",
         "The operator clicks to run an action, and you never run it.",
         "Do not use cards for progress updates.",
@@ -489,6 +495,7 @@ function descriptionForOperation(operation: PwrAgentThreadTodoOperationName): st
     case "update_todo":
       return [
         "Change some fields of one of this thread's open to-do cards, by id or key.",
+        TODO_WRITING_GUIDANCE,
         "Fields you omit stay as they are.",
         "Pass an empty string to clear an optional field back to its default.",
         "Use it when the operator asks to change a card, such as its model, effort or permissions.",
