@@ -788,18 +788,8 @@ describe("Tangerine Terminal theme contract", () => {
         }
       }
     }
-    // Banners in normal flow are inline notice panels, not floating
-    // surfaces. They have their own pass.
-    const inlineNotices = new Set(["settings-archive-banner", "federation-disconnected-banner"]);
-    for (const name of inlineNotices) {
-      expect(
-        rules.some((rule) => subjectClasses(rule.selector).some((classes) => classes.includes(name))),
-        `inline notice exemption .${name} names no rule; drop it`,
-      ).toBe(true);
-    }
     const isFrame = (classes: string[]): boolean =>
-      !classes.some((name) => inlineNotices.has(name))
-      && frames.some((frame) => frame.every((name) => classes.includes(name)));
+      frames.some((frame) => frame.every((name) => classes.includes(name)));
     // A walker that found nothing would pass everything.
     for (const selector of [".pr-detach-warning-dialog", ".codex-config-warning-banner", ".app-notice-toast", ".jump-palette"]) {
       expect(isFrame(subjectClasses(selector)[0]), `${selector} is a floating frame`).toBe(true);
