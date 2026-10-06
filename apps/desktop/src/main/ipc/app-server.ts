@@ -8093,10 +8093,17 @@ class DesktopAppServerService {
         canDispatch: (dependency) => this.ownerNavigationActive
           && (dependency.conditions.every((condition) => condition.when === "turn_completed") || this.backgroundPrPollingEnabled),
         changed: async (dependency) => {
-          await getDesktopBackendRegistry().publishLocalEvent({
-            backend: dependency.backend,
-            notification: { method: "thread/dependencies/updated", params: { threadId: dependency.threadId, dependencyId: dependency.id } },
-          });
+          // Prerequisite threads list their dependents, so they refresh too.
+          const targets = new Map<string, { backend: AppServerBackendKind; threadId: string }>();
+          for (const target of [dependency, ...dependency.conditions]) {
+            targets.set(JSON.stringify([target.backend, target.threadId]), { backend: target.backend, threadId: target.threadId });
+          }
+          for (const target of targets.values()) {
+            await getDesktopBackendRegistry().publishLocalEvent({
+              backend: target.backend,
+              notification: { method: "thread/dependencies/updated", params: { threadId: target.threadId, dependencyId: dependency.id } },
+            });
+          }
         },
       });
     }

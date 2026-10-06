@@ -48,15 +48,15 @@ export class ThreadDependencyCoordinator {
 
   manage(request: ManageThreadDependenciesRequest & { backend: AppServerBackendKind; threadId: string }): Promise<ManageThreadDependenciesResponse> {
     return this.serialize(async () => {
-      if (request.action === "list") return { dependencies: this.options.store.list(request.backend, request.threadId) };
+      if (request.action === "list") return this.response(request);
       if (request.action === "cancel" || request.action === "dismiss") {
         if (!request.dependencyId) throw new Error("dependencyId is required to cancel a dependency.");
         const changed = request.action === "dismiss"
           ? this.options.store.dismiss(request.backend, request.threadId, request.dependencyId, this.now())
           : this.options.store.cancel(request.backend, request.threadId, request.dependencyId, this.now());
-        const dependencies = this.options.store.list(request.backend, request.threadId);
+        const response = this.response(request);
         await this.options.changed(changed);
-        return { dependencies };
+        return response;
       }
       validateDependencyCreate(request);
       // Validate the consumer too: a mistyped id must never become a durable wake target.
@@ -82,8 +82,15 @@ export class ThreadDependencyCoordinator {
       });
       await this.evaluate(item);
       await this.options.changed(item);
-      return { dependencies: this.options.store.list(request.backend, request.threadId) };
+      return this.response(request);
     });
+  }
+
+  private response(target: { backend: AppServerBackendKind; threadId: string }): ManageThreadDependenciesResponse {
+    return {
+      dependencies: this.options.store.list(target.backend, target.threadId),
+      dependents: this.options.store.dependents(target.backend, target.threadId),
+    };
   }
 
   reconcile(): Promise<void> {
@@ -240,7 +247,8 @@ export function validateDependencyCreate(request: ManageThreadDependenciesReques
     if (!condition || typeof condition.backend !== "string" || !condition.backend.trim()
       || typeof condition.threadId !== "string" || !condition.threadId.trim()
       || !THREAD_DEPENDENCY_CONDITIONS.includes(condition.when)) throw new Error("Each condition requires backend, threadId, and a supported when value.");
-    if (Object.keys(condition).some((field) => !["backend", "threadId", "when", "turnId", "prUrl", "headSha"].includes(field))) throw new Error("Unknown prerequisite condition field.");
+    if (Object.keys(condition).some((field) => !["backend", "threadId", "when", "turnId", "prUrl", "headSha", "title"].includes(field))) throw new Error("Unknown prerequisite condition field.");
+    if (condition.title !== undefined && (typeof condition.title !== "string" || condition.title.length > 200)) throw new Error("A prerequisite title must be text of at most 200 characters.");
     for (const value of [condition.turnId, condition.prUrl, condition.headSha]) {
       if (value !== undefined && (typeof value !== "string" || !value.trim() || value.length > 2000)) throw new Error("Condition identifiers must be nonempty text of at most 2000 characters.");
     }
@@ -279,17 +287,30 @@ export function evaluateCondition(condition: ThreadDependencyCondition, snapshot
   return result("waiting", "Waiting for CI to pass", pr);
 }
 
+const CONDITION_PHRASES: Record<ThreadDependencyCondition["when"], string> = {
+  turn_completed: "finishes its turn",
+  pr_attached: "has a reviewable PR",
+  ci_passed: "passes CI",
+  pr_merged: "is merged",
+};
+
 export function buildDependencyPrompt(item: ThreadDependency): string {
+  const satisfied = item.outcome === "success";
   return [
-    `PwrAgent resumed this thread because dependency ${item.id} ${item.outcome === "success" ? "was satisfied" : "failed"}.`,
-    `Mode: ${item.mode}. Outcome: ${item.outcome}.`,
-    ...item.evidence.map((entry) => `- ${entry.condition.backend}:${entry.condition.threadId} (${entry.condition.when}): ${entry.reason}${entry.prUrl ? `; PR: ${entry.prUrl}` : ""}${entry.headSha ? `; observed head: ${entry.headSha}` : ""}`),
+    `PwrAgent resumed this thread because ${satisfied
+      ? item.mode === "any" ? "one of its prerequisites was met" : `its prerequisites were met (all of ${item.conditions.length})`
+      : "a prerequisite failed"}.`,
+    ...item.evidence.map((entry) => {
+      const name = entry.condition.title?.trim() ? `"${entry.condition.title.trim()}"` : `Thread ${entry.condition.threadId}`;
+      return `- ${name} ${CONDITION_PHRASES[entry.condition.when]}: ${entry.reason}${entry.prUrl ? `; PR: ${entry.prUrl}` : ""}${entry.headSha ? `; observed head: ${entry.headSha}` : ""}`;
+    }),
     "",
-    item.outcome === "success"
+    satisfied
       ? "Continue the previously authorized work. Recheck the prerequisite head before using it; a new commit can arrive after this notification."
       : "Report the prerequisite failure. Do not bypass the dependency or begin dependent work; repair only if the operator already authorized it.",
     ...(item.continuation ? ["", "Requested continuation:", item.continuation] : []),
     "Do not poll this dependency or start a Job Monitor for it.",
+    `Dependency ${item.id} (mode ${item.mode}, outcome ${item.outcome}); prerequisites: ${item.conditions.map((condition) => `${condition.backend}:${condition.threadId} (${condition.when})`).join(", ")}.`,
   ].join("\n");
 }
 

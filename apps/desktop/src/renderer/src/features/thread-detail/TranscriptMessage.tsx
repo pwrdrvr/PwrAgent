@@ -1313,6 +1313,9 @@ function labelForOrigin(origin: AppServerThreadMessageOrigin): string {
   if (origin.kind === "pwragent" && origin.systemReason === "monitor-job-suggestion") {
     return "PwrAgent System - Monitor Job Suggestion";
   }
+  if (origin.kind === "pwragent" && origin.dependencyId) {
+    return "Continue after";
+  }
   if (origin.kind === "agent") {
     return origin.sourceThread ? "From thread" : "Agent";
   }

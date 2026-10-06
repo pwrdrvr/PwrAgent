@@ -74,6 +74,36 @@ describe("durable thread dependencies", () => {
     expect(store.list("codex", "dependencies")[0]).toMatchObject({ status: "delivered", outcome: "success", evidence: [expect.objectContaining({ headSha: "head-two" })] });
   });
 
+  it("names prerequisites by their saved titles in the continuation prompt", async () => {
+    const agent = coordinator();
+    await create(agent, [{ ...condition("foundation"), title: "Extract retry helper" }]);
+    snapshots.get("foundation")!.prs = [{ pr: pr({ checkState: "passing", state: "passing" }), fetchedAt: now }];
+    await agent.handlePrEvent();
+    const prompt = (submit.mock.calls[0]![0] as unknown as { input: { text: string }[] }).input[0]!.text;
+    expect(prompt).toContain("its prerequisites were met (all of 1)");
+    expect(prompt).toContain("- \"Extract retry helper\" passes CI: CI passed for the current head; PR: https://github.com/example/fixture/pull/1");
+    expect(prompt).toContain("prerequisites: codex:foundation (ci_passed)");
+  });
+
+  it("lists active registrations that wait on a prerequisite thread", async () => {
+    const agent = coordinator();
+    await create(agent, [condition("foundation", "pr_merged")]);
+    await expect(agent.manage({ action: "list", backend: "codex", threadId: "foundation" })).resolves.toMatchObject({
+      dependencies: [], dependents: [expect.objectContaining({ threadId: "dependencies" })],
+    });
+    const [registration] = store.list("codex", "dependencies");
+    await agent.manage({ action: "cancel", backend: "codex", threadId: "dependencies", dependencyId: registration!.id });
+    await expect(agent.manage({ action: "list", backend: "codex", threadId: "foundation" })).resolves.toMatchObject({ dependents: [] });
+  });
+
+  it("rejects an oversized prerequisite title and keeps titles out of deduplication", async () => {
+    const agent = coordinator();
+    await expect(create(agent, [{ ...condition("foundation"), title: "x".repeat(201) }])).rejects.toThrow("at most 200 characters");
+    await create(agent, [{ ...condition("foundation"), title: "Old title" }]);
+    await create(agent, [{ ...condition("foundation"), title: "Renamed" }]);
+    expect(store.active()).toHaveLength(1);
+  });
+
   it("pins a specific turn, catches an already completed turn, and ignores later unrelated turns", async () => {
     const agent = coordinator();
     await create(agent, [condition("foundation", "turn_completed")]);

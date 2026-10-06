@@ -46,6 +46,14 @@ export class ThreadDependencyStore {
     ).all(backend, threadId));
   }
 
+  /** Active registrations elsewhere that name this thread as a prerequisite. */
+  dependents(backend: string, threadId: string): ThreadDependency[] {
+    const target = key(backend, threadId);
+    return this.active()
+      .filter((item) => item.conditions.some((condition) => key(condition.backend, condition.threadId) === target))
+      .sort((left, right) => right.createdAt - left.createdAt);
+  }
+
   get(backend: string, threadId: string, id: string): ThreadDependency | undefined {
     const row = this.db.prepare(
       "SELECT payload FROM thread_dependencies WHERE dependency_id = ? AND backend = ? AND thread_id = ?",

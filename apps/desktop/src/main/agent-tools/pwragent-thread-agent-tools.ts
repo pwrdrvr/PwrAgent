@@ -204,6 +204,7 @@ function inputSchemaForOperation(
                 backend: { type: "string" }, threadId: { type: "string" },
                 when: { type: "string", enum: ["turn_completed", "pr_attached", "ci_passed", "pr_merged"] },
                 turnId: { type: "string" }, prUrl: { type: "string" }, headSha: { type: "string" },
+                title: { type: "string", maxLength: 200, description: "Prerequisite thread title, shown to the operator and in the continuation." },
               },
             },
           },

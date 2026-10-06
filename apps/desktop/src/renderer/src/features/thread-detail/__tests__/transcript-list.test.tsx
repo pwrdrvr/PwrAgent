@@ -610,6 +610,16 @@ describe("TranscriptList", () => {
     expect(screen.queryByText("User")).not.toBeInTheDocument();
   });
 
+  it("labels a dependency continuation by the prerequisite feature, not as PwrAgent", () => {
+    render(<TranscriptList
+      entries={[{ type: "message", id: "continuation", role: "user", text: "PwrAgent resumed this thread because its prerequisites were met (all of 1).",
+        origin: { kind: "pwragent", dependencyId: "dependency-1" } }]}
+      loading={false} loadingMore={false} onLoadOlder={async () => undefined}
+    />);
+    expect(screen.getByText("Continue after")).toBeInTheDocument();
+    expect(screen.queryByText("PwrAgent")).not.toBeInTheDocument();
+  });
+
   it("renders PR automation prompts as compact expandable PwrAgent cards", () => {
     const rawPrompt = [
       "PwrAgent scheduled this bounded repair turn because an attached pull request needs attention.",

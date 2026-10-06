@@ -4108,6 +4108,10 @@ function threadMessageOriginFromUnknown(
       ? record.systemReason
       : undefined;
   const messaging = threadMessageMessagingOriginFromUnknown(record.messaging);
+  const dependencyId =
+    record.kind === "pwragent" && typeof record.dependencyId === "string"
+      ? record.dependencyId
+      : undefined;
   const subAgent =
     record.kind === "sub-agent"
       ? threadMessageSubAgentOriginFromUnknown(record.subAgent)
@@ -4120,6 +4124,7 @@ function threadMessageOriginFromUnknown(
   if (!source || typeof source !== "object" || Array.isArray(source)) {
     return {
       kind: record.kind,
+      ...(dependencyId ? { dependencyId } : {}),
       ...(systemReason ? { systemReason } : {}),
       ...(messaging ? { messaging } : {}),
       ...(subAgent ? { subAgent } : {}),
@@ -4133,6 +4138,7 @@ function threadMessageOriginFromUnknown(
   ) {
     return {
       kind: record.kind,
+      ...(dependencyId ? { dependencyId } : {}),
       ...(systemReason ? { systemReason } : {}),
       ...(messaging ? { messaging } : {}),
       ...(prAutomation ? { prAutomation } : {}),
@@ -4140,6 +4146,7 @@ function threadMessageOriginFromUnknown(
   }
   return {
     kind: record.kind,
+    ...(dependencyId ? { dependencyId } : {}),
     ...(systemReason ? { systemReason } : {}),
     sourceThread: {
       backend: sourceRecord.backend as AppServerBackendKind,
