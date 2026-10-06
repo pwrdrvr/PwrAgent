@@ -4,6 +4,8 @@ import type { DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import { federationTargetsEqual } from "../../lib/federated-thread-events";
 
+const EMPTY_DISMISSED_WARNING_IDS: readonly string[] = [];
+
 type ConfigWarningNotice = {
   id: string;
   summary: string;
@@ -34,11 +36,15 @@ function noticeFromEvent(event: AgentEvent): ConfigWarningNotice | undefined {
   const configPath =
     typeof rawConfigPath === "string" ? rawConfigPath.trim() : undefined;
   const details = typeof rawDetails === "string" ? rawDetails : null;
-  const id = [
+  const id = JSON.stringify([
     summary,
+    details ?? "",
     trustedProjectPath ?? "",
     configPath ?? "",
-  ].join("\n");
+    event.federationTarget?.scope === "remote"
+      ? event.federationTarget.instanceId
+      : "",
+  ]);
 
   return {
     id,
@@ -49,15 +55,30 @@ function noticeFromEvent(event: AgentEvent): ConfigWarningNotice | undefined {
   };
 }
 
-export function CodexConfigWarningBanner(props: { desktopApi?: DesktopApi }) {
+export function CodexConfigWarningBanner(props: {
+  desktopApi?: DesktopApi;
+  preferencesLoaded?: boolean;
+  dismissedWarningIds?: readonly string[];
+  onSuppressWarning?: (id: string) => Promise<boolean>;
+}) {
   const [notice, setNotice] = useState<ConfigWarningNotice | null>(null);
   const [dismissedIds, setDismissedIds] = useState<Set<string>>(() => new Set());
   const [trusting, setTrusting] = useState(false);
   const [trustError, setTrustError] = useState<string | null>(null);
+  const [savingWarningId, setSavingWarningId] = useState<string | null>(null);
+  const [suppressionErrorId, setSuppressionErrorId] = useState<string | null>(null);
   const desktopApi = props.desktopApi;
+  const preferencesLoaded = props.preferencesLoaded !== false;
+  const dismissedWarningIds = props.dismissedWarningIds ?? EMPTY_DISMISSED_WARNING_IDS;
   const federationTargetInstanceId = readRendererFederationTarget()?.instanceId;
 
   useEffect(() => {
+    if (!preferencesLoaded) {
+      return;
+    }
+    setNotice((current) => current && dismissedWarningIds.includes(current.id)
+      ? null
+      : current);
     if (!desktopApi?.onAgentEvent && !desktopApi?.getLatestCodexConfigWarning) {
       return;
     }
@@ -77,7 +98,7 @@ export function CodexConfigWarningBanner(props: { desktopApi?: DesktopApi }) {
       if (!nextNotice) {
         return;
       }
-      if (dismissedIds.has(nextNotice.id)) {
+      if (dismissedIds.has(nextNotice.id) || dismissedWarningIds.includes(nextNotice.id)) {
         return;
       }
       setNotice(nextNotice);
@@ -100,7 +121,7 @@ export function CodexConfigWarningBanner(props: { desktopApi?: DesktopApi }) {
       cancelled = true;
       unsubscribe?.();
     };
-  }, [desktopApi, dismissedIds, federationTargetInstanceId]);
+  }, [desktopApi, dismissedIds, dismissedWarningIds, federationTargetInstanceId, preferencesLoaded]);
 
   const actionLabel = useMemo(() => {
     const projectPath = notice?.trustedProjectPath;
@@ -149,6 +170,26 @@ export function CodexConfigWarningBanner(props: { desktopApi?: DesktopApi }) {
     setNotice(null);
   };
 
+  const suppressWarning = async (): Promise<void> => {
+    const id = notice.id;
+    setSavingWarningId(id);
+    setSuppressionErrorId(null);
+    try {
+      const saved = await props.onSuppressWarning?.(id);
+      if (saved) {
+        setDismissedIds((current) => new Set(current).add(id));
+        setNotice((current) => current?.id === id ? null : current);
+      } else {
+        setSuppressionErrorId(id);
+      }
+    } catch {
+      setSuppressionErrorId(id);
+    } finally {
+      setSavingWarningId((current) => current === id ? null : current);
+    }
+  };
+  const suppressionSaving = savingWarningId === notice.id;
+
   return (
     <aside className="codex-config-warning-banner" role="alert">
       <div className="codex-config-warning-banner__content">
@@ -160,13 +201,29 @@ export function CodexConfigWarningBanner(props: { desktopApi?: DesktopApi }) {
         {trustError ? (
           <p className="codex-config-warning-banner__error">{trustError}</p>
         ) : null}
+        {suppressionErrorId === notice.id ? (
+          <p className="codex-config-warning-banner__error">
+            Could not save this preference.
+          </p>
+        ) : null}
       </div>
       <div className="codex-config-warning-banner__actions">
+        {props.onSuppressWarning ? (
+          <label className="composer__checkbox codex-config-warning-banner__suppress">
+            <input
+              type="checkbox"
+              checked={suppressionSaving}
+              disabled={trusting || suppressionSaving}
+              onChange={() => { void suppressWarning(); }}
+            />
+            Don't show again
+          </label>
+        ) : null}
         {notice.trustedProjectPath ? (
           <button
             className="button button--primary"
             type="button"
-            disabled={trusting}
+            disabled={trusting || suppressionSaving}
             onClick={() => {
               void trustProject();
             }}
@@ -177,7 +234,7 @@ export function CodexConfigWarningBanner(props: { desktopApi?: DesktopApi }) {
         <button
           className="button button--ghost"
           type="button"
-          disabled={trusting}
+          disabled={trusting || suppressionSaving}
           onClick={dismiss}
         >
           Dismiss

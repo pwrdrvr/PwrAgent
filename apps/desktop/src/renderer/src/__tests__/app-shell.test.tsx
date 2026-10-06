@@ -2121,6 +2121,29 @@ describe("App", () => {
     });
   });
 
+  it("waits for startup settings before reading a buffered Codex config warning", async () => {
+    const readSettings = vi.fn(async () => await new Promise<never>(() => {}));
+    const getLatestCodexConfigWarning = vi.fn(async () => ({
+      event: {
+        backend: "codex" as const,
+        notification: {
+          method: "configWarning" as const,
+          params: { summary: "Unsupported fixture feature", details: null },
+        },
+      },
+    }));
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: ownerApi({ readSettings, getLatestCodexConfigWarning }),
+    });
+
+    render(<App />);
+    await waitFor(() => expect(readSettings).toHaveBeenCalledOnce());
+    await flushReactUpdates();
+    expect(getLatestCodexConfigWarning).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("surfaces a buffered Codex config warning captured before renderer subscription", async () => {
     const trustCodexProject = vi.fn(
       async (request: { projectPath: string; configPath?: string }) => ({

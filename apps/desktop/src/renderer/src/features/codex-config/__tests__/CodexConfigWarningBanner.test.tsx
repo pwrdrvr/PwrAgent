@@ -15,6 +15,7 @@ import { CodexConfigWarningBanner } from "../CodexConfigWarningBanner";
 function configWarningEvent(params: {
   federationTarget?: AgentEvent["federationTarget"];
   summary: string;
+  details?: string;
 }): AgentEvent {
   return {
     backend: "codex",
@@ -25,7 +26,7 @@ function configWarningEvent(params: {
       method: "configWarning",
       params: {
         summary: params.summary,
-        details: null,
+        details: params.details ?? null,
         trustedProjectPath: "/remote/repo",
         configPath: "/remote/.codex/config.toml",
       },
@@ -41,6 +42,104 @@ afterEach(() => {
 });
 
 describe("CodexConfigWarningBanner", () => {
+  it("waits for saved preferences before loading the latest warning", async () => {
+    const getLatestCodexConfigWarning = vi.fn(async () => ({
+      event: configWarningEvent({ summary: "Unsupported feature" }),
+    }));
+    const desktopApi: DesktopApi = { getLatestCodexConfigWarning };
+    const view = render(
+      <CodexConfigWarningBanner desktopApi={desktopApi} preferencesLoaded={false} />,
+    );
+    expect(getLatestCodexConfigWarning).not.toHaveBeenCalled();
+    view.rerender(
+      <CodexConfigWarningBanner desktopApi={desktopApi} preferencesLoaded />,
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent("Unsupported feature");
+  });
+
+  it("persists only the selected warning and suppresses snapshots and live repeats after remount", async () => {
+    const warning = configWarningEvent({
+      summary: "Ignoring unknown feature requirement",
+      details: "Unsupported example_feature",
+    });
+    let publish: ((event: AgentEvent) => void) | undefined;
+    const desktopApi: DesktopApi = {
+      getLatestCodexConfigWarning: vi.fn(async () => ({ event: warning })),
+      onAgentEvent: (callback) => {
+        publish = callback;
+        return () => undefined;
+      },
+    };
+    const suppress = vi.fn(async (_id: string) => true);
+    const view = render(
+      <CodexConfigWarningBanner desktopApi={desktopApi} onSuppressWarning={suppress} />,
+    );
+    await screen.findByRole("alert");
+    await act(async () => {
+      fireEvent.click(screen.getByRole("checkbox", { name: "Don't show again" }));
+    });
+    expect(suppress).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    const dismissedWarningIds = [suppress.mock.calls[0][0]];
+    view.unmount();
+    await act(async () => {
+      render(
+        <CodexConfigWarningBanner
+          desktopApi={desktopApi}
+          dismissedWarningIds={dismissedWarningIds}
+          onSuppressWarning={suppress}
+        />,
+      );
+    });
+    act(() => publish?.(warning));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    act(() => publish?.(configWarningEvent({
+      summary: "Ignoring unknown feature requirement",
+      details: "Unsupported different_feature",
+    })));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Unsupported different_feature");
+  });
+
+  it.each(["false", "reject"])("keeps the warning visible when saving returns %s", async (failure) => {
+    const suppress = vi.fn(async () => {
+      if (failure === "reject") throw new Error("Save failed");
+      return false;
+    });
+    const desktopApi: DesktopApi = {
+      getLatestCodexConfigWarning: async () => ({
+        event: configWarningEvent({ summary: "Unsupported feature" }),
+      }),
+    };
+    render(<CodexConfigWarningBanner desktopApi={desktopApi} onSuppressWarning={suppress} />);
+    await screen.findByRole("alert");
+    await act(async () => {
+      fireEvent.click(screen.getByRole("checkbox", { name: "Don't show again" }));
+    });
+    expect(screen.getByRole("alert")).toHaveTextContent("Could not save this preference.");
+    expect(screen.getByRole("checkbox", { name: "Don't show again" })).toBeEnabled();
+    expect(screen.getByRole("checkbox", { name: "Don't show again" })).not.toBeChecked();
+  });
+
+  it("does not persist an ordinary dismissal", async () => {
+    const suppress = vi.fn(async () => true);
+    const desktopApi: DesktopApi = {
+      getLatestCodexConfigWarning: async () => ({
+        event: configWarningEvent({ summary: "Unsupported feature" }),
+      }),
+    };
+    const view = render(
+      <CodexConfigWarningBanner desktopApi={desktopApi} onSuppressWarning={suppress} />,
+    );
+    await screen.findByRole("alert");
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(suppress).not.toHaveBeenCalled();
+    view.unmount();
+    render(<CodexConfigWarningBanner desktopApi={desktopApi} onSuppressWarning={suppress} />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Unsupported feature");
+  });
+
   it("ignores remote warnings in a local controller window", async () => {
     let publish: ((event: AgentEvent) => void) | undefined;
     const desktopApi: DesktopApi = {

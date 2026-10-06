@@ -155,6 +155,7 @@ export type DesktopSettingsConfig = {
     threadToolAccounting?: boolean;
     codexDefaultModeRequestUserInput?: boolean;
     codexSkillQuestionsWarningDismissed?: boolean;
+    codexConfigWarningsDismissed?: string[];
     managedReview?: boolean;
     diffCondensation?: {
       enabled?: boolean;
@@ -852,6 +853,12 @@ export function desktopSettingsPatchToEdits(
     set(
       ["experimental", "codex_skill_questions_warning_dismissed"],
       patch.experimental.codexSkillQuestionsWarningDismissed,
+    );
+  }
+  if (patch.experimental?.codexConfigWarningsDismissed !== undefined) {
+    set(
+      ["experimental", "codex_config_warnings_dismissed"],
+      [...new Set(patch.experimental.codexConfigWarningsDismissed)],
     );
   }
   if (patch.experimental?.managedReview !== undefined) {
@@ -2066,6 +2073,9 @@ function normalizeDesktopConfig(
       ),
       codexSkillQuestionsWarningDismissed: readBoolean(
         experimental?.codex_skill_questions_warning_dismissed,
+      ),
+      codexConfigWarningsDismissed: readStringArray(
+        experimental?.codex_config_warnings_dismissed,
       ),
       managedReview: readBoolean(experimental?.managed_review),
       diffCondensation: {
