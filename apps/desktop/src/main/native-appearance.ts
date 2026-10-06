@@ -52,7 +52,7 @@ export const COLOR_THEME_WINDOW_COLORS: Record<
 export const TITLE_BAR_OVERLAY_HEIGHT = 40;
 
 function resolvedNativeTheme(
-  appearance: BootstrapAppearance,
+  appearance: Pick<BootstrapAppearance, "theme">,
 ): "dark" | "light" {
   if (appearance.theme === "dark" || appearance.theme === "light") {
     return appearance.theme;
@@ -63,7 +63,9 @@ function resolvedNativeTheme(
 /** The color theme the window renders in: the operator's dark or light
  *  theme, chosen by the resolved scheme (the renderer's
  *  `resolveColorTheme`). */
-function resolvedColorTheme(appearance: BootstrapAppearance): DesktopColorTheme {
+export function resolvedColorTheme(
+  appearance: Pick<BootstrapAppearance, "theme" | "darkTheme" | "lightTheme">,
+): DesktopColorTheme {
   return resolvedNativeTheme(appearance) === "light"
     ? appearance.lightTheme
     : appearance.darkTheme;

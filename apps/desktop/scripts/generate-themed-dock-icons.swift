@@ -3,9 +3,11 @@
 import AppKit
 import Foundation
 
-// Derives the themed Dock icons. A running instance whose dark theme is not
-// Tangerine shows its theme's icon (src/main/themed-dock-icon.ts), so two
-// profiles in two themes are told apart in the Dock. app.dock.setIcon()
+// Derives the themed Dock icons. A running instance whose color theme on
+// screen is not Tangerine shows that theme's icon (src/main/themed-dock-icon.ts),
+// so two profiles in two themes are told apart in the Dock. Every dark and
+// light theme but Tangerine's has one: a dark tile for a dark theme, a light
+// tile for a light theme. app.dock.setIcon()
 // paints a bitmap literally, so each set is the finished tile for the macOS
 // it is shown on:
 //
@@ -33,8 +35,9 @@ import Foundation
 // renders in the icon style this Mac is set to, so the script refuses to run
 // unless the shipped icon renders as the Default style.
 //
-// The colors are each palette's own, not the contrast-tuned UI tokens: an
-// icon has no text to clear AA against.
+// Catppuccin's and Solarized's colors are each palette's own, not the
+// contrast-tuned UI tokens: an icon has no text to clear AA against. Gray and
+// Blue are this app's own palettes, so their UI tokens are the palette.
 
 let scriptsDir = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
 let desktopDir = scriptsDir.deletingLastPathComponent()
@@ -54,7 +57,9 @@ struct ThemedIcon {
   let accent: RGB
 }
 
-/// One per dark theme except Tangerine, which keeps the app's own icon.
+/// One per dark and light theme except Tangerine's, which keep the app's own
+/// icon. The tile runs from the lighter surface at the top to the darker one
+/// at the bottom, in both schemes.
 let icons = [
   // Catppuccin Mocha base -> crust, peach.
   ThemedIcon(theme: "catppuccin-mocha", tileTop: (30, 30, 46), tileBottom: (17, 17, 27), accent: (250, 179, 135)),
@@ -66,6 +71,14 @@ let icons = [
   ThemedIcon(theme: "blue-dark", tileTop: (22, 33, 51), tileBottom: (11, 18, 29), accent: (91, 170, 255)),
   // Phosphor's raised surface -> its sidebar, its phosphor green.
   ThemedIcon(theme: "phosphor-dark", tileTop: (12, 22, 14), tileBottom: (3, 7, 4), accent: (0, 255, 65)),
+  // Catppuccin Latte base -> crust, peach.
+  ThemedIcon(theme: "catppuccin-latte", tileTop: (239, 241, 245), tileBottom: (220, 224, 232), accent: (254, 100, 11)),
+  // Solarized base3 -> base2, yellow: the accent its dark pair uses.
+  ThemedIcon(theme: "solarized-light", tileTop: (253, 246, 227), tileBottom: (238, 232, 213), accent: (181, 137, 0)),
+  // Gray Light's panel -> its sidebar, its accent.
+  ThemedIcon(theme: "gray-light", tileTop: (238, 238, 240), tileBottom: (226, 226, 229), accent: (138, 57, 0)),
+  // Blue Light's panel -> its sidebar, its accent.
+  ThemedIcon(theme: "blue-light", tileTop: (246, 249, 253), tileBottom: (232, 239, 248), accent: (28, 86, 172)),
 ]
 
 /// The mark: the `<rect>`s of logo-pwragnt.svg, in its 128-unit viewBox,
