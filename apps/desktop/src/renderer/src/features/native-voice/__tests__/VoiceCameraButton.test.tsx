@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { NativeVoiceController, VoiceCameraDiagnostics, VoiceView } from "../native-voice-controller";
 import { cameraCueLabel, cameraDiagnosticsText, VoiceCameraButton, VoiceCameraDock } from "../VoiceCameraButton";
@@ -30,11 +30,12 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.clearAllMocks(); vi.restoreAllMocks(); });
 
 describe("camera voice control", () => {
-  it("shows only during live voice and requests explicit opt-in on click", () => {
+  it("shows only during live voice and requests explicit opt-in on click", async () => {
     const result = render(<VoiceCameraButton controller={controller} view={view} />);
     fireEvent.click(screen.getByRole("button", { name: "Turn on camera cues" }));
     expect(controller.setCamera).toHaveBeenCalledWith(true);
-    result.rerender(<VoiceCameraButton controller={controller} view={{ ...view, status: "idle" }} />);
+    // The open tooltip hides from a MutationObserver once its button leaves.
+    await act(async () => { result.rerender(<VoiceCameraButton controller={controller} view={{ ...view, status: "idle" }} />); });
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
   });
 

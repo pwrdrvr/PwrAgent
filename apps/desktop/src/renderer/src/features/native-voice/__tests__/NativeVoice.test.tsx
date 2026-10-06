@@ -375,7 +375,7 @@ it("ends director voice from End without closing the panel", async () => {
   const end = within(directorPanel()!).getByRole("button", { name: "End director voice" });
   expect(end).toHaveTextContent("End");
   expect(end.closest("header")).toBeNull();
-  end.focus();
+  act(() => end.focus());
   fireEvent.click(end);
   await waitFor(() => expect(f.api.stopNativeVoice).toHaveBeenCalledOnce());
   await waitFor(() => expect(state()).toHaveTextContent("Voice ended"));

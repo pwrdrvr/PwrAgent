@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   DesktopDecisionModelSettings,
@@ -47,8 +47,8 @@ describe("Defaults → Decisions", () => {
     const result = render(<DecisionModelDefaults snapshot={snapshot({ model: "local" })} saving={false} onSave={onSave} />);
     const toggle = screen.getByRole("switch", { name: "Camera cues in live voice" });
     expect(toggle).toHaveAttribute("aria-checked", "true");
-    fireEvent.click(toggle);
-    await vi.waitFor(() => expect(onSave).toHaveBeenCalledWith({ model: "local", cameraCues: false }));
+    await act(async () => { fireEvent.click(toggle); });
+    expect(onSave).toHaveBeenCalledWith({ model: "local", cameraCues: false });
 
     result.rerender(<DecisionModelDefaults snapshot={snapshot({ model: "jev" })} saving={false} onSave={onSave} />);
     const locked = screen.getByRole("switch", { name: "Camera cues in live voice" });
@@ -80,8 +80,8 @@ describe("decision provider screens", () => {
     expect(await screen.findByText(/Use an address on this Mac/)).toBeInTheDocument();
     expect(onSave).not.toHaveBeenCalled();
     fireEvent.change(endpoint, { target: { value: "http://localhost:9911/" } });
-    fireEvent.keyDown(endpoint, { key: "Enter" });
-    await vi.waitFor(() => expect(onSave).toHaveBeenCalledWith({ model: "local", local: { endpoint: "http://localhost:9911" } }));
+    await act(async () => { fireEvent.keyDown(endpoint, { key: "Enter" }); });
+    expect(onSave).toHaveBeenCalledWith({ model: "local", local: { endpoint: "http://localhost:9911" } });
     expect(screen.getByLabelText("API key")).toHaveAttribute("type", "password");
   });
 
@@ -92,13 +92,13 @@ describe("decision provider screens", () => {
     const model = screen.getByRole("textbox", { name: "Model" });
     expect(model).toHaveAttribute("placeholder", "clef-flash");
     fireEvent.change(model, { target: { value: "clef-pro" } });
-    fireEvent.blur(model);
-    await vi.waitFor(() => expect(onSave).toHaveBeenLastCalledWith({ local: { endpoint: "http://localhost:9911", model: "clef-pro" } }));
+    await act(async () => { fireEvent.blur(model); });
+    expect(onSave).toHaveBeenLastCalledWith({ local: { endpoint: "http://localhost:9911", model: "clef-pro" } });
     result.rerender(<DecisionProviderScreen {...props} snapshot={snapshot({ local: { model: "clef-pro" } })} />);
     const cleared = screen.getByRole("textbox", { name: "Model" });
     fireEvent.change(cleared, { target: { value: "" } });
-    fireEvent.blur(cleared);
-    await vi.waitFor(() => expect(onSave).toHaveBeenLastCalledWith({ local: undefined }));
+    await act(async () => { fireEvent.blur(cleared); });
+    expect(onSave).toHaveBeenLastCalledWith({ local: undefined });
   });
 
   it("keeps Jev's key write-only and its model editable", async () => {
@@ -119,7 +119,7 @@ describe("decision provider screens", () => {
     const model = screen.getByRole("textbox", { name: "Model" });
     expect(model).toHaveAttribute("placeholder", "jev-latest");
     fireEvent.change(model, { target: { value: "jev-preview" } });
-    fireEvent.blur(model);
-    await vi.waitFor(() => expect(onSave).toHaveBeenCalledWith({ jev: { model: "jev-preview" } }));
+    await act(async () => { fireEvent.blur(model); });
+    expect(onSave).toHaveBeenCalledWith({ jev: { model: "jev-preview" } });
   });
 });
