@@ -3217,7 +3217,7 @@ export const ComposerTiptapInput = forwardRef<
 
     let current = readTiptapContent(editor, readMode);
     let currentSignature = getContentSignature(current);
-    let currentEditorDocumentSignature = JSON.stringify(editor.getJSON());
+    const currentEditorDocumentSignature = JSON.stringify(editor.getJSON());
     const nextEditorDocumentSignature = props.editorDocument
       ? JSON.stringify(props.editorDocument)
       : undefined;
@@ -3246,7 +3246,6 @@ export const ComposerTiptapInput = forwardRef<
       applySelectionRequest(editor, props.selectionRequest);
       current = readTiptapContent(editor, readMode);
       currentSignature = getContentSignature(current);
-      currentEditorDocumentSignature = JSON.stringify(editor.getJSON());
       loadedEditorDocument = true;
       if (currentSignature === propsSignature) {
         pendingExternalSignatureRef.current = undefined;

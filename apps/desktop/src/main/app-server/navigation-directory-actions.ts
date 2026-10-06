@@ -68,7 +68,7 @@ export async function markLocalNavigationDirectorySeen(
   const registry = getDesktopBackendRegistry();
   let changedDuringRead = false;
   const unsubscribe = registry.onEvent(() => { changedDuringRead = true; });
-  let changedCount = 0;
+  let changedCount: number;
   try {
     const index = await loadLocalNavigationQueryIndex({ callerReason: "mark-navigation-directory-seen" });
     if (index.coverage && index.coverage.state !== "complete") throw new Error("Owner directory membership is still checking or unavailable. Try again after providers are ready.");
