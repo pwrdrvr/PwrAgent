@@ -3169,6 +3169,7 @@ export function useThreadNavigation(
   threads: NavigationThreadSummary[];
 } {
   const directoryDisclosure = useNavigationDirectoryDisclosure();
+  const { setUnpinnedExpandedByKey } = directoryDisclosure;
   const markThreadSeen = desktopApi?.markThreadSeen;
   const forkThreadRequest = desktopApi?.forkThread;
   const archiveThreadRequest = desktopApi?.archiveThread;
@@ -3500,6 +3501,7 @@ export function useThreadNavigation(
       ? { scope: "remote", instanceId: selectedIdentity.ownerInstanceId }
       : undefined,
   });
+  const { refresh: refreshSelectedThreadConfiguration } = selectedDetail;
   const [pendingWorkspaceHandoff, setPendingWorkspaceHandoff] = useState<{
     threadKey: string;
     directory: LinkedDirectorySummary;
@@ -3507,6 +3509,7 @@ export function useThreadNavigation(
   const launchpadConfiguration = useNavigationLaunchpadConfiguration({ desktopApi, enabled: enabled && viewVisible,
     directoryKey: getLaunchpadSelectionDirectoryKey(selectedItemKey), federationTarget: rendererFederationTarget,
   });
+  const { refresh: refreshSelectedLaunchpadConfiguration } = launchpadConfiguration;
   const draftStore = options.composerDraftStore;
   const localFederationInstanceId = options.localFederationInstanceId;
   const draftVersion = useSyncExternalStore(
@@ -3531,6 +3534,7 @@ export function useThreadNavigation(
         ...(thread.federation?.ref.target.scope === "remote" ? { ownerInstanceId: thread.federation.ref.target.instanceId } : {}) })),
     draftRefs,
   });
+  const { invalidate: invalidateNavigation, refresh: refreshBoundedNavigation } = boundedNavigation;
   // With no threads every thread lens is empty, and an empty saved lens reads
   // as "your threads are gone". Show Directories instead, without saving it:
   // a provider that briefly lists nothing must not move the operator off
@@ -3646,8 +3650,8 @@ export function useThreadNavigation(
   ): Promise<void> => {
     if (preferredOptimisticThread) setOptimisticThread(preferredOptimisticThread);
     if (preferredSelectionKey) setSelectedItemKey((current) => forcePreferredSelection || !current ? preferredSelectionKey : current);
-    await boundedNavigation.refresh(options?.owners, options?.invalidatedOnly === true, options?.diagnosticCause);
-  }, [boundedNavigation.refresh]);
+    await refreshBoundedNavigation(options?.owners, options?.invalidatedOnly === true, options?.diagnosticCause);
+  }, [refreshBoundedNavigation, setSelectedItemKey]);
 
   const refresh = useCallback(
     async (
@@ -3701,8 +3705,8 @@ export function useThreadNavigation(
   );
   const refreshNavigation = useCallback(async (): Promise<void> => {
     await refresh();
-    await Promise.all([selectedDetail.refresh(), launchpadConfiguration.refresh()]);
-  }, [refresh, selectedDetail.refresh, launchpadConfiguration.refresh]);
+    await Promise.all([refreshSelectedThreadConfiguration(), refreshSelectedLaunchpadConfiguration()]);
+  }, [refresh, refreshSelectedThreadConfiguration, refreshSelectedLaunchpadConfiguration]);
 
   const takePendingDirectoryGitStatus = useCallback(
     (directoryKey: string): NavigationDirectoryGitStatus | null | undefined => {
@@ -3905,7 +3909,7 @@ export function useThreadNavigation(
         scheduleRefresh(selection, optimistic, forceSelection, { ...options, owners,
           invalidatedOnly: navigationQueryEventRequiresRefresh(method, event.notification.params) });
       if (federationTargetsEqual(event.federationTarget, windowTarget) && navigationQueryEventRequiresRefresh(method, event.notification.params)) {
-        boundedNavigation.invalidate(owners, event);
+        invalidateNavigation(owners, event);
         // These notifications contain the complete replacement for every
         // affected chip. Keep the patched baseline stale for the next query,
         // without reading a new page for each working-state probe.
@@ -3969,7 +3973,7 @@ export function useThreadNavigation(
       if (remoteThreadStatePassthrough && navigationQueryEventRequiresRefresh(method, event.notification.params)) {
         // Viewer pages also contain mounted remote identities. A peer event
         // invalidates their in-flight baseline before its canonical patch lands.
-        boundedNavigation.invalidate(owners, event);
+        invalidateNavigation(owners, event);
         scheduleEventRefresh();
       }
       if (
@@ -4832,7 +4836,15 @@ export function useThreadNavigation(
         scheduleEventRefresh();
       }
     });
-  }, [desktopApi, enabled, markNavigationActivity, scheduleRefresh, state.rows]);
+  }, [
+    desktopApi,
+    enabled,
+    markNavigationActivity,
+    scheduleRefresh,
+    state.rows,
+    invalidateNavigation,
+    setSelectedItemKey,
+  ]);
 
   // Binding chips are projected in row pages but can be mutated outside
   // the agent-event bus (a Telegram callback creates a binding, a
@@ -7368,10 +7380,10 @@ export function useThreadNavigation(
         failures.push(`${directoryKey.replace(/^directory:/, "")}: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
-    boundedNavigation.invalidate();
+    invalidateNavigation();
     await refresh();
     if (failures.length) setArchiveThreadError(failures.join("\n"));
-  }, [desktopApi, boundedNavigation, refresh, setLocalLaunchpads, setSelectedItemKey]);
+  }, [desktopApi, invalidateNavigation, refresh, setLocalLaunchpads, setSelectedItemKey]);
 
   /** The owner validates complete membership before local state is removed. */
   const removeDirectory = useCallback(
@@ -7397,7 +7409,7 @@ export function useThreadNavigation(
           directoryKey, federationTarget: readRendererFederationTarget(),
         });
         removedDirectoryKeysRef.current.add(directoryKey);
-        boundedNavigation.invalidate();
+        invalidateNavigation();
         setLocalLaunchpads((current) => {
           if (!current[directoryKey]) {
             return current;
@@ -7429,7 +7441,7 @@ export function useThreadNavigation(
         await refresh();
       }
     },
-    [desktopApi, directories, refresh, boundedNavigation.invalidate],
+    [desktopApi, directories, refresh, invalidateNavigation, setLocalLaunchpads, setSelectedItemKey],
   );
 
   const materializeDirectoryLaunchpad = useCallback(
@@ -8253,7 +8265,7 @@ export function useThreadNavigation(
         void (async () => {
           await Promise.all([
             refresh(threadKey),
-            selectedItemKeyRef.current === threadKey ? selectedDetail.refresh() : Promise.resolve(),
+            selectedItemKeyRef.current === threadKey ? refreshSelectedThreadConfiguration() : Promise.resolve(),
           ]);
         })().catch((error) => {
           setWorktreeArchiveError(error instanceof Error ? error.message : String(error));
@@ -8264,7 +8276,7 @@ export function useThreadNavigation(
         throw error;
       }
     },
-    [desktopApi, handoffThreadWorkspaceRequest, refresh, selectedDetail.refresh]
+    [desktopApi, handoffThreadWorkspaceRequest, refresh, refreshSelectedThreadConfiguration]
   );
 
   const renameThread = useCallback(
@@ -8334,10 +8346,10 @@ export function useThreadNavigation(
         setRenameThreadError(error instanceof Error ? error.message : String(error));
         await refresh(threadKey);
       } finally {
-        if (selectedItemKeyRef.current === threadKey) await selectedDetail.refresh();
+        if (selectedItemKeyRef.current === threadKey) await refreshSelectedThreadConfiguration();
       }
     },
-    [refresh, renameThreadRequest, selectedDetail.refresh]
+    [refresh, renameThreadRequest, refreshSelectedThreadConfiguration]
   );
 
   const setThreadReactionRequest = desktopApi?.setThreadReaction;
@@ -8482,7 +8494,7 @@ export function useThreadNavigation(
             ref: thread.federation.ref,
             pinned,
           });
-          boundedNavigation.invalidate();
+          invalidateNavigation();
           applyPinRank(result.pinnedRank);
           return;
         }
@@ -8492,7 +8504,7 @@ export function useThreadNavigation(
           threadId: thread.id,
           pinned,
         });
-        boundedNavigation.invalidate();
+        invalidateNavigation();
         applyPinRank(result.pinnedRank);
       } catch {
         await refresh(threadSummaryIdentityKey(thread));
@@ -8502,7 +8514,7 @@ export function useThreadNavigation(
       refresh,
       setRemoteThreadLocalPinRequest,
       setThreadPinRequest,
-      boundedNavigation.invalidate,
+      invalidateNavigation,
     ],
   );
 
@@ -8523,7 +8535,7 @@ export function useThreadNavigation(
           federationTarget: readRendererFederationTarget(),
           move,
         });
-        boundedNavigation.invalidate();
+        invalidateNavigation();
         setState((current) => ({
           ...current,
           rows: updateThreadPinsInLoadedRows(current.rows, {
@@ -8534,7 +8546,7 @@ export function useThreadNavigation(
         await refresh();
       }
     },
-    [refresh, reorderThreadPinsRequest, boundedNavigation.invalidate],
+    [refresh, reorderThreadPinsRequest, invalidateNavigation],
   );
 
   const setThreadParent = useCallback(
@@ -8607,7 +8619,7 @@ export function useThreadNavigation(
           }
           await setThreadParentRequest({ backend: thread.source, threadId: thread.id,
             federationTarget: target, expectedParent });
-          boundedNavigation.invalidate();
+          invalidateNavigation();
           setState((current) => ({ ...current, rows: updateThreadParentInLoadedRows(current.rows, {
             backend: thread.source, threadId: thread.id, federationTarget: target,
           }) }));
@@ -8622,7 +8634,7 @@ export function useThreadNavigation(
           // Repeating before the parent in canonical sibling order keeps the group together.
           const result = await reorderThreadPinsRequest!({ federationTarget: windowTarget ?? { scope: "local" },
             move: { key: threadSummaryIdentityKey(thread), anchorKey: pinBefore, placement: "before" } });
-          boundedNavigation.invalidate();
+          invalidateNavigation();
           setState((current) => ({ ...current, rows: updateThreadPinsInLoadedRows(current.rows, {
             pinnedRanksByThreadKey: result.pinnedRanks,
           }) }));
@@ -8632,7 +8644,7 @@ export function useThreadNavigation(
       }
       await refresh();
     },
-    [desktopApi, refresh, boundedNavigation.invalidate, reorderThreadPinsRequest, setThreadParentRequest,
+    [desktopApi, refresh, invalidateNavigation, reorderThreadPinsRequest, setThreadParentRequest,
       setThreadPinRequest, setRemoteThreadLocalPinRequest],
   );
 
@@ -8657,12 +8669,12 @@ export function useThreadNavigation(
           parentThreadId: parent.id,
           move,
         });
-        boundedNavigation.invalidate();
+        invalidateNavigation();
       } catch {
         await refresh(threadSummaryIdentityKey(parent));
       }
     },
-    [refresh, boundedNavigation.invalidate, updateSubthreadOrderRequest],
+    [refresh, invalidateNavigation, updateSubthreadOrderRequest],
   );
 
   const setSubthreadsCollapsed = useCallback(
@@ -8805,7 +8817,7 @@ export function useThreadNavigation(
 
       try {
         const result = await reorderDirectoryPinsRequest({ move });
-        boundedNavigation.invalidate();
+        invalidateNavigation();
         setState((current) => ({
           ...current,
           rows: updateDirectoryPinsInLoadedRows(current.rows, {
@@ -8816,7 +8828,7 @@ export function useThreadNavigation(
         await refresh();
       }
     },
-    [refresh, reorderDirectoryPinsRequest, boundedNavigation.invalidate],
+    [refresh, reorderDirectoryPinsRequest, invalidateNavigation],
   );
 
   const setDirectoryThreadsCollapsed = useCallback(
@@ -8829,7 +8841,7 @@ export function useThreadNavigation(
       }
 
       const federationTarget = readRendererFederationTarget();
-      directoryDisclosure.setUnpinnedExpandedByKey((current) => ({ ...current, [directory.key]: !collapsed }));
+      setUnpinnedExpandedByKey((current) => ({ ...current, [directory.key]: !collapsed }));
 
       setState((current) => ({
         ...current,
@@ -8864,7 +8876,7 @@ export function useThreadNavigation(
         setSetThreadModelSettingsError(error instanceof Error ? error.message : String(error));
       }
     },
-    [setDirectoryThreadsCollapsedRequest, directoryDisclosure.setUnpinnedExpandedByKey],
+    [setDirectoryThreadsCollapsedRequest, setUnpinnedExpandedByKey],
   );
 
   const updateThreadExecutionMode = useCallback(
@@ -9254,7 +9266,7 @@ export function useThreadNavigation(
     selectedThreadConfigurationError: selectedDetail.state?.error
       ?? (selectedDetail.state?.detail && selectedDetail.state.detail.identity !== "present"
         ? `This thread is ${selectedDetail.state.detail.identity}.` : undefined),
-    refreshSelectedThreadConfiguration: selectedDetail.refresh,
+    refreshSelectedThreadConfiguration,
     selectedThreadKey,
     setThreadExecutionMode: updateThreadExecutionMode,
     setAcpSessionRuntimeOption: updateAcpSessionRuntimeOption,
@@ -9293,7 +9305,7 @@ export function useThreadNavigation(
     pagedNavigation: boundedNavigation,
     selectedLaunchpadConfigurationReady: Boolean(activeFederatedLaunchpad) || launchpadConfiguration.ready,
     selectedLaunchpadConfigurationError: activeFederatedLaunchpad ? undefined : launchpadConfiguration.error,
-    refreshSelectedLaunchpadConfiguration: launchpadConfiguration.refresh,
+    refreshSelectedLaunchpadConfiguration,
     threads,
   };
 }
