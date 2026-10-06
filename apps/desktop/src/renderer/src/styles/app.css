@@ -6527,6 +6527,18 @@ a.button {
   border-width: 1px;
 }
 
+/* Under reduced motion the hover controls open at full size instead of
+   growing from zero: the growth also pushes the title, so it is motion,
+   and a target caught mid-growth measures under the 24px WCAG 2.5.8 floor
+   (the a11y gate, which emulates reduced motion, measured a 22.5px pin
+   button 80ms into the hover). The paint fades stay. */
+@media (prefers-reduced-motion: reduce) {
+  .thread-row__actions .thread-row__chip--add-reaction,
+  .thread-row__pin-button {
+    transition-property: background, border-color, color, opacity;
+  }
+}
+
 .thread-row__chip--approval,
 .thread-row__chip--input {
   border: 1px solid var(--accent-fill-strong);

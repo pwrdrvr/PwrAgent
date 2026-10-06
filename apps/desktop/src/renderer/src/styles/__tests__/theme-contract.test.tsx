@@ -368,6 +368,15 @@ describe("Tangerine Terminal theme contract", () => {
         ".thread-row__time-lane > .thread-row__time,\n.thread-row__time-lane > .thread-row__overflow-button",
       ),
     ).toMatch(/grid-area:\s*1 \/ 1;/);
+    // The hover controls grow from zero width; caught mid-growth they are
+    // under 24px. Reduced motion (which the a11y gate emulates) must drop
+    // the size transition so they open at full size.
+    const reducedMotionGrowth = css.match(
+      /@media \(prefers-reduced-motion: reduce\) \{\s*\.thread-row__actions \.thread-row__chip--add-reaction,\s*\.thread-row__pin-button \{([^}]*)\}/,
+    )?.[1];
+    expect(reducedMotionGrowth).toBeDefined();
+    expect(reducedMotionGrowth).toMatch(/transition-property:/);
+    expect(reducedMotionGrowth).not.toMatch(/width|margin/);
     // The 24px controls give their overhang back at every title notch, so
     // revealing them never changes the card's height.
     expect(extractRuleBody(css, ".thread-row__actions")).toMatch(
