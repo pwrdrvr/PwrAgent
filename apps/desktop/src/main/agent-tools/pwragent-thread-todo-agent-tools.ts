@@ -36,8 +36,11 @@ const MODEL_SETTING_MAX_LENGTH = 200;
 const EXECUTION_MODES = ["default", "auto", "full-access"] as const satisfies
   readonly ThreadExecutionMode[];
 const WORK_MODES = ["local", "worktree"] as const;
-const TODO_WRITING_GUIDANCE =
-  "Write titles, details, and handoff prompts in clear, natural language for the operator, with normal spacing and complete sentences; organize longer prompts with Markdown headings, lists, and tables where helpful, and avoid compressed agent shorthand.";
+const TODO_WRITING_GUIDANCE = [
+  "Write titles, details, and handoff prompts in clear, natural language for the operator.",
+  "Use normal spacing and complete sentences, without compressed agent shorthand.",
+  "Organize longer prompts with Markdown headings, lists, and tables where helpful.",
+].join(" ");
 
 type ThreadTodoToolContext = {
   backend: AppServerBackendKind;
