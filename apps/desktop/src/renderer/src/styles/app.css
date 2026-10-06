@@ -4597,7 +4597,8 @@ textarea,
    in-lane `.sidebar-empty.directory-row__empty` and the masthead error
    (a `.sidebar` child, not a region child) are untouched. */
 .sidebar__scroll-region > .sidebar-empty,
-.sidebar__scroll-region > .sidebar-error {
+.sidebar__scroll-region > .sidebar-error,
+.sidebar__scroll-region > .sidebar-start-actions {
   margin-inline: var(--sidebar-rail-inset);
 }
 
@@ -8004,6 +8005,71 @@ a.button {
    whole life, so the rail looked the same whether a click would do something
    or nothing. */
 .sidebar-show-more[aria-disabled="true"] {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+/* Start Chat and Add Project Folder, always the thread list's last item (see
+   `SidebarStartActions`). As a footer below history it is a quiet pair under
+   a hairline; with no thread yet it sits right under the empty state and the
+   chat action takes the accent, because it is the next step. */
+.sidebar-start-actions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.sidebar-start-actions--lead {
+  margin-top: 12px;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.sidebar-start-actions__button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-width: 0;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.sidebar-start-actions__icon {
+  display: inline-flex;
+  flex: none;
+}
+
+.sidebar-start-actions--lead .sidebar-start-actions__button--chat {
+  border-color: var(--accent-border);
+  color: var(--accent-bright);
+}
+
+.sidebar-start-actions__button:hover:not([aria-disabled="true"]) {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.sidebar-start-actions__button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* In flight: focusable, so the ring above still shows, but muted and inert. */
+.sidebar-start-actions__button[aria-disabled="true"] {
+  border-color: var(--border-subtle);
   color: var(--text-muted);
   cursor: default;
 }
