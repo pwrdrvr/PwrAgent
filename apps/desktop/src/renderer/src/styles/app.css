@@ -3284,7 +3284,7 @@ textarea,
 }
 
 .messaging-status-popover__state--degraded {
-  color: var(--status-warning);
+  color: var(--status-warning-text);
 }
 
 .messaging-status-popover__state--errored {
@@ -3881,7 +3881,7 @@ textarea,
 
 .log-window__status-note {
   flex: 0 0 auto;
-  color: var(--status-warning);
+  color: var(--status-warning-text);
   font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
@@ -4026,7 +4026,7 @@ textarea,
 }
 
 .log-window__part--level-warn {
-  color: var(--status-warning);
+  color: var(--status-warning-text);
   font-weight: 700;
 }
 
@@ -7314,7 +7314,7 @@ a.button {
 .thread-row__chip--unpublished {
   border: 1px solid color-mix(in srgb, var(--status-warning) 48%, var(--border-subtle));
   background: color-mix(in srgb, var(--status-warning) 14%, transparent);
-  color: var(--status-warning);
+  color: var(--status-warning-text);
   font-weight: 650;
   font-variant-numeric: tabular-nums;
 }
@@ -10194,7 +10194,7 @@ a.button {
 .automation-runtime__access--elevated {
   border-color: color-mix(in srgb, var(--status-warning) 48%, var(--border-subtle));
   background: var(--warning-surface);
-  color: var(--status-warning);
+  color: var(--status-warning-text);
 }
 
 .automations-table__cwd {
@@ -11547,7 +11547,7 @@ a.button {
 /* Contradiction state: the setting says on, the runtime says it never loaded.
    Semantic warning, not the accent — this reports health, not emphasis. */
 .settings-field__value--warn {
-  color: var(--status-warning);
+  color: var(--status-warning-text);
 }
 
 .settings-field:first-child {
@@ -16147,14 +16147,6 @@ a.button {
   border-radius: 8px;
   background: var(--bg-panel-elevated);
   box-shadow: var(--shadow-popover);
-}
-
-.settings-confirm-dialog--danger::before {
-  position: absolute;
-  inset: 0 auto 0 0;
-  width: 3px;
-  background: var(--danger-text);
-  content: "";
 }
 
 .settings-confirm-dialog h2 {
@@ -24387,7 +24379,7 @@ a.transcript-message__messaging-origin:focus-visible {
 }
 
 .incident-explorer__confidence[data-kind="reconstructed"] {
-  color: var(--status-warning);
+  color: var(--status-warning-text);
 }
 
 .incident-explorer__confidence span {
@@ -25369,7 +25361,7 @@ a.transcript-message__messaging-origin:focus-visible {
 }
 
 .incident-explorer__turn-label .incident-explorer__turn-compaction {
-  color: var(--status-warning);
+  color: var(--status-warning-text);
 }
 
 .incident-explorer__turn-bar,
@@ -25421,7 +25413,7 @@ a.transcript-message__messaging-origin:focus-visible {
   margin: 0;
   padding: 8px 18px;
   border-bottom: 1px solid var(--border-subtle);
-  color: var(--status-warning);
+  color: var(--status-warning-text);
   font-size: 12px;
 }
 
@@ -25539,7 +25531,7 @@ a.transcript-message__messaging-origin:focus-visible {
    competing with it, so it stays smaller and takes the warning tone. */
 .incident-explorer__repeat {
   margin-right: 6px;
-  color: var(--status-warning);
+  color: var(--status-warning-text);
   font-size: 10px;
   font-weight: 650;
 }
@@ -25642,7 +25634,7 @@ a.transcript-message__messaging-origin:focus-visible {
 }
 
 .incident-explorer__fact[data-tone="warning"] b {
-  color: var(--status-warning);
+  color: var(--status-warning-text);
 }
 
 .incident-explorer__fact[data-tone="error"] b {
@@ -26479,7 +26471,7 @@ a.transcript-message__messaging-origin:focus-visible {
   border: 1px solid color-mix(in srgb, var(--status-warning) 38%, transparent);
   border-radius: 999px;
   background: color-mix(in srgb, var(--status-warning) 12%, transparent);
-  color: var(--status-warning);
+  color: var(--status-warning-text);
   font-size: 9px;
   font-weight: 600;
   letter-spacing: 0.04em;
@@ -26792,7 +26784,7 @@ a.transcript-message__messaging-origin:focus-visible {
 .edit-commit-badge__status--uncommitted {
   border-color: color-mix(in srgb, var(--status-warning) 42%, transparent);
   background: color-mix(in srgb, var(--status-warning) 14%, transparent);
-  color: var(--status-warning);
+  color: var(--status-warning-text);
 }
 
 .edit-commit-badge__status--committed {
@@ -27939,7 +27931,7 @@ div.composer-error-row__toggle {
 .transcript-review__priority--p2 {
   border-color: color-mix(in srgb, var(--status-warning) 48%, transparent);
   background: color-mix(in srgb, var(--status-warning) 18%, transparent);
-  color: var(--status-warning);
+  color: var(--status-warning-text);
 }
 
 .transcript-review__priority--p3 {
@@ -31952,7 +31944,7 @@ div.composer-error-row__toggle {
 }
 
 .context-empty--warning {
-  color: var(--status-warning);
+  color: var(--status-warning-text);
 }
 
 .provider-status__heading {
@@ -34502,7 +34494,7 @@ button.pricing-token-miser__folded:focus-visible {
 }
 
 .composer__queued--permissions .composer__queued-label {
-  color: var(--status-warning);
+  color: var(--status-warning-text);
 }
 
 .composer__queued--scheduled {
@@ -39322,7 +39314,7 @@ button.composer__subthread-source-parent:hover {
 }
 
 .composer__meta--warning {
-  color: var(--status-warning);
+  color: var(--status-warning-text);
 }
 
 .transcript-copy-button--composer-error {
@@ -41824,7 +41816,7 @@ button.composer__subthread-source-parent:hover {
   border-color: var(--success-border);
 }
 .onboarding-wizard__field-pill.is-warn {
-  color: var(--status-warning);
+  color: var(--status-warning-text);
   background: var(--warning-surface);
   border-color: var(--border-strong);
 }
@@ -42017,7 +42009,7 @@ button.composer__subthread-source-parent:hover {
   color: var(--text-primary);
 }
 .onboarding-wizard__pairing-warning em {
-  color: var(--status-warning);
+  color: var(--status-warning-text);
   font-style: normal;
   font-weight: 600;
 }
@@ -43582,7 +43574,7 @@ details.launchpad-pending__output > summary .launchpad-pending__command-label {
 .usage-pace.is-short > span { background: var(--warning-surface-faint); color: var(--status-warning-text); }
 .usage-limit__sub { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--text-muted); font-size: 10px; }
 .usage-limit__sub strong { color: var(--text-secondary); font-weight: 600; }
-.usage-limit__reset { color: var(--status-warning); }
+.usage-limit__reset { color: var(--status-warning-text); }
 .usage-band__cost { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding-left: 20px; border-left: 1px solid var(--border-subtle); }
 .usage-band__note { grid-column: 1 / -1; margin: 0; color: var(--text-muted); font-size: 10px; }
 
@@ -43614,12 +43606,12 @@ details.launchpad-pending__output > summary .launchpad-pending__command-label {
 .usage-timeline__future { position: absolute; top: 0; right: 0; bottom: 0; border-left: 1px dashed var(--text-muted); background: color-mix(in srgb, var(--text-muted) 6%, transparent); pointer-events: none; }
 .usage-timeline__full { position: absolute; top: 0; bottom: 0; border-left: 1px solid var(--status-warning); pointer-events: none; }
 .usage-timeline__outcome { position: absolute; top: -2px; right: 4px; color: var(--text-secondary); font: 9px var(--font-mono); white-space: nowrap; pointer-events: none; }
-.usage-timeline__outcome.is-short { color: var(--status-warning); }
-.usage-timeline__full span { position: absolute; top: 12px; right: 5px; color: var(--status-warning); font: 9px var(--font-mono); white-space: nowrap; }
+.usage-timeline__outcome.is-short { color: var(--status-warning-text); }
+.usage-timeline__full span { position: absolute; top: 12px; right: 5px; color: var(--status-warning-text); font: 9px var(--font-mono); white-space: nowrap; }
 .usage-timeline__reset { position: absolute; top: 0; bottom: 0; border-left: 1px dashed var(--text-muted); pointer-events: none; }
 .usage-timeline__reset.is-unscheduled { border-left-color: var(--status-warning); }
 .usage-timeline__reset span { position: absolute; top: -2px; left: 3px; color: var(--text-muted); font: 9px var(--font-mono); white-space: nowrap; }
-.usage-timeline__reset.is-unscheduled span { color: var(--status-warning); }
+.usage-timeline__reset.is-unscheduled span { color: var(--status-warning-text); }
 .usage-timeline__axis { padding: 5px 44px 0 52px; color: var(--text-muted); font: 9px var(--font-mono); }
 .usage-timeline__ticks { position: relative; height: 12px; }
 .usage-timeline__ticks span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
@@ -43889,7 +43881,7 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
 }
 
 .pr-activity__count.is-empty {
-  color: var(--status-warning);
+  color: var(--status-warning-text);
 }
 
 .pr-activity__budget-note,
