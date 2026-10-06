@@ -5562,6 +5562,20 @@ a.button {
 .thread-row.is-selected {
   border-color: var(--accent-border);
   background: var(--bg-row-active);
+  /* The accent edge — PwrGit's `.ref-branch-row.is-current` marker. An
+     inset shadow is clipped to the padding box, so it follows the card's
+     inner radius and curves around both left corners into the outline.
+     It replaced a 3px `::before` bar drawn 5px inside the border, which
+     shared that gutter with the sub-thread chevron (a parent card had to
+     start its bar below the chevron) and with the directory-summary
+     chevron (which had to drop the bar entirely). The shadow takes no
+     layout space and nothing sits under it, so every row kind gets the
+     same edge.
+
+     The edge carries SC 1.4.11 for the selected state: --accent is
+     8.40:1 against --bg-row-active in dark and 4.82:1 in light, where
+     the --bg-row-active fill alone is a wash. */
+  box-shadow: inset 2px 0 0 0 var(--accent);
   /* Lift the accented card in the stacking order (rows are
      `position: relative`) so its border is never painted over by an
      adjacent sibling's hover background — most visible between two tight
@@ -6058,40 +6072,6 @@ a.button {
 .reaction-picker__custom-submit:disabled {
   cursor: not-allowed;
   opacity: 0.45;
-}
-
-.thread-row.is-selected::before {
-  position: absolute;
-  top: 8px;
-  bottom: 8px;
-  left: 5px;
-  width: 3px;
-  border-radius: 999px;
-  background: var(--accent);
-  content: "";
-  pointer-events: none;
-}
-
-/* Directory-summary rows reuse `.thread-row` for typography + selection
-   tokens, but the row's lateral padding is tightened to 4px so the
-   folder icon sits close to the row edge. The base `::before` accent
-   bar (positioned at left:5px) would paint over the folder icon under
-   that tighter inset. The row already telegraphs selection via the
-   accent border and tinted background from `.thread-row.is-selected`,
-   so the redundant bar is suppressed here. */
-.directory-row__summary.is-selected::before {
-  content: none;
-}
-
-/* A card with sub-threads carries the expand/collapse toggle in its left
-   gutter (`.thread-row__subthread-toggle`, top: 9px / 18px tall → bottom
-   at 27px, left: 8px). The selection accent bar (`::before`, top: 8px,
-   left: 5px) otherwise starts level with the toggle and the two cluster
-   against the card border. Drop the bar's start just below the toggle so it
-   still telegraphs selection down the card's left edge without running
-   into the chevron. */
-.thread-row-shell.has-subthreads .thread-row.is-selected::before {
-  top: 30px;
 }
 
 /* Title line — a sibling of the open-thread overlay since the
@@ -17742,8 +17722,8 @@ a.button {
 }
 
 /* Selection speaks the sidebar's language: the same tinted fill and accent
-   border as `.thread-row.is-selected`, and the same solid accent rail,
-   which is the part that actually reads. The previous 1px ring reused
+   border as `.thread-row.is-selected`, and the same accent edge, which is
+   the part that actually reads. The previous 1px ring reused
    `--accent-border` — the identical token the hover state puts on the
    border — so a selected card and a hovered one were the same picture. */
 .star-map-card-shell--selected .star-map-card {
@@ -17751,20 +17731,23 @@ a.button {
   background: var(--bg-row-active);
 }
 
+/* The sidebar draws its edge with the row's own `box-shadow`. A card cannot:
+   hover elevation, the Agent's highlight ring, the chat tether, and the
+   located pulse each set the card's `box-shadow` and would erase it. So the
+   edge rides a pseudo-element covering the padding box, with the card's
+   8px radius minus its 1px border, which is the curve `overflow: hidden`
+   clips to. */
 .star-map-card-shell--selected .star-map-card::before {
   position: absolute;
-  top: 6px;
-  bottom: 6px;
-  left: 3px;
+  inset: 0;
   z-index: 1;
-  width: 3px;
-  border-radius: 999px;
-  background: var(--accent);
+  border-radius: 7px;
+  box-shadow: inset 2px 0 0 0 var(--accent);
   content: "";
   pointer-events: none;
 }
 
-/* Hover still elevates a selected card. Selection is carried by the rail,
+/* Hover still elevates a selected card. Selection is carried by the edge,
    so the pointer keeps its own feedback instead of the two fighting over
    the background. */
 .star-map-card-shell--selected:hover .star-map-card {
