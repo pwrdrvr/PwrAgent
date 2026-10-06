@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PrSummary, ThreadDependency, ThreadDependencyCondition } from "@pwragent/shared";
 import { StateDb } from "../state/state-db";
 import { ThreadDependencyStore } from "../state/thread-dependency-store";
-import { ThreadDependencyCoordinator, type DependencyThreadSnapshot } from "../app-server/thread-dependency-coordinator";
+import { ThreadDependencyCoordinator, buildDependencyPrompt, type DependencyThreadSnapshot } from "../app-server/thread-dependency-coordinator";
 import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 import { measureSqliteWrites } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
@@ -83,6 +83,23 @@ describe("durable thread dependencies", () => {
     expect(prompt).toContain("its prerequisites were met (all of 1)");
     expect(prompt).toContain("- \"Extract retry helper\" passes CI: CI passed for the current head; PR: https://github.com/example/fixture/pull/1");
     expect(prompt).toContain("prerequisites: codex:foundation (ci_passed)");
+  });
+
+  it("leads the continuation prompt with the registered plan, and holds it back on failure", () => {
+    const plan = "Retarget this PR to main and replay our commits onto fetched main.";
+    const base: ThreadDependency = {
+      id: "planned", backend: "codex", threadId: "consumer", status: "dispatching", mode: "all", onFailure: "notify",
+      conditions: [{ ...condition("foundation"), when: "pr_merged", title: "Bump driver" }],
+      evidence: [{ condition: { ...condition("foundation"), when: "pr_merged", title: "Bump driver" }, state: "satisfied", reason: "PR merged", observedAt: 1 }],
+      continuation: plan, outcome: "success", createdAt: 1, updatedAt: 1,
+    };
+    const success = buildDependencyPrompt(base);
+    expect(success).toContain(`Do what was planned when this dependency was registered:\n${plan}`);
+    expect(success).not.toContain("Continue the previously authorized work");
+    const failure = buildDependencyPrompt({ ...base, outcome: "failure" });
+    expect(failure).toContain("Report the prerequisite failure.");
+    expect(failure).toContain(`The work planned for success, not to start now:\n${plan}`);
+    expect(buildDependencyPrompt({ ...base, continuation: undefined })).toContain("Continue the previously authorized work");
   });
 
   it("rechecks every PR observed by one poll in a single pass", async () => {

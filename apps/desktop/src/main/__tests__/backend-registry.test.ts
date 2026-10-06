@@ -46975,12 +46975,34 @@ script = "printf setup"
     const response = await codexClient.emitRequest({ method: "item/tool/call", params: {
       threadId: "waiting-thread", turnId: "turn-1", callId: "call-dependency", requestId: "call-dependency",
       namespace: "pwragent", tool: "manage_thread_dependencies",
-      arguments: { action: "create", conditions: [{ backend: "codex", threadId: "foundation", when: "ci_passed" }] },
+      arguments: { action: "create", continuation: "Rebase onto the helper.", conditions: [{ backend: "codex", threadId: "foundation", when: "ci_passed" }] },
     } } as AppServerPendingRequestNotification);
     expect(handler).toHaveBeenCalledExactlyOnceWith({ action: "create", backend: "codex", threadId: "waiting-thread",
+      continuation: "Rebase onto the helper.",
       conditions: [{ backend: "codex", threadId: "foundation", when: "ci_passed" }],
     });
     expect(response).toMatchObject({ success: true });
+    await registry.close();
+  });
+
+  it("requires agents to write down what the resumed turn should do", async () => {
+    const codexClient = new MockBackendClient({ initializeResult: { methods: ["thread/list"] } });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const handler = vi.fn(async () => ({ ok: true as const, data: { threadDependencies: { dependencies: [] } } }));
+    registry.setThreadDependencyToolHandler(handler);
+    await registry.publishLocalEvent({ backend: "codex", notification: {
+      method: "turn/started", params: { threadId: "waiting-thread", turnId: "turn-1", turn: { id: "turn-1" } },
+    } });
+    for (const [index, continuation] of [undefined, "   "].entries()) {
+      const response = await codexClient.emitRequest({ method: "item/tool/call", params: {
+        threadId: "waiting-thread", turnId: "turn-1", callId: `call-dependency-${index}`, requestId: `call-dependency-${index}`,
+        namespace: "pwragent", tool: "manage_thread_dependencies",
+        arguments: { action: "create", ...(continuation === undefined ? {} : { continuation }), conditions: [{ backend: "codex", threadId: "foundation", when: "ci_passed" }] },
+      } } as AppServerPendingRequestNotification);
+      expect(response).toMatchObject({ success: false });
+      expect(JSON.stringify(response)).toContain("Provide continuation");
+    }
+    expect(handler).not.toHaveBeenCalled();
     await registry.close();
   });
 
@@ -46996,7 +47018,7 @@ script = "printf setup"
     await codexClient.emitRequest({ method: "item/tool/call", params: {
       threadId: "waiting-thread", turnId: "turn-1", callId: "call-dependency", requestId: "call-dependency",
       namespace: "pwragent", tool: "manage_thread_dependencies",
-      arguments: { action: "create", conditions: [
+      arguments: { action: "create", continuation: "Adopt the helper.", conditions: [
         { backend: "codex", threadId: "foundation", when: "ci_passed" },
         { backend: "codex", threadId: "unknown", when: "pr_merged" },
         { backend: "codex", threadId: "foundation", when: "turn_completed", title: "Agent's name" },
