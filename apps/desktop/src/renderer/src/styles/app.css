@@ -6193,8 +6193,11 @@ a.button {
   background: var(--bg-panel-elevated);
 }
 
-.thread-row__pin:hover,
-.thread-row__pin:focus-visible {
+/* Scoped through the shell to outrank the row-hover chrome above: the
+   row is always hovered while the pin is, so a bare `:hover` here never
+   painted. */
+.thread-row-shell .thread-row__pin:hover,
+.thread-row-shell .thread-row__pin:focus-visible {
   border-color: var(--accent-border);
   background: var(--bg-row-active);
 }
