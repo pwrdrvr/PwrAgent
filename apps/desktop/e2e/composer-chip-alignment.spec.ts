@@ -97,7 +97,8 @@ const HEIGHT_TOLERANCE_PX = 1;
 /**
  * Slack for the `#` picker's kind badge against the row's right edge.
  * Sub-pixel rounding only: the misplaced badge sat a whole label's worth
- * of free space short of the edge, well over 100px on this fixture row.
+ * of free space short of the edge, about 65px on this fixture row at the
+ * 342px composer width (headless Chromium off the real stylesheet).
  */
 const BADGE_EDGE_TOLERANCE_PX = 1;
 
