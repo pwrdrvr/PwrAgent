@@ -21126,8 +21126,13 @@ a.button {
 /* The breadcrumb's project name, when it links to the project's section in
    Directories. Built like the title: the eyebrow span keeps its trim and
    baseline, and a reset button inside it carries the ellipsis. The span
-   clips with the same 4px margin as the title, so the ring survives. */
+   clips with the same 4px margin as the title, so the ring survives.
+   `min-width: 0` because `clip`, unlike the plain eyebrow's `hidden`, does
+   not make a scroll container: the flex item's automatic minimum became the
+   button's whole unwrapped label, the name stopped shrinking, and a narrow
+   header squeezed the thread title to 0px instead. */
 .thread-header__eyebrow--link {
+  min-width: 0;
   overflow: clip;
   overflow-clip-margin: 4px;
 }
