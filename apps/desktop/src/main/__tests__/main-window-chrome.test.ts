@@ -5,6 +5,8 @@ import type { BootstrapAppearance } from "../settings/appearance-bootstrap";
 
 const appearance = {
   theme: "dark",
+  darkTheme: "tangerine-dark",
+  lightTheme: "tangerine-light",
   density: "mission-control",
   sidebarTextSize: "medium",
   transcriptTextSize: "medium",

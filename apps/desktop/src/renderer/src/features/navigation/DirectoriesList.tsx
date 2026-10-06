@@ -15,6 +15,7 @@ import {
   type ReactElement,
   type MouseEvent,
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
 } from "react";
 import type {
   AppServerBackendKind,
@@ -102,6 +103,16 @@ type DirectoriesListProps = {
    */
   startingThreads?: PendingLaunchpadCreation[];
   onSelectStartingThread?: (creation: PendingLaunchpadCreation) => void;
+  /**
+   * Shown when no project has a row. Defaults to the lens's own reading; the
+   * Sidebar says "No threads yet." when no thread exists in any lens.
+   */
+  emptyLabel?: string;
+  /**
+   * The lane's last item (the start actions), after every directory, so it
+   * scrolls with them. Also follows the empty state.
+   */
+  footer?: ReactNode;
   pagedNavigation?: ReturnType<typeof useBoundedNavigationWindow>;
   selectedThreadDirectoryKeys?: readonly string[];
   directoryDisclosure?: NavigationDirectoryDisclosure;
@@ -1342,7 +1353,12 @@ export function DirectoriesList(props: DirectoriesListProps) {
   // A starting thread with no loaded project still needs its row: an empty
   // index is exactly when navigation shows this lens for the first thread.
   if (visibleDirectories.length === 0 && unplacedStartingThreads.length === 0) {
-    return <p className="sidebar-empty">No directory-linked threads.</p>;
+    return (
+      <>
+        <p className="sidebar-empty">{props.emptyLabel ?? "No directory-linked threads."}</p>
+        {props.footer}
+      </>
+    );
   }
 
   /**
@@ -2395,6 +2411,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
         </div>
       ) : null}
       {unpinnedDirectories.map(renderDirectoryRow)}
+      {props.footer}
       {unavailableDirectoryTooltip.tooltipNode}
     </div>
   );

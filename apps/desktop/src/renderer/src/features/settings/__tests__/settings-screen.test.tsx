@@ -29,7 +29,9 @@ import type {
 } from "@pwragent/shared";
 import { GIT_LFS_UNAVAILABLE_REASON } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
+import { chooseSelectOption, selectOptionLabels } from "../../../test/select";
 import { pressEscape, tabEscapes } from "../../../test/tab-walk";
+import type { AppearanceController } from "../../../lib/useAppearance";
 import { SettingsScreen } from "../SettingsScreen";
 import { AppNoticeToast, type AppNoticeToastNotice } from "../../notifications/AppNoticeToast";
 import { CodexLaunchNotice } from "../../notifications/CodexLaunchNotice";
@@ -160,6 +162,9 @@ function createSnapshot(
       },
       appearance: {
         theme: { value: "system", source: "default" },
+        darkTheme: { value: "tangerine-dark", source: "default" },
+        lightTheme: { value: "tangerine-light", source: "default" },
+        themedDockIcon: { value: true, source: "default" },
         density: { value: "mission-control", source: "default" },
         sidebarTextSize: { value: "md", source: "default" },
         transcriptTextSize: { value: "md", source: "default" },
@@ -621,6 +626,125 @@ describe("SettingsScreen segmented pending", () => {
       fireEvent.click(within(theme).getAllByRole("radio")[0]!);
       expect(document.querySelector(".settings-pending")).toBeNull();
     }
+  });
+});
+
+describe("SettingsScreen color themes", () => {
+  it("picks the dark and light themes independently", () => {
+    const controller: AppearanceController = {
+      appearance: {
+        theme: "system",
+        darkTheme: "tangerine-dark",
+        lightTheme: "tangerine-light",
+        density: "mission-control",
+        sidebarTextSize: "md",
+        transcriptTextSize: "md",
+        resolvedTheme: "dark",
+      },
+      setTheme: vi.fn(),
+      setDarkTheme: vi.fn(),
+      setLightTheme: vi.fn(),
+      setDensity: vi.fn(),
+      setSidebarTextSize: vi.fn(),
+      setTranscriptTextSize: vi.fn(),
+      setAppearance: vi.fn(),
+    };
+    render(
+      <SettingsScreen
+        appearanceController={controller}
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "General" }));
+
+    // Each picker offers only its own scheme's themes.
+    const dark = screen.getByRole("combobox", { name: "Dark theme" });
+    const light = screen.getByRole("combobox", { name: "Light theme" });
+    // PwrAgent's own pairs first, then the community palettes.
+    expect(selectOptionLabels(dark)).toEqual([
+      "Tangerine",
+      "Gray",
+      "Blue",
+      "Phosphor",
+      "Catppuccin Mocha",
+      "Solarized Dark",
+    ]);
+    expect(selectOptionLabels(light)).toEqual([
+      "Tangerine",
+      "Gray",
+      "Blue",
+      "Catppuccin Latte",
+      "Solarized Light",
+    ]);
+
+    chooseSelectOption(dark, "Solarized Dark");
+    expect(controller.setDarkTheme).toHaveBeenCalledWith("solarized-dark");
+    expect(controller.setLightTheme).not.toHaveBeenCalled();
+
+    chooseSelectOption(light, /Blue/);
+    expect(controller.setLightTheme).toHaveBeenCalledWith("blue-light");
+  });
+
+  it("marks the row on screen, credits community palettes, and offers the pair", () => {
+    const controller: AppearanceController = {
+      appearance: {
+        theme: "dark",
+        darkTheme: "catppuccin-mocha",
+        lightTheme: "tangerine-light",
+        density: "mission-control",
+        sidebarTextSize: "md",
+        transcriptTextSize: "md",
+        resolvedTheme: "dark",
+      },
+      setTheme: vi.fn(),
+      setDarkTheme: vi.fn(),
+      setLightTheme: vi.fn(),
+      setDensity: vi.fn(),
+      setSidebarTextSize: vi.fn(),
+      setTranscriptTextSize: vi.fn(),
+      setAppearance: vi.fn(),
+    };
+    render(
+      <SettingsScreen
+        appearanceController={controller}
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "General" }));
+
+    const darkRow = screen.getByRole("combobox", { name: "Dark theme" })
+      .closest(".settings-field") as HTMLElement;
+    const lightRow = screen.getByRole("combobox", { name: "Light theme" })
+      .closest(".settings-field") as HTMLElement;
+    expect(within(darkRow).getByText("Showing")).toBeInTheDocument();
+    expect(within(lightRow).queryByText("Showing")).toBeNull();
+    expect(within(lightRow).getByText(/Not used while Theme is Dark\./)).toBeInTheDocument();
+    expect(within(darkRow).getByRole("link", { name: "Catppuccin" }))
+      .toHaveAttribute("href", "https://catppuccin.com/licensing/");
+    expect(within(lightRow).queryByRole("link")).toBeNull();
+
+    // Picking a theme offers its pair for the other scheme, and only a
+    // click applies it.
+    chooseSelectOption(screen.getByRole("combobox", { name: "Dark theme" }), "Solarized Dark");
+    expect(controller.setLightTheme).not.toHaveBeenCalled();
+    fireEvent.click(within(darkRow).getByRole("button", { name: "Use Solarized Light" }));
+    expect(controller.setLightTheme).toHaveBeenCalledWith("solarized-light");
+    expect(within(darkRow).queryByRole("button", { name: "Use Solarized Light" })).toBeNull();
+
+    // Catppuccin Latte is already the dark theme's pair, so nothing is offered.
+    chooseSelectOption(screen.getByRole("combobox", { name: "Light theme" }), "Catppuccin Latte");
+    expect(within(lightRow).queryByRole("button", { name: /^Use / })).toBeNull();
+    chooseSelectOption(screen.getByRole("combobox", { name: "Light theme" }), /Blue/);
+    fireEvent.click(within(lightRow).getByRole("button", { name: "Not now" }));
+    expect(controller.setDarkTheme).toHaveBeenCalledTimes(1);
+    expect(within(lightRow).queryByRole("button", { name: /^Use / })).toBeNull();
+
+    // Phosphor is dark only: it has no light pair to offer.
+    chooseSelectOption(screen.getByRole("combobox", { name: "Dark theme" }), /Phosphor/);
+    expect(controller.setDarkTheme).toHaveBeenLastCalledWith("phosphor-dark");
+    expect(within(darkRow).queryByRole("button", { name: /^Use / })).toBeNull();
   });
 });
 

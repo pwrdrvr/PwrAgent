@@ -80,7 +80,9 @@ Status colors should not compete with tangerine as the main action and focus sig
 ### Theme Variants
 
 The renderer ships two themes (dark + light) plus a system mode that
-follows `prefers-color-scheme`. Theme selection lives in per-profile
+follows `prefers-color-scheme`. Each scheme renders in the color theme the
+operator picked for it (see [Color themes](#color-themes)). The token
+tables below are the Tangerine pair, the default for both schemes. Theme selection lives in per-profile
 `config.toml` under `[general.appearance]` and is applied via a
 `data-theme` attribute on `<html>`. The dark palette is the unscoped
 `:root` block; the light palette is opt-in under
@@ -298,6 +300,117 @@ alphas. Illustration assets that intentionally don't theme-flip
 (currently only the lunar-phase context-window indicator) are
 substring-allowlisted in
 [`scripts/lint-renderer-colors.mjs`](../scripts/lint-renderer-colors.mjs).
+
+### Color themes
+
+The operator picks a **dark theme** and a **light theme** independently,
+as most editors do. Theme (system, dark, or light) still picks the scheme;
+the scheme the window resolves to chooses which of the two renders. So
+"system" follows the OS between any dark theme and any light theme.
+`[general.appearance] dark_theme` and `light_theme` in `config.toml` hold
+the choices. The Tangerine defaults are not written to the file. Settings →
+General → Appearance sets them.
+
+| Dark theme | Light theme | Origin |
+|---|---|---|
+| `tangerine-dark` (default) | `tangerine-light` (default) | PwrAgent. The bare `:root` / `:root[data-theme="light"]` blocks. |
+| `catppuccin-mocha` | `catppuccin-latte` | [Catppuccin](https://catppuccin.com) ([MIT](https://catppuccin.com/licensing/)), upstream colors except where AA moves them. |
+| `solarized-dark` | `solarized-light` | [Solarized](https://ethanschoonover.com/solarized/) ([MIT](https://github.com/altercation/solarized/blob/master/LICENSE)), canonical surfaces and terminal, text moved only as far as AA needs. |
+| `gray-dark` | `gray-light` | PwrAgent. Neutral charcoal or light-gray surfaces with the Tangerine accent. |
+| `blue-dark` | `blue-light` | PwrAgent. Navy or pale-blue surfaces with a blue accent. |
+| `phosphor-dark` | (none) | PwrAgent, after a green-phosphor CRT terminal. Phosphor green on green-tinted near-black. Dark only. |
+
+Each non-default theme is one `:root[data-color-theme="<id>"]` block in
+`app.css`, and `data-color-theme` is set only while that theme renders.
+`data-theme` stays the scheme whatever the color theme. Rules and scripts
+that key on `data-theme="light"`, such as brand marks and Mermaid, need no
+theme knowledge. A light theme's block has the same specificity as
+`:root[data-theme="light"]` and comes later in the file, so it wins.
+
+Every block sets the full themeable token set (Catppuccin Mocha's block is
+the reference list). A token a block leaves out would fall through to a
+stray Tangerine color. Terminal ANSI colors are the one optional group: a
+theme without its own keeps Tangerine's. No block sets the theme-neutral
+tokens listed above. Those follow the scheme block.
+
+#### Contrast
+
+Every color theme holds the same floor, measured against the
+lowest-contrast background each token can land on. Those backgrounds are
+the flat surfaces, plus the 12% and 16% accent tints over panel, sidebar,
+and hover:
+
+- Every token read as text clears 4.55:1. That is AA plus 0.05 of margin
+  for rendering. Semantic text also clears its own soft tint.
+- `--accent` is floored against the accent tints too, and `--text-subtle`
+  clears AA. The color themes inherit none of the light-theme debt above.
+- Non-text marks clear 3.05:1 on the flat surfaces. These are
+  `--danger-base`, `--status-suspended`, and the usage chart series.
+- Text ladders (primary, secondary, muted) and accent ramps keep their
+  emphasis order.
+
+Catppuccin and Solarized are borrowed palettes, and they follow one rule
+so they stay in step with upstream. Each token starts from its upstream
+color. A token that clears its floor keeps that color. One that fails moves
+by the least OKLCH lightness that clears it, and keeps its hue and chroma.
+
+Every theme draws text on an `--accent` fill with `--button-text` or
+`--accent-on`, and that fill is `--accent-fill` (`--accent-fill-strong` on
+hover). It is `--accent` unless a theme's accent is too light to be text.
+Bare marks, such as the unread cookie and selection bars, stay `--accent`,
+because they need 3:1 on the surface with no ink to carry them.
+
+The integrated terminal keeps each palette's own ANSI colors, even below AA
+on its canvas. Programs pick ANSI colors without knowing the background,
+and the terminal is where operators compare PwrAgent with their own setup.
+
+Per theme:
+
+- **Catppuccin Mocha** is upstream except muted, danger, success, and info
+  text, and the suspended mark, which each move a step to clear the
+  floor. Its terminal is Catppuccin's port mapping.
+- **Catppuccin Latte** text, accent, and semantic colors move, because
+  Catppuccin tunes Latte below AA. Muted text has to move to about
+  `#53566b`, which leaves no room under Catppuccin's text, so primary
+  darkens to keep the ladder. Peach is 2.6:1 as text, so text and marks use
+  a darker orange, and `--accent-fill` keeps peach under dark ink (6.3:1).
+- **Solarized** keeps the published surfaces (`base03`/`base02`,
+  `base3`/`base2`), terminal canvas, foreground, and 16-color ANSI mapping.
+  Its stock text does not clear AA on `base02`: `base0` is 4.1:1 and
+  `base01` is 2.4:1. Solarized has two text tones, so muted text is
+  `base0` (`base00` in Light) moved to the floor, primary is `base1`
+  (`base01`) moved by the same step, and secondary sits between them.
+  Accent and semantic colors move by the least that clears the floor.
+  The dark accent is Solarized yellow, because
+  orange cannot clear AA as text on `base03`, so the pair's accents
+  differ in hue. With only two background
+  tones per scheme, hover sits midway between them, and Light's raised
+  surface sits just above `base3`, so neither disappears into the surface
+  under it.
+- **Gray** and **Blue** are PwrAgent designs, and keep their designed values
+  wherever those already clear the floor. Blue is an explicit product
+  choice. Its navy surfaces stay low-saturation, so the anti-pattern below
+  against saturated navy dashboards still holds.
+- **Phosphor** is a PwrAgent design after a green-phosphor CRT terminal, and
+  an explicit product request. Its accent and terminal ink are phosphor
+  green `#00ff41`, on green-tinted near-black surfaces, with red for danger
+  and blue for info. It is a palette, not a costume. There is no code
+  rain, glow, or scanline effect, so the anti-patterns below against
+  novelty-terminal cosplay and decorative glows still hold. It borrows no
+  published palette and so carries no license notice. Only muted text moved
+  from its designed value to clear the floor.
+- **A theme may be dark only.** Phosphor has no light half, so picking it
+  offers no pair for the light scheme, and the operator's light theme stays
+  as it was.
+
+The theme contract test checks all of this. It reads `app.css` and fails if
+a theme drops a token, misses the floor, or breaks a ladder; if a
+Catppuccin token leaves an upstream color that passes, or moves more than
+0.3 past its floor; or if a rule puts ink on a bare `--accent` fill. The
+a11y E2E gate audits every theme in its scheme. The native window colors
+(`native-appearance.ts`) and the quit dialog palettes
+(`quit-confirmation-dialog.ts`) carry literal copies. Tests hold each one
+to its `app.css` block.
 
 ### Status indicator dots
 
@@ -573,7 +686,7 @@ Long titles, paths, and branch names must truncate or wrap predictably without c
 Avoid:
 
 - gray text on darker gray
-- saturated slate, navy, or purple-blue dashboard palettes
+- saturated slate, navy, or purple-blue dashboard palettes (the opt-in Blue color theme keeps its navy low-saturation)
 - purple accents, gradient orbs, and decorative glows
 - orange-dominant panels or orange body copy
 - browser-default controls

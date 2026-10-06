@@ -2,6 +2,8 @@ import React, { Suspense, lazy, type ReactElement } from "react";
 import ReactDOM from "react-dom/client";
 import type {
   DesktopAppearanceDensity,
+  DesktopDarkTheme,
+  DesktopLightTheme,
   DesktopAppearanceTheme,
   DesktopTextSize,
 } from "@pwragent/shared";
@@ -41,6 +43,8 @@ const desktopApi = (
       onAppearanceChanged?: (
         callback: (appearance: {
           theme: DesktopAppearanceTheme;
+          darkTheme: DesktopDarkTheme;
+          lightTheme: DesktopLightTheme;
           density: DesktopAppearanceDensity;
           sidebarTextSize: DesktopTextSize;
           transcriptTextSize: DesktopTextSize;
@@ -75,6 +79,8 @@ const unsubscribeAppearance = desktopApi?.onAppearanceChanged?.(
   (appearance) => {
     applyAppearanceAttributes(
       resolveTheme(appearance.theme),
+      appearance.darkTheme,
+      appearance.lightTheme,
       appearance.density,
       appearance.sidebarTextSize,
       appearance.transcriptTextSize,

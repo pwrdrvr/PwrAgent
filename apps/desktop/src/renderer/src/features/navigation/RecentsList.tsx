@@ -2,7 +2,7 @@ import { readNavigationPresentationOrder, type NavigationPresentationOrder } fro
 import type { NavigationPresentedThread } from "../../lib/navigation-loaded-rows";
 import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationWindow";
 import { isNavigationPeerUnavailable, navigationIdentityKey, navigationThreadSelectionKey } from "../../lib/navigation-query-state";
-import { useState, type MouseEvent } from "react";
+import { useState, type MouseEvent, type ReactNode } from "react";
 import { useEventCallback } from "../../lib/useEventCallback";
 import type {
   MessagingThreadBindingSummary,
@@ -64,6 +64,12 @@ type RecentsListProps = {
    * thread sorts in every lens that renders this list.
    */
   startingThreads?: PendingLaunchpadCreation[];
+  /**
+   * The lane's last item, after every row (the start actions). Inside the
+   * scrolling lane so it scrolls with the rows, outside the `role="list"` so
+   * it is not counted as a thread.
+   */
+  footer?: ReactNode;
   onSelectStartingThread?: (creation: PendingLaunchpadCreation) => void;
   onOpenThreadContextMenu: (
     thread: NavigationThreadSummary,
@@ -440,18 +446,21 @@ export function RecentsList(props: RecentsListProps) {
   };
 
   return (
-    <div className="sidebar-list sidebar-list--dense" role="list">
-      {startingRootThreads.map((creation) => (
-        <div key={creation.selectionKey} className="thread-group">
-          <StartingThreadRow
-            creation={creation}
-            locationMode="label"
-            selected={props.selectedThreadKey === creation.selectionKey}
-            onSelect={props.onSelectStartingThread}
-          />
-        </div>
-      ))}
-      {topLevelThreads.map((thread) => renderThreadGroup(thread))}
+    <div className="sidebar-list sidebar-list--dense">
+      <div className="sidebar-list sidebar-list--compact" role="list">
+        {startingRootThreads.map((creation) => (
+          <div key={creation.selectionKey} className="thread-group">
+            <StartingThreadRow
+              creation={creation}
+              locationMode="label"
+              selected={props.selectedThreadKey === creation.selectionKey}
+              onSelect={props.onSelectStartingThread}
+            />
+          </div>
+        ))}
+        {topLevelThreads.map((thread) => renderThreadGroup(thread))}
+      </div>
+      {props.footer}
     </div>
   );
 }

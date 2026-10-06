@@ -2451,3 +2451,407 @@ describe("Tangerine Terminal theme contract", () => {
     expect(css).not.toContain(".composer__autocomplete-token");
   });
 });
+
+describe("color theme contract", () => {
+  const DARK_THEMES = [
+    "catppuccin-mocha",
+    "solarized-dark",
+    "gray-dark",
+    "blue-dark",
+    "phosphor-dark",
+  ];
+  const LIGHT_THEMES = ["catppuccin-latte", "solarized-light", "gray-light", "blue-light"];
+  const blockFor = (theme: string): Record<string, string> =>
+    extractTokensForSelector(css, `:root[data-color-theme="${theme}"]`);
+  // The cascade each theme actually renders with: the scheme block it
+  // overrides, then its own block.
+  const themes = Object.fromEntries([
+    ...DARK_THEMES.map((theme) => [
+      theme,
+      { ...extractRootTokens(css), ...blockFor(theme) },
+    ]),
+    ...LIGHT_THEMES.map((theme) => [
+      theme,
+      {
+        ...extractRootTokens(css),
+        ...extractTokensForSelector(css, ':root[data-theme="light"]'),
+        ...blockFor(theme),
+      },
+    ]),
+  ]) as Record<string, Record<string, string>>;
+
+  const hexToRgb = (hex: string): number[] =>
+    [0, 2, 4].map((start) => Number.parseInt(expandHex(hex).slice(start, start + 2), 16));
+  const rgbToHex = (rgb: number[]): string =>
+    `#${rgb.map((channel) => Math.round(channel).toString(16).padStart(2, "0")).join("")}`;
+  const composite = (foreground: string, background: string, alpha: number): string => {
+    const front = hexToRgb(foreground);
+    const back = hexToRgb(background);
+    return rgbToHex(front.map((channel, index) => channel * alpha + back[index] * (1 - alpha)));
+  };
+
+  /** Resolve a token to the opaque color it paints on `background`:
+   *  `var()` aliases follow the cascade, and a `color-mix(… X%,
+   *  transparent)` overlay is composited onto the background. */
+  const paint = (
+    theme: Record<string, string>,
+    value: string,
+    background: string,
+  ): string => {
+    const alias = value.match(/^var\(--([a-z0-9-]+)\)$/)?.[1];
+    if (alias) return paint(theme, theme[alias], background);
+    const overlay = value.match(
+      /^color-mix\(in srgb, (?<base>var\(--[a-z0-9-]+\)|#[0-9a-f]{6}) (?<pct>[\d.]+)%, transparent\)$/,
+    )?.groups;
+    if (overlay) {
+      return composite(
+        paint(theme, overlay.base, background),
+        background,
+        Number(overlay.pct) / 100,
+      );
+    }
+    expect(value, "an opaque hex color").toMatch(/^#[0-9a-f]{6}$/);
+    return value;
+  };
+
+  /** Every background a text token can land on: the flat surfaces, plus
+   *  the 12% and 16% accent tints over the surfaces that carry them. */
+  const textBackgrounds = (theme: Record<string, string>): string[] => {
+    const flat = [
+      "bg-app",
+      "bg-sidebar",
+      "bg-panel",
+      "bg-panel-elevated",
+      "bg-panel-hover",
+      "bg-row-active",
+      "bg-input",
+    ].map((name) => paint(theme, theme[name], "#000000"));
+    const tinted = ["bg-panel", "bg-sidebar", "bg-panel-hover"].flatMap((name) => {
+      const surface = paint(theme, theme[name], "#000000");
+      return [12, 16].map((pct) =>
+        composite(paint(theme, theme.accent, surface), surface, pct / 100));
+    });
+    return [...flat, ...tinted];
+  };
+
+  const worstCase = (
+    theme: Record<string, string>,
+    token: string,
+    backgrounds: string[],
+  ): number => Math.min(
+    ...backgrounds.map((background) =>
+      contrastRatio(paint(theme, theme[token], background), background)),
+  );
+
+  it("gives every theme in the shared enums a token block, and no others", () => {
+    // The ids in app.css are the ids the settings write; a typo on either
+    // side would render Tangerine with no error anywhere.
+    const blocks = [...css.matchAll(/\n:root\[data-color-theme="([a-z0-9-]+)"\] \{/g)]
+      .map((match) => match[1])
+      .sort();
+    expect(blocks).toEqual([...DARK_THEMES, ...LIGHT_THEMES].sort());
+  });
+
+  it("sets the full themeable token set in every block", () => {
+    // A token a block leaves out falls through to Tangerine, so a theme
+    // that forgets one paints a stray Tangerine color. Catppuccin Mocha is
+    // the reference set; ANSI colors are optional (Tangerine's are kept).
+    const required = Object.keys(blockFor("catppuccin-mocha"))
+      .filter((token) => !token.startsWith("terminal-ansi-"))
+      .sort();
+    for (const theme of [...DARK_THEMES, ...LIGHT_THEMES]) {
+      const tokens = Object.keys(blockFor(theme));
+      expect(required.filter((token) => !tokens.includes(token)), theme).toEqual([]);
+    }
+  });
+
+  it("matches each block's color-scheme to the scheme it renders in", () => {
+    for (const theme of DARK_THEMES) {
+      expect(extractRuleBody(css, `:root[data-color-theme="${theme}"]`), theme)
+        .toContain("color-scheme: dark;");
+    }
+    for (const theme of LIGHT_THEMES) {
+      expect(extractRuleBody(css, `:root[data-color-theme="${theme}"]`), theme)
+        .toContain("color-scheme: light;");
+    }
+  });
+
+  it("leaves the theme-neutral tokens to the scheme blocks", () => {
+    for (const theme of [...DARK_THEMES, ...LIGHT_THEMES]) {
+      for (const neutral of [
+        "shadow-base",
+        "shadow-popover",
+        "star-map-float-border",
+        "star-map-float-shadow",
+        "chat-column-max",
+      ]) {
+        expect(blockFor(theme), `${theme}: ${neutral}`).not.toHaveProperty(neutral);
+      }
+    }
+  });
+
+  it("keeps every text token at AA on the lowest-contrast surface it can land on", () => {
+    for (const [name, theme] of Object.entries(themes)) {
+      const backgrounds = textBackgrounds(theme);
+      for (const token of [
+        "text-primary",
+        "text-secondary",
+        "text-muted",
+        "text-subtle",
+        "accent",
+        "accent-strong",
+        "accent-bright",
+        "status-ok",
+        "status-warning",
+        "status-warning-text",
+        "status-error",
+        "info-teal",
+        "brand-purple",
+        "danger-text-light",
+        "savings-great",
+        "savings-good",
+        "savings-even",
+        "savings-over",
+      ]) {
+        expect(worstCase(theme, token, backgrounds), `${name}: ${token}`)
+          .toBeGreaterThanOrEqual(4.5);
+      }
+      for (const [text, soft] of [
+        ["danger-text", "danger-soft"],
+        ["success-text", "success-soft"],
+        ["info-text", "info-soft"],
+      ]) {
+        const tinted = backgrounds.map((background) => paint(theme, theme[soft], background));
+        expect(worstCase(theme, text, [...backgrounds, ...tinted]), `${name}: ${text}`)
+          .toBeGreaterThanOrEqual(4.5);
+      }
+      for (const fill of ["accent-fill", "accent-fill-strong"]) {
+        for (const ink of ["button-text", "accent-on"]) {
+          expect(
+            contrastRatio(theme[ink], paint(theme, theme[fill], "#000000")),
+            `${name}: ${ink} on ${fill}`,
+          ).toBeGreaterThanOrEqual(4.5);
+        }
+      }
+      expect(
+        contrastRatio(
+          paint(theme, theme["terminal-fg"], theme["terminal-bg"]),
+          theme["terminal-bg"],
+        ),
+        `${name}: terminal-fg`,
+      ).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it("keeps the text and accent ladders in emphasis order", () => {
+    for (const [name, theme] of Object.entries(themes)) {
+      const backgrounds = textBackgrounds(theme);
+      const ratio = (token: string): number => worstCase(theme, token, backgrounds);
+      expect(ratio("text-primary"), name).toBeGreaterThan(ratio("text-secondary"));
+      expect(ratio("text-secondary"), name).toBeGreaterThan(ratio("text-muted"));
+      expect(ratio("accent-bright"), name).toBeGreaterThan(ratio("accent-strong"));
+      expect(ratio("accent-strong"), name).toBeGreaterThan(ratio("accent"));
+    }
+  });
+
+  it("keeps borrowed palettes on their upstream colors unless AA moves them", () => {
+    // Each token starts from Catppuccin's own color. One that clears its
+    // floor there keeps it; one that fails moves by lightness only, so it
+    // lands just above the floor instead of wherever it looked right.
+    // Latte's text ladder is the exception: subtext0 needs AA, which leaves
+    // no room under Catppuccin's text, so primary darkens to keep a ladder.
+    const UPSTREAM: Record<string, Record<string, string>> = {
+      "catppuccin-mocha": {
+        "text-primary": "#cdd6f4",
+        "text-secondary": "#bac2de",
+        "text-muted": "#a6adc8",
+        accent: "#fab387",
+        "danger-base": "#f38ba8",
+        "danger-text": "#f38ba8",
+        "danger-text-light": "#eba0ac",
+        "success-text": "#a6e3a1",
+        "info-text": "#89b4fa",
+        "info-teal": "#94e2d5",
+        "brand-purple": "#cba6f7",
+        "status-ok": "#a6e3a1",
+        "status-warning": "#f9e2af",
+        "status-error": "#eba0ac",
+        "status-suspended": "#6c7086",
+        "usage-series-2": "#89b4fa",
+        "usage-series-3": "#94e2d5",
+        "usage-series-4": "#cba6f7",
+        "usage-series-5": "#f9e2af",
+      },
+      "catppuccin-latte": {
+        "text-muted": "#6c6f85",
+        accent: "#fe640b",
+        "accent-fill": "#fe640b",
+        "danger-base": "#d20f39",
+        "danger-text": "#d20f39",
+        "danger-text-light": "#e64553",
+        "success-text": "#40a02b",
+        "info-text": "#1e66f5",
+        "info-teal": "#179299",
+        "brand-purple": "#8839ef",
+        "status-ok": "#40a02b",
+        "status-warning": "#df8e1d",
+        "status-error": "#e64553",
+        "status-suspended": "#9ca0b0",
+        "usage-series-2": "#1e66f5",
+        "usage-series-3": "#179299",
+        "usage-series-4": "#8839ef",
+        "usage-series-5": "#df8e1d",
+      },
+    };
+    const MARKS = ["danger-base", "status-suspended", "usage-series-2", "usage-series-3", "usage-series-4", "usage-series-5"];
+    const SOFT: Record<string, string> = {
+      "danger-text": "danger-soft",
+      "success-text": "success-soft",
+      "info-text": "info-soft",
+    };
+    /** [worst-case contrast, floor] for a token as the AA tests measure it,
+     *  with the 0.05 of margin app.css tunes to. */
+    const measure = (theme: Record<string, string>, token: string): [number, number] => {
+      const backgrounds = textBackgrounds(theme);
+      if (MARKS.includes(token)) {
+        const flat = ["bg-app", "bg-sidebar", "bg-panel", "bg-panel-elevated", "bg-panel-hover", "bg-input"]
+          .map((name) => paint(theme, theme[name], "#000000"));
+        return [worstCase(theme, token, flat), 3.05];
+      }
+      if (token === "accent-fill") {
+        return [contrastRatio(theme["button-text"], paint(theme, theme[token], "#000000")), 4.55];
+      }
+      const soft = SOFT[token];
+      const tinted = soft
+        ? backgrounds.map((background) => paint(theme, theme[soft], background))
+        : [];
+      return [worstCase(theme, token, [...backgrounds, ...tinted]), 4.55];
+    };
+    for (const [name, upstream] of Object.entries(UPSTREAM)) {
+      const theme = themes[name];
+      for (const [token, color] of Object.entries(upstream)) {
+        if (theme[token] === color) continue;
+        const [atUpstream, floor] = measure({ ...theme, [token]: color }, token);
+        expect(atUpstream, `${name}: ${token} moved off ${color}, which passes`)
+          .toBeLessThan(floor);
+        expect(measure(theme, token)[0], `${name}: ${token} moved past the floor`)
+          .toBeLessThan(floor + 0.3);
+      }
+    }
+  });
+
+  it("draws each theme picker swatch from its theme's own tokens", () => {
+    // The swatches show every theme while one renders, so they are literal
+    // copies on :root; a retuned block must retune its swatch too.
+    const root = extractRootTokens(css);
+    const swatched = {
+      "tangerine-dark": root,
+      "tangerine-light": {
+        ...root,
+        ...extractTokensForSelector(css, ':root[data-theme="light"]'),
+      },
+      ...themes,
+    };
+    for (const [name, theme] of Object.entries(swatched)) {
+      for (const [part, token] of [
+        ["app", "bg-app"],
+        ["sidebar", "bg-sidebar"],
+        ["accent", "accent"],
+        ["text", "text-primary"],
+      ]) {
+        expect(root[`theme-swatch-${name}-${part}`], `${name}: ${part}`)
+          .toBe(theme[token]);
+      }
+    }
+  });
+
+  it("never paints hover or raised surfaces in the color they sit on", () => {
+    // Thread rows hover in the sidebar and the panel, and secondary buttons
+    // and cards sit raised on the panel. A hover or raised token equal to
+    // the surface under it draws nothing, which is how both Solarized
+    // themes first shipped.
+    for (const [name, theme] of Object.entries(themes)) {
+      const surface = (token: string): string => paint(theme, theme[token], "#000000");
+      expect(surface("bg-panel-hover"), `${name}: hover on the panel`)
+        .not.toBe(surface("bg-panel"));
+      expect(surface("bg-panel-hover"), `${name}: hover in the sidebar`)
+        .not.toBe(surface("bg-sidebar"));
+      expect(surface("bg-panel-elevated"), `${name}: raised on the panel`)
+        .not.toBe(surface("bg-panel"));
+    }
+  });
+
+  it("keeps non-text marks at 3:1 on every flat surface", () => {
+    for (const [name, theme] of Object.entries(themes)) {
+      const flat = [
+        "bg-app",
+        "bg-sidebar",
+        "bg-panel",
+        "bg-panel-elevated",
+        "bg-panel-hover",
+        "bg-input",
+      ].map((token) => paint(theme, theme[token], "#000000"));
+      for (const token of [
+        "danger-base",
+        "status-suspended",
+        "usage-series-1",
+        "usage-series-2",
+        "usage-series-3",
+        "usage-series-4",
+        "usage-series-5",
+      ]) {
+        expect(worstCase(theme, token, flat), `${name}: ${token}`)
+          .toBeGreaterThanOrEqual(3);
+      }
+    }
+  });
+
+  it("keeps every palette's own terminal ANSI colors", () => {
+    // Programs pick ANSI colors without knowing the background, and the
+    // terminal is where operators compare PwrAgent with their own setup, so
+    // a borrowed palette's terminal stays upstream even below AA.
+    expect(blockFor("catppuccin-latte")).toMatchObject({
+      "terminal-ansi-black": "#5c5f77",
+      "terminal-ansi-green": "#40a02b",
+      "terminal-ansi-yellow": "#df8e1d",
+      "terminal-ansi-white": "#acb0be",
+      "terminal-ansi-bright-white": "#bcc0cc",
+    });
+    expect(blockFor("catppuccin-mocha")).toMatchObject({
+      "terminal-ansi-black": "#45475a",
+      "terminal-ansi-yellow": "#f9e2af",
+      "terminal-ansi-white": "#bac2de",
+    });
+  });
+
+  it("puts --button-text and --accent-on ink only on --accent-fill", () => {
+    // Latte fills with peach under dark ink and reads accent as a darker
+    // orange; a rule that paints ink on --accent is dark text on rust.
+    const offenders = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+      .filter(([, , body]) =>
+        /background(?:-color)?:\s*var\(--accent(?:-strong|-bright)?\)/.test(body)
+        && /(?:^|[;\s])color:\s*var\(--(?:button-text|accent-on)\)/.test(body))
+      .map(([, selector]) => selector.trim());
+    expect(offenders).toEqual([]);
+  });
+
+  it("keeps Solarized's canonical canvas and terminal", () => {
+    // Text moves off Solarized's values only as far as AA needs; the
+    // surfaces and the terminal stay the published palette.
+    expect(blockFor("solarized-dark")).toMatchObject({
+      "bg-app": "#002b36",
+      "bg-sidebar": "#073642",
+      "terminal-bg": "#002b36",
+      "terminal-fg": "#839496",
+      "terminal-ansi-red": "#dc322f",
+      "terminal-ansi-blue": "#268bd2",
+    });
+    expect(blockFor("solarized-light")).toMatchObject({
+      "bg-app": "#fdf6e3",
+      "bg-sidebar": "#eee8d5",
+      "terminal-bg": "#fdf6e3",
+      "terminal-ansi-red": "#dc322f",
+      "terminal-ansi-blue": "#268bd2",
+    });
+  });
+});

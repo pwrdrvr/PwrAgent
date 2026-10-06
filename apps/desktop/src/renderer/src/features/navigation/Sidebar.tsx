@@ -63,6 +63,7 @@ import {
   type IconProps,
 } from "../../icons";
 import { FederationRemoteBadge } from "../chrome/FederationRemoteBadge";
+import { SidebarStartActions } from "./SidebarStartActions";
 import {
   FEDERATION_PROJECT_STATE_LABEL,
   type FederationThreadTarget,
@@ -688,6 +689,29 @@ export function Sidebar(props: SidebarProps) {
   const startingThreads = props.browseMode === "drafts"
     ? NO_STARTING_THREADS
     : props.pendingLaunchpadCreations ?? NO_STARTING_THREADS;
+  const onCreateThreadWithoutDirectory = props.onCreateThreadWithoutDirectory;
+  const onAddProjectDirectory = props.onAddProjectDirectory;
+  // The list's own way to begin. Not while it loads, and not without a
+  // provider: the setup notice owns a provider-less window, and a Start Chat
+  // that cannot start would compete with it.
+  const canStartFromList = !props.loading
+    && props.backends.some((backend) => backend.available)
+    && Boolean(onCreateThreadWithoutDirectory || onAddProjectDirectory);
+  // Handed to whichever list renders, which places it after its last row,
+  // inside the scrolling lane; an empty lens shows it under its empty line.
+  const startActions = canStartFromList ? (
+    <SidebarStartActions
+      lead={Boolean(props.threadLensesEmpty)}
+      creatingThread={Boolean(props.creatingThread)}
+      addingProjectDirectory={Boolean(props.addingProjectDirectory)}
+      onStartChat={onCreateThreadWithoutDirectory
+        ? () => void onCreateThreadWithoutDirectory()
+        : undefined}
+      onAddProjectFolder={onAddProjectDirectory
+        ? () => void onAddProjectDirectory()
+        : undefined}
+    />
+  ) : null;
   const lensScroll = useLensScrollRestoration(
     JSON.stringify([federationTarget, props.browseMode]),
     !props.loading && (!props.pagedNavigation || (props.pagedNavigation.presentationReady
@@ -2504,6 +2528,8 @@ export function Sidebar(props: SidebarProps) {
             <DirectoriesList
               startingThreads={startingThreads}
               onSelectStartingThread={props.onSelectPendingLaunchpad}
+              emptyLabel={props.threadLensesEmpty ? "No threads yet." : undefined}
+              footer={startActions}
               projectReveal={projectReveal}
               onProjectRevealComplete={() => setProjectReveal(undefined)}
               pagedNavigation={props.pagedNavigation}
@@ -2571,21 +2597,25 @@ export function Sidebar(props: SidebarProps) {
             />
           ) : (
             renderedThreads.length === 0 && startingThreads.length === 0 ? (
-              <p className="sidebar-empty">
-                {props.browseMode === "attention"
-                  ? "Nothing running, nothing to review."
-                  : props.browseMode === "drafts"
-                    // "replies", not "drafts": launchpad (new-thread) composer
-                    // text is equally unsent but belongs to a directory rather
-                    // than a thread, so this lens cannot show it and must not
-                    // claim there is nothing to find.
-                    ? props.unassignedThreadDraftCount
-                      ? "Older drafts are available. Use Recover Draft in a composer to choose one."
-                      : "No unsent replies."
-                    : "No threads yet."}
-              </p>
+              <>
+                <p className="sidebar-empty">
+                  {props.browseMode === "attention"
+                    ? "Nothing running, nothing to review."
+                    : props.browseMode === "drafts"
+                      // "replies", not "drafts": launchpad (new-thread) composer
+                      // text is equally unsent but belongs to a directory rather
+                      // than a thread, so this lens cannot show it and must not
+                      // claim there is nothing to find.
+                      ? props.unassignedThreadDraftCount
+                        ? "Older drafts are available. Use Recover Draft in a composer to choose one."
+                        : "No unsent replies."
+                      : "No threads yet."}
+                </p>
+                {startActions}
+              </>
             ) : (
               <RecentsList
+                footer={startActions}
                 startingThreads={startingThreads}
                 onSelectStartingThread={props.onSelectPendingLaunchpad}
                 pagedNavigation={props.pagedNavigation}

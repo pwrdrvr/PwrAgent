@@ -1,6 +1,10 @@
 import { app, BrowserWindow, nativeTheme, screen } from "electron";
 import { parseThreadIdentityKey } from "@pwragent/shared";
 import type {
+  DesktopAppearanceTheme,
+  DesktopColorTheme,
+} from "@pwragent/shared";
+import type {
   QuitBlockerItem,
   QuitBlockerQueueSnapshot,
 } from "../shared/quit-blockers";
@@ -55,6 +59,8 @@ type QuitDialogPalette = {
   textMuted: string;
   accent: string;
   accentBright: string;
+  /** app.css's --accent-fill, where a theme sets one; else the accent. */
+  accentFill?: string;
   buttonText: string;
 };
 
@@ -96,10 +102,154 @@ export const QUIT_DIALOG_PALETTES: Record<"dark" | "light", QuitDialogPalette> =
   },
 };
 
+/** Every other color theme, from its `:root[data-color-theme="<id>"]` block
+ *  in app.css; the border is that block's `--border-subtle` mix resolved to a
+ *  literal. A test reads app.css and fails when an entry drifts. Tangerine
+ *  is `QUIT_DIALOG_PALETTES` above. */
+export const COLOR_THEME_QUIT_DIALOG_PALETTES: Record<
+  Exclude<DesktopColorTheme, "tangerine-dark" | "tangerine-light">,
+  QuitDialogPalette
+> = {
+  "catppuccin-mocha": {
+    bg: "#1e1e2e",
+    sidebar: "#181825",
+    surface: "#252536",
+    rowActive: "#342d37",
+    panelHover: "#28293a",
+    border: "rgba(205, 214, 244, 0.1)",
+    textPrimary: "#cdd6f4",
+    textSecondary: "#bac2de",
+    textMuted: "#a7aec9",
+    accent: "#fab387",
+    accentBright: "#febd96",
+    buttonText: "#11111b",
+  },
+  "catppuccin-latte": {
+    bg: "#eff1f5",
+    sidebar: "#e6e9ef",
+    surface: "#f7f8fa",
+    rowActive: "#f1e3de",
+    panelHover: "#e4e7ed",
+    border: "rgba(52, 54, 72, 0.09)",
+    textPrimary: "#343648",
+    textSecondary: "#454756",
+    textMuted: "#545666",
+    accent: "#983801",
+    accentBright: "#8e3401",
+    accentFill: "#fe640b",
+    buttonText: "#11111b",
+  },
+  "solarized-dark": {
+    bg: "#002b36",
+    sidebar: "#073642",
+    surface: "#073642",
+    rowActive: "#163731",
+    panelHover: "#04313c",
+    border: "rgba(177, 191, 191, 0.1)",
+    textPrimary: "#b1bfbf",
+    textSecondary: "#a7b9bb",
+    textMuted: "#a0b2b4",
+    accent: "#dba600",
+    accentBright: "#e7af00",
+    buttonText: "#002b36",
+  },
+  "solarized-light": {
+    bg: "#fdf6e3",
+    sidebar: "#eee8d5",
+    surface: "#fffcf5",
+    rowActive: "#f5e7d2",
+    panelHover: "#f6efdc",
+    border: "rgba(58, 79, 86, 0.09)",
+    textPrimary: "#3a4f56",
+    textSecondary: "#40555c",
+    textMuted: "#465b63",
+    accent: "#9a3911",
+    accentBright: "#8e3510",
+    buttonText: "#fdf6e3",
+  },
+  "gray-dark": {
+    bg: "#2b2b2e",
+    sidebar: "#252528",
+    surface: "#323236",
+    rowActive: "#403832",
+    panelHover: "#37373b",
+    border: "rgba(236, 236, 238, 0.1)",
+    textPrimary: "#ececee",
+    textSecondary: "#c8c8cb",
+    textMuted: "#bcbcc0",
+    accent: "#ffa95a",
+    accentBright: "#ffb876",
+    buttonText: "#1c1c1e",
+  },
+  "gray-light": {
+    bg: "#ebebed",
+    sidebar: "#e2e2e5",
+    surface: "#f6f6f7",
+    rowActive: "#e6e0dd",
+    panelHover: "#dddde1",
+    border: "rgba(29, 29, 32, 0.09)",
+    textPrimary: "#1d1d20",
+    textSecondary: "#45454b",
+    textMuted: "#515157",
+    accent: "#8a3900",
+    accentBright: "#7f3400",
+    buttonText: "#ffffff",
+  },
+  "blue-dark": {
+    bg: "#0f1724",
+    sidebar: "#0b121d",
+    surface: "#162133",
+    rowActive: "#18283e",
+    panelHover: "#1a2740",
+    border: "rgba(228, 236, 248, 0.1)",
+    textPrimary: "#e4ecf8",
+    textSecondary: "#b6c4da",
+    textMuted: "#95a7c2",
+    accent: "#5baaff",
+    accentBright: "#6db4ff",
+    buttonText: "#06111f",
+  },
+  "blue-light": {
+    bg: "#f3f7fc",
+    sidebar: "#e8eff8",
+    surface: "#ffffff",
+    rowActive: "#e5ecf7",
+    panelHover: "#e1e9f4",
+    border: "rgba(15, 34, 59, 0.09)",
+    textPrimary: "#0f223b",
+    textSecondary: "#33486a",
+    textMuted: "#475976",
+    accent: "#1c56ac",
+    accentBright: "#1a4f9f",
+    buttonText: "#ffffff",
+  },
+  "phosphor-dark": {
+    bg: "#050a06",
+    sidebar: "#030704",
+    surface: "#0c160e",
+    rowActive: "#06250e",
+    panelHover: "#112014",
+    border: "rgba(200, 245, 208, 0.1)",
+    textPrimary: "#c8f5d0",
+    textSecondary: "#8fd49c",
+    textMuted: "#7db187",
+    accent: "#00ff41",
+    accentBright: "#6aff90",
+    buttonText: "#021a06",
+  },
+};
+
+function quitDialogPalette(
+  colorTheme: DesktopColorTheme,
+): QuitDialogPalette {
+  if (colorTheme === "tangerine-dark") return QUIT_DIALOG_PALETTES.dark;
+  if (colorTheme === "tangerine-light") return QUIT_DIALOG_PALETTES.light;
+  return COLOR_THEME_QUIT_DIALOG_PALETTES[colorTheme];
+}
+
 /** Resolve the active PwrAgent theme (honoring the in-app setting, not just the
  *  OS). "system" falls back to the OS scheme via nativeTheme. */
-function resolveQuitDialogTheme(): "dark" | "light" {
-  const { theme } = readBootstrapAppearance();
+function resolveQuitDialogTheme(theme: DesktopAppearanceTheme): "dark" | "light" {
   if (theme === "light") return "light";
   if (theme === "dark") return "dark";
   return nativeTheme.shouldUseDarkColors ? "dark" : "light";
@@ -233,8 +383,11 @@ export async function showQuitConfirmationDialog(
     .slice(2)}`;
   const navigationPrefix = `pwragent-quit-confirmation://${token}/`;
   const parent = resolveQuitDialogParent();
-  const colorScheme = resolveQuitDialogTheme();
-  const palette = QUIT_DIALOG_PALETTES[colorScheme];
+  const appearance = readBootstrapAppearance();
+  const colorScheme = resolveQuitDialogTheme(appearance.theme);
+  const palette = quitDialogPalette(
+    colorScheme === "light" ? appearance.lightTheme : appearance.darkTheme,
+  );
   const items = options.items ?? [];
   const countdownSeconds = resolveQuitCountdownSeconds(
     options.countdownSeconds,
@@ -731,6 +884,7 @@ export function buildQuitConfirmationHtml(options: {
         --text-muted: ${p.textMuted};
         --accent: ${p.accent};
         --accent-bright: ${p.accentBright};
+        --accent-fill: ${p.accentFill ?? p.accent};
         --button-text: ${p.buttonText};
         /* Derived exactly like app.css's --accent-border. */
         --accent-border: color-mix(in srgb, var(--accent) 42%, transparent);
@@ -926,7 +1080,7 @@ export function buildQuitConfirmationHtml(options: {
         font-weight: 600;
       }
       .primary:hover {
-        background: var(--accent);
+        background: var(--accent-fill);
         color: var(--button-text);
       }
       /* Close (top-right of the strip) → maps to "Stay Open". */

@@ -435,6 +435,13 @@ function main() {
   for (const file of ["SOURCES", "COPYING", "LICENSE.git-lfs", "LICENSE.git-credential-manager", "NOTICE"]) {
     lines.push(readFileSync(join(gitNotices, file), "utf8").trim(), "");
   }
+  lines.push("Color theme palettes");
+  lines.push("--------------------");
+  lines.push("");
+  const colorThemeNotices = join(repoRoot, "apps/desktop/resources/color-themes");
+  for (const file of ["LICENSE.catppuccin", "LICENSE.solarized"]) {
+    lines.push(readFileSync(join(colorThemeNotices, file), "utf8").trim(), "");
+  }
   lines.push("Dependency Summary");
   lines.push("------------------");
   lines.push("");

@@ -99,6 +99,9 @@ extraResources:
     to: CHANGELOG.md
   - from: build/icon.png
     to: pwragent-app-icon.png
+  # Themed Dock icons for a running instance (src/main/themed-dock-icon.ts).
+  - from: build/dock-icons
+    to: dock-icons
   - from: src/renderer/src/assets/pwrsnap/pwrsnap-app-icon.png
     to: pwrsnap-app-icon.png
   - from: src/renderer/src/assets/pwrgit/pwrgit-app-icon.png
