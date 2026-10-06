@@ -345,15 +345,11 @@ for probe in styleProbes {
   }
 }
 
-// MARK: - Write both sets
+// MARK: - Render both sets, then write them
 
-do {
-  try FileManager.default.createDirectory(at: glassOutputDir, withIntermediateDirectories: true)
-} catch {
-  fail("unable to create \(glassOutputDir.path): \(error)")
-}
-
-for icon in icons {
+// Every theme is rendered and checked before any file is written, so a
+// failure partway through leaves the committed sets as they were.
+let rendered = icons.map { icon -> (theme: String, flat: NSBitmapImageRep, glass: NSBitmapImageRep) in
   let flat = newCanvas()
   draw(into: flat) { context, canvas in
     // The shipped tile, then its pixels recolored in place: `sourceIn` keeps
@@ -378,9 +374,17 @@ for icon in icons {
       NSBezierPath(roundedRect: rect, xRadius: markCornerRadius * scale, yRadius: markCornerRadius * scale).fill()
     }
   }
-  write(flat, to: outputDir.appendingPathComponent("\(icon.theme).png"), label: "dock-icons/\(icon.theme).png")
-
   let glass = renderGlass(manifest: themedManifest(icon), name: icon.theme)
   checkBounds(glass, icon.theme)
-  write(glass, to: glassOutputDir.appendingPathComponent("\(icon.theme).png"), label: "dock-icons/glass/\(icon.theme).png")
+  return (icon.theme, flat, glass)
+}
+
+do {
+  try FileManager.default.createDirectory(at: glassOutputDir, withIntermediateDirectories: true)
+} catch {
+  fail("unable to create \(glassOutputDir.path): \(error)")
+}
+for icon in rendered {
+  write(icon.flat, to: outputDir.appendingPathComponent("\(icon.theme).png"), label: "dock-icons/\(icon.theme).png")
+  write(icon.glass, to: glassOutputDir.appendingPathComponent("\(icon.theme).png"), label: "dock-icons/glass/\(icon.theme).png")
 }
