@@ -6,7 +6,6 @@ import {
   relaunchForLinuxSecretStore,
 } from "./linux-password-store";
 import { app, BrowserWindow, dialog, Menu, nativeImage, safeStorage, shell } from "electron";
-import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import {
   getDesktopBackendRegistry,
@@ -244,6 +243,7 @@ import {
   setUpdateInstallPreparationHandler,
 } from "./update-install-state";
 import { createShutdownBarrier } from "./shutdown-barrier";
+import { developmentDockIconPath } from "./themed-dock-icon";
 import {
   createE2eShutdownDiagnosticsRecorder,
   E2E_SHUTDOWN_DIAGNOSTICS_FILE_ENV,
@@ -1018,7 +1018,7 @@ function installDevelopmentDockIcon(): void {
     return;
   }
 
-  const iconPath = join(app.getAppPath(), "build/icon-macos.png");
+  const iconPath = developmentDockIconPath(app.getAppPath());
   const icon = nativeImage.createFromPath(iconPath);
   if (icon.isEmpty()) {
     mainLog.warn("failed to load development dock icon", { iconPath });

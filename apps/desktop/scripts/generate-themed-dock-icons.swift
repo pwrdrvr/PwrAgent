@@ -13,6 +13,10 @@ import Foundation
 //                                       tile, flat. macOS 15 and earlier.
 //   build/dock-icons/glass/<theme>.png  The same tile with macOS 26's Liquid
 //                                       Glass baked in. macOS 26 and later.
+//   build/icon-macos-glass.png          The shipped icon rendered the same
+//                                       way: the development Dock icon on
+//                                       macOS 26, where an unpackaged app has
+//                                       no bundle icon for the system to draw.
 //
 // Flat: derived from build/icon-macos.png, the padded development Dock icon
 // generate-macos-app-icon.swift writes. The tile keeps the shipped icon's
@@ -39,6 +43,7 @@ let tileURL = buildDir.appendingPathComponent("icon-macos.png")
 let packageURL = buildDir.appendingPathComponent("icon.icon", isDirectory: true)
 let outputDir = buildDir.appendingPathComponent("dock-icons", isDirectory: true)
 let glassOutputDir = outputDir.appendingPathComponent("glass", isDirectory: true)
+let developmentGlassURL = buildDir.appendingPathComponent("icon-macos-glass.png")
 
 typealias RGB = (r: Double, g: Double, b: Double)
 
@@ -384,6 +389,7 @@ do {
 } catch {
   fail("unable to create \(glassOutputDir.path): \(error)")
 }
+write(shippedGlass, to: developmentGlassURL, label: "icon-macos-glass.png")
 for icon in rendered {
   write(icon.flat, to: outputDir.appendingPathComponent("\(icon.theme).png"), label: "dock-icons/\(icon.theme).png")
   write(icon.glass, to: glassOutputDir.appendingPathComponent("\(icon.theme).png"), label: "dock-icons/glass/\(icon.theme).png")

@@ -33,6 +33,7 @@ vi.mock("electron", () => ({
 }));
 
 import {
+  developmentDockIconPath,
   drawsLiquidGlassIcons,
   resetThemedDockIconForTests,
   syncThemedDockIcon,
@@ -88,10 +89,23 @@ describe("themed dock icon", () => {
     expect(drawsLiquidGlassIcons("26.1.0")).toBe(true);
   });
 
-  it("shows the flat icon before macOS 26", () => {
+  it("shows the flat icons before macOS 26", () => {
     osMocks.release = "24.6.0";
     syncThemedDockIcon({ darkTheme: "blue-dark", themedDockIcon: true });
-    expect(appliedFiles()).toEqual([path.join("/app", "build/dock-icons", "blue-dark.png")]);
+    syncThemedDockIcon({ darkTheme: "tangerine-dark", themedDockIcon: true });
+    expect(appliedFiles()).toEqual([
+      path.join("/app", "build/dock-icons", "blue-dark.png"),
+      path.join("/app", "build/icon-macos.png"),
+    ]);
+  });
+
+  it("ships a flat and a glass development icon", () => {
+    const appPath = path.resolve(testDir, "../../..");
+    for (const liquidGlass of [false, true]) {
+      expect(existsSync(developmentDockIconPath(appPath, liquidGlass)), String(liquidGlass)).toBe(true);
+    }
+    expect(developmentDockIconPath("/app", true)).toBe(path.join("/app", "build/icon-macos-glass.png"));
+    expect(developmentDockIconPath("/app", false)).toBe(path.join("/app", "build/icon-macos.png"));
   });
 
   it("follows the dark theme, and leaves the app icon alone until it changes", () => {
@@ -102,9 +116,9 @@ describe("themed dock icon", () => {
     syncThemedDockIcon({ darkTheme: "blue-dark", themedDockIcon: true });
     expect(appliedFiles()).toEqual([path.join("/app", "build/dock-icons", "glass", "blue-dark.png")]);
 
-    // Back to the app's own icon: the padded development icon here.
+    // Back to the app's own icon: the glass development icon here.
     syncThemedDockIcon({ darkTheme: "tangerine-dark", themedDockIcon: true });
-    expect(appliedFiles().at(-1)).toBe(path.join("/app", "build/icon-macos.png"));
+    expect(appliedFiles().at(-1)).toBe(path.join("/app", "build/icon-macos-glass.png"));
   });
 
   it("restores the bundle icon in a packaged app when the operator opts out", () => {

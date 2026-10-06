@@ -48,6 +48,19 @@ export function drawsLiquidGlassIcons(darwinRelease: string = release()): boolea
 }
 
 /**
+ * The development Dock icon. An unpackaged app has no bundle icon for macOS
+ * to draw, so `installDevelopmentDockIcon` paints this one and Tangerine
+ * returns to it: the shipped icon with the same Liquid Glass baked in as the
+ * themed set, or the flat padded tile before macOS 26.
+ */
+export function developmentDockIconPath(
+  appPath: string,
+  liquidGlass: boolean = drawsLiquidGlassIcons(),
+): string {
+  return join(appPath, liquidGlass ? "build/icon-macos-glass.png" : "build/icon-macos.png");
+}
+
+/**
  * The icon file a dark theme shows, relative to the icon directory, or null
  * for the app's own icon.
  */
@@ -91,10 +104,10 @@ export function syncThemedDockIcon(appearance: {
   } else {
     // An empty image clears the override, so the bundle's icon returns. A
     // development build has no bundle icon of its own, so it goes back to
-    // the padded development icon `installDevelopmentDockIcon` sets.
+    // the development icon `installDevelopmentDockIcon` sets.
     icon = app.isPackaged
       ? nativeImage.createEmpty()
-      : nativeImage.createFromPath(join(app.getAppPath(), "build/icon-macos.png"));
+      : nativeImage.createFromPath(developmentDockIconPath(app.getAppPath()));
   }
   app.dock.setIcon(icon);
   applied = file;
