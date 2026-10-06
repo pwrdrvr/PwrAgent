@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ownThreadInputAttachments } from "../app-server/turn-input-attachment-files";
+import { ownThreadInputAttachments, stageTurnInputAttachmentsForRetention } from "../app-server/turn-input-attachment-files";
 
 const owner = { backend: "codex" as const, threadId: "image-thread" };
 let testRoot: string;
@@ -37,6 +37,39 @@ describe("thread image inputs", () => {
     await expect(ownThreadInputAttachments([
       { type: "image", url: "https://example.test/image.png" },
     ], owner)).resolves.toEqual([{ type: "image", url: "https://example.test/image.png" }]);
+  });
+
+  it.each(["jpeg", "png"])("uses the normalized %s extension while preserving the original WebP label", async (mimeType) => {
+    const [image] = await ownThreadInputAttachments([
+      { type: "image", name: "large.webp", url: `data:image/${mimeType};base64,AQID` },
+    ], owner);
+    if (image?.type !== "localImage") throw new Error("Expected an owned normalized image.");
+    expect(image.name).toBe("large.webp");
+    expect(path.extname(image.path)).toBe(mimeType === "jpeg" ? ".jpg" : ".png");
+    await expect(readFile(image.path)).resolves.toEqual(Buffer.from([1, 2, 3]));
+  });
+
+  it("preserves the inline GIF provider payload while retaining a thread-owned copy", async () => {
+    const image = { type: "image" as const, name: "loop.gif", url: "data:image/gif;base64,R0lGODlh" };
+    const input = await ownThreadInputAttachments([image], owner);
+    expect(input).toEqual([image]);
+    const [retained] = await stageTurnInputAttachmentsForRetention(input, { owner });
+    if (retained?.type !== "localImage") throw new Error("Expected an owned retained GIF.");
+    expect(retained.path).toContain(path.join("thread-assets", "codex", "image-thread"));
+    expect(path.extname(retained.path)).toBe(".gif");
+    await expect(readFile(retained.path)).resolves.toEqual(Buffer.from("GIF89a"));
+  });
+
+  it("preserves the normalized file extension when forwarding an image with its original label", async () => {
+    const [original] = await ownThreadInputAttachments([
+      { type: "image", name: "large.webp", url: "data:image/jpeg;base64,AQID" },
+    ], owner);
+    if (original?.type !== "localImage") throw new Error("Expected an owned normalized image.");
+    const [forwarded] = await ownThreadInputAttachments([original], { backend: "codex", threadId: "recipient" });
+    if (forwarded?.type !== "localImage") throw new Error("Expected a forwarded normalized image.");
+    expect(forwarded.name).toBe("large.webp");
+    expect(path.extname(forwarded.path)).toBe(".jpg");
+    await expect(readFile(forwarded.path)).resolves.toEqual(Buffer.from([1, 2, 3]));
   });
 
   it("sanitizes ASCII control characters in owned image filenames", async () => {

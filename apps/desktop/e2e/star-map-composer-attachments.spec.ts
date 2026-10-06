@@ -340,11 +340,14 @@ test("sends pasted, dropped, and local-file attachments from a Star Map chat car
       expect.objectContaining({
         mimeType: "text/plain",
         name: "star-map-notes.txt",
-        path: notesPath,
+        path: expect.stringContaining(path.join("thread-assets", "codex", "thread-star-map-attachments")),
         textPreview: "renderer preload attachment evidence\n",
         type: "localFile",
       }),
     );
+    expect(localFileInput?.path).not.toBe(notesPath);
+    if (!localFileInput?.path) throw new Error("Expected a thread-owned local file.");
+    expect(await readFile(localFileInput.path, "utf8")).toBe("renderer preload attachment evidence\n");
   } finally {
     await trajectory?.stop();
     await app.close();

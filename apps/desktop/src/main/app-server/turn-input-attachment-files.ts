@@ -61,10 +61,18 @@ export async function stageTurnInputAttachment(
   }
 
   const root = turnInputAttachmentRoot();
-  const name = sanitizeTurnAttachmentName(
+  let name = sanitizeTurnAttachmentName(
     upload.name,
     fallbackName(upload.type, upload.mimeType),
   );
+  // Normalization preserves the original display label (for example .webp),
+  // but file consumers infer the retained image format from its extension.
+  const normalizedExtension = upload.type === "localImage"
+    ? normalizedImageExtension(upload.mimeType)
+    : undefined;
+  if (normalizedExtension) {
+    name = `${path.parse(name).name}${normalizedExtension}`;
+  }
   if (owner) {
     const ownedPath = await storeThreadAsset(owner, data, name);
     return upload.type === "localImage"
@@ -168,7 +176,12 @@ export async function stageLocalTurnInputAttachment(
   if (!options?.owner && await isResolvedThreadAssetPath(readable.path)) return { ...item, path: readable.path };
   const data = await readFile(readable.path);
   if (options?.owner) {
-    const ownedPath = await storeThreadAsset(options.owner, data, sanitizeTurnAttachmentName(item.name ?? path.basename(item.path)), readable.path);
+    let name = sanitizeTurnAttachmentName(item.name ?? path.basename(item.path));
+    const extension = item.type === "localImage" ? path.extname(readable.path).toLowerCase() : "";
+    if (/^\.(?:avif|bmp|gif|jpe?g|png|webp)$/u.test(extension)) {
+      name = `${path.parse(name).name}${extension}`;
+    }
+    const ownedPath = await storeThreadAsset(options.owner, data, name, readable.path);
     return { ...item, path: ownedPath, ...(item.type === "localFile" ? { sizeBytes: data.byteLength } : {}) };
   }
   return await stageTurnInputAttachment({
@@ -260,9 +273,12 @@ export async function ownThreadInputAttachments(
     }
     const retained = await stageTurnInputAttachmentsForRetention([item], { owner, privateStorageRoots, strict: true });
     const attachment = retained[0];
-    // ACP adapters retain their established inline image contract; the owned
-    // file is used by replay/forwarding independently of the provider payload.
-    if (owner.backend.startsWith("acp:") && item.type === "image") {
+    // Preserve established inline payloads for ACP and non-JPEG/PNG images
+    // such as animated GIFs. Their owned copy serves replay and forwarding.
+    const preserveInlineImage = item.type === "image"
+      && (owner.backend.startsWith("acp:")
+        || item.url.startsWith("data:") && !/^data:image\/(?:jpeg|jpg|png);base64,/iu.test(item.url));
+    if (preserveInlineImage) {
       output.push(item);
     } else {
       output.push(attachment
@@ -392,6 +408,18 @@ function fallbackName(
       return "image.webp";
     default:
       return "image.png";
+  }
+}
+
+function normalizedImageExtension(mimeType: string | undefined): string | undefined {
+  switch (mimeType?.trim().toLowerCase()) {
+    case "image/jpeg":
+    case "image/jpg":
+      return ".jpg";
+    case "image/png":
+      return ".png";
+    default:
+      return undefined;
   }
 }
 
