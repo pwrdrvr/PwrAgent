@@ -11,6 +11,13 @@ const electronMocks = vi.hoisted(() => ({
   createEmpty: vi.fn(() => ({ file: "<empty>", isEmpty: () => true })),
 }));
 
+const osMocks = vi.hoisted(() => ({ release: "25.6.0" }));
+
+vi.mock("node:os", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:os")>()),
+  release: () => osMocks.release,
+}));
+
 vi.mock("electron", () => ({
   app: {
     dock: { setIcon: electronMocks.setIcon },
@@ -26,6 +33,7 @@ vi.mock("electron", () => ({
 }));
 
 import {
+  drawsLiquidGlassIcons,
   resetThemedDockIconForTests,
   syncThemedDockIcon,
   themedDockIconFile,
@@ -46,6 +54,7 @@ describe("themed dock icon", () => {
     Object.defineProperty(process, "platform", { value: "darwin" });
     electronMocks.isPackaged = false;
     electronMocks.setIcon.mockClear();
+    osMocks.release = "25.6.0";
     resetThemedDockIconForTests();
   });
 
@@ -58,15 +67,31 @@ describe("themed dock icon", () => {
     }
   });
 
-  it("ships an icon for every dark theme but Tangerine", () => {
-    for (const theme of DESKTOP_DARK_THEMES) {
-      const file = themedDockIconFile(theme, true);
-      if (theme === "tangerine-dark") {
-        expect(file).toBeNull();
-      } else {
-        expect(existsSync(path.join(iconsDir, file ?? "")), theme).toBe(true);
+  it("ships a flat and a glass icon for every dark theme but Tangerine", () => {
+    for (const liquidGlass of [false, true]) {
+      for (const theme of DESKTOP_DARK_THEMES) {
+        const file = themedDockIconFile(theme, true, liquidGlass);
+        if (theme === "tangerine-dark") {
+          expect(file).toBeNull();
+        } else {
+          expect(existsSync(path.join(iconsDir, file ?? "")), `${theme} ${file}`).toBe(true);
+        }
       }
     }
+    expect(themedDockIconFile("blue-dark", true, true)).toBe(path.join("glass", "blue-dark.png"));
+    expect(themedDockIconFile("blue-dark", true, false)).toBe("blue-dark.png");
+  });
+
+  it("draws Liquid Glass icons from macOS 26 (Darwin 25)", () => {
+    expect(drawsLiquidGlassIcons("24.6.0")).toBe(false);
+    expect(drawsLiquidGlassIcons("25.0.0")).toBe(true);
+    expect(drawsLiquidGlassIcons("26.1.0")).toBe(true);
+  });
+
+  it("shows the flat icon before macOS 26", () => {
+    osMocks.release = "24.6.0";
+    syncThemedDockIcon({ darkTheme: "blue-dark", themedDockIcon: true });
+    expect(appliedFiles()).toEqual([path.join("/app", "build/dock-icons", "blue-dark.png")]);
   });
 
   it("follows the dark theme, and leaves the app icon alone until it changes", () => {
@@ -75,7 +100,7 @@ describe("themed dock icon", () => {
 
     syncThemedDockIcon({ darkTheme: "blue-dark", themedDockIcon: true });
     syncThemedDockIcon({ darkTheme: "blue-dark", themedDockIcon: true });
-    expect(appliedFiles()).toEqual([path.join("/app", "build/dock-icons", "blue-dark.png")]);
+    expect(appliedFiles()).toEqual([path.join("/app", "build/dock-icons", "glass", "blue-dark.png")]);
 
     // Back to the app's own icon: the padded development icon here.
     syncThemedDockIcon({ darkTheme: "tangerine-dark", themedDockIcon: true });
@@ -90,7 +115,7 @@ describe("themed dock icon", () => {
     });
     syncThemedDockIcon({ darkTheme: "solarized-dark", themedDockIcon: true });
     expect(appliedFiles().at(-1)).toBe(
-      path.join("/Applications/PwrAgent.app/Contents/Resources", "dock-icons", "solarized-dark.png"),
+      path.join("/Applications/PwrAgent.app/Contents/Resources", "dock-icons", "glass", "solarized-dark.png"),
     );
 
     syncThemedDockIcon({ darkTheme: "solarized-dark", themedDockIcon: false });
