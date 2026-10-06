@@ -41718,6 +41718,9 @@ export class DesktopBackendRegistry {
       if (!this.threadDependencyToolHandler) return threadInspectionFailure("unsupported_operation", "Thread dependencies are not available.");
       return await this.threadDependencyToolHandler({
         ...request.args,
+        ...(request.args.action === "create" && Array.isArray(request.args.conditions)
+          ? { conditions: await this.withDependencyTitles(request.args.conditions) }
+          : {}),
         backend: request.args.backend ?? request.context.backend,
         threadId: request.args.threadId ?? request.context.threadId,
       });
@@ -41892,6 +41895,38 @@ export class DesktopBackendRegistry {
         federationFailures: response.data.failures,
       },
     };
+  }
+
+  /**
+   * Agents usually register dependencies from ids alone. Save each
+   * prerequisite's current title so the operator's rail and the continuation
+   * prompt name it. Best effort: an unknown thread keeps its id.
+   */
+  private async withDependencyTitles<T>(conditions: T[]): Promise<T[]> {
+    type Untitled = { backend: AppServerBackendKind; threadId: string };
+    const untitled = (condition: unknown): condition is Untitled =>
+      Boolean(condition) && typeof condition === "object"
+      && typeof (condition as { backend?: unknown }).backend === "string"
+      && typeof (condition as { threadId?: unknown }).threadId === "string"
+      && (condition as { title?: unknown }).title === undefined;
+    const missing = (conditions as unknown[]).filter(untitled);
+    if (missing.length === 0) return conditions;
+    const titles = new Map<string, string>();
+    for (const backend of new Set(missing.map((condition) => condition.backend))) {
+      try {
+        const wanted = new Set(missing.filter((condition) => condition.backend === backend).map((condition) => condition.threadId));
+        for (const thread of await this.listThreads({ backend, archived: false, callerReason: "thread-dependency-titles" })) {
+          if (wanted.has(thread.id) && thread.title.trim()) titles.set(JSON.stringify([backend, thread.id]), thread.title.trim().slice(0, 200));
+        }
+      } catch {
+        // Titles are display-only; registration validates the thread itself.
+      }
+    }
+    return conditions.map((condition) => {
+      if (!untitled(condition)) return condition;
+      const title = titles.get(JSON.stringify([condition.backend, condition.threadId]));
+      return title ? { ...condition, title } : condition;
+    });
   }
 
   private async handleGetThreadStatusInspectionRequest(

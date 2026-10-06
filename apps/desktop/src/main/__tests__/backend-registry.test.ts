@@ -46984,6 +46984,32 @@ script = "printf setup"
     await registry.close();
   });
 
+  it("saves prerequisite titles for agent-registered dependencies that omit them", async () => {
+    const foundation: AppServerThreadSummary = { id: "foundation", title: "Extract retry helper", titleSource: "explicit", source: "codex", updatedAt: 1000, linkedDirectories: [] };
+    const codexClient = new MockBackendClient({ threads: [foundation], initializeResult: { methods: ["thread/list"] } });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const handler = vi.fn(async () => ({ ok: true as const, data: { threadDependencies: { dependencies: [] } } }));
+    registry.setThreadDependencyToolHandler(handler);
+    await registry.publishLocalEvent({ backend: "codex", notification: {
+      method: "turn/started", params: { threadId: "waiting-thread", turnId: "turn-1", turn: { id: "turn-1" } },
+    } });
+    await codexClient.emitRequest({ method: "item/tool/call", params: {
+      threadId: "waiting-thread", turnId: "turn-1", callId: "call-dependency", requestId: "call-dependency",
+      namespace: "pwragent", tool: "manage_thread_dependencies",
+      arguments: { action: "create", conditions: [
+        { backend: "codex", threadId: "foundation", when: "ci_passed" },
+        { backend: "codex", threadId: "unknown", when: "pr_merged" },
+        { backend: "codex", threadId: "foundation", when: "turn_completed", title: "Agent's name" },
+      ] },
+    } } as AppServerPendingRequestNotification);
+    expect(handler).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ conditions: [
+      { backend: "codex", threadId: "foundation", when: "ci_passed", title: "Extract retry helper" },
+      { backend: "codex", threadId: "unknown", when: "pr_merged" },
+      { backend: "codex", threadId: "foundation", when: "turn_completed", title: "Agent's name" },
+    ] }));
+    await registry.close();
+  });
+
   it("routes one-shot PR watches with invoking thread defaults", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/list"] },

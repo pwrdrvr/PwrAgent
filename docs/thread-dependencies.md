@@ -23,7 +23,8 @@ evidence, plus `dependents`: active registrations on other threads that wait
 on this one. `action: "cancel"` requires `dependencyId` and cancels a
 registration before admission. A condition may carry a display-only `title`
 (at most 200 characters). It is excluded from deduplication, and the
-continuation prompt names the prerequisite by it.
+continuation prompt names the prerequisite by it. When an agent omits it,
+PwrAgent saves the thread's current title at registration.
 
 The desktop uses the same service from Thread Info's **Continue after**
 section. Searching adds a prerequisite row per chosen thread, each with its
