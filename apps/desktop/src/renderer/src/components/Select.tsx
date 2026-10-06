@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
   type Ref,
 } from "react";
 import { createPortal } from "react-dom";
@@ -48,6 +49,14 @@ export type SelectOption<T extends string = string> = {
   description?: string;
   /** Listed but not choosable. The arrows and typeahead step over it. */
   disabled?: boolean;
+  /**
+   * A heading the option is listed under. Consecutive options that share one
+   * render as a labelled `role="group"`, the APG grouped-listbox shape. The
+   * arrows and typeahead still walk one flat list.
+   */
+  group?: string;
+  /** Decorative mark before the label, in the list and on the trigger. */
+  leading?: ReactNode;
 };
 
 /** Gap between the trigger and the list. */
@@ -195,6 +204,25 @@ function labelText(control: HTMLButtonElement): string | undefined {
     .replace(/\s+/g, " ")
     .trim();
   return text === "" ? undefined : text;
+}
+
+/**
+ * Option indexes split into runs of consecutive options under one `group`
+ * heading. An option with no group is a run of its own, rendered bare.
+ */
+export function groupRuns(
+  options: readonly SelectOption[],
+): Array<{ group: string | undefined; indexes: number[] }> {
+  const runs: Array<{ group: string | undefined; indexes: number[] }> = [];
+  options.forEach((option, index) => {
+    const last = runs[runs.length - 1];
+    if (last && option.group !== undefined && last.group === option.group) {
+      last.indexes.push(index);
+    } else {
+      runs.push({ group: option.group, indexes: [index] });
+    }
+  });
+  return runs;
 }
 
 export function Select<T extends string>(props: {
@@ -527,46 +555,16 @@ export function Select<T extends string>(props: {
           event.stopPropagation();
         }}
       >
-        {options.map((option, index) => {
-          const isSelected = index === selectedIndex;
-          const descriptionId = option.description
-            ? `${optionId(index)}-description`
-            : undefined;
+        {groupRuns(options).map((run) => {
+          const rows = run.indexes.map((index) => renderOption(index));
+          if (run.group === undefined) return rows;
+          const labelId = `${baseId}-group-${run.indexes[0]}`;
           return (
-            <div
-              key={option.value}
-              id={optionId(index)}
-              role="option"
-              aria-selected={isSelected}
-              aria-disabled={option.disabled ? true : undefined}
-              aria-describedby={descriptionId}
-              className={index === cursor ? "select-option is-active" : "select-option"}
-              // The pointer moves the keyboard cursor, so a hovered row and
-              // the row Enter picks are never two rows in the same paint.
-              // `pointermove`, not `pointerenter`: a list scrolled under a
-              // resting pointer must not steal the cursor from the arrows.
-              onPointerMove={() => {
-                if (!option.disabled && index !== cursor) setActive(index);
-              }}
-              onClick={() => commit(index)}
-            >
-              <span aria-hidden="true" className="select-option__check">
-                {isSelected ? <CheckIcon size={12} /> : null}
-              </span>
-              <span className="select-option__body">
-                <span className="select-option__label">{option.label}</span>
-                {option.description ? (
-                  // Hidden from the option's name, which is its label alone;
-                  // `aria-describedby` still reaches it.
-                  <span
-                    aria-hidden="true"
-                    className="select-option__description"
-                    id={descriptionId}
-                  >
-                    {option.description}
-                  </span>
-                ) : null}
-              </span>
+            <div key={labelId} role="group" aria-labelledby={labelId}>
+              <div id={labelId} role="presentation" className="select-group__label">
+                {run.group}
+              </div>
+              {rows}
             </div>
           );
         })}
@@ -574,6 +572,56 @@ export function Select<T extends string>(props: {
       document.body,
     )
     : null;
+
+  function renderOption(index: number): ReactNode {
+    const option = options[index];
+    const isSelected = index === selectedIndex;
+    const descriptionId = option.description
+      ? `${optionId(index)}-description`
+      : undefined;
+    return (
+      <div
+        key={option.value}
+        id={optionId(index)}
+        role="option"
+        aria-selected={isSelected}
+        aria-disabled={option.disabled ? true : undefined}
+        aria-describedby={descriptionId}
+        className={index === cursor ? "select-option is-active" : "select-option"}
+        // The pointer moves the keyboard cursor, so a hovered row and
+        // the row Enter picks are never two rows in the same paint.
+        // `pointermove`, not `pointerenter`: a list scrolled under a
+        // resting pointer must not steal the cursor from the arrows.
+        onPointerMove={() => {
+          if (!option.disabled && index !== cursor) setActive(index);
+        }}
+        onClick={() => commit(index)}
+      >
+        <span aria-hidden="true" className="select-option__check">
+          {isSelected ? <CheckIcon size={12} /> : null}
+        </span>
+        {option.leading ? (
+          <span aria-hidden="true" className="select-option__leading">
+            {option.leading}
+          </span>
+        ) : null}
+        <span className="select-option__body">
+          <span className="select-option__label">{option.label}</span>
+          {option.description ? (
+            // Hidden from the option's name, which is its label alone;
+            // `aria-describedby` still reaches it.
+            <span
+              aria-hidden="true"
+              className="select-option__description"
+              id={descriptionId}
+            >
+              {option.description}
+            </span>
+          ) : null}
+        </span>
+      </div>
+    );
+  }
 
   return (
     <>
@@ -605,6 +653,11 @@ export function Select<T extends string>(props: {
         }}
         onKeyDown={handleKeyDown}
       >
+        {selected?.leading ? (
+          <span aria-hidden="true" className="select-trigger__leading">
+            {selected.leading}
+          </span>
+        ) : null}
         <span
           className={
             selected === undefined
