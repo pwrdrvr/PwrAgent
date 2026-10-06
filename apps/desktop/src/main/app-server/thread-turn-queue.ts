@@ -530,6 +530,22 @@ export class ThreadTurnQueue {
     return undefined;
   }
 
+  /**
+   * Clears a thread's hold when its reason passes `shouldRelease`, and drains
+   * the queue once the thread is idle. Returns whether a hold was cleared.
+   */
+  async releaseHold(
+    params: { backend: AppServerBackendKind; threadId: string },
+    shouldRelease: (reason: string) => boolean,
+  ): Promise<boolean> {
+    const key = this.keyFor(params);
+    const reason = this.heldQueues.get(key);
+    if (!reason || !shouldRelease(reason)) return false;
+    await this.clearQueueHold(key);
+    this.scheduleDrain(key);
+    return true;
+  }
+
   async releaseEntryWithDisposition(
     entryId: string,
   ): Promise<ThreadTurnQueueReleaseResult> {

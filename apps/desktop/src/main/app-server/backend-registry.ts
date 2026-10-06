@@ -34,7 +34,7 @@ import { resolvePullRequestReview } from "./pull-request-review";
 import { publishedPrCommitShas } from "../../shared/pull-request-publication";
 import { priceLocalModelUsage } from "@pwragent/shared";
 import { codexNativeSubAgentName, readCodexNativeSubAgentName } from "@pwragent/shared";
-import { normalizeThreadLockNote, threadLockRefusalMessage } from "@pwragent/shared";
+import { isThreadLockRefusal, normalizeThreadLockNote, threadLockRefusalMessage } from "@pwragent/shared";
 import { navigationWorkingStatePath as resolveThreadWorkingStatePath } from "@pwragent/shared";
 import { validateCodexConfigOverrides } from "../settings/codex-config-overrides";
 import {
@@ -210,6 +210,7 @@ import {
   type ConfigureGrokWorkflowBudgetResponse,
   type ControlActiveTurnRequest,
   type ControlActiveTurnResponse,
+  type ControlActiveTurnErrorCode,
   type ForkThreadRequest,
   type ForkThreadResponse,
   isBranchDrifted,
@@ -17608,7 +17609,9 @@ export class DesktopBackendRegistry {
     fastMode?: boolean;
     messageOrigin?: AppServerThreadMessageOrigin;
   }): Promise<Extract<ThreadTurnQueueSubmissionResult, { status: "queued" }>> {
-    await this.assertThreadNotLocked(params.backend, params.threadId);
+    // No lock check: a held entry starts nothing until it is released, and
+    // the release is refused while the thread is locked. Holding is how a
+    // lock pauses a delivery, such as a monitor's result, without losing it.
     this.assertThreadNotHandingOff(params.backend, params.threadId);
     const {
       holdReason,
@@ -20400,12 +20403,7 @@ export class DesktopBackendRegistry {
     request: ControlActiveTurnRequest,
   ): Promise<ControlActiveTurnResponse> {
     const failure = (
-      code:
-        | "invalid_arguments"
-        | "no_active_turn"
-        | "stale_target"
-        | "unsupported_backend"
-        | "unsupported_capability",
+      code: ControlActiveTurnErrorCode,
       message: string,
       details: { activeTurnId?: string; expectedTurnId?: string } = {},
     ): ControlActiveTurnResponse => ({
@@ -20547,6 +20545,9 @@ export class DesktopBackendRegistry {
           });
         }
         const message = error instanceof Error ? error.message : String(error);
+        if (isThreadLockRefusal(message)) {
+          return failure("forbidden", message);
+        }
         if (/unsupported|does not support/i.test(message)) {
           return failure("unsupported_capability", message);
         }
@@ -22781,6 +22782,11 @@ export class DesktopBackendRegistry {
       return identity;
     }
     await this.writeThreadLock(identity, lock);
+    if (!lock) {
+      // An unlock resumes what the lock paused: a queue the lock held, with
+      // its entries in order, drains once the thread is idle.
+      await this.threadTurnQueue.releaseHold(identity, isThreadLockRefusal);
+    }
     return {
       ...identity,
       ...(lock ? { lock } : { previousLock: current }),
@@ -38061,11 +38067,13 @@ export class DesktopBackendRegistry {
       return threadOrchestrationFailure(
         error instanceof PwrAgentFederatedThreadMessageError
           ? error.code
-          : /unsupported|does not support/i.test(message)
-            ? "unsupported_capability"
-            : /active|expected turn|stale/i.test(message)
-              ? "stale_target"
-              : "internal_error",
+          : isThreadLockRefusal(message)
+            ? "forbidden"
+            : /unsupported|does not support/i.test(message)
+              ? "unsupported_capability"
+              : /active|expected turn|stale/i.test(message)
+                ? "stale_target"
+                : "internal_error",
         message,
         {
           backend,
@@ -40076,12 +40084,12 @@ export class DesktopBackendRegistry {
         summary: params.summary,
         task: params.record.task,
       });
-      const submitted = await this.submitTurn({
+      const parentWake = {
         backend: params.record.parentBackend,
         threadId: params.record.parentThreadId,
         input: [
           {
-            type: "text",
+            type: "text" as const,
             text: buildTaskMonitorFinalHandoffInput({
               completionSource: params.completionSource,
               details: params.details,
@@ -40092,9 +40100,19 @@ export class DesktopBackendRegistry {
             }),
           },
         ],
-        origin: "manual",
+        origin: "manual" as const,
         messageOrigin,
-      });
+      };
+      const parentLock = await this.readThreadLock(parentWake.backend, parentWake.threadId);
+      // A locked parent holds the result rather than refusing it: the monitor
+      // finishes either way, and an unlock delivers what it found.
+      const submitted = parentLock
+        ? await this.submitHeldTurn({
+            ...parentWake,
+            queueEntryId: `task-monitor:${params.record.monitorId}`,
+            holdReason: threadLockRefusalMessage(parentLock),
+          })
+        : await this.submitTurn(parentWake);
       parentTurn =
         submitted.status === "started"
           ? {

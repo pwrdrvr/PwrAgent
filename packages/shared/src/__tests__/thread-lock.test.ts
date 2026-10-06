@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  isThreadLockRefusal,
   normalizeThreadLockNote,
   THREAD_LOCK_NOTE_MAX_LENGTH,
   threadLockRefusalMessage,
@@ -28,5 +29,11 @@ describe("thread lock refusal", () => {
 
   it("reads without a note", () => {
     expect(threadLockRefusalMessage({})).toBe("This thread is locked. Unlock it before starting a turn.");
+  });
+
+  it("is recognized whatever its note says, even through a wrapping error", () => {
+    expect(isThreadLockRefusal(threadLockRefusalMessage({ note: "Repair in progress" }))).toBe(true);
+    expect(isThreadLockRefusal(`Remote error: ${threadLockRefusalMessage({})}`)).toBe(true);
+    expect(isThreadLockRefusal("A turn is already active on this thread.")).toBe(false);
   });
 });

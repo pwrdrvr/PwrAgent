@@ -1286,6 +1286,46 @@ describe("DesktopMessagingBackendBridge", () => {
     });
   });
 
+  it("locks a local thread as messaging, and hands a remote one to its owner", async () => {
+    const remoteSetThreadLock = vi.fn(async () => ({ backend: "codex" as const, threadId: "remote-thread" }));
+    const federation = {
+      connectedPeerTargets: () => [],
+      health: async () => ({
+        enabled: false,
+        role: "dual" as const,
+        status: "disabled" as const,
+        peers: [],
+      }),
+      onRemoteBackendEvent: () => () => undefined,
+      remoteBackend: () => ({ setThreadLock: remoteSetThreadLock } as unknown as FederationBackendOperations),
+      remoteNavigationSnapshot: vi.fn(),
+    } satisfies DesktopMessagingFederationBridge;
+    const setThreadLock = vi.fn(async () => ({ backend: "codex" as const, threadId: "thread-1" }));
+    const bridge = new DesktopMessagingBackendBridge(
+      { setThreadLock } as unknown as DesktopBackendRegistry,
+      federation,
+    );
+
+    await bridge.setThreadLock({ backend: "codex", threadId: "thread-1", locked: true });
+    expect(setThreadLock).toHaveBeenCalledWith(
+      { backend: "codex", threadId: "thread-1", locked: true },
+      { source: "messaging" },
+    );
+
+    await bridge.setThreadLock({
+      backend: "codex",
+      federationTarget: { scope: "remote", instanceId: "client_one" },
+      threadId: "remote-thread",
+      locked: false,
+    });
+    expect(remoteSetThreadLock).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "remote-thread",
+      locked: false,
+    });
+    expect(setThreadLock).toHaveBeenCalledTimes(1);
+  });
+
   it("routes targeted messaging turns and navigation to the remote backend", async () => {
     const startTurn = vi.fn(async () => ({
       backend: "codex" as const,

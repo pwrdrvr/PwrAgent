@@ -2174,8 +2174,8 @@ export type SetThreadReactionResponse = {
   reactions: string[];
 };
 
-/** Who set a thread lock. */
-export type ThreadLockSource = "operator" | "agent_tool" | "peer";
+/** Who set a thread lock. `messaging` is a contact on a bound chat's status card. */
+export type ThreadLockSource = "operator" | "agent_tool" | "peer" | "messaging";
 
 /**
  * A lock parks a thread: every path that starts or steers a turn refuses it

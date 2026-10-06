@@ -1730,6 +1730,13 @@ export function ThreadView(props: ThreadViewProps) {
     },
     [],
   );
+  const onSetThreadLock = props.onSetThreadLock;
+  const lockThreadFromComposer = useMemo(
+    () => onSetThreadLock
+      ? async (note: string) => await onSetThreadLock(true, note)
+      : undefined,
+    [onSetThreadLock],
+  );
   const onLoadOlder = props.onLoadOlder;
   const onRenderedTranscriptEntryLimitChange =
     props.onRenderedTranscriptEntryLimitChange;
@@ -3616,6 +3623,7 @@ export function ThreadView(props: ThreadViewProps) {
           onCreateSubthread: props.onCreateSubthread,
           readThreadWorktreeAvailability: props.readThreadWorktreeAvailability,
           onShowMcpInventory: showMcpInventory,
+          onLockThread: lockThreadFromComposer,
           mcpConnectionCount: threadMcpConnectionCount,
           replySubmission: asyncQuestionReply,
           onReplySubmissionSettled: handleReplySubmissionSettled,

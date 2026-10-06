@@ -1,5 +1,6 @@
 import { codexSpeedOptions, codexSpeedSettings, nextCodexSpeed, selectedCodexSpeed } from "@pwragent/shared";
 import type { ReviewRunMode } from "@pwragent/shared";
+import { isThreadLockRefusal } from "@pwragent/shared";
 import { MessagingBrowseQueryPool } from "./messaging-browse-query-pool";
 import type { NavigationQuery } from "@pwragent/shared";
 import { readMessagingLaunchpadContext, isMessagingLaunchpadContext, type MessagingLaunchpadDirectory, type MessagingLaunchpadContext, type MessagingNewThreadNavigation } from "./messaging-launchpad-context";
@@ -1746,6 +1747,7 @@ export class MessagingController {
     if (
       event.notification.method === "thread/executionMode/updated" ||
       event.notification.method === "thread/modelSettings/updated" ||
+      event.notification.method === "thread/lock/updated" ||
       event.notification.method === "thread/rewound" ||
       event.notification.method === "thread/prAutoDispatch/updated" ||
       event.notification.method === "thread/prAutoDispatch/pendingUpdated" ||
@@ -12620,6 +12622,10 @@ export class MessagingController {
       await this.compactThread(binding, event);
       return;
     }
+    if (actionId === "status:lock") {
+      await this.toggleThreadLock(binding, event);
+      return;
+    }
     if (actionId === "status:sync-name") {
       await this.syncConversationName(binding, event);
       return;
@@ -14777,6 +14783,38 @@ export class MessagingController {
       });
     }
     await this.renderBindingStatus(binding, event);
+  }
+
+  private async toggleThreadLock(
+    binding: MessagingBindingRecord,
+    event: MessagingInboundEvent,
+  ): Promise<void> {
+    if (!this.options.backend.setThreadLock) {
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("status-lock-unavailable"),
+          createdAt: this.now(),
+          title: "Lock unavailable",
+          body: "This backend does not expose thread locks through messaging.",
+          recoverable: true,
+        }),
+        binding,
+        event,
+      );
+      return;
+    }
+    // Toggles from the thread's current state, the same state the card's
+    // Lock or Unlock label was drawn from. A chat has no note field, so a
+    // lock from here carries none; one set elsewhere keeps its note.
+    const navigation = await this.readBoundThreadConfiguration(binding);
+    const thread = findThreadForBinding(navigation, binding);
+    await this.options.backend.setThreadLock({
+      backend: binding.backend,
+      federationTarget: federationTargetForBinding(binding),
+      threadId: binding.threadId,
+      locked: !thread?.lock,
+    });
+    // Refresh handled by the thread-state update bus.
   }
 
   private async compactThread(
@@ -23018,7 +23056,10 @@ function truncateText(text: string, limit: number): string {
 
 function isTurnInProgressStartError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  return /\b(active turn|turn already|already active|in progress)\b/i.test(message);
+  // A lock's note is free text, so "repair in progress" must not read as busy
+  // and quietly queue a message the lock will refuse.
+  return !isThreadLockRefusal(message)
+    && /\b(active turn|turn already|already active|in progress)\b/i.test(message);
 }
 
 function isMissingTurnTargetStartError(

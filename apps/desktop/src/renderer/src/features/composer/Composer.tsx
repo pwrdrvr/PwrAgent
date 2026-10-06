@@ -450,6 +450,8 @@ export type ComposerProps = {
   >;
   onClearPickDirectoryError?: () => void;
   onShowMcpInventory?: (detail: CodexMcpInventoryDetail) => void;
+  /** `/lock [note]`: locks this thread. Rejects with the error to show. */
+  onLockThread?: (note: string) => Promise<void>;
   onShowMcpAccess?: () => void;
   /** Managed connections this thread has selected, for the composer badge. */
   mcpConnectionCount?: number;
@@ -889,6 +891,21 @@ const FORK_SLASH_COMMAND: SlashCommandSuggestion = {
   source: "pwragent",
   sourceLabel: "PwrAgent",
 };
+
+const LOCK_SLASH_COMMAND: SlashCommandSuggestion = {
+  id: "thread-lock",
+  label: "/lock",
+  insertText: "/lock",
+  description: "Lock this thread, with an optional note on why",
+  source: "pwragent",
+  sourceLabel: "PwrAgent",
+};
+
+/** The note of a `/lock [note]` draft, or undefined for any other draft. */
+function parseLockCommandNote(draft: string): string | undefined {
+  const match = /^\/lock(?:\s+([\s\S]*))?$/i.exec(draft.trim());
+  return match ? match[1] ?? "" : undefined;
+}
 
 const CODEX_MCP_SLASH_COMMANDS: SlashCommandSuggestion[] = [
   {
@@ -3319,6 +3336,12 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     !isLaunchpad
     && props.thread?.source === "codex"
     && Boolean(props.onShowMcpInventory);
+  // No `/unlock`: a locked thread's composer is disabled, and its lock card
+  // carries Unlock.
+  const supportsLockCommand =
+    !isLaunchpad
+    && Boolean(props.thread)
+    && Boolean(props.onLockThread);
 
   const selectionStart = Math.min(
     inputRef.current?.selectionStart ?? draft.length,
@@ -4775,10 +4798,14 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     if (supportsForkCommand || supportsSubthreadCommand) {
       localCommands.push(FORK_SLASH_COMMAND);
     }
+    if (supportsLockCommand) {
+      localCommands.push(LOCK_SLASH_COMMAND);
+    }
     return [...localCommands, ...commands];
   }, [
     props.backends,
     props.providerCommands,
+    supportsLockCommand,
     supportsMcpInventory,
     supportsReview,
     supportsForkCommand,
@@ -5089,6 +5116,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       : supportsMcpInventory && draft.trim().toLowerCase() === "/mcp verbose"
         ? "full"
         : undefined;
+  const lockCommandNote = supportsLockCommand
+    ? parseLockCommandNote(draft)
+    : undefined;
   const isReviewComposerOpen = Boolean(
     supportsReview && reviewConfig && parsedReviewCommand
   );
@@ -6394,6 +6424,34 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       return;
     }
 
+    consumeLocalCommandDraft();
+    props.onShowMcpInventory(detail);
+    requestAnimationFrame(() => inputRef.current?.focus());
+  };
+
+  /** Lock this thread from `/lock [note]`; the draft clears once it holds. */
+  const lockThreadFromCommand = async (note: string): Promise<void> => {
+    if (imageAttachments.length > 0 || fileAttachments.length > 0) {
+      setSendError("/lock does not accept attachments.");
+      return;
+    }
+    if (!props.onLockThread) {
+      setSendError("Locking is not available for this thread.");
+      return;
+    }
+    try {
+      await props.onLockThread(note);
+    } catch (error) {
+      setSendError(error instanceof Error ? error.message : String(error));
+      return;
+    }
+    // Cleared only after the lock holds: a refused lock keeps the note to
+    // retry, and a held one must not reappear as a draft after unlock.
+    consumeLocalCommandDraft();
+  };
+
+  /** Clears a local command's draft and records it in draft history as sent. */
+  const consumeLocalCommandDraft = (): void => {
     const submittedScopeKey = composerScopeKey;
     const submittedSnapshot = latestDraftSnapshotRef.current.snapshot;
     const emptySnapshot = createEmptyComposerDraftSnapshot();
@@ -6418,8 +6476,6 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     });
     setSendError(undefined);
     recordComposerDraftHistory(submittedScopeKey, submittedSnapshot, "sent");
-    props.onShowMcpInventory(detail);
-    requestAnimationFrame(() => inputRef.current?.focus());
   };
 
   /**
@@ -8225,6 +8281,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     }
     if (mcpInventoryDetail) {
       showMcpInventory(mcpInventoryDetail);
+      return;
+    }
+    if (lockCommandNote !== undefined) {
+      await lockThreadFromCommand(lockCommandNote);
       return;
     }
 
@@ -10155,7 +10215,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     launchpadSubmitting ||
     (!props.thread && !props.launchpad) ||
     Boolean(props.launchpad && !props.onMaterializeLaunchpad) ||
-    isCompactCommand || Boolean(forkCommand);
+    isCompactCommand || Boolean(forkCommand) ||
+    lockCommandNote !== undefined;
   // Only surface the schedule caret where scheduling actually applies. In the
   // compact command or a thread-less composer there is nothing to schedule,
   // so the split collapses to a plain Send pill instead of parking a
@@ -10166,7 +10227,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     Boolean(
       props.thread
       || (props.launchpad && props.onMaterializeLaunchpad)
-    ) && !isCompactCommand && !forkCommand;
+    ) && !isCompactCommand && !forkCommand && lockCommandNote === undefined;
   // A pending draft schedule (e.g. after editing a scheduled item) surfaces as
   // a checkable toggle between the caret and Send rather than hijacking the
   // Send label into a countdown. Armed → Send keeps the schedule; unarmed →

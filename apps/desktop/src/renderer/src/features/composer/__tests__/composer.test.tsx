@@ -15271,6 +15271,75 @@ describe("Composer", () => {
     expect(startTurn).not.toHaveBeenCalled();
   });
 
+  it("locks the thread from /lock with the rest of the line as its note", async () => {
+    const onLockThread = vi.fn(async () => undefined);
+    const startTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    }));
+    const thread = {
+      id: "thread-1",
+      title: "Lock me",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      executionMode: "default" as const,
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    render(
+      <Composer
+        desktopApi={{ onAgentEvent: () => () => undefined, startTurn }}
+        disabled={false}
+        onLockThread={onLockThread}
+        skills={[]}
+        thread={thread}
+      />,
+    );
+    const textarea = screen.getByLabelText("Reply");
+
+    fireEvent.change(textarea, { target: { value: "/lo" } });
+    expect(await screen.findByRole("option", { name: /\/lock/ })).toBeInTheDocument();
+
+    fireEvent.change(textarea, { target: { value: "/lock Worktree handed to the repair thread." } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(onLockThread).toHaveBeenCalledWith("Worktree handed to the repair thread."));
+    expect(startTurn).not.toHaveBeenCalled();
+    await waitFor(() => expect(textarea).toHaveValue(""));
+  });
+
+  it("keeps a /lock draft and shows why when the lock is refused", async () => {
+    const onLockThread = vi.fn(async () => {
+      throw new Error("Owner Mac is unreachable.");
+    });
+    render(
+      <Composer
+        desktopApi={{ onAgentEvent: () => () => undefined }}
+        disabled={false}
+        onLockThread={onLockThread}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Lock me",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+    const textarea = screen.getByLabelText("Reply");
+
+    fireEvent.change(textarea, { target: { value: "/lock" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(onLockThread).toHaveBeenCalledWith(""));
+    expect(await screen.findByText("Owner Mac is unreachable.")).toBeInTheDocument();
+    expect(textarea).toHaveValue("/lock");
+  });
+
   it("opens Codex MCP inventory locally instead of sending a turn", async () => {
     const onShowMcpInventory = vi.fn();
     const startTurn = vi.fn(async () => ({

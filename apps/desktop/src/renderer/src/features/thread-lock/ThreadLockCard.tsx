@@ -15,7 +15,9 @@ export function describeThreadLockOrigin(lock: ThreadLock): string {
     ? "Agent tool"
     : lock.source === "peer"
       ? "Another instance"
-      : "You";
+      : lock.source === "messaging"
+        ? "Messaging"
+        : "You";
   return `${who} · ${LOCKED_AT_FORMAT.format(lock.lockedAt)}`;
 }
 

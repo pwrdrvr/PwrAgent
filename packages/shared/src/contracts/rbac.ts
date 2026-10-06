@@ -672,6 +672,9 @@ export const STATUS_ACTION_PERMISSIONS: Record<string, MessagingPermissionId> = 
   "status:compact": "thread.control.compact",
   "status:stop": "thread.control.stop",
   "status:handoff": "thread.control.handoff",
+  // As for mutate_thread's lock fields: a lock parks the thread for someone
+  // else's work, and only who may hand a thread off may park it.
+  "status:lock": "thread.control.handoff",
 };
 
 /**
