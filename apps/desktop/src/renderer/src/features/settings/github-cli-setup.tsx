@@ -88,7 +88,8 @@ export function GitHubCliSetup(props: {
             </span>
           ) : null}
           <span className="settings-pathrow__path settings-gh-status__reason">
-            After installing, click Re-check and select the updated path under Available paths.
+            After installing, enable GitHub checks if they are off, then click Re-check
+            and select the updated path under Available paths.
             Use Choose… if it is not detected.
           </span>
           <div className="settings-inline-actions">

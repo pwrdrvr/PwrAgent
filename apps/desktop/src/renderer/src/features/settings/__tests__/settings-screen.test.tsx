@@ -4604,6 +4604,40 @@ describe("SettingsScreen", () => {
     expect(getGhStatus).toHaveBeenCalledWith({ recheck: true });
   });
 
+  it.each(["empty", "unavailable", "installed"] as const)(
+    "shows missing gh installation guidance with checks off and %s discovery",
+    async (discoveryState) => {
+      const snapshot = createSnapshot();
+      snapshot.applications.gh.discovery = {
+        candidates: discoveryState === "empty" ? [] : [{
+          command: "/usr/bin/gh",
+          source: "path",
+          executable: discoveryState === "installed",
+          selected: discoveryState === "installed",
+          version: discoveryState === "installed" ? "2.99.0" : undefined,
+        }],
+      };
+      const getGhStatus = vi.fn();
+      render(
+        <SettingsScreen
+          desktopApi={{ platform: "linux", getGhStatus }}
+          initialSection="git"
+          settings={createSettingsState(snapshot)}
+          onClose={() => undefined}
+        />,
+      );
+      const ghPanel = screen.getByRole("heading", { name: "GitHub CLI (gh)" }).closest("section")!;
+      expect(getGhStatus).not.toHaveBeenCalled();
+      if (discoveryState === "installed") {
+        expect(within(ghPanel).queryByText("Install GitHub CLI")).not.toBeInTheDocument();
+      } else {
+        expect(within(ghPanel).getByText("Install GitHub CLI")).toBeInTheDocument();
+        expect(within(ghPanel).getByText("Ubuntu / Debian commands")).toBeInTheDocument();
+        expect(within(ghPanel).getByText(/enable GitHub checks if they are off/)).toBeInTheDocument();
+      }
+    },
+  );
+
   it("clears the attachment warning after rechecking an upgraded selected gh", async () => {
     const snapshot = createSnapshot();
     const discovery = (version: string) => ({

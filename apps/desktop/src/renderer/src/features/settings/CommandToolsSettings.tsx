@@ -428,6 +428,8 @@ export function GhToolSection(props: {
   const ghNeedsUpgrade = provider === "github"
     && Boolean(selected && isValidatedDiscoveryCandidate(selected))
     && isGhVersionTooOldForAttachments(resolvedVersion);
+  const ghNeedsInstall = provider === "github"
+    && !candidates.some(isValidatedDiscoveryCandidate);
   const sourceLabel = gh.path.source === "default" ? "auto" : gh.path.source;
   const saveGhPath = async (path: string): Promise<void> => {
     try {
@@ -551,7 +553,7 @@ export function GhToolSection(props: {
             </div>
           }
         />
-        {provider === "github" && (ghNeedsUpgrade || (status && !status.installed)) ? (
+        {ghNeedsUpgrade || ghNeedsInstall ? (
           <GitHubCliSetup
             desktopApi={desktopApi}
             upgrade={ghNeedsUpgrade}
