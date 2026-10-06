@@ -520,24 +520,25 @@ Focus states should be visible and tangerine-led, but contained so they do not c
 
 ## Tooltips
 
-Two patterns. Pick the right one:
+Every tooltip renders in a portal on `document.body`, so no pane can
+clip it and no stacking context can bury it. Two ways in:
 
-**CSS pseudo-element tooltip** (`tooltip-target` + `data-tooltip` in
-`app.css`): cheapest and stateless. Use when the hovered element and
-all its ancestors render with `overflow: visible`. The tooltip is an
-`::after` pseudo-element positioned absolutely; any clipping ancestor
-(`overflow: hidden`, `overflow: auto`, `overflow: scroll`) chops it.
+**Declarative** (`tooltip-target` + `data-tooltip`): the default for a
+plain-text tooltip. `DataTooltipLayer`
+(`renderer/src/lib/DataTooltipLayer.tsx`), mounted once at the renderer
+root, opens it on hover or keyboard focus and keeps it in the viewport.
+It works anywhere, including inside clipping panes, beside the sidebar,
+and on a disabled control.
 
 ```tsx
-<span className="… tooltip-target" data-tooltip={text}>…</span>
+<button className="… tooltip-target" data-tooltip={text}>…</button>
 ```
 
-**Portal-rendered tooltip** (`useViewportTooltip` hook in
-`renderer/src/lib/useViewportTooltip.tsx`): when ANY ancestor clips —
-sidebar scroll regions, overflow-hidden chips with text-ellipsis,
-draggable rails. The hook renders the tooltip via `createPortal` to
-`document.body` with `position: fixed`, then clamps to viewport bounds
-via `useLayoutEffect` after measuring the rendered text.
+**Hook** (`useViewportTooltip` in
+`renderer/src/lib/useViewportTooltip.tsx`): use it when the tooltip needs
+more than a string. Examples are `ReactNode` content, a structured card
+class, a hover delay, or pointer-following placement. It is the same
+portal and the same placement code.
 
 ```tsx
 const { show, hide, tooltipNode } =
@@ -554,6 +555,15 @@ return (
   </span>
 );
 ```
+
+Anti-pattern: a CSS pseudo-element tooltip (`::after` with
+`content: attr(…)`). A pseudo-element paints inside its host. Every
+`overflow` ancestor clips it, and every stacking context around the host
+caps it. That is why the composer's toggles drew their tooltips under
+the sidebar. Do not fix one control by moving its tooltip's x or raising
+one z-index. Use one of the two patterns above.
+`styles/__tests__/data-tooltip-layer-contract.test.ts` fails on an
+`attr(data-tooltip)` in any renderer stylesheet.
 
 Both honor `\n` for multi-line bodies via `white-space: pre-wrap`.
 
