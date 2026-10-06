@@ -1257,9 +1257,12 @@ describe("bootstrapApp", () => {
 
     await import("../index");
     await flushMicrotasks();
+    const { developmentDockIconPath } = await import("../themed-dock-icon");
 
+    // The glass or flat tile by this Mac's version; themed-dock-icon.test.ts
+    // covers the choice.
     expect(nativeImageCreateFromPathMock).toHaveBeenCalledWith(
-      "/test/app/build/icon-macos.png",
+      developmentDockIconPath("/test/app"),
     );
     expect(dockSetIconMock).toHaveBeenCalledWith(nativeImageMock);
   });
