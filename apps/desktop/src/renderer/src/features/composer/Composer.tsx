@@ -1523,10 +1523,16 @@ type ThreadEnvActionStartingKey = {
  * An environment selection in flight on one thread. `environmentId` is the
  * target (undefined clears the environment), which the chip shows until the
  * recorded runtime catches up: setup runs before main records the selection.
+ * `applied` marks a call that resolved. A federated thread's runtime event
+ * rides the peer's notification stream, which is not ordered against the RPC
+ * response, so the target stays on the chip, no longer busy, until the
+ * runtime moves off `previousEnvironmentId`.
  */
 type ThreadEnvSelecting = {
+  applied?: boolean;
   backend: NavigationThreadSummary["source"];
   environmentId?: string;
+  previousEnvironmentId?: string;
   threadId: string;
 };
 
@@ -3252,6 +3258,28 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const [activeDirectoryRefIndex, setActiveDirectoryRefIndex] = useState(0);
   const [activeHashReferenceIndex, setActiveHashReferenceIndex] = useState(0);
   const [dismissedAutocompleteKey, setDismissedAutocompleteKey] = useState<string>();
+
+  // A settled marker is dropped, so a later runtime change (another window
+  // returning the thread to its old environment) is not read as this
+  // selection still catching up.
+  useEffect(() => {
+    if (!threadEnvSelecting?.applied) {
+      return;
+    }
+    const runtimeEnvironmentId =
+      props.thread?.source === threadEnvSelecting.backend
+      && props.thread.id === threadEnvSelecting.threadId
+        ? props.thread.codexEnvironmentRuntime?.environmentId
+        : undefined;
+    if (
+      runtimeEnvironmentId === threadEnvSelecting.environmentId
+      || runtimeEnvironmentId !== threadEnvSelecting.previousEnvironmentId
+    ) {
+      setThreadEnvSelecting((current) =>
+        current === threadEnvSelecting ? undefined : current,
+      );
+    }
+  }, [props.thread, threadEnvSelecting]);
 
   useEffect(() => {
     setAgentThreadError(undefined);
@@ -9947,6 +9975,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     const selecting: ThreadEnvSelecting = {
       backend: props.thread.source,
       environmentId,
+      previousEnvironmentId: props.thread.codexEnvironmentRuntime?.environmentId,
       threadId: props.thread.id,
     };
     setEnvironmentError(undefined);
@@ -9963,16 +9992,19 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         environmentId,
         actionId,
       });
+      // Only this call's own marker: a later selection owns the chip now.
+      setThreadEnvSelecting((current) =>
+        current === selecting ? { ...selecting, applied: true } : current,
+      );
     } catch (error) {
+      setThreadEnvSelecting((current) =>
+        current === selecting ? undefined : current,
+      );
       setEnvironmentError({
         message: error instanceof Error ? error.message : String(error),
         selectedEnvironmentId: environmentId,
       });
     } finally {
-      // Only this call's own marker: a later selection owns the chip now.
-      setThreadEnvSelecting((current) =>
-        current === selecting ? undefined : current,
-      );
       props.onPendingStatusChange?.(undefined);
     }
   };
@@ -10498,10 +10530,19 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   // value (often "No environment") and stays clickable beside a running
   // setup row. The stream also covers a run this composer did not start,
   // such as setup still finishing for a thread whose launch just created it.
+  const threadRuntimeEnvironmentId =
+    props.thread?.codexEnvironmentRuntime?.environmentId;
+  const threadEnvSelectingSettled =
+    threadEnvSelecting?.applied === true
+    && (
+      threadRuntimeEnvironmentId === threadEnvSelecting.environmentId
+      || threadRuntimeEnvironmentId !== threadEnvSelecting.previousEnvironmentId
+    );
   const currentThreadEnvSelecting =
     props.thread
     && threadEnvSelecting?.backend === props.thread.source
     && threadEnvSelecting.threadId === props.thread.id
+    && !threadEnvSelectingSettled
       ? threadEnvSelecting
       : undefined;
   const runningThreadEnvSetup =
@@ -10511,7 +10552,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       ? props.environmentSetup
       : undefined;
   const threadEnvironmentBusy = Boolean(
-    currentThreadEnvSelecting || runningThreadEnvSetup,
+    (currentThreadEnvSelecting && !currentThreadEnvSelecting.applied)
+    || runningThreadEnvSetup,
   );
   const threadEnvironmentValue = currentThreadEnvSelecting
     ? currentThreadEnvSelecting.environmentId ?? ""

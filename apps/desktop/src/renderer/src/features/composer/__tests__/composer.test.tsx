@@ -2941,6 +2941,66 @@ describe("Composer", () => {
       ).toBeNull();
     });
 
+    it("keeps the target on the chip when the call resolves before the runtime event", async () => {
+      // A federated thread's runtime event rides the peer's notification
+      // stream, which is not ordered against the RPC response.
+      let finishSelection: () => void = () => undefined;
+      const setCodexThreadEnvironment = vi.fn(
+        () =>
+          new Promise<{ backend: "codex"; threadId: string }>((resolve) => {
+            finishSelection = () =>
+              resolve({ backend: "codex", threadId: "thread-1" });
+          }),
+      );
+      const { rerender } = render(
+        <Composer
+          backends={[backendSummary("codex")]}
+          desktopApi={{ setCodexThreadEnvironment }}
+          disabled={false}
+          skills={[]}
+          thread={buildEnvironmentThread()}
+        />,
+      );
+
+      chooseDropdownOption("Environment", "PwrAgnt");
+      await act(async () => {
+        finishSelection();
+        await Promise.resolve();
+      });
+
+      expect(environmentChip()).toHaveTextContent("PwrAgnt");
+      expect(environmentChip()).toBeEnabled();
+      expect(environmentChip()).not.toHaveAttribute("aria-busy");
+
+      rerender(
+        <Composer
+          backends={[backendSummary("codex")]}
+          desktopApi={{ setCodexThreadEnvironment }}
+          disabled={false}
+          skills={[]}
+          thread={buildEnvironmentThread({
+            environmentId: "environment",
+            environmentName: "PwrAgnt",
+            executionTarget: "local",
+            actions: [],
+          })}
+        />,
+      );
+      expect(environmentChip()).toHaveTextContent("PwrAgnt");
+
+      // Settled: a later change elsewhere back to no environment shows.
+      rerender(
+        <Composer
+          backends={[backendSummary("codex")]}
+          desktopApi={{ setCodexThreadEnvironment }}
+          disabled={false}
+          skills={[]}
+          thread={buildEnvironmentThread()}
+        />,
+      );
+      expect(environmentChip()).toHaveTextContent("No environment");
+    });
+
     it("returns the chip to the recorded environment when the selection fails", async () => {
       let failSelection: () => void = () => undefined;
       const setCodexThreadEnvironment = vi.fn(
