@@ -37,8 +37,8 @@ function ensureWorker(): Promise<Worker> {
   if (worker) {
     return worker;
   }
-  const loading = import("./pixel-diff.worker?worker&inline").then(({ default: PixelDiffWorker }) => {
-    const created = new PixelDiffWorker();
+  const loading = import("./pixel-diff-worker-loader").then(({ createPixelDiffWorker }) => {
+    const created = createPixelDiffWorker();
     created.addEventListener("message", (event: MessageEvent<PixelDiffReply>) => {
       const reply = event.data;
       const waiting = pending.get(reply.id);
