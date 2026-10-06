@@ -2845,6 +2845,161 @@ describe("Composer", () => {
     });
   });
 
+  describe("environment selection in flight", () => {
+    const buildEnvironmentThread = (
+      codexEnvironmentRuntime?: NavigationThreadSummary["codexEnvironmentRuntime"],
+    ): NavigationThreadSummary => ({
+      id: "thread-1",
+      title: "Environment selection",
+      titleSource: "explicit",
+      source: "codex",
+      executionMode: "default",
+      linkedDirectories: [
+        {
+          id: "fixture-repo",
+          label: "FixtureRepo",
+          path: "/repo/FixtureRepo",
+          kind: "local",
+        },
+      ],
+      inbox: { inInbox: false },
+      codexEnvironmentRuntime,
+      codexEnvironmentOptions: [
+        {
+          id: "environment",
+          name: "PwrAgnt",
+          sourcePath: "/repo/.codex/environments/environment.toml",
+          setupScript: "pnpm install",
+          actions: [],
+        },
+      ],
+    });
+    const environmentChip = (): HTMLElement =>
+      screen.getByRole("button", { name: "Environment" });
+
+    it("disables the chip with a spinner and shows the target until setup returns", async () => {
+      let finishSelection: () => void = () => undefined;
+      const setCodexThreadEnvironment = vi.fn(
+        () =>
+          new Promise<{ backend: "codex"; threadId: string }>((resolve) => {
+            finishSelection = () =>
+              resolve({ backend: "codex", threadId: "thread-1" });
+          }),
+      );
+      const { container, rerender } = render(
+        <Composer
+          backends={[backendSummary("codex")]}
+          desktopApi={{ setCodexThreadEnvironment }}
+          disabled={false}
+          skills={[]}
+          thread={buildEnvironmentThread()}
+        />,
+      );
+
+      expect(environmentChip()).toHaveTextContent("No environment");
+      expect(environmentChip()).toBeEnabled();
+
+      chooseDropdownOption("Environment", "PwrAgnt");
+
+      // Main records the runtime only after setup exits, so the thread prop
+      // still has none here: the chip must not fall back to "No environment".
+      expect(setCodexThreadEnvironment).toHaveBeenCalledTimes(1);
+      expect(environmentChip()).toHaveTextContent("PwrAgnt");
+      expect(environmentChip()).toBeDisabled();
+      expect(environmentChip()).toHaveAttribute("aria-busy", "true");
+      expect(
+        container.querySelector(
+          ".composer-dropdown__button[aria-busy='true'] .pending-spinner",
+        ),
+      ).not.toBeNull();
+
+      // The runtime event lands before the IPC call resolves.
+      rerender(
+        <Composer
+          backends={[backendSummary("codex")]}
+          desktopApi={{ setCodexThreadEnvironment }}
+          disabled={false}
+          skills={[]}
+          thread={buildEnvironmentThread({
+            environmentId: "environment",
+            environmentName: "PwrAgnt",
+            executionTarget: "local",
+            actions: [],
+          })}
+        />,
+      );
+      await act(async () => {
+        finishSelection();
+        await Promise.resolve();
+      });
+
+      expect(environmentChip()).toHaveTextContent("PwrAgnt");
+      expect(environmentChip()).toBeEnabled();
+      expect(environmentChip()).not.toHaveAttribute("aria-busy");
+      expect(
+        container.querySelector(".composer-dropdown__button .pending-spinner"),
+      ).toBeNull();
+    });
+
+    it("returns the chip to the recorded environment when the selection fails", async () => {
+      let failSelection: () => void = () => undefined;
+      const setCodexThreadEnvironment = vi.fn(
+        () =>
+          new Promise<{ backend: "codex"; threadId: string }>((_resolve, reject) => {
+            failSelection = () =>
+              reject(new Error("Selected environment is not available for this thread."));
+          }),
+      );
+      render(
+        <Composer
+          backends={[backendSummary("codex")]}
+          desktopApi={{ setCodexThreadEnvironment }}
+          disabled={false}
+          skills={[]}
+          thread={buildEnvironmentThread()}
+        />,
+      );
+
+      chooseDropdownOption("Environment", "PwrAgnt");
+      expect(environmentChip()).toBeDisabled();
+
+      await act(async () => {
+        failSelection();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(environmentChip()).toHaveTextContent("No environment");
+      expect(environmentChip()).toBeEnabled();
+      expect(environmentChip()).not.toHaveAttribute("aria-busy");
+    });
+
+    it("stays busy on the running setup's environment for a run it did not start", () => {
+      render(
+        <Composer
+          backends={[backendSummary("codex")]}
+          desktopApi={{ setCodexThreadEnvironment: vi.fn() }}
+          disabled={false}
+          environmentSetup={{
+            key: "progress:thread:codex:thread-1:1",
+            phase: "setup",
+            status: "running",
+            environmentId: "environment",
+            environmentName: "PwrAgnt",
+            command: "pnpm install",
+            startedAt: 1,
+          }}
+          skills={[]}
+          thread={buildEnvironmentThread()}
+        />,
+      );
+
+      expect(environmentChip()).toHaveTextContent("PwrAgnt");
+      expect(environmentChip()).toBeDisabled();
+      expect(environmentChip()).toHaveAttribute("aria-busy", "true");
+    });
+  });
+
   it("shows a disabled spinner on the environment Run button after starting", async () => {
     vi.useFakeTimers();
     const runCodexEnvironmentAction = vi.fn(async () => ({

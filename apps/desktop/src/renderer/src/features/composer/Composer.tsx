@@ -1519,6 +1519,17 @@ type ThreadEnvActionStartingKey = {
   threadId: string;
 };
 
+/**
+ * An environment selection in flight on one thread. `environmentId` is the
+ * target (undefined clears the environment), which the chip shows until the
+ * recorded runtime catches up: setup runs before main records the selection.
+ */
+type ThreadEnvSelecting = {
+  backend: NavigationThreadSummary["source"];
+  environmentId?: string;
+  threadId: string;
+};
+
 function sameThreadEnvActionStartingKey(
   left: ThreadEnvActionStartingKey | undefined,
   right: ThreadEnvActionStartingKey | undefined,
@@ -3179,6 +3190,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     selectedEnvironmentId?: string;
   }>();
   const [environmentSetupRetrying, setEnvironmentSetupRetrying] = useState(false);
+  const [threadEnvSelecting, setThreadEnvSelecting] =
+    useState<ThreadEnvSelecting>();
   const [agentThreadSaving, setAgentThreadSaving] = useState(false);
   const [applicationOpenError, setApplicationOpenError] = useState<string>();
   const [threadEnvActionStarting, setThreadEnvActionStartingState] =
@@ -9931,7 +9944,13 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       return;
     }
 
+    const selecting: ThreadEnvSelecting = {
+      backend: props.thread.source,
+      environmentId,
+      threadId: props.thread.id,
+    };
     setEnvironmentError(undefined);
+    setThreadEnvSelecting(selecting);
     props.onPendingStatusChange?.(
       environmentId ? "Selecting environment" : "Clearing environment",
     );
@@ -9950,6 +9969,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         selectedEnvironmentId: environmentId,
       });
     } finally {
+      // Only this call's own marker: a later selection owns the chip now.
+      setThreadEnvSelecting((current) =>
+        current === selecting ? undefined : current,
+      );
       props.onPendingStatusChange?.(undefined);
     }
   };
@@ -10469,6 +10492,32 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     threadEnvActionStarting,
     currentThreadEnvActionStartingKey,
   );
+  // The Environment chip is busy while a selection is in flight here, and
+  // while any setup run streams for this thread. Main records the runtime
+  // only after setup exits, so without this the chip keeps reading the old
+  // value (often "No environment") and stays clickable beside a running
+  // setup row. The stream also covers a run this composer did not start,
+  // such as setup still finishing for a thread whose launch just created it.
+  const currentThreadEnvSelecting =
+    props.thread
+    && threadEnvSelecting?.backend === props.thread.source
+    && threadEnvSelecting.threadId === props.thread.id
+      ? threadEnvSelecting
+      : undefined;
+  const runningThreadEnvSetup =
+    props.thread
+    && props.environmentSetup?.phase === "setup"
+    && props.environmentSetup.status === "running"
+      ? props.environmentSetup
+      : undefined;
+  const threadEnvironmentBusy = Boolean(
+    currentThreadEnvSelecting || runningThreadEnvSetup,
+  );
+  const threadEnvironmentValue = currentThreadEnvSelecting
+    ? currentThreadEnvSelecting.environmentId ?? ""
+    : runningThreadEnvSetup?.environmentId
+      ?? props.thread?.codexEnvironmentRuntime?.environmentId
+      ?? "";
   const threadWorkspace = props.thread ? getThreadWorkspace(props.thread) : undefined;
   const showPrAutoDispatchToggle = Boolean(
     props.thread && getPrimaryWorkspaceRepository(props.thread),
@@ -13668,6 +13717,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             {props.launchpad && launchpadCodexEnvironmentOptions.length > 0 ? (
               <ComposerDropdown
                 ariaLabel="Environment"
+                busy={
+                  props.environmentSetup?.phase === "setup"
+                  && props.environmentSetup.status === "running"
+                }
                 compact
                 disabled={launchpadSubmitting}
                 icon={FileCodeIcon}
@@ -13697,10 +13750,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             {!props.launchpad && threadCodexEnvironmentOptions.length > 0 ? (
               <ComposerDropdown
                 ariaLabel="Environment"
+                busy={threadEnvironmentBusy}
                 compact
                 disabled={!props.desktopApi?.setCodexThreadEnvironment}
                 icon={FileCodeIcon}
-                value={props.thread?.codexEnvironmentRuntime?.environmentId ?? ""}
+                value={threadEnvironmentValue}
                 options={[
                   { label: "No environment", value: "" },
                   ...threadCodexEnvironmentOptions.map((environment) => ({
@@ -13739,6 +13793,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   }
                   disabled={
                     currentThreadEnvActionStarting ||
+                    threadEnvironmentBusy ||
                     !selectedThreadCodexAction ||
                     !props.desktopApi?.runCodexEnvironmentAction
                   }
@@ -13760,6 +13815,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   ariaLabel="Environment command"
                   compact
                   disabled={
+                    threadEnvironmentBusy ||
                     threadCodexEnvironmentActions.length === 0 ||
                     !props.desktopApi?.runCodexEnvironmentAction
                   }

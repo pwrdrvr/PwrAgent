@@ -66,6 +66,12 @@ export function useDismissableMenu<T extends HTMLElement>(
 
 export function ComposerDropdown(props: {
   ariaLabel: string;
+  /**
+   * A change of this choice is in flight. The trigger disables, sets
+   * `aria-busy`, and swaps its icon for the shared pending ring, so the chip
+   * itself says the selection is still being applied.
+   */
+  busy?: boolean;
   compact?: boolean;
   disabled?: boolean;
   icon?: ComposerDropdownIcon;
@@ -290,12 +296,17 @@ export function ComposerDropdown(props: {
         aria-describedby={visible && !open ? tooltipId : undefined}
         aria-controls={open ? listboxId : undefined}
         aria-expanded={open}
+        aria-busy={props.busy || undefined}
         aria-haspopup="listbox"
         aria-label={props.ariaLabel}
         className="composer-dropdown__button"
         data-value={props.value}
         ref={buttonRef}
-        disabled={props.disabled || props.options.length + otherOptions.length === 0}
+        disabled={
+          props.disabled
+          || props.busy
+          || props.options.length + otherOptions.length === 0
+        }
         id={props.id}
         type="button"
         value={props.value}
@@ -316,7 +327,11 @@ export function ComposerDropdown(props: {
           onOpenChange?.(nextOpen);
         }}
       >
-        {Icon ? (
+        {props.busy ? (
+          <span aria-hidden="true" className="composer-dropdown__icon">
+            <span className="pending-spinner pending-spinner--sm" />
+          </span>
+        ) : Icon ? (
           <span aria-hidden="true" className="composer-dropdown__icon">
             <Icon size={props.iconOnly ? 15 : 13} />
           </span>
