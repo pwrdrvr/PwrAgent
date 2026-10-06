@@ -6,11 +6,14 @@ import {
   DraftIcon,
   FolderIcon,
   TerminalIcon,
+  TodoIcon,
   WorktreeIcon,
 } from "../../icons";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { copyText } from "../../lib/copy-text";
 import { readRendererFederationTarget } from "../../lib/federation-window";
+import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
+import { useThreadTodosForKey } from "../thread-todos/useThreadTodos";
 import { InstanceChip } from "../federation/InstanceGlyph";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
@@ -91,6 +94,10 @@ export function ThreadMetaChips({
   // Same reason as the terminal chip: the sidebar clips a native `title`, and
   // the Star Map layer would paint over one anyway.
   const draftTooltip = useViewportTooltip({ className: "viewport-tooltip" });
+  const todoTooltip = useViewportTooltip({ className: "viewport-tooltip" });
+  const openTodos = useThreadTodosForKey(
+    thread.federation ? "" : threadSummaryIdentityKey(thread),
+  );
   const branchDrifted = isBranchDrifted(thread.gitBranch, thread.observedGitBranch);
   const branchChip = thread.gitBranch ?? thread.observedGitBranch;
   const gitWorking = thread.gitWorkingState;
@@ -301,6 +308,28 @@ export function ThreadMetaChips({
         </span>
       ) : null}
       {draftTooltip.tooltipNode}
+
+      {openTodos.length > 0 ? (
+        <span
+          aria-label={`${openTodos.length} open to-do${openTodos.length === 1 ? "" : "s"}`}
+          role="img"
+          className="thread-row__chip thread-row__chip--todos thread-row__chip--persistent"
+          data-thread-todos={openTodos.length}
+          onMouseEnter={(event) =>
+            todoTooltip.show(
+              event.currentTarget,
+              formatTodoTooltip(openTodos.map((todo) => todo.title)),
+            )
+          }
+          onMouseLeave={todoTooltip.hide}
+        >
+          <span aria-hidden="true" className="thread-row__chip-icon">
+            <TodoIcon size={12} />
+          </span>
+          <span className="thread-row__chip-label">{openTodos.length}</span>
+        </span>
+      ) : null}
+      {todoTooltip.tooltipNode}
 
       {hasApprovalRequest ? (
         <span
@@ -585,4 +614,14 @@ export function CopyableThreadChip(props: {
       {tooltip.tooltipNode}
     </>
   );
+}
+
+function formatTodoTooltip(titles: string[]): string {
+  const shown = titles.slice(0, 3).map((title) => `• ${title}`);
+  const more = titles.length - shown.length;
+  return [
+    titles.length === 1 ? "1 open to-do" : `${titles.length} open to-dos`,
+    ...shown,
+    ...(more > 0 ? [`and ${more} more`] : []),
+  ].join("\n");
 }

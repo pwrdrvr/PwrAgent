@@ -19,6 +19,7 @@ import {
 } from "react";
 import {
   buildThreadIdentityKey,
+  DEFAULT_THREAD_TODO_MERGE_METHOD,
   federatedThreadIdentityKey,
   DEFAULT_BACKGROUND_PR_POLLING,
   DEFAULT_PR_AUTO_DISPATCH_ALLOWED,
@@ -103,6 +104,7 @@ import { useBackendSummaries } from "./lib/useBackendSummaries";
 import { useDesktopApi, type DesktopApi } from "./lib/desktop-api";
 import { useDesktopApplications } from "./lib/useDesktopApplications";
 import { useEventCallback } from "./lib/useEventCallback";
+import { useExecutionModeSelection } from "./lib/useExecutionModeSelection";
 import {
   readRendererFederationLabel,
   readRendererFederationTarget,
@@ -142,6 +144,11 @@ import { useScheduledThreadActionProjection } from "./lib/useScheduledThreadActi
 import { useIndependentQueueProjection } from "./lib/useIndependentQueueProjection";
 import { useThreadQueuedMessageIndicators } from "./lib/useThreadQueuedMessageIndicators";
 import { useThreadDraftIndicators, useUnassignedThreadDraftCount } from "./lib/useThreadDraftIndicators";
+import {
+  ThreadTodoCountsContext,
+  useThreadTodos,
+} from "./features/thread-todos/useThreadTodos";
+import type { ThreadTodosView } from "./features/thread-todos/thread-todos-view";
 import { copyTextAsCodeBlock } from "./lib/copy-text";
 import { resolveThreadWorkingStatePath } from "./lib/thread-working-state-path";
 import { CodexConfigWarningBanner } from "./features/codex-config/CodexConfigWarningBanner";
@@ -2307,6 +2314,118 @@ function DesktopAppShell(props: {
     threads: navigation.threads,
   });
   const unassignedThreadDraftCount = useUnassignedThreadDraftCount(composerDraftStore);
+  const threadTodoController = useThreadTodos(desktopApi);
+  const localThreadTitles = useMemo(() => {
+    const titles = new Map<string, string>();
+    for (const thread of navigation.threads) {
+      if (!thread.federation) {
+        titles.set(buildThreadIdentityKey(thread.source, thread.id), thread.title);
+      }
+    }
+    return titles;
+  }, [navigation.threads]);
+  const listThreadTodos = desktopApi?.listThreadTodos;
+  const configuredMergeMethod = props.settings.snapshot?.git?.defaultMergeMethod?.value;
+  // Peers that can host a handoff thread, the same list the new-thread
+  // machine chip offers.
+  const todoHandoffInstances = useMemo(
+    () => newThreadFederationTargets
+      .filter((target) => target.availability === "available")
+      .map((target) => ({ instanceId: target.instanceId, label: target.label })),
+    [newThreadFederationTargets],
+  );
+  // A handoff card asking for Full Access passes the same confirmation as
+  // every other escalation: the agent proposed the mode, the operator has
+  // not chosen it yet. A declined dialog leaves the run's promise pending,
+  // which the card reads as "nothing happened".
+  const pendingFullAccessTodoRunRef = useRef<(() => void) | undefined>(undefined);
+  const {
+    fullAccessRiskDialog: todoFullAccessRiskDialog,
+    requestExecutionModeSelection: requestTodoExecutionMode,
+  } = useExecutionModeSelection({
+    applyExecutionMode: () => {
+      const run = pendingFullAccessTodoRunRef.current;
+      pendingFullAccessTodoRunRef.current = undefined;
+      run?.();
+    },
+    currentExecutionMode: "default",
+    desktopApi,
+    dismissed: settings.snapshot?.experimental.fullAccessRiskWarningDismissed.value ?? false,
+    onDismiss: () => handleDismissFullAccessRiskWarning(),
+  });
+  const threadTodosView = useMemo<ThreadTodosView | undefined>(() => {
+    if (!listThreadTodos || readRendererFederationTarget()) return undefined;
+    const showTodoThread = (backend: AppServerBackendKind, threadId: string): void => {
+      showThreadFromLink({ backend, threadId });
+    };
+    // Settings is the live source for the default, so the button relabels
+    // as soon as it changes there rather than on the next card change.
+    const mergeMethods = threadTodoController.mergeMethods || configuredMergeMethod
+      ? {
+          defaultMethod: configuredMergeMethod
+            ?? threadTodoController.mergeMethods?.defaultMethod
+            ?? DEFAULT_THREAD_TODO_MERGE_METHOD,
+          byProject: threadTodoController.mergeMethods?.byProject ?? {},
+        }
+      : undefined;
+    return {
+      open: threadTodoController.openTodos,
+      openByThreadKey: threadTodoController.openByThreadKey,
+      revision: threadTodoController.revision,
+      runningIds: threadTodoController.runningIds,
+      mergeMethods,
+      instances: todoHandoffInstances,
+      threadTitle: (todo) =>
+        localThreadTitles.get(buildThreadIdentityKey(todo.backend, todo.threadId))
+          ?? "Untitled thread",
+      resolve: (todo, status, resolution) =>
+        threadTodoController.resolve(todo.id, status, resolution),
+      run: (todo, options) => {
+        if (
+          todo.action?.type !== "start_thread"
+          || todo.action.executionMode !== "full-access"
+        ) {
+          return threadTodoController.runAction(todo.id, options);
+        }
+        return new Promise((resolve, reject) => {
+          pendingFullAccessTodoRunRef.current = () => {
+            threadTodoController.runAction(todo.id, options).then(resolve, reject);
+          };
+          requestTodoExecutionMode("full-access");
+        });
+      },
+      openThread: (todo) => showTodoThread(todo.backend, todo.threadId),
+      openStartedThread: (todo) => {
+        const started = todo.startedThread;
+        if (!started) return;
+        showThreadFromLink({
+          backend: started.backend,
+          threadId: started.threadId,
+          ...(started.instanceId
+            ? {
+                instanceId: started.instanceId,
+                ...(started.instanceLabel ? { instanceLabel: started.instanceLabel } : {}),
+              }
+            : {}),
+        });
+      },
+      listResolved: async () => {
+        const response = await listThreadTodos({ status: "all" });
+        return response.todos
+          .filter((todo) => todo.status !== "open")
+          .sort((left, right) =>
+            (right.resolvedAt ?? right.updatedAt) - (left.resolvedAt ?? left.updatedAt));
+      },
+    };
+  }, [
+    configuredMergeMethod,
+    listThreadTodos,
+    localThreadTitles,
+    requestTodoExecutionMode,
+    showThreadFromLink,
+    threadTodoController,
+    todoHandoffInstances,
+  ]);
   // Fetch the boot info once at mount. Stable for the renderer's
   // lifetime — the main process records the decision before this
   // window opens, and graduating the bootstrap profile spawns a
@@ -3234,6 +3353,7 @@ function DesktopAppShell(props: {
     mastheadActions,
     historyNav,
     starMap: starMapControls,
+    threadTodos: threadTodosView,
     findOpen: threadFindOpen,
     findInitialQuery: threadFindInitialQuery,
     findTurnId: threadFindTurnId,
@@ -3393,6 +3513,7 @@ function DesktopAppShell(props: {
 
   return (
     <FederationDisplayLabelsProvider health={liveFederationHealth}>
+    <ThreadTodoCountsContext.Provider value={threadTodoController.openByThreadKey}>
     <TranscriptLinkProvider
       localInstanceId={liveFederationHealth?.instanceId}
       activeThread={navigation.selectedThread}
@@ -3954,7 +4075,9 @@ function DesktopAppShell(props: {
         ) : null}
       </div>
 
+      {todoFullAccessRiskDialog}
     </TranscriptLinkProvider>
+    </ThreadTodoCountsContext.Provider>
     </FederationDisplayLabelsProvider>
   );
 }

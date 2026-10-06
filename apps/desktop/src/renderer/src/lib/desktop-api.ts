@@ -5,6 +5,14 @@ import type {
   TerminateBackgroundTerminalRequest,
   TerminateBackgroundTerminalResponse,
 } from "@pwragent/shared";
+import type {
+  ListThreadTodosRequest,
+  ListThreadTodosResponse,
+  ResolveThreadTodoRequest,
+  RunThreadTodoActionRequest,
+  ThreadTodoMutationResponse,
+  ThreadTodosChangedEvent,
+} from "@pwragent/shared";
 import type { ReadUsageActivityRequest, ReadUsageActivityResponse, AnalyzeUsageActivityRequest, AnalyzeUsageActivityResponse } from "@pwragent/shared";
 import type { PrActivitySnapshot } from "@pwragent/shared";
 import type { HandoffInstanceThreadRequest, HandoffInstanceThreadResult } from "@pwragent/shared";
@@ -954,6 +962,20 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   releaseQueuedTurn?: (
     request: ReleaseQueuedTurnRequest,
   ) => Promise<ReleaseQueuedTurnResponse>;
+  listThreadTodos?: (
+    request?: ListThreadTodosRequest,
+  ) => Promise<ListThreadTodosResponse>;
+  resolveThreadTodo?: (
+    request: ResolveThreadTodoRequest,
+  ) => Promise<ThreadTodoMutationResponse>;
+  /** Merge or start-thread; start_review runs through the composer instead. */
+  runThreadTodoAction?: (
+    request: RunThreadTodoActionRequest,
+  ) => Promise<ThreadTodoMutationResponse>;
+  /** Marker event; refetch with `listThreadTodos`. Local windows only. */
+  onThreadTodosChanged?: (
+    callback: (event: ThreadTodosChangedEvent) => void,
+  ) => () => void;
   listScheduledThreadActions?: (
     request?: ListScheduledThreadActionsRequest,
     consumerId?: string,

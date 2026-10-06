@@ -1396,6 +1396,11 @@ function SettingsSectionBody(props: {
             git: { pausePrAutoDispatchWhenBudgetEmpty: enabled },
           });
         }}
+        onDefaultMergeMethodChange={async (method) => {
+          await props.settings.writeConfig({
+            git: { defaultMergeMethod: method },
+          });
+        }}
         onRefresh={props.settings.refresh}
         onGhStatusChange={(status) => props.onForgeStatusChange("github", status)}
         onGlabStatusChange={(status) => props.onForgeStatusChange("gitlab", status)}

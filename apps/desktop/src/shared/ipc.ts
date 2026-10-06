@@ -166,6 +166,15 @@ export const SCHEDULED_ACTIONS_CREATE_CHANNEL = "scheduled-actions:create";
 export const SCHEDULED_ACTIONS_UPDATE_CHANNEL = "scheduled-actions:update";
 export const SCHEDULED_ACTIONS_CANCEL_CHANNEL = "scheduled-actions:cancel";
 export const SCHEDULED_ACTIONS_SEND_NOW_CHANNEL = "scheduled-actions:send-now";
+export const THREAD_TODOS_LIST_CHANNEL = "thread-todos:list";
+export const THREAD_TODOS_RESOLVE_CHANNEL = "thread-todos:resolve";
+export const THREAD_TODOS_RUN_ACTION_CHANNEL = "thread-todos:run-action";
+/**
+ * Marker event: a thread's to-do cards changed. Listeners refetch with
+ * `thread-todos:list`. Sent to local windows only; a peer's cards stay on
+ * the peer.
+ */
+export const THREAD_TODOS_CHANGED_EVENT_CHANNEL = "thread-todos:changed";
 export const AGENT_START_REVIEW_CHANNEL = "agent:start-review";
 export const AGENT_COMPACT_THREAD_CHANNEL = "agent:compact-thread";
 export const AGENT_LIST_THREAD_MCP_SERVERS_CHANNEL =

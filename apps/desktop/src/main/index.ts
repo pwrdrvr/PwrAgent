@@ -34,6 +34,7 @@ import {
   disposeScheduledActionIpcHandlers,
   registerScheduledActionIpcHandlers,
 } from "./ipc/scheduled-actions-ipc";
+import { registerThreadTodoIpcHandlers } from "./ipc/thread-todos-ipc";
 import {
   disposeScheduledThreadActionService,
 } from "./scheduled-actions/scheduled-thread-action-service";
@@ -1515,8 +1516,10 @@ export function bootstrapApp(): void {
         });
       },
     };
+    const federationAgentToolsHandler =
+      createFederationAgentToolsHandler(federationAgentToolOptions);
     getDesktopBackendRegistry().setPwrAgentFederationHandler(
-      createFederationAgentToolsHandler(federationAgentToolOptions),
+      federationAgentToolsHandler,
     );
     // The same tools, for the Star Map [+] intake agent — built per intake
     // rather than once, because two of its options are properties of the one
@@ -1589,6 +1592,8 @@ export function bootstrapApp(): void {
     });
     registerAgentIpcHandlers();
     registerScheduledActionIpcHandlers();
+    // A to-do's "Start thread on" runs through the same federation tools.
+    registerThreadTodoIpcHandlers({ federation: federationAgentToolsHandler });
     registerApplicationIpcHandlers();
     registerAutomationIpcHandlers();
     registerAppMetadataIpcHandlers();

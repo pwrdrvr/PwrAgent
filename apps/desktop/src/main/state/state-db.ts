@@ -17,7 +17,7 @@ import {
   isSqliteWriteMetricsEnabled,
 } from "./sqlite-write-metrics.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 68;
+export const CURRENT_STATE_DB_USER_VERSION = 70;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -552,6 +552,64 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_scheduled_thread_actions_queue
   ON scheduled_thread_actions(queue_entry_id)
   WHERE queue_entry_id IS NOT NULL;
 `;
+
+// Cards a thread raises for the operator (review, merge, start a proposed
+// thread, or a reminder). Written once per tool call or operator click, never
+// per streamed event. The partial unique index enforces "one open card per
+// key per thread"; a done card frees its key for the next one.
+const THREAD_TODO_SCHEMA = `
+CREATE TABLE IF NOT EXISTS thread_todos (
+  todo_id      TEXT PRIMARY KEY,
+  backend      TEXT NOT NULL,
+  thread_id    TEXT NOT NULL,
+  todo_key     TEXT,
+  kind         TEXT NOT NULL,
+  status       TEXT NOT NULL,
+  title        TEXT NOT NULL,
+  detail       TEXT,
+  action_json  TEXT,
+  cwd          TEXT,
+  result_json  TEXT,
+  error        TEXT,
+  created_at   INTEGER NOT NULL,
+  updated_at   INTEGER NOT NULL,
+  resolved_at  INTEGER,
+  source_project_json TEXT,
+  target_project_json TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_thread_todos_status_thread
+  ON thread_todos(status, backend, thread_id, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_thread_todos_open_key
+  ON thread_todos(backend, thread_id, todo_key)
+  WHERE status = 'open' AND todo_key IS NOT NULL;
+`;
+
+/**
+ * The merge method an operator last picked from a to-do card's menu, per
+ * project. Learned state, so it lives here rather than in config.toml; the
+ * configured default is `[git] default_merge_method`.
+ */
+const THREAD_TODO_PROJECT_PREFS_SCHEMA = `
+CREATE TABLE IF NOT EXISTS thread_todo_project_prefs (
+  directory_key TEXT PRIMARY KEY,
+  merge_method  TEXT NOT NULL,
+  updated_at    INTEGER NOT NULL
+);
+`;
+
+/** v70: the project a card came from and the one it is for. */
+function ensureThreadTodoProjectColumns(db: BetterSqlite3.Database): void {
+  if (!tableExists(db, "thread_todos")) {
+    db.exec(THREAD_TODO_SCHEMA);
+  }
+  if (!tableColumnExists(db, "thread_todos", "source_project_json")) {
+    db.exec("ALTER TABLE thread_todos ADD COLUMN source_project_json TEXT");
+  }
+  if (!tableColumnExists(db, "thread_todos", "target_project_json")) {
+    db.exec("ALTER TABLE thread_todos ADD COLUMN target_project_json TEXT");
+  }
+  db.exec(THREAD_TODO_PROJECT_PREFS_SCHEMA);
+}
 
 const MESSAGING_ACTIVITY_SUMMARY_SCHEMA = `
 CREATE TABLE IF NOT EXISTS messaging_activity_summary (
@@ -1879,6 +1937,18 @@ export class StateDb {
           db.pragma("user_version = 68");
         })();
       }
+      if ((db.pragma("user_version", { simple: true }) as number) < 69) {
+        db.transaction(() => {
+          db.exec(THREAD_TODO_SCHEMA);
+          db.pragma("user_version = 69");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 70) {
+        db.transaction(() => {
+          ensureThreadTodoProjectColumns(db);
+          db.pragma("user_version = 70");
+        })();
+      }
       // Keep current-version databases converged without asking pre-v36 profiles
       // to install the unique index before the migration above removes duplicates.
       db.exec(PR_AUTO_DISPATCH_GLOBAL_FINGERPRINT_INDEX);
@@ -2589,6 +2659,8 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     db.exec(REMOTE_THREAD_TARGET_SCHEMA);
     db.exec(STAR_MAP_ARRANGEMENT_SCHEMA);
     db.exec(STAR_MAP_WORKSPACE_SCHEMA);
+    db.exec(THREAD_TODO_SCHEMA);
+    ensureThreadTodoProjectColumns(db);
     db.exec(DESKTOP_CONFIG_STORE_SCHEMA);
     if ((db.pragma("user_version", { simple: true }) as number) < 4) {
       db.pragma("user_version = 4");
@@ -4007,6 +4079,7 @@ function tableColumnExists(
     | "thread_pricing_summaries"
     | "remote_thread_pins"
     | "thread_search_fts"
+    | "thread_todos"
     | "thread_usage_lines"
     | "thread_usage_turns",
   columnName: string,
@@ -4046,10 +4119,15 @@ function readTableInfo(
     | "thread_pricing_summaries"
     | "remote_thread_pins"
     | "thread_search_fts"
+    | "thread_todos"
     | "thread_usage_lines"
     | "thread_usage_turns",
 ): Array<{ name: string }> {
   switch (tableName) {
+    case "thread_todos":
+      return db.prepare("PRAGMA table_info(thread_todos)").all() as Array<{
+        name: string;
+      }>;
     case "app_runtime_instances":
       return db.prepare("PRAGMA table_info(app_runtime_instances)").all() as Array<{
         name: string;

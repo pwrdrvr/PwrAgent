@@ -3,6 +3,7 @@ import type { MessagingToolUpdateMode } from "./messaging";
 import type { AppServerBackendKind } from "./normalized-app-server";
 import type { FederationTarget } from "./federation";
 import type { DesktopHelperModelSettings } from "../helper-models";
+import type { ThreadTodoMergeMethod } from "./thread-todos";
 import {
   TOOL_OUTPUT_WARNING_INVOCATIONS,
   TOOL_OUTPUT_WARNING_PERCENT,
@@ -1460,6 +1461,11 @@ export type DesktopSettingsSnapshot = {
     prAutoDispatchBudgetCapacity: DesktopSettingsValue<number>;
     prAutoDispatchBudgetRefillPerMinute: DesktopSettingsValue<number>;
     pausePrAutoDispatchWhenBudgetEmpty: DesktopSettingsValue<boolean>;
+    /**
+     * What a to-do card's merge button does. A pick from the card's menu
+     * overrides it for that project.
+     */
+    defaultMergeMethod: DesktopSettingsValue<ThreadTodoMergeMethod>;
   };
   applications: DesktopApplicationsSnapshot;
   worktrees: {
@@ -1702,6 +1708,7 @@ export type DesktopSettingsConfigPatch = {
     prAutoDispatchBudgetCapacity?: number;
     prAutoDispatchBudgetRefillPerMinute?: number;
     pausePrAutoDispatchWhenBudgetEmpty?: boolean;
+    defaultMergeMethod?: ThreadTodoMergeMethod;
   };
   applications?: {
     editor?: {

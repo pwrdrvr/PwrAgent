@@ -12,12 +12,15 @@ import {
   MAX_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
   MIN_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
   MIN_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
+  DEFAULT_THREAD_TODO_MERGE_METHOD,
   type DesktopSettingsSnapshot,
   type GhStatus,
+  type ThreadTodoMergeMethod,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { useNavigationSettingsPreview, isNavigationPreviewCancelled } from "../../lib/navigation-settings-preview";
 import {
+  SegmentedField,
   SettingsField,
   SettingsPanelHead,
   SettingsSection,
@@ -57,6 +60,17 @@ const DEFAULT_PAUSE_PR_AUTO_DISPATCH_WHEN_BUDGET_EMPTY_VALUE = {
   source: "default" as const,
 };
 
+const DEFAULT_MERGE_METHOD_VALUE = {
+  value: DEFAULT_THREAD_TODO_MERGE_METHOD,
+  source: "default" as const,
+};
+
+const MERGE_METHOD_OPTIONS: Array<{ label: string; value: ThreadTodoMergeMethod }> = [
+  { label: "Squash", value: "squash" },
+  { label: "Rebase", value: "rebase" },
+  { label: "Merge commit", value: "merge" },
+];
+
 export function GitSettings(props: {
   desktopApi?: DesktopApi;
   saving: boolean;
@@ -71,6 +85,7 @@ export function GitSettings(props: {
   onPausePrAutoDispatchWhenBudgetEmptyChange: (
     enabled: boolean,
   ) => Promise<void>;
+  onDefaultMergeMethodChange: (method: ThreadTodoMergeMethod) => Promise<void>;
   onRefresh: () => Promise<void>;
   /** Nav sub-route: the section slug to scroll to on arrival. */
   focusSectionId?: string;
@@ -107,6 +122,9 @@ export function GitSettings(props: {
   const defaultPrAutoDispatchEnabled =
     props.snapshot.git?.defaultPrAutoDispatchEnabled ??
     DEFAULT_PR_AUTO_DISPATCH_ENABLED_VALUE;
+  const defaultMergeMethod =
+    props.snapshot.git?.defaultMergeMethod ??
+    DEFAULT_MERGE_METHOD_VALUE;
   const prAutoDispatchBudgetCapacity =
     props.snapshot.git?.prAutoDispatchBudgetCapacity ??
     DEFAULT_PR_AUTO_DISPATCH_BUDGET_CAPACITY_VALUE;
@@ -447,6 +465,23 @@ export function GitSettings(props: {
             onChange={(enabled) => {
               return props.onPausePrAutoDispatchWhenBudgetEmptyChange(enabled);
             }}
+          />
+        </div>
+      </SettingsSection>
+      <SettingsSection
+        eyebrow="GitHub"
+        title="Merge cards"
+        description="How a to-do card merges its pull request. Picking another method on a card remembers it for that project."
+      >
+        <div className="settings-fields">
+          <SegmentedField
+            disabled={props.saving}
+            label="Default merge method"
+            sub="Used by projects where no other method was picked on a card."
+            options={MERGE_METHOD_OPTIONS}
+            source={sourceBadge(defaultMergeMethod)}
+            value={defaultMergeMethod.value}
+            onChange={(method) => props.onDefaultMergeMethodChange(method)}
           />
         </div>
       </SettingsSection>

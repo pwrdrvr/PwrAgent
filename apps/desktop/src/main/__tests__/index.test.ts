@@ -386,6 +386,10 @@ vi.mock("../ipc/native-voice", () => ({
   registerNativeVoiceIpcHandlers: registerNativeVoiceIpcHandlersMock,
 }));
 
+vi.mock("../ipc/thread-todos-ipc", () => ({
+  registerThreadTodoIpcHandlers: vi.fn(),
+}));
+
 vi.mock("../ipc/scheduled-actions-ipc", () => ({
   registerScheduledActionIpcHandlers: registerScheduledActionIpcHandlersMock,
   disposeScheduledActionIpcHandlers: disposeScheduledActionIpcHandlersMock,

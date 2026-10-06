@@ -6606,6 +6606,20 @@ a.button {
   color: var(--text-secondary);
 }
 
+/* Open to-dos. Neutral like the draft chip, with the accent on the glyph:
+   a card waiting is a prompt, not an alarm. */
+.thread-row__chip--todos {
+  border: 1px solid var(--border-subtle);
+  background: transparent;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.thread-row__chip--todos .thread-row__chip-icon {
+  color: var(--accent-bright);
+}
+
 .path-copy-target {
   position: relative;
 }
@@ -21079,6 +21093,769 @@ a.button {
 ::highlight(thread-find-active) {
   background-color: var(--accent-fill);
   color: var(--button-text);
+}
+
+/* Thread to-do cards. The focused thread's open cards stack in the
+   transcript's top-right corner, one at a time with a pager, the way the
+   notice toast pages; the anatomy below is the toast's. One below the find
+   bar's layer, and moved under it while it is open. */
+.thread-todo-stack {
+  position: absolute;
+  z-index: 29;
+  top: 10px;
+  right: 18px;
+  display: flex;
+  width: min(340px, calc(100% - 36px));
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  pointer-events: none;
+}
+
+.thread-todo-stack > * {
+  pointer-events: auto;
+}
+
+.thread-todo-stack.is-below-find {
+  top: 56px;
+}
+
+/* The shadow is on the deck, not the card, so the slivers of the cards
+   behind sit inside it rather than under the card's own shadow. */
+.thread-todo-stack__deck {
+  position: relative;
+  width: 100%;
+  margin-bottom: 0;
+  filter: drop-shadow(0 12px 24px var(--shadow-tint-soft));
+  animation: app-update-banner-enter 160ms ease-out;
+}
+
+.thread-todo-stack__deck[data-depth="1"] {
+  margin-bottom: 4px;
+}
+
+.thread-todo-stack__deck[data-depth="2"] {
+  margin-bottom: 8px;
+}
+
+.thread-todo-stack__deck[data-depth="1"]::before,
+.thread-todo-stack__deck[data-depth="2"]::before,
+.thread-todo-stack__deck[data-depth="2"]::after {
+  position: absolute;
+  z-index: -1;
+  right: 6px;
+  bottom: -4px;
+  left: 6px;
+  height: 12px;
+  border: 1px solid var(--border-subtle);
+  border-top: 0;
+  border-radius: 0 0 8px 8px;
+  background: var(--bg-panel-elevated);
+  content: "";
+}
+
+.thread-todo-stack__deck[data-depth="2"]::after {
+  z-index: -2;
+  right: 12px;
+  bottom: -8px;
+  left: 12px;
+}
+
+.thread-todo-card {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 6px 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  -webkit-app-region: no-drag;
+}
+
+.thread-todo-card__head {
+  display: flex;
+  min-height: 24px;
+  align-items: center;
+  gap: 8px;
+}
+
+.thread-todo-card__kind {
+  display: inline-grid;
+  width: 14px;
+  height: 14px;
+  flex: none;
+  place-items: center;
+  color: var(--accent-bright);
+}
+
+.thread-todo-card__ring {
+  width: 9px;
+  height: 9px;
+  border: 1.5px solid var(--text-muted);
+  border-radius: 50%;
+}
+
+.thread-todo-card__title {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.thread-todo-card__age {
+  flex: none;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 18px;
+}
+
+.thread-todo-card__tools {
+  display: flex;
+  flex: none;
+}
+
+/* Indented past the kind glyph, so the text lines up under the title. */
+.thread-todo-card__body {
+  min-width: 0;
+  padding: 0 8px 0 22px;
+  user-select: text;
+}
+
+.thread-todo-card__detail {
+  margin: 0;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12.5px;
+  line-height: 17px;
+}
+
+.thread-todo-card__facts {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 10px;
+  margin: 6px 0 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.thread-todo-card__fact {
+  display: contents;
+}
+
+.thread-todo-card__fact dt {
+  color: var(--text-muted);
+}
+
+.thread-todo-card__fact dd {
+  margin: 0;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+/* The proposed prompt, quoted. Three lines until it is opened; the clamp is
+   on the inner span so the padding never shows a partial fourth line. */
+.thread-todo-card__prompt {
+  display: block;
+  width: 100%;
+  margin: 6px 0 0;
+  padding: 5px 8px;
+  border: 0;
+  border-left: 2px solid var(--border-strong);
+  border-radius: 0 6px 6px 0;
+  background: var(--bg-panel-hover);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  line-height: 17px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.thread-todo-card__prompt:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.thread-todo-card__prompt-text {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.thread-todo-card__prompt.is-expanded .thread-todo-card__prompt-text {
+  display: block;
+  max-height: 240px;
+  overflow-y: auto;
+  -webkit-line-clamp: unset;
+}
+
+.thread-todo-card__error {
+  margin: 6px 0 0;
+  color: var(--danger-text);
+  font-size: 12px;
+  line-height: 17px;
+  overflow-wrap: anywhere;
+}
+
+.thread-todo-card__confirm {
+  margin: 8px 8px 0 22px;
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 17px;
+}
+
+.thread-todo-card__footer {
+  display: flex;
+  min-height: 24px;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 0 2px 0 8px;
+}
+
+.thread-todo-card__pager {
+  display: flex;
+  align-items: center;
+  margin-left: -6px;
+}
+
+.thread-todo-card__position {
+  min-width: 36px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+  text-align: center;
+}
+
+.thread-todo-card__actions {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.thread-todo-card__button {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 9px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.thread-todo-card__button--quiet {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.thread-todo-card__button--quiet:hover {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.thread-todo-card__button--busy {
+  color: var(--text-secondary);
+}
+
+/* Borderless. 24px keeps WCAG 2.5.8's target size, as the toast's do. */
+.thread-todo-card__icon-button {
+  display: inline-grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.thread-todo-card__icon-button:hover:not(:disabled),
+.thread-todo-card__icon-button:focus-visible {
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.thread-todo-card__icon-button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.thread-todo-card__icon-button:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+/* The project a card's work is for, when that is not this thread's. */
+.thread-todo-card__project {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  margin: 0 8px 4px 22px;
+  color: var(--accent-bright);
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 16px;
+}
+
+.thread-todo-card__project svg {
+  flex: none;
+}
+
+.thread-todo-card__project-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The prompt and its copy button. The button sits beside the quote, not in
+   it, so a click on it never also toggles the quote open. */
+.thread-todo-card__prompt-block {
+  display: flex;
+  align-items: flex-start;
+  gap: 2px;
+  margin-top: 6px;
+}
+
+.thread-todo-card__prompt-block .thread-todo-card__prompt {
+  min-width: 0;
+  flex: 1 1 auto;
+  margin: 0;
+}
+
+.thread-todo-card__copy {
+  flex: none;
+  margin-right: -6px;
+}
+
+/* A card's action as the composer's Send pill: chevron, seam, label. The
+   tokens are the composer's, so the two read as one control family. */
+.todo-split {
+  position: relative;
+  display: inline-flex;
+}
+
+.todo-split__pill {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: stretch;
+  overflow: hidden;
+  border: 1px solid var(--accent-border);
+  border-radius: 999px;
+  background: var(--bg-row-active);
+}
+
+.todo-split__chevron,
+.todo-split__primary {
+  display: inline-flex;
+  align-items: center;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--accent-bright);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.2;
+  white-space: nowrap;
+  transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.todo-split__chevron {
+  width: 26px;
+  justify-content: center;
+  padding: 0;
+  border-right: 1px solid var(--accent-border);
+}
+
+.todo-split__chevron svg {
+  transition: transform 120ms ease;
+}
+
+.todo-split--open .todo-split__chevron svg {
+  transform: rotate(180deg);
+}
+
+.todo-split__primary {
+  gap: 5px;
+  padding: 0 11px 0 8px;
+}
+
+/* Once a zone fills, its own edge is the boundary; the hairline would read
+   as a stray sliver beside it. */
+.todo-split__pill:hover .todo-split__chevron,
+.todo-split--open .todo-split__chevron {
+  border-right-color: transparent;
+}
+
+.todo-split__chevron:hover,
+.todo-split__primary:hover,
+.todo-split--open .todo-split__chevron {
+  background: var(--accent-fill);
+  color: var(--button-text);
+}
+
+/* One ring around the pill; a per-zone outline would be cropped by its clip. */
+.todo-split__chevron:focus,
+.todo-split__primary:focus {
+  outline: none;
+}
+
+.todo-split__pill:has(:focus-visible) {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* Opens downward: the stack sits at the top of the transcript. */
+.todo-split__menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 2;
+  min-width: 188px;
+  max-width: 260px;
+  padding: 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  box-shadow: var(--shadow-popover);
+}
+
+.todo-split__menu:focus {
+  outline: none;
+}
+
+.todo-split__item {
+  display: flex;
+  width: 100%;
+  min-height: 30px;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px 5px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 1.3;
+  text-align: left;
+}
+
+.todo-split__item:hover,
+.todo-split__item:focus-visible {
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+  outline: none;
+}
+
+.todo-split__item[aria-disabled="true"] {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.todo-split__item--back {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.todo-split__item-check {
+  display: inline-grid;
+  width: 14px;
+  flex: none;
+  place-items: center;
+  color: var(--accent-bright);
+}
+
+.todo-split__item-label {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.todo-split__separator {
+  height: 1px;
+  margin: 4px 2px;
+  background: var(--border-subtle);
+}
+
+/* Collapsed: a count chip in the same corner. Neutral border, accent glyph,
+   so it reads as present without competing with the transcript. */
+.thread-todo-stack__chip {
+  display: inline-flex;
+  min-height: 26px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 9px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  box-shadow: var(--shadow-popover);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.thread-todo-stack__chip svg {
+  color: var(--accent-bright);
+}
+
+.thread-todo-stack__chip:hover {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.thread-todo-stack__chip:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.thread-todo-stack__chip-count {
+  color: var(--text-primary);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.thread-todo-stack__notice {
+  display: flex;
+  max-width: 100%;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px 4px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  box-shadow: var(--shadow-popover);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 17px;
+}
+
+.thread-todo-stack__notice-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-todo-stack__notice-button,
+.thread-todos-panel__row-link {
+  min-height: 24px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--accent-bright);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.thread-todo-stack__notice-button:hover,
+.thread-todos-panel__row-link:hover {
+  background: var(--accent-soft);
+}
+
+.thread-todo-stack__notice-button:focus-visible,
+.thread-todos-panel__row-link:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+/* Rail panel: grouped by thread, this thread first. Its own cards sit flat
+   in the rail, so they drop the stack's elevation. */
+.thread-todos-panel__group {
+  margin-top: 12px;
+}
+
+.thread-todos-panel__group-title {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 0 0 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+}
+
+.thread-todos-panel__group-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-todos-panel__group-count {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.thread-todos-panel__list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.thread-todos-panel__row {
+  padding: 2px 0;
+}
+
+.thread-todos-panel__row-main {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  min-height: 28px;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+}
+
+button.thread-todos-panel__row-main {
+  cursor: pointer;
+}
+
+button.thread-todos-panel__row-main:hover {
+  border-color: var(--border-subtle);
+  background: var(--bg-panel-hover);
+}
+
+button.thread-todos-panel__row-main:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.thread-todos-panel__row-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-todos-panel__row[data-status="dismissed"] .thread-todos-panel__row-title {
+  color: var(--text-secondary);
+}
+
+.thread-todos-panel__row-meta {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  padding: 0 8px 0 30px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 16px;
+}
+
+/* Where a card came from or is for, under its row. */
+.thread-todos-panel__row-route {
+  margin: 0;
+  padding: 0 8px 0 30px;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-todos-panel__controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.thread-todos-panel__controls .subagent-lens-switch {
+  flex: 1 1 auto;
+  margin: 0;
+}
+
+/* Sits beside the lens switch at its height, in its quiet style. */
+.thread-todos-panel__resolved-toggle {
+  flex: none;
+  height: 32px;
+  padding: 0 9px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.thread-todos-panel__resolved-toggle:hover {
+  color: var(--text-primary);
+}
+
+.thread-todos-panel__resolved-toggle[aria-pressed="true"] {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.thread-todos-panel__resolved-toggle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+/* The rail tab's count. Sits where the actions tab's activity dot does. */
+.context-rail__activity--todos {
+  display: inline-grid;
+  min-width: 14px;
+  height: 14px;
+  place-items: center;
+  top: 1px;
+  right: 1px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--accent-fill);
+  color: var(--button-text);
+  font-size: 9.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
 }
 
 .thread-find {
@@ -39263,7 +40040,9 @@ button.composer__subthread-source-parent:hover {
   /* The composer's pre-send ring qualifies under the same rule: it sits
      beside the word "Preparing…" and the form carries `aria-busy`, so the
      state survives the ring going still. */
-  .composer__send-split-pill .pending-spinner {
+  .composer__send-split-pill .pending-spinner,
+  /* A to-do's running ring sits beside "Merging…" or "Starting…". */
+  .thread-todo-card__button--busy .pending-spinner {
     border-color: var(--accent);
     animation: none;
   }

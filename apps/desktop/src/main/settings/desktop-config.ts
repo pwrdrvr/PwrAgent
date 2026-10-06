@@ -1,5 +1,5 @@
-import type { DesktopThreadArchivePolicy } from "@pwragent/shared";
-import { validateLocalModelIds } from "@pwragent/shared";
+import type { DesktopThreadArchivePolicy, ThreadTodoMergeMethod } from "@pwragent/shared";
+import { isThreadTodoMergeMethod, validateLocalModelIds } from "@pwragent/shared";
 import fs from "node:fs";
 import { validateCodexConfigOverrides } from "./codex-config-overrides";
 import os from "node:os";
@@ -331,6 +331,7 @@ export type DesktopSettingsConfig = {
     prAutoDispatchBudgetCapacity?: number;
     prAutoDispatchBudgetRefillPerMinute?: number;
     pausePrAutoDispatchWhenBudgetEmpty?: boolean;
+    defaultMergeMethod?: ThreadTodoMergeMethod;
   };
   applications?: {
     editor?: {
@@ -1829,6 +1830,9 @@ export function desktopSettingsPatchToEdits(
       patch.git.pausePrAutoDispatchWhenBudgetEmpty,
     );
   }
+  if (patch.git?.defaultMergeMethod !== undefined) {
+    set(["git", "default_merge_method"], patch.git.defaultMergeMethod);
+  }
 
   if (patch.applications?.editor?.preferredId !== undefined) {
     set(["applications", "editor", "preferred_id"], patch.applications.editor.preferredId);
@@ -2323,6 +2327,7 @@ function normalizeDesktopConfig(
       pausePrAutoDispatchWhenBudgetEmpty: readBoolean(
         git?.pause_pr_auto_dispatch_when_budget_empty,
       ),
+      defaultMergeMethod: readMergeMethod(git?.default_merge_method),
     },
     applications: {
       editor: {
@@ -2815,6 +2820,12 @@ function readHotCpuProfileStartDelayMs(
   return typeof value === "number" && isDesktopHotCpuProfileStartDelayMs(value)
     ? value
     : undefined;
+}
+
+function readMergeMethod(
+  value: TomlScalar | undefined,
+): ThreadTodoMergeMethod | undefined {
+  return isThreadTodoMergeMethod(value) ? value : undefined;
 }
 
 function readHotCpuProfileTriggerMode(

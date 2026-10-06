@@ -547,6 +547,10 @@ import {
   readPwrAgentStarMapDynamicToolCall,
 } from "../agent-tools/pwragent-star-map-codex-tools";
 import type { PwrAgentStarMapHandler } from "../agent-tools/pwragent-star-map-agent-tools";
+import {
+  buildPwrAgentThreadTodoToolRouter,
+  type PwrAgentThreadTodoHandler,
+} from "../agent-tools/pwragent-thread-todo-agent-tools";
 import type { MessagingAgentToolService } from "../messaging/messaging-agent-tool-service";
 import { resolveAutomationInspectionMcpCommand } from "../automations/automation-inspection-cli";
 import { automationMcpToolAllowed, buildAutomationMcpPolicy, type AutomationMcpServer } from "../automations/automation-mcp-policy";
@@ -8004,6 +8008,15 @@ function threadOrchestrationFailure(
   };
 }
 
+/** See `DesktopBackendRegistry.readThreadHandoffSettings`. */
+export type HandoffSourceSettings = {
+  executionMode: ThreadExecutionMode;
+  model?: string;
+  reasoningEffort?: string;
+  serviceTier?: string;
+  fastMode?: boolean;
+};
+
 /** See `DesktopBackendRegistry.setAgentThreadActions`. */
 export type AgentThreadActions = {
   markProjectRead?: (args: MarkProjectReadToolArgs) => Promise<MarkProjectReadResult>;
@@ -9050,6 +9063,7 @@ export class DesktopBackendRegistry {
   private automationInspectionHandler?: AutomationInspectionHandler;
   private appManagementHandler?: PwrAgentAppManagementHandler;
   private starMapHandler?: PwrAgentStarMapHandler;
+  private threadTodoHandler?: PwrAgentThreadTodoHandler;
   private agentThreadActions?: AgentThreadActions;
   private messagingAgentToolService?: MessagingAgentToolService;
   private readonly changingCodexAgentThreadIds = new Set<string>();
@@ -10015,6 +10029,7 @@ export class DesktopBackendRegistry {
                 tokenMiserStore: this.tokenMiserStore,
                 tokenMiserFocused: this.tokenMiserService?.focused,
                 starMapHandler: this.starMapHandler,
+                threadTodoHandler: this.threadTodoHandler,
               }, { taskMonitorRole: "all" }),
             authorizeToolCall: (params) =>
               this.authorizeAgentToolMcpCall(params),
@@ -10794,6 +10809,106 @@ export class DesktopBackendRegistry {
     handler: PwrAgentStarMapHandler | null | undefined,
   ): void {
     this.starMapHandler = handler ?? undefined;
+  }
+
+  setPwrAgentThreadTodoHandler(
+    handler: PwrAgentThreadTodoHandler | null | undefined,
+  ): void {
+    this.threadTodoHandler = handler ?? undefined;
+  }
+
+  /**
+   * The thread's workspace directory, as handoff and review resolve it. Thread
+   * to-dos capture it when a card is raised, so the card's merge or new thread
+   * runs where the raising thread worked.
+   */
+  async resolveThreadWorkspaceCwd(
+    backend: AppServerBackendKind,
+    threadId: string,
+  ): Promise<string | undefined> {
+    return await this.resolveThreadEnvironmentCwd(backend, threadId);
+  }
+
+  /**
+   * A backend's model catalog, awaited rather than read off a summary that
+   * may still hold fallback models while discovery runs. Thread to-dos check
+   * a handoff card's model against it when the card is written.
+   */
+  async readBackendModelOptions(
+    backend: AppServerBackendKind,
+  ): Promise<BackendLaunchpadOptions | undefined> {
+    return this.getBackendLaunchpadOptions(backend, "thread-todo-model");
+  }
+
+  /**
+   * What a thread handed off from this one inherits when the request names
+   * nothing: its access mode, model, reasoning effort, and speed. handoff_task
+   * and a to-do's Start thread both start from it, so a handoff from a Full
+   * Access thread on GPT-6.1-Sol does not quietly become a Default Access
+   * thread on the catalog's default model.
+   */
+  async readThreadHandoffSettings(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    /** The live turn asking, whose mode outranks the stored one. */
+    turnId?: string;
+  }): Promise<HandoffSourceSettings> {
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: params.backend,
+      threadId: params.threadId,
+    });
+    return {
+      executionMode: await this.resolveHandoffSourceExecutionMode({
+        ...params,
+        overlay,
+      }),
+      ...(overlay?.model ? { model: overlay.model } : {}),
+      ...(overlay?.reasoningEffort
+        ? { reasoningEffort: overlay.reasoningEffort }
+        : {}),
+      ...(overlay?.serviceTier ? { serviceTier: overlay.serviceTier } : {}),
+      ...(overlay?.fastMode !== undefined ? { fastMode: overlay.fastMode } : {}),
+    };
+  }
+
+  private async resolveHandoffSourceExecutionMode(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    turnId?: string;
+    overlay?: ThreadOverlayState;
+  }): Promise<ThreadExecutionMode> {
+    const { backend, threadId, turnId, overlay } = params;
+    return (
+      (backend === "codex" && turnId
+        ? this.activeCodexTurnModes.get(buildActiveTurnModeKey(threadId, turnId))
+        : undefined)
+      ?? overlay?.executionMode
+      ?? (backend === "codex"
+        ? await this.resolveCodexThreadExecutionModeForActiveTurn(threadId)
+        : isAcpBackendId(backend)
+          ? this.acpBackend.getSession(backend, threadId)?.executionMode ?? "default"
+          : "default")
+    );
+  }
+
+  /**
+   * The linked directory a thread's project is filed under: its first link,
+   * as the Directories lens and the Star Map read it.
+   */
+  async resolveThreadPrimaryDirectory(
+    backend: AppServerBackendKind,
+    threadId: string,
+  ): Promise<LinkedDirectorySummary | undefined> {
+    const pending = this.pendingStartedThreads.get(
+      buildThreadIdentityKey(backend, threadId),
+    );
+    const thread = pending ?? await this.findThreadForWorkspaceHandoff({
+      backend,
+      callerReason: "turn-cwd",
+      freshness: "last-known",
+      threadId,
+    });
+    return thread?.linkedDirectories?.[0];
   }
 
   setFederatedThreadMessageHandler(
@@ -16812,6 +16927,7 @@ export class DesktopBackendRegistry {
       // never enabled the feature.
       ...(tokenMiserEnabled ? { tokenMiserStore: this.tokenMiserStore, tokenMiserFocused: this.tokenMiserService?.focused } : {}),
       starMapHandler: this.starMapHandler,
+      threadTodoHandler: this.threadTodoHandler,
     });
     const pdfMcpRegistration =
       backend === "codex" && this.resolvePdfAnalysisEnabledFn()
@@ -25709,6 +25825,7 @@ export class DesktopBackendRegistry {
         threadOrchestrationHandler: this.threadOrchestrationHandler,
         ...(tokenMiserEnabled ? { tokenMiserStore: this.tokenMiserStore, tokenMiserFocused: this.tokenMiserService?.focused } : {}),
         starMapHandler: this.starMapHandler,
+        threadTodoHandler: this.threadTodoHandler,
       }),
     ), discoveryEnabled, eagerTools);
   }
@@ -35783,6 +35900,24 @@ export class DesktopBackendRegistry {
       });
     }
 
+    const threadTodoRouter = buildPwrAgentThreadTodoToolRouter(
+      this.threadTodoHandler,
+    );
+    if (hostToolCall && threadTodoRouter.acceptsDynamicToolCall(hostToolCall)) {
+      if (!this.isLiveDynamicToolCall(backend, hostToolCall)) {
+        return toDynamicToolResponse({
+          ok: false,
+          code: "forbidden",
+          message:
+            "To-do tool calls must originate from an active turn on the owning thread.",
+        });
+      }
+      return await threadTodoRouter.handleDynamicToolCall({
+        backend,
+        call: hostToolCall,
+      });
+    }
+
     const federationToolCall = readPwrAgentFederationDynamicToolCall({
       method: request.method,
       params: request.params,
@@ -38306,18 +38441,12 @@ export class DesktopBackendRegistry {
     });
     const requestedOrInheritedExecutionMode =
       request.args.executionMode ??
-      (sourceBackend === "codex"
-        ? this.activeCodexTurnModes.get(
-            buildActiveTurnModeKey(sourceThreadId, sourceTurnId),
-          )
-        : undefined) ??
-      sourceOverlay.executionMode ??
-      (sourceBackend === "codex"
-        ? await this.resolveCodexThreadExecutionModeForActiveTurn(sourceThreadId)
-        : isAcpBackendId(sourceBackend)
-          ? this.acpBackend.getSession(sourceBackend, sourceThreadId)
-              ?.executionMode ?? "default"
-          : "default");
+      await this.resolveHandoffSourceExecutionMode({
+        backend: sourceBackend,
+        threadId: sourceThreadId,
+        turnId: sourceTurnId,
+        overlay: sourceOverlay,
+      });
     // Auto review belongs to Codex. An implicit cross-provider handoff keeps
     // approvals enabled using ACP's default mode; explicit Auto remains invalid.
     const executionMode =

@@ -19,6 +19,7 @@ import type {
   AppServerAvailableCommandSummary,
   AcpThreadRewindPoint,
   AppServerCollaborationModeRequest,
+  AppServerBackendKind,
   AppServerPendingRequestNotification,
   AppServerReviewTarget,
   AppServerThreadActivityDetail,
@@ -50,6 +51,7 @@ import type {
   ThreadExecutionMode,
   ThreadCompactionRecord,
   ThreadPricingSummary,
+  ThreadTodo,
   ThreadToolAccounting,
   ThreadToolInvocationRecord,
   ThreadUsageLineRecord,
@@ -58,6 +60,7 @@ import type {
 import {
   buildPendingRequestResponse,
   buildThreadIdentityKey,
+  classifyDirectory,
   isBranchDrifted,
   isRemoteFederationTarget,
   parseCodexAsyncQuestionReply,
@@ -68,7 +71,12 @@ import {
   withoutSupersededCodexEnvironmentActionRuns,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
-import { agentEventMatchesThread } from "../../lib/federated-thread-events";
+import {
+  agentEventMatchesThread,
+  threadSummaryIdentityKey,
+} from "../../lib/federated-thread-events";
+import { ThreadTodoStack } from "../thread-todos/ThreadTodoStack";
+import type { ThreadTodosView } from "../thread-todos/thread-todos-view";
 import { useCelestialIcons } from "../../lib/useCelestialIcons";
 import { useModalDialog } from "../../lib/useModalDialog";
 import { CelestialWatermark } from "../../components/CelestialWatermark";
@@ -909,6 +917,8 @@ export type ThreadViewProps = {
   historyNav?: HistoryNavControls;
   /** Star Map toggle rendered in the header chrome. Owned by App. */
   starMap?: StarMapToggleControls;
+  /** Thread to-do cards, owned by App. Absent in a window fronting a peer. */
+  threadTodos?: ThreadTodosView;
   /** In-thread find bar (⌘F): open state + close callback, owned by App. */
   findOpen?: boolean;
   onFindOpenChange?: (open: boolean) => void;
@@ -1151,6 +1161,8 @@ function findTranscriptTurnEntryIndex(
   return bestIndex;
 }
 
+const NO_THREAD_TODOS: ThreadTodo[] = [];
+
 export function ThreadView(props: ThreadViewProps) {
   const [pendingActivityEntry, setPendingActivityEntry] =
     useState<AppServerThreadActivityEntry>();
@@ -1344,6 +1356,22 @@ export function ThreadView(props: ThreadViewProps) {
   }, [props.activeTurnId]);
 
   const selectedThread = props.selectedThread;
+  // Cards live in this instance's state, so a peer's thread has none.
+  const threadTodoKey = selectedThread && !selectedThread.federation
+    ? threadSummaryIdentityKey(selectedThread)
+    : undefined;
+  const threadTodoDirectory = selectedThread?.linkedDirectories[0];
+  const threadTodos = props.threadTodos && threadTodoKey
+    ? {
+        view: props.threadTodos,
+        threadKey: threadTodoKey,
+        projectKey: threadTodoDirectory
+          ? classifyDirectory(threadTodoDirectory).key
+          : undefined,
+        todos: props.threadTodos.openByThreadKey.get(threadTodoKey)
+          ?? NO_THREAD_TODOS,
+      }
+    : undefined;
   const transcriptThreadLinkTarget =
     selectedThread?.federation?.ref.target ?? readRendererFederationTarget();
   const transcriptThreadLinkInstanceId =
@@ -2471,6 +2499,53 @@ export function ThreadView(props: ThreadViewProps) {
         text,
       });
     });
+  });
+  // A review card's Start review opens the composer's `/review` panel, and
+  // the card resolves only once a review actually starts from it.
+  const [todoReviewRequest, setTodoReviewRequest] = useState<{
+    id: number;
+    threadId: string;
+    backend: AppServerBackendKind;
+  }>();
+  const pendingReviewTodoRef = useRef<ThreadTodo | undefined>(undefined);
+  const startTodoReview = useEventCallback((todo: ThreadTodo) => {
+    pendingReviewTodoRef.current = todo;
+    setTodoReviewRequest((current) => ({
+      id: (current?.id ?? 0) + 1,
+      threadId: todo.threadId,
+      backend: todo.backend,
+    }));
+  });
+  const handleReviewStarted = useEventCallback(() => {
+    const todo = pendingReviewTodoRef.current;
+    pendingReviewTodoRef.current = undefined;
+    if (
+      todo
+      && todo.threadId === selectedThread?.id
+      && todo.backend === selectedThread?.source
+    ) {
+      void props.threadTodos?.resolve(todo, "done").catch((error: unknown) => {
+        console.warn("Resolving the review to-do failed.", error);
+      });
+    }
+  });
+  // "Do it here" sends a handoff's prompt through the same reply path an
+  // answered question takes: start, steer or queue, as a typed reply would.
+  // The card resolves only once the composer has taken it.
+  // Resolves false when the composer would not take it (disabled, or
+  // another answer still sending), so the card can say so.
+  const doTodoHere = useEventCallback(async (todo: ThreadTodo): Promise<boolean> => {
+    if (todo.action?.type !== "start_thread") return false;
+    try {
+      const accepted = await handleAnswerAsyncQuestions(todo.action.prompt);
+      if (accepted) {
+        await props.threadTodos?.resolve(todo, "done", "sent_here");
+      }
+      return accepted;
+    } catch (error) {
+      console.warn("Sending the handoff here failed.", error);
+      return false;
+    }
   });
   const handleReplySubmissionSettled = useEventCallback((id: number, accepted: boolean) => {
     const settle = asyncQuestionReplySettlers.current.get(id);
@@ -3634,6 +3709,8 @@ export function ThreadView(props: ThreadViewProps) {
           mcpConnectionCount: threadMcpConnectionCount,
           replySubmission: asyncQuestionReply,
           onReplySubmissionSettled: handleReplySubmissionSettled,
+          reviewRequest: todoReviewRequest,
+          onReviewStarted: handleReviewStarted,
           workspaceActionsBlocked: props.workspaceActionsBlocked,
           contextWindow: props.contextWindow,
           onActiveTurnIdChange: props.onActiveTurnIdChange,
@@ -4006,6 +4083,16 @@ export function ThreadView(props: ThreadViewProps) {
           the header moves `.thread-view__layout`, and the context rail
           is anchored to it. See `ThreadWarnings`. */}
       {selectedThread ? <ThreadWarnings thread={selectedThread} /> : null}
+      {threadTodos && !(contextRailPinned && activeContextTab === "todos") ? (
+        <ThreadTodoStack
+          threadKey={threadTodos.threadKey}
+          todos={threadTodos.todos}
+          view={threadTodos.view}
+          onStartReview={startTodoReview}
+          onDoHere={doTodoHere}
+          findOpen={props.findOpen}
+        />
+      ) : null}
       {props.findOpen ? (
         <ThreadFindBar
           containerRef={transcriptPanelRef}
@@ -4200,6 +4287,13 @@ export function ThreadView(props: ThreadViewProps) {
           worktreeArchiveError: props.worktreeArchiveError,
           onRestoreWorktree: props.onRestoreWorktree,
           initialLoadDurationMs: props.initialLoadDurationMs,
+          todos: threadTodos ? {
+            view: threadTodos.view,
+            threadKey: threadTodos.threadKey,
+            projectKey: threadTodos.projectKey,
+            onStartReview: startTodoReview,
+            onDoHere: doTodoHere,
+          } : undefined,
         }
       : {};
 

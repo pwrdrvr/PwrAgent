@@ -44,7 +44,17 @@ const VISUAL_INITIAL_LOAD_DURATION = "3 ms";
 // images in 1x and Retina 2x sessions. `scale: "css"` normalizes only the
 // screenshot dimensions, not that backing rasterization. The checked-in
 // goldens encode 1x output, matching the established PwrSnap visual harness.
-const VISUAL_ELECTRON_ARGS = ["--force-device-scale-factor=1"];
+//
+// Pin classic scrollbars too. macOS "Automatic" resolves to classic bars on a
+// runner with no trackpad and to overlay bars on a laptop, and classic bars
+// take layout width: the sidebar list reserves a gutter and the approval card
+// renders 565px wide instead of 576px. Cocoa reads `-Key Value` arguments into
+// the process's own defaults, so this changes no system or app setting.
+const VISUAL_ELECTRON_ARGS = [
+  "--force-device-scale-factor=1",
+  "-AppleShowScrollBars",
+  "Always",
+];
 
 async function waitForFonts(page: Page): Promise<void> {
   await page.evaluate(async () => {
