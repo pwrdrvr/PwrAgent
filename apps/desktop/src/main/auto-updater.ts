@@ -1224,6 +1224,22 @@ function isBetaLatestRelease(
   );
 }
 
+// A Stable RC that outranks Stable Latest is newer than anything the Beta
+// train has shipped whenever no alpha or beta is ahead of it. Beta ·
+// Prerelease is the most adventurous slot, so it must not sit on Stable
+// Latest while Stable · Prerelease already offers a newer build.
+function isStableCandidateAheadOfLatest(
+  release: GitHubRelease,
+  stableLatest: GitHubRelease | undefined,
+): boolean {
+  return (
+    release.prerelease === true
+    && firstPrereleaseId(release.tag_name) === "prerelease"
+    && (stableLatest === undefined
+      || compareSemver(release.tag_name, stableLatest.tag_name) > 0)
+  );
+}
+
 export type SelectedUpdateReleases = {
   latest: GitHubRelease | undefined;
   prerelease: GitHubRelease | undefined;
@@ -1240,7 +1256,8 @@ export type SelectedUpdateReleases = {
 //   - stable prerelease  → max(stable latest, 1.0 `-prerelease` / legacy `-beta`)
 //   - beta latest        → highest `-beta` whose core is ahead of Stable Latest
 //   - beta prerelease    → max(beta latest, highest `-alpha` on a newer core,
-//                          suffix-free release staged as GitHub prerelease)
+//                          suffix-free release staged as GitHub prerelease,
+//                          `-prerelease` Stable RC ahead of Stable Latest)
 // Both Beta slots fall back to Stable Latest so installed alphas and betas
 // can upgrade to their final release. The saved selection stays on Beta to
 // follow the next eligible `main` tag after a Stable promotion.
@@ -1283,7 +1300,8 @@ export function selectChannelReleases(
   const betaPrerelease = byPrecedenceDesc.find((release) =>
     release === stableLatest
     || (release.prerelease === true && isSuffixFreeStableTag(release.tag_name))
-    || isBetaTrainRelease(release, stableLatest, publicReleases),
+    || isBetaTrainRelease(release, stableLatest, publicReleases)
+    || isStableCandidateAheadOfLatest(release, stableLatest),
   );
   return {
     latest: stableLatest,

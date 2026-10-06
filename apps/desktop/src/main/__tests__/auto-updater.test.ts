@@ -2226,6 +2226,47 @@ describe("selectChannelReleases", () => {
     expect(selected.betaPrerelease?.tag_name).toBe("v1.1.0-alpha.7");
   });
 
+  it("keeps beta prerelease from trailing a newer Stable RC", async () => {
+    const { selectChannelReleases } = await import("../auto-updater");
+    // The 2026-10-06 release set: Settings showed v1.2.0-prerelease.1 under
+    // Stable · Prerelease while Beta · Prerelease still read v1.1.6.
+    const releases = [
+      { tag_name: "v1.2.0-prerelease.1", prerelease: true, draft: false },
+      { tag_name: "v1.1.6", prerelease: false, draft: false },
+      { tag_name: "v1.1.5", prerelease: false, draft: false },
+      { tag_name: "v1.1.0-beta.5", prerelease: true, draft: false },
+      { tag_name: "v1.1.0-alpha.5", prerelease: true, draft: false },
+      { tag_name: "v1.0.2-prerelease.2", prerelease: true, draft: false },
+    ];
+    const selected = selectChannelReleases(releases);
+    expect(selected.stableLatest?.tag_name).toBe("v1.1.6");
+    expect(selected.stablePrerelease?.tag_name).toBe("v1.2.0-prerelease.1");
+    expect(selected.betaLatest).toBe(selected.stableLatest);
+    expect(selected.betaPrerelease?.tag_name).toBe("v1.2.0-prerelease.1");
+  });
+
+  it("prefers a newer main-train alpha over a maintenance Stable RC", async () => {
+    const { selectChannelReleases } = await import("../auto-updater");
+    const releases = [
+      { tag_name: "v1.2.0-alpha.1", prerelease: true, draft: false },
+      { tag_name: "v1.1.7-prerelease.1", prerelease: true, draft: false },
+      { tag_name: "v1.1.6", prerelease: false, draft: false },
+    ];
+    const selected = selectChannelReleases(releases);
+    expect(selected.stablePrerelease?.tag_name).toBe("v1.1.7-prerelease.1");
+    expect(selected.betaPrerelease?.tag_name).toBe("v1.2.0-alpha.1");
+  });
+
+  it("does not offer a Stable RC that Stable Latest already outranks", async () => {
+    const { selectChannelReleases } = await import("../auto-updater");
+    const releases = [
+      { tag_name: "v1.1.6", prerelease: false, draft: false },
+      { tag_name: "v1.1.6-prerelease.2", prerelease: true, draft: false },
+    ];
+    const selected = selectChannelReleases(releases);
+    expect(selected.betaPrerelease).toBe(selected.stableLatest);
+  });
+
   it("does not let a mistagged main-train alpha take stable latest", async () => {
     const { selectChannelReleases } = await import("../auto-updater");
     // The GitHub Pre-release flag is set by hand at tag time. If a `main` tag
