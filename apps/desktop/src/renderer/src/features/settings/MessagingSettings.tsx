@@ -1376,7 +1376,11 @@ export function MessagingSettings(props: {
           />
           {slack.inboundMode.value === "events" ? (
             <p className="settings-inline-notice" role="status">
-              {SLACK_EVENTS_API_UNIMPLEMENTED_NOTICE}
+              <span
+                className="status-dot status-dot--warning settings-inline-notice__dot"
+                aria-hidden="true"
+              />
+              <span>{SLACK_EVENTS_API_UNIMPLEMENTED_NOTICE}</span>
             </p>
           ) : null}
         </div>

@@ -8213,9 +8213,11 @@ a.button {
 .transcript-error {
   margin: 12px 0 0;
   padding: 12px;
-  border: 1px solid var(--danger-border);
+  /* Neutral card; the error text carries the tone. A --danger-soft fill
+     read as a salmon box in blue and the other cool themes. */
+  border: 1px solid var(--border-subtle);
   border-radius: 8px;
-  background: var(--danger-soft);
+  background: var(--bg-panel-elevated);
   color: var(--danger-text);
   font-size: 14px;
   line-height: 1.45;
@@ -8770,11 +8772,11 @@ a.button {
 
 .thread-search__error {
   margin: 0;
-  border: 1px solid color-mix(in srgb, var(--status-error) 50%, var(--border-subtle));
+  border: 1px solid var(--border-subtle);
   border-radius: 8px;
   padding: 10px 12px;
-  background: color-mix(in srgb, var(--status-error) 10%, transparent);
-  color: var(--text-primary);
+  background: var(--bg-panel-elevated);
+  color: var(--danger-text);
   font-size: 13px;
 }
 
@@ -11118,9 +11120,10 @@ a.button {
   overflow: visible;
 }
 
-.settings-panel--error {
-  border-color: var(--danger-border);
-  background: var(--danger-soft);
+/* The error panel keeps the base panel's neutral frame; its eyebrow
+   carries the tone, and `.settings-error-block p` the message. */
+.settings-panel--error .settings-panel__header .eyebrow {
+  color: var(--danger-text);
 }
 
 .settings-panel--warning {
@@ -11853,14 +11856,24 @@ a.button {
 }
 
 .settings-inline-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
   margin: 0 18px 8px;
   padding: 8px 10px;
-  border: 1px solid var(--border-strong);
+  /* Neutral card; the leading status dot carries the warning. */
+  border: 1px solid var(--border-subtle);
   border-radius: 6px;
-  background: var(--warning-surface, var(--bg-panel-elevated));
+  background: var(--bg-panel-elevated);
   color: var(--text-secondary);
   font-size: 12px;
   line-height: 1.45;
+}
+
+/* Centred on the first line box: half the 1.45 line height, less half
+   the 8px dot. */
+.settings-inline-notice__dot {
+  margin-top: calc(0.725em - 4px);
 }
 
 .slack-connect {
@@ -13339,9 +13352,10 @@ a.button {
   justify-content: space-between;
   gap: 10px;
   padding: 7px 8px;
-  border: 1px solid var(--danger-border);
+  /* Neutral row; the message text carries the error tone. */
+  border: 1px solid var(--border-subtle);
   border-radius: 6px;
-  background: var(--danger-soft);
+  background: var(--bg-panel-elevated);
 }
 
 .settings-list-validation__message {
@@ -14030,19 +14044,15 @@ a.button {
   background: color-mix(in srgb, var(--bg-panel-elevated) 94%, var(--accent) 6%);
 }
 
-.managed-progress--ok {
-  border-color: var(--success-border);
-  background: var(--bg-panel-elevated);
-}
-
-.managed-progress--error {
-  border-color: var(--danger-border);
-  background: color-mix(in srgb, var(--bg-panel-elevated) 92%, var(--status-error) 8%);
-}
-
+/* A settled strip is a neutral card: the eyebrow carries ok, error, and
+   notice. A tinted fill read as a salmon or beige box in the cool themes.
+   The busy strip keeps the accent wash of the bar it shares with the
+   update banner. */
+.managed-progress--ok,
+.managed-progress--error,
 .managed-progress--notice {
-  border-color: var(--info-border);
-  background: color-mix(in srgb, var(--bg-panel-elevated) 94%, var(--info-text) 6%);
+  border-color: var(--border-subtle);
+  background: var(--bg-panel-elevated);
 }
 
 .managed-progress__head {
@@ -14911,9 +14921,10 @@ a.button {
   gap: 10px;
   margin: 0 0 12px;
   padding: 8px 10px;
-  border: 1px solid var(--accent-border);
+  /* Neutral card in every kind; the line's own color carries the tone. */
+  border: 1px solid var(--border-subtle);
   border-radius: 6px;
-  background: var(--accent-soft);
+  background: var(--bg-panel-elevated);
   color: var(--accent-bright);
   font-size: 12px;
   line-height: 1.35;
@@ -14926,14 +14937,10 @@ a.button {
 }
 
 .settings-plugin-notice--success {
-  border-color: var(--success-border);
-  background: var(--success-soft);
   color: var(--success-text);
 }
 
 .settings-plugin-notice--error {
-  border-color: var(--danger-border);
-  background: var(--danger-soft);
   color: var(--danger-text);
 }
 
@@ -15107,15 +15114,13 @@ a.button {
   line-height: 1.5;
 }
 
+/* The probe keeps the base's neutral frame; the result line carries the
+   tone. */
 .settings-mcp-probe--ok {
-  border-color: var(--success-border);
-  background: var(--success-soft);
   color: var(--success-text);
 }
 
 .settings-mcp-probe--err {
-  border-color: var(--danger-border);
-  background: var(--danger-soft);
   color: var(--danger-text);
 }
 
@@ -15463,9 +15468,10 @@ a.button {
   align-items: center;
   gap: 10px;
   padding: 10px 12px 10px 14px;
-  border: 1px solid var(--danger-border);
+  /* Neutral card; the bold headline carries the error tone. */
+  border: 1px solid var(--border-subtle);
   border-radius: 8px;
-  background: var(--danger-soft);
+  background: var(--bg-panel-elevated);
 }
 
 .settings-archive-banner__text {
@@ -15474,12 +15480,13 @@ a.button {
   gap: 2px;
   min-width: 0;
   margin: 0;
-  color: var(--danger-text);
+  color: var(--text-secondary);
   font-size: 12px;
   line-height: 1.45;
 }
 
 .settings-archive-banner__text b {
+  color: var(--danger-text);
   font-size: 13px;
   font-weight: 600;
 }
@@ -20975,7 +20982,9 @@ a.button {
 /* Window-level notice for a remote federation window whose peer is
    unreachable: the composer disables and remote polling suspends, so
    the banner is the one place that says why. Warning tones (not danger)
-   — the runtime is auto-reconnecting and the state is expected to heal. */
+   — the runtime is auto-reconnecting and the state is expected to heal.
+   The card is neutral and the dot carries the warning: an amber fill
+   read as a beige box in the cool themes. */
 .federation-disconnected-banner {
   display: flex;
   flex: 0 0 auto;
@@ -20983,9 +20992,9 @@ a.button {
   gap: 8px;
   margin: 10px 16px 0;
   padding: 8px 12px;
-  border: 1px solid var(--accent-border);
+  border: 1px solid var(--border-subtle);
   border-radius: 8px;
-  background: var(--warning-surface);
+  background: var(--bg-panel-elevated);
   color: var(--text-primary);
   font-size: 13px;
   line-height: 1.45;
@@ -37655,9 +37664,9 @@ button.composer__subthread-source-parent:hover {
   margin: 4px 8px 6px;
   padding: 6px 8px;
   border-radius: 6px;
-  /* Canonical danger pair — same tokens used by .settings-panel--error
-     and .messaging-status-chip--errored. Don't introduce a new error
-     token name (UI-THEME.md). */
+  /* Canonical danger pair — same tokens used by
+     .messaging-status-chip--errored. Don't introduce a new error token
+     name (UI-THEME.md). */
   background: var(--danger-soft);
   color: var(--danger-text);
   font-size: 12px;
@@ -42300,19 +42309,16 @@ button.composer__subthread-source-parent:hover {
 /* Ported from docs/design/pwragent-v2/project/rbac.css; raw    */
 /* accent/danger literals mapped to :root tokens via color-mix. */
 /* ============================================================ */
+/* Neutral card; the icon chip carries the tone. */
 .rbac-callout {
   display: flex;
   align-items: flex-start;
   gap: 12px;
   padding: 12px 14px;
-  border: 1px solid var(--accent-border);
-  background: var(--accent-soft);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-panel-elevated);
   border-radius: 8px;
   margin-bottom: 12px;
-}
-.rbac-callout.is-danger {
-  border-color: var(--danger-border);
-  background: var(--danger-soft);
 }
 .rbac-callout__icon {
   width: 28px; height: 28px;
@@ -43740,13 +43746,14 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   display: grid;
   gap: 4px;
   padding: 10px;
-  border: 1px solid color-mix(in srgb, var(--status-warning) 40%, transparent);
+  /* Neutral card; the title carries the warning. */
+  border: 1px solid var(--border-subtle);
   border-radius: 8px;
-  background: var(--warning-surface);
+  background: var(--bg-panel-elevated);
 }
 
 .pr-activity__notice-title {
-  color: var(--text-primary);
+  color: var(--status-warning-text);
   font-size: 12.5px;
   font-weight: 650;
 }
