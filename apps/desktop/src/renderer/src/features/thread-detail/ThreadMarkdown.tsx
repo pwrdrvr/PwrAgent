@@ -152,6 +152,24 @@ function clipboardTextFromFragment(fragment: DocumentFragment): string {
   return text;
 }
 
+// `user-select: all` makes Chromium select the whole chip on a mousedown
+// inside it, so a plain click to open the PR left the chip highlighted and a
+// drag started on it began a selection. Refusing the mousedown's default keeps
+// the click and leaves a drag that merely crosses a chip atomic. Shift still
+// extends an existing selection over the chip.
+function suppressPullRequestChipSelectionStart(
+  event: MouseEvent<HTMLDivElement>,
+): void {
+  if (
+    event.button === 0
+    && !event.shiftKey
+    && event.target instanceof Element
+    && event.target.closest("[data-pr-chip]")
+  ) {
+    event.preventDefault();
+  }
+}
+
 function copySelectedPullRequestLinks(
   event: ClipboardEvent<HTMLDivElement>,
 ): void {
@@ -791,6 +809,7 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
         .filter(Boolean)
         .join(" ")}
       onCopy={copySelectedPullRequestLinks}
+      onMouseDown={suppressPullRequestChipSelectionStart}
     >
       <MarkdownRenderContext.Provider value={renderState}>
         <MarkdownCodeApiContext.Provider value={props.desktopApi}>

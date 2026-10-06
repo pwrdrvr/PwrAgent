@@ -6768,7 +6768,9 @@ a.button {
 /* A PR chip inside rendered markdown is part of the message's copyable prose.
    Select it atomically so Chromium includes the full chip in the range;
    ThreadMarkdown serializes it as a full PR URL for cross-project hydration.
-   Chips in sidebar rows and context chrome remain non-selectable controls. */
+   `all` also selects the chip on a mousedown inside it, so ThreadMarkdown
+   refuses that mousedown's default; only a drag that crosses the chip selects
+   it. Chips in sidebar rows and context chrome remain non-selectable controls. */
 .thread-markdown .pr-chip {
   -webkit-user-select: all;
   user-select: all;

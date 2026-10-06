@@ -121,6 +121,26 @@ describe("pull request links in transcript markdown", () => {
     expect(open).toHaveBeenCalledWith(PR_URL, "_blank", "noopener,noreferrer");
   });
 
+  it("does not start a text selection from a mousedown on a PR chip", () => {
+    const { container } = renderWithPullRequests(
+      `Opened [ExampleOrg/catalog-service#13290](${PR_URL}) for review.`,
+      [prSummary()],
+    );
+    const chip = container.querySelector<HTMLElement>("[data-pr-chip]");
+    const label = chip?.querySelector(".pr-chip__label");
+    const paragraph = container.querySelector("p");
+    expect(label).not.toBeNull();
+    expect(paragraph).not.toBeNull();
+
+    // `user-select: all` would select the whole chip on this mousedown.
+    expect(fireEvent.mouseDown(label!, { button: 0 })).toBe(false);
+    // Extending a selection, a secondary button, and surrounding prose keep
+    // the browser's default so a drag across the chip still selects it.
+    expect(fireEvent.mouseDown(label!, { button: 0, shiftKey: true })).toBe(true);
+    expect(fireEvent.mouseDown(label!, { button: 2 })).toBe(true);
+    expect(fireEvent.mouseDown(paragraph!, { button: 0 })).toBe(true);
+  });
+
   it("copies a selected PR chip as a full URL that can hydrate in any project", () => {
     const { container } = renderWithPullRequests(
       `> Deploy merged PR [ExampleOrg/catalog-service#13290](${PR_URL}) now.`,
