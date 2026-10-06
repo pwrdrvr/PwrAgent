@@ -846,7 +846,9 @@ if (!signStageOnly) {
   if (win) {
     deployArgs.push("--config.node-linker=hoisted");
   } else {
-    deployArgs.push("--prod");
+    // Production deploys intentionally omit patched dev tools such as
+    // Playwright. Keep unused-patch validation enabled for workspace installs.
+    deployArgs.push("--prod", "--config.allowUnusedPatches=true");
   }
   deployArgs.push(stageDir);
   step(`pnpm ${win ? "deploy (hoisted)" : "deploy --prod"} -> release-stage`);
