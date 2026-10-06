@@ -19311,6 +19311,7 @@ describe("MessagingController", () => {
           expect(harness.delivered).toHaveLength(0);
         } finally {
           harness.controller.dispose();
+          await harness.controller.whenToolUpdatesSettled();
           vi.useRealTimers();
         }
       },
@@ -19342,7 +19343,11 @@ describe("MessagingController", () => {
             }
           }
         } finally {
+          // The Less notice comes from a flush timer that no test step awaits,
+          // and its store write can still be running after `delivered` grows.
+          // Drain it before afterEach removes the store directory.
           harness.controller.dispose();
+          await harness.controller.whenToolUpdatesSettled();
           vi.useRealTimers();
         }
       },
@@ -19405,6 +19410,7 @@ describe("MessagingController", () => {
         expect(harness.delivered).toHaveLength(4);
       } finally {
         harness.controller.dispose();
+        await harness.controller.whenToolUpdatesSettled();
         vi.useRealTimers();
       }
     });
@@ -19472,6 +19478,7 @@ describe("MessagingController", () => {
         expect(texts.filter((text) => text === "The release is ready.")).toHaveLength(1);
       } finally {
         harness.controller.dispose();
+        await harness.controller.whenToolUpdatesSettled();
         vi.useRealTimers();
       }
     });
