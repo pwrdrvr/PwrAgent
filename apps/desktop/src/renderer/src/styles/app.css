@@ -19506,6 +19506,7 @@ a.button {
   .composer-tiptap-input.is-empty
   .composer-tiptap-input__editor::before {
   top: 6px;
+  right: 8px;
   left: 8px;
 }
 
@@ -33423,12 +33424,20 @@ button.pricing-token-miser__folded:focus-visible {
   padding-left: 20px;
 }
 
+/* The reply placeholder rotates through usage tips (composer-tips.ts). The
+   empty box stays one line tall, so a placeholder too long for a narrow box
+   ends in an ellipsis instead of wrapping, which the box's floor would clip
+   mid-line. */
 .composer-tiptap-input.is-empty .composer-tiptap-input__editor::before {
   content: attr(data-placeholder);
   position: absolute;
   top: 12px;
+  right: 12px;
   left: 12px;
+  overflow: hidden;
   color: var(--text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
   pointer-events: none;
 }
 
