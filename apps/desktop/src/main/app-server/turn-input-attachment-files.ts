@@ -21,6 +21,7 @@ import type {
 import { resolveActiveProfilePath } from "../profile";
 import { normalizeExplicitLocalFileReferencePath } from "../explicit-local-file-reference";
 import { imageInputFileRoot } from "./image-input-files";
+import { scheduleLegacyAttachmentCleanup } from "./legacy-attachment-cleanup";
 import { resolveReadableLocalFilePath } from "./local-file-input";
 import { isThreadAssetPath, isResolvedThreadAssetPath, storeThreadAsset, threadAssetRoot, withAssetDirectory, type ThreadAssetOwner } from "./thread-assets";
 
@@ -76,6 +77,7 @@ export async function stageTurnInputAttachment(
   }
   if (owner) {
     const ownedPath = await storeThreadAsset(owner, data, name);
+    void scheduleLegacyAttachmentCleanup();
     return upload.type === "localImage"
       ? {
           type: "localImage",
@@ -121,6 +123,7 @@ export async function stageTurnInputAttachment(
     }
 
     scheduleStagingCleanup(root, path.dirname(filePath));
+    void scheduleLegacyAttachmentCleanup();
 
     return upload.type === "localImage"
       ? {
@@ -183,6 +186,7 @@ export async function stageLocalTurnInputAttachment(
       name = `${path.parse(name).name}${extension}`;
     }
     const ownedPath = await storeThreadAsset(options.owner, data, name, readable.path);
+    void scheduleLegacyAttachmentCleanup();
     return { ...item, path: ownedPath, ...(item.type === "localFile" ? { sizeBytes: data.byteLength } : {}) };
   }
   return await stageTurnInputAttachment({
