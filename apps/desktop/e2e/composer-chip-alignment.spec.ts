@@ -94,6 +94,12 @@ async function writeTwoThreadFixture(): Promise<{
 const OFFSET_TOLERANCE_PX = 0.5;
 /** Slack for the line-grid and chip-height comparisons. */
 const HEIGHT_TOLERANCE_PX = 1;
+/**
+ * Slack for the `#` picker's kind badge against the row's right edge.
+ * Sub-pixel rounding only: the misplaced badge sat a whole label's worth
+ * of free space short of the edge, well over 100px on this fixture row.
+ */
+const BADGE_EDGE_TOLERANCE_PX = 1;
 
 type ChipPlacement = {
   height: number;
@@ -241,6 +247,33 @@ test("composer chips of every structure sit at one height in the prose", async (
       name: "Threads and pull requests",
     });
     await expect(hashOptions).toBeVisible();
+
+    // The kind badge sits at the row's right edge whatever the title's
+    // length. This fixture's "Hash reference target" is far too short to
+    // clamp, which is exactly the row that once left its badge one gap
+    // after the last word. Measured against the option's own content box,
+    // not the title span: the span shrinking with its label is one way
+    // this breaks, and a span-relative edge would agree with it.
+    const badgeGap = await hashOptions
+      .getByRole("option", { name: /Hash reference target/ })
+      .evaluate((option) => {
+        const badge = option.querySelector(".composer__autocomplete-source");
+        if (!badge) {
+          return null;
+        }
+        const style = getComputedStyle(option);
+        const contentRight =
+          option.getBoundingClientRect().right
+          - Number.parseFloat(style.borderRightWidth)
+          - Number.parseFloat(style.paddingRight);
+        return contentRight - badge.getBoundingClientRect().right;
+      });
+    expect(badgeGap, "THREAD badge present on the fixture row").not.toBeNull();
+    expect(
+      Math.abs(badgeGap ?? Number.NaN),
+      "THREAD badge inset from the option's content edge",
+    ).toBeLessThanOrEqual(BADGE_EDGE_TOLERANCE_PX);
+
     await app.window.keyboard.press("Enter");
     await expect(hashOptions).toBeHidden();
     await app.window.keyboard.type("today");
