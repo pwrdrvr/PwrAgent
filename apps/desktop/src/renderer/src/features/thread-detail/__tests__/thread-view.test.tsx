@@ -2927,7 +2927,7 @@ describe("ThreadView", () => {
     expect(screen.getByRole("button", { name: "Start thread" })).toBeInTheDocument();
   });
 
-  it("describes sub-thread launchpads as grouped children with empty history", () => {
+  it("names a sub-thread launchpad's parent beside the input, until it is detached", async () => {
     const selectedDirectory = {
       key: "subthread:codex:thread-parent:new-worktree",
       kind: "directory",
@@ -2952,30 +2952,68 @@ describe("ThreadView", () => {
       workMode: "worktree",
     } satisfies NavigationLaunchpadDraft;
 
-    render(
-      <ThreadView
-        addOptimisticUserMessage={(_text) => "optimistic-1"}
-        backends={[]}
-        clearPendingRequest={() => undefined}
-        composerDisabled={false}
-        loading={false}
-        loadingMore={false}
-        messageCount={0}
-        selectedDirectory={selectedDirectory}
-        selectedLaunchpad={selectedLaunchpad}
-        skills={[]}
-        transcriptEntries={[]}
-        onLoadOlder={async () => undefined}
-        removeOptimisticMessage={(_id) => undefined}
-      />
-    );
+    const onDetachLaunchpadParent = vi.fn();
+    const onSelectLaunchpadParent = vi.fn();
+    function DetachableLaunchpad() {
+      const [launchpad, setLaunchpad] = useState<NavigationLaunchpadDraft>(selectedLaunchpad);
+      return (
+        <ThreadView
+          addOptimisticUserMessage={(_text) => "optimistic-1"}
+          backends={[]}
+          clearPendingRequest={() => undefined}
+          composerDisabled={false}
+          loading={false}
+          loadingMore={false}
+          messageCount={0}
+          selectedDirectory={selectedDirectory}
+          selectedLaunchpad={launchpad}
+          skills={[]}
+          transcriptEntries={[]}
+          onCancelLaunchpad={() => undefined}
+          onDetachLaunchpadParent={(directoryKey) => {
+            onDetachLaunchpadParent(directoryKey);
+            setLaunchpad(({ parentThreadId: _id, parentThreadTitle: _title, ...detached }) => detached);
+          }}
+          onSelectLaunchpadParent={onSelectLaunchpadParent}
+          onLoadOlder={async () => undefined}
+          removeOptimisticMessage={(_id) => undefined}
+        />
+      );
+    }
 
-    expect(
-      screen.getByText("Grouped under Issue 193 Markdown attachments"),
-    ).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "New thread" })).toBeInTheDocument();
+    render(<DetachableLaunchpad />);
+
+    // The breadcrumb says what is being made; the source row says from what.
+    expect(screen.getByRole("heading", { name: "New sub-thread" })).toBeInTheDocument();
+    expect(screen.queryByText(/Grouped under/)).not.toBeInTheDocument();
+    const source = screen.getByRole("group", { name: "Sub-thread source" });
+    expect(source).toHaveTextContent("Sub-thread of");
+    expect(source).toHaveTextContent("· no history");
+    expect(screen.getByRole("button", { name: "Start sub-thread" })).toBeInTheDocument();
+    const input = screen.getByRole("textbox", { name: "New thread" });
+    expect(input).toHaveAttribute("data-placeholder", "Start a sub-thread of Issue 193 Markdown attachments");
     expect(screen.getAllByText("main").length).toBeGreaterThan(0);
     expect(screen.queryByText("Not a Git repo")).not.toBeInTheDocument();
+
+    fireEvent.click(within(source).getByRole("button", { name: "Open Issue 193 Markdown attachments" }));
+    expect(onSelectLaunchpadParent).toHaveBeenCalledWith(expect.objectContaining({
+      directoryKey: selectedDirectory.key,
+      parentThreadId: "thread-parent",
+    }));
+
+    fireEvent.click(within(source).getByRole("button", { name: "Detach from Issue 193 Markdown attachments" }));
+
+    expect(onDetachLaunchpadParent).toHaveBeenCalledWith(selectedDirectory.key);
+    expect(screen.queryByRole("group", { name: "Sub-thread source" })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "New thread" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Start thread" })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "New thread" }))
+      .toHaveAttribute("data-placeholder", "Start a new thread in PwrAgnt");
+    // Detach keeps the settings. With no git status probed yet, the parent
+    // link was what offered a new worktree; the launchpad still is one.
+    expect(screen.getAllByText("New worktree").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("main").length).toBeGreaterThan(0);
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "New thread" })).toHaveFocus());
   });
 
   it("describes same-worktree sub-thread launchpads as shared worktrees", () => {
@@ -3022,9 +3060,9 @@ describe("ThreadView", () => {
     );
 
     expect(screen.getByText("Same worktree")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "New thread" })).toBeInTheDocument();
-    expect(screen.getByText("Grouped under Issue 193 Markdown attachments"))
-      .toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "New sub-thread" })).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Sub-thread source" }))
+      .toHaveTextContent("Issue 193 Markdown attachments");
     expect(document.querySelector(".launchpad-panel")).not.toBeInTheDocument();
     expect(screen.queryByText("Local checkout")).not.toBeInTheDocument();
     expect(screen.queryByText("Not a Git repo")).not.toBeInTheDocument();

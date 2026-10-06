@@ -2079,6 +2079,81 @@ describe("Composer", () => {
     );
   });
 
+  it("runs a sub-thread draft row's Discard as its Cancel, once, for its own launchpad", () => {
+    // The row's menu lives in the sidebar, but the open composer holds the
+    // draft and would save it back on unmount, so the composer runs it.
+    const deleteDraft = vi.fn();
+    const recordHistory = vi.fn();
+    const draftStore: ComposerDraftStore = {
+      hydrationStatus: "memory-only",
+      getDraftScopeKeys: () => [],
+      getQueuedScopeKeys: () => [],
+      delete: deleteDraft,
+      recordHistory,
+      get: () => undefined,
+      popDraft: () => undefined,
+      pushDraft: vi.fn(),
+      deletePendingSteer: vi.fn(),
+      deleteQueuedTurn: vi.fn(),
+      getPendingSteer: () => undefined,
+      getQueuedTurn: () => undefined,
+      getQueuedTurns: () => [],
+      getQueuedTurnVersion: () => 0,
+      subscribeQueuedTurns: () => () => undefined,
+      hasDraftContent: () => false,
+      getDraftPresenceVersion: () => 0,
+      subscribeDraftPresence: () => () => undefined,
+      removeQueuedTurnAt: () => undefined,
+      removeQueuedTurnById: () => undefined,
+      shiftQueuedTurn: () => undefined,
+      setPendingSteer: vi.fn(),
+      setQueuedTurn: vi.fn(),
+      setQueuedTurns: vi.fn(),
+      set: vi.fn(),
+    };
+    const onCancelLaunchpad = vi.fn();
+    const directoryKey = "subthread:codex:thread-parent:local";
+    const props = {
+      backends: [backendSummary("codex")],
+      disabled: false,
+      draftStore,
+      launchpad: {
+        directoryKey,
+        directoryKind: "directory" as const,
+        directoryLabel: "media-service",
+        directoryPath: "/repo",
+        backend: "codex" as const,
+        executionMode: "default" as const,
+        prompt: "Make a PR to swap all the icons",
+        workMode: "local" as const,
+        parentThreadId: "thread-parent",
+        parentThreadTitle: "Swap the icons",
+        createdAt: 1,
+        updatedAt: 1,
+      },
+      onCancelLaunchpad,
+      skills: [],
+    };
+
+    const view = render(
+      <Composer {...props} launchpadCancelRequest={{ directoryKey: "subthread:codex:other:local", id: 1 }} />,
+    );
+    expect(onCancelLaunchpad).not.toHaveBeenCalled();
+
+    view.rerender(<Composer {...props} launchpadCancelRequest={{ directoryKey, id: 2 }} />);
+    expect(recordHistory).toHaveBeenCalledWith(
+      `launchpad:${directoryKey}`,
+      expect.objectContaining({ draft: "Make a PR to swap all the icons" }),
+      "abandoned",
+    );
+    expect(deleteDraft).toHaveBeenCalledWith(`launchpad:${directoryKey}`);
+    expect(onCancelLaunchpad).toHaveBeenCalledTimes(1);
+    expect(onCancelLaunchpad).toHaveBeenCalledWith(directoryKey);
+
+    view.rerender(<Composer {...props} launchpadCancelRequest={{ directoryKey, id: 2 }} />);
+    expect(onCancelLaunchpad).toHaveBeenCalledTimes(1);
+  });
+
   it("renders unavailable reason when provided", async () => {
     const unavailableReason = "Codex profile not logged in. Please check your settings.";
     render(
@@ -16744,7 +16819,7 @@ describe("Composer", () => {
 
     const input = screen.getByLabelText("New thread");
     fireEvent.change(input, { target: { value: "/review" } });
-    await clickButton("Start thread");
+    await clickButton("Start sub-thread");
     expect(screen.getByLabelText("Workspace mode")).toHaveValue("worktree");
     expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));

@@ -62,6 +62,7 @@ export { SlackIcon } from "./SlackIcon";
 export { SmileyIcon } from "./SmileyIcon";
 export { StarMapIcon } from "./StarMapIcon";
 export { SubAgentsIcon } from "./SubAgentsIcon";
+export { SubthreadIcon } from "./SubthreadIcon";
 export { TelegramIcon } from "./TelegramIcon";
 export { TerminalIcon } from "./TerminalIcon";
 export { ToolCallsIcon } from "./ToolCallsIcon";

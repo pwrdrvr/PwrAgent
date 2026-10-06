@@ -6590,6 +6590,32 @@ a.button {
   font-weight: 600;
 }
 
+/* A sub-thread still being written (`SubthreadDraftRow`). The thread row's
+   box in the Draft chip's dashed neutral, so it reads as the same reminder
+   at row size; the title steps down to the secondary ink because nothing
+   has been sent. Selection keeps the dash and takes the accent edge. */
+.thread-row--draft {
+  border-style: dashed;
+  border-color: var(--border-strong);
+}
+
+.thread-row--draft .thread-row__title {
+  color: var(--text-secondary);
+}
+
+.thread-row__status-indicator--draft {
+  color: var(--text-muted);
+}
+
+/* The parent a draft row names when it waits away from it. Neutral like the
+   location chip, and it gives up width first: the title says what it is. */
+.thread-row__chips .thread-row__chip--subthread-parent {
+  flex: 0 1 auto;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-panel-elevated);
+  color: var(--text-secondary);
+}
+
 .path-copy-target {
   position: relative;
 }
@@ -33566,6 +33592,86 @@ button.pricing-token-miser__folded:focus-visible {
    step quieter than a title. */
 .composer__queued-text--raw {
   color: var(--text-secondary);
+}
+
+/* A sub-thread launchpad's parent, nearest the input. The queued row's card
+   and height, one line: glyph, muted label, the parent's title (the part
+   that truncates), the history note, then ×. */
+.composer__subthread-source {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 32px;
+  padding: 0 4px 0 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.composer__subthread-source-icon {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+}
+
+.composer__subthread-source-label,
+.composer__subthread-source-meta {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.composer__subthread-source-parent {
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+button.composer__subthread-source-parent {
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 3px;
+}
+
+button.composer__subthread-source-parent:hover {
+  text-decoration-color: currentColor;
+}
+
+.composer__subthread-source-detach {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.composer__subthread-source-detach:hover {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.composer__subthread-source-parent:focus-visible,
+.composer__subthread-source-detach:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 /* The chevron button's hit area covers the whole line (the row is the

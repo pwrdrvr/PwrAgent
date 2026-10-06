@@ -9826,6 +9826,186 @@ describe("useThreadNavigation", () => {
     expect(result.current.selectedLaunchpad).toBeUndefined();
   });
 
+  describe("a sub-thread launchpad's draft row", () => {
+    const directoryKey = "subthread:codex:thread-parent:local";
+    const parentThread = {
+      id: "thread-parent",
+      title: "Local parent",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      executionMode: "default" as const,
+      linkedDirectories: [
+        { id: "/repo/app", label: "app", path: "/repo/app", kind: "local" as const },
+      ],
+      inbox: { inInbox: true, reason: "new-thread" as const },
+      createdAt: 1_000,
+      updatedAt: 2_000,
+    };
+    const launchpad: NavigationLaunchpadDraft = {
+      directoryKey,
+      directoryKind: "directory",
+      directoryLabel: "app",
+      directoryPath: "/repo/app",
+      workMode: "local",
+      backend: "codex",
+      executionMode: "default",
+      prompt: "",
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const defaults = { backend: "codex" as const, executionMode: "default" as const };
+
+    function renderSubthreadLaunchpad() {
+      let stored = launchpad;
+      const updateDirectoryLaunchpad = vi.fn<NonNullable<DesktopApi["updateDirectoryLaunchpad"]>>(
+        async (request) => {
+          // Main's own merge: a key sent as undefined clears the field.
+          stored = { ...stored, ...request.patch, updatedAt: stored.updatedAt + 1 };
+          return { launchpad: stored, defaults };
+        },
+      );
+      const materializeDirectoryLaunchpad = vi.fn<NonNullable<DesktopApi["materializeDirectoryLaunchpad"]>>(
+        async () => ({
+          backend: "codex",
+          threadId: "thread-new",
+          executionMode: "default",
+          workMode: "local",
+        }),
+      );
+      const desktopApi: DesktopApi = {
+        ...actionDetailApi(parentThread),
+        ensureDirectoryLaunchpad: vi.fn(async () => ({ launchpad, defaults })),
+        updateDirectoryLaunchpad,
+        materializeDirectoryLaunchpad,
+        resetDirectoryLaunchpad: vi.fn(async () => ({ directoryKey, defaults })),
+        readPopulation: vi.fn(async () => ({
+          backend: "all" as const,
+          fetchedAt: Date.now(),
+          unchanged: false,
+          inboxThreadKeys: ["codex:thread-parent"],
+          threads: [parentThread],
+          directories: [],
+          launchpadDefaults: defaults,
+        })),
+        onAgentEvent: () => () => undefined,
+      };
+      const rendered = renderHook(() => useThreadNavigation(desktopApi));
+      return { ...rendered, updateDirectoryLaunchpad, materializeDirectoryLaunchpad };
+    }
+
+    // Selecting reads the thread's detail and launchpad configuration. Let
+    // those land inside act before asserting, not after the test ends.
+    async function selectAndSettle(
+      result: ReturnType<typeof renderSubthreadLaunchpad>["result"],
+      thread: typeof parentThread,
+    ) {
+      await act(async () => {
+        result.current.selectThread(thread);
+      });
+      await waitFor(() => expect(result.current.selectedThread?.id).toBe(thread.id));
+    }
+
+    it("files under its parent and outlives navigating away", async () => {
+      const { result } = renderSubthreadLaunchpad();
+      await waitFor(() => expect(result.current.selectedThread?.id).toBe("thread-parent"));
+
+      await act(async () => {
+        await result.current.createSubthread(parentThread, "local");
+      });
+
+      expect(result.current.subthreadLaunchpadDrafts).toEqual([
+        expect.objectContaining({
+          kind: "subthread-draft",
+          selectionKey: `launchpad:${directoryKey}`,
+          directoryKey,
+          parentThreadKey: "codex:thread-parent",
+          sourceThreadKey: "codex:thread-parent",
+          parentThreadTitle: "Local parent",
+        }),
+      ]);
+      expect(result.current.selectedItemKey).toBe(`launchpad:${directoryKey}`);
+      // The draft row marks where the sub-thread goes; the parent is not
+      // filled as the composer's source on top of it.
+      expect(result.current.composerSourceThreadKey).toBeUndefined();
+
+      await selectAndSettle(result, parentThread);
+      expect(result.current.selectedItemKey).toBe("codex:thread-parent");
+      expect(result.current.subthreadLaunchpadDrafts).toHaveLength(1);
+    });
+
+    it("detaches into an ordinary launchpad that keeps its draft and settings", async () => {
+      const { result, updateDirectoryLaunchpad } = renderSubthreadLaunchpad();
+      await waitFor(() => expect(result.current.selectedThread?.id).toBe("thread-parent"));
+      await act(async () => {
+        await result.current.createSubthread(parentThread, "local");
+      });
+      await act(async () => {
+        await result.current.updateDirectoryLaunchpad(directoryKey, { prompt: "Keep this draft" });
+      });
+
+      await act(async () => {
+        result.current.detachSubthreadLaunchpad(directoryKey);
+      });
+
+      const patch = updateDirectoryLaunchpad.mock.calls.at(-1)![0].patch;
+      expect(Object.keys(patch).sort()).toEqual([
+        "parentThreadBackend",
+        "parentThreadId",
+        "parentThreadInstanceId",
+        "parentThreadTitle",
+      ]);
+      expect(Object.values(patch)).toEqual([undefined, undefined, undefined, undefined]);
+      expect(result.current.subthreadLaunchpadDrafts).toEqual([]);
+      expect(result.current.selectedItemKey).toBe(`launchpad:${directoryKey}`);
+      expect(result.current.selectedLaunchpad).toMatchObject({
+        directoryKey,
+        prompt: "Keep this draft",
+        workMode: "local",
+        backend: "codex",
+      });
+      expect(result.current.selectedLaunchpad?.parentThreadId).toBeUndefined();
+      expect(result.current.selectedLaunchpad?.parentThreadTitle).toBeUndefined();
+      expect(result.current.selectedLaunchpad?.sourceThreadId).toBeUndefined();
+    });
+
+    it("starts a detached launchpad's thread with no parent, though its key names one", async () => {
+      const { result, materializeDirectoryLaunchpad } = renderSubthreadLaunchpad();
+      await waitFor(() => expect(result.current.selectedThread?.id).toBe("thread-parent"));
+      await act(async () => {
+        await result.current.createSubthread(parentThread, "local");
+      });
+      await act(async () => {
+        result.current.detachSubthreadLaunchpad(directoryKey);
+      });
+
+      await act(async () => {
+        await result.current.materializeDirectoryLaunchpad(directoryKey, [
+          { type: "text", text: "Ordinary thread" },
+        ]);
+      });
+
+      expect(materializeDirectoryLaunchpad).toHaveBeenCalledTimes(1);
+      expect(materializeDirectoryLaunchpad.mock.calls[0]![0]).not.toHaveProperty("parentThreadId");
+      expect(materializeDirectoryLaunchpad.mock.calls[0]![0].launchpad?.parentThreadId).toBeUndefined();
+    });
+
+    it("leaves the selection alone when it is discarded from its row", async () => {
+      const { result } = renderSubthreadLaunchpad();
+      await waitFor(() => expect(result.current.selectedThread?.id).toBe("thread-parent"));
+      await act(async () => {
+        await result.current.createSubthread(parentThread, "local");
+      });
+      await selectAndSettle(result, parentThread);
+
+      await act(async () => {
+        result.current.discardLaunchpad(directoryKey);
+      });
+
+      expect(result.current.subthreadLaunchpadDrafts).toEqual([]);
+      expect(result.current.selectedItemKey).toBe("codex:thread-parent");
+    });
+  });
+
   it("returns to the source thread when a sub-thread launchpad is cancelled after a refresh", async () => {
     const parentThread = {
       id: "thread-parent",

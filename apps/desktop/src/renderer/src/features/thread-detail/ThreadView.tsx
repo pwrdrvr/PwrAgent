@@ -935,6 +935,10 @@ export type ThreadViewProps = {
     scheduledFor?: number,
   ) => Promise<void>;
   onCancelLaunchpad?: (directoryKey: string) => void;
+  /** See `Composer`'s prop of the same name. */
+  launchpadCancelRequest?: { directoryKey: string; id: number };
+  onDetachLaunchpadParent?: (directoryKey: string) => void;
+  onSelectLaunchpadParent?: (launchpad: NavigationLaunchpadDraft) => void;
   onPendingStatusChange?: (status?: string) => void;
   /**
    * Called when the operator sends or steers a turn on a thread. The
@@ -3592,6 +3596,9 @@ export function ThreadView(props: ThreadViewProps) {
           onReloadLaunchpadConfiguration: props.onReloadLaunchpadConfiguration,
           onMaterializeLaunchpad: handleMaterializeLaunchpad,
           onCancelLaunchpad: props.onCancelLaunchpad,
+          launchpadCancelRequest: props.launchpadCancelRequest,
+          onDetachLaunchpadParent: props.onDetachLaunchpadParent,
+          onSelectLaunchpadParent: props.onSelectLaunchpadParent,
           onUpdateLaunchpad: props.onUpdateLaunchpad,
           onSelectDirectoryFromPicker: props.onSelectDirectoryFromPicker,
           onSelectNoDirectoryFromPicker: props.onSelectNoDirectoryFromPicker,
@@ -3804,16 +3811,10 @@ export function ThreadView(props: ThreadViewProps) {
         composerLaunchpad.backend,
         props.backends,
       )}
-      contextLabel={
-        composerLaunchpad.parentThreadTitle || composerLaunchpad.parentThreadId
-          ? `Grouped under ${
-              composerLaunchpad.parentThreadTitle ??
-              composerLaunchpad.parentThreadId
-            }`
-          : undefined
-      }
       projectLabel={composerLaunchpad.directoryLabel}
-      title="New thread"
+      // The composer's source row names the parent; the breadcrumb only says
+      // what is being made.
+      title={composerLaunchpad.parentThreadId ? "New sub-thread" : "New thread"}
       machineSlotRef={props.launchpadMachine ? setLaunchpadMachineSlot : undefined}
     />
   ) : (

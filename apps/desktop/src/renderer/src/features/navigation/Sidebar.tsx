@@ -13,7 +13,11 @@ import { useLensScrollRestoration } from "../../lib/useLensScrollRestoration";
 import { useMenuNavigation } from "../../lib/useMenuNavigation";
 import { useModalDialog } from "../../lib/useModalDialog";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
-import type { PendingLaunchpadCreation } from "../../lib/useThreadNavigation";
+import type {
+  PendingLaunchpadCreation,
+  SubthreadLaunchpadDraft,
+} from "../../lib/useThreadNavigation";
+import type { PendingSidebarRow } from "./StartingThreadRow";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type {
   ComponentType,
@@ -251,7 +255,13 @@ type SidebarProps = {
   onRevealSelectedThreadComplete?: (request: number) => void;
   selectedItemKey?: string;
   pendingLaunchpadCreations?: PendingLaunchpadCreation[];
-  onSelectPendingLaunchpad?: (creation: PendingLaunchpadCreation) => void;
+  /** Sub-thread launchpads being written in this window. */
+  subthreadLaunchpadDrafts?: SubthreadLaunchpadDraft[];
+  onSelectPendingLaunchpad?: (entry: PendingSidebarRow) => void;
+  /** The draft row's Discard: the composer's Cancel. */
+  onDiscardSubthreadDraft?: (draft: SubthreadLaunchpadDraft) => void;
+  /** The draft row's Detach from Parent: the source row's ×. */
+  onDetachSubthreadDraft?: (draft: SubthreadLaunchpadDraft) => void;
   thinkingThreadKeys?: Record<string, boolean>;
   agentCommandThreadKeys?: Record<string, boolean>;
   threads: NavigationThreadSummary[];
@@ -511,6 +521,8 @@ export function Sidebar(props: SidebarProps) {
   const directoryContextMenuOpenerRef = useRef<HTMLElement | null>(null);
   const directoryTargetMenuRef = useRef<HTMLDivElement>(null);
   const directoryTargetMenuOpenerRef = useRef<HTMLElement | null>(null);
+  const subthreadDraftMenuRef = useRef<HTMLDivElement>(null);
+  const subthreadDraftMenuOpenerRef = useRef<HTMLElement | null>(null);
   const profileMenuRef = useRef<HTMLDivElement>(null);
   const profileMenuTriggerRef = useRef<HTMLButtonElement | null>(null);
   const federationThreadTargets = props.newThreadFederationTargets ?? [];
@@ -559,6 +571,18 @@ export function Sidebar(props: SidebarProps) {
         position?: { x: number; y: number };
         directory: NavigationDirectorySummary;
         directories: NavigationDirectorySummary[];
+      }
+    | undefined
+  >();
+  /**
+   * A sub-thread draft row's menu. Its own state, like the directory menu:
+   * a draft has no thread id, so none of the thread menu's actions apply.
+   */
+  const [subthreadDraftMenu, setSubthreadDraftMenu] = useState<
+    | {
+        requestedPosition: ThreadContextMenuPosition;
+        position?: { x: number; y: number };
+        draft: SubthreadLaunchpadDraft;
       }
     | undefined
   >();
@@ -683,12 +707,18 @@ export function Sidebar(props: SidebarProps) {
   const renderedThreads = props.browseMode === "directories" ? presentedThreads
     : hoverStableSnapshot.value.visibleKeys.map((key) => presentedByKey.get(key)).filter((thread): thread is NavigationThreadSummary => Boolean(thread));
   const renderedDirectoryKeys = new Set(renderedDirectories.map((directory) => directory.key));
-  // A starting thread renders where its thread will land. Drafts holds only
-  // threads with unsent replies, which a new thread never is, so it lands
-  // nowhere there.
-  const startingThreads = props.browseMode === "drafts"
-    ? NO_STARTING_THREADS
-    : props.pendingLaunchpadCreations ?? NO_STARTING_THREADS;
+  // A starting thread renders where its thread will land, and a sub-thread
+  // being written renders in the same slot. Drafts holds only threads with
+  // unsent replies, which a new thread never is, so neither lands there.
+  // Drafts splice in last, so a draft leads its parent's tray, above any
+  // sibling still starting: the slot the next child takes.
+  const startingThreads = useMemo((): PendingSidebarRow[] => {
+    if (props.browseMode === "drafts") return NO_STARTING_THREADS;
+    const creations = props.pendingLaunchpadCreations ?? NO_STARTING_THREADS;
+    return props.subthreadLaunchpadDrafts?.length
+      ? [...creations, ...props.subthreadLaunchpadDrafts]
+      : creations;
+  }, [props.browseMode, props.pendingLaunchpadCreations, props.subthreadLaunchpadDrafts]);
   const onCreateThreadWithoutDirectory = props.onCreateThreadWithoutDirectory;
   const onAddProjectDirectory = props.onAddProjectDirectory;
   // The list's own way to begin. Not while it loads, and not without a
@@ -1119,6 +1149,21 @@ export function Sidebar(props: SidebarProps) {
   }, [directoryContextMenu]);
 
   useEffect(() => {
+    if (!subthreadDraftMenu) {
+      return;
+    }
+
+    const closeMenu = (): void => setSubthreadDraftMenu(undefined);
+
+    window.addEventListener("click", closeMenu);
+    window.addEventListener("contextmenu", closeMenu, true);
+    return () => {
+      window.removeEventListener("click", closeMenu);
+      window.removeEventListener("contextmenu", closeMenu, true);
+    };
+  }, [subthreadDraftMenu]);
+
+  useEffect(() => {
     if (federationThreadTargets.length === 0) {
       // The menu is also gated on this at render time, so without clearing the
       // state a peer reconnecting would pop the menu back open at its old
@@ -1171,6 +1216,12 @@ export function Sidebar(props: SidebarProps) {
     menuRef: directoryContextMenuRef,
     triggerRef: directoryContextMenuOpenerRef,
     onClose: () => setDirectoryContextMenu(undefined),
+  });
+  useMenuNavigation({
+    open: subthreadDraftMenu?.position !== undefined,
+    menuRef: subthreadDraftMenuRef,
+    triggerRef: subthreadDraftMenuOpenerRef,
+    onClose: () => setSubthreadDraftMenu(undefined),
   });
   useMenuNavigation({
     open:
@@ -1244,6 +1295,34 @@ export function Sidebar(props: SidebarProps) {
       position: nextPosition,
     });
   }, [directoryContextMenu]);
+
+  useLayoutEffect(() => {
+    if (!subthreadDraftMenu) {
+      return;
+    }
+
+    const menu = subthreadDraftMenuRef.current;
+    if (!menu) {
+      return;
+    }
+
+    const nextPosition = placeThreadContextMenu(
+      subthreadDraftMenu.requestedPosition,
+      menu.getBoundingClientRect(),
+    );
+
+    if (
+      subthreadDraftMenu.position?.x === nextPosition.x &&
+      subthreadDraftMenu.position.y === nextPosition.y
+    ) {
+      return;
+    }
+
+    setSubthreadDraftMenu({
+      ...subthreadDraftMenu,
+      position: nextPosition,
+    });
+  }, [subthreadDraftMenu]);
 
   useLayoutEffect(() => {
     if (!directoryTargetMenu) {
@@ -1490,6 +1569,19 @@ export function Sidebar(props: SidebarProps) {
       directory,
       directories: resolveDirectoryContextMenuDirectories(directory),
     });
+  };
+
+  const openSubthreadDraftMenu = (
+    draft: SubthreadLaunchpadDraft,
+    position: ThreadContextMenuPosition,
+  ): void => {
+    rememberMenuOpener(subthreadDraftMenuOpenerRef, subthreadDraftMenuRef);
+    setContextMenu(undefined);
+    setDirectoryContextMenu(undefined);
+    setDirectoryTargetMenu(undefined);
+    setProfileMenuOpen(false);
+    setRenameThread(undefined);
+    setSubthreadDraftMenu({ requestedPosition: position, draft });
   };
 
   const openDirectoryTargetMenu = (
@@ -2530,6 +2622,7 @@ export function Sidebar(props: SidebarProps) {
               onSelectStartingThread={props.onSelectPendingLaunchpad}
               emptyLabel={props.threadLensesEmpty ? "No threads yet." : undefined}
               footer={startActions}
+              onOpenSubthreadDraftContextMenu={openSubthreadDraftMenu}
               projectReveal={projectReveal}
               onProjectRevealComplete={() => setProjectReveal(undefined)}
               pagedNavigation={props.pagedNavigation}
@@ -2618,6 +2711,7 @@ export function Sidebar(props: SidebarProps) {
                 footer={startActions}
                 startingThreads={startingThreads}
                 onSelectStartingThread={props.onSelectPendingLaunchpad}
+                onOpenSubthreadDraftContextMenu={openSubthreadDraftMenu}
                 pagedNavigation={props.pagedNavigation}
                 resourceIds={lensResources.map((resource) => resource.id)}
                 presentationOrder={hoverStableSnapshot.value.order}
@@ -3240,6 +3334,55 @@ export function Sidebar(props: SidebarProps) {
               );
             }}
           />
+        </div>
+      ) : null}
+
+      {subthreadDraftMenu ? (
+        <div
+          ref={subthreadDraftMenuRef}
+          className="thread-context-menu"
+          role="menu"
+          aria-label={`Actions for the sub-thread draft under ${subthreadDraftMenu.draft.parentThreadTitle}`}
+          style={{
+            left:
+              subthreadDraftMenu.position?.x ??
+              subthreadDraftMenu.requestedPosition.x,
+            top:
+              subthreadDraftMenu.position?.y ??
+              subthreadDraftMenu.requestedPosition.y,
+            visibility: subthreadDraftMenu.position ? undefined : "hidden",
+          }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <div className="thread-context-menu__section">
+            <button
+              role="menuitem"
+              type="button"
+              disabled={!props.onDetachSubthreadDraft}
+              onClick={() => {
+                const { draft } = subthreadDraftMenu;
+                setSubthreadDraftMenu(undefined);
+                props.onDetachSubthreadDraft?.(draft);
+              }}
+            >
+              Detach from Parent
+            </button>
+          </div>
+          <div className="thread-context-menu__separator" role="separator" />
+          <div className="thread-context-menu__section">
+            <button
+              role="menuitem"
+              type="button"
+              disabled={!props.onDiscardSubthreadDraft}
+              onClick={() => {
+                const { draft } = subthreadDraftMenu;
+                setSubthreadDraftMenu(undefined);
+                props.onDiscardSubthreadDraft?.(draft);
+              }}
+            >
+              Discard Sub-thread
+            </button>
+          </div>
         </div>
       ) : null}
 

@@ -1198,7 +1198,7 @@ test.describe("federation remote window", () => {
       await expect(childEnvironment).toContainText("PwrAgent");
 
       await childPrompt.fill("/review");
-      await remote.getByRole("button", { name: "Start thread" }).click();
+      await remote.getByRole("button", { name: "Start sub-thread" }).click();
       const reviewTarget = remote.getByRole("group", { name: "Review target" });
       await expect(reviewTarget).toBeVisible();
       await reviewTarget.getByRole("combobox", { name: "Base branch" }).click();
@@ -1977,7 +1977,7 @@ test.describe("federation remote window", () => {
       await expect(childEnvironment).toContainText("PwrAgent");
 
       await remote.getByRole("textbox", { name: "New thread" }).fill("/review");
-      await remote.getByRole("button", { name: "Start thread" }).click();
+      await remote.getByRole("button", { name: "Start sub-thread" }).click();
       const reviewTarget = remote.getByRole("group", { name: "Review target" });
       await expect(reviewTarget).toBeVisible();
       await reviewTarget.getByRole("combobox", { name: "Base branch" }).click();

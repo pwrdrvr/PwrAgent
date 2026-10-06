@@ -29,7 +29,6 @@ type ThreadPlaceholderHeaderProps = {
    * backend chip, where the thread header names the machine afterwards.
    */
   machineSlotRef?: (element: HTMLSpanElement | null) => void;
-  contextLabel?: string;
   desktopApi?: DesktopApi;
   projectLabel?: string;
   title: string;
@@ -102,11 +101,6 @@ export function ThreadPlaceholderHeader(props: ThreadPlaceholderHeaderProps) {
             ) : null}
             {props.backendLabel ? (
               <span className="chip chip--backend">{props.backendLabel}</span>
-            ) : null}
-            {props.contextLabel ? (
-              <span className="thread-row__chip" title={props.contextLabel}>
-                {props.contextLabel}
-              </span>
             ) : null}
           </div>
         </div>
