@@ -141,7 +141,7 @@ export function showStarMapWindow(source: WindowPlacementSource = {}): void {
   // deliberately registered WITHOUT a federation target: remote-scoped
   // event delivery is gated per-webContents by the renderer's own
   // `setFederationEventSubscriptions` registration instead. The diagnostics
-  // channel lets Help → Copy Local Diagnostics Info describe this focused
+  // channel lets Help → Copy Diagnostics Info describe this focused
   // surface and its active intake target instead of falling back to the main
   // window's selected-thread context.
   registerWindowChannels(window, WINDOW_KIND_STAR_MAP, [

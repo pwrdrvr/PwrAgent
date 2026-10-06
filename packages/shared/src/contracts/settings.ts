@@ -1994,12 +1994,41 @@ export type DesktopPwrAgentProfileSummary = {
   profileDir: string;
   canDelete: boolean;
   codexProfile: DesktopCodexAuthProfileCandidate;
+  /**
+   * Whether the Profiles menu lists this profile. A hidden profile keeps its
+   * data and its place in the order, and still opens from Settings →
+   * Profiles and the CLI; it only gives up its menu row and shortcut.
+   */
+  showInMenu: boolean;
 };
 
 export type ListDesktopPwrAgentProfilesResponse = {
   activeProfile: string;
   defaultProfile: string;
+  /** In the operator's order: creation order until they reorder it. */
   profiles: DesktopPwrAgentProfileSummary[];
+};
+
+export type ReorderDesktopPwrAgentProfilesRequest = {
+  /**
+   * Every listed profile name, in the new order. A list that does not name
+   * exactly the current set of profiles is refused as stale.
+   */
+  order: string[];
+};
+
+export type ReorderDesktopPwrAgentProfilesResponse = {
+  order: string[];
+};
+
+export type SetDesktopPwrAgentProfileMenuVisibilityRequest = {
+  profile: string;
+  showInMenu: boolean;
+};
+
+export type SetDesktopPwrAgentProfileMenuVisibilityResponse = {
+  profile: string;
+  showInMenu: boolean;
 };
 
 export type OpenDesktopPwrAgentProfileRequest = {

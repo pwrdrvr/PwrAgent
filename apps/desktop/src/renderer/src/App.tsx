@@ -223,6 +223,7 @@ import {
   type GithubPrSamlEnforcementEvent,
 } from "../../shared/github-pr-access";
 import { buildLocalThreadDiagnosticsInfo } from "../../shared/local-diagnostics-info";
+import { PROFILES_SETTINGS_CREATE_SUBSECTION } from "../../shared/settings-routes";
 import { AppUpdateBanner } from "./features/update/AppUpdateBanner";
 import { isNativeVoiceApi, useNativeVoiceNotices } from "./features/native-voice/NativeVoice";
 import {
@@ -515,6 +516,22 @@ function DesktopAppShell(props: {
   const [settingsInitialSubsection, setSettingsInitialSubsection] = useState<
     string | undefined
   >(undefined);
+  // Profiles → New Profile… asks Settings → Profiles to open its create form.
+  // A one-shot flag rather than a route: ProfilesSettings clears it once the
+  // form is open, so a second click opens it again and a later visit to the
+  // pane does not.
+  const [profileCreateRequested, setProfileCreateRequested] = useState(false);
+  const clearProfileCreateRequest = useCallback(() => {
+    setProfileCreateRequested(false);
+  }, []);
+  // Settings can close before the Profiles pane ever mounts (an unsaved-edits
+  // prompt kept another pane open, then Exit Settings). The request goes with
+  // it, or a later visit to Profiles would open a form nobody asked for.
+  useEffect(() => {
+    if (mainView !== "settings") {
+      setProfileCreateRequested(false);
+    }
+  }, [mainView]);
   const [threadViewReady, setThreadViewReady] = useState(false);
   // Onboarding wizard overlay state. Three paths into it:
   //  (1) auto-launch on first snapshot if `onboarding.completed` is
@@ -2507,8 +2524,19 @@ function DesktopAppShell(props: {
     if (!desktopApi?.onOpenSettingsRequested) {
       return;
     }
-    return desktopApi.onOpenSettingsRequested((section) => {
-      openSettingsSection(isSettingsSection(section) ? section : undefined);
+    return desktopApi.onOpenSettingsRequested((section, subsection) => {
+      if (
+        section === "profiles"
+        && subsection === PROFILES_SETTINGS_CREATE_SUBSECTION
+      ) {
+        openSettingsSection("profiles");
+        setProfileCreateRequested(true);
+        return;
+      }
+      openSettingsSection(
+        isSettingsSection(section) ? section : undefined,
+        subsection,
+      );
     });
   }, [desktopApi, openSettingsSection]);
   useEffect(() => {
@@ -3903,11 +3931,13 @@ function DesktopAppShell(props: {
                 desktopApi={desktopApi}
                 initialSection={settingsInitialSection}
                 initialSubsection={settingsInitialSubsection}
+                profileCreateRequested={profileCreateRequested}
                 profiles={profiles}
                 registerLeaveGuard={registerSettingsLeaveGuard}
                 settings={settings}
                 onClose={() => setMainView("thread")}
                 onOpenMessagingActivity={openMessagingActivityWindow}
+                onProfileCreateRequestHandled={clearProfileCreateRequest}
                 onOpenThread={(target) => {
                   setMainView("thread");
                   void navigation.showThread(target);

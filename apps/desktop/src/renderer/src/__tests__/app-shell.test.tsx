@@ -250,6 +250,7 @@ function profileSummary(
     },
     default: name === "default",
     profileDir: `/home/example/.pwragent/profiles/${name}`,
+    showInMenu: true,
   };
 }
 

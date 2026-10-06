@@ -281,6 +281,9 @@ export function SettingsScreen(props: {
    *  registry id under "models", a platform kind under "messaging").
    *  Ignored without `initialSection`. */
   initialSubsection?: string;
+  /** Profiles → New Profile…: open the Profiles pane's create form. */
+  profileCreateRequested?: boolean;
+  onProfileCreateRequestHandled?: () => void;
   onClose?: () => void;
   onOpenThread?: (target: {
     backend: AppServerBackendKind;
@@ -830,6 +833,8 @@ export function SettingsScreen(props: {
                 onOpenRoute={openRoute}
                 onOpenThread={props.onOpenThread}
                 onShowNotice={props.onShowNotice}
+                onProfileCreateRequestHandled={props.onProfileCreateRequestHandled}
+                profileCreateRequested={props.profileCreateRequested}
                 profiles={props.profiles}
                 section={section}
                 settings={props.settings}
@@ -866,6 +871,8 @@ function SettingsSectionBody(props: {
     threadId: string;
   }) => void;
   onShowNotice?: (notice: AppNoticeToastNotice) => void;
+  onProfileCreateRequestHandled?: () => void;
+  profileCreateRequested?: boolean;
   profiles?: PwrAgentProfilesState;
   section: SettingsSection;
   settings: DesktopSettingsState;
@@ -1442,7 +1449,9 @@ function SettingsSectionBody(props: {
   if (props.section === "profiles") {
     return (
       <ProfilesSettings
+        createRequested={props.profileCreateRequested}
         desktopApi={props.desktopApi}
+        onCreateRequestHandled={props.onProfileCreateRequestHandled}
         profiles={props.profiles}
         snapshot={props.snapshot}
         onSettingsChanged={props.settings.refresh}

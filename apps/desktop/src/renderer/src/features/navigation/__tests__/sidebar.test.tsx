@@ -3001,6 +3001,7 @@ describe("Sidebar", () => {
             active: true,
             default: false,
             profileDir: "/home/example/.pwragent/profiles/work",
+            showInMenu: true,
             canDelete: false,
             codexProfile: {
               name: "work3",
@@ -3059,6 +3060,7 @@ describe("Sidebar", () => {
             active: true,
             default: false,
             profileDir: "/home/example/.pwragent/profiles/work",
+            showInMenu: true,
             canDelete: false,
             codexProfile: {
               name: "work3",
@@ -3097,6 +3099,7 @@ describe("Sidebar", () => {
             active: true,
             default: false,
             profileDir: "/home/example/.pwragent/profiles/work",
+            showInMenu: true,
             canDelete: false,
             codexProfile: {
               name: "personal",
@@ -9318,6 +9321,7 @@ describe("Sidebar menus from the keyboard", () => {
     active,
     default: false,
     profileDir: `/home/example/.pwragent/profiles/${name}`,
+    showInMenu: true,
     canDelete: false,
     codexProfile: {
       name,

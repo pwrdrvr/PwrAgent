@@ -2534,32 +2534,39 @@ export function Sidebar(props: SidebarProps) {
               tabIndex={-1}
               onClick={(event) => event.stopPropagation()}
             >
-              {props.profiles.map((profile) => (
-                <button
-                  key={profile.name}
-                  className="sidebar__menu-item"
-                  disabled={profile.active || !props.onOpenProfile}
-                  role="menuitem"
-                  type="button"
-                  onClick={() => {
-                    setProfileMenuOpen(false);
-                    void props.onOpenProfile?.(profile.name);
-                  }}
-                >
-                  <span className="sidebar__menu-item-title">
-                    {profile.displayName || profile.name}
-                  </span>
-                  <span className="sidebar__menu-item-detail">
-                    {profile.active
-                      ? profile.default
-                        ? "Current profile - startup default"
-                        : "Current profile"
-                      : profile.default
-                        ? "Startup default - open in new app instance"
-                        : "Open in new app instance"}
-                  </span>
-                </button>
-              ))}
+              {/*
+                The operator's Settings → Profiles order, minus the profiles
+                switched out of the Profiles menu. The current profile stays,
+                because this row is also where it says it is current.
+              */}
+              {props.profiles
+                .filter((profile) => profile.showInMenu || profile.active)
+                .map((profile) => (
+                  <button
+                    key={profile.name}
+                    className="sidebar__menu-item"
+                    disabled={profile.active || !props.onOpenProfile}
+                    role="menuitem"
+                    type="button"
+                    onClick={() => {
+                      setProfileMenuOpen(false);
+                      void props.onOpenProfile?.(profile.name);
+                    }}
+                  >
+                    <span className="sidebar__menu-item-title">
+                      {profile.displayName || profile.name}
+                    </span>
+                    <span className="sidebar__menu-item-detail">
+                      {profile.active
+                        ? profile.default
+                          ? "Current profile - startup default"
+                          : "Current profile"
+                        : profile.default
+                          ? "Startup default - open in new app instance"
+                          : "Open in new app instance"}
+                    </span>
+                  </button>
+                ))}
               {props.onOpenUsageActivity ? (
                 <>
                   <div className="thread-context-menu__separator" role="separator" />

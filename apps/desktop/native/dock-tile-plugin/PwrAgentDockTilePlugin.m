@@ -18,10 +18,25 @@
   NSString *pwragentHome = [self pwragentHomeFromSnapshot:snapshot];
   NSArray<NSDictionary *> *profiles = pwragentHome == nil
     ? @[]
-    : [self sortedProfilesFromSnapshot:snapshot];
+    : [self orderedProfilesFromSnapshot:snapshot];
+  NSArray<NSDictionary *> *shownProfiles = [profiles
+    filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(
+      NSDictionary *profile,
+      NSDictionary *bindings
+    ) {
+      return ![profile[@"showInMenu"] isEqual:@NO];
+    }]];
 
   NSMenu *menu = [[NSMenu alloc] initWithTitle:@""];
   menu.autoenablesItems = NO;
+
+  // Every profile switched out of the Profiles menu is a choice, not an
+  // empty state, so the Dock offers no Open Profile item at all, as the
+  // running app's Dock menu does.
+  if (profiles.count > 0 && shownProfiles.count == 0) {
+    self.retainedDockMenu = menu;
+    return menu;
+  }
 
   NSMenuItem *openProfileItem = [[NSMenuItem alloc]
     initWithTitle:@"Open Profile"
@@ -39,7 +54,7 @@
     [profileMenu addItem:emptyItem];
   } else {
     NSString *defaultProfile = snapshot[@"defaultProfile"];
-    for (NSDictionary *profile in profiles) {
+    for (NSDictionary *profile in shownProfiles) {
       NSString *name = profile[@"name"];
       NSString *displayName = profile[@"displayName"];
       NSString *label = displayName.length > 0 ? displayName : name;
@@ -149,7 +164,7 @@
   return [pwragentHome stringByStandardizingPath];
 }
 
-- (NSArray<NSDictionary *> *)sortedProfilesFromSnapshot:(NSDictionary *)snapshot {
+- (NSArray<NSDictionary *> *)orderedProfilesFromSnapshot:(NSDictionary *)snapshot {
   id rawProfiles = snapshot[@"profiles"];
   if (![rawProfiles isKindOfClass:[NSArray class]]) {
     return @[];
@@ -171,12 +186,26 @@
         || displayName.length > 256) {
       displayName = nil;
     }
-    [profiles addObject:displayName.length > 0
-      ? @{ @"name": name, @"displayName": displayName }
-      : @{ @"name": name }];
+    NSMutableDictionary *profile = [NSMutableDictionary
+      dictionaryWithObject:name
+      forKey:@"name"];
+    if (displayName.length > 0) {
+      profile[@"displayName"] = displayName;
+    }
+    if ([value[@"showInMenu"] isEqual:@NO]) {
+      profile[@"showInMenu"] = @NO;
+    }
+    [profiles addObject:profile];
     if (profiles.count >= 100) {
       break;
     }
+  }
+
+  // A snapshot marked `ordered` is already in the Profiles-menu order the
+  // operator set in Settings. One without it came from an older PwrAgent,
+  // so fall back to the order those builds showed.
+  if ([snapshot[@"ordered"] isEqual:@YES]) {
+    return profiles;
   }
 
   NSString *defaultProfile = snapshot[@"defaultProfile"];

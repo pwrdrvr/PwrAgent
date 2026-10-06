@@ -1,7 +1,7 @@
 # Usage Activity
 
 Usage Activity is its own window. Open it from **PwrAgent → Usage Activity**
-(Help → Usage Activity on Windows and Linux), the profile menu at the bottom
+(File → Usage Activity on Windows and Linux), the profile menu at the bottom
 of the sidebar, **Usage Activity** in a thread's Pricing panel, or by clicking
 the context moon beside the composer. It shows PwrAgent's pricing ledger beside
 the account limits Codex reports. It is not a billing report, and it never

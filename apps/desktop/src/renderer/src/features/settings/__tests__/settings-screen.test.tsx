@@ -3,6 +3,7 @@ import "@testing-library/jest-dom/vitest";
 import {
   act,
   cleanup,
+  createEvent,
   fireEvent,
   render,
   screen,
@@ -8226,6 +8227,7 @@ describe("SettingsScreen", () => {
               active: true,
               default: false,
               profileDir: "/home/example/.pwragent/profiles/dev",
+              showInMenu: true,
               canDelete: false,
               codexProfile: {
                 name: "",
@@ -8244,6 +8246,7 @@ describe("SettingsScreen", () => {
               active: false,
               default: false,
               profileDir: "/home/example/.pwragent/profiles/work",
+              showInMenu: true,
               canDelete: true,
               codexProfile: {
                 name: "",
@@ -8258,8 +8261,10 @@ describe("SettingsScreen", () => {
             },
           ],
           refresh: vi.fn(async () => undefined),
+          reorderProfiles: vi.fn(async () => undefined),
           setCodexProfile: vi.fn(async () => undefined),
           setDefaultProfile,
+          setShowInMenu: vi.fn(async () => undefined),
         }}
         settings={createSettingsState()}
       />,
@@ -8278,6 +8283,204 @@ describe("SettingsScreen", () => {
     });
   });
 
+  describe("Profiles menu order and visibility", () => {
+    const profile = (
+      name: string,
+      options: { active?: boolean; showInMenu?: boolean } = {},
+    ) => ({
+      name,
+      displayName: name,
+      active: options.active ?? false,
+      default: false,
+      profileDir: `/home/example/.pwragent/profiles/${name}`,
+      showInMenu: options.showInMenu ?? true,
+      canDelete: !options.active,
+      codexProfile: {
+        name: "",
+        displayName: "System default",
+        codexHome: "/home/example/.codex",
+        source: "default" as const,
+        exists: true,
+        selected: true,
+        hasAuthFile: true,
+        hasConfigFile: true,
+      },
+    });
+
+    function renderProfiles(options: {
+      profiles: ReturnType<typeof profile>[];
+      reorderProfiles?: (order: string[]) => Promise<void>;
+      setShowInMenu?: (name: string, showInMenu: boolean) => Promise<void>;
+      profileCreateRequested?: boolean;
+      onProfileCreateRequestHandled?: () => void;
+    }) {
+      return render(
+        <SettingsScreen
+          initialSection="profiles"
+          profileCreateRequested={options.profileCreateRequested}
+          profiles={{
+            activeProfile: "dev",
+            createProfile: vi.fn(async () => undefined),
+            defaultProfile: "dev",
+            deleteProfile: vi.fn(async () => undefined),
+            loading: false,
+            openProfile: vi.fn(async () => undefined),
+            profiles: options.profiles,
+            refresh: vi.fn(async () => undefined),
+            reorderProfiles:
+              options.reorderProfiles ?? vi.fn(async () => undefined),
+            setCodexProfile: vi.fn(async () => undefined),
+            setDefaultProfile: vi.fn(async () => undefined),
+            setShowInMenu: options.setShowInMenu ?? vi.fn(async () => undefined),
+          }}
+          settings={createSettingsState()}
+          onProfileCreateRequestHandled={options.onProfileCreateRequestHandled}
+        />,
+      );
+    }
+
+    const card = (name: string) =>
+      document.querySelector(
+        `.settings-profile-card[data-profile-name="${name}"]`,
+      ) as HTMLElement;
+
+    it("shows each shown profile's menu shortcut, and none for a hidden one", () => {
+      renderProfiles({
+        profiles: [
+          profile("dev", { active: true }),
+          profile("scratch", { showInMenu: false }),
+          profile("work"),
+        ],
+      });
+
+      // No desktop bridge in jsdom, so the shortcut renders in its
+      // Windows/Linux form.
+      expect(
+        within(card("dev")).getByRole("img", {
+          name: "Profiles menu shortcut Ctrl+1",
+        }),
+      ).toBeInTheDocument();
+      expect(
+        within(card("scratch")).queryByRole("img", { name: /shortcut/ }),
+      ).toBeNull();
+      expect(
+        within(card("work")).getByRole("img", {
+          name: "Profiles menu shortcut Ctrl+2",
+        }),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("switch", { name: "Show scratch in the Profiles menu" }),
+      ).toHaveAttribute("aria-checked", "false");
+    });
+
+    it("switches a profile out of the Profiles menu", async () => {
+      const setShowInMenu = vi.fn(async () => undefined);
+      renderProfiles({
+        profiles: [profile("dev", { active: true }), profile("work")],
+        setShowInMenu,
+      });
+
+      fireEvent.click(
+        screen.getByRole("switch", { name: "Show work in the Profiles menu" }),
+      );
+
+      await waitFor(() => {
+        expect(setShowInMenu).toHaveBeenCalledWith("work", false);
+      });
+    });
+
+    it("moves a profile with the arrow keys on its grip and announces it", async () => {
+      const reorderProfiles = vi.fn(async (_order: string[]) => undefined);
+      renderProfiles({
+        profiles: [
+          profile("dev", { active: true }),
+          profile("work"),
+          profile("alpha"),
+        ],
+        reorderProfiles,
+      });
+      const grip = screen.getByRole("button", {
+        name: "Move dev. Use the up and down arrow keys.",
+      });
+      grip.focus();
+
+      // Already first: nothing to send.
+      fireEvent.keyDown(grip, { key: "ArrowUp" });
+      expect(reorderProfiles).not.toHaveBeenCalled();
+
+      fireEvent.keyDown(grip, { key: "ArrowDown" });
+
+      await waitFor(() => {
+        expect(reorderProfiles).toHaveBeenCalledWith(["work", "dev", "alpha"]);
+      });
+      expect(screen.getByRole("status")).toHaveTextContent(
+        "dev moved to position 2 of 3.",
+      );
+    });
+
+    it("drops a dragged profile above the card it lands on", async () => {
+      const reorderProfiles = vi.fn(async (_order: string[]) => undefined);
+      renderProfiles({
+        profiles: [
+          profile("dev", { active: true }),
+          profile("work"),
+          profile("alpha"),
+        ],
+        reorderProfiles,
+      });
+      const dataTransfer = {
+        dropEffect: "none",
+        effectAllowed: "all",
+        setData: vi.fn(),
+        setDragImage: vi.fn(),
+      };
+      const target = card("work");
+      target.getBoundingClientRect = () =>
+        ({ top: 100, height: 40, bottom: 140, left: 0, right: 0, width: 0 }) as DOMRect;
+
+      fireEvent.dragStart(
+        screen.getByRole("button", {
+          name: "Move alpha. Use the up and down arrow keys.",
+        }),
+        { dataTransfer },
+      );
+      // jsdom has no DragEvent, so an init dict's clientY never reaches the
+      // handler; set it on the event itself.
+      const pointerEvent = (event: Event) => {
+        Object.defineProperty(event, "clientY", { value: 105 });
+        return event;
+      };
+      fireEvent(target, pointerEvent(createEvent.dragOver(target, { dataTransfer })));
+      expect(target).toHaveClass("is-drop-before");
+      fireEvent(target, pointerEvent(createEvent.drop(target, { dataTransfer })));
+
+      await waitFor(() => {
+        expect(reorderProfiles).toHaveBeenCalledWith(["dev", "alpha", "work"]);
+      });
+      expect(target).not.toHaveClass("is-drop-before");
+    });
+
+    it("offers no grip when there is only one profile to order", () => {
+      renderProfiles({ profiles: [profile("dev", { active: true })] });
+
+      expect(screen.queryByRole("button", { name: /^Move dev/ })).toBeNull();
+    });
+
+    it("opens the create form when Profiles → New Profile… asks, once", async () => {
+      const onProfileCreateRequestHandled = vi.fn();
+      renderProfiles({
+        profiles: [profile("dev", { active: true })],
+        profileCreateRequested: true,
+        onProfileCreateRequestHandled,
+      });
+
+      expect(
+        await screen.findByRole("dialog", { name: "Add PwrAgent profile" }),
+      ).toBeInTheDocument();
+      expect(onProfileCreateRequestHandled).toHaveBeenCalledOnce();
+    });
+  });
+
   it("keeps the profile dialogs keyboard-contained and returns focus to what opened them", async () => {
     const profile = (name: string, active: boolean) => ({
       name,
@@ -8285,6 +8488,7 @@ describe("SettingsScreen", () => {
       active,
       default: false,
       profileDir: `/home/example/.pwragent/profiles/${name}`,
+      showInMenu: true,
       canDelete: !active,
       codexProfile: {
         name: "",
@@ -8309,8 +8513,10 @@ describe("SettingsScreen", () => {
           openProfile: vi.fn(async () => undefined),
           profiles: [profile("dev", true), profile("work", false)],
           refresh: vi.fn(async () => undefined),
+          reorderProfiles: vi.fn(async () => undefined),
           setCodexProfile: vi.fn(async () => undefined),
           setDefaultProfile: vi.fn(async () => undefined),
+          setShowInMenu: vi.fn(async () => undefined),
         }}
         settings={createSettingsState()}
       />,
