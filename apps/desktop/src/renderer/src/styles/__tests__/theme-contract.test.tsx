@@ -653,6 +653,19 @@ describe("Tangerine Terminal theme contract", () => {
     expect(warningBannerRule).toContain("-webkit-app-region: no-drag;");
   });
 
+  it("keeps confirm modal frames neutral and puts danger on the action", () => {
+    // The detach-PR dialog once drew its whole frame in --danger-border,
+    // which blue-dark's salmon danger base turned into an orange box.
+    for (const selector of [".pr-detach-warning-dialog", ".settings-confirm-dialog"]) {
+      const frame = extractRuleBody(css, selector);
+      expect(frame).toContain("border: 1px solid var(--border-subtle);");
+      expect(frame).not.toContain("--danger");
+    }
+    expect(
+      extractRuleBody(css, ".pr-detach-warning-dialog__actions .button--danger"),
+    ).toContain("border-color: var(--danger-border);");
+  });
+
   it("carries notice tone on the title-row dot, not the card", () => {
     // State by emphasis and badges, not colored panels (desktop style guide):
     // the card is neutral in every tone, and the dot and countdown carry it.
