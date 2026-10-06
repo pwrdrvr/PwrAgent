@@ -872,3 +872,50 @@ it.each([
     expect(read).toHaveBeenCalledTimes(1);
   } finally { queries.dispose(); }
 });
+
+it.each(["thread/started", "thread/parent/set"])(
+  "refreshes a newly discovered child's status during a pending %s read", async (method) => {
+    const membership = deferred<NavigationQueryPage>();
+    const fresh = deferred<NavigationQueryPage>();
+    const empty = page({ complete: true, nextCursor: undefined, counts: { total: 0, active: 0, unread: 0, review: 0 } });
+    const childPage = (threadStatus: "idle" | "active") => page({ complete: true, nextCursor: undefined,
+      counts: { total: 1, active: threadStatus === "active" ? 1 : 0, unread: 0, review: 0 },
+      entries: [{ orderKey: "new-child", placement: { kind: "root" }, row: {
+        id: "new-child", source: "codex", title: "New child", titleSource: "explicit", threadStatus,
+        ref: { backend: "codex", threadId: "new-child" }, rowRevision: threadStatus, linkedDirectories: [],
+        inbox: { inInbox: false }, ordinaryChildCount: 0, nativeSubAgentGroupPresent: false,
+        queueCount: 0, queueState: "unknown",
+      } }],
+    });
+    const read = vi.fn<NonNullable<DesktopApi["getNavigationQueryPage"]>>()
+      .mockResolvedValueOnce(empty).mockReturnValueOnce(membership.promise).mockReturnValueOnce(fresh.promise);
+    const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+    queries.setDemand(new Map([["children", { protocol: 2, consumer: "main-sidebar",
+      query: { kind: "children", parent: { backend: "codex", threadId: "parent" } },
+    }]]));
+    try {
+      await vi.waitFor(() => expect(queries.getSnapshot().resources.get("children")?.loading).toBe(false));
+      queries.invalidate(undefined, undefined, { backend: "codex", notification: { method,
+        params: { threadId: "new-child", thread: { id: "new-child" }, parentThreadId: "parent" },
+      } } as AgentEvent);
+      const refreshing = queries.refresh(undefined, undefined, true);
+      await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+      // The old complete baseline has no new-child yet. Its status event must
+      // still fence this in-flight membership response and coalesce a replacement.
+      for (let index = 0; index < 2; index++) queries.invalidate(undefined, undefined, { backend: "codex", notification: {
+        method: "thread/status/changed", params: { threadId: "new-child", status: { type: "active" } },
+      } });
+      membership.resolve(childPage("idle"));
+      await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(3));
+      expect(queries.getSnapshot().resources.get("children")?.state.page?.entries).toEqual([]);
+      fresh.resolve(childPage("active"));
+      await refreshing;
+      expect(queries.getSnapshot().resources.get("children")?.state.page?.entries[0]?.row.threadStatus).toBe("active");
+      expect(read).toHaveBeenCalledTimes(3);
+    } finally {
+      queries.dispose();
+      membership.resolve(empty);
+      fresh.resolve(empty);
+    }
+  },
+);

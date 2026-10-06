@@ -270,13 +270,16 @@ export class NavigationWindowQueries {
     const params = event.notification.params as { sourceMethod?: unknown; threadId?: unknown; worktreePath?: unknown; directoryKey?: unknown; instanceId?: string };
     const method = event.notification.method === "navigation/invalidated" ? params?.sourceMethod : event.notification.method;
     const page = resource.value.state.page;
-    if (request.query.kind === "children" && page?.complete && (page.rangeStart ?? 0) === 0 && page.coverage.state === "complete"
+    if (request.query.kind === "children" && !resource.value.loading && !resource.value.state.stale
+      && page?.complete && (page.rangeStart ?? 0) === 0 && page.coverage.state === "complete"
       && typeof params?.threadId === "string"
       && (!navigationInvalidationMayChangeMembership(method)
         || method === "thread/pin/added" || method === "thread/pin/removed" || method === "navigation/remoteThreadPins/changed")) {
       // Pins move roots between directory sections, but do not reparent children.
-      // Only a complete disclosure can exclude an off-page row safely. Unknown
-      // membership events still discover newly created/reparented children.
+      // Only a current, settled disclosure can exclude an off-page row safely.
+      // A pending membership refresh may discover rows absent from its baseline;
+      // their subsequent events must fence that read and request a replacement.
+      // Unknown membership events still discover newly created/reparented children.
       const ownerInstanceId = event.federationTarget?.scope === "remote" ? event.federationTarget.instanceId
         : method === "navigation/remoteThreadPins/changed" ? params.instanceId : undefined;
       const key = navigationIdentityKey({ backend: event.backend, threadId: params.threadId, ownerInstanceId });
