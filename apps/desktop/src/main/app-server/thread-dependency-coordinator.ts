@@ -4,7 +4,7 @@ import type {
   ManageThreadDependenciesRequest, ManageThreadDependenciesResponse, PrSummary,
   ThreadDependency, ThreadDependencyCondition, ThreadDependencyEvidence,
 } from "@pwragent/shared";
-import { THREAD_DEPENDENCY_CONDITIONS } from "@pwragent/shared";
+import { isRepairableDependencyFailure, THREAD_DEPENDENCY_CONDITIONS } from "@pwragent/shared";
 import type { ThreadDependencyStore } from "../state/thread-dependency-store";
 
 export type DependencyThreadSnapshot = {
@@ -121,12 +121,15 @@ export class ThreadDependencyCoordinator {
     });
   }
 
-  handlePrEvent(prUrl?: string): Promise<void> {
+  /** One pass for every PR observed together; omit urls to recheck all PR prerequisites. */
+  handlePrEvent(prUrls?: string | readonly string[]): Promise<void> {
+    const urls = prUrls === undefined ? undefined : new Set(typeof prUrls === "string" ? [prUrls] : prUrls);
+    if (urls?.size === 0) return Promise.resolve();
     return this.serialize(async () => {
       for (const item of this.options.store.active()) {
         if (item.conditions.some((condition) => condition.when !== "turn_completed")
-          && (!prUrl || item.conditions.some((condition) => condition.prUrl === prUrl)
-            || item.evidence.some((entry) => entry.prUrl === prUrl))) await this.evaluate(item);
+          && (!urls || item.conditions.some((condition) => condition.prUrl !== undefined && urls.has(condition.prUrl))
+            || item.evidence.some((entry) => entry.prUrl !== undefined && urls.has(entry.prUrl)))) await this.evaluate(item);
       }
     });
   }
@@ -199,8 +202,7 @@ export class ThreadDependencyCoordinator {
       || this.options.isConsumerBusy?.(current) || this.busyConsumers.has(identity(current))) return;
     // onFailure=wait tolerates repairable CI failures; closure/cancellation
     // still surfaces as terminal rather than silently waiting forever.
-    if (current.outcome === "failure" && current.onFailure === "wait"
-      && current.evidence.filter((entry) => entry.state === "failed").every((entry) => entry.reason === "CI failed" || entry.reason === "Merge conflict")) return;
+    if (current.outcome === "failure" && isRepairableDependencyFailure(current)) return;
     const claim = { ...current, status: "dispatching" as const, dispatchOwnerPid: process.pid, updatedAt: this.now() };
     if (!this.options.store.replace(current, claim)) return;
     await this.options.changed(claim);
