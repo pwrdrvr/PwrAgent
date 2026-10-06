@@ -19,9 +19,20 @@ There is no Job Monitor, model-driven polling, or new timer.
 
 `backend` and `threadId` identify the waiting thread and default to the
 trusted calling thread. `action: "list"` returns its registrations and
-evidence. `action: "cancel"` requires `dependencyId` and cancels a registration
-before admission. The desktop uses the same service from Thread Info's
-**Continue after** form.
+evidence, plus `dependents`: active registrations on other threads that wait
+on this one. `action: "cancel"` requires `dependencyId` and cancels a
+registration before admission. A condition may carry a display-only `title`
+(at most 200 characters). It is excluded from deduplication, and the
+continuation prompt names the prerequisite by it.
+
+The desktop uses the same service from Thread Info's **Continue after**
+section. Searching adds a prerequisite row per chosen thread, each with its
+own condition; threads already waiting on this one are not offered. Active
+registrations show one line per prerequisite with its state, and finished
+ones collapse under **History**. The prerequisite thread lists its dependents
+under **Waiting on this thread**, and every change notifies the waiting
+thread and each prerequisite thread. A continuation turn is labeled
+**Continue after** in the transcript.
 
 ## Conditions
 
