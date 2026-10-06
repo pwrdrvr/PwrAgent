@@ -27,6 +27,9 @@ test("keeps a Windows title-bar flyout open while the pointer crosses into it", 
 
   try {
     const trigger = mastheadAction(app.window, "New thread");
+    // Windows retains the native pointer position between Electron launches.
+    // Start outside the title bar so hover produces a fresh mouse-enter event.
+    await app.window.getByRole("textbox", { name: "Reply", exact: true }).hover();
     await trigger.hover();
 
     const menu = app.window.getByRole("menu", { name: "New thread options" });

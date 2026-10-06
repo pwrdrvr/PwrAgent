@@ -2806,13 +2806,13 @@ export function useThreadNavigation(
     parent: NavigationThreadSummary,
     mode?: ThreadWorkspaceMode,
     machine?: SubthreadMachine,
-  ) => Promise<void>;
+  ) => Promise<boolean>;
   /** Returns true when cancellation restores a sub-thread source selection. */
   discardLaunchpad: (directoryKey: string) => boolean;
   forkThread: (
     parent: NavigationThreadSummary,
     mode: ThreadWorkspaceMode,
-  ) => Promise<void>;
+  ) => Promise<boolean>;
   creatingThread?: CreatingThreadState;
   directories: NavigationDirectorySummary[];
   error?: string;
@@ -5723,10 +5723,10 @@ export function useThreadNavigation(
       parent: NavigationThreadSummary,
       mode: ThreadWorkspaceMode = "same-worktree",
       machine?: SubthreadMachine,
-    ): Promise<void> => {
+    ): Promise<boolean> => {
       if (!desktopApi?.ensureDirectoryLaunchpad) {
         setCreateThreadError("Desktop bridge is missing ensureDirectoryLaunchpad().");
-        return;
+        return false;
       }
 
       let workspaceDirectories: Awaited<ReturnType<typeof readNavigationActionDetail>>["workspaceDirectories"];
@@ -5737,7 +5737,7 @@ export function useThreadNavigation(
         workspaceDirectories = detail.workspaceDirectories;
       } catch (error) {
         setCreateThreadError(error instanceof Error ? error.message : String(error));
-        return;
+        return false;
       }
 
       const parentOwnerTarget =
@@ -5764,7 +5764,7 @@ export function useThreadNavigation(
         && machineInstanceId !== parentOwnerInstanceId;
       if (crossMachine && !parentOwnerInstanceId) {
         setCreateThreadError("This machine has no federation identity to link the sub-thread to its parent.");
-        return;
+        return false;
       }
 
       let directory = selectThreadWorkspace(parent, mode);
@@ -5775,7 +5775,7 @@ export function useThreadNavigation(
         const project = getSubthreadProjectIdentity(parent, directories);
         if (!project) {
           setCreateThreadError("This thread has no project to start a worktree from.");
-          return;
+          return false;
         }
         let counterpart: Awaited<ReturnType<typeof readSubthreadWorktreeCounterpart>>;
         try {
@@ -5786,11 +5786,11 @@ export function useThreadNavigation(
           );
         } catch (error) {
           setCreateThreadError(error instanceof Error ? error.message : String(error));
-          return;
+          return false;
         }
         if (!counterpart) {
           setCreateThreadError(`That machine has no project named ${project.label}.`);
-          return;
+          return false;
         }
         if (!counterpart.base.available) {
           setCreateThreadError(
@@ -5798,7 +5798,7 @@ export function useThreadNavigation(
               ? `${counterpart.directory.label} on that machine has no branch to start a worktree from.`
               : `${counterpart.directory.label} on that machine cannot start a worktree${counterpart.base.reason ? `: ${counterpart.base.reason}` : ""}.`,
           );
-          return;
+          return false;
         }
         // The menu named the base branch. A checkout that moved since then
         // is reported, never followed.
@@ -5806,7 +5806,7 @@ export function useThreadNavigation(
           setCreateThreadError(
             `${counterpart.directory.label} on that machine would now start from ${counterpart.base.baseBranch}, not ${machine.baseBranch}. Choose the machine again to start from ${counterpart.base.baseBranch}.`,
           );
-          return;
+          return false;
         }
         directory = {
           branchName: counterpart.base.baseBranch,
@@ -5957,8 +5957,10 @@ export function useThreadNavigation(
           }),
         }));
         setSelectedItemKey(buildLaunchpadSelectionKey(directoryKey));
+        return true;
       } catch (error) {
         setCreateThreadError(error instanceof Error ? error.message : String(error));
+        return false;
       } finally {
         setCreatingThread(undefined);
       }
@@ -5977,17 +5979,17 @@ export function useThreadNavigation(
     async (
       parent: NavigationThreadSummary,
       mode: ThreadWorkspaceMode,
-    ): Promise<void> => {
+    ): Promise<boolean> => {
       if (!forkThreadRequest) {
         setCreateThreadError("Desktop bridge is missing forkThread().");
-        return;
+        return false;
       }
 
       try {
         parent = await readNavigationActionThread({ api: desktopApi, thread: parent, target: readRendererFederationTarget(), signal: actionAbortControllerRef.current.signal });
       } catch (error) {
         setCreateThreadError(error instanceof Error ? error.message : String(error));
-        return;
+        return false;
       }
 
       const directory = selectThreadWorkspace(parent, mode);
@@ -6132,8 +6134,10 @@ export function useThreadNavigation(
         setSelectedItemKey(nextThreadKey);
         setPendingSeenThreadKey(nextThreadKey);
         await refresh(nextThreadKey, optimisticFork, true);
+        return true;
       } catch (error) {
         setCreateThreadError(error instanceof Error ? error.message : String(error));
+        return false;
       } finally {
         setCreatingThread(undefined);
       }

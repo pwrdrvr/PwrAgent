@@ -3020,6 +3020,9 @@ function DesktopAppShell(props: {
   });
 
   const threadViewProps = {
+    onForkThread: navigation.forkThread,
+    onCreateSubthread: navigation.createSubthread,
+    readThreadWorktreeAvailability: navigation.readThreadWorktreeAvailability,
     pendingLaunchpadCreation: navigation.pendingLaunchpadCreations.find(
       (creation) => creation.selectionKey === navigation.selectedItemKey,
     ),
