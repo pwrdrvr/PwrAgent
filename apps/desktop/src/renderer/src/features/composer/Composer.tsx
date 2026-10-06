@@ -5077,7 +5077,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   );
   const parsedReviewCommand = supportsReview ? parseReviewCommand(draft) : undefined;
   const isBareReviewCommand = draft.trim() === "/review";
-  const forkCommand = parseForkCommand(draft);
+  // Only a composer that can act on /fork claims it. A launchpad, or a host
+  // that wires no fork action, sends "/fork …" on as ordinary text.
+  const forkCommand = supportsForkCommand || supportsSubthreadCommand
+    ? parseForkCommand(draft)
+    : undefined;
   const isCompactCommand = supportsCompactCommand && draft.trim() === "/compact";
   const mcpInventoryDetail: CodexMcpInventoryDetail | undefined =
     supportsMcpInventory && draft.trim().toLowerCase() === "/mcp"

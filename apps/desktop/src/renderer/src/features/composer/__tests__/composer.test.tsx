@@ -15113,6 +15113,17 @@ describe("Composer", () => {
       expect(input).toHaveValue("/fork --wt ");
     });
 
+    it("sends /fork text as an ordinary turn when the composer has no fork action", async () => {
+      const { onForkThread, startTurn } = renderForkComposer({ onForkThread: undefined, onCreateSubthread: undefined });
+      const input = screen.getByLabelText("Reply");
+      fireEvent.change(input, { target: { value: "/fork the release plan into two" } });
+      expect(screen.queryByRole("button", { name: "Fork" })).not.toBeInTheDocument();
+      fireEvent.keyDown(input, { key: "Enter" });
+      await waitFor(() => expect(startTurn).toHaveBeenCalled());
+      expect(onForkThread).not.toHaveBeenCalled();
+      expect(screen.queryByText(/Use \/fork/)).not.toBeInTheDocument();
+    });
+
     it("draws no parameter hint for ordinary drafts", () => {
       renderForkComposer();
       fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "Please fork this later" } });
