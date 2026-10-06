@@ -712,6 +712,61 @@ describe("Tangerine Terminal theme contract", () => {
     }
   });
 
+  it("carries inline notice tone on the label, not the panel", () => {
+    // Every theme's danger and warning hues are warm, so a panel tinted with
+    // them read as a salmon or beige box in blue and the other cool themes.
+    // Each frame is a neutral card; a dot, title, eyebrow, icon, or the
+    // line's own text carries the tone. Text may wear a tone token; the
+    // frame's border and fill may not.
+    const statusFill = /--(danger|warning|success|info|status)-|--accent-(soft|border)/;
+    const frameDeclarations = (rule: string) =>
+      rule.match(/^\s*(border|background)[a-z-]*:[^;]*;/gm)?.join("\n") ?? "";
+    for (const selector of [
+      ".settings-archive-banner",
+      ".settings-plugin-notice",
+      ".federation-disconnected-banner",
+      ".settings-inline-notice",
+      ".rbac-callout",
+      ".sidebar-error,\n.transcript-error",
+      ".thread-search__error",
+      ".settings-list-validation__item",
+      ".pr-activity__notice",
+    ]) {
+      const frame = extractRuleBody(css, selector);
+      expect(frame, selector).toContain("border: 1px solid var(--border-subtle);");
+      expect(frame, selector).toContain("background: var(--bg-panel-elevated);");
+      expect(frameDeclarations(frame), selector).not.toMatch(statusFill);
+    }
+    const settled = extractRuleBody(
+      css,
+      ".managed-progress--ok,\n.managed-progress--error,\n.managed-progress--notice",
+    );
+    expect(settled).toContain("border-color: var(--border-subtle);");
+    expect(settled).toContain("background: var(--bg-panel-elevated);");
+    // A modifier may recolor the line, never refill the frame.
+    for (const selector of [
+      ".settings-plugin-notice--success",
+      ".settings-plugin-notice--error",
+      ".settings-mcp-probe--ok",
+      ".settings-mcp-probe--err",
+    ]) {
+      expect(frameDeclarations(extractRuleBody(css, selector)), selector).toBe("");
+    }
+    expect(css).not.toMatch(/\n\.settings-panel--error\s*\{/);
+    expect(css).not.toMatch(/\n\.rbac-callout\.is-danger\s*\{/);
+
+    expect(extractRuleBody(css, ".settings-archive-banner__text b"))
+      .toContain("color: var(--danger-text);");
+    expect(extractRuleBody(css, ".settings-panel--error .settings-panel__header .eyebrow"))
+      .toContain("color: var(--danger-text);");
+    expect(extractRuleBody(css, ".pr-activity__notice-title"))
+      .toContain("color: var(--status-warning-text);");
+    expect(extractRuleBody(css, ".rbac-callout.is-danger .rbac-callout__icon"))
+      .toContain("color: var(--danger-text);");
+    expect(extractRuleBody(css, ".federation-disconnected-banner__dot"))
+      .toContain("background: var(--status-warning);");
+  });
+
   it("sizes a notice to its content and scrolls only the text", () => {
     // A paged notice was a fixed 208px, which clipped a long one mid-line
     // and left blank space under a short one.
