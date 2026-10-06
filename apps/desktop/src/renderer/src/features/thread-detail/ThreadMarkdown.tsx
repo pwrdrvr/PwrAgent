@@ -961,6 +961,15 @@ function MarkdownDocumentModal(props: {
             </div>
           </div>
           <div className="markdown-document-modal__actions">
+            {documentKind === "JSON" && loadState.status === "loaded" ? (
+              <TranscriptCopyButton
+                className="json-file-preview__copy"
+                desktopApi={props.desktopApi}
+                label="Copy JSON"
+                copiedLabel="Copied JSON"
+                text={loadState.content}
+              />
+            ) : null}
             {props.editorApplication ? (
               <button
                 type="button"
@@ -1031,7 +1040,7 @@ function MarkdownDocumentModal(props: {
             </p>
           ) : null}
           {loadState.status === "loaded" ? (documentKind === "JSON" ? (
-            <JsonFilePreview content={loadState.content} desktopApi={props.desktopApi} />
+            <JsonFilePreview content={loadState.content} />
           ) : (
             <ThreadMarkdown
               applications={props.applications}

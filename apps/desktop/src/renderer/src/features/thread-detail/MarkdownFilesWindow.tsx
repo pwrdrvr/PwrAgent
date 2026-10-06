@@ -13,6 +13,7 @@ import { ThreadMarkdown } from "./ThreadMarkdown";
 import { BrandLockup } from "../chrome/BrandLockup";
 import { useMarkdownFileSource } from "./useMarkdownFileSource";
 import { isJsonFilePath, JsonFilePreview } from "./JsonFilePreview";
+import { TranscriptCopyButton } from "./TranscriptCopyButton";
 
 type LoadState =
   | { status: "idle" | "loading" }
@@ -224,6 +225,15 @@ export function MarkdownFilesWindow() {
                 ) : null}
               </div>
               <div className="markdown-files-window__file-actions">
+                {isJsonFilePath(selectedPath ?? "") && loadState.status === "loaded" ? (
+                  <TranscriptCopyButton
+                    className="json-file-preview__copy"
+                    desktopApi={viewerApi}
+                    label="Copy JSON"
+                    copiedLabel="Copied JSON"
+                    text={loadState.content}
+                  />
+                ) : null}
                 {snapshot?.editorApplication && selectedFile ? (
                   <button
                     type="button"
@@ -261,7 +271,7 @@ export function MarkdownFilesWindow() {
                 </p>
               ) : null}
               {loadState.status === "loaded" ? (isJsonFilePath(selectedPath ?? "") ? (
-                <JsonFilePreview content={loadState.content} desktopApi={viewerApi} />
+                <JsonFilePreview content={loadState.content} />
               ) : (
                 <ThreadMarkdown
                   applications={markdownApplications}

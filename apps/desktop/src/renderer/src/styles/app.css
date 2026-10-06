@@ -23624,22 +23624,15 @@ a.transcript-message__messaging-origin:focus-visible {
   color: var(--danger-text);
 }
 
-.json-file-preview__toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 12px;
-  margin-bottom: 12px;
-}
-
 .json-file-preview__error {
-  flex: 1;
-  margin: 0;
+  margin: 0 0 12px;
   color: var(--danger-text);
   font-size: 13px;
 }
 
-.json-file-preview__toolbar .transcript-copy-button {
+.json-file-preview__copy {
+  width: 32px;
+  height: 32px;
   opacity: 1;
 }
 
@@ -23647,11 +23640,33 @@ a.transcript-message__messaging-origin:focus-visible {
   margin: 0;
   color: var(--text-primary);
   font-family: var(--font-mono);
-  font-size: var(--transcript-text-size);
-  line-height: 1.6;
+  font-size: calc(var(--transcript-text-size) - 1px);
+  font-weight: 400;
+  line-height: 1.5;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   tab-size: 2;
+}
+
+.json-file-preview__code code {
+  font: inherit;
+}
+
+.json-file-preview__key {
+  color: var(--info-text);
+}
+
+.json-file-preview__string {
+  color: var(--success-text);
+}
+
+.json-file-preview__number,
+.json-file-preview__literal {
+  color: var(--accent-bright);
+}
+
+.json-file-preview__punctuation {
+  color: var(--text-secondary);
 }
 
 .json-file-preview__code:focus-visible {
