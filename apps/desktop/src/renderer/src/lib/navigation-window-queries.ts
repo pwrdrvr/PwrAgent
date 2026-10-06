@@ -266,14 +266,27 @@ export class NavigationWindowQueries {
   }
 
   private eventAffectsResource(resource: Resource, event: AgentEvent): boolean {
-    // A remote row event cannot change membership of an exact identity query.
-    // Collection queries retain conservative invalidation for counts/order.
     const request = resource.value.state.request;
-    if (request.federationTarget?.scope !== "remote" || request.query.kind !== "exact") return true;
-    const params = event.notification.params as { sourceMethod?: unknown; threadId?: unknown; worktreePath?: unknown; directoryKey?: unknown };
+    const params = event.notification.params as { sourceMethod?: unknown; threadId?: unknown; worktreePath?: unknown; directoryKey?: unknown; instanceId?: string };
     const method = event.notification.method === "navigation/invalidated" ? params?.sourceMethod : event.notification.method;
-    if (navigationInvalidationMayChangeMembership(method)) return true;
     const page = resource.value.state.page;
+    if (request.query.kind === "children" && page?.complete && (page.rangeStart ?? 0) === 0 && page.coverage.state === "complete"
+      && typeof params?.threadId === "string"
+      && (!navigationInvalidationMayChangeMembership(method)
+        || method === "thread/pin/added" || method === "thread/pin/removed" || method === "navigation/remoteThreadPins/changed")) {
+      // Pins move roots between directory sections, but do not reparent children.
+      // Only a complete disclosure can exclude an off-page row safely. Unknown
+      // membership events still discover newly created/reparented children.
+      const ownerInstanceId = event.federationTarget?.scope === "remote" ? event.federationTarget.instanceId
+        : method === "navigation/remoteThreadPins/changed" ? params.instanceId : undefined;
+      const key = navigationIdentityKey({ backend: event.backend, threadId: params.threadId, ownerInstanceId });
+      return navigationIdentityKey(request.query.parent) === key
+        || page.entries.some(({ row }) => navigationIdentityKey(row.ref) === key);
+    }
+    // A remote row event cannot change membership of an exact identity query.
+    // Other collections retain conservative invalidation for counts/order.
+    if (request.federationTarget?.scope !== "remote" || request.query.kind !== "exact") return true;
+    if (navigationInvalidationMayChangeMembership(method)) return true;
     if (method === "navigation/directoryGitStatus/updated" && typeof params?.directoryKey === "string"
       && page?.coverage.state === "complete" && page.complete) {
       return page.selectionDirectory?.key === params.directoryKey || Boolean(page.directories?.some((directory) => directory.key === params.directoryKey));

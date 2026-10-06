@@ -785,3 +785,90 @@ it("consumes an invalidation once when a scheduled refresh overlaps its replacem
     expect(read).toHaveBeenCalledTimes(2);
   } finally { queries.dispose(); }
 });
+
+// Complete expanded child ranges know their membership. Row-only changes must
+// refresh the affected disclosure, not every expanded group in the window.
+it.each(["thread/name/updated", "thread/pin/added", "navigation/thread/seen", "turn/started"])(
+  "budgets one child read for %s across twelve expanded groups", async (method) => {
+    const read = vi.fn<NonNullable<DesktopApi["getNavigationQueryPage"]>>(async (request) => {
+      const parent = request.query.kind === "children" ? request.query.parent.threadId : "";
+      return page({ complete: true, nextCursor: undefined, entries: [{ placement: { kind: "root" }, orderKey: parent,
+        row: { id: `${parent}-child`, source: "codex", title: "fresh", titleSource: "explicit",
+          linkedDirectories: [], inbox: { inInbox: true }, rowRevision: "r", ordinaryChildCount: 0,
+          nativeSubAgentGroupPresent: false, queueCount: 0, queueState: "unknown", ref: { backend: "codex", threadId: `${parent}-child` } },
+      }] });
+    });
+    const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+    queries.setDemand(new Map(Array.from({ length: 12 }, (_, index) => [`group-${index}`, {
+      protocol: 2 as const, consumer: "main-sidebar" as const,
+      query: { kind: "children" as const, parent: { backend: "codex", threadId: `parent-${index}` } },
+    }])));
+    try {
+      await vi.waitFor(() => expect([...queries.getSnapshot().resources.values()].every((resource) => !resource.loading)).toBe(true));
+      expect(read).toHaveBeenCalledTimes(12);
+      read.mockClear();
+      const event = { backend: "codex", notification: { method, params: { threadId: "parent-0-child" } } } as AgentEvent;
+      queries.invalidate(undefined, undefined, event);
+      await queries.refresh(undefined, undefined, true);
+      expect(read).toHaveBeenCalledTimes(1);
+      expect(read.mock.calls[0]?.[0].query).toMatchObject({ parent: { threadId: "parent-0" } });
+      expect(queries.getSnapshot().resources.get("group-0")?.state.page?.entries[0]?.row.title).toBe("fresh");
+      // New children can be unknown to a complete baseline. Keep discovery.
+      read.mockClear();
+      queries.invalidate(undefined, undefined, { backend: "codex", notification: {
+        method: "thread/started", params: { thread: { id: "new-child" } },
+      } } as AgentEvent);
+      await queries.refresh(undefined, undefined, true);
+      expect(read).toHaveBeenCalledTimes(12);
+    } finally {
+      queries.dispose();
+    }
+  },
+);
+
+it("keeps child invalidation scoped to federation identity", async () => {
+  const read = vi.fn<NonNullable<DesktopApi["getNavigationQueryPage"]>>(async (request) => {
+    const ownerInstanceId = request.query.kind === "children" ? request.query.parent.ownerInstanceId : undefined;
+    return page({ complete: true, nextCursor: undefined, entries: [{ placement: { kind: "root" }, orderKey: "child",
+      row: { id: "shared-child", source: "codex", title: "Fresh", titleSource: "explicit", ref: {
+        backend: "codex", threadId: "shared-child", ownerInstanceId,
+      }, rowRevision: "r", linkedDirectories: [], inbox: { inInbox: false }, ordinaryChildCount: 0,
+      nativeSubAgentGroupPresent: false, queueCount: 0, queueState: "unknown" },
+    }] });
+  });
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  queries.setDemand(new Map(["peer-a", "peer-b"].map((ownerInstanceId) => [ownerInstanceId, {
+    protocol: 2 as const, consumer: "main-sidebar" as const, inventory: "viewer" as const,
+    query: { kind: "children" as const, parent: { backend: "codex", threadId: "parent", ownerInstanceId } },
+  }])));
+  try {
+    await vi.waitFor(() => expect([...queries.getSnapshot().resources.values()].every((resource) => !resource.loading)).toBe(true));
+    read.mockClear();
+    queries.invalidate(undefined, undefined, { backend: "codex", federationTarget: { scope: "remote", instanceId: "peer-a" },
+      notification: { method: "navigation/invalidated", params: { sourceMethod: "thread/name/updated", threadId: "shared-child" } },
+    });
+    await queries.refresh(undefined, undefined, true);
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(read.mock.calls[0]?.[0].query).toMatchObject({ parent: { ownerInstanceId: "peer-a" } });
+  } finally { queries.dispose(); }
+});
+
+it.each([
+  { complete: false, nextCursor: "next" },
+  { complete: true, nextCursor: undefined, rangeStart: 10 },
+])("keeps child discovery conservative for incomplete ranges %j", async (range) => {
+  const read = vi.fn<NonNullable<DesktopApi["getNavigationQueryPage"]>>(async () => page(range));
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  queries.setDemand(new Map([["children", { protocol: 2, consumer: "main-sidebar",
+    query: { kind: "children", parent: { backend: "codex", threadId: "parent" } },
+  }]]));
+  try {
+    await vi.waitFor(() => expect(queries.getSnapshot().resources.get("children")?.loading).toBe(false));
+    read.mockClear();
+    queries.invalidate(undefined, undefined, { backend: "codex", notification: {
+      method: "thread/name/updated", params: { threadId: "off-page-child", threadName: "Changed" },
+    } });
+    await queries.refresh(undefined, undefined, true);
+    expect(read).toHaveBeenCalledTimes(1);
+  } finally { queries.dispose(); }
+});
