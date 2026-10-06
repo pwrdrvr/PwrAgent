@@ -2784,9 +2784,16 @@ textarea,
   padding-right: 16px;
 }
 
+/* Controls and EVERYTHING inside them. `.thread-header *` above marks each
+   descendant a drag region, so an icon or span inside a button stayed one:
+   the pointer over the glyph belonged to the OS, which took the click and
+   ate the hover, and the control answered only at its edges. The `*` forms
+   outrank `.thread-header *` by specificity, wherever either rule sits. */
 .thread-header button,
+.thread-header button *,
 .thread-header input,
 .thread-header a,
+.thread-header a *,
 .thread-header select {
   -webkit-app-region: no-drag;
 }
@@ -10353,11 +10360,15 @@ a.button {
   -webkit-app-region: drag;
 }
 
+/* Descendants too, for the reason given at `.thread-header button *`. */
 .settings-titlebar button,
+.settings-titlebar button *,
 .settings-titlebar input,
 .settings-titlebar a,
+.settings-titlebar a *,
 .settings-titlebar select,
-.settings-titlebar [role="button"] {
+.settings-titlebar [role="button"],
+.settings-titlebar [role="button"] * {
   -webkit-app-region: no-drag;
 }
 
@@ -21154,21 +21165,25 @@ a.button {
 }
 
 /* Opens the project's new-thread menu, like the chevron on the project's
-   sidebar row. Muted at rest so the breadcrumb still reads as one line. The
-   negative margin narrows the breadcrumb's 6px gap: the caret belongs to the
-   name before it, not to the chevron after it. Its focus ring is inset, so
-   at that gap the ring clears the name's last letter (measured: 3px). */
+   sidebar row. Muted at rest so the breadcrumb still reads as one line.
+   24px square, the WCAG 2.2 minimum target (SC 2.5.8) and the history
+   buttons' height: at 18px it passed only on the spacing exception, by a
+   pixel. The block margins take the extra 6px back out of layout: at full
+   height the box grew the breadcrumb and lifted the name and title 3px. The
+   left margin narrows the breadcrumb's 6px gap, since the caret belongs to
+   the name before it, not to the chevron after it. Its focus ring is inset,
+   so at that gap the ring clears the name's last letter. */
 .thread-header__project-menu-button {
   display: inline-grid;
   flex: 0 0 auto;
   align-self: center;
   place-items: center;
-  width: 18px;
-  height: 18px;
-  margin-left: -2px;
+  width: 24px;
+  height: 24px;
+  margin: -3px 0 -3px -2px;
   padding: 0;
   border: 0;
-  border-radius: 4px;
+  border-radius: 6px;
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;

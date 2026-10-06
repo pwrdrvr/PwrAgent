@@ -1015,6 +1015,18 @@ describe("Tangerine Terminal theme contract", () => {
     );
   });
 
+  it("keeps everything inside a title-strip control out of the drag region", () => {
+    // `.thread-header *` and `.settings-titlebar *` make every descendant a
+    // drag region. Opting out only the control left its icon one, so the
+    // breadcrumb's project caret took clicks and hover only at its edges.
+    expect(css).toMatch(
+      /\.thread-header button,\s*\.thread-header button \*,\s*\.thread-header input,\s*\.thread-header a,\s*\.thread-header a \*,\s*\.thread-header select\s*\{\s*-webkit-app-region:\s*no-drag;\s*\}/,
+    );
+    expect(css).toMatch(
+      /\.settings-titlebar button,\s*\.settings-titlebar button \*,[\s\S]*?\.settings-titlebar \[role="button"\] \*\s*\{\s*-webkit-app-region:\s*no-drag;\s*\}/,
+    );
+  });
+
   it("keeps the header machine chip and its menu out of the drag region", () => {
     // The menu is a descendant of `.thread-header`, so the header's
     // `.thread-header *` drag rule reaches every box in it.
