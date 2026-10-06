@@ -14,6 +14,7 @@ import {
 import { createPortal } from "react-dom";
 import {
   isSubthreadLaunchpadKey,
+  isWindowsFilesystemPath,
   threadHasExactPrNumberMatch,
   textMatchesJumpQuery,
   type NavigationThreadSummary,
@@ -33,9 +34,19 @@ import { InstanceChip } from "../federation/InstanceGlyph";
 import { PrChip } from "../pr-status/PrChip";
 import type { NavigationDirectoryView } from "../../lib/navigation-loaded-rows";
 import { useNavigationQueryResource } from "../../lib/useNavigationQueryResource";
-import { readRendererFederationTarget } from "../../lib/federation-window";
+import { readRendererFederationLabel, readRendererFederationTarget } from "../../lib/federation-window";
 
 const MAX_RESULTS = 8;
+
+/** Provider history can include foreign paths without a federation owner. */
+function foreignProjectPlatform(path: string | undefined, platform: string | undefined): string | undefined {
+  if (!path || !platform) return undefined;
+  const windowsPath = isWindowsFilesystemPath(path);
+  if (platform !== "win32" && windowsPath) return "Windows";
+  if (platform === "win32" && !windowsPath && path.startsWith("/")) return "Unix";
+  return undefined;
+}
+
 type JumpResult = { kind: "project"; directory: NavigationDirectoryView }
   | { kind: "thread"; thread: NavigationThreadSummary };
 
@@ -95,13 +106,16 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
   });
 
   const trimmed = query.trim();
+  const federationTarget = readRendererFederationTarget();
+  const ownerInstanceId = federationTarget?.instanceId;
+  const platform = getDesktopApi()?.platform;
   const ownerSearch = useNavigationOwnerSearch({ query: trimmed, desktopApi: getDesktopApi() });
 
   const projectSearch = useNavigationQueryResource({
     desktopApi: getDesktopApi(),
     request: trimmed && props.onJumpToProject ? {
       protocol: 2, consumer: "search", inventory: "owner",
-      federationTarget: readRendererFederationTarget(),
+      federationTarget,
       query: { kind: "directory-index", filter: trimmed }, pageSize: 100,
     } : undefined,
   });
@@ -122,9 +136,13 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
       && directory.localAvailability !== "unconfigured"
       && !isSubthreadLaunchpadKey(directory.key)
       && [directory.label, directory.path].some((text) => textMatchesJumpQuery(text, query)))
-      .sort((left, right) => rank(left) - rank(right) || left.label.localeCompare(right.label))
+      .sort((left, right) =>
+        (ownerInstanceId ? 0 : Number(Boolean(foreignProjectPlatform(left.path, platform)))
+          - Number(Boolean(foreignProjectPlatform(right.path, platform))))
+        || rank(left) - rank(right)
+        || left.label.localeCompare(right.label))
       .slice(0, MAX_RESULTS);
-  }, [trimmed, props.projects, props.onJumpToProject, projectSearch.state]);
+  }, [trimmed, props.projects, props.onJumpToProject, projectSearch.state, ownerInstanceId, platform]);
 
   const results = useMemo(() => {
     if (!trimmed) {
@@ -433,6 +451,15 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
                 >
                   <FolderIcon size={14} aria-hidden />
                   <span className="jump-palette__row-title">{directory.label}</span>
+                  {ownerInstanceId ? (
+                    <InstanceChip instanceId={ownerInstanceId}
+                      label={readRendererFederationLabel() ?? ownerInstanceId} />
+                  ) : foreignProjectPlatform(directory.path, platform) ? (
+                    <span className="chip chip--instance tooltip-target"
+                      data-tooltip="This path belongs to another operating system.">
+                      Other machine · {foreignProjectPlatform(directory.path, platform)}
+                    </span>
+                  ) : null}
                   <span className="jump-palette__row-branch">{directory.path}</span>
                   <span className="jump-palette__row-repo">Project</span>
                 </button>
