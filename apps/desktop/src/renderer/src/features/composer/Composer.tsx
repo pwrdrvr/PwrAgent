@@ -212,6 +212,7 @@ import { LinkedTurnFailureMessage } from "../notifications/LinkedTurnFailureMess
 import { turnFailureAcknowledgements, turnFailureScopeKey } from "../notifications/turn-failure-acknowledgements";
 import { findSlashCommandTrigger } from "./composer-slash-commands";
 import {
+  forkCommandCompletion,
   forkCommandHint,
   parseForkCommand,
   type ComposerForkCommand,
@@ -10205,6 +10206,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     && !forking
       ? forkCommandHint(draft)
       : undefined;
+  const forkInlineCompletion = forkInlineHint
+    ? forkCommandCompletion(draft)
+    : undefined;
   // Queue is the primary mid-turn; the steer chord is its keyboard-only
   // sibling, so the button is where it gets named.
   const submitButtonSteerHint =
@@ -12320,6 +12324,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             readOnly={preparingSend || forking}
             label={isLaunchpad ? "New thread" : "Reply"}
             inlineHint={forkInlineHint}
+            inlineCompletion={forkInlineCompletion}
             markdownConversion
             placeholder={composerPlaceholder}
             resolveThreadLink={(ref) => {

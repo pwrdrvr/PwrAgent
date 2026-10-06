@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { forkCommandHint, parseForkCommand } from "../composer-fork-command";
+import {
+  forkCommandCompletion,
+  forkCommandHint,
+  parseForkCommand,
+} from "../composer-fork-command";
 import { findSlashCommandTrigger } from "../composer-slash-commands";
 
 describe("fork command parsing", () => {
@@ -66,5 +70,32 @@ describe("fork command hint", () => {
     "/fork\n",
   ])("has no hint for %j", (text) => {
     expect(forkCommandHint(text)).toBeUndefined();
+  });
+});
+
+describe("fork command completion", () => {
+  it.each([
+    ["/fork --no-", "history"],
+    ["/fork --n", "o-history"],
+    ["/fork --w", "t"],
+    ["/fork --wt n", "ew"],
+    ["/fork --wt s", "ame"],
+    ["/fork --no-history --wt n", "ew"],
+  ])("completes %j with %j", (text, completion) => {
+    expect(forkCommandCompletion(text)).toBe(completion);
+  });
+
+  it.each([
+    // Guidance only: brackets and the same|new placeholder are not text.
+    "/fork",
+    "/fork ",
+    "/fork --wt",
+    "/fork --wt ",
+    "/fork --wt new",
+    "/fork --",
+    "/fork --wt x",
+    "Please /fork --n",
+  ])("has nothing to accept in %j", (text) => {
+    expect(forkCommandCompletion(text)).toBeUndefined();
   });
 });

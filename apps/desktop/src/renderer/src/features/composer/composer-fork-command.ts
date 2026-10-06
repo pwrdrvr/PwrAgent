@@ -44,6 +44,13 @@ const FORK_WORKTREE_FLAG = "--wt";
 const FORK_NO_HISTORY_FLAG = "--no-history";
 const FORK_WORKTREE_VALUES = ["same", "new"] as const;
 
+type ForkDraftHint = {
+  /** Literal text that finishes the token under the caret; may be empty. */
+  completion: string;
+  /** Everything drawn after the caret, starting with the completion. */
+  hint: string;
+};
+
 /**
  * Muted text drawn after the caret while a `/fork` draft is being written:
  * the parameters still available, completing a partially typed flag or value.
@@ -51,6 +58,19 @@ const FORK_WORKTREE_VALUES = ["same", "new"] as const;
  * has an argument the parser would reject.
  */
 export function forkCommandHint(text: string): string | undefined {
+  return describeForkDraft(text)?.hint;
+}
+
+/**
+ * The part of the hint that Tab, Right Arrow, or Space accepts: the rest of a
+ * uniquely prefixed flag or worktree value. Bracketed parameters and the
+ * `same|new` placeholder are guidance, not text, so they never complete.
+ */
+export function forkCommandCompletion(text: string): string | undefined {
+  return describeForkDraft(text)?.completion || undefined;
+}
+
+function describeForkDraft(text: string): ForkDraftHint | undefined {
   const match = /^\/fork(?=\s|$)/i.exec(text);
   if (!match || /[\r\n]/.test(text)) {
     return undefined;
@@ -79,24 +99,23 @@ export function forkCommandHint(text: string): string | undefined {
     ...(worktree === "unset" ? [`[${FORK_WORKTREE_FLAG} same|new]`] : []),
     ...(noHistory ? [] : [`[${FORK_NO_HISTORY_FLAG}]`]),
   ];
-  // `completion` finishes the token under the caret; the parts follow it.
-  const hint = (completion: string, parts: string[]): string | undefined => {
-    const text = [completion, ...parts].join(" ");
-    return text.trim() ? text : undefined;
+  const describe = (completion: string, parts: string[]): ForkDraftHint | undefined => {
+    const hint = [completion, ...parts].join(" ");
+    return hint.trim() ? { completion, hint } : undefined;
   };
 
   if (partial === undefined) {
     const parts = worktree === "pending" ? ["same|new", ...remaining()] : remaining();
     if (parts.length === 0) return undefined;
     // Bare "/fork" has no separator yet, so the hint supplies it.
-    return `${rest.length === 0 ? " " : ""}${parts.join(" ")}`;
+    return { completion: "", hint: `${rest.length === 0 ? " " : ""}${parts.join(" ")}` };
   }
 
   if (worktree === "pending") {
     const values = FORK_WORKTREE_VALUES.filter((value) => value.startsWith(partial));
     if (values.length !== 1) return undefined;
     worktree = "set";
-    return hint(values[0]!.slice(partial.length), remaining());
+    return describe(values[0]!.slice(partial.length), remaining());
   }
 
   const flags = [
@@ -107,8 +126,8 @@ export function forkCommandHint(text: string): string | undefined {
   const flag = flags[0]!;
   if (flag === FORK_WORKTREE_FLAG) {
     worktree = "pending";
-    return hint(flag.slice(partial.length), ["same|new", ...remaining()]);
+    return describe(flag.slice(partial.length), ["same|new", ...remaining()]);
   }
   noHistory = true;
-  return hint(flag.slice(partial.length), remaining());
+  return describe(flag.slice(partial.length), remaining());
 }

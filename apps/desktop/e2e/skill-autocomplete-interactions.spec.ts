@@ -173,6 +173,11 @@ test("thread reply Tiptap fork autocomplete stays plain and hints parameters in 
 
     await textbox.pressSequentially("--wt n");
     await expect(tiptapInput).toHaveAttribute("data-inline-hint", "ew [--no-history]");
+    // Tab accepts the literal part of the hint, like a shell autosuggestion.
+    await textbox.press("Tab");
+    await expect(tiptapInput).toHaveAttribute("data-value", "/fork --wt new ");
+    await expect(textbox).toBeFocused();
+    await expect(tiptapInput).toHaveAttribute("data-inline-hint", "[--no-history]");
     await expect(app.window.getByRole("button", { name: "Fork", exact: true })).toBeVisible();
     // Picking the command inserts it; it must not submit a provider turn.
     expect(await app.getLastStartTurn()).toBeUndefined();

@@ -4,7 +4,7 @@ import { handoffLaunchpadComposer } from "../launchpad-composer-handoff";
 import { hydrateComposerDraft } from "../composer-draft-hydration";
 import { buildDirectoryReferenceMarkdown } from "../../../lib/directory-references";
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, createEvent, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import { Profiler, StrictMode, useMemo, useState, type ComponentProps } from "react";
 import {
   applyNavigationLaunchpadProviderSettingsPatch,
@@ -15081,6 +15081,36 @@ describe("Composer", () => {
       fireEvent.keyDown(input, { key: "Enter" });
       await waitFor(() => expect(onCreateSubthread).toHaveBeenCalledWith(thread, "new-worktree"));
       expect(startTurn).not.toHaveBeenCalled();
+    });
+
+    it.each(["Tab", "ArrowRight", " "])("accepts the hinted completion with %j at the end of the draft", async (key) => {
+      const { onForkThread, onCreateSubthread } = renderForkComposer();
+      const input = screen.getByLabelText("Reply");
+      const tiptapInput = screen.getByTestId("composer-tiptap-input");
+      fireEvent.change(input, { target: { value: "/fork --no-" } });
+      expect(tiptapInput).toHaveAttribute("data-inline-completion", "history");
+      await flushReactUpdates();
+
+      const event = createEvent.keyDown(input, { key });
+      fireEvent(input, event);
+      expect(event.defaultPrevented).toBe(true);
+      await waitFor(() => expect(input).toHaveValue("/fork --no-history "));
+      expect(tiptapInput).toHaveAttribute("data-inline-hint", "[--wt same|new]");
+      expect(tiptapInput).not.toHaveAttribute("data-inline-completion");
+      expect(onForkThread).not.toHaveBeenCalled();
+      expect(onCreateSubthread).not.toHaveBeenCalled();
+    });
+
+    it("leaves Tab alone when the hint has nothing literal to accept", async () => {
+      renderForkComposer();
+      const input = screen.getByLabelText("Reply");
+      fireEvent.change(input, { target: { value: "/fork --wt " } });
+      expect(screen.getByTestId("composer-tiptap-input")).toHaveAttribute("data-inline-hint", "same|new [--no-history]");
+      await flushReactUpdates();
+      const event = createEvent.keyDown(input, { key: "Tab" });
+      fireEvent(input, event);
+      expect(event.defaultPrevented).toBe(false);
+      expect(input).toHaveValue("/fork --wt ");
     });
 
     it("draws no parameter hint for ordinary drafts", () => {
