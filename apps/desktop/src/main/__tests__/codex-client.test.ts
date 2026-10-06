@@ -2847,6 +2847,57 @@ describe("CodexAppServerClient", () => {
     }
   });
 
+  it.each([
+    ["turn/started", 1], ["thread/status/changed", 1], ["thread/pin/added", 1], ["navigation/thread/seen", 1],
+    ["thread/archived", 2], ["thread/unarchived", 2], ["thread/name/updated", 2],
+  ] as const)(
+    "budgets archived scans across %s at %i generations", async (method, generations) => {
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      MockTransport.threadListResultBySearchTerm.set("archive-generation-budget", []);
+
+      const client = new CodexAppServerClient({ command: "codex" });
+      await client.listThreads({ enrichDirectories: false, skipArchivedMetadataRefresh: true, maxPages: 1 });
+      const transport = MockTransport.instances.at(-1)!;
+      const originalSend = transport.send.bind(transport);
+      const send = (message: string) => {
+        const request = JSON.parse(message);
+        const previousCursor = MockTransport.threadListNextCursor;
+        if (request.method === "thread/list") MockTransport.threadListNextCursor = request.params.cursor ? undefined : "last-page";
+        try { originalSend(message); } finally { MockTransport.threadListNextCursor = previousCursor; }
+      };
+      let release!: () => void;
+      let held = false;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const rpc = vi.spyOn(transport, "send").mockImplementation((message) => {
+        const request = JSON.parse(message);
+        if (request.method === "thread/list" && request.params.archived && !held) {
+          held = true;
+          void gate.then(() => send(message));
+        } else send(message);
+      });
+      const params = { archived: true, filter: "archive-generation-budget", enrichDirectories: false,
+        skipArchivedMetadataRefresh: true };
+      try {
+        const first = client.listThreads(params);
+        await vi.waitFor(() => expect(held).toBe(true));
+        transport.notify(method, { threadId: "active", threadName: "Renamed", status: { type: "active" }, turn: { id: "turn" } });
+        const second = client.listThreads(params);
+        await new Promise((resolve) => setImmediate(resolve));
+        release();
+        await Promise.all([first, second]);
+        const requests = () => rpc.mock.calls.filter(([message]) => JSON.parse(message).method === "thread/list");
+        expect(requests()).toHaveLength(generations * 2); // two cursor pages per affected generation
+        // A later explicit read still reaches the provider; no completed cache.
+        await client.listThreads(params);
+        expect(requests()).toHaveLength((generations + 1) * 2);
+      } finally {
+        release();
+        rpc.mockRestore();
+        await client.close();
+      }
+    },
+  );
+
   it("schedules one archived metadata page sequence for concurrent active listings", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     const budget = navigationListingBudgets["archived-metadata-per-filter"];

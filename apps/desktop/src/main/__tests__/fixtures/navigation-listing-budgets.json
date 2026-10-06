@@ -1,21 +1,21 @@
 {
   "turn-start-with-related-notifications": {
     "logicalRequests": 4,
-    "indexConstructions": 2,
+    "indexConstructions": 1,
     "providerListings": 2,
     "paginatedRpcs": 6,
     "pagesPerListing": 3
   },
   "unchanged-rerender": {
     "logicalRequests": 4,
-    "indexConstructions": 2,
+    "indexConstructions": 1,
     "providerListings": 2,
     "paginatedRpcs": 6,
     "pagesPerListing": 3
   },
   "later-mutation": {
     "logicalRequests": 1,
-    "indexConstructions": 3,
+    "indexConstructions": 2,
     "providerListings": 3,
     "paginatedRpcs": 9,
     "pagesPerListing": 3

@@ -7641,7 +7641,8 @@ export class CodexAppServerClient {
   >();
   private readonly threadListTextCache = new ThreadListTextCache();
   private readonly pendingThreadListings = new Map<string, Promise<AppServerThreadSummary[]>>();
-  private threadListingGeneration = 0;
+  private activeThreadListingGeneration = 0;
+  private archivedThreadListingGeneration = 0;
   private readonly threadListingInvalidations = new WeakSet<AppServerNotification>();
   private readonly recordedThreadNames = new Map<string, string>();
   private readonly requestListeners = new Set<
@@ -8894,15 +8895,21 @@ export class CodexAppServerClient {
 
   /** Mutation fences also arrive locally through the registry, without a
    * notification on this connection. Existing readers keep their ownership;
-   * callers after the fence cannot join their pre-mutation physical read.
+   * callers after the fence cannot join the affected inventory's pre-mutation read.
    */
   invalidateThreadListings(notification?: AppServerNotification): void {
     if (notification) {
       if (this.threadListingInvalidations.has(notification)) return;
       this.threadListingInvalidations.add(notification);
     }
-    this.threadListingGeneration += 1;
-    this.pendingThreadListings.clear();
+    this.activeThreadListingGeneration += 1;
+    // Turn/status and viewer overlay events do not change archived inventory.
+    // Keep its in-flight owner joinable while active navigation advances.
+    if (!notification || !["turn/started", "turn/completed", "turn/failed", "turn/cancelled",
+      "thread/status/changed", "navigation/thread/seen", "thread/pin/added", "thread/pin/removed",
+      "thread/pin/reordered"].includes(notification.method)) {
+      this.archivedThreadListingGeneration += 1;
+    }
   }
 
   async listThreads(params?: {
@@ -8921,7 +8928,7 @@ export class CodexAppServerClient {
     // through different cache keys. Share the complete listing, including
     // directory observations, until it settles. Never retain a completed scan.
     const key = JSON.stringify([
-      this.threadListingGeneration,
+      params?.archived ? this.archivedThreadListingGeneration : this.activeThreadListingGeneration,
       params?.archived === true, params?.enrichDirectories ?? true,
       params?.filter?.trim() || "", params?.limit, params?.maxPages,
       params?.skipArchivedMetadataRefresh === true, params?.deadlineAt,
