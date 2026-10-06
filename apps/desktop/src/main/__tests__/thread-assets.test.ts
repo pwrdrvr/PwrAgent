@@ -2,10 +2,12 @@ import { copyFile, mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from 
 import { constants } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveActiveProfilePath } from "../profile";
 import {
   stageLocalTurnInputAttachment,
+  ownThreadInputAttachments,
   stageTurnInputAttachment,
   turnInputAttachmentRoot,
 } from "../app-server/turn-input-attachment-files";
@@ -27,6 +29,23 @@ afterEach(async () => {
 });
 
 describe("thread-owned attachments", () => {
+  it.each(["encoded-path", "file-url"])("updates matching explicit file references after ownership without changing unrelated text: %s", async (kind) => {
+    const filePath = path.join(testRoot, "report with spaces.pdf");
+    await writeFile(filePath, "%PDF-1.7\n");
+    const target = kind === "file-url" ? pathToFileURL(filePath).toString() : encodeURIComponent(filePath);
+    const input = await ownThreadInputAttachments([
+      { type: "text", text: `Read [@report](${target}); keep [@other](/tmp/other.pdf) and the literal ${filePath}.` },
+      { type: "localFile", name: "report (draft).pdf", path: filePath },
+    ], recipient);
+    const retained = input[1];
+    if (retained?.type !== "localFile") throw new Error("Expected an owned PDF file.");
+    const reference = input[0]?.type === "text" ? /\[@report\]\(([^)]+)\)/u.exec(input[0].text) : undefined;
+    expect(reference).toBeTruthy();
+    expect(decodeURIComponent(reference![1]!)).toBe(retained.path);
+    expect(input[0]?.type === "text" ? input[0].text : "").toContain(`keep [@other](/tmp/other.pdf) and the literal ${filePath}.`);
+    await expect(readFile(retained.path, "utf8")).resolves.toBe("%PDF-1.7\n");
+  });
+
   it.each(["localImage", "localFile"] as const)("keeps forwarded %s bytes after the source thread is deleted", async (type) => {
     const bytes = Buffer.from([1, 2, 3]);
     const original = await stageTurnInputAttachment({ type, name: "shared.png", data: bytes }, source);

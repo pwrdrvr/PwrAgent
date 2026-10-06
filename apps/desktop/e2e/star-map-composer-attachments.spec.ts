@@ -314,9 +314,8 @@ test("sends pasted, dropped, and local-file attachments from a Star Map chat car
     expect(textInput?.text).toContain("Inspect these Star Map attachments");
     const notesReference = textInput?.text?.match(/\[@star-map-notes\.txt\]\(([^)]+)\)/);
     expect(notesReference).toBeTruthy();
-    // Markdown escapes Windows backslashes (including UNC prefixes). Assert
-    // that the destination still identifies the selected file after decoding.
-    expect(decodeURIComponent(notesReference![1]!)).toBe(notesPath);
+    // Ownership rewrites the explicit reference along with the file's path.
+    const referencedNotesPath = decodeURIComponent(notesReference![1]!);
 
     const imageInputs = request.input.filter(
       (item) => item.type === "localImage",
@@ -347,6 +346,7 @@ test("sends pasted, dropped, and local-file attachments from a Star Map chat car
     );
     expect(localFileInput?.path).not.toBe(notesPath);
     if (!localFileInput?.path) throw new Error("Expected a thread-owned local file.");
+    expect(referencedNotesPath).toBe(localFileInput.path);
     expect(await readFile(localFileInput.path, "utf8")).toBe("renderer preload attachment evidence\n");
   } finally {
     await trajectory?.stop();

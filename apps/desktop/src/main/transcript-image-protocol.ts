@@ -545,9 +545,16 @@ async function materializeTranscriptMessagePartImageUrl(
     return part;
   }
 
-  const sourcePath = isFileImageUrl(part.url)
-    ? fileURLToPath(part.url)
-    : decodeTranscriptImageProtocolRequest(part.url);
+  let sourcePath: string | undefined;
+  try {
+    sourcePath = isFileImageUrl(part.url)
+      ? fileURLToPath(part.url)
+      : decodeTranscriptImageProtocolRequest(part.url);
+  } catch {
+    // A provider filename can contain an unescaped percent or separator.
+    // Keep this unusable image from rejecting the rest of the conversation.
+    return part;
+  }
   if (sourcePath) {
     const owner = { backend: response.backend, threadId: response.threadId };
     const retained = isThreadAssetPath(sourcePath, owner)

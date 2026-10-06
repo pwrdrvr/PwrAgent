@@ -84,6 +84,33 @@ describe("transcript image protocol", () => {
     expect(retainLocalImage).not.toHaveBeenCalled();
   });
 
+  it.each(["file:///tmp/100%image.png", "file:///tmp/image%2Fname.png"])("preserves the conversation when one image has a malformed file URL: %s", async (url) => {
+    const { materializeTranscriptImageUrlsForRenderer } = await import("../transcript-image-protocol");
+    const validPath = path.join(tempDir, "good.png");
+    const retainLocalImage = vi.fn(async () => undefined);
+    const response = {
+      backend: "codex" as const, threadId: "mixed-images", fetchedAt: 0,
+      replay: {
+        entries: [],
+        messages: [{
+          id: "mixed", role: "user" as const, text: "Keep the conversation readable",
+          parts: [
+            { type: "image" as const, url },
+            { type: "image" as const, url: pathToFileURL(validPath).toString() },
+          ],
+        }],
+        pagination: { supportsPagination: false, hasPreviousPage: false },
+      },
+    };
+    const result = await materializeTranscriptImageUrlsForRenderer(response, { retainLocalImage });
+    expect(result.replay.messages[0]?.text).toBe("Keep the conversation readable");
+    expect(result.replay.messages[0]?.parts).toEqual([
+      { type: "image", url },
+      { type: "image", url: toProtocolUrl(validPath) },
+    ]);
+    expect(retainLocalImage).toHaveBeenCalledTimes(1);
+  });
+
   it("registers a secure custom image protocol", async () => {
     const { registerTranscriptImageProtocolScheme } = await import(
       "../transcript-image-protocol"

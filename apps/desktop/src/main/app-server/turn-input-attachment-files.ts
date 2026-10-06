@@ -19,6 +19,7 @@ import type {
   AppServerTurnInputItem,
 } from "@pwragent/shared";
 import { resolveActiveProfilePath } from "../profile";
+import { normalizeExplicitLocalFileReferencePath } from "../explicit-local-file-reference";
 import { imageInputFileRoot } from "./image-input-files";
 import { resolveReadableLocalFilePath } from "./local-file-input";
 import { isThreadAssetPath, isResolvedThreadAssetPath, storeThreadAsset, threadAssetRoot, withAssetDirectory, type ThreadAssetOwner } from "./thread-assets";
@@ -266,6 +267,7 @@ export async function ownThreadInputAttachments(
   privateStorageRoots?: readonly string[],
 ): Promise<AppServerTurnInputItem[]> {
   const output: AppServerTurnInputItem[] = [];
+  const ownedPaths = new Map<string, string>();
   for (const item of input) {
     if (item.type === "text" || (item.type === "localImage" || item.type === "localFile") && isThreadAssetPath(item.path, owner)) {
       output.push(item);
@@ -273,6 +275,9 @@ export async function ownThreadInputAttachments(
     }
     const retained = await stageTurnInputAttachmentsForRetention([item], { owner, privateStorageRoots, strict: true });
     const attachment = retained[0];
+    if (item.type === "localFile" && attachment?.type === "localFile" && item.path !== attachment.path) {
+      ownedPaths.set(path.resolve(item.path), attachment.path);
+    }
     // Preserve established inline payloads for ACP and non-JPEG/PNG images
     // such as animated GIFs. Their owned copy serves replay and forwarding.
     const preserveInlineImage = item.type === "image"
@@ -286,7 +291,20 @@ export async function ownThreadInputAttachments(
         : item);
     }
   }
-  return output;
+  if (ownedPaths.size === 0) return output;
+  return output.map((item) => {
+    if (item.type !== "text" || !item.text.includes("[@")) return item;
+    return {
+      ...item,
+      text: item.text.replace(/\[@([^\]]+)\]\(([^)]*)\)/gu, (reference, name: string, value: string) => {
+        const sourcePath = normalizeExplicitLocalFileReferencePath(value);
+        const ownedPath = sourcePath ? ownedPaths.get(sourcePath) : undefined;
+        // Escape parentheses too: encodeURIComponent leaves them unchanged.
+        const target = ownedPath ? encodeURIComponent(ownedPath).replace(/[()]/gu, (character) => character === "(" ? "%28" : "%29") : undefined;
+        return target ? `[@${name}](${target})` : reference;
+      }),
+    };
+  });
 }
 
 function filePathFromUrl(value: string): string | undefined {

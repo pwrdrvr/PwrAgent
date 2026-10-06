@@ -8737,6 +8737,7 @@ export class DesktopBackendRegistry {
   private readonly activeTurnKeys = new ActiveTurnKeySet();
   private readonly threadHandoffReservations = new Set<string>();
   private readonly threadLifecycleLocks = new PerKeyAsyncLock();
+  private readonly threadAttachmentAdmissionLocks = new PerKeyAsyncLock();
   private readonly automaticArchiveReservations = new Map<string, { cancelled: boolean }>();
   private readonly threadLifecycleMutationCounts = new Map<string, number>();
   private readonly handoffTurnStarts = new Map<string, number>();
@@ -14062,7 +14063,11 @@ export class DesktopBackendRegistry {
           throw new AutomaticArchiveCancelledError();
         }
         await remove(root.id);
-        await deleteThreadAssets({ backend: root.source, threadId: root.id });
+        // The provider deletes the complete family. Child notifications may
+        // be missed, so release every owner's assets before forgetting refs.
+        for (const thread of family) {
+          await deleteThreadAssets({ backend: thread.source, threadId: thread.id });
+        }
         this.invalidateThreadListCache(root.source);
         this.invalidateArchiveCleanupReads(root.source);
       };
@@ -17531,6 +17536,26 @@ export class DesktopBackendRegistry {
     };
   }
 
+  /** Reserve submission order until the queue claims a position, not until
+   * the provider responds. Other threads retain their independent admissions. */
+  private async admitThreadAttachments<T>(
+    params: ThreadAssetOwner & { input: AppServerTurnInputItem[] },
+    admit: (input: AppServerTurnInputItem[], onAdmission: () => void) => Promise<T>,
+  ): Promise<T> {
+    const key = buildThreadIdentityKey(params.backend, params.threadId);
+    const { submission } = await this.threadAttachmentAdmissionLocks.run(key, async () => {
+      const input = await ownThreadInputAttachments(params.input, params, this.localFilePrivateStorageRoots);
+      let onAdmission!: () => void;
+      const admitted = new Promise<void>((resolve) => { onAdmission = resolve; });
+      const submission = admit(input, onAdmission);
+      // A rejected admission must also release the next sender's reservation.
+      void submission.then(onAdmission, onAdmission);
+      await admitted;
+      return { submission };
+    });
+    return await submission;
+  }
+
   async submitTurn(params: {
     queueEntryId?: string;
     backend: AppServerBackendKind;
@@ -17551,7 +17576,6 @@ export class DesktopBackendRegistry {
   }): Promise<ThreadTurnQueueSubmissionResult> {
     this.assertThreadNotHandingOff(params.backend, params.threadId);
     const { origin = "manual", queueEntryId, delivery, ...entry } = params;
-    entry.input = await ownThreadInputAttachments(entry.input, entry, this.localFilePrivateStorageRoots);
     const hasTurnSettings = [
       entry.executionMode,
       entry.approvalPolicy,
@@ -17562,17 +17586,11 @@ export class DesktopBackendRegistry {
       entry.reasoningEffort,
       entry.fastMode,
     ].some((value) => value !== undefined);
-    if (entry.messageOrigin?.kind === "agent" && delivery !== "new_turn" && !hasTurnSettings) {
-      return await this.threadTurnQueue.submitGroupedSteer({
-        ...entry,
-        ...(queueEntryId ? { id: queueEntryId } : {}),
-        origin,
-      });
-    }
-    return await this.threadTurnQueue.submit({
-      ...entry,
-      ...(queueEntryId ? { id: queueEntryId } : {}),
-      origin,
+    return await this.admitThreadAttachments(entry, (input, onAdmission) => {
+      const prepared = { ...entry, input, ...(queueEntryId ? { id: queueEntryId } : {}), origin };
+      return entry.messageOrigin?.kind === "agent" && delivery !== "new_turn" && !hasTurnSettings
+        ? this.threadTurnQueue.submitGroupedSteer(prepared, { onAdmission })
+        : this.threadTurnQueue.submit(prepared, { onAdmission });
     });
   }
 
@@ -17600,12 +17618,12 @@ export class DesktopBackendRegistry {
       queueEntryId,
       ...entry
     } = params;
-    entry.input = await ownThreadInputAttachments(entry.input, entry, this.localFilePrivateStorageRoots);
-    return await this.threadTurnQueue.submitHeld({
+    return await this.admitThreadAttachments(entry, (input, onAdmission) => this.threadTurnQueue.submitHeld({
       ...entry,
+      input,
       id: queueEntryId,
       origin,
-    }, holdReason);
+    }, holdReason, { onAdmission }));
   }
 
   async submitTurnIfIdle(params: {
@@ -17623,11 +17641,11 @@ export class DesktopBackendRegistry {
     ) {
       return { status: "busy" };
     }
-    entry.input = await ownThreadInputAttachments(entry.input, entry, this.localFilePrivateStorageRoots);
-    return await this.threadTurnQueue.submitIfIdle({
+    return await this.admitThreadAttachments(entry, (input, onAdmission) => this.threadTurnQueue.submitIfIdle({
       ...entry,
+      input,
       origin,
-    });
+    }, { onAdmission }));
   }
 
   async readQueuedTurn(
@@ -20475,14 +20493,13 @@ export class DesktopBackendRegistry {
           };
         }
         if (request.messageOrigin?.kind === "agent") {
-          const input = await ownThreadInputAttachments(request.input ?? [], request, this.localFilePrivateStorageRoots);
-          const queued = await this.threadTurnQueue.submitGroupedSteer({
+          const queued = await this.admitThreadAttachments({ ...request, input: request.input ?? [] }, (input, onAdmission) => this.threadTurnQueue.submitGroupedSteer({
             backend: request.backend,
             threadId: request.threadId,
             input,
             messageOrigin: request.messageOrigin,
             origin: "manual",
-          }, { deferStart: true });
+          }, { deferStart: true, onAdmission }));
           return {
             ok: true,
             backend: request.backend,
