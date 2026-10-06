@@ -6652,13 +6652,17 @@ describe("App", () => {
     fireEvent.click(
       await screen.findByRole("menuitem", { name: "Sub-thread in This Directory" }),
     );
-    await screen.findByRole("heading", { level: 2, name: "New thread" });
+    await screen.findByRole("heading", { level: 2, name: "New sub-thread" });
     expect(
       await screen.findByRole("button", { name: "First project thread" }),
     ).toHaveAttribute("aria-pressed", "false");
     expect(
       await screen.findByRole("button", { name: "Second project thread" }),
     ).toHaveAttribute("aria-pressed", "false");
+    // The selection has a row: the draft, under the thread it came from.
+    expect(
+      await screen.findByRole("button", { name: "New sub-thread draft, under Second project thread" }),
+    ).toHaveAttribute("aria-pressed", "true");
 
     await clickButton("Cancel");
     await screen.findByRole("heading", {
@@ -6668,6 +6672,7 @@ describe("App", () => {
     expect(
       await screen.findByRole("button", { name: "Second project thread" }),
     ).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByRole("button", { name: /sub-thread draft/ })).not.toBeInTheDocument();
   });
 
   it("renames the selected thread from the sidebar actions menu", async () => {

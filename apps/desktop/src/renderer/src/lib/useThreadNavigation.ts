@@ -2777,6 +2777,30 @@ export type PendingLaunchpadCreation = {
 };
 
 /**
+ * A sub-thread launchpad still being written, drawn as a draft row in the
+ * slot its thread will take. It carries the same placement keys as a
+ * `PendingLaunchpadCreation`, so a list files both the same way and the
+ * starting row that replaces it on send lands where the draft was.
+ *
+ * Built from this window's own launchpads: draft text never federates, so a
+ * peer sees nothing until the thread starts.
+ */
+export type SubthreadLaunchpadDraft = {
+  kind: "subthread-draft";
+  /** The launchpad's selection key: the row is selected while it is. */
+  selectionKey: string;
+  directoryKey: string;
+  directoryLabel: string;
+  launchpad: NavigationLaunchpadDraft;
+  /** Keys as `threadSummaryIdentityKey` spells them. */
+  parentThreadKey: string;
+  sourceThreadKey?: string;
+  parentThreadTitle: string;
+  /** A draft has no thread yet. Typed so lists can treat both alike. */
+  threadKey?: undefined;
+};
+
+/**
  * A thread the launchpad names, keyed as its row is. A row on a peer carries
  * that peer's ref, including every row of a peer's window, where the launchpad
  * leaves the instance implicit in the window's own target.
@@ -2867,6 +2891,12 @@ export function useThreadNavigation(
   recentThreads: NavigationThreadSummary[];
   launchpadError?: string;
   pendingLaunchpadCreations: PendingLaunchpadCreation[];
+  /** Sub-thread launchpads being written in this window, in no set order. */
+  subthreadLaunchpadDrafts: SubthreadLaunchpadDraft[];
+  /** Drop a sub-thread launchpad's parent link and keep its draft. */
+  detachSubthreadLaunchpad: (directoryKey: string) => void;
+  /** Open a sub-thread launchpad's parent. The launchpad and its row stay. */
+  selectSubthreadLaunchpadParent: (directoryKey: string) => void;
   selectPendingLaunchpad: (selectionKey: string) => void;
   archiveThreadNotice?: ArchiveThreadNotice;
   dismissArchiveThreadNotice: () => void;
@@ -3184,6 +3214,13 @@ export function useThreadNavigation(
   const [localLaunchpads, setLocalLaunchpads] = useRecoverableState<
     Record<string, NavigationLaunchpadDraft>
   >("navigation.launchpads", {});
+  // Sub-thread launchpads the operator detached from their parent. Their
+  // `subthread:` key still spells the parent, so materialization must not
+  // fall back to reading the parent from it.
+  const detachedSubthreadLaunchpadKeysRef = useRecoverableRef(
+    "navigation.detachedSubthreadLaunchpads",
+    () => new Set<string>(),
+  );
   const [federatedLaunchpad, setFederatedLaunchpad] = useRecoverableState<
     FederatedLaunchpadSession | undefined
   >("navigation.federatedLaunchpad", undefined);
@@ -5143,11 +5180,61 @@ export function useThreadNavigation(
     if (!selectedLaunchpad?.sourceThreadId || !selectedLaunchpad.backend) {
       return undefined;
     }
+    // A sub-thread's own draft or starting row sits under its parent and
+    // says where it goes. Filling the parent too would compete with the
+    // selected row right below it.
+    if (selectedLaunchpad.parentThreadId && isSubthreadLaunchpadKey(selectedLaunchpad.directoryKey)) {
+      return undefined;
+    }
     return buildThreadIdentityKey(
       selectedLaunchpad.backend,
       selectedLaunchpad.sourceThreadId,
     );
   }, [selectedLaunchpad]);
+
+  const subthreadLaunchpadDrafts = useMemo((): SubthreadLaunchpadDraft[] => {
+    const drafts: SubthreadLaunchpadDraft[] = [];
+    for (const [directoryKey, launchpad] of Object.entries(localLaunchpads)) {
+      if (!launchpad || !isSubthreadLaunchpadKey(directoryKey) || !launchpad.parentThreadId) {
+        continue;
+      }
+      const selectionKey = buildLaunchpadSelectionKey(directoryKey);
+      // A launchpad that keeps its slot while it starts (one sent to another
+      // machine) is already drawn as its starting row.
+      if (pendingLaunchpadCreations.some((creation) => creation.selectionKey === selectionKey)) {
+        continue;
+      }
+      // Keyed exactly as materialization keys the starting row, so the two
+      // file under the same parent.
+      const federationTarget = launchpad.federationTarget ?? rendererFederationTarget;
+      const parentBackend = launchpad.parentThreadBackend ?? launchpad.backend;
+      const parentThreadKey = buildLaunchpadRelativeThreadKey(
+        parentBackend,
+        launchpad.parentThreadId,
+        launchpad.parentThreadInstanceId,
+        federationTarget,
+        localFederationInstanceId,
+      );
+      if (!parentThreadKey) continue;
+      drafts.push({
+        kind: "subthread-draft",
+        selectionKey,
+        directoryKey,
+        directoryLabel: launchpad.directoryLabel,
+        launchpad,
+        parentThreadKey,
+        sourceThreadKey: buildLaunchpadRelativeThreadKey(
+          parentBackend,
+          launchpad.sourceThreadId ?? launchpad.parentThreadId,
+          launchpad.parentThreadInstanceId,
+          federationTarget,
+          localFederationInstanceId,
+        ),
+        parentThreadTitle: launchpad.parentThreadTitle ?? launchpad.parentThreadId,
+      });
+    }
+    return drafts;
+  }, [localFederationInstanceId, localLaunchpads, pendingLaunchpadCreations, rendererFederationTarget]);
 
   useEffect(() => {
     releaseRetainedUnreadThread(selectedItemKey);
@@ -5471,6 +5558,20 @@ export function useThreadNavigation(
     [refresh, selectThread, state.rows],
   );
 
+  const selectSubthreadLaunchpadParent = useCallback((directoryKey: string): void => {
+    const draft = subthreadLaunchpadDrafts.find((candidate) => candidate.directoryKey === directoryKey);
+    if (!draft) return;
+    const parent = loadedThreadRows(state.rows).find(
+      (thread) => threadSummaryIdentityKey(thread) === draft.parentThreadKey,
+    );
+    if (parent) {
+      selectThread(parent);
+      return;
+    }
+    setSelectedItemKey(draft.parentThreadKey);
+    void refresh(draft.parentThreadKey, undefined, true);
+  }, [refresh, selectThread, state.rows, subthreadLaunchpadDrafts]);
+
   const selectDirectoryLaunchpad = useCallback((directoryKey: string): void => {
     setCreateThreadError(undefined);
     setLaunchpadError(undefined);
@@ -5548,6 +5649,7 @@ export function useThreadNavigation(
           launchpad = updated.launchpad;
           defaults = updated.defaults;
         }
+        detachedSubthreadLaunchpadKeysRef.current.delete(directoryKey);
         setLocalLaunchpads((current) => ({
           ...current,
           [directoryKey]: launchpad,
@@ -7383,7 +7485,9 @@ export function useThreadNavigation(
       const materializeParentThreadId =
         parentThreadId ??
         launchpad.parentThreadId ??
-        getParentThreadIdFromSubthreadLaunchpadKey(directoryKey);
+        (detachedSubthreadLaunchpadKeysRef.current.has(directoryKey)
+          ? undefined
+          : getParentThreadIdFromSubthreadLaunchpadKey(directoryKey));
       const materializeParentThreadBackend =
         launchpad.parentThreadBackend ?? launchpad.backend;
       const materializeParentThreadInstanceId =
@@ -7756,10 +7860,33 @@ export function useThreadNavigation(
    * thread"). Drops the draft and, for a sub-thread composer, returns the
    * selection to the source card the user invoked it from.
    */
+  /**
+   * Turn a sub-thread launchpad into an ordinary new thread. Only the parent
+   * link goes: the draft and every setting the operator chose stay, and the
+   * launchpad keeps its key, which is just the composer's address.
+   */
+  const detachSubthreadLaunchpad = useCallback((directoryKey: string): void => {
+    detachedSubthreadLaunchpadKeysRef.current.add(directoryKey);
+    // The source card is this window's alone; main never stores it.
+    setLocalLaunchpads((current) => {
+      const launchpad = current[directoryKey];
+      if (!launchpad?.sourceThreadId) return current;
+      const { sourceThreadId: _sourceThreadId, ...detached } = launchpad;
+      return { ...current, [directoryKey]: detached };
+    });
+    void updateDirectoryLaunchpad(directoryKey, {
+      parentThreadId: undefined,
+      parentThreadBackend: undefined,
+      parentThreadInstanceId: undefined,
+      parentThreadTitle: undefined,
+    });
+  }, [setLocalLaunchpads, updateDirectoryLaunchpad]);
+
   const discardLaunchpad = useCallback((directoryKey: string): boolean => {
     // A previous discard failure is stale the moment the operator tries
     // again; clear it so a retry that succeeds takes the toast down.
     publishDiscardLaunchpadError();
+    detachedSubthreadLaunchpadKeysRef.current.delete(directoryKey);
     if (
       activeFederatedLaunchpad
       && activeFederatedLaunchpad.launchpad.directoryKey === directoryKey
@@ -7831,11 +7958,15 @@ export function useThreadNavigation(
         : current.rows,
     }));
 
-    setSelectedItemKey(
-      sourceThreadId && sourceBackend
-        ? buildThreadIdentityKey(sourceBackend, sourceThreadId)
-        : undefined,
-    );
+    // A sub-thread draft row can discard a launchpad the operator is not
+    // looking at. Only the open launchpad hands selection back.
+    if (selectedItemKeyRef.current === buildLaunchpadSelectionKey(directoryKey)) {
+      setSelectedItemKey(
+        sourceThreadId && sourceBackend
+          ? buildThreadIdentityKey(sourceBackend, sourceThreadId)
+          : undefined,
+      );
+    }
 
     // Persist the discard so the overlay row can't rehydrate the cancelled
     // draft on the next open (or after a refresh / restart / in another window).
@@ -9038,6 +9169,9 @@ export function useThreadNavigation(
     recentThreads,
     launchpadError,
     pendingLaunchpadCreations,
+    subthreadLaunchpadDrafts,
+    detachSubthreadLaunchpad,
+    selectSubthreadLaunchpadParent,
     archiveThreadNotice,
     dismissArchiveThreadNotice,
     worktreeArchiveError,

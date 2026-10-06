@@ -80,6 +80,7 @@ import {
   federatedThreadIdentityKey,
   findPreferredReviewWorkspaceCwd,
   findPrimaryReviewWorkspaceCwd,
+  isSubthreadLaunchpadKey,
   normalizeGitOriginUrl,
   parseCodexAsyncQuestionReply,
   readCodexEnvironmentActionRuns,
@@ -101,6 +102,7 @@ import {
   PlusIcon,
   PullRequestIcon,
   SearchIcon,
+  SubthreadIcon,
   ThreadIcon,
   TrashIcon,
   CelestialIcon,
@@ -348,6 +350,16 @@ export type ComposerProps = {
   ) => Promise<void>;
   /** Discard this launchpad draft (the "Cancel" button next to "Start thread"). */
   onCancelLaunchpad?: (directoryKey: string) => void;
+  /**
+   * Cancel this launchpad as its Cancel button does, asked from outside the
+   * composer (a sub-thread draft row's menu). The composer must run it: its
+   * unmount would otherwise save the draft it still holds back to the store.
+   */
+  launchpadCancelRequest?: { directoryKey: string; id: number };
+  /** The source row's ×: start this sub-thread as an ordinary thread. */
+  onDetachLaunchpadParent?: (directoryKey: string) => void;
+  /** The source row's parent title: open the parent, keep this draft. */
+  onSelectLaunchpadParent?: (launchpad: NavigationLaunchpadDraft) => void;
   onMoveEnvActionsToSidebar?: () => void;
   onDismissEnvActionRun?: (run: CodexEnvironmentActionRun) => void;
   onStopEnvActionRun?: (
@@ -10182,6 +10194,30 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     Boolean(backend?.capabilities.steerTurn) &&
     selectedModelOption?.supportsSteering !== false;
   const launchpadSubmitting = isLaunchpad && (sending || Boolean(props.launchpadMaterializing));
+  // A launchpad with a parent starts a sub-thread. Detaching clears the
+  // parent, and the copy goes back to a plain new thread.
+  const subthreadParentTitle = isLaunchpad && props.launchpad?.parentThreadId
+    ? props.launchpad.parentThreadTitle || props.launchpad.parentThreadId
+    : undefined;
+  // A Discard asked from outside, run as the Cancel button runs it. Each
+  // request runs once, and only against the launchpad it names.
+  const handledLaunchpadCancelRequestIdRef = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    const request = props.launchpadCancelRequest;
+    if (!request || handledLaunchpadCancelRequestIdRef.current === request.id) {
+      return;
+    }
+    handledLaunchpadCancelRequestIdRef.current = request.id;
+    if (
+      !props.launchpad
+      || props.launchpad.directoryKey !== request.directoryKey
+      || launchpadSubmitting
+    ) {
+      return;
+    }
+    abandonComposerDraftSnapshot(composerScopeKey);
+    props.onCancelLaunchpad?.(request.directoryKey);
+  }, [props.launchpadCancelRequest]);
   const fiveHourResetAt = getFiveHourRateLimitResetAt({
     backend,
     now: scheduleNow,
@@ -10259,7 +10295,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             ? "Starting…"
             : "Sending…"
           : props.launchpad
-            ? "Start thread"
+            ? subthreadParentTitle ? "Start sub-thread" : "Start thread"
             : "Send";
   const submitButtonLabel = forking
     ? "Forking…"
@@ -10818,7 +10854,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const composerPlaceholder = launchpadSubmitting
     ? "Queue a follow-up while this thread starts"
     : isLaunchpad
-    ? `Start a new thread in ${props.launchpad?.directoryLabel ?? "this directory"}${
+    ? `${subthreadParentTitle
+      ? `Start a sub-thread of ${subthreadParentTitle}`
+      : `Start a new thread in ${props.launchpad?.directoryLabel ?? "this directory"}`}${
       launchpadRemoteMachineLabel ? ` on ${launchpadRemoteMachineLabel}` : ""
     }`
     : "Reply to this thread";
@@ -11802,6 +11840,24 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           </div>
         );
       })}
+
+      {/* Last in the band, nearest the input it describes. Hidden once the
+          launchpad is submitted: the starting thread is no longer a draft
+          to detach. */}
+      {subthreadParentTitle && !launchpadSubmitting && !props.launchpadComposerScopeKey ? (
+        <SubthreadSourceRow
+          parentTitle={subthreadParentTitle}
+          onSelectParent={props.onSelectLaunchpadParent
+            ? () => props.onSelectLaunchpadParent?.(props.launchpad!)
+            : undefined}
+          onDetach={props.onDetachLaunchpadParent
+            ? () => {
+                props.onDetachLaunchpadParent?.(props.launchpad!.directoryKey);
+                requestAnimationFrame(() => inputRef.current?.focus());
+              }
+            : undefined}
+        />
+      ) : null}
       </div>
 
       {hasVisibleAttachments ? (
@@ -13872,6 +13928,66 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   );
 });
 
+/**
+ * Names the thread a sub-thread launchpad will start under, beside the input
+ * it describes. The parent title opens the parent; × keeps the draft and
+ * drops the link, so the launchpad starts an ordinary thread.
+ */
+function SubthreadSourceRow({
+  parentTitle,
+  onSelectParent,
+  onDetach,
+}: {
+  parentTitle: string;
+  onSelectParent?: () => void;
+  onDetach?: () => void;
+}) {
+  const { show, showAfterDelay, hide, visible, tooltipId, tooltipNode } =
+    useViewportTooltip({ className: "viewport-tooltip" });
+  const detachTooltip = "Start as a regular thread";
+  return (
+    <div className="composer__subthread-source" role="group" aria-label="Sub-thread source">
+      <SubthreadIcon className="composer__subthread-source-icon" size={14} />
+      <span className="composer__subthread-source-label">Sub-thread of</span>
+      {onSelectParent ? (
+        <button
+          aria-label={`Open ${parentTitle}`}
+          className="composer__subthread-source-parent"
+          title={parentTitle}
+          type="button"
+          onClick={onSelectParent}
+        >
+          {parentTitle}
+        </button>
+      ) : (
+        <span className="composer__subthread-source-parent" title={parentTitle}>
+          {parentTitle}
+        </span>
+      )}
+      <span className="composer__subthread-source-meta">· no history</span>
+      {onDetach ? (
+        <button
+          aria-describedby={visible ? tooltipId : undefined}
+          aria-label={`Detach from ${parentTitle}`}
+          className="composer__subthread-source-detach"
+          type="button"
+          onBlur={hide}
+          onClick={() => {
+            hide();
+            onDetach();
+          }}
+          onFocus={(event) => show(event.currentTarget, detachTooltip)}
+          onMouseEnter={(event) => showAfterDelay(event.currentTarget, detachTooltip)}
+          onMouseLeave={hide}
+        >
+          <CloseIcon size={14} />
+        </button>
+      ) : null}
+      {tooltipNode}
+    </div>
+  );
+}
+
 function AttachmentTooltip({
   children,
   className,
@@ -14315,8 +14431,11 @@ function buildLaunchpadWorkspaceOptions(
       (directory.gitStatus?.worktreeCreationAvailable === true ||
         directory.gitStatus?.currentBranch ||
         (directory.gitStatus?.branches?.length ?? 0) > 0 ||
+        // A sub-thread launchpad, detached or not, was opened from a thread
+        // whose project offered one; detaching keeps its settings.
         (launchpad.workMode === "worktree" &&
-          Boolean(launchpad.parentThreadId)))
+          (Boolean(launchpad.parentThreadId)
+            || isSubthreadLaunchpadKey(launchpad.directoryKey))))
   );
   const options: Array<{ value: NavigationLaunchpadDraft["workMode"]; label: string }> = [
     { value: "local", label: localLabel ?? "Local" },

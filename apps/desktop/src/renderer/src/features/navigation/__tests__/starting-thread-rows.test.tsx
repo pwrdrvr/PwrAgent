@@ -6,8 +6,15 @@ import type {
   NavigationThreadSummary,
 } from "@pwragent/shared";
 import { FixtureSidebar as Sidebar } from "../../../test/navigation-presentation-fixture";
-import type { PendingLaunchpadCreation } from "../../../lib/useThreadNavigation";
-import { interleaveStartingSubthreads } from "../StartingThreadRow";
+import type {
+  PendingLaunchpadCreation,
+  SubthreadLaunchpadDraft,
+} from "../../../lib/useThreadNavigation";
+import {
+  interleaveStartingSubthreads,
+  pendingThreadTitleLine,
+  type PendingSidebarRow,
+} from "../StartingThreadRow";
 import { buildSubthreadLaunchpadKey } from "../../../lib/subthread-launchpads";
 
 afterEach(cleanup);
@@ -60,12 +67,42 @@ function creation(patch: Partial<PendingLaunchpadCreation> = {}): PendingLaunchp
   };
 }
 
+function subthreadDraft(patch: Partial<SubthreadLaunchpadDraft> = {}): SubthreadLaunchpadDraft {
+  const directoryKey = buildSubthreadLaunchpadKey({ id: "Parent", source: "codex" }, "new-worktree");
+  return {
+    kind: "subthread-draft",
+    selectionKey: `launchpad:${directoryKey}`,
+    directoryKey,
+    directoryLabel: "PwrSnap",
+    launchpad: {
+      backend: "codex",
+      directoryKey,
+      directoryKind: "directory",
+      directoryLabel: "PwrSnap",
+      directoryPath: PROJECT_PATH,
+      executionMode: "default",
+      prompt: "",
+      workMode: "worktree",
+      parentThreadId: "Parent",
+      parentThreadTitle: "Parent",
+    } as SubthreadLaunchpadDraft["launchpad"],
+    parentThreadKey: "codex:Parent",
+    sourceThreadKey: "codex:Parent",
+    parentThreadTitle: "Parent",
+    ...patch,
+  };
+}
+
 function renderSidebar(props: {
   browseMode: "attention" | "drafts" | "inbox" | "recents" | "directories";
   threads: NavigationThreadSummary[];
   creations: PendingLaunchpadCreation[];
+  drafts?: SubthreadLaunchpadDraft[];
   selectedItemKey?: string;
-  onSelectPendingLaunchpad?: (creation: PendingLaunchpadCreation) => void;
+  onSelectPendingLaunchpad?: (entry: PendingSidebarRow) => void;
+  onDiscardSubthreadDraft?: (draft: SubthreadLaunchpadDraft) => void;
+  onDetachSubthreadDraft?: (draft: SubthreadLaunchpadDraft) => void;
+  onSetSubthreadsCollapsed?: (parent: NavigationThreadSummary, collapsed: boolean) => Promise<void>;
 }) {
   return render(
     <Sidebar
@@ -76,12 +113,16 @@ function renderSidebar(props: {
       loaded
       loading={false}
       pendingLaunchpadCreations={props.creations}
+      subthreadLaunchpadDrafts={props.drafts}
       selectedItemKey={props.selectedItemKey}
       threads={props.threads}
       onBrowseModeChange={() => undefined}
       onCreateThread={async () => undefined}
       onOpenLaunchpad={async () => undefined}
       onSelectPendingLaunchpad={props.onSelectPendingLaunchpad}
+      onDiscardSubthreadDraft={props.onDiscardSubthreadDraft}
+      onDetachSubthreadDraft={props.onDetachSubthreadDraft}
+      onSetSubthreadsCollapsed={props.onSetSubthreadsCollapsed}
       onSelectThread={() => undefined}
     />,
   );
@@ -282,6 +323,157 @@ describe("a thread that is still starting", () => {
 
     expect(rowNames(screen.getByRole("list", { name: "Threads in PwrSnap" })))
       .toEqual(["Add a crop tool", "Older thread"]);
+  });
+});
+
+describe("a sub-thread still being written", () => {
+  const DRAFT_ROW = "New sub-thread draft, under Parent";
+
+  it("sits directly under its parent, at the top of the tray, as the selection", () => {
+    const onSelectPendingLaunchpad = vi.fn();
+    const draft = subthreadDraft();
+    renderSidebar({
+      browseMode: "directories",
+      threads: [thread("Parent"), thread("Older child", { parentThreadId: "Parent" })],
+      creations: [],
+      drafts: [draft],
+      selectedItemKey: draft.selectionKey,
+      onSelectPendingLaunchpad,
+    });
+
+    expect(rowNames(screen.getByRole("list", { name: "Sub-threads of Parent" })))
+      .toEqual([DRAFT_ROW, "Older child"]);
+    const row = screen.getByRole("button", { name: DRAFT_ROW });
+    expect(row).toHaveAttribute("aria-pressed", "true");
+    const card = row.closest<HTMLElement>(".thread-row")!;
+    expect(card).toHaveClass("thread-row--draft", "is-selected");
+    expect(card.querySelector(".thread-row__title")).toHaveTextContent("New sub-thread");
+    expect(card.querySelector(".thread-row__time")).toHaveTextContent("Draft");
+    expect(within(card).getByRole("img", { name: "Draft" })).toBeInTheDocument();
+    expect(card.querySelector(".thread-row__chips")).toHaveTextContent("New worktree");
+    // Child order is keyed by thread id, which a draft does not have yet.
+    expect(row.closest(".thread-row-shell")).not.toHaveAttribute("draggable");
+
+    fireEvent.click(row);
+    expect(onSelectPendingLaunchpad).toHaveBeenCalledWith(draft);
+  });
+
+  it("opens a collapsed parent's tray and gives a childless parent its chevron", () => {
+    renderSidebar({
+      browseMode: "inbox",
+      threads: [thread("Parent", { subthreadsCollapsed: true })],
+      creations: [],
+      drafts: [subthreadDraft()],
+      onSetSubthreadsCollapsed: async () => undefined,
+    });
+
+    expect(rowNames(screen.getByRole("list", { name: "Sub-threads of Parent" }))).toEqual([DRAFT_ROW]);
+    expect(screen.getByRole("button", { name: "Collapse sub-threads for Parent" }))
+      .toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("takes the slot its starting row will take", () => {
+    // The draft leads the tray, above a sibling already starting: a child
+    // sent now lands at the top.
+    renderSidebar({
+      browseMode: "inbox",
+      threads: [thread("Parent")],
+      creations: [creation({ parentThreadKey: "codex:Parent", sourceThreadKey: "codex:Parent" })],
+      drafts: [subthreadDraft()],
+    });
+
+    expect(rowNames(screen.getByRole("list", { name: "Sub-threads of Parent" })))
+      .toEqual([DRAFT_ROW, "Add a crop tool, starting in PwrSnap"]);
+  });
+
+  it("titles itself with the first line of its draft", () => {
+    renderSidebar({
+      browseMode: "inbox",
+      threads: [thread("Parent")],
+      creations: [],
+      drafts: [subthreadDraft({
+        launchpad: { ...subthreadDraft().launchpad, prompt: "\n  Check the Authorize state\nafter cancel" },
+      })],
+    });
+
+    const row = screen.getByRole("button", { name: "Check the Authorize state, sub-thread draft under Parent" });
+    expect(row.closest(".thread-row")!.querySelector(".thread-row__title"))
+      .toHaveTextContent(/^Check the Authorize state$/);
+  });
+
+  it("waits at the top and names its parent when the parent is not in the lens", () => {
+    renderSidebar({
+      browseMode: "inbox",
+      threads: [thread("Older thread")],
+      creations: [],
+      drafts: [subthreadDraft({ parentThreadTitle: "Fix the Authorize button" })],
+    });
+
+    const row = screen.getByRole("button", { name: "New sub-thread draft, under Fix the Authorize button" });
+    expect(rowNames(row.closest<HTMLElement>(".sidebar-list")!))
+      .toEqual(["New sub-thread draft, under Fix the Authorize button", "Older thread"]);
+    expect(row.closest(".thread-row")!.querySelector(".thread-row__chip--subthread-parent"))
+      .toHaveTextContent("Fix the Authorize button");
+  });
+
+  it("names its parent in the Directories lens's unplaced rows too", () => {
+    renderSidebar({
+      browseMode: "directories",
+      threads: [thread("Older thread")],
+      creations: [],
+      drafts: [subthreadDraft()],
+    });
+
+    const unplaced = screen.getByRole("list", { name: "Starting threads" });
+    expect(rowNames(unplaced)).toEqual([DRAFT_ROW]);
+    expect(unplaced.querySelector(".thread-row__chip--subthread-parent")).toHaveTextContent("Parent");
+  });
+
+  it("names no parent where it sits under the parent", () => {
+    renderSidebar({ browseMode: "inbox", threads: [thread("Parent")], creations: [], drafts: [subthreadDraft()] });
+
+    expect(document.querySelector(".thread-row__chip--subthread-parent")).toBeNull();
+  });
+
+  it("is not in Drafts, where unsent replies live", () => {
+    renderSidebar({ browseMode: "drafts", threads: [thread("Parent")], creations: [], drafts: [subthreadDraft()] });
+
+    expect(screen.queryByRole("button", { name: DRAFT_ROW })).not.toBeInTheDocument();
+  });
+
+  it("offers Detach from Parent and Discard Sub-thread from its menu", () => {
+    const onDetachSubthreadDraft = vi.fn();
+    const onDiscardSubthreadDraft = vi.fn();
+    const draft = subthreadDraft();
+    renderSidebar({
+      browseMode: "inbox",
+      threads: [thread("Parent")],
+      creations: [],
+      drafts: [draft],
+      onDetachSubthreadDraft,
+      onDiscardSubthreadDraft,
+    });
+
+    const card = screen.getByRole("button", { name: DRAFT_ROW }).closest(".thread-row")!;
+    fireEvent.contextMenu(card, { clientX: 20, clientY: 40 });
+    const menu = screen.getByRole("menu", { name: "Actions for the sub-thread draft under Parent" });
+    expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent))
+      .toEqual(["Detach from Parent", "Discard Sub-thread"]);
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Detach from Parent" }));
+    expect(onDetachSubthreadDraft).toHaveBeenCalledWith(draft);
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+
+    fireEvent.contextMenu(card, { clientX: 20, clientY: 40 });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Discard Sub-thread" }));
+    expect(onDiscardSubthreadDraft).toHaveBeenCalledWith(draft);
+  });
+});
+
+describe("pendingThreadTitleLine", () => {
+  it("takes the first line that has text", () => {
+    expect(pendingThreadTitleLine("\n  First line \nsecond")).toBe("First line");
+    expect(pendingThreadTitleLine("   ")).toBe("");
+    expect(pendingThreadTitleLine(undefined)).toBe("");
   });
 });
 

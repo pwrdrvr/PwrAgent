@@ -47,6 +47,7 @@ import {
   toolOutputWarningChars,
 } from "@pwragent/shared";
 import { Sidebar } from "./features/navigation/Sidebar";
+import { isSubthreadLaunchpadDraft } from "./features/navigation/StartingThreadRow";
 import { SidebarResizeHandle } from "./features/navigation/SidebarResizeHandle";
 import { useThreadJump } from "./features/navigation/useThreadJump";
 import { AppTitleBar } from "./features/chrome/AppTitleBar";
@@ -94,6 +95,7 @@ import {
 } from "./features/thread-detail/context-panels/context-tab";
 import { ThreadPlaceholderHeader } from "./features/thread-detail/ThreadPlaceholderHeader";
 import { handoffLaunchpadComposer } from "./features/composer/launchpad-composer-handoff";
+import { hasComposerDraftContent } from "./features/composer/useComposerDraftStore";
 import { useRecoverableState, useRecoverableComposerDraftStore } from "./lib/RendererRecoveryState";
 import { readBootstrapLayoutPreferences } from "./lib/layout-preferences";
 import { useAppearance, type AppearanceController } from "./lib/useAppearance";
@@ -126,7 +128,7 @@ import {
   InteractiveSvgPreferencesProvider,
   type InteractiveSvgPreferences,
 } from "./lib/interactive-svg-preferences";
-import { useThreadNavigation } from "./lib/useThreadNavigation";
+import { useThreadNavigation, type SubthreadLaunchpadDraft } from "./lib/useThreadNavigation";
 import { usePwrAgentProfiles } from "./lib/usePwrAgentProfiles";
 import { usePullRequestRefresh } from "./features/pr-status/usePullRequestRefresh";
 import { useThreadGitWorkingStateRefresh } from "./features/navigation/useThreadGitWorkingStateRefresh";
@@ -2960,6 +2962,38 @@ function DesktopAppShell(props: {
       history.goBack();
     }
   });
+  // A sub-thread draft row's Discard. The open composer holds the draft
+  // live and saves it back to the store when it unmounts, so when it is the
+  // draft's composer it runs the discard itself, exactly as Cancel does.
+  const [launchpadCancelRequest, setLaunchpadCancelRequest] =
+    useState<{ directoryKey: string; id: number }>();
+  const handleDiscardSubthreadDraft = useEventCallback((draft: SubthreadLaunchpadDraft) => {
+    const composerOwnsDraft =
+      navigation.selectedItemKey === draft.selectionKey
+      && mainView !== "search"
+      && !threadDetailPending
+      && Boolean(ThreadViewComponent);
+    if (composerOwnsDraft) {
+      setLaunchpadCancelRequest((current) => ({
+        directoryKey: draft.directoryKey,
+        id: (current?.id ?? 0) + 1,
+      }));
+      return;
+    }
+    const scopeKey = `launchpad:${draft.directoryKey}`;
+    const snapshot = composerDraftStore.get(scopeKey);
+    if (snapshot && hasComposerDraftContent(snapshot)) {
+      composerDraftStore.recordHistory?.(scopeKey, snapshot, "abandoned");
+    }
+    composerDraftStore.delete(scopeKey);
+    navigation.discardLaunchpad(draft.directoryKey);
+  });
+  const handleDetachLaunchpadParent = useEventCallback((directoryKey: string) => {
+    navigation.detachSubthreadLaunchpad(directoryKey);
+  });
+  const handleSelectLaunchpadParent = useEventCallback((launchpad: { directoryKey: string }) => {
+    navigation.selectSubthreadLaunchpadParent(launchpad.directoryKey);
+  });
 
   // These event props cross the memoized Composer boundary on every shell update.
   const handleAttachDirectoryReferences = useEventCallback((
@@ -3228,6 +3262,9 @@ function DesktopAppShell(props: {
     onLoadOlder: session.loadOlder,
     onLiveTranscriptEntry: session.upsertLiveTranscriptEntry,
     onCancelLaunchpad: handleCancelLaunchpad,
+    launchpadCancelRequest,
+    onDetachLaunchpadParent: handleDetachLaunchpadParent,
+    onSelectLaunchpadParent: handleSelectLaunchpadParent,
     // The composer's 5th argument is `extraDirectoryPaths` (draft
     // `@`-references); the hook's 5th is `parentThreadId` (resolved from
     // the launchpad draft internally), so map positions explicitly.
@@ -3404,8 +3441,18 @@ function DesktopAppShell(props: {
           inert={layerView !== undefined}
           directoryDisclosure={navigation.directoryDisclosure}
           pendingLaunchpadCreations={navigation.pendingLaunchpadCreations}
-          onSelectPendingLaunchpad={(creation) => {
-            navigation.selectPendingLaunchpad(creation.selectionKey);
+          subthreadLaunchpadDrafts={navigation.subthreadLaunchpadDrafts}
+          onSelectPendingLaunchpad={(entry) => {
+            setMainView("thread");
+            if (isSubthreadLaunchpadDraft(entry)) {
+              navigation.selectDirectoryLaunchpad(entry.directoryKey);
+            } else {
+              navigation.selectPendingLaunchpad(entry.selectionKey);
+            }
+          }}
+          onDiscardSubthreadDraft={handleDiscardSubthreadDraft}
+          onDetachSubthreadDraft={(draft) => {
+            navigation.detachSubthreadLaunchpad(draft.directoryKey);
           }}
           addingProjectDirectory={navigation.pickingDirectory}
           backends={backendSummaries.backends}
