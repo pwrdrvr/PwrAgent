@@ -4021,7 +4021,10 @@ function DesktopAppShell(props: {
 
         <CodexConfigWarningBanner
           desktopApi={desktopApi}
-          preferencesLoaded={Boolean(props.settings.snapshot)}
+          preferencesLoaded={
+            Boolean(props.settings.snapshot)
+            || !desktopApi?.readSettings
+          }
           dismissedWarningIds={props.settings.snapshot?.experimental.codexConfigWarningsDismissed?.value}
           onSuppressWarning={(id) => settings.writeConfig({
             experimental: {
