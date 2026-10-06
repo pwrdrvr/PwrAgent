@@ -3392,7 +3392,7 @@ export function useThreadNavigation(
         )),
       },
     } : current);
-  }, [options.providerModelDefaults, rendererFederationTarget]);
+  }, [options.providerModelDefaults, rendererFederationTarget, setLocalLaunchpads]);
   const prChipLocationIndexRef = useRef<PrChipLocationIndex | undefined>(undefined);
 
   const optimisticThreadRef = useRef<NavigationThreadSummary | undefined>(undefined);
@@ -3463,7 +3463,7 @@ export function useThreadNavigation(
     void setNavigationBrowseModeRequestRef.current?.({
       browseMode: normalized,
     }).catch(() => undefined);
-  }, []);
+  }, [setBrowseMode]);
 
   const releaseRetainedUnreadThread = useCallback((nextSelectionKey?: string): void => {
     const retainedThread = retainedUnreadThreadRef.current;
@@ -4954,7 +4954,7 @@ export function useThreadNavigation(
         ? buildLaunchpadSelectionKey(canonicalWorkspace.key)
         : current
     );
-  }, [state.rows]);
+  }, [state.rows, setLocalLaunchpads, setSelectedItemKey]);
 
   const inboxThreads = threads;
   const recentThreads = useMemo(
@@ -4982,7 +4982,15 @@ export function useThreadNavigation(
         ? threadSummaryIdentityKey(optimisticThread)
         : undefined,
     );
-  }, [directories, optimisticThread, selectedItemKey, state.rows, state.startupSelectionSettled, threads]);
+  }, [
+    directories,
+    optimisticThread,
+    selectedItemKey,
+    state.rows,
+    state.startupSelectionSettled,
+    threads,
+    initialSelectionEstablishedRef,
+  ]);
   const displaySelectionKey = selectedItemKey ?? initialFallbackSelectionKey;
   useEffect(() => {
     if (selectedItemKey) {
@@ -5018,6 +5026,8 @@ export function useThreadNavigation(
     selectedItemKey,
     state.rows,
     state.startupSelectionSettled,
+    initialSelectionEstablishedRef,
+    setSelectedItemKey,
   ]);
 
   const activeFederatedLaunchpad =
@@ -5302,7 +5312,7 @@ export function useThreadNavigation(
     }
 
     void markSeen();
-  }, [markThreadSeen, pendingSeenThreadKey, selectedThread]);
+  }, [markThreadSeen, pendingSeenThreadKey, selectedThread, submittedSeenUpdatedAtByThreadKeyRef]);
 
   const refreshThreadDirectoryGitStatuses = useCallback(
     (threadKey: string): void => {
@@ -5368,6 +5378,8 @@ export function useThreadNavigation(
     selectedThread,
     threadViewVisible,
     viewForeground,
+    manuallySelectedThreadKeysRef,
+    submittedSeenUpdatedAtByThreadKeyRef,
   ]);
 
   const selectThread = useCallback((thread: NavigationThreadSummary): void => {
@@ -5399,7 +5411,13 @@ export function useThreadNavigation(
         setRetainedUnreadThread(thread);
       }
     }
-  }, [browseMode, refreshThreadDirectoryGitStatuses, releaseRetainedUnreadThread]);
+  }, [
+    browseMode,
+    refreshThreadDirectoryGitStatuses,
+    releaseRetainedUnreadThread,
+    manuallySelectedThreadKeysRef,
+    setSelectedItemKey,
+  ]);
 
   const markThreadsSeen = useCallback(
     async (candidateThreads: NavigationThreadSummary[]): Promise<void> => {
@@ -5479,7 +5497,7 @@ export function useThreadNavigation(
         current && markedThreadKeys.has(current) ? undefined : current,
       );
     },
-    [markThreadSeen],
+    [markThreadSeen, submittedSeenUpdatedAtByThreadKeyRef],
   );
 
   const markThreadUnread = useCallback(
@@ -5522,7 +5540,7 @@ export function useThreadNavigation(
         }),
       }));
     },
-    [markThreadSeen],
+    [markThreadSeen, manuallySelectedThreadKeysRef, submittedSeenUpdatedAtByThreadKeyRef],
   );
 
   const showThread = useCallback(
@@ -5555,7 +5573,7 @@ export function useThreadNavigation(
       setSelectedItemKey(threadKey);
       await refresh(threadKey, undefined, true);
     },
-    [refresh, selectThread, state.rows],
+    [refresh, selectThread, state.rows, setSelectedItemKey],
   );
 
   const selectSubthreadLaunchpadParent = useCallback((directoryKey: string): void => {
@@ -5570,7 +5588,7 @@ export function useThreadNavigation(
     }
     setSelectedItemKey(draft.parentThreadKey);
     void refresh(draft.parentThreadKey, undefined, true);
-  }, [refresh, selectThread, state.rows, subthreadLaunchpadDrafts]);
+  }, [refresh, selectThread, state.rows, subthreadLaunchpadDrafts, setSelectedItemKey]);
 
   const selectDirectoryLaunchpad = useCallback((directoryKey: string): void => {
     setCreateThreadError(undefined);
@@ -5579,14 +5597,14 @@ export function useThreadNavigation(
     setSetThreadExecutionModeError(undefined);
     setSetThreadModelSettingsError(undefined);
     setSelectedItemKey(buildLaunchpadSelectionKey(directoryKey));
-  }, []);
+  }, [setSelectedItemKey]);
 
   const selectPendingLaunchpad = useCallback((selectionKey: string): void => {
     const creation = pendingLaunchpadCreationsRef.current.get(selectionKey);
     if (!creation) return;
     if (creation.federatedSession) setFederatedLaunchpad(creation.federatedSession);
     setSelectedItemKey(creation.selectionKey);
-  }, []);
+  }, [setFederatedLaunchpad, setSelectedItemKey]);
 
   const createThread = useCallback(
     async (
@@ -5722,6 +5740,9 @@ export function useThreadNavigation(
       selectedDetail.state?.readiness,
       takePendingDirectoryGitStatus,
       rendererFederationTarget,
+      detachedSubthreadLaunchpadKeysRef,
+      setLocalLaunchpads,
+      setSelectedItemKey,
     ]
   );
 
@@ -6148,6 +6169,8 @@ export function useThreadNavigation(
       readSubthreadWorktreeCounterpart,
       rendererFederationTarget,
       takePendingDirectoryGitStatus,
+      setLocalLaunchpads,
+      setSelectedItemKey,
     ],
   );
 
@@ -6323,6 +6346,7 @@ export function useThreadNavigation(
       forkThreadRequest,
       insertSubthreadBelowSource,
       refresh,
+      setSelectedItemKey,
     ],
   );
 
@@ -6402,7 +6426,7 @@ export function useThreadNavigation(
         }
       }
     },
-    [desktopApi, federatedLaunchpad],
+    [desktopApi, federatedLaunchpad, setFederatedLaunchpad, setSelectedItemKey],
   );
 
   /**
@@ -6589,7 +6613,7 @@ export function useThreadNavigation(
         "The owner has no workspace launchpad.",
       );
     },
-    [federatedLaunchpad, openFederatedLaunchpadFromOwnerIndex],
+    [federatedLaunchpad, openFederatedLaunchpadFromOwnerIndex, setFederatedLaunchpad, setSelectedItemKey],
   );
 
   const openDirectoryLaunchpad = useCallback(
@@ -6644,7 +6668,7 @@ export function useThreadNavigation(
         setLaunchpadError(error instanceof Error ? error.message : String(error));
       }
     },
-    [desktopApi, rendererFederationTarget]
+    [desktopApi, rendererFederationTarget, setLocalLaunchpads, setSelectedItemKey]
   );
 
   // Switch the composer to the directory-less "workspace" launchpad. Backs the
@@ -6837,7 +6861,7 @@ export function useThreadNavigation(
         setPickingDirectory(false);
       }
     },
-    [desktopApi, recordPickDirectoryError, refresh, rendererFederationTarget],
+    [desktopApi, recordPickDirectoryError, refresh, rendererFederationTarget, setLocalLaunchpads, setSelectedItemKey],
   );
 
   const pickDirectoryForReference = useCallback(async (): Promise<
@@ -6900,7 +6924,7 @@ export function useThreadNavigation(
     } finally {
       setPickingDirectory(false);
     }
-  }, [desktopApi, recordPickDirectoryError, rendererFederationTarget]);
+  }, [desktopApi, recordPickDirectoryError, rendererFederationTarget, setLocalLaunchpads]);
 
   const addProjectDirectory = useCallback(async (): Promise<string | undefined> => {
     const directoryKey = await pickAndRegisterDirectory();
@@ -7226,7 +7250,7 @@ export function useThreadNavigation(
         setLaunchpadError(error instanceof Error ? error.message : String(error));
       }
     },
-    [activeFederatedLaunchpad, desktopApi, isRendererFederationWindow]
+    [activeFederatedLaunchpad, desktopApi, isRendererFederationWindow, setFederatedLaunchpad, setLocalLaunchpads]
   );
 
   const resetDirectoryLaunchpad = useCallback(
@@ -7299,6 +7323,9 @@ export function useThreadNavigation(
       optimisticThread,
       state.rows,
       threads,
+      setFederatedLaunchpad,
+      setLocalLaunchpads,
+      setSelectedItemKey,
     ]
   );
 
@@ -7344,7 +7371,7 @@ export function useThreadNavigation(
     boundedNavigation.invalidate();
     await refresh();
     if (failures.length) setArchiveThreadError(failures.join("\n"));
-  }, [desktopApi, boundedNavigation, refresh]);
+  }, [desktopApi, boundedNavigation, refresh, setLocalLaunchpads, setSelectedItemKey]);
 
   /** The owner validates complete membership before local state is removed. */
   const removeDirectory = useCallback(
@@ -7852,6 +7879,10 @@ export function useThreadNavigation(
       directories,
       insertSubthreadBelowSource,
       refresh,
+      detachedSubthreadLaunchpadKeysRef,
+      setFederatedLaunchpad,
+      setLocalLaunchpads,
+      setSelectedItemKey,
     ]
   );
 
@@ -7880,7 +7911,7 @@ export function useThreadNavigation(
       parentThreadInstanceId: undefined,
       parentThreadTitle: undefined,
     });
-  }, [setLocalLaunchpads, updateDirectoryLaunchpad]);
+  }, [setLocalLaunchpads, updateDirectoryLaunchpad, detachedSubthreadLaunchpadKeysRef]);
 
   const discardLaunchpad = useCallback((directoryKey: string): boolean => {
     // A previous discard failure is stale the moment the operator tries
@@ -7994,6 +8025,10 @@ export function useThreadNavigation(
     desktopApi,
     directories,
     publishDiscardLaunchpadError,
+    detachedSubthreadLaunchpadKeysRef,
+    setFederatedLaunchpad,
+    setLocalLaunchpads,
+    setSelectedItemKey,
   ]);
 
   const archiveThread = useCallback(
@@ -8114,6 +8149,7 @@ export function useThreadNavigation(
       refresh,
       removeRemoteThreadPinRequest,
       state.rows,
+      setSelectedItemKey,
     ]
   );
 
