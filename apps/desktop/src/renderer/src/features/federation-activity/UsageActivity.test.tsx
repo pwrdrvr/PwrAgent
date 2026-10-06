@@ -177,7 +177,7 @@ it("stacks spend by model, provider or instance, and narrows the threads to one"
   render(<UsageActivity desktopApi={{ readUsageActivity, readFederationActivity: peers([{ id: "owner", label: "Owner", status: "connected" }]) }} />);
   await screen.findByRole("button", { name: "Inspect grok thread" });
   const spendBy = screen.getByRole("group", { name: "Spend by" });
-  expect(within(spendBy).getAllByRole("button").map((button) => button.textContent)).toEqual(["Thread", "Model", "Provider", "Instance"]);
+  expect(within(spendBy).getAllByRole("button").map((button) => button.textContent)).toEqual(["Thread", "Model", "Provider", "Account", "Instance"]);
 
   fireEvent.click(within(spendBy).getByRole("button", { name: "Provider" }));
   expect(screen.getByRole("button", { name: /^OpenAI · \$2\.00$/ })).toBeInTheDocument();
@@ -192,6 +192,108 @@ it("stacks spend by model, provider or instance, and narrows the threads to one"
   expect(screen.getByRole("button", { name: /^Owner · \$1\.00$/ })).toBeInTheDocument();
   fireEvent.click(within(spendBy).getByRole("button", { name: "Model" }));
   expect(screen.getByRole("button", { name: /^Grok 5 · \$1\.00$/ })).toBeInTheDocument();
+});
+
+it("filters totals, tokens, limits and threads by recorded account across owners and account switches", async () => {
+  const now = new Date(2026, 8, 28, 12).getTime();
+  vi.spyOn(Date, "now").mockReturnValue(now);
+  const row = (id: string, accountKey: string | undefined, cost: number, provider = "openai") => ({
+    ...usageFixture({ threadId: id, turnId: `${id}-turn`, usageLineId: id, provider,
+      createdAt: now - 2 * HOUR, startedAt: now - 2 * HOUR, completedAt: now - HOUR, totalCostMicros: cost * 1_000_000 }),
+    title: id, accountKey,
+  });
+  const old = row("Previous login", "alpha", 1);
+  const observation = (accountKey: string): UsageLimitObservation => ({ observedAt: now, accountKey, limits: [] });
+  const readUsageActivity = vi.fn(async (request) => ({ readAt: now, rateLimits: [], truncated: false,
+    ...request.federationTarget?.scope === "local" ? {
+      rows: [old, row("Current login", "beta", 2), row("Unkeyed history", undefined, 3),
+        { ...old, accountKey: undefined, line: { ...old.line, scope: "monitor" as const, totalCostMicros: 10_000_000 } }],
+      limitObservation: observation("beta"), limitHistory: [observation("alpha")],
+    } : { rows: [row("Same account abroad", "alpha", 4), row("Another provider", "alpha", 5, "xai")],
+      limitObservation: observation("alpha") } }));
+  render(<UsageActivity desktopApi={{ readUsageActivity, readFederationActivity: peers([{ id: "remote", label: "Remote", status: "connected" }]) }} />);
+  await screen.findByRole("button", { name: "Inspect Current login" });
+  choosePeriod("7 days");
+  await waitFor(() => expect(readUsageActivity).toHaveBeenCalledTimes(4));
+  const band = () => within(screen.getByRole("region", { name: "Limits and cost" }));
+  expect(band().getByText("$15.00")).toBeInTheDocument();
+  const picker = screen.getByRole("combobox", { name: "Account" });
+  expect(selectOptionLabels(picker)).toEqual([
+    "All accounts", "OpenAI · Account alpha · Local, Remote", "OpenAI · Account beta · Local",
+    "OpenAI · Unknown account · Local", "xAI · Account alpha · Remote",
+  ]);
+  const spendBy = screen.getByRole("group", { name: "Spend by" });
+  fireEvent.click(within(spendBy).getByRole("button", { name: "Provider" }));
+  expect(screen.getByRole("button", { name: /^OpenAI · \$10\.00$/ })).toBeInTheDocument();
+  fireEvent.click(within(spendBy).getByRole("button", { name: "Account" }));
+  fireEvent.click(screen.getByRole("button", { name: /^OpenAI · Account alpha · Local, Remote · \$5\.00$/ }));
+  expect(picker).toHaveTextContent("OpenAI · Account alpha");
+  expect(band().getByText("$5.00")).toBeInTheDocument();
+  expect(band().getByText("2 threads · 2 turns")).toBeInTheDocument();
+  expect(band().getByText("600")).toBeInTheDocument();
+  expect(band().getByText("400")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Inspect Previous login" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Inspect Same account abroad" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Inspect Current login" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Inspect Another provider" })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Inspect Previous login" }));
+  chooseSelectOption(picker, "OpenAI · Account beta · Local");
+  expect(band().getByText("$2.00")).toBeInTheDocument();
+  expect(screen.queryByRole("group", { name: "Turns in window" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Inspect Current login" })).toBeInTheDocument();
+  chooseSelectOption(picker, "OpenAI · Unknown account · Local");
+  expect(band().getByText("$3.00")).toBeInTheDocument();
+  expect(screen.getByText(/These rows have no recorded account identity/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Inspect Unkeyed history" })).toBeInTheDocument();
+  chooseSelectOption(picker, "All accounts");
+  expect(band().getByText("$15.00")).toBeInTheDocument();
+  expect(screen.queryByText(/These rows have no recorded account identity/)).not.toBeInTheDocument();
+  expect(readUsageActivity).toHaveBeenCalledTimes(4); // Clock-period account filtering stays local.
+});
+
+it("uses the selected account's reset window rather than another instance's current account", async () => {
+  const now = new Date(2026, 8, 28, 12).getTime();
+  vi.spyOn(Date, "now").mockReturnValue(now);
+  const reading = (accountKey: string, daysSinceReset: number): UsageLimitObservation => ({
+    observedAt: now, accountKey, limits: [{ name: "Weekly limit", windowKey: "secondary", usedPercent: 20,
+      resetAt: now + (7 - daysSinceReset) * 24 * HOUR, windowMinutes: 10_080 }],
+  });
+  const readUsageActivity = vi.fn(async (request) => ({ rows: [], readAt: now, rateLimits: [], truncated: false,
+    limitObservation: request.federationTarget?.scope === "local" ? reading("local-account", 4) : reading("remote-account", 2) }));
+  render(<UsageActivity desktopApi={{ readUsageActivity, readFederationActivity: peers([{ id: "remote", label: "Remote", status: "connected" }]) }} />);
+  await waitFor(() => expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled());
+  await screen.findByRole("combobox", { name: "Account" });
+  await waitFor(() => expect(readUsageActivity).toHaveBeenCalledTimes(4));
+  chooseSelectOption(screen.getByRole("combobox", { name: "Account" }), "OpenAI · Account remote-a · Remote");
+  await waitFor(() => expect(readUsageActivity).toHaveBeenCalledTimes(6));
+  await waitFor(() => expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled());
+  expect(readUsageActivity.mock.calls.slice(-2).map(([request]) => request.from)).toEqual([now - 2 * 24 * HOUR, now - 2 * 24 * HOUR]);
+  expect(screen.queryByText(/Limits are the newest reading, from Local/)).not.toBeInTheDocument();
+  expect(screen.getByText(/Limits are the newest reading, from Remote/)).toBeInTheDocument();
+});
+
+it("keeps a historical account selected when the new period has no usage for it", async () => {
+  const now = new Date(2026, 8, 28, 12).getTime();
+  vi.spyOn(Date, "now").mockReturnValue(now);
+  const previous = { ...usageFixture({ threadId: "previous", turnId: "old-turn", usageLineId: "old-line",
+    createdAt: now - 48 * HOUR, startedAt: now - 48 * HOUR, completedAt: now - 47 * HOUR, totalCostMicros: 1_000_000 }),
+  accountKey: "previous", title: "Previous account" };
+  const current = { ...usageFixture({ threadId: "current", turnId: "new-turn", usageLineId: "new-line",
+    createdAt: now - 2 * HOUR, startedAt: now - 2 * HOUR, completedAt: now - HOUR, totalCostMicros: 9_000_000 }),
+  accountKey: "current", title: "Current account" };
+  const readUsageActivity = vi.fn(async (request) => ({ readAt: now, rateLimits: [], truncated: false,
+    rows: request.from < previous.line.completedAt! ? [previous, current] : [current],
+    limitObservation: { observedAt: now, accountKey: "current", limits: [] } }));
+  render(<UsageActivity desktopApi={{ readUsageActivity }} />);
+  await screen.findByRole("button", { name: "Inspect Previous account" });
+  chooseSelectOption(screen.getByRole("combobox", { name: "Account" }), "OpenAI · Account previous · This instance");
+  choosePeriod("Today");
+  await waitFor(() => expect(readUsageActivity).toHaveBeenLastCalledWith(expect.objectContaining({ from: new Date(2026, 8, 28).getTime() })));
+  await waitFor(() => expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled());
+  expect(screen.getByRole("combobox", { name: "Account" })).toHaveTextContent("Account previous");
+  expect(within(screen.getByRole("region", { name: "Limits and cost" })).getByText("$0.00")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Inspect Current account" })).not.toBeInTheDocument();
+  expect(screen.getByText("No usage in this period")).toBeInTheDocument();
 });
 
 it("keeps the thread list at the height its grip was set to", async () => {

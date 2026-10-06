@@ -382,9 +382,12 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     });
     const snapshot = await store.readUsageActivity({ from: start, to: start + 5_000 });
     expect(snapshot.limitHistory).toEqual([reading]);
+    expect(snapshot.rows.map((row) => row.accountKey)).toEqual(["acct", "acct"]);
     // A corrupt stored reading is dropped, not thrown.
     stateDb.raw.prepare("UPDATE thread_usage_turns SET rate_limit_snapshot = ? WHERE turn_id = ?").run("{not json", "turn-2");
-    expect((await store.readUsageActivity({ from: start, to: start + 5_000 })).limitHistory).toEqual([reading]);
+    const corrupt = await store.readUsageActivity({ from: start, to: start + 5_000 });
+    expect(corrupt.limitHistory).toEqual([reading]);
+    expect(corrupt.rows.find((row) => row.line.turnId === "turn-2")?.accountKey).toBeUndefined();
   });
 
   it("uses one commit to record a completed turn after its usage row was flushed", async () => {

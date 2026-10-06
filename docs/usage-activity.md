@@ -99,10 +99,36 @@ them.
   a limit, resetting at month end, plus a **Credits** row. Both are shown as
   reported.
 
+## Account selection
+
+**All accounts** shows the combined pricing ledger for the selected instances.
+Choose **Account** under **Spend by** to segment the chart by provider account,
+or use the **Account** selector to focus totals, tokens, chart, thread ranking
+and limit readings on one account. Clicking an account in the chart legend
+selects it; choosing **All accounts** restores the combined view. **Provider**
+still groups all accounts' spend for each provider.
+
+Account choices use an opaque key and the instances that reported it, without
+relaying an email. The same recorded key merges across machines and profiles;
+different providers keep separate accounts even if their keys match. Codex
+turns use the key stamped in their completion reading, so earlier usage stays
+with its recorded account after a profile changes login. Since-reset and
+5-hour periods follow the selected account's limit window when known. Clock
+periods filter the loaded snapshot without another owner read.
+A selected historical account stays selected when the next period has no
+usage for it; its total is zero until usage is available in that scope.
+
+Rows without a recorded key appear as **Unknown account**, separately for
+each provider and instance. This includes older peers, turns without a stored
+account reading, background-helper rollups and providers that do not report
+an account identity. They remain in the all-account total and can be selected
+as their own group; they are never assigned to the instance's current login.
+Duplicate ledger representations are resolved before account filtering.
+
 ## Chart and ranking
 
 The chart stacks each completed turn's API-equivalent cost at its completion
-time, by **Thread**, **Model**, **Provider** (OpenAI, xAI, …) or, with more
+time, by **Thread**, **Model**, **Provider** (OpenAI, xAI, …), **Account** or, with more
 than one instance read, **Instance**. Bars are clock steps (15 or 30 minutes, 1, 2, 3, 6 or 12 hours, or a
 day), the finest that keeps the window within 40 bars, starting on local
 quarter hours, hours or midnight; only the first and last bar can be partial,

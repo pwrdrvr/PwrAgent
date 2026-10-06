@@ -5,11 +5,11 @@ import type { LimitPoint, LimitReset } from "./usage-limits";
 export type UsageChartLimit = { label: string; points: LimitPoint[]; resets: LimitReset[] };
 /**
  * A stacked series: a thread, which can open in the main window, or a model,
- * provider or instance, which narrows the thread list to itself.
+ * provider, account or instance, which can filter the view.
  */
 export type UsageChartSeries = { title: string; cost: string; onOpen?: () => void; onFilter?: () => void; filtered?: boolean };
 
-const DIMENSION_NAMES: Record<UsageDimension, string> = { thread: "Thread", model: "Model", provider: "Provider", instance: "Instance" };
+const DIMENSION_NAMES: Record<UsageDimension, string> = { thread: "Thread", model: "Model", provider: "Provider", account: "Account", instance: "Instance" };
 /**
  * The current pace carried forward from the newest reading to the limit's
  * reset, or to 100% when it gets there first. The chart extends past now to
@@ -164,7 +164,7 @@ export function UsageTimeline({ buckets, series, limit, forecast, selected, onSe
         ? <button type="button" key={index} className="usage-timeline__legend-item" title={`Open ${item.title}`}
           aria-label={`Open ${item.title}`} onClick={item.onOpen}><i className={`usage-series--${index}`} /><span>{item.title}</span> · {item.cost}</button>
         : <span key={index} className="usage-timeline__legend-item" title={item.title}><i className={`usage-series--${index}`} /><span>{item.title}</span> · {item.cost}</span>)}
-      {buckets.some((bucket) => bucket.other > 0) ? <span className="usage-timeline__legend-item"><i className="usage-series--other" />Other {dimension === "thread" ? "threads" : dimension === "model" ? "models" : dimension === "provider" ? "providers" : "instances"}</span> : null}
+      {buckets.some((bucket) => bucket.other > 0) ? <span className="usage-timeline__legend-item"><i className="usage-series--other" />Other {dimension === "thread" ? "threads" : dimension === "model" ? "models" : dimension === "provider" ? "providers" : dimension === "account" ? "accounts" : "instances"}</span> : null}
     </div>
     <p className="usage-timeline__readout">{active
       ? `${usageBucketLabel(active, to)} · ${usageMoney(active.cost)} · ${active.rows} completed ${active.rows === 1 ? "turn" : "turns"}`

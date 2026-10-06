@@ -2516,6 +2516,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
             completedAt: row.activity_completed_at ?? undefined },
           title: titles.get(identityFor(row)) || row.thread_id,
           updatedAt: row.updated_at,
+          accountKey: readings.get(row.activity_rate_limit_snapshot ?? "")?.accountKey,
         })),
         ...rollups.map(({ line, rollup, updatedAt }) => ({
           line, rollup, updatedAt,

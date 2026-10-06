@@ -39,6 +39,12 @@ export type UsageActivityRow = {
   line: ThreadUsageLineRecord;
   title: string;
   updatedAt: number;
+  /**
+   * Opaque account key recorded with this turn's completion reading. Never
+   * inferred from the owner's current login. Absent for unrecorded accounts,
+   * background-helper rollups and older peers; scoped by `line.provider`.
+   */
+  accountKey?: string;
   rollup?: UsageActivityRollup;
 };
 

@@ -11,6 +11,7 @@ import { buildLimitAccounts, fiveHourSeries, limitLabel, projectLimit, seriesSta
 import { Select } from "../../components/Select";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { summarizeUsageActivity, type OwnedUsageRow, type UsageGroup } from "./usage-activity-summary";
+import { buildUsageAccounts, limitUsageAccountKey, usageAccountKey, type UsageAccount } from "./usage-activity-accounts";
 import { USAGE_RESULTS_MAX_HEIGHT, USAGE_RESULTS_MIN_HEIGHT, clampUsageResultsHeight, readStoredUsageResultsHeight,
   writeStoredUsageResultsHeight } from "./usage-activity-layout";
 
@@ -64,7 +65,7 @@ function unavailableKind(error: string): "outdated" | "offline" | "failed" {
   return "failed";
 }
 
-const DIMENSION_LABELS: Record<UsageDimension, string> = { thread: "Thread", model: "Model", provider: "Provider", instance: "Instance" };
+const DIMENSION_LABELS: Record<UsageDimension, string> = { thread: "Thread", model: "Model", provider: "Provider", account: "Account", instance: "Instance" };
 
 /** One analysis per thread and turn; its answer stays with it while the operator looks elsewhere. */
 const analysisKey = (row: OwnedUsageRow, turnId: string | undefined) =>
@@ -108,6 +109,8 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
   const [to, setTo] = useState(() => localDate(new Date()));
   const [snapshot, setSnapshot] = useState<Snapshot>();
   const [focusKey, setFocusKey] = useState<string>();
+  const [accountFilter, setAccountFilter] = useState("");
+  const [rememberedAccount, setRememberedAccount] = useState<UsageAccount>();
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string>();
   const [selectedKey, setSelectedKey] = useState<string>();
@@ -152,7 +155,18 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
     return () => window.removeEventListener("focus", readHelperModels);
   }, [desktopApi]);
 
-  const summary = useMemo(() => snapshot ? summarizeUsageActivity(snapshot.rows, snapshot.from, snapshot.to) : undefined, [snapshot]);
+  const allSummary = useMemo(() => snapshot ? summarizeUsageActivity(snapshot.rows, snapshot.from, snapshot.to) : undefined, [snapshot]);
+  const usageAccounts = useMemo(() => buildUsageAccounts(allSummary?.rows ?? [], snapshot?.accounts ?? []), [allSummary, snapshot]);
+  const selectedAccount = usageAccounts.find((account) => account.key === accountFilter) ?? rememberedAccount;
+  // A selected historical account may have no usage in the next period. Keep
+  // its selection and show zero, rather than silently broadening to all accounts.
+  const accountChoices = rememberedAccount && !usageAccounts.some((account) => account.key === rememberedAccount.key)
+    ? [...usageAccounts, rememberedAccount] : usageAccounts;
+  // Deduplicate before filtering: an unkeyed monitor copy must not become a
+  // second charge when its authoritative live turn belongs to a known account.
+  const summary = useMemo(() => snapshot && allSummary && accountFilter
+    ? summarizeUsageActivity(allSummary.rows.filter((row) => usageAccountKey(row) === accountFilter), snapshot.from, snapshot.to)
+    : allSummary, [snapshot, allSummary, accountFilter]);
   const selectedGroup = selectedKey ? summary?.groups.find((group) => group.key === selectedKey) : undefined;
   const inspected = selectedGroup?.rows[0] ?? selectedExcluded;
   const analysisTarget = scope === "turn" && turn?.line.turnId ? turn : inspected;
@@ -199,8 +213,10 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
   const offlineSources = sources.filter((source) => !isOnline(source));
   const limitPreset = preset === "reset" || preset === "five";
   const queryKey = JSON.stringify([enabledSources.map((source) => sourceId(source.target)), preset,
-    preset === "custom" ? [from, to] : null, limitPreset ? focusKey ?? null : null]);
+    preset === "custom" ? [from, to] : null, limitPreset ? [focusKey ?? null, accountFilter] : null]);
   const localLabel = sources[0].label;
+  const scopedLimits = (accounts: LimitAccount[]) => accountFilter
+    ? accounts.filter((account) => limitUsageAccountKey(account) === accountFilter) : accounts;
 
   const readAll = async (targets: Source[], start: number, end: number) => {
     const results: SourceResult[] = [];
@@ -225,7 +241,7 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
     const today = new Date(end); today.setHours(0, 0, 0, 0);
     // A limit preset starts where the account's window began. Until limits are
     // known, read the longest such window and narrow once they arrive.
-    const known = limitStart(preset, focusAccount(snapshot?.accounts ?? [], focusKey, localLabel));
+    const known = limitStart(preset, focusAccount(scopedLimits(snapshot?.accounts ?? []), focusKey, localLabel));
     let start = preset === "custom" ? new Date(from).getTime()
       : preset === "today" ? today.getTime()
       : preset === "day" ? end - DAY
@@ -245,7 +261,7 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
     let results = await readAll(enabledSources, start, end);
     if (!mounted.current || seq !== readSeq.current) return;
     let accounts = accountsOf(results);
-    const resolved = limitStart(preset, focusAccount(accounts, focusKey, localLabel));
+    const resolved = limitStart(preset, focusAccount(scopedLimits(accounts), focusKey, localLabel));
     if (resolved !== undefined && resolved < end) {
       const bounded = Math.max(resolved, end - MAX_WINDOW);
       if (Math.abs(bounded - start) > 60_000) {
@@ -352,7 +368,8 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
     failed.length ? `${nameList(failed.map((source) => source.label))} could not be read` : "",
     capped.length ? `${nameList(capped)} returned only the newest 5,000 rows; choose a shorter period for the rest` : "",
   ].filter(Boolean);
-  const focus = snapshot ? focusAccount(snapshot.accounts, focusKey, localLabel) : undefined;
+  const limitAccounts = scopedLimits(snapshot?.accounts ?? []);
+  const focus = snapshot ? focusAccount(limitAccounts, focusKey, localLabel) : undefined;
   const lineSeries = snapshot?.preset === "five" ? fiveHourSeries(focus) : sinceResetSeries(focus);
   // Only a window anchored on the limit ends now and belongs beside its reset.
   const forecast = snapshot?.preset === "reset" || snapshot?.preset === "five" ? limitForecast(lineSeries) : undefined;
@@ -374,6 +391,12 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
     setSelectedKey(undefined); setSelectedExcluded(row); setTurn(undefined); setScope("recent"); setError(undefined);
   };
   const closeInspector = () => { setSelectedKey(undefined); setSelectedExcluded(undefined); setTurn(undefined); };
+  const selectAccount = (key: string) => {
+    setAccountFilter(key); closeInspector(); setBucket(undefined); setFacet(undefined);
+    const account = accountChoices.find((item) => item.key === key);
+    setRememberedAccount(account);
+    setFocusKey(account?.limitKey);
+  };
   const runAnalysis = () => {
     const target = analysisTarget;
     const key = currentAnalysisKey;
@@ -441,6 +464,10 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
       </div>
       {preset === "custom" ? <><label className="usage-date">From <input type="datetime-local" value={from} onChange={(event) => setFrom(event.target.value)} /></label>
         <label className="usage-date">To <input type="datetime-local" value={to} onChange={(event) => setTo(event.target.value)} /></label></> : null}
+      <label className="usage-account-filter"><span>Account</span><Select value={accountFilter} onChange={selectAccount} options={[
+        { value: "", label: "All accounts" },
+        ...accountChoices.map((account) => ({ value: account.key, label: account.label })),
+      ]} /></label>
       <span className="usage-controls__spacer" />
       <span className="usage-controls__asof">{snapshot ? `Read ${usageClock(snapshot.readAt)}` : Intl.DateTimeFormat().resolvedOptions().timeZone}</span>
       <button type="button" className="usage-button" disabled={pending || !desktopApi?.readUsageActivity} onClick={() => void refresh()}>{pending ? "Reading…" : "Refresh"}</button>
@@ -454,16 +481,20 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
         <ul>{failures.map((source) => <li key={sourceId(source.target)}><strong>{source.label}</strong> {source.error}</li>)}</ul></details> : null}
     </div> : null}
     {snapshot && summary ? <>
-      <UsageLimitsBand accounts={snapshot.accounts} focusKey={focus?.key} onFocus={setFocusKey} now={snapshot.to}
+      {selectedAccount?.unknown ? <p className="usage-account-note">These rows have no recorded account identity. They are kept separate for this provider and instance.</p> : null}
+      <UsageLimitsBand accounts={limitAccounts} focusKey={focus?.key} onFocus={setFocusKey} now={snapshot.to}
         cost={available ? total : undefined} threads={summary.groups.length} turns={summary.contained}
         cacheShare={cacheShare} uncached={totals.uncached} output={totals.output} />
       {buckets ? <UsageTimeline buckets={buckets} selected={bucket} onSelect={setBucket}
         dimension={shownDimension} onDimension={(next) => { setDimension(next); setFacet(undefined); }}
-        dimensions={instances > 1 ? ["thread", "model", "provider", "instance"] : ["thread", "model", "provider"]}
+        dimensions={instances > 1 ? ["thread", "model", "provider", "account", "instance"] : ["thread", "model", "provider", "account"]}
         series={shownDimension === "thread"
           ? summary.groups.slice(0, USAGE_SERIES).map((group) => ({ title: group.title, cost: money(group.cost), onOpen: openThread(group.rows[0]) }))
-          : facets.slice(0, USAGE_SERIES).map((item) => ({ title: item.value, cost: money(item.cost), filtered: activeFacet === item.value,
-            onFilter: () => setFacet((current) => current === item.value ? undefined : item.value) }))}
+          : facets.slice(0, USAGE_SERIES).map((item) => ({
+            title: shownDimension === "account" ? usageAccounts.find((account) => account.key === item.value)?.label ?? item.value : item.value,
+            cost: money(item.cost), filtered: shownDimension === "account" ? accountFilter === item.value : activeFacet === item.value,
+            onFilter: () => shownDimension === "account" ? selectAccount(accountFilter === item.value ? "" : item.value)
+              : setFacet((current) => current === item.value ? undefined : item.value) }))}
         limit={lineSeries ? { label: limitLabel(lineSeries), points: lineSeries.points, resets: lineSeries.resets } : undefined}
         forecast={forecast} /> : null}
       <div className={`usage-results${inspected ? " has-inspector" : ""}`} ref={resultsRef}
