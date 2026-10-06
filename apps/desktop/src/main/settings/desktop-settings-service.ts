@@ -1146,6 +1146,12 @@ export class DesktopSettingsService {
           config.experimental?.codexSkillQuestionsWarningDismissed,
           false,
         ),
+        codexConfigWarningsDismissed: {
+          value: config.experimental?.codexConfigWarningsDismissed ?? [],
+          source: config.experimental?.codexConfigWarningsDismissed === undefined
+            ? "default"
+            : "config",
+        },
         managedReview: this.resolveConfigBoolean(
           config.experimental?.managedReview,
           false,

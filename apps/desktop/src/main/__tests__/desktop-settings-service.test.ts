@@ -5191,6 +5191,31 @@ describe("DesktopSettingsService", () => {
     );
   });
 
+  it("persists exact Codex config warning dismissals across service restarts", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(configPath, "# Keep this comment\n[experimental]\nmarkdown_math_rendering = true\n");
+    const options = { configPath, env: {}, secretStore: new MemoryDesktopSecretStore() };
+    const service = new DesktopSettingsService(options);
+    expect((await service.readSettingsProjection()).experimental.codexConfigWarningsDismissed).toEqual({
+      value: [],
+      source: "default",
+    });
+    const id = JSON.stringify(["Ignoring unknown `features` requirement `example_feature`", "", "", "", ""]);
+    await service.writeConfigPatchTargeted({
+      experimental: { codexConfigWarningsDismissed: [id, id] },
+    });
+    const restarted = new DesktopSettingsService(options);
+    expect((await restarted.readSettingsProjection()).experimental.codexConfigWarningsDismissed).toEqual({
+      value: [id],
+      source: "config",
+    });
+    const contents = fs.readFileSync(configPath, "utf8");
+    expect(contents).toContain("# Keep this comment");
+    expect(contents).toContain("markdown_math_rendering = true");
+    expect(contents).toContain("codex_config_warnings_dismissed = ");
+  });
+
   it("defaults Codex default-mode request_user_input to false and persists it", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");

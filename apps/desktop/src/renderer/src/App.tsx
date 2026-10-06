@@ -4019,7 +4019,19 @@ function DesktopAppShell(props: {
           </Suspense>
         ) : null}
 
-        <CodexConfigWarningBanner desktopApi={desktopApi} />
+        <CodexConfigWarningBanner
+          desktopApi={desktopApi}
+          preferencesLoaded={Boolean(props.settings.snapshot)}
+          dismissedWarningIds={props.settings.snapshot?.experimental.codexConfigWarningsDismissed?.value}
+          onSuppressWarning={(id) => settings.writeConfig({
+            experimental: {
+              codexConfigWarningsDismissed: [...new Set([
+                ...(props.settings.snapshot?.experimental.codexConfigWarningsDismissed?.value ?? []),
+                id,
+              ])],
+            },
+          })}
+        />
         <FederationShutdownNotices desktopApi={desktopApi} onNoticeChanged={syncFederationShutdownNotice} />
         <MessagingErrorNotices
           desktopApi={desktopApi}

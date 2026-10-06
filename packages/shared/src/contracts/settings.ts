@@ -1227,6 +1227,8 @@ export type DesktopSettingsSnapshot = {
     codexDefaultModeRequestUserInput: DesktopSettingsValue<boolean>;
     /** Hide only Codex's default-mode request_user_input development warning toast. */
     codexSkillQuestionsWarningDismissed: DesktopSettingsValue<boolean>;
+    /** Exact Codex config warning identities hidden in this PwrAgent profile. */
+    codexConfigWarningsDismissed?: DesktopSettingsValue<string[]>;
     /** Legacy round-trip field; per-review runMode now selects the engine. */
     managedReview?: DesktopSettingsValue<boolean>;
     /**
@@ -1531,6 +1533,7 @@ export type DesktopSettingsConfigPatch = {
     threadToolAccounting?: boolean;
     codexDefaultModeRequestUserInput?: boolean;
     codexSkillQuestionsWarningDismissed?: boolean;
+    codexConfigWarningsDismissed?: string[];
     /** Legacy round-trip field; per-review runMode now selects the engine. */
     managedReview?: boolean;
     diffCondensation?: {
