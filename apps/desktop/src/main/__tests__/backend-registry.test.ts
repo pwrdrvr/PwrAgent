@@ -48934,6 +48934,26 @@ script = "printf setup"
       ],
     });
 
+    expect(events).toContainEqual(expect.objectContaining({
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: `monitor:${monitorId}`,
+          item: {
+            id: `${monitorId}:created`,
+            type: "taskMonitorCreated",
+            data: {
+              source: "pwragent_task_monitor",
+              monitorId,
+              parentTurnId: "turn-1",
+              task: "Watch PR #123 checks until they finish.",
+            },
+          },
+        },
+      },
+    }));
+
     const progressEvent = events.find((event) => {
       if (event.notification.method !== "item/completed") {
         return false;
@@ -49018,6 +49038,19 @@ script = "printf setup"
 
     expect(completionResponse).toMatchObject({ success: true });
     expect(codexClient.injectedThreadItems).toHaveLength(0);
+    expect(events).toContainEqual(expect.objectContaining({
+      notification: expect.objectContaining({
+        method: "item/completed",
+        params: expect.objectContaining({
+          threadId: "thread-1",
+          turnId: `monitor:${monitorId}`,
+          item: expect.objectContaining({
+            type: "taskMonitorCompletion",
+            data: expect.objectContaining({ monitorId, parentTurnId: "turn-1", outcome: "failure" }),
+          }),
+        }),
+      }),
+    }));
     const completionUsageEvent = events.find((event) => {
       if (event.notification.method !== "item/completed") {
         return false;

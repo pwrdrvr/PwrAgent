@@ -2996,6 +2996,7 @@ type TaskMonitorDelegationRecord = {
   monitorTurnId?: string;
   parentBackend: AppServerBackendKind;
   parentThreadId: string;
+  parentTurnId: string;
   heartbeatIntervalSeconds: number;
   pollIntervalSeconds: number;
   preferredModel: string;
@@ -39181,6 +39182,7 @@ export class DesktopBackendRegistry {
       monitorId,
       parentBackend: context.backend,
       parentThreadId,
+      parentTurnId: context.turnId,
       pollIntervalSeconds,
       preferredModel,
       preferredReasoningEffort,
@@ -39233,6 +39235,26 @@ export class DesktopBackendRegistry {
     record.monitorThreadId = startedMonitor.threadId;
     record.monitorTurnId = startedMonitor.turnId;
     await this.persistTaskMonitorSubAgent(record, { status: "running" });
+    await this.emit({
+      backend: record.parentBackend,
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: record.parentThreadId,
+          turnId: `monitor:${monitorId}`,
+          item: {
+            id: `${monitorId}:created`,
+            type: "taskMonitorCreated",
+            data: {
+              source: "pwragent_task_monitor",
+              monitorId,
+              parentTurnId: record.parentTurnId,
+              task: record.task,
+            },
+          },
+        },
+      },
+    });
 
     return {
       ok: true,
@@ -39933,6 +39955,8 @@ export class DesktopBackendRegistry {
       outcome: params.outcome,
       parentBackend: params.record.parentBackend,
       parentThreadId: params.record.parentThreadId,
+      parentTurnId: params.record.parentTurnId,
+      task: params.record.task,
     });
 
     let parentTurn:
@@ -40424,6 +40448,8 @@ export class DesktopBackendRegistry {
     outcome: CompleteMonitoringToolArgs["outcome"];
     parentBackend: AppServerBackendKind;
     parentThreadId: string;
+    parentTurnId: string;
+    task: string;
   }): Promise<void> {
     const now = Date.now();
     await this.emit({
@@ -40439,6 +40465,8 @@ export class DesktopBackendRegistry {
             data: {
               source: "pwragent_task_monitor",
               monitorId: params.monitorId,
+              parentTurnId: params.parentTurnId,
+              task: params.task,
               outcome: params.outcome,
               completionSource: params.completionSource,
               fallbackGenerated:
