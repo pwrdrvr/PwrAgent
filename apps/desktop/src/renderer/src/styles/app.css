@@ -7508,6 +7508,34 @@ a.button {
   opacity: 0.72;
 }
 
+/* Revealed from the thread header's project name: an outline that fades,
+   because the click can switch the lens and the eye needs somewhere to land.
+   The 1200ms matches PROJECT_REVEAL_FLASH_MS, which removes the class. Under
+   reduced motion the outline holds for that time and goes without a fade. */
+.directory-row__summary.is-revealed {
+  outline: 1px solid transparent;
+  outline-offset: -1px;
+  animation: directory-row-revealed 1200ms ease-out;
+}
+
+@keyframes directory-row-revealed {
+  0%,
+  40% {
+    outline-color: var(--accent);
+  }
+
+  100% {
+    outline-color: transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .directory-row__summary.is-revealed {
+    animation: none;
+    outline-color: var(--accent);
+  }
+}
+
 .directory-row__summary-main,
 .directory-row__summary-meta,
 .directory-row__title-wrap {
@@ -21082,6 +21110,79 @@ a.button {
   border-radius: 4px;
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
+}
+
+/* The breadcrumb's project name, when it links to the project's section in
+   Directories. Built like the title: the eyebrow span keeps its trim and
+   baseline, and a reset button inside it carries the ellipsis. The span
+   clips with the same 4px margin as the title, so the ring survives. */
+.thread-header__eyebrow--link {
+  overflow: clip;
+  overflow-clip-margin: 4px;
+}
+
+.thread-header__project-button {
+  display: inline-block;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: inherit;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+/* Underlined where the title is not: the eyebrow is already accent-coloured,
+   and brightening it alone is too slight a change to read as a link. */
+.thread-header__project-button:hover {
+  color: var(--accent-bright);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+.thread-header__project-button:focus-visible {
+  border-radius: 4px;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* Opens the project's new-thread menu, like the chevron on the project's
+   sidebar row. Muted at rest so the breadcrumb still reads as one line. The
+   negative margin narrows the breadcrumb's 6px gap: the caret belongs to the
+   name before it, not to the chevron after it. Its focus ring is inset, so
+   at that gap the ring clears the name's last letter (measured: 3px). */
+.thread-header__project-menu-button {
+  display: inline-grid;
+  flex: 0 0 auto;
+  align-self: center;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  margin-left: -2px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.thread-header__project-menu-button:hover,
+.thread-header__project-menu-button.is-open {
+  background: var(--bg-panel-hover);
+  color: var(--accent-bright);
+}
+
+.thread-header__project-menu-button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -1px;
 }
 
 .thread-header__eyebrow-row > .thread-row__chip {

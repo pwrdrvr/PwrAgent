@@ -109,7 +109,7 @@ import {
   formatRateLimitLine,
   selectVisibleRateLimits,
 } from "../../lib/backend-status-format";
-import { DirectoriesList } from "./DirectoriesList";
+import { DirectoriesList, type ProjectRevealRequest } from "./DirectoriesList";
 import type { ThreadRowRef } from "./ThreadRow";
 import { RecentsList } from "./RecentsList";
 import { createHoverStableSidebarHydrator } from "./hover-stable-sidebar-snapshot";
@@ -254,6 +254,11 @@ type SidebarProps = {
   /** Incremented when the thread title asks the active lens to reveal its row. */
   revealSelectedThreadRequest?: number;
   onRevealSelectedThreadComplete?: (request: number) => void;
+  /**
+   * Set (to a fresh object) when the thread header's project name asks the
+   * Directories lens to show that project. The caller switches the lens.
+   */
+  projectRevealRequest?: ProjectRevealRequest;
   selectedItemKey?: string;
   pendingLaunchpadCreations?: PendingLaunchpadCreation[];
   /** Sub-thread launchpads being written in this window. */
@@ -543,7 +548,7 @@ export function Sidebar(props: SidebarProps) {
   const previousSelectedItemKeyRef = useRef<string | undefined>(
     props.selectedItemKey,
   );
-  const [projectReveal, setProjectReveal] = useState<{ key: string }>();
+  const [projectReveal, setProjectReveal] = useState<ProjectRevealRequest>();
   const [directoryRevealRequest, setDirectoryRevealRequest] = useState(0);
   const [selectedThreadKeys, setSelectedThreadKeys] = useState<Set<string>>(
     () =>
@@ -1090,6 +1095,21 @@ export function Sidebar(props: SidebarProps) {
       setDirectoryRevealRequest(0);
     }
   }, [browseMode, directoryRevealRequest]);
+
+  // The request outlives the lens switch that comes with it: it is held here,
+  // and DirectoriesList picks it up when it mounts. Each request is taken
+  // once, so a completed reveal cannot replay into a later remount of the lens.
+  const projectRevealRequest = props.projectRevealRequest;
+  const takenProjectRevealRequestRef = useRef<ProjectRevealRequest>(undefined);
+  useEffect(() => {
+    if (
+      !projectRevealRequest
+      || takenProjectRevealRequestRef.current === projectRevealRequest
+    ) return;
+    takenProjectRevealRequestRef.current = projectRevealRequest;
+    releaseHoverStableSnapshot();
+    setProjectReveal(projectRevealRequest);
+  }, [projectRevealRequest, releaseHoverStableSnapshot]);
 
   useEffect(() => {
     if (!copiedRuntimeValue) {

@@ -23,6 +23,10 @@ import { MastheadActions, type MastheadActionsProps } from "../chrome/MastheadAc
 import { formatAutomationRelative } from "../automations/automation-format";
 import { BrandLockup } from "../chrome/BrandLockup";
 import { FixedMachineChip, type MachineChipValue } from "../composer/LaunchpadMachineChip";
+import {
+  ThreadHeaderProjectCrumb,
+  type ThreadHeaderProject,
+} from "./ThreadHeaderProjectCrumb";
 
 type ThreadHeaderLayoutControls = {
   sidebarOpen: boolean;
@@ -56,6 +60,11 @@ type ThreadHeaderProps = {
   desktopApi?: DesktopApi;
   hasApprovalRequest?: boolean;
   projectLabel?: string;
+  /**
+   * Makes the breadcrumb's project label a link to the project, with a caret
+   * for starting a thread there. Only for a project the thread list shows.
+   */
+  project?: ThreadHeaderProject;
   thread: NavigationThreadSummary;
   /**
    * The machine the thread runs on, shown wherever the launchpad showed its
@@ -177,9 +186,18 @@ export function ThreadHeader(props: ThreadHeaderProps) {
             <div className="thread-header__breadcrumb">
               {projectLabel ? (
                 <>
-                  <span className="thread-header__eyebrow" title={projectLabel}>
-                    {projectLabel}
-                  </span>
+                  {props.project ? (
+                    <ThreadHeaderProjectCrumb
+                      // A new project closes a menu opened for the old one.
+                      key={projectLabel}
+                      label={projectLabel}
+                      project={props.project}
+                    />
+                  ) : (
+                    <span className="thread-header__eyebrow" title={projectLabel}>
+                      {projectLabel}
+                    </span>
+                  )}
                   <span aria-hidden="true" className="thread-header__separator">
                     ›
                   </span>
