@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  isCodexVersionBelowMinimum,
   isValidatedDiscoveryCandidate,
   parseCodexVersionCore,
 } from "@pwragent/shared";
@@ -27,13 +26,12 @@ export function findCodexLaunchFailure(
     (candidate) => candidate.command === discovery.selectedCommand,
   );
   // A failed probe of an unused installation needs no action when the Codex
-  // we will launch is validated and supports the current model catalog. Keep
+  // we will launch is validated and reports a known version. Keep
   // the candidate's diagnostic in Settings without raising a startup toast.
   if (
     selected
     && isValidatedDiscoveryCandidate(selected)
     && parseCodexVersionCore(selected.version)
-    && !isCodexVersionBelowMinimum(selected.version)
   ) {
     return undefined;
   }

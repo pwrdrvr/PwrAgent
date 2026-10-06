@@ -70,7 +70,7 @@ describe("Codex launch recovery notice", () => {
     })).toMatchObject({ autoDismiss: false, copyText: `${command}\n${reason}` });
   });
 
-  it.each(["0.159.0", "0.159.0-alpha.2", "0.160.0", "codex-cli 0.160.0", "1.0.0"])(
+  it.each(["0.144.0", "0.158.9", "0.159.0", "0.159.0-alpha.2", "0.160.0", "codex-cli 0.160.0", "1.0.0"])(
     "does not warn about an unused broken wrapper with selected Codex %s", (version) => {
       const failedCommand = "/usr/local/bin/codex";
       const discovery: DesktopCodexDiscoverySnapshot = {
@@ -84,6 +84,8 @@ describe("Codex launch recovery notice", () => {
             source: "application",
             versionFailureReason: `Command failed: ${failedCommand} --version\nenv: node: No such file or directory`,
           },
+          { command: "/old-nvm/bin/codex", executable: false, selected: false, source: "path", failureReason: "not_executable" },
+          { command: "/broken-native/codex", executable: true, selected: false, source: "path", versionFailureReason: "Error: spawn /broken-native/codex ENOENT" },
         ],
       };
       render(<NoticeHarness discovery={discovery} />);
@@ -93,8 +95,8 @@ describe("Codex launch recovery notice", () => {
     },
   );
 
-  it.each(["0.144.0", "0.158.9", "garbage", undefined])(
-    "still reports a broken wrapper when selected Codex %s does not clear the model gate", (version) => {
+  it.each(["garbage", undefined])(
+    "still reports a broken wrapper when selected Codex %s cannot be verified", (version) => {
       const fallback = "/standalone/codex";
       render(<NoticeHarness discovery={{
         selectedCommand: fallback,
@@ -137,7 +139,7 @@ describe("Codex launch recovery notice", () => {
     expect(screen.getByRole("status")).toHaveTextContent("Codex installation failed to start");
   });
 
-  it("clears the warning after selecting a current runtime while the broken candidate remains", () => {
+  it("clears the warning after selecting a validated older runtime while the broken candidate remains", () => {
     const { rerender } = render(<NoticeHarness discovery={broken} />);
     expect(screen.getByRole("status")).toBeInTheDocument();
 
@@ -145,7 +147,7 @@ describe("Codex launch recovery notice", () => {
       selectedCommand: "/standalone/codex",
       candidates: [
         ...broken.candidates,
-        { command: "/standalone/codex", executable: true, selected: true, source: "config", version: "0.160.0" },
+        { command: "/standalone/codex", executable: true, selected: true, source: "config", version: "0.144.0" },
       ],
     }} />);
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
