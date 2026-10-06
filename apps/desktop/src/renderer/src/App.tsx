@@ -461,7 +461,7 @@ function DesktopAppShell(props: {
       }
       show();
     },
-    [],
+    [setMainViewState],
   );
   // The opener went inert with the sidebar or main, so focus moves onto the
   // layer, and Tab starts at its first control. On close, or on a switch
@@ -921,18 +921,19 @@ function DesktopAppShell(props: {
     dispatchAppNotice({ type: "dismiss", id: CODEX_LAUNCH_NOTICE_ID });
     if (notice) showAppNotice(notice);
   }, [showAppNotice]);
+  const { writeConfig: writeSettingsConfig, refresh: refreshSettings } = props.settings;
   const changeCodexManagedBuilds = useCallback(async (managedBuilds: boolean) => {
-    const saved = await props.settings.writeConfig({ models: { codex: { managedBuilds } } });
+    const saved = await writeSettingsConfig({ models: { codex: { managedBuilds } } });
     if (saved) {
-      await props.settings.refresh();
+      await refreshSettings();
       await refreshManagedCodexModelCatalog(desktopApi);
     }
     return saved;
-  }, [desktopApi, props.settings.writeConfig, props.settings.refresh]);
+  }, [desktopApi, writeSettingsConfig, refreshSettings]);
   const checkCodexManagedBuildUpdates = useCallback(async () => {
     await checkForManagedCodexUpdates(desktopApi);
-    await props.settings.refresh();
-  }, [desktopApi, props.settings.refresh]);
+    await refreshSettings();
+  }, [desktopApi, refreshSettings]);
 
   useEffect(() => {
     return desktopApi?.onGithubPrSamlEnforcement?.((event) => {
