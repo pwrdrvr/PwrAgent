@@ -49,7 +49,15 @@ An already-promoted reference uses a direct filename lookup; images already
 owned by that thread bypass retention work entirely. Renderer re-renders do not
 run migration or asset scans.
 
-Legacy shared files are kept during this transition because another unread
-historical thread may still reference them. They require a complete
-protocol-based migration before bulk reclamation is safe. New uploads do not
-grow those legacy stores. Product code does not inspect provider rollouts.
+Legacy shared files in `image-inputs` and `turn-input-attachments` expire
+30 days after their last write. Successful uploads trigger a background sweep
+at most once per hour, including uploads stored directly under thread ownership.
+Cleanup checks each file's write time, preserves newer neighbors, and removes
+empty digest buckets. It does not follow symlinks or scan other profiles.
+Thread-owned assets retain their permanent-deletion lifecycle, and unowned
+staging retains its seven-day expiry.
+
+There is no required migration before legacy expiry. Historical references
+that were not promoted before their shared files expire can become unavailable.
+New uploads do not grow the legacy stores. Product code does not inspect
+provider rollouts.
