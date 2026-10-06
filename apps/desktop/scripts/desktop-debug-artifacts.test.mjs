@@ -1,9 +1,12 @@
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { runInNewContext } from "node:vm";
 import { expect, it } from "vitest";
+import { build } from "vite";
+import { inlineWorkerDebugCode } from "./inline-worker-debug-code.mjs";
 import {
   createDesktopDebugArtifact, inspectDebugOutput, RELEASE_DEBUG_TARGETS,
   desktopDebugTarCommand,
@@ -84,6 +87,66 @@ it("selects Windows native tar rather than a PATH entry from Git", () => {
   expect(desktopDebugTarCommand("win32", "D:\\Windows")).toBe("D:\\Windows\\System32\\tar.exe");
   expect(desktopDebugTarCommand("linux")).toBe("tar");
   expect(desktopDebugTarCommand("darwin")).toBe("tar");
+});
+
+it("retains usable hidden maps for the real lazy inline pixel-diff worker", async () => {
+  const { root, desktopRoot, out } = fixture();
+  try {
+    const sourceRoot = join(dirname(fileURLToPath(import.meta.url)), "../src/renderer");
+    const workerDebug = inlineWorkerDebugCode();
+    let inlineCode;
+    await build({
+      configFile: false,
+      root: sourceRoot,
+      logLevel: "silent",
+      plugins: [workerDebug.renderer, {
+        name: "capture-inline-worker-payload",
+        transform(code, id) {
+          if (id.endsWith("?worker&inline")) {
+            // Vite embeds the exact generated worker as this string literal;
+            // esbuild may change its quoting before this transform runs.
+            const literal = code.match(/^const jsContent = (.*);$/m)?.[1];
+            expect(literal).toBeDefined();
+            inlineCode = runInNewContext(literal);
+          }
+        },
+      }],
+      worker: { plugins: () => [workerDebug.worker] },
+      build: {
+        outDir: join(out, "renderer"),
+        emptyOutDir: true,
+        minify: "esbuild",
+        sourcemap: "hidden",
+        rollupOptions: {
+          input: join(sourceRoot, "src/features/thread-detail/image-diff/pixel-diff-client.ts"),
+          preserveEntrySignatures: "strict",
+        },
+      },
+    });
+    // Vite's synthetic inline-worker wrapper has an empty map when it is
+    // dynamically imported directly. Build the actual client so this catches
+    // that packaging regression rather than accepting a handwritten map.
+    const { manifest } = createDesktopDebugArtifact({
+      desktopRoot, repoRoot: root, platform: "linux", arch: "arm64", env: {},
+    });
+    const workerMap = manifest.files.find((file) =>
+      /renderer\/assets\/pixel-diff\.worker-.*\.js\.map$/.test(file.path));
+    expect(workerMap).toBeDefined();
+    expect(inlineCode).toEqual(expect.any(String));
+    expect(readFileSync(join(desktopRoot, workerMap.path.slice(0, -4)), "utf8"))
+      .toBe(inlineCode);
+    const map = JSON.parse(readFileSync(join(desktopRoot, workerMap.path), "utf8"));
+    expect(map.sources).toEqual(expect.arrayContaining([
+      expect.stringContaining("pixel-diff.worker.ts"),
+      expect.stringContaining("pixel-diff-options.ts"),
+      expect.stringContaining("pixelmatch"),
+    ]));
+    expect(map.sourcesContent).toContain(readFileSync(join(
+      sourceRoot, "src/features/thread-detail/image-diff/pixel-diff.worker.ts",
+    ), "utf8"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 it("captures the configured Linux architecture from release orchestration before packaging", () => {
