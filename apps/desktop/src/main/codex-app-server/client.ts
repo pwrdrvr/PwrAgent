@@ -7663,6 +7663,7 @@ export class CodexAppServerClient {
   private readonly pendingFirstTurnThreadResults = new Map<string, unknown>();
   private readonly pendingFirstTurnShellEnvironments = new Map<string, string | undefined>();
   private readonly helperThreadIds = new Set<string>();
+  private readonly pendingHelperThreadStarts = new Set<Promise<string | undefined>>();
   private readonly helperTurnWaiters = new Map<
     string,
     {
@@ -7814,6 +7815,16 @@ export class CodexAppServerClient {
       );
       if (navigationQueryEventRequiresRefresh(method)) this.invalidateThreadListings(normalized);
       const helperThreadId = extractThreadIdFromNotification(normalized, params);
+      // Codex can send startup warnings before thread/start returns its ID.
+      // Wait only for startup notices, then suppress those belonging to the
+      // helper. Interactive turn traffic continues while the RPC is pending.
+      if (helperThreadId
+        && !this.helperThreadIds.has(helperThreadId)
+        && (normalized.method === "warning" || method === "thread/started")
+        && this.pendingHelperThreadStarts.size > 0) {
+        const startedHelperIds = await Promise.all([...this.pendingHelperThreadStarts]);
+        if (startedHelperIds.includes(helperThreadId)) return;
+      }
       if (helperThreadId && (normalized.method === "turn/started" || method === "thread/closed")) {
         this.threadsAwaitingFirstTurn.delete(helperThreadId);
         this.freshNativeVoiceThreads.delete(helperThreadId);
@@ -10416,7 +10427,7 @@ export class CodexAppServerClient {
         mcpServerNames,
         params.disableExecution,
       );
-      const threadStartResult = await requestWithFallbacks({
+      const threadStartResult = await this.startHelperThread({
         client: this.connection,
         methods: ["thread/start"],
         payloads: [
@@ -10489,7 +10500,6 @@ export class CodexAppServerClient {
           threadId: helperThreadId,
         });
       }
-      this.helperThreadIds.add(helperThreadId);
       this.helperThreadPredicates.set(helperThreadId, helperPredicate);
       if (params.onToolCall) {
         // Registered only after the attestation above proves this thread has
@@ -10611,6 +10621,26 @@ export class CodexAppServerClient {
         this.helperToolTurnThreadIds.delete(helperThreadId);
         this.noteLiveTurnActivity();
       }
+    }
+  }
+
+  private async startHelperThread(
+    params: Parameters<typeof requestWithFallbacks>[0],
+  ): Promise<unknown> {
+    let resolveStarted!: (threadId: string | undefined) => void;
+    const started = new Promise<string | undefined>((resolve) => { resolveStarted = resolve; });
+    this.pendingHelperThreadStarts.add(started);
+    let threadId: string | undefined;
+    try {
+      const result = await requestWithFallbacks(params);
+      threadId = extractThreadIdFromValue(result);
+      // Own notifications before instruction validation and MCP attestation
+      // await further RPCs. Tool handlers still require successful attestation.
+      if (threadId) this.helperThreadIds.add(threadId);
+      return result;
+    } finally {
+      resolveStarted(threadId);
+      this.pendingHelperThreadStarts.delete(started);
     }
   }
 
