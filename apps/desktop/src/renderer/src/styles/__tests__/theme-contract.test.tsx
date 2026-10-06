@@ -678,6 +678,18 @@ describe("Tangerine Terminal theme contract", () => {
     ).toContain("border-color: var(--danger-border);");
   });
 
+  it("keeps the Codex config warning card neutral with a readable amber eyebrow", () => {
+    // The card was tinted 8% amber with an amber border, which read as a
+    // beige panel in the blue themes. The eyebrow carries the warning, in
+    // the text token, since --status-warning is the dot-and-stroke amber.
+    const card = extractRuleBody(css, ".codex-config-warning-banner");
+    expect(card).toContain("border: 1px solid var(--border-subtle);");
+    expect(card).toContain("background: var(--bg-panel-elevated);");
+    expect(card).not.toContain("--status-warning");
+    expect(extractRuleBody(css, ".codex-config-warning-banner__eyebrow"))
+      .toContain("color: var(--status-warning-text);");
+  });
+
   it("carries notice tone on the title-row dot, not the card", () => {
     // State by emphasis and badges, not colored panels (desktop style guide):
     // the card is neutral in every tone, and the dot and countdown carry it.

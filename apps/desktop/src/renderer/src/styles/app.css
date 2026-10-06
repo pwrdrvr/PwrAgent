@@ -9011,9 +9011,12 @@ a.button {
   grid-template-columns: minmax(0, 1fr);
   gap: 12px;
   padding: 14px;
-  border: 1px solid color-mix(in srgb, var(--status-warning) 52%, var(--border-subtle));
+  /* Neutral card, like the notice toasts: the amber eyebrow carries the
+     warning. A tinted card and border read as a beige panel in blue and
+     the other cool themes. */
+  border: 1px solid var(--border-subtle);
   border-radius: 8px;
-  background: color-mix(in srgb, var(--bg-panel-elevated) 92%, var(--status-warning) 8%);
+  background: var(--bg-panel-elevated);
   box-shadow: var(--shadow-popover);
   animation: app-update-banner-enter 160ms ease-out;
   -webkit-app-region: no-drag;
@@ -9025,7 +9028,7 @@ a.button {
 
 .codex-config-warning-banner__eyebrow {
   margin: 0 0 4px;
-  color: var(--status-warning);
+  color: var(--status-warning-text);
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0;
