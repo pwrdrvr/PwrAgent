@@ -373,12 +373,12 @@ The palette has held one tangerine since the theme shipped — `--accent` has ne
 
 | Token | Job | Never |
 |---|---|---|
-| `--accent` | Solid fills, and the thread-row selection bar | Text |
+| `--accent` | Solid fills, and the selected-row edge | Text |
 | `--accent-border` | Outline of a **selected** container | Idle chrome, badges |
 | `--accent-soft` | Fill of a **highlighted** row or surface | Large panels |
 | `--accent-bright` | Text on an accent tint, and the typed run in a picker | Body copy, metadata |
 
-**The rule: a row carries its selection treatment plus at most one more accent element.** Badges, kind icons, boxed sigils, and counts rank via neutrals (`--border-strong` + `--text-primary` for emphasis, `--border-subtle` + `--text-secondary` for ordinary metadata). A row showing a bar, an outline, a boxed glyph, a highlighted match, and a pill all in tangerine has no signal left — everything is emphasized, so nothing is.
+**The rule: a row carries its selection treatment plus at most one more accent element.** Badges, kind icons, boxed sigils, and counts rank via neutrals (`--border-strong` + `--text-primary` for emphasis, `--border-subtle` + `--text-secondary` for ordinary metadata). A row showing an edge, an outline, a boxed glyph, a highlighted match, and a pill all in tangerine has no signal left — everything is emphasized, so nothing is.
 
 ### The two selection languages are not interchangeable
 
@@ -398,10 +398,12 @@ Used by `.project-picker__row`, `.branch-picker__option`, `.reference-picker__ro
 ```css
 border-color: var(--accent-border);
 background: var(--bg-row-active);
-/* plus the 3px ::before bar in var(--accent) */
+box-shadow: inset 2px 0 0 0 var(--accent);
 ```
 
-Used by `.thread-row.is-selected` and its derivatives. Do not lend the bar to a popover.
+Used by `.thread-row.is-selected` and its derivatives. Do not lend the edge to a popover.
+
+The edge is PwrGit's selected-row marker. An inset shadow is clipped to the padding box, so it follows the row's corners, takes no layout space, and leaves the left gutter free for the sub-thread and directory chevrons. It carries the state for SC 1.4.11: `--accent` is 8.40:1 against `--bg-row-active` in dark and 4.82:1 in light. A surface that sets its own `box-shadow` for other states, like a Star Map card, draws the same edge on an `inset: 0` pseudo-element instead.
 
 **Consequence for match highlighting:** on a highlighted row the label is already `--accent-bright`, so a color-only "typed run" highlight vanishes on exactly the row being read. Emphasize the match with **weight** (`font-weight: 700`) so it survives both states.
 

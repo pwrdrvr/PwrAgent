@@ -1287,22 +1287,31 @@ describe("Tangerine Terminal theme contract", () => {
     expect(summaryMetaRule).toContain("flex: 0 0 auto;");
   });
 
-  it("suppresses the selection-indicator bar on directory-summary rows so it can't paint over the folder icon", () => {
-    // `.directory-row__summary` reuses `.thread-row` for typography and
-    // selection tokens, but tightens its lateral padding to 4px so the
-    // folder icon sits close to the row edge. The base
-    // `.thread-row.is-selected::before` accent bar (positioned at
-    // left:5px, width:3px) would paint over the folder icon under that
-    // tighter inset. The header already conveys selection via the
-    // accent border + tinted background from `.thread-row.is-selected`,
-    // so the redundant bar is suppressed via `content: none`. If this
-    // override is removed, the orange bar reappears across the folder
-    // glyph the next time a directory header is selected.
-    const overrideRule = extractRuleBody(
+  it("marks a selected row with the inset accent edge, not an inner bar", () => {
+    // The edge is PwrGit's `.ref-branch-row.is-current` marker: an inset
+    // shadow, clipped to the padding box, so it follows the card's corners
+    // and takes no layout space. It replaced a 3px `::before` bar drawn 5px
+    // inside the border. That bar shared the left gutter with the sub-thread
+    // chevron and the directory-summary chevron, so it needed a per-kind
+    // offset (`has-subthreads` started it at top: 30px) and a per-kind
+    // suppression (`.directory-row__summary` dropped it). A bar coming back
+    // would bring both workarounds with it.
+    const selectedRule = extractRuleBody(css, ".thread-row.is-selected");
+    expect(selectedRule).toContain("border-color: var(--accent-border);");
+    expect(selectedRule).toContain("background: var(--bg-row-active);");
+    expect(selectedRule).toContain("box-shadow: inset 2px 0 0 0 var(--accent);");
+    expect(css).not.toMatch(/\.is-selected::before\s*[,{]/);
+
+    // The Star Map card speaks the same selection language, but on a
+    // pseudo-element: hover, the Agent's highlight ring, and the chat
+    // tether each set the card's own box-shadow.
+    const cardEdge = extractRuleBody(
       css,
-      ".directory-row__summary.is-selected::before",
+      ".star-map-card-shell--selected .star-map-card::before",
     );
-    expect(overrideRule).toContain("content: none;");
+    expect(cardEdge).toContain("inset: 0;");
+    expect(cardEdge).toContain("box-shadow: inset 2px 0 0 0 var(--accent);");
+    expect(cardEdge).not.toContain("width:");
   });
 
   it("keeps thread context menu hover states visible (skipping disabled rows)", () => {
@@ -2371,11 +2380,12 @@ describe("Tangerine Terminal theme contract", () => {
     // `@` tinted with --accent-soft (matching `.reference-picker__row`,
     // `.project-picker__row`, and `.branch-picker__option`) while the
     // other three drew the thread-row treatment — an --accent-border
-    // outline, a --bg-row-active fill, AND a 3px --accent ::before bar.
+    // outline, a --bg-row-active fill, AND a 3px --accent ::before bar
+    // (the thread-row marker then; it is an inset edge now).
     // That put three separate tangerines on one row and made the same
     // gesture look like two different things.
     //
-    // The tint is the popover language; the bar + border + row-active
+    // The tint is the popover language; the edge + border + row-active
     // fill stays reserved for `.thread-row.is-selected`, which marks a
     // persistent selection rather than a transient "Enter lands here".
     const sharedHighlight = css.match(
@@ -2384,11 +2394,12 @@ describe("Tangerine Terminal theme contract", () => {
     expect(sharedHighlight).toBeTruthy();
     expect(sharedHighlight).toContain("background: var(--accent-soft);");
     expect(sharedHighlight).toContain("color: var(--accent-bright);");
-    // No per-picker override may reintroduce a second highlight: not the
-    // accent bar, and not the thread-row fill/outline pair.
+    // No per-picker override may reintroduce a second highlight: not an
+    // accent bar or edge, and not the thread-row fill/outline pair.
     expect(css).not.toMatch(
       /\.composer__autocomplete-option(?:[^{]*)\.is-active(?:[^{]*)::before\s*\{/
     );
+    expect(sharedHighlight).not.toContain("box-shadow");
     expect(sharedHighlight).not.toContain("var(--bg-row-active)");
     expect(sharedHighlight).not.toContain("var(--accent-border)");
   });
