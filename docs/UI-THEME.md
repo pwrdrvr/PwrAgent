@@ -314,7 +314,7 @@ General → Appearance sets them.
 | Dark theme | Light theme | Origin |
 |---|---|---|
 | `tangerine-dark` (default) | `tangerine-light` (default) | PwrAgent. The bare `:root` / `:root[data-theme="light"]` blocks. |
-| `catppuccin-mocha` | `catppuccin-latte` | [Catppuccin](https://catppuccin.com) ([MIT](https://catppuccin.com/licensing/)), tuned to the lowest compliant contrast. |
+| `catppuccin-mocha` | `catppuccin-latte` | [Catppuccin](https://catppuccin.com) ([MIT](https://catppuccin.com/licensing/)), upstream colors except where AA moves them. |
 | `solarized-dark` | `solarized-light` | [Solarized](https://ethanschoonover.com/solarized/) ([MIT](https://github.com/altercation/solarized/blob/master/LICENSE)), canonical surfaces and terminal, text moved only as far as AA needs. |
 | `gray-dark` | `gray-light` | PwrAgent. Neutral charcoal or light-gray surfaces with the Tangerine accent. |
 | `blue-dark` | `blue-light` | PwrAgent. Navy or pale-blue surfaces with a blue accent. |
@@ -349,20 +349,41 @@ and hover:
 - Text ladders (primary, secondary, muted) and accent ramps keep their
   emphasis order.
 
+Catppuccin and Solarized are borrowed palettes, and they follow one rule
+so they stay in step with upstream. Each token starts from its upstream
+color. A token that clears its floor keeps that color. One that fails moves
+by the least OKLCH lightness that clears it, and keeps its hue and chroma.
+
+Every theme draws text on an `--accent` fill with `--button-text` or
+`--accent-on`, and that fill is `--accent-fill` (`--accent-fill-strong` on
+hover). It is `--accent` unless a theme's accent is too light to be text.
+Bare marks, such as the unread cookie and selection bars, stay `--accent`,
+because they need 3:1 on the surface with no ink to carry them.
+
+The integrated terminal keeps each palette's own ANSI colors, even below AA
+on its canvas. Programs pick ANSI colors without knowing the background,
+and the terminal is where operators compare PwrAgent with their own setup.
+
 Per theme:
 
-- **Catppuccin** sits at the floor on purpose. Its text ladder is
-  7.5 / 5.75 / 4.55. Mocha colors dim toward its base, so the pastels keep
-  their hue. Latte colors move in lightness only. Mocha's terminal ANSI
-  colors are Catppuccin's own. In Latte, each one under 4.5:1 is darkened
-  to it.
+- **Catppuccin Mocha** is upstream except muted, danger, success, and info
+  text, and the suspended mark, which each move a step to clear the
+  floor. Its terminal is Catppuccin's port mapping.
+- **Catppuccin Latte** text, accent, and semantic colors move, because
+  Catppuccin tunes Latte below AA. Muted text has to move to about
+  `#53566b`, which leaves no room under Catppuccin's text, so primary
+  darkens to keep the ladder. Peach is 2.6:1 as text, so text and marks use
+  a darker orange, and `--accent-fill` keeps peach under dark ink (6.3:1).
 - **Solarized** keeps the published surfaces (`base03`/`base02`,
   `base3`/`base2`), terminal canvas, foreground, and 16-color ANSI mapping.
   Its stock text does not clear AA on `base02`: `base0` is 4.1:1 and
-  `base01` is 2.4:1. Text, accent, and semantic colors therefore move in
-  lightness only, by the least that clears the floor, with a tighter
-  ladder (5.75 / 5.05 / 4.55). The dark accent is Solarized yellow, because
-  orange cannot clear AA as text on `base03`. With only two background
+  `base01` is 2.4:1. Solarized has two text tones, so muted text is
+  `base0` (`base00` in Light) moved to the floor, primary is `base1`
+  (`base01`) moved by the same step, and secondary sits between them.
+  Accent and semantic colors move by the least that clears the floor.
+  The dark accent is Solarized yellow, because
+  orange cannot clear AA as text on `base03`, so the pair's accents
+  differ in hue. With only two background
   tones per scheme, hover sits midway between them, and Light's raised
   surface sits just above `base3`, so neither disappears into the surface
   under it.
@@ -383,8 +404,9 @@ Per theme:
   as it was.
 
 The theme contract test checks all of this. It reads `app.css` and fails if
-a theme drops a token, misses the floor, breaks a ladder, or if
-Catppuccin's `--text-muted` or `--accent` drifts to 4.7:1 or above. The
+a theme drops a token, misses the floor, or breaks a ladder; if a
+Catppuccin token leaves an upstream color that passes, or moves more than
+0.3 past its floor; or if a rule puts ink on a bare `--accent` fill. The
 a11y E2E gate audits every theme in its scheme. The native window colors
 (`native-appearance.ts`) and the quit dialog palettes
 (`quit-confirmation-dialog.ts`) carry literal copies. Tests hold each one

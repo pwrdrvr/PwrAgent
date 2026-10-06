@@ -88,6 +88,10 @@
   --accent: #ff8a1f;
   --accent-strong: #ffa33d;
   --accent-bright: #ffb35c;
+  /* Accent under --button-text / --accent-on ink. A theme whose accent is
+     too light for text keeps its own color here. */
+  --accent-fill: var(--accent);
+  --accent-fill-strong: var(--accent-strong);
   /* Foreground for content sitting on a solid `--accent` fill (the orange
      "composing source" thread row). Near-black on the bright dark-theme
      accent for a strong AA-passing contrast. */
@@ -312,8 +316,8 @@
   --theme-swatch-tangerine-light-text: #1a1612;
   --theme-swatch-catppuccin-mocha-app: #1e1e2e;
   --theme-swatch-catppuccin-mocha-sidebar: #181825;
-  --theme-swatch-catppuccin-mocha-accent: #d99d7a;
-  --theme-swatch-catppuccin-mocha-text: #d0d8f5;
+  --theme-swatch-catppuccin-mocha-accent: #fab387;
+  --theme-swatch-catppuccin-mocha-text: #cdd6f4;
   --theme-swatch-catppuccin-latte-app: #eff1f5;
   --theme-swatch-catppuccin-latte-sidebar: #e6e9ef;
   --theme-swatch-catppuccin-latte-accent: #983801;
@@ -321,11 +325,11 @@
   --theme-swatch-solarized-dark-app: #002b36;
   --theme-swatch-solarized-dark-sidebar: #073642;
   --theme-swatch-solarized-dark-accent: #dba600;
-  --theme-swatch-solarized-dark-text: #bcc5c5;
+  --theme-swatch-solarized-dark-text: #b1bfbf;
   --theme-swatch-solarized-light-app: #fdf6e3;
   --theme-swatch-solarized-light-sidebar: #eee8d5;
   --theme-swatch-solarized-light-accent: #9a3911;
-  --theme-swatch-solarized-light-text: #3c4c50;
+  --theme-swatch-solarized-light-text: #3a4f56;
   --theme-swatch-gray-dark-app: #2b2b2e;
   --theme-swatch-gray-dark-sidebar: #252528;
   --theme-swatch-gray-dark-accent: #ffa95a;
@@ -602,16 +606,24 @@
    Non-text marks (--danger-base, --status-suspended, chart series) clear
    3.05:1 on the flat surfaces. --text-subtle clears AA in every theme here.
 
-   Catppuccin is tuned to the LOWEST compliant contrast: its text ladder is
-   7.5 / 5.75 / 4.55. Mocha colors dim toward base so the pastels keep
-   their hue; Latte colors move in lightness only. Mocha's terminal ANSI
-   colors are Catppuccin's own; in Latte each one under 4.5:1 is darkened.
+   Catppuccin and Solarized are borrowed palettes, so they follow one rule:
+   each token starts from its upstream color, and only a token that fails
+   its floor moves, by the least OKLCH lightness that clears it. Hue and
+   chroma stay. Most of Mocha is upstream; Latte's text, accent, and
+   semantic colors move, because Catppuccin tunes Latte below AA.
+   Solarized's stock text does not clear AA on base02 (base0 is 4.1:1,
+   base01 2.4:1), so its text moves by the one lightness step base0 needs,
+   and the dark accent is Solarized yellow; orange cannot clear AA as text
+   on base03, so the pair's accents differ in hue.
 
-   Solarized keeps Ethan Schoonover's canonical surfaces, terminal, and
-   ANSI mapping. Its stock text does not clear AA on base02 (base0 is
-   4.1:1, base01 2.4:1), so text, accent, and semantic colors move in
-   lightness only, by the least that clears it. The dark accent is
-   Solarized yellow; orange cannot clear AA as text on base03.
+   Latte's accent is too light for text (peach is 2.6:1 on base), so text
+   and marks take a darker orange and --accent-fill keeps Catppuccin's
+   peach for fills under dark ink. Every other theme fills with --accent.
+
+   The integrated terminal keeps each palette's own ANSI colors, even where
+   one is below AA on its canvas (Latte yellow, Solarized base2 white): the
+   terminal is where operators compare PwrAgent with their own setup, and
+   programs pick ANSI colors without knowing the background.
 
    Catppuccin (https://catppuccin.com/licensing/) and Solarized are MIT
    licensed. Their notices are in apps/desktop/resources/color-themes/ and
@@ -642,16 +654,16 @@
   --border-subtle: color-mix(in srgb, var(--text-primary) 10%, transparent);
   --border-strong: color-mix(in srgb, var(--text-primary) 20%, transparent);
 
-  /* Text ladder: 7.5 / 5.75 / 4.5 worst case */
-  --text-primary: #d0d8f5;
-  --text-secondary: #b9bed4;
-  --text-muted: #a4a9be;
-  --text-subtle: color-mix(in srgb, var(--text-primary) 70%, transparent);
+  /* Text: Catppuccin's text / subtext1 / subtext0 */
+  --text-primary: #cdd6f4;
+  --text-secondary: #bac2de;
+  --text-muted: #a7aec9;
+  --text-subtle: color-mix(in srgb, var(--text-primary) 74%, transparent);
 
   /* Accent: Peach */
-  --accent: #d99d7a;
-  --accent-strong: #dda07b;
-  --accent-bright: #e4a47e;
+  --accent: #fab387;
+  --accent-strong: #feb78b;
+  --accent-bright: #febd96;
   --accent-on: #11111b;
   --button-text: #11111b;
   --focus-ring: var(--accent);
@@ -679,32 +691,32 @@
   --terminal-ansi-bright-white: #a6adc8;
 
   /* Semantic */
-  --danger-base: #a8657d;
+  --danger-base: #f38ba8;
   --danger-soft: color-mix(in srgb, var(--danger-base) 24%, transparent);
   --danger-border: color-mix(in srgb, var(--danger-base) 45%, transparent);
-  --danger-text: #f6a7bd;
-  --danger-text-light: #edacb6;
+  --danger-text: #ffc4d2;
+  --danger-text-light: #eba0ac;
   --success-soft: color-mix(in srgb, #a6e3a1 18%, transparent);
   --success-border: color-mix(in srgb, #a6e3a1 32%, transparent);
-  --success-text: #a3df9f;
+  --success-text: #a8e5a3;
   --info-soft: color-mix(in srgb, #89b4fa 16%, transparent);
   --info-border: color-mix(in srgb, #89b4fa 28%, transparent);
-  --info-text: #a3c5fb;
-  --info-teal: #79b5af;
-  --brand-purple: #bd9be7;
+  --info-text: #a9caff;
+  --info-teal: #94e2d5;
+  --brand-purple: #cba6f7;
 
   /* Status */
-  --status-ok: #87b687;
-  --status-warning: #ccba95;
-  --status-error: #f0b6bf;
-  --status-suspended: #73788f;
+  --status-ok: #a6e3a1;
+  --status-warning: #f9e2af;
+  --status-error: #eba0ac;
+  --status-suspended: #6f7389;
   --status-warning-text: var(--status-warning);
   --savings-over: var(--status-warning);
   --usage-series-1: var(--accent);
-  --usage-series-2: #5f7aaa;
-  --usage-series-3: #598082;
-  --usage-series-4: #856fa6;
-  --usage-series-5: #837869;
+  --usage-series-2: #89b4fa;
+  --usage-series-3: #94e2d5;
+  --usage-series-4: #cba6f7;
+  --usage-series-5: #f9e2af;
 }
 
 :root[data-color-theme="catppuccin-latte"] {
@@ -723,7 +735,8 @@
   --border-subtle: color-mix(in srgb, var(--text-primary) 9%, transparent);
   --border-strong: color-mix(in srgb, var(--text-primary) 18%, transparent);
 
-  /* Text ladder: 7.5 / 5.75 / 4.5 worst case */
+  /* Text: subtext0 needs AA (#53566b at the floor), which leaves no room
+     between it and Catppuccin's text, so primary darkens to keep a ladder. */
   --text-primary: #343648;
   --text-secondary: #454756;
   --text-muted: #545666;
@@ -733,8 +746,12 @@
   --accent: #983801;
   --accent-strong: #933601;
   --accent-bright: #8e3401;
-  --accent-on: #eff1f5;
-  --button-text: #eff1f5;
+  /* Peach is 2.6:1 as text on base, so text and marks take a darker
+     orange; fills keep Catppuccin's peach under dark ink (6.3:1). */
+  --accent-fill: #fe640b;
+  --accent-fill-strong: #f15d00;
+  --accent-on: #11111b;
+  --button-text: #11111b;
   --focus-ring: var(--accent);
 
   /* Integrated terminal */
@@ -743,28 +760,28 @@
   --terminal-cursor: #dc8a78;
   --terminal-cursor-accent: #eff1f5;
   --terminal-ansi-black: #5c5f77;
-  --terminal-ansi-red: #d80f3b;
-  --terminal-ansi-green: #327c21;
-  --terminal-ansi-yellow: #996114;
-  --terminal-ansi-blue: #1761f5;
-  --terminal-ansi-magenta: #c71e9a;
-  --terminal-ansi-cyan: #13797f;
-  --terminal-ansi-white: #696c82;
+  --terminal-ansi-red: #d20f39;
+  --terminal-ansi-green: #40a02b;
+  --terminal-ansi-yellow: #df8e1d;
+  --terminal-ansi-blue: #1e66f5;
+  --terminal-ansi-magenta: #ea76cb;
+  --terminal-ansi-cyan: #179299;
+  --terminal-ansi-white: #acb0be;
   --terminal-ansi-bright-black: #6c6f85;
-  --terminal-ansi-bright-red: #d80f3b;
-  --terminal-ansi-bright-green: #327c21;
-  --terminal-ansi-bright-yellow: #996114;
-  --terminal-ansi-bright-blue: #1761f5;
-  --terminal-ansi-bright-magenta: #c71e9a;
-  --terminal-ansi-bright-cyan: #13797f;
+  --terminal-ansi-bright-red: #d20f39;
+  --terminal-ansi-bright-green: #40a02b;
+  --terminal-ansi-bright-yellow: #df8e1d;
+  --terminal-ansi-bright-blue: #1e66f5;
+  --terminal-ansi-bright-magenta: #ea76cb;
+  --terminal-ansi-bright-cyan: #179299;
   --terminal-ansi-bright-white: #bcc0cc;
 
   /* Semantic */
-  --danger-base: #f13961;
+  --danger-base: #d20f39;
   --danger-soft: color-mix(in srgb, var(--danger-base) 24%, transparent);
   --danger-border: color-mix(in srgb, var(--danger-base) 45%, transparent);
-  --danger-text: #900a27;
-  --danger-text-light: #8e131e;
+  --danger-text: #86001f;
+  --danger-text-light: #b1012b;
   --success-soft: color-mix(in srgb, #40a02b 18%, transparent);
   --success-border: color-mix(in srgb, #40a02b 32%, transparent);
   --success-text: #245918;
@@ -776,15 +793,15 @@
 
   /* Status */
   --status-ok: #28631b;
-  --status-warning: #764b0f;
-  --status-error: #991520;
+  --status-warning: #7d4c00;
+  --status-error: #b1012b;
   --status-suspended: #7c8297;
   --status-warning-text: var(--status-warning);
   --savings-over: var(--status-warning);
   --usage-series-1: var(--accent);
-  --usage-series-2: #407df7;
+  --usage-series-2: #1e66f5;
   --usage-series-3: #179097;
-  --usage-series-4: #a061f2;
+  --usage-series-4: #8839ef;
   --usage-series-5: #b67418;
 }
 
@@ -808,11 +825,12 @@
   --border-subtle: color-mix(in srgb, var(--text-primary) 10%, transparent);
   --border-strong: color-mix(in srgb, var(--text-primary) 20%, transparent);
 
-  /* Text */
-  --text-primary: #bcc5c5;
-  --text-secondary: #aeb9ba;
-  --text-muted: #a0b1b7;
-  --text-subtle: color-mix(in srgb, var(--text-primary) 84%, transparent);
+  /* Text: base1 / base0 / base0 (base01 / base00 / base00 in light),
+     each moved by the one lightness step base0 needs for AA. */
+  --text-primary: #b1bfbf;
+  --text-secondary: #a7b9bb;
+  --text-muted: #a0b2b4;
+  --text-subtle: color-mix(in srgb, var(--text-primary) 89%, transparent);
 
   /* Accent */
   --accent: #dba600;
@@ -892,11 +910,12 @@
   --border-subtle: color-mix(in srgb, var(--text-primary) 9%, transparent);
   --border-strong: color-mix(in srgb, var(--text-primary) 18%, transparent);
 
-  /* Text */
-  --text-primary: #3c4c50;
-  --text-secondary: #45545a;
-  --text-muted: #4f5a5a;
-  --text-subtle: color-mix(in srgb, var(--text-primary) 89%, transparent);
+  /* Text: base1 / base0 / base0 (base01 / base00 / base00 in light),
+     each moved by the one lightness step base0 needs for AA. */
+  --text-primary: #3a4f56;
+  --text-secondary: #40555c;
+  --text-muted: #465b63;
+  --text-subtle: color-mix(in srgb, var(--text-primary) 91%, transparent);
 
   /* Accent */
   --accent: #9a3911;
@@ -3958,7 +3977,7 @@ textarea,
 }
 
 .log-window__match--active {
-  background: var(--accent);
+  background: var(--accent-fill);
   color: var(--button-text);
 }
 
@@ -5068,7 +5087,7 @@ a.button {
 }
 
 .button--primary:hover:not([disabled]) {
-  background: var(--accent);
+  background: var(--accent-fill);
   color: var(--button-text);
 }
 
@@ -5564,8 +5583,8 @@ a.button {
    long as the pointer rests on the link (see ThreadRow / thread-links). */
 .thread-row.is-composer-source,
 .thread-row.is-link-target {
-  border-color: var(--accent);
-  background: var(--accent);
+  border-color: var(--accent-fill);
+  background: var(--accent-fill);
   color: var(--accent-on);
   /* Same stacking lift as `.is-selected` — keep the solid accent fill +
      border above a neighbouring hovered row. */
@@ -5639,7 +5658,7 @@ a.button {
   right: 12px;
   padding: 1px 7px;
   border-radius: 999px;
-  background: var(--accent);
+  background: var(--accent-fill);
   color: var(--accent-on);
   font-size: 10px;
   font-weight: 600;
@@ -6027,7 +6046,7 @@ a.button {
 
 .reaction-picker__custom-submit:hover:not(:disabled),
 .reaction-picker__custom-submit:focus-visible {
-  background: var(--accent);
+  background: var(--accent-fill);
   color: var(--button-text);
 }
 
@@ -6483,8 +6502,8 @@ a.button {
 
 .chip--agent,
 .thread-row__chip--agent {
-  border: 1px solid var(--accent-strong);
-  background: var(--accent);
+  border: 1px solid var(--accent-fill-strong);
+  background: var(--accent-fill);
   color: var(--accent-on);
   font-weight: 700;
 }
@@ -6512,15 +6531,15 @@ a.button {
 
 .thread-row__chip--approval,
 .thread-row__chip--input {
-  border: 1px solid var(--accent-strong);
-  background: var(--accent);
+  border: 1px solid var(--accent-fill-strong);
+  background: var(--accent-fill);
   color: var(--button-text);
   font-weight: 700;
 }
 
 .thread-row__chip--approval:hover,
 .thread-row__chip--input:hover {
-  background: var(--accent-strong);
+  background: var(--accent-fill-strong);
 }
 
 /* Icon-only marker: this thread has a live shell. Quieter than the approval /
@@ -6542,8 +6561,8 @@ a.button {
    two labels sit in the same list. Only one renders per row (priority is
    resolved upstream), but they share the base pill sizing. */
 .thread-row__chip--scheduled {
-  border: 1px solid var(--accent-strong);
-  background: var(--accent);
+  border: 1px solid var(--accent-fill-strong);
+  background: var(--accent-fill);
   color: var(--button-text);
   font-weight: 700;
 }
@@ -8193,7 +8212,7 @@ a.button {
 }
 
 .thread-context-menu button[aria-checked="true"] .thread-context-menu__check {
-  background: var(--accent);
+  background: var(--accent-fill);
   box-shadow: none;
   color: var(--accent-on);
 }
@@ -9337,14 +9356,14 @@ a.button {
 
 .button.app-update-banner__restart,
 .button.settings-update-channel__restart-button {
-  border-color: var(--accent-strong);
-  background: var(--accent);
+  border-color: var(--accent-fill-strong);
+  background: var(--accent-fill);
   color: var(--button-text);
 }
 
 .button.app-update-banner__restart:hover:not([disabled]),
 .button.settings-update-channel__restart-button:hover:not([disabled]) {
-  background: var(--accent-strong);
+  background: var(--accent-fill-strong);
 }
 
 /* "Release notes" — text among real buttons, on purpose. The card already
@@ -19558,7 +19577,7 @@ a.button {
   align-items: center;
   padding: 0 6px;
   border-radius: 999px;
-  background: var(--accent);
+  background: var(--accent-fill);
   color: var(--button-text);
   font-size: 10px;
   font-weight: 600;
@@ -19821,7 +19840,7 @@ a.button {
 
 .compact-composer__menu-toggle.is-checked {
   border-color: var(--accent-border);
-  background: var(--accent);
+  background: var(--accent-fill);
 }
 
 .compact-composer__menu-toggle.is-checked
@@ -19851,8 +19870,8 @@ a.button {
 }
 
 .compact-composer__send:hover:not(:disabled) {
-  border-color: var(--accent);
-  background: var(--accent);
+  border-color: var(--accent-fill);
+  background: var(--accent-fill);
   color: var(--button-text);
 }
 
@@ -20868,7 +20887,7 @@ a.button {
 }
 
 ::highlight(thread-find-active) {
-  background-color: var(--accent);
+  background-color: var(--accent-fill);
   color: var(--button-text);
 }
 
@@ -21409,12 +21428,12 @@ a.button {
   box-shadow: 0 10px 24px color-mix(in srgb, var(--shadow-base) 34%, transparent);
   transform: translateX(-50%);
   border-color: var(--accent-border);
-  background: var(--accent);
+  background: var(--accent-fill);
   color: var(--button-text);
 }
 
 .transcript-list__scroll-bottom:hover {
-  background: var(--accent-strong);
+  background: var(--accent-fill-strong);
   color: var(--button-text);
 }
 
@@ -22852,7 +22871,7 @@ a.transcript-message__messaging-origin:focus-visible {
 
 .incident-explorer .incident-explorer__primary {
   border-color: var(--accent-border);
-  background: var(--accent);
+  background: var(--accent-fill);
   color: var(--button-text);
   font-weight: 650;
 }
@@ -23625,7 +23644,7 @@ a.transcript-message__messaging-origin:focus-visible {
 }
 
 .incident-explorer__gate-filter[aria-pressed="true"] {
-  background: var(--accent);
+  background: var(--accent-fill);
   color: var(--accent-on);
 }
 
@@ -34570,12 +34589,12 @@ button.pricing-token-miser__folded:focus-visible {
 /* Find is the field's one primary action. */
 .image-lightbox__svg-search button[type="submit"] {
   border-color: var(--accent-border);
-  background: var(--accent);
+  background: var(--accent-fill);
   color: var(--button-text);
 }
 
 .image-lightbox__svg-search button[type="submit"]:hover {
-  background: var(--accent-strong);
+  background: var(--accent-fill-strong);
   color: var(--button-text);
 }
 
@@ -34678,14 +34697,14 @@ button.pricing-token-miser__folded:focus-visible {
   padding: 0 14px;
   border: 1px solid var(--accent-border);
   border-radius: 999px;
-  background: var(--accent);
+  background: var(--accent-fill);
   color: var(--button-text);
   font-size: 12px;
   cursor: pointer;
 }
 
 .image-lightbox__svg-notice-run:hover:not([aria-disabled="true"]) {
-  background: var(--accent-strong);
+  background: var(--accent-fill-strong);
 }
 
 .image-lightbox__svg-notice-run:focus-visible {
@@ -34741,7 +34760,7 @@ button.pricing-token-miser__folded:focus-visible {
   padding: 0;
   border: 1px solid var(--accent-border);
   border-radius: 50%;
-  background: var(--accent);
+  background: var(--accent-fill);
   color: var(--button-text);
   box-shadow: 0 6px 18px color-mix(in srgb, var(--shadow-base) 34%, transparent);
   cursor: pointer;
@@ -34749,7 +34768,7 @@ button.pricing-token-miser__folded:focus-visible {
 }
 
 .image-lightbox__close:hover {
-  background: var(--accent-strong);
+  background: var(--accent-fill-strong);
   color: var(--button-text);
 }
 
@@ -35509,8 +35528,8 @@ button.pricing-token-miser__folded:focus-visible {
    It's the single SOLID-orange fill in the otherwise-neutral chip row so it
    can't be missed — the accent doubles as our warning signal. */
 .composer-dropdown--danger .composer-dropdown__button {
-  border-color: var(--accent-strong);
-  background: var(--accent);
+  border-color: var(--accent-fill-strong);
+  background: var(--accent-fill);
   color: var(--button-text);
   font-weight: 600;
 }
@@ -35518,8 +35537,8 @@ button.pricing-token-miser__folded:focus-visible {
 .composer-dropdown--danger .composer-dropdown__button:hover,
 .composer-dropdown--danger .composer-dropdown__button:focus-visible,
 .composer-dropdown--danger.composer-dropdown--open .composer-dropdown__button {
-  border-color: var(--accent-strong);
-  background: var(--accent-strong);
+  border-color: var(--accent-fill-strong);
+  background: var(--accent-fill-strong);
   color: var(--button-text);
 }
 
@@ -35766,7 +35785,7 @@ button.pricing-token-miser__folded:focus-visible {
 
 .composer-thread-options__toggle.is-checked {
   border-color: var(--accent-border);
-  background: var(--accent);
+  background: var(--accent-fill);
 }
 
 .composer-thread-options__toggle.is-checked
@@ -36257,7 +36276,7 @@ button.pricing-token-miser__folded:focus-visible {
 
 .composer__run-split-play:hover:not(:disabled),
 .composer__run-split-play:focus-visible {
-  background: var(--accent);
+  background: var(--accent-fill);
   color: var(--button-text);
 }
 
@@ -37258,7 +37277,7 @@ button.pricing-token-miser__folded:focus-visible {
   height: 14px;
   padding: 0 3px;
   border-radius: 999px;
-  background: var(--accent);
+  background: var(--accent-fill);
   color: var(--accent-on);
   font-size: 9px;
   font-weight: 700;
@@ -38064,7 +38083,7 @@ button.pricing-token-miser__folded:focus-visible {
 }
 
 .composer__primary-action:hover:not([disabled]) {
-  background: var(--accent);
+  background: var(--accent-fill);
   color: var(--button-text);
 }
 
@@ -38247,8 +38266,8 @@ button.pricing-token-miser__folded:focus-visible {
 }
 
 .composer__send-schedule-toggle.is-armed .composer__send-schedule-toggle-box {
-  border-color: var(--accent);
-  background: var(--accent);
+  border-color: var(--accent-fill);
+  background: var(--accent-fill);
 }
 
 .composer__send-schedule-toggle:not(.is-armed) .composer__send-schedule-toggle-label {
@@ -38258,7 +38277,7 @@ button.pricing-token-miser__folded:focus-visible {
 /* Hover fills this zone like the caret/Send zones so it's clear a click lands
    here — but keep the armed check box readable by giving it a solid outline. */
 .composer__send-split-pill .composer__send-schedule-toggle:not(:disabled):hover {
-  background: var(--accent);
+  background: var(--accent-fill);
   color: var(--button-text);
 }
 
@@ -38272,7 +38291,7 @@ button.pricing-token-miser__folded:focus-visible {
    for the old two-button version where one highlight hid under the other. */
 .composer__send-split-pill .button:not(:disabled):hover,
 .composer__send-split--open .composer__send-schedule-button:not(:disabled) {
-  background: var(--accent);
+  background: var(--accent-fill);
   color: var(--button-text);
 }
 
@@ -39414,11 +39433,11 @@ button.pricing-token-miser__folded:focus-visible {
   outline-offset: 2px;
 }
 .onboarding-wizard__btn--primary {
-  background: var(--accent);
+  background: var(--accent-fill);
   color: var(--button-text);
 }
 .onboarding-wizard__btn--primary:hover:not(:disabled) {
-  background: var(--accent-strong);
+  background: var(--accent-fill-strong);
 }
 .onboarding-wizard__btn--primary:disabled {
   background: var(--bg-panel-elevated);
@@ -40142,8 +40161,8 @@ button.pricing-token-miser__folded:focus-visible {
   flex-shrink: 0;
 }
 .onboarding-wizard__safety-check.is-on {
-  background: var(--accent);
-  border-color: var(--accent);
+  background: var(--accent-fill);
+  border-color: var(--accent-fill);
 }
 .onboarding-wizard__safety-check.is-on::after {
   content: "";
@@ -40215,8 +40234,8 @@ button.pricing-token-miser__folded:focus-visible {
   display: inline-block;
 }
 .onboarding-wizard__provider-check.is-on {
-  background: var(--accent);
-  border-color: var(--accent);
+  background: var(--accent-fill);
+  border-color: var(--accent-fill);
 }
 .onboarding-wizard__provider-check.is-on::after {
   content: "";
@@ -41929,7 +41948,7 @@ button.pricing-token-miser__folded:focus-visible {
 .federation-sky__cta:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
 /* Empty sky opens the map too, so pointing at it lights the button; pointing
    at a body lights only the body. */
-.federation-sky:hover:not(:has(.federation-sky__body:hover)) .federation-sky__cta, .federation-sky__cta:hover, .federation-sky__cta:focus-visible { border-color: var(--accent); background: var(--accent); color: var(--button-text); }
+.federation-sky:hover:not(:has(.federation-sky__body:hover)) .federation-sky__cta, .federation-sky__cta:hover, .federation-sky__cta:focus-visible { border-color: var(--accent-fill); background: var(--accent-fill); color: var(--button-text); }
 
 .federation-traffic { display: flex; flex-direction: column; gap: 6px; width: 100%; padding: 9px 10px 8px; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-panel); color: var(--text-primary); text-align: left; cursor: pointer; }
 .federation-traffic:hover:not(:disabled), .federation-traffic:focus-visible { border-color: var(--border-strong); background: var(--bg-panel-hover); }
@@ -42484,8 +42503,8 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
 .usage-analysis__result > p { color: var(--text-muted); font: 10px var(--font-mono); }
 .usage-analysis__result pre { font: inherit; font-size: 12px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
 .usage-analysis__result--failed .usage-eyebrow, .usage-analysis__result--failed pre { color: var(--status-error); }
-.usage-button--primary { width: 100%; border-color: var(--accent); background: var(--accent); color: var(--button-text); font-weight: 600 !important; }
-.usage-button--primary:hover { border-color: var(--accent-strong); background: var(--accent-strong); }
+.usage-button--primary { width: 100%; border-color: var(--accent-fill); background: var(--accent-fill); color: var(--button-text); font-weight: 600 !important; }
+.usage-button--primary:hover { border-color: var(--accent-fill-strong); background: var(--accent-fill-strong); }
 
 /* Empty states */
 .usage-empty { padding: 32px 14px; color: var(--text-muted); font-size: 12px; }
