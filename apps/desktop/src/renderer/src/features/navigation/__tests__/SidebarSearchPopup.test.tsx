@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -26,11 +26,12 @@ const readRendererFederationTarget = vi.fn<
 
 const getNavigationQueryPage = vi.fn<() => Promise<NavigationQueryPage>>();
 const releaseNavigationQuery = vi.fn(async () => undefined);
-const desktopApi = { jumpSearchRemoteThreads, getNavigationQueryPage, releaseNavigationQuery };
+const desktopApi = { jumpSearchRemoteThreads, getNavigationQueryPage, releaseNavigationQuery, platform: "darwin" };
 vi.mock("../../../lib/desktop-api", () => ({ getDesktopApi: () => desktopApi }));
 
 vi.mock("../../../lib/federation-window", () => ({
   readRendererFederationTarget: () => readRendererFederationTarget(),
+  readRendererFederationLabel: () => "Windows workstation",
 }));
 
 function localThread(
@@ -97,6 +98,7 @@ beforeEach(() => {
   jumpSearchRemoteThreads.mockClear();
   jumpSearchRemoteThreads.mockResolvedValue({ results: [] });
   readRendererFederationTarget.mockReturnValue(undefined);
+  desktopApi.platform = "darwin";
   getNavigationQueryPage.mockReset();
   getNavigationQueryPage.mockResolvedValue({ protocol: 2, queryKey: "search", generation: "generation", ownerEpoch: "owner",
     countsRevision: "counts", counts: { total: 0, active: 0, unread: 0, review: 0 }, coverage: { state: "complete" }, entries: [], complete: true });
@@ -863,6 +865,54 @@ describe("SidebarSearchPopup, focus", () => {
 
 describe("project destinations", () => {
   const project = { key: "directory:/repos/PwrAgnt", kind: "directory" as const, label: "PwrAgnt", path: "/repos/PwrAgnt" };
+
+  it.each([
+    ["darwin", "C:/PwrLab/repos/PwrAgent", "/Users/example/repos/PwrAgnt", "Windows"],
+    ["linux", "\\\\workstation\\repos\\PwrAgent", "/home/example/repos/PwrAgnt", "Windows"],
+    ["win32", "/Users/example/repos/PwrAgent", "C:/repos/PwrAgnt", "Unix"],
+  ])("prefers local projects on %s and annotates foreign paths", async (platform, foreignPath, localPath, foreignPlatform) => {
+    desktopApi.platform = platform;
+    const foreign = { ...project, key: `directory:${foreignPath}`, label: "PwrAgent", path: foreignPath };
+    const local = { ...project, key: `directory:${localPath}`, path: localPath };
+    const select = vi.fn();
+    render(<SidebarSearchPopup projects={[foreign, local]} threads={[]}
+      onJumpToProject={select} onJumpToThread={vi.fn()} onClose={vi.fn()} />);
+    const input = screen.getByRole("textbox");
+    fireEvent.change(input, { target: { value: "pa" } });
+    await settleRemoteSearch();
+    const rows = screen.getAllByRole("option");
+    expect(rows[0]).toHaveTextContent(localPath);
+    expect(within(rows[1]).getByText(`Other machine · ${foreignPlatform}`)).toBeInTheDocument();
+    expect(within(rows[0]).queryByText(/Other machine/)).not.toBeInTheDocument();
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(select).toHaveBeenCalledWith(local);
+  });
+
+  it("keeps local projects ahead of exact foreign matches before applying the result limit", async () => {
+    const foreign = Array.from({ length: 8 }, (_, index) => ({ ...project,
+      key: `directory:C:/repos/${index}/PwrAgnt`, path: `C:/repos/${index}/PwrAgnt` }));
+    const local = { ...project, key: "directory:/repos/PwrAgnt-tools", label: "PwrAgnt tools", path: "/repos/PwrAgnt-tools" };
+    const empty = await getNavigationQueryPage();
+    getNavigationQueryPage.mockResolvedValue({ ...empty, directories: foreign.map((directory) => ({ ...directory,
+      counts: empty.counts, pinnedRootCount: 0, unpinnedRootCount: 0, launchpadPresent: false })) });
+    render(<SidebarSearchPopup projects={[local]} threads={[]}
+      onJumpToProject={vi.fn()} onJumpToThread={vi.fn()} onClose={vi.fn()} />);
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "PwrAgnt" } });
+    await settleRemoteSearch();
+    expect(screen.getAllByRole("option")).toHaveLength(8);
+    expect(screen.getAllByRole("option")[0]).toHaveTextContent(local.path);
+  });
+
+  it("labels project destinations with their known owner in a federation viewer", async () => {
+    readRendererFederationTarget.mockReturnValue({ scope: "remote", instanceId: "windows-peer" });
+    const destination = { ...project, key: "directory:C:/repos/PwrAgent", path: "C:/repos/PwrAgent" };
+    render(<SidebarSearchPopup projects={[destination]} threads={[]}
+      onJumpToProject={vi.fn()} onJumpToThread={vi.fn()} onClose={vi.fn()} />);
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "pa" } });
+    await settleRemoteSearch();
+    expect(screen.getByLabelText("Runs on Windows workstation")).toBeInTheDocument();
+    expect(screen.queryByText(/Other machine/)).not.toBeInTheDocument();
+  });
 
   it.each([
     ["PwrSuiteLab", "PWS"], ["PwrAgent", "pa"], ["PwrSnap", "Ps"], ["trading-system", "ts"],
