@@ -368,6 +368,15 @@ describe("Tangerine Terminal theme contract", () => {
         ".thread-row__time-lane > .thread-row__time,\n.thread-row__time-lane > .thread-row__overflow-button",
       ),
     ).toMatch(/grid-area:\s*1 \/ 1;/);
+    // At rest the hover controls must have zero area, not merely zero
+    // opacity: axe's target-size rule measures invisible controls, and a
+    // border left on a zero-width chip is a 2px target.
+    expect(extractRuleBody(css, ".thread-row__pin-button")).toMatch(
+      /width:\s*0;[\s\S]*border-width:\s*0;/,
+    );
+    expect(
+      extractRuleBody(css, ".thread-row__actions .thread-row__chip.thread-row__chip--add-reaction"),
+    ).toMatch(/border-width:\s*0;/);
     // The hover controls grow from zero width; caught mid-growth they are
     // under 24px. Reduced motion (which the a11y gate emulates) must drop
     // the size transition so they open at full size.

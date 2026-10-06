@@ -6467,6 +6467,21 @@ a.button {
   background: var(--bg-row-active);
 }
 
+/* In the title line the chip is zero-width at rest, but the 1px border
+   above would still paint a 2px sliver, and axe's target-size rule
+   measures an invisible control: the sub-agents strip audit failed on a
+   2px add-reaction beside the (also invisible) kebab. Like the pin
+   button, the border exists only while the chip is revealed. */
+.thread-row__actions .thread-row__chip.thread-row__chip--add-reaction {
+  border-width: 0;
+}
+
+.thread-row-shell:hover .thread-row__actions .thread-row__chip.thread-row__chip--add-reaction,
+.thread-row__actions .thread-row__chip.thread-row__chip--add-reaction:focus-visible,
+.thread-row__actions .thread-row__chip.thread-row__chip--add-reaction.is-open {
+  border-width: 1px;
+}
+
 /* `.chip--backend` is the non-list alias of `.thread-row__chip--backend`,
    pairing with the `.chip` primitive. Used by the open-thread header and
    the transcript so they keep their elevated-panel backend pill without
