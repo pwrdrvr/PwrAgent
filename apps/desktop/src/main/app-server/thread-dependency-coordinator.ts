@@ -51,10 +51,11 @@ export class ThreadDependencyCoordinator {
       if (request.action === "list") return { dependencies: this.options.store.list(request.backend, request.threadId) };
       if (request.action === "cancel" || request.action === "dismiss") {
         if (!request.dependencyId) throw new Error("dependencyId is required to cancel a dependency.");
-        if (request.action === "dismiss") this.options.store.dismiss(request.backend, request.threadId, request.dependencyId, this.now());
-        else this.options.store.cancel(request.backend, request.threadId, request.dependencyId, this.now());
+        const changed = request.action === "dismiss"
+          ? this.options.store.dismiss(request.backend, request.threadId, request.dependencyId, this.now())
+          : this.options.store.cancel(request.backend, request.threadId, request.dependencyId, this.now());
         const dependencies = this.options.store.list(request.backend, request.threadId);
-        await this.options.changed(dependencies.find((item) => item.id === request.dependencyId)!);
+        await this.options.changed(changed);
         return { dependencies };
       }
       validateDependencyCreate(request);
@@ -152,9 +153,17 @@ export class ThreadDependencyCoordinator {
         // later. Its current head remains live unless explicitly pinned.
         const selector = !condition.prUrl && previous?.prUrl
           ? { ...condition, prUrl: previous.prUrl } : condition;
-        evidence.push({ ...evaluateCondition(selector, snapshot, this.now(), turn), condition });
+        const observed = { ...evaluateCondition(selector, snapshot, this.now(), turn), condition };
+        if (!observed.prUrl && previous?.prUrl) {
+          observed.prUrl = previous.prUrl;
+          observed.headSha = previous.headSha;
+        }
+        evidence.push(observed);
       } catch (error) {
-        evidence.push({ condition, state: "waiting", reason: `Prerequisite unavailable: ${error instanceof Error ? error.message : String(error)}`, observedAt: this.now() });
+        evidence.push({
+          condition, state: "waiting", reason: `Prerequisite unavailable: ${error instanceof Error ? error.message : String(error)}`, observedAt: this.now(),
+          ...(previous?.prUrl ? { prUrl: previous.prUrl, headSha: previous.headSha } : {}),
+        });
       }
     }
     const successes = evidence.filter((entry) => entry.state === "satisfied").length;
