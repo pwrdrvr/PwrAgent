@@ -31222,10 +31222,11 @@ div.composer-error-row__toggle {
   line-height: 1.35;
 }
 
+/* Centred on the head's first line, which is as tall as a 22px thread chip. */
 .thread-dependencies__mark {
   width: 10px;
   height: 10px;
-  margin-top: 4px;
+  margin-top: 6px;
   border-radius: 50%;
   background: var(--status-suspended);
 }
@@ -31243,12 +31244,14 @@ div.composer-error-row__toggle {
   background: transparent;
 }
 
+/* Centre, not baseline: the chip group's baseline sits 2px off its label. */
 .thread-dependencies__condition-head {
   display: flex;
   flex-wrap: wrap;
-  align-items: baseline;
+  align-items: center;
   gap: 2px 6px;
   min-width: 0;
+  min-height: 22px;
 }
 
 .thread-dependencies__thread {
