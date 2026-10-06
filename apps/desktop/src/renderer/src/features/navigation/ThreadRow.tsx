@@ -222,11 +222,11 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
   const isPinnedRow =
     Boolean(props.thread.pinnedRank) && !props.nested;
   const isRetainedRow = Boolean(props.retainedForSelection) && !isPinnedRow && !props.nested;
-  const hasHeadingPin = isPinnedRow || isRetainedRow;
+  const hasPinMark = isPinnedRow || isRetainedRow;
   // A pin kept at top draws the same glyph filled; the tier is otherwise
   // visible only while a pin drag is live.
   const isKeptAtTopRow = isPinnedRow && isKeptAtTopThread(props.thread);
-  const pinGlyphClass = isKeptAtTopRow ? " thread-row__heading-pin--kept" : "";
+  const pinGlyphClass = isKeptAtTopRow ? " thread-row__pin--kept" : "";
   const pinAction = isPinnedRow ? "Unpin thread" : "Pin thread";
   const pinTooltip = isRetainedRow
     ? "Shown for the open transcript. Pin thread to keep it here."
@@ -419,8 +419,8 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
       <div
         ref={rowRef}
         className={`thread-row${props.compact ? " thread-row--compact" : ""}${
-          isPinnedRow ? " thread-row--pinned" : isRetainedRow ? " thread-row--retained" : ""
-        }${selected ? " is-selected" : ""}${
+          selected ? " is-selected" : ""
+        }${
           isComposerSource ? " is-composer-source" : ""
         }${isLinkTarget ? " is-link-target" : ""}${
           isRemoteOffline ? " is-remote-offline" : ""
@@ -431,7 +431,7 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
         // rest of the card still opens the thread through this guarded
         // forwarder: chip-gap and padding clicks land on this div (the
         // chip container is pointer-events: none), while clicks on real
-        // controls — chips, the in-title pin, the actions cluster — are
+        // controls — chips, the pin, the title line's actions — are
         // excluded by the closest() guard or never bubble here at all.
         // The div carries no role, so it is invisible to axe's
         // target-size neighbor scan; the button remains the row's one
@@ -447,7 +447,7 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
         {/* The card's primary action: an EMPTY button absolutely
             stretched over the TITLE BAND only (see `.thread-row__open`
             in app.css for why its rect must not cover the chip flow).
-            The title line, chip flow, and actions cluster are all
+            The title line (with its actions) and the chip flow are
             SIBLINGS rather than descendants: they own real buttons
             (unpin, copy path, copy branch, unbind, reactions, PR links)
             and a button inside a button is neither valid nor operable —
@@ -459,7 +459,7 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
           // ", pinned" keeps the pinned state in the row's accessible
           // name. The button is an empty full-card overlay: the visible
           // title line renders in the SIBLING `.thread-row__header` span
-          // (same pattern as the chip flow) so the in-title pin can be a
+          // (same pattern as the chip flow) so the title line's pin can be a
           // real unpin button without nesting a control inside this one.
           aria-label={
             isPinnedRow ? `${props.thread.title}, pinned`
@@ -498,8 +498,8 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
         />
 
         {/* Title line — a SIBLING of the open-thread overlay (pointer
-            events fall through to it except on the pin button and the
-            status indicator), so the always-visible pin can be the
+            events fall through to it except on the row's controls and
+            the status indicator), so the always-visible pin can be the
             actual unpin control instead of the double affordance the
             hover cluster used to add. Status-indicator clicks bubble
             past this span to the card div's guarded forwarder above, so
@@ -534,12 +534,38 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
               </span>
             ) : null}
             {lockTooltipController.tooltipNode}
-            {hasHeadingPin ? (
+          </span>
+
+          {/* The row's controls, in one fixed order: add reaction · pin ·
+              timestamp-or-kebab. The pin never moves when the row is
+              hovered: the timestamp and the kebab share one lane at the
+              right edge, so nothing right of the pin changes width, and
+              the hover-only controls (reaction, and the pin button on an
+              unpinned row) open toward the title instead. It used to
+              follow the title, where a hover reserve slid it left under
+              the pointer and turned a click on the title into an unpin. */}
+          <span className="thread-row__actions">
+            {canReact ? (
+              <AddReactionChip
+                anchorRef={addReactionRef}
+                open={pickerOpen}
+                onToggle={toggleReactionPicker}
+              />
+            ) : null}
+
+            {/* A pinned row, and the dashed pin on a selection-retained
+                row, show their pin at rest; it is the unpin control.
+                Other unpinned rows reveal the pin button in the same
+                slot on hover. Visibly nested sub-threads cannot be
+                pinned. A remote child whose parent is absent from a full
+                remote-viewer snapshot is rendered as a top-level row and
+                remains pinnable. */}
+            {hasPinMark ? (
               onSetThreadPin ? (
                 <button
                   aria-label={pinAction}
                   aria-describedby={pinTooltipController.visible ? pinTooltipController.tooltipId : undefined}
-                  className={`thread-row__heading-pin${pinGlyphClass}`}
+                  className={`thread-row__pin${pinGlyphClass}`}
                   onMouseEnter={(event) => pinTooltipController.show(event.currentTarget, pinTooltip)}
                   onMouseLeave={pinTooltipController.hide}
                   onFocus={(event) => pinTooltipController.show(event.currentTarget, pinTooltip)}
@@ -560,21 +586,68 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
                     void onSetThreadPin(props.thread, !isPinnedRow);
                   }}
                 >
-                  <PinIcon size={11} strokeDasharray={isRetainedRow ? "3 3" : undefined} aria-hidden="true" />
+                  <PinIcon size={12} strokeDasharray={isRetainedRow ? "3 3" : undefined} aria-hidden="true" />
                 </button>
               ) : (
                 <span
                   aria-hidden="true"
-                  className={`thread-row__heading-pin thread-row__heading-pin--static${pinGlyphClass}`}
+                  className={`thread-row__pin thread-row__pin--static${pinGlyphClass}`}
                 >
-                  <PinIcon size={11} strokeDasharray={isRetainedRow ? "3 3" : undefined} />
+                  <PinIcon size={12} strokeDasharray={isRetainedRow ? "3 3" : undefined} />
                 </span>
               )
+            ) : onSetThreadPin && !props.nested ? (
+              <button
+                aria-label="Pin thread"
+                className="thread-row__pin-button"
+                title="Pin thread"
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  // Same focus-parking as the unpin button: this one-shot
+                  // control unmounts on activation (replaced by the pinned
+                  // row's pin), so keep keyboard focus in the row.
+                  if (event.detail === 0) {
+                    openButtonRef.current?.focus();
+                  }
+                  void onSetThreadPin(props.thread, true);
+                }}
+              >
+                <PinIcon size={12} aria-hidden="true" />
+              </button>
             ) : null}
             {pinTooltipController.tooltipNode}
-          </span>
-          <span className="thread-row__time">
-            {formatRelativeTime(props.thread.updatedAt)}
+
+            <span className="thread-row__time-lane">
+              <span className="thread-row__time">
+                {formatRelativeTime(props.thread.updatedAt)}
+              </span>
+              <button
+                aria-expanded={props.actionsMenuOpen === true}
+                aria-haspopup="menu"
+                aria-label="Open thread actions"
+                className="thread-row__overflow-button"
+                title={`Open thread actions for ${props.thread.title}`}
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  const rect = event.currentTarget.getBoundingClientRect();
+                  props.onOpenContextMenu(props.thread, {
+                    x: rect.left,
+                    y: rect.bottom + 4,
+                    anchorTop: rect.top,
+                  });
+                }}
+              >
+                {/* Vertical dots (⋮), not a horizontal ellipsis: two glyphs to
+                    the left the title ellipsizes, so "…" here reads as the
+                    truncation mark rather than a menu affordance. Shares
+                    MoreVerticalIcon with the pricing-panel and automations
+                    kebabs. (StarMapCardMenu and CompactComposer still draw a
+                    literal ⋯ — separate surfaces, not yet unified.) */}
+                <MoreVerticalIcon size={14} aria-hidden="true" />
+              </button>
+            </span>
           </span>
         </span>
 
@@ -654,71 +727,6 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
           ))}
         </span>
 
-      </div>
-
-      <div className="thread-row__actions">
-        {/* Rows with an in-title pin already have a pin/unpin control,
-            including the dashed pin on a selection-retained row.
-            Other unpinned rows reveal this control on hover.
-            Visibly nested sub-threads cannot be pinned. A remote child
-            whose parent is absent from a full remote-viewer snapshot is
-            rendered as a top-level row and remains pinnable. */}
-        {onSetThreadPin
-          && !props.nested
-          && !hasHeadingPin ? (
-          <button
-            aria-label="Pin thread"
-            className="thread-row__pin-button"
-            title="Pin thread"
-            type="button"
-            onClick={(event) => {
-              event.stopPropagation();
-              // Same focus-parking as the in-title unpin button: this
-              // one-shot control unmounts on activation (replaced by the
-              // in-title pin), so keep keyboard focus in the row.
-              if (event.detail === 0) {
-                openButtonRef.current?.focus();
-              }
-              void onSetThreadPin(props.thread, true);
-            }}
-          >
-            <PinIcon size={12} aria-hidden="true" />
-          </button>
-        ) : null}
-
-        {canReact ? (
-          <AddReactionChip
-            anchorRef={addReactionRef}
-            open={pickerOpen}
-            onToggle={toggleReactionPicker}
-          />
-        ) : null}
-
-        <button
-          aria-expanded={props.actionsMenuOpen === true}
-          aria-haspopup="menu"
-          aria-label="Open thread actions"
-          className="thread-row__overflow-button"
-          title={`Open thread actions for ${props.thread.title}`}
-          type="button"
-          onClick={(event) => {
-            event.stopPropagation();
-            const rect = event.currentTarget.getBoundingClientRect();
-            props.onOpenContextMenu(props.thread, {
-              x: rect.left,
-              y: rect.bottom + 4,
-              anchorTop: rect.top,
-            });
-          }}
-        >
-          {/* Vertical dots (⋮), not a horizontal ellipsis: two glyphs to
-              the left the title ellipsizes, so "…" here reads as the
-              truncation mark rather than a menu affordance. Shares
-              MoreVerticalIcon with the pricing-panel and automations
-              kebabs. (StarMapCardMenu and CompactComposer still draw a
-              literal ⋯ — separate surfaces, not yet unified.) */}
-          <MoreVerticalIcon size={14} aria-hidden="true" />
-        </button>
       </div>
 
       {canReact ? (
