@@ -44,6 +44,31 @@ describe("useComposerTip", () => {
     expect(result.current).toBe(tip(1));
   });
 
+  it("does not skip a tip when leaving a drafted thread for an empty one", () => {
+    // Composer stays mounted across threads and restores the next thread's
+    // draft a render after the scope changes, so the switch renders the new
+    // scope with the old draft first, then empties.
+    const { result, rerender } = renderHook(
+      ({ scopeKey, empty }) => useComposerTip(scopeKey, empty),
+      { initialProps: { scopeKey: "thread-a", empty: true } },
+    );
+    rerender({ scopeKey: "thread-a", empty: false });
+    rerender({ scopeKey: "thread-b", empty: false });
+    rerender({ scopeKey: "thread-b", empty: true });
+    expect(result.current).toBe(tip(1));
+  });
+
+  it("keeps a tip nobody has seen yet when a thread opened with a draft empties", () => {
+    const { result, rerender } = renderHook(
+      ({ scopeKey, empty }) => useComposerTip(scopeKey, empty),
+      { initialProps: { scopeKey: "thread-a", empty: false } },
+    );
+    rerender({ scopeKey: "thread-a", empty: true });
+    expect(result.current).toBe(tip(0));
+    rerender({ scopeKey: "thread-b", empty: true });
+    expect(result.current).toBe(tip(1));
+  });
+
   it("continues the rotation across composers instead of restarting it", () => {
     renderHook(() => useComposerTip("thread-a", true));
     const second = renderHook(() => useComposerTip("thread-b", true));

@@ -19,7 +19,7 @@ export const COMPOSER_TIPS: readonly (() => string)[] = [
   () => "Type # to mention a thread or pull request",
   () => "Type / for commands, like /review for a code review",
   () => "Type $ for Codex skills. Other harnesses use /",
-  () => "Pin a thread to keep it from being auto-archived",
+  () => "Pins keep your active threads in focus. Unpin to tidy up",
   () => "In Directories, Keep at Top holds a thread above pins",
   () => "Say “Send #thread a message asking it to…”",
   () => "Say “Handoff a child thread to…” to split off visible work",

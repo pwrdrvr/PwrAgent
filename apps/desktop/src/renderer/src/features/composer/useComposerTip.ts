@@ -18,6 +18,8 @@ interface ComposerTipState {
   scopeKey: string | undefined;
   empty: boolean;
   index: number | undefined;
+  /** Whether a render has shown this tip in an empty box. */
+  shown: boolean;
 }
 
 /**
@@ -29,27 +31,39 @@ interface ComposerTipState {
  * composer moves to another thread, or when it empties again after holding a
  * draft (a send, or the operator clearing the box). It never rotates on a
  * timer, because text that changes under the eye reads as a notification.
+ *
+ * Either change moves on only from a tip that was actually shown. Composer
+ * stays mounted across threads and restores a thread's draft a render after
+ * the scope changes, so leaving a thread with a draft for an empty one first
+ * renders the new scope with the old draft and then empties. Without the
+ * `shown` check, those two renders spent two tips, and the first was never
+ * seen.
  */
 export function useComposerTip(scopeKey: string | undefined, empty: boolean): string | undefined {
   const [state, setState] = useState<ComposerTipState>(() => ({
     scopeKey,
     empty,
     index: scopeKey === undefined ? undefined : takeNextTipIndex(),
+    shown: scopeKey !== undefined && empty,
   }));
-  let index = state.index;
+  let { index, shown } = state;
   if (state.scopeKey !== scopeKey || state.empty !== empty) {
     // Adjusting state while rendering, React's pattern for state derived from
     // a previous render: the next render reads the settled value.
     if (scopeKey === undefined) {
       index = undefined;
-    } else if (
-      index === undefined
-      || state.scopeKey !== scopeKey
-      || (empty && !state.empty)
-    ) {
-      index = takeNextTipIndex();
+      shown = false;
+    } else {
+      const freshBox =
+        state.scopeKey !== scopeKey
+        || (empty && !state.empty);
+      if (index === undefined || (freshBox && shown)) {
+        index = takeNextTipIndex();
+        shown = false;
+      }
+      shown = shown || empty;
     }
-    setState({ scopeKey, empty, index });
+    setState({ scopeKey, empty, index, shown });
   }
   return index === undefined ? undefined : COMPOSER_TIPS[index]!();
 }
