@@ -2,6 +2,16 @@
 // surfaces. These are locator-scoped on purpose: BrowserWindow chrome and OS
 // shadows belong to native screenshot documentation, not renderer contracts.
 //
+// Scope each golden to the surface its test is about, never the whole window.
+// The to-do golden used to capture all of `.app-shell`, so the sidebar rows,
+// the thread-list footer, the context-rail tabs, the selected-row style and
+// the composer chips all lived in one LFS binary. On 2026-10-06 three
+// unrelated PRs each regenerated it, and every open UI PR then hit a binary
+// merge conflict that git cannot resolve. There is deliberately no
+// whole-window golden: any piece of chrome stable enough to pin here is better
+// pinned by a geometry or DOM assertion in its own feature spec, which states
+// what it guards and merges as text.
+//
 // The reference images are lossless WebP generated on the matching Tart VM
 // runner and stored in Git LFS. Playwright infers WebP from the extension and
 // uses its lossless default at quality 100. Use workspace/MCP tools to locate
@@ -38,7 +48,6 @@ const VISUAL_WINDOW_SIZE = { width: 1440, height: 900 };
 const VISUAL_MAX_DIFF_PIXELS = 20;
 const VISUAL_CLOCK_TIME = new Date("2026-08-02T12:00:00.000Z");
 const VISUAL_APP_VERSION = "1.2.3-beta.1";
-const VISUAL_INITIAL_LOAD_DURATION = "3 ms";
 // Pin the backing scale factor. Chromium otherwise rasterizes at the attached
 // display's native scale, so the same CSS layout produces pixel-different
 // images in 1x and Retina 2x sessions. `scale: "css"` normalizes only the
@@ -76,7 +85,7 @@ test.describe("visual regression", () => {
 
   test.setTimeout(120_000);
 
-  test("renders a replayed todo thread in the desktop shell", async () => {
+  test("renders a replayed task plan in the transcript", async () => {
     const app = await launchElectronApp({
       fixturePath: path.resolve(
         specDir,
@@ -115,40 +124,26 @@ test.describe("visual regression", () => {
           name: "Add AGENTS docs for media VCL",
         }),
       ).toBeVisible();
+      // The golden is the transcript's content column: the user message, the
+      // task-plan card the fixture exists for, and the assistant reply. It is
+      // sized to its entries, not to the scroller, so the composer's height
+      // stays out of it, and nothing outside the thread pane is in it. Its
+      // width still follows the thread column, so a sidebar or rail width
+      // change moves it; that reflows the transcript and is worth a look. The
+      // context rail is not captured, so neither its readiness nor its
+      // measured "Initial load" duration matters to this golden.
+      const transcript = app.window.getByRole("region", { name: "Transcript" });
       await expect(
-        app.window.getByText(
-          /Changes made during a turn are queued/,
-        ),
+        transcript.getByRole("group", { name: "Task plan" }),
+      ).toContainText("0 out of 3 tasks completed");
+      await expect(
+        transcript.getByText(/keep the implementation checklist in sync/),
       ).toBeVisible();
-      await expect(
-        app.window.getByRole("button", { name: "Mark as Agent", exact: true }),
-      ).toBeEnabled();
-      const initialLoadDuration = app.window
-        .getByText("Initial load", { exact: true })
-        .locator("xpath=following-sibling::dd");
-      await expect(initialLoadDuration).toBeVisible();
-      // The real backend read is intentionally measured, so its exact value
-      // varies by a millisecond or two between otherwise identical runs.
-      // Normalize only that volatile text while retaining the row and layout
-      // in the visual contract.
-      await initialLoadDuration.evaluate((element, duration) => {
-        element.textContent = duration;
-      }, VISUAL_INITIAL_LOAD_DURATION);
-      await expect.poll(async () =>
-        await app.window.evaluate(async () => {
-          const bridge = globalThis as typeof globalThis & {
-            pwragent?: {
-              readAppMetadata?: () => Promise<{ applicationVersion: string }>;
-            };
-          };
-          return (await bridge.pwragent?.readAppMetadata?.())?.applicationVersion;
-        })
-      ).toBe(VISUAL_APP_VERSION);
 
-      const shell = app.window.locator(".app-shell");
-      await expect(shell).toBeVisible();
+      const content = transcript.locator(".transcript-list__content");
+      await expect(content).toBeVisible();
       await waitForFonts(app.window);
-      await expect(shell).toHaveScreenshot("todo-thread-shell.webp", {
+      await expect(content).toHaveScreenshot("todo-thread-transcript.webp", {
         animations: "disabled",
         caret: "hide",
         maxDiffPixels: VISUAL_MAX_DIFF_PIXELS,
