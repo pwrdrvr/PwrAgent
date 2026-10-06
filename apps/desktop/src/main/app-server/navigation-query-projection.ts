@@ -24,6 +24,7 @@ import {
   passesNavigationStarMapFilters,
   NAVIGATION_QUERY_MAX_PAGE_ROWS,
   rankThreadJumpMatches,
+  textMatchesJumpQuery,
 } from "@pwragent/shared";
 import {
   navigationAttentionIdentity,
@@ -877,8 +878,8 @@ export function projectNavigationQuery(params: {
             || query.keys?.includes(directory.key) || (directory.path !== undefined && query.paths?.includes(directory.path))))
           .filter((directory) => query.kind !== "directory-index"
             || !query.filter?.trim()
-            || `${directory.label}\n${directory.path ?? ""}`.toLowerCase()
-              .includes(query.filter.trim().toLowerCase()))
+            || [directory.label, directory.path]
+              .some((value) => textMatchesJumpQuery(value, query.filter ?? "")))
       : [],
     entries,
     queryKey: navigationQueryKey(params.request),
