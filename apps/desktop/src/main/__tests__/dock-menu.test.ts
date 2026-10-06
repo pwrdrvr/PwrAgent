@@ -1,5 +1,31 @@
 import { describe, expect, it, vi } from "vitest";
+import type { DesktopPwrAgentProfileSummary } from "@pwragent/shared";
 import { buildDockProfileMenuTemplate } from "../dock-menu";
+
+function summary(
+  name: string,
+  options: Partial<DesktopPwrAgentProfileSummary> = {},
+): DesktopPwrAgentProfileSummary {
+  return {
+    active: false,
+    canDelete: true,
+    codexProfile: {
+      codexHome: `/tmp/codex-${name}`,
+      displayName: name,
+      exists: true,
+      hasAuthFile: true,
+      hasConfigFile: true,
+      name,
+      selected: true,
+      source: "directory",
+    },
+    default: false,
+    name,
+    profileDir: `/tmp/${name}`,
+    showInMenu: true,
+    ...options,
+  };
+}
 
 describe("Dock profile menu", () => {
   it("lists profiles and opens the selected profile", () => {
@@ -70,6 +96,31 @@ describe("Dock profile menu", () => {
     }
     firstItem.click?.({} as never, {} as never, {} as never);
     expect(openProfile).toHaveBeenCalledWith("personal");
+  });
+
+  it("follows the Profiles menu: given order, hidden profiles left out", () => {
+    const template = buildDockProfileMenuTemplate(
+      [
+        summary("work"),
+        summary("scratch", { showInMenu: false }),
+        summary("personal", { active: true }),
+      ],
+      vi.fn(),
+    );
+
+    const submenu = Array.isArray(template[0]?.submenu)
+      ? template[0].submenu
+      : [];
+    expect(submenu.map((item) => item.label)).toEqual(["work", "personal"]);
+  });
+
+  it("offers no Open Profile item when every profile is switched off", () => {
+    expect(
+      buildDockProfileMenuTemplate(
+        [summary("scratch", { active: true, showInMenu: false })],
+        vi.fn(),
+      ),
+    ).toEqual([]);
   });
 
   it("keeps the submenu visible when there are no profiles", () => {

@@ -76,13 +76,23 @@ export type ProfilesRegistry = {
   profiles: ProfileEntry[];
 };
 
+/**
+ * Read by the Dock tile plug-in while PwrAgent is not running. The plug-in in
+ * an already-installed build accepts only `schemaVersion: 2`, and every build
+ * writes the same cache file, so new fields are additive rather than a bump:
+ * an older plug-in ignores them and keeps its own alphabetical sort.
+ */
 export type DockProfileSnapshot = {
   schemaVersion: 2;
   pwragentHome: string;
   defaultProfile: string;
+  /** `profiles` is already in the Profiles-menu order; do not re-sort it. */
+  ordered: true;
   profiles: Array<{
     name: string;
     displayName?: string;
+    /** Written only as `false`: switched out of the Profiles menu. */
+    showInMenu?: false;
   }>;
 };
 
@@ -486,19 +496,32 @@ export function buildDockProfileSnapshot(
     // A fresh install has no profiles directory yet.
   }
 
+  // The Profiles menu's order: the registry's own (creation order until the
+  // operator reorders it), then any profile directory the registry never
+  // recorded, by name. Hidden profiles stay in the snapshot so the plug-in
+  // can tell "no profiles yet" from "every profile switched off".
+  const registryOrder = [...profileEntries.keys()];
+  const materialized = new Set(materializedProfileNames);
+  const orderedNames = [
+    ...registryOrder.filter((name) => materialized.has(name)),
+    ...materializedProfileNames
+      .filter((name) => !profileEntries.has(name))
+      .sort((left, right) => left.localeCompare(right)),
+  ];
+
   return {
     schemaVersion: 2,
     pwragentHome,
     defaultProfile: registry.default_profile ?? "default",
-    profiles: materializedProfileNames
-      .sort((left, right) => left.localeCompare(right))
-      .map((name) => {
-        const displayName = profileEntries.get(name)?.display_name;
-        return {
-          name,
-          ...(displayName ? { displayName } : {}),
-        };
-      }),
+    ordered: true,
+    profiles: orderedNames.map((name) => {
+      const entry = profileEntries.get(name);
+      return {
+        name,
+        ...(entry?.display_name ? { displayName: entry.display_name } : {}),
+        ...(entry?.show_in_menu === false ? { showInMenu: false as const } : {}),
+      };
+    }),
   };
 }
 
