@@ -701,7 +701,7 @@ describe("buildBindingStatusIntent", () => {
     const locked = status(navigation);
     expect(locked.text).toContain("Locked: Worktree handed to the repair thread.");
     expect(locked.actions).toContainEqual(expect.objectContaining({
-      id: "status:lock", label: "Unlock", fallbackText: "unlock", priority: 1,
+      id: "status:lock", label: "Unlock", fallbackText: "unlock", priority: 1, value: { locked: false },
     }));
 
     const unlocked = status(base);

@@ -749,6 +749,9 @@ function buildStatusActions(params: {
       // Unlocking is the one thing a locked thread is waiting on, so it
       // outlasts every control but Stop on a short action budget.
       priority: params.locked ? 1 : 15,
+      // The state the button asks for, so a stale card or a second tap on
+      // the same Lock cannot invert it.
+      value: { locked: !params.locked },
     },
     {
       id: "status:stop",

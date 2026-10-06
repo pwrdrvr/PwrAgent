@@ -18503,11 +18503,14 @@ export class DesktopBackendRegistry {
     const key = buildThreadIdentityKey(params.backend, params.threadId);
     this.handoffTurnStarts.set(key, (this.handoffTurnStarts.get(key) ?? 0) + 1);
     try {
-      // Checked after the handoff count is raised, so a handoff cannot slip
-      // into the await. A queued entry that reaches here is held with this
-      // refusal as its reason, and waits for an explicit release.
-      await this.assertThreadNotLocked(params.backend, params.threadId);
-      return await this.withThreadLifecycleMutation(params, async () => await this.startTurnWithoutHandoff(params));
+      // Checked inside the lifecycle mutation, after the handoff count is
+      // raised: a start that waited behind a move or archive sees a lock
+      // that landed meanwhile. A queued entry that reaches here is held with
+      // this refusal as its reason until an unlock releases it.
+      return await this.withThreadLifecycleMutation(params, async () => {
+        await this.assertThreadNotLocked(params.backend, params.threadId);
+        return await this.startTurnWithoutHandoff(params);
+      });
     } finally {
       const count = (this.handoffTurnStarts.get(key) ?? 1) - 1;
       if (count) this.handoffTurnStarts.set(key, count);
@@ -22759,6 +22762,8 @@ export class DesktopBackendRegistry {
       note?: string;
     },
     origin: { source: ThreadLockSource; sourceInstanceId?: FederationInstanceId },
+    /** False leaves a queue the lock held for the caller to resume. */
+    options: { resumeQueue?: boolean } = {},
   ): Promise<SetThreadLockResponse> {
     const identity = { backend: request.backend, threadId: request.threadId };
     const current = await this.readThreadLock(request.backend, request.threadId);
@@ -22782,7 +22787,7 @@ export class DesktopBackendRegistry {
       return identity;
     }
     await this.writeThreadLock(identity, lock);
-    if (!lock) {
+    if (!lock && options.resumeQueue !== false) {
       // An unlock resumes what the lock paused: a queue the lock held, with
       // its entries in order, drains once the thread is idle.
       await this.threadTurnQueue.releaseHold(identity, isThreadLockRefusal);
@@ -41836,12 +41841,14 @@ export class DesktopBackendRegistry {
     // An unlock lands before the move, which a lock refuses; a lock lands
     // last, after the move it would otherwise refuse. A refused move puts
     // the unlocked lock back as it was.
+    // The queue the lock held resumes only after the move: a message started
+    // in between would run in the old workspace and refuse the move.
     const unlockedLock = mutateLocally && locked === false && !dryRun
       ? (await this.setThreadLock({
           backend: args.backend,
           threadId,
           locked: false,
-        }, { source: "agent_tool" })).previousLock
+        }, { source: "agent_tool" }, { resumeQueue: false })).previousLock
       : undefined;
 
     // First, and before anything else changes: the destination is checked on
@@ -41865,6 +41872,9 @@ export class DesktopBackendRegistry {
           message,
         );
       }
+    }
+    if (unlockedLock) {
+      await this.threadTurnQueue.releaseHold({ backend: args.backend, threadId }, isThreadLockRefusal);
     }
 
     if (mutateLocally && title !== undefined && !dryRun) {

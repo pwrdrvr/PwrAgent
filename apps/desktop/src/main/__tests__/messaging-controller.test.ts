@@ -24720,6 +24720,17 @@ describe("MessagingController", () => {
       threadId: "thread-1",
       locked: false,
     });
+
+    // A button carries the state it was drawn for: a stale or repeated Lock
+    // on a now-locked thread locks again rather than unlocking it.
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:lock", value: { locked: true } }),
+    );
+    expect(harness.setThreadLock).toHaveBeenLastCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      locked: true,
+    });
   });
 
   it("reports a lock refusal whose note reads like a busy thread instead of queueing it", async () => {

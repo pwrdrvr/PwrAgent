@@ -15309,6 +15309,37 @@ describe("Composer", () => {
     await waitFor(() => expect(textarea).toHaveValue(""));
   });
 
+  it("does not offer /lock on a peer's thread whose owner withholds turn control", async () => {
+    render(
+      <Composer
+        desktopApi={{ onAgentEvent: () => () => undefined }}
+        disabled={false}
+        onLockThread={vi.fn(async () => undefined)}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Peer thread",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+          federation: {
+            ref: { backend: "codex", threadId: "thread-1", target: { scope: "remote", instanceId: "pwr_owner" } },
+            instanceLabel: "Owner Mac",
+            peerStatus: "connected",
+            capabilities: ["thread_navigation"],
+          } as never,
+        }}
+      />,
+    );
+
+    // "/" opens the menu with every local command, so /review proves it is open.
+    fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "/" } });
+    expect(await screen.findByRole("option", { name: /\/review/ })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /\/lock/ })).toBeNull();
+  });
+
   it("keeps a /lock draft and shows why when the lock is refused", async () => {
     const onLockThread = vi.fn(async () => {
       throw new Error("Owner Mac is unreachable.");

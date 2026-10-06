@@ -14803,16 +14803,23 @@ export class MessagingController {
       );
       return;
     }
-    // Toggles from the thread's current state, the same state the card's
-    // Lock or Unlock label was drawn from. A chat has no note field, so a
-    // lock from here carries none; one set elsewhere keeps its note.
-    const navigation = await this.readBoundThreadConfiguration(binding);
-    const thread = findThreadForBinding(navigation, binding);
+    // The button carries the state it asks for. A text fallback carries
+    // none, and toggles the thread's current state. A chat has no note
+    // field, so a lock from here carries none; one set elsewhere keeps its
+    // note.
+    const requested = event.kind === "callback" && event.value
+      && typeof (event.value as { locked?: unknown }).locked === "boolean"
+      ? (event.value as { locked: boolean }).locked
+      : undefined;
+    const locked = requested ?? !findThreadForBinding(
+      await this.readBoundThreadConfiguration(binding),
+      binding,
+    )?.lock;
     await this.options.backend.setThreadLock({
       backend: binding.backend,
       federationTarget: federationTargetForBinding(binding),
       threadId: binding.threadId,
-      locked: !thread?.lock,
+      locked,
     });
     // Refresh handled by the thread-state update bus.
   }

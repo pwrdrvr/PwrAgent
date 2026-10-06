@@ -47799,6 +47799,33 @@ script = "printf setup"
       await registry.close();
     });
 
+    it("resumes what the lock held only after an unlock's move lands", async () => {
+      const { call, codexClient, handoff, registry } = await setup();
+      const target = { backend: "codex" as const, threadId: "target-thread" };
+      const { lock } = await registry.setThreadLock({ ...target, locked: true, note: "Parked" }, { source: "operator" });
+      await registry.submitHeldTurn({
+        ...target,
+        input: [{ type: "text", text: "Held while parked" }],
+        queueEntryId: "held-while-parked",
+        holdReason: threadLockRefusalMessage(lock!),
+      });
+      let startsDuringMove: number | undefined;
+      handoff.mockImplementationOnce(async () => {
+        // Give a drain scheduled by the unlock every chance to run.
+        await new Promise((resolve) => setImmediate(resolve));
+        await new Promise((resolve) => setImmediate(resolve));
+        startsDuringMove = codexClient.startTurnCallCount;
+        return {} as HandoffThreadWorkspaceResponse;
+      });
+
+      const result = await call({ locked: false, projectPath: "/Users/fixture-user/repos/app" });
+
+      expect(result.success).toBe(true);
+      expect(startsDuringMove).toBe(0);
+      await vi.waitFor(() => expect(codexClient.startTurnCallCount).toBe(1));
+      await registry.close();
+    });
+
     it("hands an archive, a restore, a move or a pin to the peer that owns the thread", async () => {
       const codexClient = new MockBackendClient({
         initializeResult: { methods: ["thread/list"] },

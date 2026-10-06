@@ -3341,7 +3341,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const supportsLockCommand =
     !isLaunchpad
     && Boolean(props.thread)
-    && Boolean(props.onLockThread);
+    && Boolean(props.onLockThread)
+    // A peer's thread locks only where the owner grants turn control, as in
+    // the sidebar's menu.
+    && (props.thread?.federation?.capabilities?.includes("turn_control") ?? true);
 
   const selectionStart = Math.min(
     inputRef.current?.selectionStart ?? draft.length,

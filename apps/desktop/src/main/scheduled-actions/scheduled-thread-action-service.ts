@@ -9,6 +9,7 @@ import type {
   ScheduledThreadActionMutationResponse,
   UpdateScheduledThreadActionRequest,
 } from "@pwragent/shared";
+import { isThreadLockRefusal } from "@pwragent/shared";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry.js";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry.js";
 import { getMainLogger } from "../log.js";
@@ -395,14 +396,30 @@ export class ScheduledThreadActionService {
         }
         return;
       }
-      const response = await this.options.registry.submitTurn({
+      const turn = {
         ...action.turn,
         backend: action.backend,
         threadId: action.threadId,
-        origin: "scheduled",
+        origin: "scheduled" as const,
         queueEntryId,
-      });
-      const updated = response.status === "queued"
+      };
+      const response = await this.options.registry.submitTurn(turn)
+        .catch(async (error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
+          if (!isThreadLockRefusal(message)) throw error;
+          // A lock pauses the message rather than failing it: held in the
+          // thread's queue, it starts when the thread is unlocked.
+          return await this.options.registry.submitHeldTurn({ ...turn, holdReason: message });
+        });
+      const updated = response.status === "queued" && response.entry.holdReason
+        ? this.options.store.markHeld(
+            action.id,
+            response.entry.id,
+            response.entry.holdReason,
+            this.now(),
+            this.ownerId,
+          )
+        : response.status === "queued"
         ? this.options.store.markQueued(
             action.id,
             response.entry.id,
