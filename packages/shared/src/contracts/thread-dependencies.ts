@@ -46,6 +46,20 @@ export type ThreadDependency = {
   dispatchOwnerPid?: number;
 };
 
+/** Evidence reasons a repair can clear while the PR stays open. */
+export const REPAIRABLE_THREAD_DEPENDENCY_FAILURES: readonly string[] = ["CI failed", "Merge conflict"];
+
+/**
+ * True when `onFailure: "wait"` keeps this failed registration waiting:
+ * every failed prerequisite is a CI failure or conflict a repair can clear.
+ */
+export function isRepairableDependencyFailure(dependency: Pick<ThreadDependency, "onFailure" | "evidence">): boolean {
+  return dependency.onFailure === "wait"
+    && dependency.evidence
+      .filter((entry) => entry.state === "failed")
+      .every((entry) => REPAIRABLE_THREAD_DEPENDENCY_FAILURES.includes(entry.reason));
+}
+
 export type ManageThreadDependenciesRequest = {
   action: "create" | "list" | "cancel" | "dismiss";
   backend?: AppServerBackendKind;
