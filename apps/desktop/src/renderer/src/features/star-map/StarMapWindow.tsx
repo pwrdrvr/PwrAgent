@@ -6,6 +6,7 @@ import { useRecoverableComposerDraftStore } from "../../lib/RendererRecoveryStat
 import { useDesktopSettings } from "../settings/useDesktopSettings";
 import { StarMapScreen } from "./StarMapScreen";
 import { BrandLockup } from "../chrome/BrandLockup";
+import { TerminalPreferencesProvider } from "../../lib/terminal-preferences";
 
 /**
  * Root component for the dedicated Federation Star Map BrowserWindow.
@@ -84,40 +85,47 @@ export function StarMapWindow() {
           <div className="activity-titlebar__spacer" />
         </header>
       ) : null}
-      <StarMapScreen
-        composerDraftStore={composerDraftStore}
-        desktopApi={desktopApi}
-        sessionKeys={{
-          approvalRequestThreadKeys: session.approvalRequestThreadKeys,
-          inputRequestThreadKeys: session.inputRequestThreadKeys,
-          thinkingThreadKeys: session.thinkingThreadKeys,
-        }}
-        localInstanceLabel={settings.snapshot?.federation.instanceLabel.value}
-        pastedImageMaxPatches={
-          settings.snapshot?.imageUploads.pastedImageMaxPatches.value
+      <TerminalPreferencesProvider
+        minimumContrast={
+          settings.snapshot?.general.appearance.terminalMinimumContrast?.value
+          ?? false
         }
-        pricingDisplayOptions={{
-          codexCredits:
-            settings.snapshot?.experimental.threadPricingDisplayCodexCredits
-              ?.value ?? false,
-          usd:
-            settings.snapshot?.experimental.threadPricingDisplayUsd?.value
-            ?? true,
-        }}
-        threadPricingSummaryEnabled={
-          settings.snapshot?.experimental.threadPricingSummary?.value ?? true
-        }
-        onOpenLocalThread={(thread) => {
-          void desktopApi?.openStarMapThreadInMainWindow?.({
-            backend: thread.source,
-            threadId: thread.id,
-          });
-        }}
-        onUserRepliedToThread={reportUserRepliedToThread}
-        onFocusLocalInstance={() => {
-          void desktopApi?.focusMainWindowFromStarMap?.();
-        }}
-      />
+      >
+        <StarMapScreen
+          composerDraftStore={composerDraftStore}
+          desktopApi={desktopApi}
+          sessionKeys={{
+            approvalRequestThreadKeys: session.approvalRequestThreadKeys,
+            inputRequestThreadKeys: session.inputRequestThreadKeys,
+            thinkingThreadKeys: session.thinkingThreadKeys,
+          }}
+          localInstanceLabel={settings.snapshot?.federation.instanceLabel.value}
+          pastedImageMaxPatches={
+            settings.snapshot?.imageUploads.pastedImageMaxPatches.value
+          }
+          pricingDisplayOptions={{
+            codexCredits:
+              settings.snapshot?.experimental.threadPricingDisplayCodexCredits
+                ?.value ?? false,
+            usd:
+              settings.snapshot?.experimental.threadPricingDisplayUsd?.value
+              ?? true,
+          }}
+          threadPricingSummaryEnabled={
+            settings.snapshot?.experimental.threadPricingSummary?.value ?? true
+          }
+          onOpenLocalThread={(thread) => {
+            void desktopApi?.openStarMapThreadInMainWindow?.({
+              backend: thread.source,
+              threadId: thread.id,
+            });
+          }}
+          onUserRepliedToThread={reportUserRepliedToThread}
+          onFocusLocalInstance={() => {
+            void desktopApi?.focusMainWindowFromStarMap?.();
+          }}
+        />
+      </TerminalPreferencesProvider>
     </div>
   );
 }

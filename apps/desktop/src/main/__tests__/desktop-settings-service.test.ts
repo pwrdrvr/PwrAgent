@@ -3014,6 +3014,7 @@ describe("DesktopSettingsService", () => {
           darkTheme: "solarized-dark",
           lightTheme: "catppuccin-latte",
           themedDockIcon: false,
+          terminalMinimumContrast: true,
           density: "compact",
           sidebarTextSize: "lg",
         },
@@ -3026,6 +3027,7 @@ describe("DesktopSettingsService", () => {
     expect(writtenFile).toContain('dark_theme = "solarized-dark"');
     expect(writtenFile).toContain('light_theme = "catppuccin-latte"');
     expect(writtenFile).toContain("themed_dock_icon = false");
+    expect(writtenFile).toContain("terminal_minimum_contrast = true");
     expect(writtenFile).toContain('density = "compact"');
     expect(writtenFile).toContain('sidebar_text_size = "lg"');
 
@@ -3044,6 +3046,10 @@ describe("DesktopSettingsService", () => {
     });
     expect(afterWrite.general.appearance.themedDockIcon).toEqual({
       value: false,
+      source: "config",
+    });
+    expect(afterWrite.general.appearance.terminalMinimumContrast).toEqual({
+      value: true,
       source: "config",
     });
     expect(afterWrite.general.appearance.density).toEqual({
@@ -3072,6 +3078,7 @@ describe("DesktopSettingsService", () => {
           darkTheme: "tangerine-dark",
           lightTheme: "tangerine-light",
           themedDockIcon: true,
+          terminalMinimumContrast: false,
           density: "mission-control",
           sidebarTextSize: "md",
         },
@@ -3083,6 +3090,7 @@ describe("DesktopSettingsService", () => {
     expect(restoredFile).not.toContain("dark_theme");
     expect(restoredFile).not.toContain("light_theme");
     expect(restoredFile).not.toContain("themed_dock_icon");
+    expect(restoredFile).not.toContain("terminal_minimum_contrast");
     expect(restoredFile).not.toContain('density = "');
     expect(restoredFile).not.toContain('sidebar_text_size = "');
 
@@ -3092,6 +3100,10 @@ describe("DesktopSettingsService", () => {
     expect(afterRestore.general.appearance.lightTheme.source).toBe("default");
     expect(afterRestore.general.appearance.themedDockIcon).toEqual({
       value: true,
+      source: "default",
+    });
+    expect(afterRestore.general.appearance.terminalMinimumContrast).toEqual({
+      value: false,
       source: "default",
     });
     expect(afterRestore.general.appearance.density.source).toBe("default");

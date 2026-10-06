@@ -938,6 +938,11 @@ function SettingsSectionBody(props: {
             general: { appearance: { themedDockIcon } },
           });
         }}
+        onTerminalMinimumContrastChange={async (terminalMinimumContrast) => {
+          await props.settings.writeConfig({
+            general: { appearance: { terminalMinimumContrast } },
+          });
+        }}
         onClearMessagingAcknowledgment={async () => {
           await props.settings.writeConfig({
             general: { messagingAcknowledgment: null },

@@ -2,6 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DesktopApi } from "../../../lib/desktop-api";
+import { TerminalPreferencesProvider } from "../../../lib/terminal-preferences";
 import { IntegratedTerminal } from "../IntegratedTerminal";
 
 const xtermState = vi.hoisted(() => ({
@@ -78,6 +79,24 @@ vi.mock("@xterm/addon-fit", () => ({
   },
 }));
 
+// The real lookup caches per window, which would leak one test's fonts into
+// the next; each test decides what the lookup finds and when.
+const nerdFontState = vi.hoisted(() => ({
+  discovered: undefined as string | undefined,
+  lookup: undefined as Promise<string | undefined> | undefined,
+}));
+
+vi.mock("../../../lib/nerd-font-fallback", async (importActual) => {
+  const actual =
+    await importActual<typeof import("../../../lib/nerd-font-fallback")>();
+  return {
+    ...actual,
+    discoveredNerdFontFamily: () => nerdFontState.discovered,
+    discoverNerdFontFamily: () =>
+      nerdFontState.lookup ?? Promise.resolve(undefined),
+  };
+});
+
 class MockResizeObserver {
   static instances: MockResizeObserver[] = [];
   constructor(readonly callback: () => void) {
@@ -94,6 +113,8 @@ describe("IntegratedTerminal", () => {
     xtermState.pendingWriteCallbacks.length = 0;
     xtermState.replayDataEvents.clear();
     xtermState.fit.mockClear();
+    nerdFontState.discovered = undefined;
+    nerdFontState.lookup = undefined;
     MockResizeObserver.instances = [];
     Object.defineProperty(window, "ResizeObserver", {
       configurable: true,
@@ -282,6 +303,204 @@ describe("IntegratedTerminal", () => {
       brightBlack: "#666666",
       brightWhite: "#a5a5a5",
     });
+  });
+
+  it("repaints from the live tokens when the theme changes", async () => {
+    // The pane's background follows the theme through CSS, but xterm draws
+    // text from the palette it was handed. A terminal opened under Blue Dark
+    // kept Blue Dark's pale ink on Blue Light's pale canvas.
+    const root = document.documentElement;
+    const setTokens = (tokens: Record<string, string>) => {
+      for (const [token, value] of Object.entries(tokens)) {
+        root.style.setProperty(token, value);
+      }
+    };
+    setTokens({
+      "--terminal-bg": "#0f1724",
+      "--terminal-fg": "#c9d6ea",
+      "--terminal-cursor": "#7fbcff",
+      "--terminal-ansi-yellow": "#e5c06a",
+    });
+    root.setAttribute("data-color-theme", "blue-dark");
+
+    const { unmount } = render(
+      <IntegratedTerminal
+        desktopApi={{
+          createIntegratedTerminal: vi.fn(async () => ({
+            sessionId: "session-1",
+            threadKey: "codex:thread-a",
+            cwd: "/repo/a",
+            shell: "/bin/zsh",
+          })),
+          resizeIntegratedTerminal: vi.fn(async () => undefined),
+        }}
+        threadKey="codex:thread-a"
+        height={260}
+        onClose={() => undefined}
+        onExit={() => undefined}
+      />,
+    );
+    await waitFor(() => expect(xtermState.instances).toHaveLength(1));
+    const options = xtermState.instances[0]!.options as {
+      theme: Record<string, string>;
+    };
+    expect(options.theme).toMatchObject({ foreground: "#c9d6ea", yellow: "#e5c06a" });
+
+    // `applyAppearanceAttributes` flips both attributes for a scheme change.
+    setTokens({
+      "--terminal-bg": "#f3f7fc",
+      "--terminal-fg": "#1f2f47",
+      "--terminal-cursor": "#1f5fbf",
+      "--terminal-ansi-yellow": "#8a6100",
+    });
+    root.setAttribute("data-theme", "light");
+    root.setAttribute("data-color-theme", "blue-light");
+    await waitFor(() => expect(options.theme).toMatchObject({
+      background: "#f3f7fc",
+      foreground: "#1f2f47",
+      cursor: "#1f5fbf",
+      yellow: "#8a6100",
+    }));
+
+    // A switch between two themes of the same scheme changes only
+    // `data-color-theme`, and must repaint too.
+    setTokens({ "--terminal-fg": "#2e2e33" });
+    root.setAttribute("data-color-theme", "gray-light");
+    await waitFor(() => expect(options.theme.foreground).toBe("#2e2e33"));
+
+    unmount();
+    setTokens({ "--terminal-fg": "#333333" });
+    root.removeAttribute("data-color-theme");
+    await Promise.resolve();
+    expect(options.theme.foreground).toBe("#2e2e33");
+    root.removeAttribute("data-theme");
+  });
+
+  it("holds text to 4.5:1 only while the operator opts in", async () => {
+    const desktopApi: DesktopApi = {
+      createIntegratedTerminal: vi.fn(async () => ({
+        sessionId: "session-1",
+        threadKey: "codex:thread-a",
+        cwd: "/repo/a",
+        shell: "/bin/zsh",
+      })),
+      resizeIntegratedTerminal: vi.fn(async () => undefined),
+    };
+    const pane = (minimumContrast: boolean) => (
+      <TerminalPreferencesProvider minimumContrast={minimumContrast}>
+        <IntegratedTerminal
+          desktopApi={desktopApi}
+          threadKey="codex:thread-a"
+          height={260}
+          onClose={() => undefined}
+          onExit={() => undefined}
+        />
+      </TerminalPreferencesProvider>
+    );
+    const { rerender } = render(pane(true));
+    await waitFor(() => expect(xtermState.instances).toHaveLength(1));
+    const options = xtermState.instances[0]!.options as {
+      minimumContrastRatio: number;
+    };
+    expect(options.minimumContrastRatio).toBe(4.5);
+
+    // Applied to the running terminal, not only to the next one.
+    rerender(pane(false));
+    expect(options.minimumContrastRatio).toBe(1);
+    expect(xtermState.instances).toHaveLength(1);
+  });
+
+  it("leaves every color alone where no preference is provided", async () => {
+    render(
+      <IntegratedTerminal
+        desktopApi={{
+          createIntegratedTerminal: vi.fn(async () => ({
+            sessionId: "session-1",
+            threadKey: "codex:thread-a",
+            cwd: "/repo/a",
+            shell: "/bin/zsh",
+          })),
+        }}
+        threadKey="codex:thread-a"
+        height={260}
+        onClose={() => undefined}
+        onExit={() => undefined}
+      />,
+    );
+    await waitFor(() => expect(xtermState.instances).toHaveLength(1));
+    expect(
+      (xtermState.instances[0]!.options as { minimumContrastRatio: number })
+        .minimumContrastRatio,
+    ).toBe(1);
+  });
+
+  it("adds an installed Nerd Font behind the mono stack once it is found", async () => {
+    // A powerline prompt's icons are Nerd Font private-use glyphs that
+    // nothing in --font-mono carries, so they drew as tofu boxes.
+    document.documentElement.style.setProperty(
+      "--font-mono",
+      '"Geist Mono", "SF Mono", monospace',
+    );
+    let resolveLookup: (family: string | undefined) => void = () => undefined;
+    nerdFontState.lookup = new Promise((resolve) => {
+      resolveLookup = resolve;
+    });
+    const resizeIntegratedTerminal = vi.fn(async () => undefined);
+    render(
+      <IntegratedTerminal
+        desktopApi={{
+          createIntegratedTerminal: vi.fn(async () => ({
+            sessionId: "session-1",
+            threadKey: "codex:thread-a",
+            cwd: "/repo/a",
+            shell: "/bin/zsh",
+          })),
+          resizeIntegratedTerminal,
+        }}
+        threadKey="codex:thread-a"
+        height={260}
+        onClose={() => undefined}
+        onExit={() => undefined}
+      />,
+    );
+    await waitFor(() => expect(xtermState.instances).toHaveLength(1));
+    const options = xtermState.instances[0]!.options as { fontFamily: string };
+    // The terminal opens without waiting on the 1.5s lookup.
+    expect(options.fontFamily).toBe('"Geist Mono", "SF Mono", monospace');
+
+    resolveLookup("MesloLGS NF");
+    await waitFor(() => {
+      expect(options.fontFamily).toBe(
+        '"Geist Mono", "SF Mono", "MesloLGS NF", monospace',
+      );
+    });
+  });
+
+  it("opens with the Nerd Font when an earlier terminal already found it", async () => {
+    document.documentElement.style.setProperty(
+      "--font-mono",
+      '"Geist Mono", monospace',
+    );
+    nerdFontState.discovered = "Hack NFM";
+    render(
+      <IntegratedTerminal
+        desktopApi={{
+          createIntegratedTerminal: vi.fn(async () => ({
+            sessionId: "session-1",
+            threadKey: "codex:thread-a",
+            cwd: "/repo/a",
+            shell: "/bin/zsh",
+          })),
+        }}
+        threadKey="codex:thread-a"
+        height={260}
+        onClose={() => undefined}
+        onExit={() => undefined}
+      />,
+    );
+    await waitFor(() => expect(xtermState.instances).toHaveLength(1));
+    expect((xtermState.instances[0]!.options as { fontFamily: string }).fontFamily)
+      .toBe('"Geist Mono", "Hack NFM", monospace');
   });
 
   it("opens xterm only after the mono faces load", async () => {
