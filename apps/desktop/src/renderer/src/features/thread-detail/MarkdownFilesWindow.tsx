@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
-import { isRemoteFederationTarget } from "@pwragent/shared";
+import { filePreviewKind, isRemoteFederationTarget } from "@pwragent/shared";
 import { scopeDesktopApiToFederationTarget } from "../../lib/federation-desktop-api";
 import type {
   DesktopApplicationsSnapshot,
@@ -7,16 +7,19 @@ import type {
   MarkdownFileViewerSnapshot,
 } from "@pwragent/shared";
 import { AppIcon } from "../../components/AppIcon";
-import { CloseIcon } from "../../icons";
+import { CloseIcon, CopyIcon } from "../../icons";
+import { copyText } from "../../lib/copy-text";
 import { useDesktopApi } from "../../lib/desktop-api";
 import { ThreadMarkdown } from "./ThreadMarkdown";
 import { BrandLockup } from "../chrome/BrandLockup";
 import { useMarkdownFileSource } from "./useMarkdownFileSource";
+import { FilePreviewBody, FilePreviewCopyButton } from "./FilePreview";
+import { tildifyPath } from "../../lib/tildify-path";
 
 type LoadState =
   | { status: "idle" | "loading" }
-  | { status: "loaded"; content: string }
-  | { status: "error"; error: string };
+  | { status: "loaded"; content: string; path: string }
+  | { status: "error"; error: string; path: string };
 
 export function MarkdownFilesWindow() {
   const desktopApi = useDesktopApi();
@@ -32,6 +35,7 @@ export function MarkdownFilesWindow() {
     (file) => file.path === snapshot.selectedPath,
   ) ?? snapshot?.files[0];
   const selectedPath = selectedFile?.path;
+  const previewKind = filePreviewKind(selectedPath ?? "") ?? "markdown";
   const markdownApplications = useMemo(
     () => applicationsSnapshotForEditor(snapshot),
     [snapshot],
@@ -40,7 +44,12 @@ export function MarkdownFilesWindow() {
     () => markdownFilesBreadcrumbParts(snapshot?.context),
     [snapshot?.context],
   );
-  const [loadState, setLoadState] = useState<LoadState>({ status: "idle" });
+  const [rawLoadState, setLoadState] = useState<LoadState>({ status: "idle" });
+  // Selecting another file renders once before the read effect runs. Never
+  // show the previous file's content under the new file's kind.
+  const loadState: LoadState = "path" in rawLoadState && rawLoadState.path !== selectedPath
+    ? { status: "loading" }
+    : rawLoadState;
   const readMarkdownFile = viewerApi?.readMarkdownFile;
 
   useEffect(() => {
@@ -99,17 +108,19 @@ export function MarkdownFilesWindow() {
         if (response.error || response.content === undefined) {
           setLoadState({
             status: "error",
-            error: response.error ?? "Markdown file could not be read.",
+            error: response.error ?? "File could not be read.",
+            path: selectedPath,
           });
           return;
         }
-        setLoadState({ status: "loaded", content: response.content });
+        setLoadState({ status: "loaded", content: response.content, path: selectedPath });
       })
       .catch((error: unknown) => {
         if (cancelled) return;
         setLoadState({
           status: "error",
-          error: error instanceof Error ? error.message : "Markdown file could not be read.",
+          error: error instanceof Error ? error.message : "File could not be read.",
+          path: selectedPath,
         });
       });
 
@@ -212,17 +223,37 @@ export function MarkdownFilesWindow() {
                   {selectedFile?.label ?? "No file selected"}
                 </h1>
                 {selectedFile ? (
-                  <p className="markdown-files-window__file-path">
-                    {selectedFile.path}
-                  </p>
+                  <div className="markdown-files-window__path-row">
+                    <p className="markdown-files-window__file-path">
+                      {tildifyPath(selectedFile.path)}
+                    </p>
+                    <button
+                      type="button"
+                      className="markdown-files-window__path-copy"
+                      aria-label="Copy path"
+                      title="Copy path to clipboard"
+                      onClick={() => {
+                        void copyText(selectedFile.path, viewerApi);
+                      }}
+                    >
+                      <CopyIcon size={13} aria-hidden="true" />
+                    </button>
+                  </div>
                 ) : null}
                 {snapshot?.context.projectPath ? (
                   <p className="markdown-files-window__project">
-                    Project: {snapshot.context.projectPath}
+                    Project: {tildifyPath(snapshot.context.projectPath)}
                   </p>
                 ) : null}
               </div>
               <div className="markdown-files-window__file-actions">
+                {loadState.status === "loaded" ? (
+                  <FilePreviewCopyButton
+                    content={loadState.content}
+                    desktopApi={viewerApi}
+                    kind={previewKind}
+                  />
+                ) : null}
                 {snapshot?.editorApplication && selectedFile ? (
                   <button
                     type="button"
@@ -250,16 +281,27 @@ export function MarkdownFilesWindow() {
               </div>
             </header>
 
-            <div className="markdown-files-window__markdown-scroll">
+            <div
+              className={[
+                "markdown-files-window__markdown-scroll",
+                previewKind === "markdown" ? undefined : "markdown-files-window__markdown-scroll--file",
+              ].filter(Boolean).join(" ")}
+            >
               {loadState.status === "loading" ? (
-                <p className="markdown-files-window__status">Loading document...</p>
+                <p className="markdown-files-window__status">Loading file…</p>
               ) : null}
               {loadState.status === "error" ? (
                 <p className="markdown-files-window__status markdown-files-window__status--error">
                   {loadState.error}
                 </p>
               ) : null}
-              {loadState.status === "loaded" ? (
+              {loadState.status === "loaded" ? (previewKind !== "markdown" ? (
+                <FilePreviewBody
+                  content={loadState.content}
+                  kind={previewKind}
+                  targetLine={selectedFile?.line}
+                />
+              ) : (
                 <ThreadMarkdown
                   applications={markdownApplications}
                   className="markdown-files-window__markdown"
@@ -268,7 +310,7 @@ export function MarkdownFilesWindow() {
                   text={loadState.content}
                   variant="summary"
                 />
-              ) : null}
+              )) : null}
             </div>
           </article>
         </main>

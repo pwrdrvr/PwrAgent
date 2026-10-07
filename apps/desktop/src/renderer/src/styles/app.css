@@ -23634,13 +23634,15 @@ a.transcript-message__messaging-origin:focus-visible {
   overflow-wrap: anywhere;
 }
 
-.markdown-document-modal__path-row {
+.markdown-document-modal__path-row,
+.markdown-files-window__path-row {
   display: flex;
   align-items: flex-start;
   gap: 4px;
 }
 
-.markdown-document-modal__path-copy {
+.markdown-document-modal__path-copy,
+.markdown-files-window__path-copy {
   display: inline-flex;
   width: 24px;
   height: 24px;
@@ -23657,12 +23659,15 @@ a.transcript-message__messaging-origin:focus-visible {
 }
 
 .markdown-document-modal__path-copy:hover,
-.markdown-document-modal__path-copy:focus-visible {
+.markdown-document-modal__path-copy:focus-visible,
+.markdown-files-window__path-copy:hover,
+.markdown-files-window__path-copy:focus-visible {
   background: var(--bg-row-active);
   color: var(--text-primary);
 }
 
-.markdown-document-modal__path-copy:focus-visible {
+.markdown-document-modal__path-copy:focus-visible,
+.markdown-files-window__path-copy:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: -2px;
 }
@@ -23708,6 +23713,15 @@ a.transcript-message__messaging-origin:focus-visible {
   padding: 18px 20px 22px;
 }
 
+.markdown-document-modal__body--file {
+  padding: 14px 0 18px;
+}
+
+/* The code view runs its gutter to the edge, so status lines keep the inset. */
+.markdown-document-modal__body--file > .markdown-document-modal__status {
+  padding: 0 20px;
+}
+
 .markdown-document-modal__markdown {
   max-width: 78ch;
 }
@@ -23725,6 +23739,172 @@ a.transcript-message__messaging-origin:focus-visible {
 
 .markdown-document-modal__status--error {
   color: var(--danger-text);
+}
+
+/* In-app file preview: every kind but Markdown. Shown as written with a line
+   gutter so line numbers match the editor. The gutter number comes from
+   data-line through ::before, which selection and copy skip. */
+.file-preview {
+  --file-preview-inset: 20px;
+}
+
+.markdown-files-window__markdown-scroll--file .file-preview {
+  --file-preview-inset: 26px;
+}
+
+.file-preview__notice {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0 var(--file-preview-inset) 10px;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.file-preview__notice strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.file-preview__notice[data-tone="neutral"] strong {
+  color: inherit;
+  font-weight: inherit;
+}
+
+/* Tone on the dot, not the panel: warm danger tints read orange in the
+   Blue and Gray themes. */
+.file-preview__notice-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  transform: translateY(-1px);
+}
+
+.file-preview__notice[data-tone="danger"] .file-preview__notice-dot {
+  background: var(--danger-text);
+}
+
+.file-preview__code,
+.file-preview__plain {
+  margin: 0;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: calc(var(--transcript-text-size) - 1px);
+  font-weight: 400;
+  line-height: 1.5;
+  tab-size: 2;
+}
+
+.file-preview__plain {
+  padding: 0 var(--file-preview-inset);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.file-preview__code:focus-visible,
+.file-preview__plain:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.file-preview__line {
+  display: grid;
+  grid-template-columns:
+    calc(var(--file-preview-inset) + var(--file-preview-digits, 2) * 1ch + 12px)
+    minmax(0, 1fr);
+}
+
+.file-preview__line::before {
+  content: attr(data-line);
+  /* Empty alt text keeps the numbers out of the accessibility tree. */
+  content: attr(data-line) / "";
+  padding-right: 12px;
+  border-right: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  text-align: right;
+  user-select: none;
+}
+
+.file-preview__text {
+  min-width: 0;
+  padding: 0 var(--file-preview-inset) 0 14px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.file-preview__line[data-state="target"] {
+  background: var(--accent-soft);
+}
+
+.file-preview__line[data-state="target"]::before {
+  color: var(--accent-bright);
+  font-weight: 600;
+}
+
+.file-preview__line[data-state="error"]::before {
+  color: var(--danger-text);
+  font-weight: 700;
+  box-shadow: inset 2px 0 var(--danger-text);
+}
+
+.file-preview__token--key,
+.file-preview__token--section {
+  color: var(--info-text);
+}
+
+.file-preview__token--section {
+  font-weight: 600;
+}
+
+.file-preview__token--string {
+  color: var(--success-text);
+}
+
+.file-preview__token--number,
+.file-preview__token--literal {
+  color: var(--accent-bright);
+}
+
+.file-preview__token--punctuation {
+  color: var(--text-secondary);
+}
+
+.file-preview__token--comment {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.file-preview__table {
+  margin: 0 var(--file-preview-inset);
+}
+
+.file-preview__table .thread-markdown__th[data-numeric="true"],
+.file-preview__table .thread-markdown__td[data-numeric="true"] {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Copy sits beside the outline icon buttons in both preview headers, so it
+   drops the transcript chip's fill and takes their size and glyph. */
+.transcript-copy-button.file-preview__copy {
+  width: 32px;
+  height: 32px;
+  background: transparent;
+  opacity: 1;
+}
+
+.transcript-copy-button.file-preview__copy::before {
+  width: 16px;
+  height: 16px;
+}
+
+.transcript-copy-button.file-preview__copy:hover,
+.transcript-copy-button.file-preview__copy:focus-visible,
+.transcript-copy-button.file-preview__copy[data-copied="true"] {
+  background: transparent;
 }
 
 .markdown-files-window {
@@ -23877,6 +24057,14 @@ a.transcript-message__messaging-origin:focus-visible {
   min-height: 0;
   overflow: auto;
   padding: 22px 26px 32px;
+}
+
+.markdown-files-window__markdown-scroll--file {
+  padding: 16px 0 28px;
+}
+
+.markdown-files-window__markdown-scroll--file > .markdown-files-window__status {
+  padding: 0 26px;
 }
 
 .markdown-files-window__markdown {

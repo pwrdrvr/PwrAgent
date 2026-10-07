@@ -55,6 +55,7 @@ export * from "./navigation-state";
 export * from "./navigation-snapshot-transport";
 export * from "./helper-models";
 export * from "./pending-request-response";
+export * from "./file-preview";
 export * from "./path-display";
 export * from "./release-notes";
 export * from "./review-branches";

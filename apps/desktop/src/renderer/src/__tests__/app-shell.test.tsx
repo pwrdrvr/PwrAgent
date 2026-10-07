@@ -391,7 +391,7 @@ describe("App", () => {
       expect(selection.toString()).toBe("Keep this paragraph selected.");
       expect(scroll.scrollTop).toBe(640);
       expect(readMarkdownFile).toHaveBeenCalledTimes(1);
-      expect(screen.queryByText("Loading document...")).not.toBeInTheDocument();
+      expect(screen.queryByText("Loading file…")).not.toBeInTheDocument();
     }
     selection.removeAllRanges();
   });
