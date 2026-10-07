@@ -1,4 +1,5 @@
 import { FederationShutdownNotices } from "./features/notifications/FederationShutdownNotices";
+import { CloudflareSignInNotice, CLOUDFLARE_SIGN_IN_NOTICE_ID } from "./features/notifications/CloudflareSignInNotice";
 import { CodexAuthProfileLoginDialog } from "./features/settings/CodexAuthProfileSelect";
 import { navigationIdentityFromThreadKey } from "./lib/navigation-query-state";
 import { classifyDirectory } from "@pwragent/shared";
@@ -897,6 +898,11 @@ function DesktopAppShell(props: {
   const syncFederationShutdownNotice = useCallback((instanceId: string, notice: AppNoticeToastNotice | undefined): void => {
     if (notice) showAppNotice(notice);
     else dispatchAppNotice({ type: "dismiss", id: `federation-shutdown:${instanceId}` });
+  }, [showAppNotice]);
+
+  const syncCloudflareSignInNotice = useCallback((notice: AppNoticeToastNotice | undefined): void => {
+    if (notice) showAppNotice(notice);
+    else dispatchAppNotice({ type: "dismiss", id: CLOUDFLARE_SIGN_IN_NOTICE_ID });
   }, [showAppNotice]);
 
   const syncMessagingErrorNotice = useCallback((
@@ -4130,6 +4136,12 @@ function DesktopAppShell(props: {
           onSuppressWarning={suppressCodexWarning}
         />
         <FederationShutdownNotices desktopApi={desktopApi} onNoticeChanged={syncFederationShutdownNotice} />
+        <CloudflareSignInNotice
+          desktopApi={desktopApi}
+          health={liveFederationHealth}
+          onNoticeChanged={syncCloudflareSignInNotice}
+          onRefreshHealth={refreshFederationHealth}
+        />
         <MessagingErrorNotices
           desktopApi={desktopApi}
           onNoticeChanged={syncMessagingErrorNotice}

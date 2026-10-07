@@ -4,6 +4,8 @@ import { DesktopFederationRuntime } from "../federation/federation-runtime";
 import { CloudflareAccessRefusedError, CloudflareSignInRequiredError } from "../federation/cloudflare-access-oauth";
 import { classifyFederationClientFailure } from "../federation/federation-redaction";
 import type { FederationClientWebSocketClient } from "../federation/federation-transport";
+import type { FederationRuntimeConfig } from "../federation/federation-runtime-config";
+import { FEDERATION_HEALTH_CHANGED_METHOD } from "@pwragent/shared";
 
 const metaStore = vi.hoisted(() => new Map<string, string>());
 const clientClose = vi.hoisted(() => vi.fn());
@@ -295,6 +297,60 @@ describe("federation endpoint credential scoping", () => {
         clearTimeout(harness.reconnectTimer);
       }
     }
+  });
+
+  it("publishes local sign-in health before a peer exists and clears it after reconnect", async () => {
+    signIn.enabled = true;
+    cloudflareEndpoint.value = "wss://federation.example.com";
+    const runtime = createHarness([cloudflareEndpoint.value]) as CredentialHarness & {
+      cloudflareSignInRequiredEndpoint?: string;
+      handleClientConnectionFailure: (error: unknown) => void;
+      disconnectAdvertisedPeers: () => void;
+      setAgentEventPublisher: DesktopFederationRuntime["setAgentEventPublisher"];
+      health: DesktopFederationRuntime["health"];
+      readRuntimeConfig: () => FederationRuntimeConfig;
+      visiblePeers: () => [];
+      readClientEnrollment: () => undefined;
+      activeCelestialAssignments: () => [];
+    };
+    runtime.disconnectAdvertisedPeers = () => undefined;
+    const config = runtime.readRuntimeConfig();
+    runtime.readRuntimeConfig = () => ({ ...config, mode: "client", gatewayEndpoints: [cloudflareEndpoint.value] });
+    runtime.visiblePeers = () => [];
+    runtime.readClientEnrollment = () => undefined;
+    runtime.activeCelestialAssignments = () => [];
+    const publish = vi.fn();
+    runtime.setAgentEventPublisher(publish);
+    runtime.handleClientConnectionFailure(new CloudflareSignInRequiredError());
+    expect(runtime.cloudflareSignInRequiredEndpoint).toBe(cloudflareEndpoint.value);
+    expect((await runtime.health()).cloudflareSignInRequired).toEqual({ endpoint: cloudflareEndpoint.value });
+    expect(publish).toHaveBeenCalledExactlyOnceWith({
+      backend: "codex", notification: { method: FEDERATION_HEALTH_CHANGED_METHOD, params: {} },
+    });
+    runtime.handleClientConnectionFailure(new CloudflareSignInRequiredError());
+    expect(publish).toHaveBeenCalledOnce();
+    await runtime.connectClient(cloudflareEndpoint.value);
+    expect(runtime.cloudflareSignInRequiredEndpoint).toBeUndefined();
+    expect((await runtime.health()).cloudflareSignInRequired).toBeUndefined();
+    expect(publish).toHaveBeenLastCalledWith({
+      backend: "codex", notification: { method: FEDERATION_HEALTH_CHANGED_METHOD, params: {} },
+    });
+  });
+
+  it("does not offer OAuth sign-in when Cloudflare refuses a service credential", () => {
+    cloudflareEndpoint.value = "wss://federation.example.com";
+    const runtime = createHarness([cloudflareEndpoint.value]) as CredentialHarness & {
+      cloudflareSignInRequiredEndpoint?: string;
+      handleClientConnectionFailure: (error: unknown) => void;
+      disconnectAdvertisedPeers: () => void;
+      setAgentEventPublisher: DesktopFederationRuntime["setAgentEventPublisher"];
+    };
+    runtime.disconnectAdvertisedPeers = () => undefined;
+    const publish = vi.fn();
+    runtime.setAgentEventPublisher(publish);
+    runtime.handleClientConnectionFailure(new CloudflareAccessRefusedError("federation.example.com"));
+    expect(runtime.cloudflareSignInRequiredEndpoint).toBeUndefined();
+    expect(publish).not.toHaveBeenCalled();
   });
 
   it("reports the connection through the Cloudflare endpoint for the setup pane", async () => {

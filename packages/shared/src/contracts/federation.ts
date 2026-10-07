@@ -44,6 +44,8 @@ export const FEDERATION_CAPABILITIES = [
 
 export const FEDERATION_SHUTDOWN_METHOD = "federation/shutdown";
 export const FEDERATION_SHUTDOWN_CHANGED_METHOD = "federation/shutdown/changed";
+/** Local health changed without a peer transition, e.g. Access refused sign-in before dialing. */
+export const FEDERATION_HEALTH_CHANGED_METHOD = "federation/health/changed";
 
 export type FederationShutdownNotice = {
   shutdownId: string;
@@ -483,6 +485,8 @@ export type FederationActiveConnection = {
 
 export type FederationHealthStatus = {
   shutdownNotices?: FederationPeerShutdown[];
+  /** This client's Cloudflare OAuth grant needs an interactive sign-in. */
+  cloudflareSignInRequired?: { endpoint: string };
   enabled: boolean;
   role: FederationInstanceRole;
   status: FederationConnectionState;

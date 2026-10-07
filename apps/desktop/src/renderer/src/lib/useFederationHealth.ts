@@ -1,14 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { FederationHealthStatus } from "@pwragent/shared";
+import { FEDERATION_HEALTH_CHANGED_METHOD, type FederationHealthStatus } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 
 /**
  * Live federation health for whole-federation surfaces (the Star Map).
  * Seeds from readFederationHealth and re-reads on every
  * `federation/peerStatus/changed` / `federation/celestialIcons/changed` /
- * `federation/shortNames/changed` agent event — peer transitions are the
- * only signal that changes the topology, so a re-read per transition stays
- * cheap.
+ * `federation/shortNames/changed` / local health-change agent event. A local
+ * authentication failure can happen before any peer connects.
  */
 export function useFederationHealth(params: {
   desktopApi?: DesktopApi;
@@ -20,6 +19,7 @@ export function useFederationHealth(params: {
   const desktopApi = params.desktopApi;
   const enabled = params.enabled ?? true;
   const lifetime = useRef(0);
+  const readSequence = useRef(0);
   const active = useRef(!params.suspended);
   active.current = !params.suspended;
   const [health, setHealth] = useState<FederationHealthStatus>();
@@ -27,11 +27,13 @@ export function useFederationHealth(params: {
   const refresh = useCallback(() => {
     if (!active.current) return;
     const generation = lifetime.current;
+    const sequence = ++readSequence.current;
     void Promise.resolve().then(async () => {
       // Cleanup must be able to revoke a mount read before it reaches IPC.
       if (!active.current || lifetime.current !== generation) return;
       const response = await desktopApi?.readFederationHealth?.({});
-      if (response && active.current && lifetime.current === generation) setHealth(response.health);
+      if (response && active.current && lifetime.current === generation
+        && readSequence.current === sequence) setHealth(response.health);
     })
       .catch(() => {
         // Keep the last known topology; peer events retrigger the read.
@@ -47,6 +49,7 @@ export function useFederationHealth(params: {
         event.notification.method === "federation/peerStatus/changed"
         || event.notification.method === "federation/celestialIcons/changed"
         || event.notification.method === "federation/shortNames/changed"
+        || (!event.federationTarget && event.notification.method === FEDERATION_HEALTH_CHANGED_METHOD)
       ) {
         refresh();
       }

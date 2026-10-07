@@ -19,7 +19,7 @@ import {
 } from "./federation-file-push";
 import { summarizeThreadAgentChange } from "@pwragent/shared";
 import { FederationShutdown } from "./federation-shutdown";
-import { FEDERATION_SHUTDOWN_CHANGED_METHOD } from "@pwragent/shared";
+import { FEDERATION_HEALTH_CHANGED_METHOD, FEDERATION_SHUTDOWN_CHANGED_METHOD } from "@pwragent/shared";
 import { NAVIGATION_DIRECTORY_SET_CHANGED_METHOD } from "@pwragent/shared";
 import { projectThreadDisplayEvent } from "../app-server/thread-display-events";
 import { federationTrafficCaptureUntil, setFederationTrafficCapture, saveFederationTrafficHistory } from "./federation-traffic-capture";
@@ -1103,6 +1103,7 @@ export class DesktopFederationRuntime {
   private stopping = true;
   private lastConnectionError?: string;
   private lastConnectionFailureKind?: "auth" | "replaced" | "transport";
+  private cloudflareSignInRequiredEndpoint?: string;
   /** Peer ids the gateway recently flagged for duplicate-identity churn. */
   private readonly duplicateIdentitySuspectedAt = new Map<
     FederationInstanceId,
@@ -1479,6 +1480,7 @@ export class DesktopFederationRuntime {
     this.lastConnectionError = undefined;
     this.lastConnectionFailureKind = undefined;
     this.gatewayListenerError = undefined;
+    this.setCloudflareSignInRequired(undefined);
   }
 
   async setDetailedTrafficCapture(enabled: boolean): Promise<ReadFederationActivityResponse> {
@@ -1601,6 +1603,9 @@ export class DesktopFederationRuntime {
       unavailableReason: this.gatewayListenerError,
     });
     health.shutdownNotices = this.shutdown.snapshot();
+    if (config.cloudflareAccessOAuthEnabled && this.cloudflareSignInRequiredEndpoint) {
+      health.cloudflareSignInRequired = { endpoint: this.cloudflareSignInRequiredEndpoint };
+    }
     if (
       config.mode === "client" ||
       config.mode === "dual"
@@ -3761,6 +3766,7 @@ export class DesktopFederationRuntime {
     this.lastConnectedAt = Date.now();
     this.lastConnectionError = undefined;
     this.lastConnectionFailureKind = undefined;
+    this.setCloudflareSignInRequired(undefined);
     // Replayed subscriptions require the authenticated router connection and
     // restored local subscription state before any queued envelope is handled.
     client.startReceiving();
@@ -3869,6 +3875,15 @@ export class DesktopFederationRuntime {
     });
   }
 
+  private setCloudflareSignInRequired(endpoint: string | undefined): void {
+    if (this.cloudflareSignInRequiredEndpoint === endpoint) return;
+    this.cloudflareSignInRequiredEndpoint = endpoint;
+    this.publishAgentEvent?.({
+      backend: "codex",
+      notification: { method: FEDERATION_HEALTH_CHANGED_METHOD, params: {} },
+    });
+  }
+
   private handleClientConnectionFailure(error: unknown): void {
     if (this.stopping) return;
     this.client = undefined;
@@ -3876,6 +3891,9 @@ export class DesktopFederationRuntime {
     this.lastConnectionFailureKind = classifyFederationClientFailure(rawMessage);
     this.lastConnectionError = redactFederationDiagnostic(rawMessage)
       + federationLocalNetworkFailureHint(rawMessage);
+    if (error instanceof CloudflareSignInRequiredError) {
+      this.setCloudflareSignInRequired(this.readRuntimeConfig().cloudflareEndpoint || undefined);
+    }
     if (this.gatewayInstanceId) {
       this.publishPeerStatus(
         this.gatewayInstanceId,

@@ -212,7 +212,7 @@ export function cloudflareAdmissionPolicy(gate: CloudflareGate, ids: string[]) {
  * authorization code on 127.0.0.1, and no https redirect is allowed that a
  * third-party site could use to collect a grant. The 15-minute access token and
  * two-week grant are Cloudflare's recommendation for CLI and agent clients —
- * a person signs in again only after two weeks without PwrAgent refreshing.
+ * the grant limits how long refresh tokens remain valid before a new sign-in.
  */
 export const CLOUDFLARE_OAUTH_CONFIGURATION = {
   enabled: true,
