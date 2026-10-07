@@ -1,6 +1,7 @@
 import { access, readFile, stat } from "node:fs/promises";
 import { BrowserWindow, ipcMain, shell } from "electron";
 import {
+  isFilePreviewPath,
   isRemoteFederationTarget,
   type OpenDesktopApplicationRequest,
   type OpenDesktopApplicationResponse,
@@ -92,8 +93,8 @@ async function revealPathInFolder(
   return { opened: true };
 }
 
-// The existing file-viewer channel also serves JSON previews. Keep the channel
-// name stable for preload and federation clients.
+// The existing file-viewer channel serves every preview kind, not only
+// Markdown. Keep the channel name stable for preload and federation clients.
 async function readMarkdownFile(
   request: ReadMarkdownFileRequest,
 ): Promise<ReadMarkdownFileResponse> {
@@ -109,8 +110,8 @@ async function readMarkdownFile(
     return { path: "", error: "No file path was provided." };
   }
 
-  if (!/\.(?:md|markdown|json)$/i.test(target)) {
-    return { path: target, error: "Only Markdown and JSON files can be previewed." };
+  if (!isFilePreviewPath(target)) {
+    return { path: target, error: "This file type cannot be previewed." };
   }
 
   try {

@@ -49,6 +49,15 @@ describe("Federation file pull", () => {
     await expect(pull(filePath)).rejects.toThrow("File pull is disabled");
   });
 
+  it.each(["config.yaml", "pyproject.toml", "events.jsonl", "rows.csv", "build.log"])("previews %s inside the thread directories only", async (name) => {
+    const filePath = path.join(directory, name);
+    await writeFile(filePath, "owner contents");
+    expect(await pull(filePath)).toEqual({ path: filePath, content: "owner contents" });
+    const outside = path.join(root, name);
+    await writeFile(outside, "outside contents");
+    await expect(pull(outside)).rejects.toThrow("outside the thread");
+  });
+
   it("continues authorized previews after the owning thread is archived", async () => {
     const registry = {
       resolveThread: vi.fn(async () => thread),
@@ -155,7 +164,8 @@ describe("Federation file pull", () => {
   it("rejects directories, unsupported paths and oversized files", async () => {
     await mkdir(path.join(directory, "folder.md"));
     await expect(pull(path.join(directory, "folder.md"))).rejects.toThrow("regular file");
-    await expect(pull(path.join(directory, "plain.txt"))).rejects.toThrow("Markdown or JSON file path");
+    await expect(pull(path.join(directory, "script.js"))).rejects.toThrow("file type that can be previewed");
+    await expect(pull(path.join(directory, ".env"))).rejects.toThrow("file type that can be previewed");
     await writeFile(path.join(directory, "large.md"), Buffer.alloc(FILE_PULL_MAX_BYTES + 1));
     await expect(pull(path.join(directory, "large.md"))).rejects.toThrow("too large");
   });

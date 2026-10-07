@@ -3,6 +3,7 @@ import { open, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import {
   isAppServerBackendKind,
+  isFilePreviewPath,
   type AppServerThreadSummary,
   type ReadMarkdownFileResponse,
 } from "@pwragent/shared";
@@ -58,8 +59,8 @@ export class FederationFilePullReader {
     if (!permissions.filePull) throw new Error("File pull is disabled on the owning machine. Enable Allow file pull in its Federation settings.");
     const request = input as { path?: unknown; thread?: { backend?: unknown; threadId?: unknown } } | null;
     if (!request || typeof request.path !== "string" || !path.isAbsolute(request.path)
-      || request.path.includes("\0") || !/\.(md|markdown|json)$/i.test(request.path)) {
-      throw new Error("Select an absolute Markdown or JSON file path.");
+      || request.path.includes("\0") || !isFilePreviewPath(request.path)) {
+      throw new Error("Select an absolute path to a file type that can be previewed.");
     }
     const identity = request.thread;
     if (!identity || typeof identity.backend !== "string" || !isAppServerBackendKind(identity.backend)

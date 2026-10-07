@@ -574,11 +574,11 @@ describe("ThreadMarkdown", () => {
     });
     if (kind === "JSON") {
       expect(await screen.findByLabelText("JSON contents")).toHaveTextContent('"title": "Widget"');
-      fireEvent.click(screen.getByRole("button", { name: "Copy JSON" }));
-      await waitFor(() => expect(copyPath).toHaveBeenCalledWith(content));
     } else {
       expect(screen.getByRole("heading", { name: "AGENTS" })).toBeInTheDocument();
     }
+    fireEvent.click(screen.getByRole("button", { name: `Copy ${kind}` }));
+    await waitFor(() => expect(copyPath).toHaveBeenCalledWith(content));
     expect(openApplication).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Copy path" }));
@@ -608,6 +608,73 @@ describe("ThreadMarkdown", () => {
         },
       });
     });
+  });
+
+  it.each([
+    ["config.yaml", "YAML", "service:\n  replicas: 3\n  region: us-west-2"],
+    ["pyproject.toml", "TOML", "[project]\nname = \"example\"\nversion = \"0.3.1\""],
+    ["events.jsonl", "JSON Lines", '{"t":0}\n{"t":1}\n{"t":2}'],
+    ["build.log", "Text", "start\nwarn: slow step\ndone"],
+  ])("previews %s at its linked line", async (fileName, kind, content) => {
+    const readMarkdownFile = vi.fn(async (request: { path: string }) => ({ path: request.path, content }));
+    const openApplication = vi.fn(async () => ({ opened: true as const }));
+    render(
+      <ThreadMarkdown
+        desktopApi={{ openApplication, readMarkdownFile }}
+        text={`See [${fileName}](/repo/PwrAgent/${fileName}:2).`}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("link", { name: fileName }));
+
+    const dialog = await screen.findByRole("dialog", { name: `${kind} document: ${fileName}` });
+    const contents = await within(dialog).findByRole("region", { name: `${kind} contents` });
+    expect(contents.querySelector('[data-state="target"]')).toHaveAttribute("data-line", "2");
+    expect(within(dialog).getByRole("button", { name: `Copy ${kind === "Text" ? "text" : kind}` }))
+      .toBeInTheDocument();
+    expect(openApplication).not.toHaveBeenCalled();
+  });
+
+  it("keeps source code links opening the editor", async () => {
+    const readMarkdownFile = vi.fn();
+    const openApplication = vi.fn(async () => ({ opened: true as const }));
+    render(
+      <ThreadMarkdown
+        applications={{
+          editors: [
+            {
+              id: "zed",
+              kind: "editor",
+              name: "Zed",
+              source: "application",
+              appPath: "/Applications/Zed.app",
+              canOpenWorkspace: true,
+            },
+          ],
+          terminals: [],
+          preferredEditorId: { value: "zed", source: "config" },
+          preferredTerminalId: { value: "", source: "default" },
+          gh: {
+            enabled: { value: false, source: "default" },
+            path: { value: "", source: "default" },
+            discovery: { candidates: [] },
+          },
+          git: {
+            path: { value: "", source: "default" },
+            discovery: { candidates: [] },
+          },
+        }}
+        desktopApi={{ openApplication, readMarkdownFile }}
+        text={"Open [.env](/repo/PwrAgent/.env) and [main.py](/repo/PwrAgent/main.py)."}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("link", { name: ".env" }));
+    fireEvent.click(screen.getByRole("link", { name: "main.py" }));
+
+    await waitFor(() => expect(openApplication).toHaveBeenCalledTimes(2));
+    expect(readMarkdownFile).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   it("passes local file link line and column metadata to the configured editor", async () => {

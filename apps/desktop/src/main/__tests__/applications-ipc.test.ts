@@ -116,7 +116,7 @@ describe("application IPC", () => {
     mocks.showToolOutputIncidentExplorerWindow.mockClear();
   });
 
-  it("reads local JSON previews and rejects unsupported, missing, directory and oversized paths", async () => {
+  it("reads local previewable files and rejects unsupported, missing, directory and oversized paths", async () => {
     registerApplicationIpcHandlers();
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-json-preview-"));
     const read = (filePath: string) => mocks.handlers.get(MARKDOWN_FILE_READ_CHANNEL)?.({}, { path: filePath });
@@ -125,7 +125,13 @@ describe("application IPC", () => {
       const content = '{"title":"Widget","id":9007199254740993}';
       await writeFile(filePath, content);
       expect(await read(filePath)).toEqual({ path: filePath, content });
-      expect(await read(path.join(root, "script.js"))).toMatchObject({ error: "Only Markdown and JSON files can be previewed." });
+      for (const name of ["config.yml", "pyproject.toml", "events.ndjson", "rows.tsv", "build.log"]) {
+        await writeFile(path.join(root, name), "x");
+        expect(await read(path.join(root, name))).toEqual({ path: path.join(root, name), content: "x" });
+      }
+      for (const name of ["script.js", ".env", "secrets.env"]) {
+        expect(await read(path.join(root, name))).toMatchObject({ error: "This file type cannot be previewed." });
+      }
       expect(await read(path.join(root, "missing.json"))).toMatchObject({ error: expect.stringContaining("does not exist") });
       const directory = path.join(root, "directory.json");
       await mkdir(directory);

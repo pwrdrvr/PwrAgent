@@ -564,6 +564,11 @@ describe("Tangerine Terminal theme contract", () => {
       // `.composer-tiptap-input` as a CSS string and drawn by the last
       // paragraph's ::after. Content, not theme.
       "composer-inline-hint",
+      // The file preview's horizontal inset, defined on `.file-preview` and
+      // set per surface (the dialog and the Files window pad differently).
+      // The notice, the line gutter and the table all read it. Geometry, not
+      // theme.
+      "file-preview-inset",
     ]);
     const tokenReferences = [...css.matchAll(/var\(--([a-z0-9-]+)\)/g)].map(
       ([, token]) => token
