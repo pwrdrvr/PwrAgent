@@ -5629,6 +5629,18 @@ describe("TranscriptList agent commands line", () => {
     expect(onShowAgentCommands).toHaveBeenCalledTimes(1);
   });
 
+  it("names a multi-line command by its first line only", () => {
+    render(
+      <TranscriptList entries={entries} loading={false} loadingMore={false}
+        agentCommandsStatus={{ count: 1, command: "python3 - <<'PY'\nprint('audit')\nPY" }}
+        onShowAgentCommands={vi.fn()} threadId="thread-1" onLoadOlder={async () => undefined} />,
+    );
+    const line = screen.getByText("python3 - <<'PY' …").closest(".transcript-list__agent-commands");
+    expect(line).toHaveTextContent("python3 - <<'PY' … is still running");
+    expect(line).not.toHaveTextContent("print('audit')");
+    expect(screen.getByRole("button", { name: "Actions" })).toBeInTheDocument();
+  });
+
   it("counts commands when it cannot name one", () => {
     const { rerender } = render(
       <TranscriptList entries={entries} loading={false} loadingMore={false}

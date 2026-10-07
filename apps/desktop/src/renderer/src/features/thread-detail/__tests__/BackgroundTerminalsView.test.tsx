@@ -2,7 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import type { CodexEnvironmentActionRun } from "@pwragent/shared";
-import { agentCommandDirectoryLabel } from "../BackgroundTerminalsView";
+import { agentCommandDirectoryLabel, agentCommandPreview } from "../BackgroundTerminalsView";
 import { ActionRunsPanel } from "../context-panels/ActionRunsPanel";
 
 afterEach(cleanup);
@@ -62,4 +62,49 @@ it("labels a command by its working directory's last segment", () => {
   expect(agentCommandDirectoryLabel("/projects/atlas/")).toBe("atlas");
   expect(agentCommandDirectoryLabel("C:\\work\\atlas")).toBe("atlas");
   expect(agentCommandDirectoryLabel("/")).toBe("/");
+});
+
+const heredoc = [
+  "python3 - <<'PY'",
+  "from pathlib import Path",
+  "print(Path('.local/audit').exists())",
+  "PY",
+].join("\n");
+
+it("names a multi-line command by its first line and shows the whole command only when open", () => {
+  const onStop = vi.fn(async () => undefined);
+  const script = { ...terminal, command: heredoc, osPid: 58970 };
+  render(<ActionRunsPanel dock="sidebar" onDockChange={vi.fn()} runs={[]} terminals={[script]} onStop={onStop} />);
+  const row = screen.getByRole("group", { name: "Agent command: python3 - <<'PY' …" });
+  const summary = row.querySelector("summary") as HTMLElement;
+  expect(within(summary).getByText("python3 - <<'PY' …")).toBeInTheDocument();
+  expect(summary).toHaveTextContent("worktree · PID 58970 · 4 lines");
+  expect(summary).not.toHaveTextContent("from pathlib import Path");
+  // The open body carries the script with its line breaks.
+  const full = row.querySelector(".agent-command-run__command-text") as HTMLElement;
+  expect(full.textContent).toBe(heredoc);
+  const stop = screen.getByRole("button", { name: "Stop python3 - <<'PY' …" });
+  fireEvent.click(stop);
+  expect(onStop).toHaveBeenCalledWith(script);
+});
+
+it("repeats a long one-line command in the open row but not a short one", () => {
+  const long = `rg --files ${"-g '!generated' ".repeat(8)}| xargs wc -l`;
+  render(<ActionRunsPanel dock="sidebar" onDockChange={vi.fn()} runs={[]}
+    terminals={[terminal, { ...terminal, processId: "codex-session-2", command: long }]} />);
+  const [short, longRow] = screen.getAllByRole("group");
+  expect(short.querySelector(".agent-command-run__command-text")).toBeNull();
+  expect(longRow.querySelector(".agent-command-run__command-text")).toHaveTextContent(long);
+  // A single line has no line count.
+  expect(longRow.querySelector(".agent-command-run__meta")).not.toHaveTextContent("lines");
+});
+
+it("previews a command by its first non-blank line", () => {
+  expect(agentCommandPreview("pnpm dev")).toEqual({ text: "pnpm dev", lineCount: 1, cut: false });
+  expect(agentCommandPreview(heredoc)).toEqual({ text: "python3 - <<'PY' …", lineCount: 4, cut: true });
+  expect(agentCommandPreview("\n  bash -lc 'set -e  \r\necho hi'\n")).toEqual({
+    text: "bash -lc 'set -e …", lineCount: 2, cut: true,
+  });
+  expect(agentCommandPreview("x".repeat(80)).cut).toBe(false);
+  expect(agentCommandPreview("x".repeat(81))).toEqual({ text: "x".repeat(81), lineCount: 1, cut: true });
 });
