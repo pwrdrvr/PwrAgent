@@ -57,21 +57,22 @@ function request(
 }
 
 describe("NavigationQueryStore", () => {
-  it("pages visible Attention children without loading their idle parents or the whole inventory", async () => {
+  it.each(["checking", "degraded", "complete"] as const)("pages visible Attention children without loading their idle parents or the whole inventory during %s discovery", async (state) => {
     const children = Array.from({ length: 23 }, (_, index) => ({ ...thread(`child-${index}`),
       createdAt: index + 1, updatedAt: index + 1,
       parentThreadId: "idle-parent", parentThreadBackend: "codex" as const,
       inbox: { inInbox: true }, threadStatus: index === 22 ? "active" as const : "idle" as const,
     }));
-    const loadIndex = vi.fn(async () => snapshot([
+    const loadIndex = vi.fn(async () => ({ ...snapshot([
       ...Array.from({ length: 1000 }, (_, index) => thread(`idle-${index}`)),
       { ...thread("idle-parent"), subthreadsCollapsed: true }, ...children,
-    ]));
+    ]), coverage: { state } }));
     const store = new NavigationQueryStore();
     const view = request({ query: { kind: "lens", lens: "attention" }, pageSize: 10,
       attentionView: { id: "attention-children", promoteOnTurnEnd: true } });
     const read = (cursor?: string) => store.readPage({ scopeKey: "viewer", loadIndex, request: { ...view, cursor } });
     const first = await read();
+    expect(first.coverage).toEqual({ state });
     expect(first.entries).toHaveLength(10);
     expect(first.entries.every(({ placement }) => placement.kind === "root")).toBe(true);
     expect(first.counts).toMatchObject({ active: 1, unread: 23, review: 22 });
@@ -90,11 +91,11 @@ describe("NavigationQueryStore", () => {
     }
   });
 
-  it("does not treat an Attention parent on a later page as outside the lens", async () => {
+  it.each(["checking", "degraded", "complete"] as const)("does not treat an Attention parent on a later page as outside the lens during %s discovery", async (state) => {
     const store = new NavigationQueryStore();
     const parent = { ...thread("parent"), inbox: { inInbox: true }, updatedAt: 1 };
     const child = { ...thread("child"), parentThreadId: parent.id, inbox: { inInbox: true }, updatedAt: 2 };
-    const loadIndex = vi.fn(async () => snapshot([parent, child]));
+    const loadIndex = vi.fn(async () => ({ ...snapshot([parent, child]), coverage: { state } }));
     const view = request({ query: { kind: "lens", lens: "attention" }, pageSize: 1,
       attentionView: { id: "grouped-attention", promoteOnTurnEnd: true } });
     const first = await store.readPage({ scopeKey: "viewer", loadIndex, request: view });

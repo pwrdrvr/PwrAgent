@@ -803,11 +803,12 @@ export function projectNavigationQuery(params: {
       collectionSize: directories.length, directories, entries: [], queryKey: navigationQueryKey(params.request) };
   }
   // Attention can include a child while excluding its idle/read parent. Base
-  // placement on the complete filtered membership, before pagination: such a
+  // placement on the current filtered membership, before pagination: such a
   // child needs its own row, but a qualifying parent on a later page must keep
-  // its group. Preserve the actual relationship in row metadata for actions.
+  // its group. Incomplete provider discovery must not hide known active/unread
+  // children while their missing or idle parents cannot render. A later index
+  // can regroup them. Preserve the actual relationship in row metadata for actions.
   const attentionMemberKeys = query.kind === "lens" && query.lens === "attention"
-    && (!params.index.coverage || params.index.coverage.state === "complete")
     ? new Set(selectedThreads.map(threadKey)) : undefined;
   const entries = selectedThreads.map((thread, index): NavigationQueryEntry => {
     const parent = parentIdentity(thread, parentCandidates);
