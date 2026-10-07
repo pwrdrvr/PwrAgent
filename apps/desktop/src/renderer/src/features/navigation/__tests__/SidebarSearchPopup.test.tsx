@@ -979,3 +979,40 @@ describe("project destinations", () => {
     expect(onJumpToThread).toHaveBeenCalledWith(thread);
   });
 });
+
+describe("project mentions", () => {
+  const inProject = (id: string, title: string, label: string, updatedAt: number) => localThread({
+    id, title, updatedAt, linkedDirectories: [{ id, kind: "local", label, path: `/repos/${label}` }],
+  });
+
+  it("scopes threads to an @project mention and offers no project rows", async () => {
+    const busy = Array.from({ length: 10 }, (_, index) =>
+      inProject(`busy-${index}`, `MCP gateway ${index}`, "media-services", 100 + index));
+    const quiet = inProject("quiet", "MCP config", "pinecone-api", 1);
+    const onJumpToThread = vi.fn();
+    render(<SidebarSearchPopup
+      projects={[{ key: "directory:/repos/pinecone-api", kind: "directory", label: "pinecone-api", path: "/repos/pinecone-api" }]}
+      threads={[...busy, quiet]}
+      onJumpToProject={vi.fn()} onJumpToThread={onJumpToThread} onClose={vi.fn()} />);
+    const input = screen.getByRole("textbox");
+    fireEvent.change(input, { target: { value: "@pinecone-api mcp" } });
+    await settleRemoteSearch();
+    expect(screen.getAllByRole("option")).toHaveLength(1);
+    expect(screen.getByRole("option")).toHaveTextContent("MCP config");
+    expect(getNavigationQueryPage).not.toHaveBeenCalledWith(
+      expect.objectContaining({ query: expect.objectContaining({ kind: "directory-index" }) }), expect.any(String));
+    expect(getNavigationQueryPage).toHaveBeenCalledWith(expect.objectContaining({
+      query: { kind: "search", text: "@pinecone-api mcp" } }), expect.any(String));
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onJumpToThread).toHaveBeenCalledWith(quiet);
+  });
+
+  it("lists a project's threads for a bare in:@project mention", async () => {
+    render(<SidebarSearchPopup threads={[
+      inProject("a", "Alpha", "pinecone-api", 2), inProject("b", "Beta", "media-services", 3),
+    ]} onJumpToThread={vi.fn()} onClose={vi.fn()} />);
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "in:@pine" } });
+    await settleRemoteSearch();
+    expect(screen.getAllByRole("option").map((row) => row.textContent)).toEqual([expect.stringContaining("Alpha")]);
+  });
+});

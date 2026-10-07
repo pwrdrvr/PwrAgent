@@ -73,6 +73,18 @@ describe("navigation query projection", () => {
     expect(projects.directories.map((directory) => directory.label)).toEqual([name]);
   });
 
+  it("scopes owner search to @project mentions", () => {
+    const busy = Array.from({ length: 10 }, (_, index) => thread(`busy-${index}`, { title: `MCP gateway ${index}`,
+      updatedAt: 100 + index, linkedDirectories: [{ id: "busy", kind: "local", label: "media-services", path: "/repos/media-services" }] }));
+    const quiet = thread("quiet", { title: "MCP config", updatedAt: 1,
+      linkedDirectories: [{ id: "quiet", kind: "local", label: "pinecone-api", path: "/repos/pinecone-api" }] });
+    const source = snapshot([...busy, quiet]);
+    const page = (text: string) => projectNavigationQuery({ index: source, request: request({ kind: "search", text }) })
+      .entries.map(({ row }) => row.id);
+    expect(page("@pinecone-api mcp")).toEqual(["quiet"]);
+    expect(page("in:@Pinecone")).toEqual(["quiet"]);
+  });
+
   it("counts worker-only parents once and includes them in Attention without changing turn status", () => {
     const source = snapshot([
       thread("worker-only", { threadStatus: "idle", hasActiveSubAgent: true }),

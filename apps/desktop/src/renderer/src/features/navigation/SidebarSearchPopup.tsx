@@ -15,6 +15,7 @@ import { createPortal } from "react-dom";
 import {
   isSubthreadLaunchpadKey,
   isWindowsFilesystemPath,
+  parseThreadJumpQuery,
   threadHasExactPrNumberMatch,
   textMatchesJumpQuery,
   type NavigationThreadSummary,
@@ -106,6 +107,13 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
   });
 
   const trimmed = query.trim();
+  // `@project` / `in:@project` scope the threads, as in thread search. The
+  // whole query still goes to every matcher, which parses the mentions
+  // itself; only PR-number ranking reads the free text alone.
+  const parsedQuery = useMemo(() => parseThreadJumpQuery(trimmed), [trimmed]);
+  const jumpText = parsedQuery.text;
+  // A mention is a filter, not a project to jump to.
+  const projectRowsWanted = Boolean(props.onJumpToProject) && parsedQuery.projects.length === 0;
   const federationTarget = readRendererFederationTarget();
   const ownerInstanceId = federationTarget?.instanceId;
   const platform = getDesktopApi()?.platform;
@@ -113,14 +121,14 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
 
   const projectSearch = useNavigationQueryResource({
     desktopApi: getDesktopApi(),
-    request: trimmed && props.onJumpToProject ? {
+    request: trimmed && projectRowsWanted ? {
       protocol: 2, consumer: "search", inventory: "owner",
       federationTarget,
       query: { kind: "directory-index", filter: trimmed }, pageSize: 100,
     } : undefined,
   });
   const projects = useMemo(() => {
-    if (!trimmed || !props.onJumpToProject) return [];
+    if (!trimmed || !projectRowsWanted) return [];
     const query = trimmed.toLowerCase();
     const candidates = new Map((props.projects ?? []).map((directory) => [directory.key, directory]));
     if (projectSearch.state?.request.query.kind === "directory-index"
@@ -142,7 +150,7 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
         || rank(left) - rank(right)
         || left.label.localeCompare(right.label))
       .slice(0, MAX_RESULTS);
-  }, [trimmed, props.projects, props.onJumpToProject, projectSearch.state, ownerInstanceId, platform]);
+  }, [trimmed, props.projects, projectRowsWanted, projectSearch.state, ownerInstanceId, platform]);
 
   const results = useMemo(() => {
     if (!trimmed) {
@@ -152,13 +160,13 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
       .filter((thread) => threadMatchesQuery(thread, trimmed))
       .sort(
         (left, right) =>
-          Number(threadHasExactPrNumberMatch(right, trimmed))
-          - Number(threadHasExactPrNumberMatch(left, trimmed)),
+          Number(threadHasExactPrNumberMatch(right, jumpText))
+          - Number(threadHasExactPrNumberMatch(left, jumpText)),
       )
       .slice(0, MAX_RESULTS);
     const ownerKeys = new Set(ownerSearch.rows.map(threadSummaryIdentityKey));
     return [...ownerSearch.rows, ...immediate.filter((thread) => !ownerKeys.has(threadSummaryIdentityKey(thread)))].slice(0, MAX_RESULTS);
-  }, [trimmed, props.threads, ownerSearch.rows]);
+  }, [trimmed, jumpText, props.threads, ownerSearch.rows]);
 
   const {
     available: remoteSearchAvailable,
@@ -299,9 +307,9 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
     index: number,
   ): ReactElement => {
     const description = describeThread(thread);
-    const prs = orderPullRequestsForQuery(thread, trimmed);
-    const exactPrQuery = threadHasExactPrNumberMatch(thread, trimmed)
-      ? String(Number(trimmed.replace(/^#/, "")))
+    const prs = orderPullRequestsForQuery(thread, jumpText);
+    const exactPrQuery = threadHasExactPrNumberMatch(thread, jumpText)
+      ? String(Number(jumpText.replace(/^#/, "")))
       : "";
     const prStripResetKey = `${exactPrQuery}|${prs
       .map((pr) => pr.url)
