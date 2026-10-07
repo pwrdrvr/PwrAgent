@@ -213,6 +213,7 @@ import {
   type QuitRequestSource,
 } from "./quit-manager";
 import { retryQuitAfterDispatch } from "./quit-retry";
+import { watchSystemShutdown } from "./system-shutdown";
 import {
   installTranscriptImageProtocol,
   registerTranscriptImageProtocolScheme,
@@ -1364,6 +1365,12 @@ export function bootstrapApp(): void {
   }
 
   app.whenReady().then(async () => {
+    watchSystemShutdown(() => {
+      beginQuitInProgress("system-shutdown");
+      // Like a process signal, OS shutdown cannot wait for the interactive
+      // running-thread confirmation. before-quit still drains resources.
+      appQuitManager.allowImmediateQuit();
+    });
     if (linuxPasswordStoreRoot && relaunchForLinuxSecretStore({
       platform: process.platform,
       argv: process.argv,
