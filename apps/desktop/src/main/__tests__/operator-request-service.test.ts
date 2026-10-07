@@ -114,8 +114,10 @@ function replyEvent(threadId: string, messageId: string): AgentEvent {
   });
 }
 
-function createService(db: StateDb = openInMemoryStateDb()) {
-  cleanups.push(() => db.close());
+/** A database passed in is the caller's to close. */
+function createService(existing?: StateDb) {
+  const db = existing ?? openInMemoryStateDb();
+  if (!existing) cleanups.push(() => db.close());
   const registry = createRegistry();
   const store = new OperatorRequestStore(db);
   const broadcasts: OperatorRequestsChangedEvent[] = [];
@@ -308,6 +310,8 @@ describe("OperatorRequestService write cost", () => {
       });
     } finally {
       service.stop();
+      // Windows cannot remove a directory holding an open database.
+      db.close();
       delete process.env[SQLITE_WRITE_METRICS_ENV];
       fs.rmSync(root, { recursive: true, force: true });
     }
