@@ -1,10 +1,10 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, mkdir, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, expect, it } from "vitest";
-import { exportGitHandoff, importGitHandoff } from "../app-server/git-instance-handoff";
+import { assertGitHandoffUnchanged, exportGitHandoff, handoffRepositoryIdentity, importGitHandoff, prepareGitHandoff } from "../app-server/git-instance-handoff";
 
 const execute = promisify(execFile);
 const roots: string[] = [];
@@ -16,96 +16,142 @@ async function fixture() {
   roots.push(root);
   const source = path.join(root, "source");
   const receiver = path.join(root, "receiver");
-  const staging = path.join(root, "staging");
+  const remote = path.join(root, "origin.git");
   await mkdir(source);
-  await mkdir(staging);
   await git(source, "init", "-b", "main");
   await git(source, "config", "user.email", "test@example.invalid");
   await git(source, "config", "user.name", "Fixture");
   await git(source, "config", "core.autocrlf", "false");
-  await writeFile(path.join(source, "both.txt"), "base\n");
-  await writeFile(path.join(source, "deleted.txt"), "remove\n");
+  await writeFile(path.join(source, "code.txt"), "base\n");
   await writeFile(path.join(source, ".gitignore"), "ignored.txt\n");
   await git(source, "add", ".");
   await git(source, "commit", "-m", "base");
-  await git(root, "clone", source, receiver);
-  await git(source, "switch", "-c", "feature/windows-tests");
-  await writeFile(path.join(source, "commit.txt"), "unpublished\n");
-  await git(source, "add", "commit.txt");
-  await git(source, "commit", "-m", "unpublished");
-  return { root, source, receiver, staging };
+  await git(root, "clone", "--bare", source, remote);
+  await git(source, "remote", "add", "origin", remote);
+  await git(root, "clone", remote, receiver);
+  await git(source, "switch", "-c", "feature/handoff");
+  await writeFile(path.join(source, "commit.txt"), "published feature\n");
+  await git(source, "add", ".");
+  await git(source, "commit", "-m", "feature");
+  await git(source, "push", "-u", "origin", "feature/handoff");
+  return { root, source, receiver, remote };
 }
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-it("carries unpublished commits and distinct index/working layers without altering either checkout", async () => {
-  const { source, receiver, staging, root } = await fixture();
-  await writeFile(path.join(source, "both.txt"), "staged\n");
-  await git(source, "add", "both.txt");
-  await writeFile(path.join(source, "both.txt"), "working\r\n");
-  await rm(path.join(source, "deleted.txt"));
-  await writeFile(path.join(source, "binary.bin"), Buffer.from([0, 255, 13, 10, 42]));
-  await writeFile(path.join(source, "ignored.txt"), "not transferred");
-  await writeFile(path.join(receiver, "both.txt"), "receiver changes\n");
+it("preflights a published ref and fetches it into a detached worktree without transferring workspace bytes", async () => {
+  const { source, receiver, root } = await fixture();
+  await writeFile(path.join(source, "ignored.txt"), "never transferred\n");
+  await writeFile(path.join(receiver, "code.txt"), "receiver changes\n");
   const sourceStatus = await git(source, "status", "--porcelain=v1", "-z");
   const sourceIndex = await git(source, "ls-files", "--stage", "-z");
-  const sourceHead = await git(source, "rev-parse", "HEAD");
+  const sourceHead = (await git(source, "rev-parse", "HEAD")).trim();
   const receiverHead = await git(receiver, "rev-parse", "HEAD");
-  const snapshot = await exportGitHandoff(source, staging);
-  const bundlePath = path.join(root, "incoming.bundle");
-  await writeFile(bundlePath, Buffer.from(snapshot.bundleBase64, "base64"));
+  const snapshot = await exportGitHandoff(source);
+  expect(snapshot).toEqual({ head: sourceHead, ref: "refs/heads/feature/handoff", origin: expect.any(String), sourceBranch: "feature/handoff" });
+  expect(await prepareGitHandoff(receiver, snapshot)).toEqual({ head: sourceHead });
   const worktree = path.join(root, "handoff");
-  const rollback = await importGitHandoff({ repository: receiver, worktree, bundlePath, snapshot });
-  expect(await git(worktree, "rev-parse", "HEAD")).toBe(sourceHead);
-  expect(await git(worktree, "ls-files", "--stage", "-z")).toBe(sourceIndex);
-  expect(await readFile(path.join(worktree, "both.txt"), "utf8")).toBe("working\r\n");
-  expect(await git(worktree, "show", ":both.txt")).toBe("staged\n");
-  expect(await readFile(path.join(worktree, "binary.bin"))).toEqual(Buffer.from([0, 255, 13, 10, 42]));
-  expect(await readFile(path.join(worktree, "commit.txt"), "utf8")).toBe("unpublished\n");
-  await expect(readFile(path.join(worktree, "deleted.txt"))).rejects.toMatchObject({ code: "ENOENT" });
+  const rollback = await importGitHandoff({ repository: receiver, worktree, snapshot });
+  expect((await git(worktree, "rev-parse", "HEAD")).trim()).toBe(sourceHead);
+  expect(await git(worktree, "branch", "--show-current")).toBe("");
+  expect(await readFile(path.join(worktree, "commit.txt"), "utf8")).toBe("published feature\n");
   await expect(readFile(path.join(worktree, "ignored.txt"))).rejects.toMatchObject({ code: "ENOENT" });
   expect(await git(source, "status", "--porcelain=v1", "-z")).toBe(sourceStatus);
   expect(await git(source, "ls-files", "--stage", "-z")).toBe(sourceIndex);
-  expect(await git(source, "rev-parse", "HEAD")).toBe(sourceHead);
-  expect(await git(source, "for-each-ref", "refs/pwragent/handoffs")).toBe("");
   expect(await git(receiver, "rev-parse", "HEAD")).toBe(receiverHead);
-  expect(await readFile(path.join(receiver, "both.txt"), "utf8")).toBe("receiver changes\n");
+  expect(await readFile(path.join(receiver, "code.txt"), "utf8")).toBe("receiver changes\n");
+  expect(await git(source, "for-each-ref", "refs/pwragent/handoffs")).toBe("");
+  expect(await git(receiver, "for-each-ref", "refs/pwragent/handoffs")).toBe("");
   await rollback();
-  await expect(readFile(path.join(worktree, "both.txt"))).rejects.toMatchObject({ code: "ENOENT" });
+  expect(await git(receiver, "worktree", "list")).not.toContain(worktree);
 });
 
-it("rejects a tampered file and removes the partially created worktree", async () => {
-  const { source, receiver, staging, root } = await fixture();
-  const snapshot = await exportGitHandoff(source, staging);
-  snapshot.files[0].dataBase64 = Buffer.from("tampered").toString("base64");
-  const bundlePath = path.join(root, "incoming.bundle");
-  await writeFile(bundlePath, Buffer.from(snapshot.bundleBase64, "base64"));
+it.each(["unstaged", "staged", "untracked"])("blocks %s non-ignored changes before transfer", async (kind) => {
+  const { source } = await fixture();
+  await writeFile(path.join(source, kind === "untracked" ? "new.txt" : "code.txt"), "uncommitted\n");
+  if (kind === "staged") await git(source, "add", "code.txt");
+  await expect(exportGitHandoff(source)).rejects.toThrow("Commit or stash");
+});
+
+it("blocks unpushed commits even when the receiver has source objects", async () => {
+  const { source } = await fixture();
+  await git(source, "commit", "--allow-empty", "-m", "unpublished");
+  await expect(exportGitHandoff(source)).rejects.toThrow("Push branch feature/handoff");
+});
+
+it("requires an existing receiver clone of the same remote", async () => {
+  const { source, receiver, root } = await fixture();
+  const snapshot = await exportGitHandoff(source);
+  await expect(prepareGitHandoff(root, snapshot)).rejects.toThrow("Clone it there");
+  await git(receiver, "remote", "set-url", "origin", path.join(root, "another.git"));
+  await expect(prepareGitHandoff(receiver, snapshot)).rejects.toThrow("no remote matching the sender");
+});
+
+it("rejects a rewritten published branch even when the receiver already has the source objects", async () => {
+  const { source, receiver, root } = await fixture();
+  const snapshot = await exportGitHandoff(source);
+  await prepareGitHandoff(receiver, snapshot);
+  await git(source, "switch", "--detach", "HEAD~1");
+  await git(source, "commit", "--allow-empty", "-m", "next commit");
+  await git(source, "push", "--force", "origin", "HEAD:refs/heads/feature/handoff");
   const worktree = path.join(root, "handoff");
-  await expect(importGitHandoff({ repository: receiver, worktree, bundlePath, snapshot })).rejects.toThrow("did not match");
+  await expect(importGitHandoff({ repository: receiver, worktree, snapshot })).rejects.toThrow("published branch no longer contains");
   expect(await git(receiver, "worktree", "list")).not.toContain(worktree);
   expect(await git(receiver, "for-each-ref", "refs/pwragent/handoffs")).toBe("");
 });
 
-it("omits shared history from a bundle when the receiver advertises a known commit", async () => {
-  const { source, receiver, staging, root } = await fixture();
-  const receiverHead = (await git(receiver, "rev-parse", "HEAD")).trim();
-  const snapshot = await exportGitHandoff(source, staging, [receiverHead]);
-  const bundle = Buffer.from(snapshot.bundleBase64, "base64");
-  expect(bundle.subarray(0, 200).toString("utf8")).toContain(`-${receiverHead}`);
-  const bundlePath = path.join(root, "incremental.bundle");
-  await writeFile(bundlePath, bundle);
+it("keeps the exact source commit when the published branch advances", async () => {
+  const { source, receiver, root } = await fixture();
+  const head = (await git(source, "rev-parse", "HEAD")).trim();
+  await git(source, "commit", "--allow-empty", "-m", "later published commit");
+  await git(source, "push");
+  await git(source, "reset", "--hard", head);
+  const snapshot = await exportGitHandoff(source);
+  expect(snapshot.head).toBe(head);
   const worktree = path.join(root, "handoff");
-  await importGitHandoff({ repository: receiver, worktree, bundlePath, snapshot });
-  expect((await git(worktree, "rev-parse", "HEAD")).trim()).toBe(snapshot.head);
-  expect(await readFile(path.join(worktree, "commit.txt"), "utf8")).toBe("unpublished\n");
+  await importGitHandoff({ repository: receiver, worktree, snapshot });
+  expect((await git(worktree, "rev-parse", "HEAD")).trim()).toBe(head);
+  expect((await git(source, "rev-parse", "HEAD")).trim()).toBe(head);
 });
 
-it("rejects symlinks and repository escape paths before materializing files", async () => {
-  const { source, receiver, staging, root } = await fixture();
-  const snapshot = await exportGitHandoff(source, staging);
-  snapshot.files[0].path = "../escape.txt";
-  await expect(importGitHandoff({ repository: receiver, worktree: path.join(root, "handoff"), bundlePath: "unused", snapshot })).rejects.toThrow("Unsafe");
-  await git(source, "update-index", "--add", "--cacheinfo", "120000", snapshot.head, "link");
-  await expect(exportGitHandoff(source, staging)).rejects.toThrow("symlinks");
+it("reports receiver fetch failures during preflight", async () => {
+  const { source, receiver, remote } = await fixture();
+  const snapshot = await exportGitHandoff(source);
+  await git(remote, "update-ref", "-d", snapshot.ref);
+  await expect(prepareGitHandoff(receiver, snapshot)).rejects.toThrow("receiving machine could not fetch");
+  expect(await git(receiver, "for-each-ref", "refs/pwragent/handoffs")).toBe("");
+});
+
+it("uses a published branch for a detached source and checks for subsequent edits", async () => {
+  const { source } = await fixture();
+  await git(source, "switch", "--detach");
+  const snapshot = await exportGitHandoff(source);
+  expect(snapshot.ref).toBe("refs/heads/feature/handoff");
+  expect(snapshot.sourceBranch).toBeUndefined();
+  await writeFile(path.join(source, "code.txt"), "later edit\n");
+  await expect(assertGitHandoffUnchanged(source, snapshot)).rejects.toThrow("Commit or stash");
+});
+
+it.skipIf(process.platform === "win32")("lets Git restore tracked symlinks, including CLAUDE.md and dangling links", async () => {
+  const { source, receiver, root } = await fixture();
+  await writeFile(path.join(source, "AGENTS.md"), "fixture guidance\n");
+  await symlink("AGENTS.md", path.join(source, "CLAUDE.md"));
+  await symlink("missing-target", path.join(source, "dangling-link"));
+  await git(source, "add", ".");
+  await git(source, "commit", "-m", "link fixture");
+  await git(source, "push");
+  const snapshot = await exportGitHandoff(source);
+  const worktree = path.join(root, "handoff");
+  await importGitHandoff({ repository: receiver, worktree, snapshot });
+  expect((await lstat(path.join(worktree, "CLAUDE.md"))).isSymbolicLink()).toBe(true);
+  expect(await readlink(path.join(worktree, "CLAUDE.md"))).toBe("AGENTS.md");
+  expect(await readlink(path.join(worktree, "dangling-link"))).toBe("missing-target");
+});
+
+it("normalizes SSH and HTTPS identities without credentials", () => {
+  const identity = "github.com/example/repo";
+  expect(handoffRepositoryIdentity("git@github.com:Example/Repo.git")).toBe(identity);
+  expect(handoffRepositoryIdentity("ssh://git@github.com/Example/Repo.git")).toBe(identity);
+  expect(handoffRepositoryIdentity("https://user:secret@github.com/Example/Repo.git")).toBe(identity);
 });

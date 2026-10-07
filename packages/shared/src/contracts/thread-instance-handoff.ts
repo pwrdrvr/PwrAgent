@@ -23,22 +23,40 @@ export type HandoffInstanceThreadResult = {
   warnings: string[];
 };
 
+/** Published Git history used to create the receiver's workspace. */
+export type ThreadHandoffGitReference = {
+  head: string;
+  ref: string;
+  /** Normalized repository identity; credentials are never transferred. */
+  origin: string;
+  sourceBranch?: string;
+  cwdRelative?: string;
+};
+
+export type ThreadHandoffPrepareRequest = {
+  repository?: string;
+  git?: ThreadHandoffGitReference;
+};
+
+export type ThreadHandoffPrepareResult = {
+  version: 2;
+  platform: string;
+  git?: { head: string };
+};
+
 /** PwrAgent-owned envelope. The Codex payload is opaque, never parsed. */
 export type ThreadHandoffPackage = {
-  version: 1;
+  version: 2;
   handoffId: string;
   sourceThreadId: string;
   title?: string;
   historyDigest: string;
   rolloutBase64: string;
-  git?: {
-    bundleBase64: string;
-    head: string;
-    indexCommit: string;
-    workingCommit: string;
-    sourceBranch?: string;
-    cwdRelative?: string;
-    files: { path: string; dataBase64: string; mode: "100644" | "100755" }[];
+  git?: ThreadHandoffGitReference;
+  workspace?: {
+    format: "tar.gz" | "zip";
+    dataBase64: string;
+    warnings: string[];
   };
 };
 

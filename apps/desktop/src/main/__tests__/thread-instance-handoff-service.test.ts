@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
-import { copyFile, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readdir, readFile, readlink, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -34,21 +34,23 @@ async function setup(options: { createHistoryWorkspace?: () => Promise<string> }
   const receipt = vi.fn(() => true);
   const receiver = new ThreadInstanceHandoffService({
     backend, directory: path.join(root, "receiver"), localInstanceId: () => "pwr_receiver",
-    push: vi.fn(), remoteImport: vi.fn(), assertTarget: vi.fn(), receipt, ...options,
+    push: vi.fn(), remoteImport: vi.fn(), assertTarget: vi.fn(), receipt, prepareTarget: vi.fn(), ...options,
   });
   const remoteImport = vi.fn(async (_instanceId: string, request: ImportInstanceThreadRequest) => await receiver.receive("pwr_sender", request));
+  const prepareTarget = vi.fn(async (_instanceId: string, request: Parameters<typeof receiver.prepare>[0]) => await receiver.prepare(request));
+  const push = vi.fn(async (_instanceId: string, file: string) => {
+    const incoming = path.join(root, "downloads", path.basename(file));
+    await mkdir(path.dirname(incoming), { recursive: true });
+    await copyFile(file, incoming);
+    const bytes = await readFile(incoming);
+    return { path: incoming, sizeBytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") };
+  });
   const sender = new ThreadInstanceHandoffService({
     backend, directory: path.join(root, "sender"), localInstanceId: () => "pwr_sender",
     assertTarget: vi.fn(), receipt: vi.fn(), remoteImport,
-    push: async (_instanceId, file) => {
-      const incoming = path.join(root, "downloads", path.basename(file));
-      await mkdir(path.dirname(incoming), { recursive: true });
-      await copyFile(file, incoming);
-      const bytes = await readFile(incoming);
-      return { path: incoming, sizeBytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") };
-    },
+    prepareTarget, push,
   });
-  return { root, backend, sender, receiver, receipt, remoteImport, archive };
+  return { root, backend, sender, receiver, receipt, remoteImport, archive, prepareTarget, push };
 }
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
@@ -100,9 +102,11 @@ async function gitFixture(root: string) {
   await git(repository, "add", ".");
   await git(repository, "commit", "-m", "fixture");
   const destinationRepo = path.join(root, "destination-repo");
-  await git(root, "clone", repository, destinationRepo);
-  await writeFile(path.join(subdirectory, "code.txt"), "unstaged\n");
-  return { subdirectory, destinationRepo, canonicalDestinationRepo: await realpath(destinationRepo) };
+  const remote = path.join(root, "origin.git");
+  await git(root, "clone", "--bare", repository, remote);
+  await git(repository, "remote", "add", "origin", remote);
+  await git(root, "clone", remote, destinationRepo);
+  return { repository, subdirectory, destinationRepo, canonicalDestinationRepo: await realpath(destinationRepo), git };
 }
 
 it("transfers a Git workspace and keeps the thread's subdirectory cwd", async () => {
@@ -114,7 +118,7 @@ it("transfers a Git workspace and keeps the thread's subdirectory cwd", async ()
   expect(path.dirname(path.dirname(worktree))).toBe(path.join(canonicalDestinationRepo, ".worktrees"));
   expect(path.basename(worktree)).toBe("destination-repo");
   expect(result.directoryPath).toBe(path.join(worktree, "packages", "example"));
-  expect(await readFile(path.join(result.directoryPath, "code.txt"), "utf8")).toBe("unstaged\n");
+  expect(await readFile(path.join(result.directoryPath, "code.txt"), "utf8")).toBe("committed\n");
   expect(backend.forkThread).toHaveBeenCalledWith(expect.objectContaining({
     directoryPath: result.directoryPath, directoryLabel: "destination-repo", workMode: "worktree",
     importedWorktree: { repositoryPath: expect.any(String), worktreePath: worktree },
@@ -135,8 +139,77 @@ it("places a Git import where the receiver's Worktrees setting puts worktrees", 
   expect(allocate).toHaveBeenCalledTimes(1);
   const worktree = path.dirname(path.dirname(result.directoryPath));
   expect(path.dirname(path.dirname(worktree))).toBe(userHomeWorktreesRoot(home));
-  expect(await readFile(path.join(result.directoryPath, "code.txt"), "utf8")).toBe("unstaged\n");
+  expect(await readFile(path.join(result.directoryPath, "code.txt"), "utf8")).toBe("committed\n");
   expect(await readdir(destinationRepo)).not.toContain(".worktrees");
+});
+
+it.skipIf(process.platform === "win32")("moves a published Git thread with symlinks after validating its fork", async () => {
+  const { sender, backend, archive, root, prepareTarget } = await setup();
+  const { repository, subdirectory, destinationRepo, git } = await gitFixture(root);
+  await writeFile(path.join(repository, "AGENTS.md"), "fixture guidance\n");
+  await symlink("AGENTS.md", path.join(repository, "CLAUDE.md"));
+  await git(repository, "add", "AGENTS.md", "CLAUDE.md");
+  await git(repository, "commit", "-m", "guidance fixture");
+  await git(repository, "push", "origin", "main");
+  backend.exportThreadForHandoff.mockResolvedValue({ ...source, cwd: subdirectory });
+  const result = await sender.send({ sourceThreadId: "source-thread", targetInstanceId: "pwr_receiver", targetRepositoryPath: destinationRepo, operation: "move" });
+  const worktree = path.dirname(path.dirname(result.directoryPath));
+  expect(await readlink(path.join(worktree, "CLAUDE.md"))).toBe("AGENTS.md");
+  expect(result.sourceArchived).toBe(true);
+  expect(prepareTarget).toHaveBeenCalledWith("pwr_receiver", expect.objectContaining({ repository: destinationRepo,
+    git: expect.objectContaining({ ref: "refs/heads/main", cwdRelative: "packages/example" }) }));
+  expect(backend.readThread.mock.invocationCallOrder[0]).toBeLessThan(archive.mock.invocationCallOrder[0]);
+});
+
+it.each(["dirty", "unpushed", "missing receiver"])("stops before sending history for %s Git preflight", async (condition) => {
+  const { sender, backend, root, push, remoteImport, archive } = await setup();
+  const { repository, subdirectory, destinationRepo, git } = await gitFixture(root);
+  backend.exportThreadForHandoff.mockResolvedValue({ ...source, cwd: subdirectory });
+  if (condition === "dirty") await writeFile(path.join(subdirectory, "code.txt"), "uncommitted\n");
+  if (condition === "unpushed") await git(repository, "commit", "--allow-empty", "-m", "unpublished");
+  await expect(sender.send({ sourceThreadId: "source-thread", targetInstanceId: "pwr_receiver",
+    targetRepositoryPath: condition === "missing receiver" ? path.join(root, "not-cloned") : destinationRepo, operation: "move" }))
+    .rejects.toThrow(condition === "dirty" ? "Commit or stash" : condition === "unpushed" ? "Push branch" : "Clone it there");
+  expect(push).not.toHaveBeenCalled();
+  expect(remoteImport).not.toHaveBeenCalled();
+  expect(archive).not.toHaveBeenCalled();
+});
+
+it("rejects a legacy receiver before pushing history", async () => {
+  const { sender, prepareTarget, push } = await setup();
+  prepareTarget.mockResolvedValueOnce([] as unknown as Awaited<ReturnType<typeof prepareTarget>>);
+  await expect(sender.send({ sourceThreadId: "source-thread", targetInstanceId: "pwr_receiver", operation: "copy" }))
+    .rejects.toThrow("Upgrade the receiving PwrAgent");
+  expect(push).not.toHaveBeenCalled();
+});
+
+it("keeps the source when new workspace edits arrive after the receiver confirms its fork", async () => {
+  const { sender, backend, root, remoteImport, archive } = await setup();
+  const { subdirectory, destinationRepo } = await gitFixture(root);
+  backend.exportThreadForHandoff.mockResolvedValue({ ...source, cwd: subdirectory });
+  const importOne = remoteImport.getMockImplementation()!;
+  remoteImport.mockImplementationOnce(async (instanceId, request) => {
+    const destination = await importOne(instanceId, request);
+    await writeFile(path.join(subdirectory, "code.txt"), "new source edit\n");
+    return destination;
+  });
+  const result = await sender.send({ sourceThreadId: "source-thread", targetInstanceId: "pwr_receiver", targetRepositoryPath: destinationRepo, operation: "move" });
+  expect(result.sourceArchived).toBe(false);
+  expect(result.warnings.some((warning) => warning.includes("Commit or stash"))).toBe(true);
+  expect(archive).not.toHaveBeenCalled();
+});
+
+it("transfers a non-Git workspace using the receiver's platform and restores the fork cwd", async () => {
+  const { sender, backend, root, prepareTarget, receiver } = await setup();
+  const directory = path.join(root, "non-git");
+  await mkdir(directory);
+  await writeFile(path.join(directory, "code.txt"), "workspace bytes\n");
+  backend.exportThreadForHandoff.mockResolvedValue({ ...source, cwd: directory });
+  prepareTarget.mockImplementationOnce(async (_instanceId, request) => ({ ...await receiver.prepare(request), platform: "win32" }));
+  const result = await sender.send({ sourceThreadId: "source-thread", targetInstanceId: "pwr_receiver", operation: "copy" });
+  expect(await readFile(path.join(result.directoryPath, "code.txt"), "utf8")).toBe("workspace bytes\n");
+  expect(result.warnings).toContain("ZIP workspaces do not transfer symlinks.");
+  expect(backend.forkThread).toHaveBeenCalledWith(expect.objectContaining({ directoryPath: result.directoryPath, workMode: "local" }));
 });
 
 it("retains the workspace when fork rejection leaves provider creation uncertain", async () => {
@@ -208,7 +281,7 @@ it("does not archive a source whose history changes through another protocol cli
 it("binds imports to the pushing peer and deduplicates repeated acknowledgements", async () => {
   const { receiver, backend, root, receipt } = await setup();
   const handoffId = randomUUID();
-  const pkg: ThreadHandoffPackage = { version: 1, handoffId, sourceThreadId: "source-thread", rolloutBase64: source.rolloutBase64, historyDigest: threadHistoryDigest(replay) };
+  const pkg: ThreadHandoffPackage = { version: 2, handoffId, sourceThreadId: "source-thread", rolloutBase64: source.rolloutBase64, historyDigest: threadHistoryDigest(replay) };
   const bytes = await encodeThreadHandoff(pkg);
   const filePath = path.join(root, "package.gz");
   await writeFile(filePath, bytes);
@@ -225,7 +298,7 @@ it("keeps accepting imports after many settled ones", async () => {
   const { receiver, backend, root } = await setup();
   for (let index = 0; index < 130; index += 1) {
     const handoffId = randomUUID();
-    const bytes = await encodeThreadHandoff({ version: 1, handoffId, sourceThreadId: "source-thread", rolloutBase64: source.rolloutBase64, historyDigest: threadHistoryDigest(replay) });
+    const bytes = await encodeThreadHandoff({ version: 2, handoffId, sourceThreadId: "source-thread", rolloutBase64: source.rolloutBase64, historyDigest: threadHistoryDigest(replay) });
     const filePath = path.join(root, `${handoffId}.gz`);
     await writeFile(filePath, bytes);
     await receiver.receive("pwr_sender", { handoffId, file: { path: filePath, sizeBytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") } });
@@ -242,8 +315,8 @@ it("rejects tampered checksums and unsafe file paths before importing", async ()
   await expect(receiver.receive("pwr_sender", { handoffId, file: { path: file, sizeBytes: 7, sha256: "incorrect" } })).rejects.toThrow("checksum");
   expect(backend.forkThread).not.toHaveBeenCalled();
   const pkg: ThreadHandoffPackage = {
-    version: 1, handoffId, sourceThreadId: "source-thread", rolloutBase64: source.rolloutBase64, historyDigest: threadHistoryDigest(replay),
-    git: { head: "a".repeat(40), indexCommit: "b".repeat(40), workingCommit: "c".repeat(40), bundleBase64: "", files: [{ path: ".git/config", mode: "100644", dataBase64: "" }] },
+    version: 2, handoffId, sourceThreadId: "source-thread", rolloutBase64: source.rolloutBase64, historyDigest: threadHistoryDigest(replay),
+    git: { head: "a".repeat(40), ref: "refs/heads/main", origin: "example/repo", cwdRelative: ".git/config" },
   };
   await expect(decodeThreadHandoff(await encodeThreadHandoff(pkg))).rejects.toThrow("Unsafe");
 });
