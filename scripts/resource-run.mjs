@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 import { execFileSync, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { createPosixProcessTracker, DESCENDANT_ENV, ownerRunning, processStartedAt } from "./tool-processes.mjs";
+export { processStartedAt } from "./tool-processes.mjs";
 import { pathToFileURL } from "node:url";
 import lockfile from "proper-lockfile";
 import crossSpawn from "cross-spawn";
@@ -63,12 +65,12 @@ async function inheritedLock(env, lockPath) {
     if (!owner || owner.path !== lockPath || typeof owner.token !== "string" || !alive(owner.pid) || !isAncestorPid(owner.pid)) return false;
     const recorded = await readOwner(lockPath);
     return recorded?.pid === owner.pid && recorded?.token === owner.token && recorded?.path === lockPath
-      && ownerRunning(recorded)
-      && await lockfile.check(lockPath, { realpath: false, stale: 30_000 });
+      && ownerRunning(recorded) && await lockfile.check(lockPath, { realpath: false, stale: 30_000 });
   } catch { return false; }
 }
 
 function signalGroup(pid, signal) {
+  if (!Number.isInteger(pid) || pid <= 0) throw new Error("Invalid tool process group identity");
   try { process.kill(-pid, signal); } catch (error) { if (error.code !== "ESRCH") throw error; }
 }
 
@@ -82,35 +84,8 @@ function groupRunning(pid) {
   });
 }
 
-export function processStartedAt(pid) {
-  try {
-    if (process.platform === "linux") {
-      const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-      return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
-    }
-    if (process.platform === "win32") {
-      return execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
-        `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().Ticks`], { encoding: "utf8", timeout: 5_000, windowsHide: true }).trim() || null;
-    }
-    return execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], {
-      encoding: "utf8", timeout: 5_000, env: { ...process.env, LC_ALL: "C" },
-    }).trim() || null;
-  } catch (error) {
-    if (error.code === "ENOENT" || error.status === 1) return null;
-    throw error;
-  }
-}
-
-function ownerRunning(owner) {
-  if (!alive(owner.pid)) return false;
-  // Older peers did not publish an owner identity. Keep their fail-closed
-  // behavior, and also refuse recovery if a live process cannot be identified.
-  if (!owner.ownerStartedAt) return true;
-  const currentStartedAt = processStartedAt(owner.pid);
-  return !currentStartedAt || currentStartedAt === owner.ownerStartedAt;
-}
-
 async function finishGroup(pid, expectedStartedAt) {
+  if (!Number.isInteger(pid) || pid <= 0) throw new Error("Invalid tool process group identity");
   // A PGID cannot be reused while any original member remains. If its leader
   // exists with a different start identity, the old group is already gone.
   const currentStartedAt = processStartedAt(pid);
@@ -145,17 +120,34 @@ export async function runResourceCommand(command, args, {
   let ownedGroupStartedAt;
   let killTimer;
   let windowsJob;
+  let tracker;
+  let observeTimer;
+  let recordedGroups = "[]";
+  const observeDescendants = () => {
+    tracker.observe();
+    const groups = tracker.recordedGroups();
+    const serialized = JSON.stringify(groups);
+    if (serialized === recordedGroups) return;
+    owner.descendantGroups = groups;
+    // One writer, synchronous atomic replacement: cancellation must publish
+    // discoveries before killing their parents, without racing an interval.
+    const temporary = `${lockPath}.owner-${owner.token}.tmp`;
+    writeFileSync(temporary, JSON.stringify(owner), { mode: 0o600 });
+    renameSync(temporary, `${lockPath}.owner.json`);
+    recordedGroups = serialized;
+  };
   const stopChild = (signal) => {
     if (!child?.pid) return;
     if (windowsJob) { windowsJob.cancel(); return; }
-    if (ownsGroup) signalGroup(child.pid, signal);
+    if (tracker) { observeDescendants(); tracker.signal(signal); }
+    else if (ownsGroup) signalGroup(child.pid, signal);
     else child.kill(signal);
   };
   const stop = (signal) => {
     stoppedBy ??= signal;
     abort.abort();
-    stopChild(signal);
-    if (child && !windowsJob && !killTimer) killTimer = setTimeout(() => stopChild("SIGKILL"), 5_000);
+    try { stopChild(signal); } catch (error) { compromised ??= error; }
+    if (child && !windowsJob && !killTimer) killTimer = setTimeout(() => { try { stopChild("SIGKILL"); } catch (error) { compromised ??= error; } }, 5_000);
   };
   const onInt = () => stop("SIGINT");
   const onTerm = () => stop("SIGTERM");
@@ -176,11 +168,13 @@ export async function runResourceCommand(command, args, {
           if (previous?.groupPid && process.platform !== "win32") {
             if (!previous.groupStartedAt) {
               if (groupRunning(previous.groupPid)) throw new Error("Stale process group has no start identity; refusing unsafe recovery.");
-            } else await finishGroup(previous.groupPid, previous.groupStartedAt);
+            } else await createPosixProcessTracker(
+              { pid: previous.groupPid, startedAt: previous.groupStartedAt }, previous.descendantGroups, { descendantToken: previous.descendantToken },
+            ).drain();
           }
           const ownerStartedAt = processStartedAt(process.pid);
-          if (!ownerStartedAt) throw new Error("Cannot identify the tool lease owner; refusing unsafe ownership.");
-          owner = { pid: process.pid, path: lockPath, token: randomUUID(), ownerStartedAt };
+          if (!ownerStartedAt) throw new Error("Unable to identify the tool lease owner");
+          owner = { pid: process.pid, path: lockPath, token: randomUUID(), ownerStartedAt, ...(process.platform === "win32" ? {} : { descendantToken: randomUUID() }) };
           await writeOwner(lockPath, owner);
           childEnv[OWNER_ENV] = JSON.stringify({ pid: owner.pid, path: owner.path, token: owner.token });
           break;
@@ -203,7 +197,7 @@ export async function runResourceCommand(command, args, {
       const launchArgs = windowsJob?.args ?? (ownsGroup ? [path.join(import.meta.dirname, "posix-tool-child.mjs")] : childArgs);
       const spawnTool = process.platform === "win32" && !windowsJob ? crossSpawn : spawn;
       child = spawnTool(launchCommand, launchArgs, {
-        cwd, env: windowsJob?.env ?? childEnv,
+        cwd, env: ownsGroup ? { ...childEnv, [DESCENDANT_ENV]: owner.descendantToken } : (windowsJob?.env ?? childEnv),
         stdio: ownsGroup ? (Array.isArray(stdio) ? [...stdio.slice(0, 3), "ipc"] : [stdio, stdio, stdio, "ipc"]) : stdio,
         shell: false,
         windowsHide: !!windowsJob,
@@ -217,7 +211,13 @@ export async function runResourceCommand(command, args, {
     if (owner && ownsGroup && child.pid) {
       ownedGroupStartedAt = processStartedAt(child.pid);
       if (!ownedGroupStartedAt) throw new Error("Tool bridge exited before publishing process ownership.");
-      await writeOwner(lockPath, { ...owner, groupPid: child.pid, groupStartedAt: ownedGroupStartedAt });
+      owner = { ...owner, groupPid: child.pid, groupStartedAt: ownedGroupStartedAt, descendantGroups: [] };
+      await writeOwner(lockPath, owner);
+      tracker = createPosixProcessTracker({ pid: child.pid, startedAt: ownedGroupStartedAt }, [], { descendantToken: owner.descendantToken });
+      observeTimer = setInterval(() => {
+        try { observeDescendants(); }
+        catch (error) { compromised ??= error; stop("SIGTERM"); }
+      }, 100);
       if (abort.signal.aborted) stopChild(stoppedBy);
       else await new Promise((resolve, reject) => child.send({ command, args: childArgs }, (error) => error ? reject(error) : resolve()));
     }
@@ -229,8 +229,10 @@ export async function runResourceCommand(command, args, {
     throw error;
   } finally {
     if (killTimer) clearTimeout(killTimer);
+    if (observeTimer) clearInterval(observeTimer);
     try {
-      if (ownsGroup && child?.pid) await finishGroup(child.pid, ownedGroupStartedAt);
+      if (tracker) { observeDescendants(); await tracker.drain(); }
+      else if (ownsGroup && child?.pid) await finishGroup(child.pid, ownedGroupStartedAt);
       if (release && !compromised) {
         if (owner) await rm(`${lockPath}.owner.json`, { force: true });
         await release();

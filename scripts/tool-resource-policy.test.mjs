@@ -1,4 +1,5 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdtemp, mkdir, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -464,8 +465,12 @@ describe("parallel and option-prefix escapes", () => {
   it.skipIf(process.platform === "win32")("does not start a POSIX tool before the group ownership gate is published", async () => {
     const directory = await fixture();
     const output = path.join(directory, "started");
+    const owner = { pid: process.pid, path: path.join(directory, "gate"), token: randomUUID() };
+    const descendantToken = randomUUID();
+    await writeFile(`${owner.path}.owner.json`, JSON.stringify({ ...owner, ownerStartedAt: processStartedAt(process.pid), descendantToken }));
     const child = spawn(process.execPath, [path.join(import.meta.dirname, "posix-tool-child.mjs")], {
       detached: true, stdio: ["ignore", "ignore", "ignore", "ipc"],
+      env: { ...process.env, [OWNER_ENV]: JSON.stringify(owner), PWRAGENT_TOOL_DESCENDANT_TOKEN: descendantToken },
     });
     const exited = new Promise((resolve, reject) => { child.once("error", reject); child.once("exit", resolve); });
     try {
@@ -479,6 +484,22 @@ describe("parallel and option-prefix escapes", () => {
 });
 
 describe("stale process identity", () => {
+  it("keeps public owner environment at three fields and publishes private identity separately", async () => {
+    const directory = await fixture();
+    const output = path.join(directory, "published-owner");
+    expect(await runResourceCommand(process.execPath, ["-e", `const fs = require('fs'); const owner = JSON.parse(process.env.${OWNER_ENV}); fs.writeFileSync(${JSON.stringify(output)}, JSON.stringify({ owner, marker: process.env.PWRAGENT_TOOL_DESCENDANT_TOKEN, recorded: JSON.parse(fs.readFileSync(owner.path + '.owner.json', 'utf8')) }));`], {
+      policy: low, lockPath: path.join(directory, "lock"), stdio: "ignore", log: () => {},
+    })).toEqual({ code: 0, signal: null });
+    const { owner, marker, recorded } = JSON.parse(await readFile(output, "utf8"));
+    expect(Object.keys(owner).sort()).toEqual(["path", "pid", "token"]);
+    expect(recorded.ownerStartedAt).toBe(processStartedAt(process.pid));
+    if (process.platform !== "win32") {
+      expect(marker).toBe(recorded.descendantToken);
+      expect(marker).toBeTruthy();
+      expect(marker).not.toBe(owner.token);
+    } else expect(recorded.descendantToken).toBeUndefined();
+  }, 30_000);
+
   it("recovers a stale lease whose owner PID now belongs to an unrelated process", async () => {
     const directory = await fixture();
     const ready = path.join(directory, "ready");
@@ -540,6 +561,115 @@ describe("stale process identity", () => {
         .toEqual({ code: 0, signal: null });
       expect(() => process.kill(unrelated.pid, 0)).not.toThrow();
     } finally { process.kill(-unrelated.pid, "SIGKILL"); await exited; }
+  }, 15_000);
+});
+
+describe.skipIf(process.platform === "win32")("detached POSIX tool descendants", () => {
+  async function escapedFixture(directory) {
+    const marker = path.join(directory, "detached-ready");
+    const program = `require('fs').writeFileSync(${JSON.stringify(marker)}, String(process.pid)); setInterval(() => {}, 1000)`;
+    const holder = await startFixture(directory, ["-e", `require('child_process').spawn(process.execPath, ['-e', ${JSON.stringify(program)}], { detached: true, stdio: 'ignore' }); setInterval(() => {}, 1000)`]);
+    const pid = Number(await waitForFile(marker));
+    return { holder, pid, startedAt: processStartedAt(pid) };
+  }
+
+  function running(pid) {
+    try {
+      const state = execFileSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8", timeout: 5_000 }).trim();
+      return !!state && !state.startsWith("Z");
+    } catch (error) { if (error.status === 1) return false; throw error; }
+  }
+
+  async function drained(pid) {
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      if (!running(pid)) return;
+      await delay(50);
+    }
+    throw new Error(`Detached tool descendant ${pid} survived cleanup`);
+  }
+
+  function cleanup({ holder, pid, startedAt }) {
+    holder.kill("SIGKILL");
+    if (processStartedAt(pid) === startedAt) {
+      try { process.kill(-pid, "SIGKILL"); } catch (error) { if (error.code !== "ESRCH") throw error; }
+    }
+  }
+
+  it.each(["SIGTERM", "SIGKILL"])("drains an escaped process group after lease-owner %s", async (signal) => {
+    const directory = await fixture();
+    const escaped = await escapedFixture(directory);
+    try {
+      escaped.holder.kill(signal);
+      expect(await escaped.holder.exited).toEqual({ code: null, signal });
+      await drained(escaped.pid);
+    } finally { cleanup(escaped); await escaped.holder.exited; }
+  }, 15_000);
+
+  it("drains an orphaned group when its launcher exits before the first observation", async () => {
+    const directory = await fixture();
+    const marker = path.join(directory, "orphan-pid");
+    const childProgram = "setInterval(() => {}, 1000)";
+    const holder = await startFixture(directory, ["-e", `const child = require('child_process').spawn(process.execPath, ['-e', ${JSON.stringify(childProgram)}], { detached: true, stdio: 'ignore' }); require('fs').writeFileSync(${JSON.stringify(marker)}, String(child.pid)); child.unref();`]);
+    const pid = Number(await waitForFile(marker));
+    const escaped = { holder, pid, startedAt: processStartedAt(pid) };
+    try {
+      expect(await holder.exited).toEqual({ code: 0, signal: null });
+      await drained(pid);
+    } finally { cleanup(escaped); await holder.exited; }
+  }, 15_000);
+
+  it("recovers recorded detached groups after both the owner and bridge are killed", async () => {
+    const directory = await fixture();
+    const escaped = await escapedFixture(directory);
+    const lockPath = path.join(directory, "lock");
+    try {
+      let owner;
+      for (let attempt = 0; attempt < 200; attempt += 1) {
+        owner = JSON.parse(await readFile(`${lockPath}.owner.json`, "utf8"));
+        if (owner.descendantGroups?.some((group) => group.pid === escaped.pid && group.startedAt === escaped.startedAt)) break;
+        await delay(25);
+      }
+      expect(owner.descendantGroups).toContainEqual({ pid: escaped.pid, startedAt: escaped.startedAt });
+      escaped.holder.kill("SIGSTOP");
+      process.kill(-owner.groupPid, "SIGKILL");
+      escaped.holder.kill("SIGKILL");
+      await escaped.holder.exited;
+      expect(running(escaped.pid)).toBe(true);
+      const old = new Date(Date.now() - 60_000);
+      await utimes(`${lockPath}.lock`, old, old);
+      const next = await startFixture(directory, ["-e", "0"], { lockPath });
+      expect(await next.exited).toEqual({ code: 0, signal: null });
+      await drained(escaped.pid);
+    } finally { cleanup(escaped); await escaped.holder.exited; }
+  }, 15_000);
+
+  it.each([true, false])("checks the private capability when an orphan never reached the stale ledger ($0)", async (matches) => {
+    const directory = await fixture();
+    const marker = path.join(directory, "capability-ready");
+    const lockPath = path.join(directory, "lock");
+    const dead = spawn(process.execPath, ["-e", "0"], { stdio: "ignore" });
+    await new Promise((resolve) => dead.once("exit", resolve));
+    const owner = { pid: dead.pid, path: lockPath, token: randomUUID() };
+    const descendantToken = randomUUID();
+    const child = spawn(process.execPath, ["-e", `require('fs').writeFileSync(${JSON.stringify(marker)}, 'ready'); setInterval(() => {}, 1000)`], {
+      detached: true, stdio: "ignore",
+      env: { ...process.env, [OWNER_ENV]: JSON.stringify(owner), PWRAGENT_TOOL_DESCENDANT_TOKEN: matches ? descendantToken : `wrong:${descendantToken}` },
+    });
+    const exited = new Promise((resolve) => child.once("exit", resolve));
+    const startedAt = processStartedAt(child.pid);
+    try {
+      await waitForFile(marker);
+      await mkdir(`${lockPath}.lock`);
+      const old = new Date(Date.now() - 60_000);
+      await utimes(`${lockPath}.lock`, old, old);
+      await writeFile(`${lockPath}.owner.json`, JSON.stringify({
+        ...owner, ownerStartedAt: "dead-owner", groupPid: dead.pid, groupStartedAt: "dead-bridge", descendantToken,
+      }));
+      const next = await startFixture(directory, ["-e", "0"], { lockPath });
+      expect(await next.exited).toEqual({ code: 0, signal: null });
+      if (matches) await drained(child.pid);
+      else expect(running(child.pid)).toBe(true);
+    } finally { cleanup({ holder: child, pid: child.pid, startedAt }); await exited; }
   }, 15_000);
 });
 

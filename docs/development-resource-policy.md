@@ -56,11 +56,19 @@ an active lease and an actual owner in the process ancestry. Unrelated
 processes cannot bypass the queue by copying the owner environment.
 
 On POSIX, a gated Node bridge creates the process group; the owner records it
-before permitting the tool to start. Nested wrappers stay in that group.
-Cancellation terminates and drains the group before releasing the lease.
-Owner death disconnects the bridge, which kills its group. Stale recovery also
-terminates any recorded group belonging to a dead owner before starting the
-next tool. Group start identity prevents a reused PGID from targeting an
+before permitting the tool to start. Nested wrappers inherit its ownership.
+An optional `descendantGroups: [{pid,startedAt}]` ledger records escaped groups
+whose ancestry or private capability proves ownership. A separate, fresh
+`descendantToken` is persisted before launch and passed only to the bridge/tool
+environment as `PWRAGENT_TOOL_DESCENDANT_TOKEN`. Exact capability matching plus
+start identity finds orphans whose launcher exits before an observation;
+copied public owner JSON alone grants no cleanup authority.
+
+Cancellation snapshots ownership, signals escaped and primary groups, and
+drains them before releasing the lease. Owner death disconnects the bridge,
+which drains its descendants before exiting. Stale recovery drains recorded
+groups and capability-tagged orphans before starting the next tool. Group start
+identity prevents a reused PGID from targeting an
 unrelated process. Owner start identity permits recovery when an unrelated
 process reuses the crashed owner's PID. Legacy sidecars without that identity
 still refuse recovery while their PID is live. A stale lease with a verified live owner fails rather than starting a second

@@ -43,5 +43,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
     [path.join(repoRoot, "scripts", "report-sqlite-writes.mjs"), metricsFile],
     { cwd: repoRoot, stdio: "inherit" },
   );
-  process.exit(vitest.code ?? report.status ?? 0);
+  if (vitest.signal) {
+    setTimeout(() => process.exit(1), 1_000);
+    process.kill(process.pid, vitest.signal);
+  } else process.exit(vitest.code ?? report.status ?? 0);
 }
