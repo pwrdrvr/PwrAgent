@@ -198,6 +198,7 @@ import {
 import { registerManagedGrokSignatureRejectionBroadcast } from "./managed-grok-signature-broadcast";
 import { registerManagedRuntimeProgressBroadcast } from "./managed-runtime-progress-broadcast";
 import { subscribersForChannel } from "./window-channels";
+import { requestOpenMainView } from "./window-open-main-view";
 import { requestOpenNewThread } from "./window-open-new-thread";
 import { requestOpenSettings } from "./window-open-settings";
 import { PROFILES_SETTINGS_CREATE_SUBSECTION } from "../shared/settings-routes";
@@ -1173,6 +1174,9 @@ function installApplicationMenu(): void {
         window.show();
         window.focus();
       },
+      openAutomations: () => {
+        requestOpenMainView("automations");
+      },
       openDocumentation: async () => {
         await shell.openExternal(PWRAGENT_DOCUMENTATION_URL);
       },
@@ -1209,6 +1213,9 @@ function installApplicationMenu(): void {
       },
       openSource: async () => {
         await shell.openExternal(PWRAGENT_SOURCE_URL);
+      },
+      openThreadSearch: () => {
+        requestOpenMainView("search");
       },
       openWebsite: async () => {
         await shell.openExternal(PWRAGENT_HOMEPAGE_URL);

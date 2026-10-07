@@ -2454,7 +2454,9 @@ export function Sidebar(props: SidebarProps) {
           <MastheadActionButton
             ariaLabel="Open automations"
             ariaPressed={props.automationsActive}
-            className={`sidebar__icon-button${props.automationsActive ? " is-active" : ""}`}
+            // `sidebar__masthead-automations` drops out after the gear on a
+            // narrow rail; View → Automations is its other home.
+            className={`sidebar__icon-button sidebar__masthead-automations${props.automationsActive ? " is-active" : ""}`}
             onClick={props.onOpenAutomations}
           >
             <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M8 2v4"/><path d="M16 2v4"/><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M3 10h18"/><path d="M8 14h.01"/><path d="M12 14h.01"/><path d="M16 14h.01"/><path d="M8 18h.01"/><path d="M12 18h.01"/></svg>
@@ -2465,7 +2467,7 @@ export function Sidebar(props: SidebarProps) {
             ariaLabel="Open settings"
             ariaPressed={props.settingsActive}
             // `sidebar__masthead-settings` lets the gear drop out first when the
-            // rail is too narrow for the wordmark + all four actions — Settings
+            // rail is too narrow for the wordmark + all five controls — Settings
             // is still reachable from the app menu (⌘,), so it's the safe one to
             // shed before the (less reachable) brand wordmark.
             className={`sidebar__icon-button sidebar__masthead-settings${props.settingsActive ? " is-active" : ""}`}

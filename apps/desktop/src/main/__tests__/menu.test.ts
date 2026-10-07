@@ -44,6 +44,7 @@ function buildTemplate(
       checkForUpdates: vi.fn(),
       copyLocalDiagnosticsInfo: vi.fn(),
       focusWindow: vi.fn(),
+      openAutomations: vi.fn(),
       openDocumentation: vi.fn(),
       openFederationWindow: options?.openFederationWindow ?? vi.fn(),
       openIssueReporter: vi.fn(),
@@ -54,6 +55,7 @@ function buildTemplate(
       openSecurityReporter: vi.fn(),
       openSettings: vi.fn(),
       openSource: vi.fn(),
+      openThreadSearch: vi.fn(),
       openWebsite: vi.fn(),
       quit: vi.fn(),
       replayOnboarding: vi.fn(),
@@ -196,6 +198,9 @@ describe("buildApplicationMenuTemplate", () => {
       // Decision E: drop the stock item on macOS only if macOS adds its own.
       // It does not, so this is the only full-screen entry the menu bar has.
       expect(flatten(submenuItems(template, "View"))).toEqual([
+        "Search Threads",
+        "Automations",
+        "---",
         "Reload Window",
         "---",
         "role:resetZoom",
@@ -239,6 +244,9 @@ describe("buildApplicationMenuTemplate", () => {
 
     it("pins View", () => {
       expect(flatten(submenuItems(template, "View"))).toEqual([
+        "Search Threads",
+        "Automations",
+        "---",
         "Reload Window",
         "---",
         "role:resetZoom",
@@ -286,7 +294,7 @@ describe("buildApplicationMenuTemplate", () => {
     (isMac) => {
       const view = flatten(submenuItems(buildTemplate(true, { isMac }), "View"));
 
-      expect(view.slice(0, 4)).toEqual([
+      expect(view.slice(3, 7)).toEqual([
         "Reload Window",
         "role:forceReload",
         "role:toggleDevTools",
@@ -305,6 +313,9 @@ describe("buildApplicationMenuTemplate", () => {
 
     expect(accelerator("Settings…")).toBe("CmdOrCtrl+,");
     expect(accelerator("New Thread")).toBe("CmdOrCtrl+N");
+    // The renderer's own Search All chord, shown on the row.
+    expect(accelerator("Search Threads")).toBe("CmdOrCtrl+Shift+F");
+    expect(accelerator("Automations")).toBeUndefined();
     expect(accelerator(isMac ? "Quit PwrAgent" : "Quit")).toBe(
       isMac ? "Command+Q" : "CmdOrCtrl+Q",
     );
@@ -334,11 +345,13 @@ describe("buildApplicationMenuTemplate", () => {
     const actions = {
       checkForUpdates: vi.fn(),
       copyLocalDiagnosticsInfo: vi.fn(),
+      openAutomations: vi.fn(),
       openDocumentation: vi.fn(),
       openIssueReporter: vi.fn(),
       openSecurityReporter: vi.fn(),
       openSettings: vi.fn(),
       openSource: vi.fn(),
+      openThreadSearch: vi.fn(),
       openWebsite: vi.fn(),
       quit: vi.fn(),
       replayOnboarding: vi.fn(),
@@ -359,6 +372,8 @@ describe("buildApplicationMenuTemplate", () => {
     click(items, "Check for Updates…");
     click(items, "Settings…");
     click(items, "Usage Activity");
+    click(items, "Search Threads");
+    click(items, "Automations");
     click(items, "PwrAgent Documentation");
     click(items, "Replay Onboarding…");
     click(items, "Report an Issue…");

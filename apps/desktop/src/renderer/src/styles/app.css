@@ -2662,47 +2662,57 @@ textarea,
   gap: 8px;
 }
 
-/* When the rail gets too narrow for the wordmark + all four actions, the
-   Settings gear drops out — it's the one masthead action reachable elsewhere
-   (app menu → Settings…, ⌘,), so it's the safe one to shed. That alone frees
-   enough room for the wordmark + the remaining three buttons to coexist all the
-   way down to the minimum rail width, so the wordmark itself never has to hide.
+/* A local window's masthead holds five 28px controls: Director voice, Search,
+   Automations, Settings and New Thread. As the rail narrows they shed in a
+   fixed order — the brand mark, then Settings, then Automations — and the
+   wordmark, the mic, Search and New Thread stay down to the 280px minimum.
+   Settings and Automations go because they are the two with another home:
+   app menu / File → Settings… (⌘,) and View → Automations. A remote
+   federation window shows only Search and New Thread, which fit at every
+   width, so the mark rule is scoped to the five-control row.
+
    `.sidebar` is the named width-query container (`sidebar`) — the same
-   mechanism the lens switch uses to swap "Directories" → "Dirs". */
-@container sidebar (max-width: 282px) {
-  /* Compound selector (.0,2,0) so this beats `.sidebar__icon-button`'s own
-     `display: inline-flex` (.0,1,0), which is declared later in the file and
-     would otherwise win the cascade and keep the gear visible. */
+   mechanism the lens switch uses to swap "Directories" → "Dirs". Its content
+   box is the rail minus 33px (16px padding each side and the 1px border).
+   Measured in Chromium with the wordmark in the bundled Geist Sans Bold on
+   macOS: the lockup ends at x=206.41 with the mark and 178.41 without it,
+   each control takes 30px (28px + 2px gap), and the action group may reach
+   8px into the rail's padding. So n controls need a rail of at least
+   lockup end + 15 + 30n: 371.41px for the mark and five, 343.41px for five,
+   313.41px for four, 283.41px for three. Each query below leaves ~3.6px of
+   slack over that. Adding a sixth control means re-measuring every step;
+   the mic shipped without that, and the row ran up to 29px past the rail. */
+@container sidebar (max-width: 341px) {
+  /* The mark is the first to go: it is decorative (the wordmark names the
+     app) and the lockup is 28px wider than the wordmark alone. Only the
+     stoplight gutter costs this room, so every other platform and macOS
+     fullscreen keep it. */
+  :root[data-platform="darwin"]:not([data-fullscreen="true"])
+    .sidebar__masthead:has(.sidebar__masthead-automations)
+    .brand-lockup__mark {
+    display: none;
+  }
+}
+
+/* Compound selectors (.0,2,0) so these beat `.sidebar__icon-button`'s own
+   `display: inline-flex` (.0,1,0), which is declared later in the file and
+   would otherwise win the cascade and keep the button visible. */
+@container sidebar (max-width: 313px) {
   .sidebar__icon-button.sidebar__masthead-settings {
     display: none;
   }
 }
 
-/* The brand lockup's mark is the first thing the macOS masthead sheds, before
-   any button: it is decorative (the wordmark names the app) and the lockup
-   is 28px wider than the wordmark alone. Measured with the wordmark drawn in
-   the bundled Geist Sans Bold: the lockup ends at x=206.41, and four buttons
-   plus the 8px gap need the rail's content box to be at least 308.41px (a
-   341.41px sidebar). The query leaves ~3.6px of slack. It stood at 307px
-   while the wordmark drew in `.SF NS` Bold, 3.91px narrower, and at a 341px
-   rail that left the buttons 0.41px past their inset.
-   The default 408px rail keeps the mark; the 280px minimum drops it and, at
-   282px, the Settings gear above as well. Only the stoplight gutter costs
-   this room, so every other platform and macOS fullscreen keep the mark. */
-@container sidebar (max-width: 312px) {
-  :root[data-platform="darwin"]:not([data-fullscreen="true"])
-    .sidebar__masthead .brand-lockup__mark {
+@container sidebar (max-width: 283px) {
+  .sidebar__icon-button.sidebar__masthead-automations {
     display: none;
   }
 }
 
-/* At the minimum rail the mark and the gear are both shed (above), leaving
-   the wordmark and three buttons. The wordmark in Geist Sans Bold measures
-   82.41px, 3.91px wider than it drew in `.SF NS` Bold, so with the 8px gap
-   those buttons need a 283.41px rail, and at the 280px minimum they sat
-   3.41px past their inset. At a 284px rail or narrower (251px of content
-   inside the 16px padding and 1px border) the gap tightens to 4px, which fits
-   them at the minimum with 0.59px to spare. */
+/* Three controls beside the bare wordmark need a 283.41px rail with the 8px
+   gap, 3.41px more than the 280px minimum. At a 284px rail or narrower
+   (251px of content) the gap tightens to 4px, which fits them at the minimum
+   with 0.59px to spare. */
 @container sidebar (max-width: 251px) {
   .sidebar__masthead {
     gap: 4px;

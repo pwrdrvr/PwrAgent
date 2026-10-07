@@ -1637,6 +1637,7 @@ function DesktopAppShell(props: {
   // its own open state and the sidebar peek a jump's landing scroll needs.
   const threadJump = useThreadJump({ sidebarHidden, setSidebarHidden });
   const endSidebarPeek = threadJump.endPeek;
+  const closeThreadJump = threadJump.closeJump;
   const toggleGlobalThreadSearch = () => {
     threadJump.closeJump();
     setMainView((current) => current === "search" ? "thread" : "search");
@@ -2560,6 +2561,18 @@ function DesktopAppShell(props: {
       );
     });
   }, [desktopApi, openSettingsSection]);
+  useEffect(() => {
+    // View → Search Threads / View → Automations. The menu opens rather than
+    // toggles: the row names a screen, so choosing it again keeps it up.
+    if (!desktopApi?.onOpenMainViewRequested) {
+      return;
+    }
+    return desktopApi.onOpenMainViewRequested((view) => {
+      // The ⌘K palette sits above every screen, so it would cover either one.
+      closeThreadJump();
+      setMainView(view);
+    });
+  }, [closeThreadJump, desktopApi, setMainView]);
   useEffect(() => {
     if (!desktopApi?.onOpenNewThreadRequested) {
       return;
