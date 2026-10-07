@@ -35,6 +35,22 @@ describe("DesktopBackendRegistry usage titles", () => {
     stateDb.close();
   });
 
+  it("records the helper runner's account when its parent belongs to another backend", async () => {
+    await (registry as unknown as {
+      writeSystemHelperSubAgent(params: unknown): Promise<void>;
+    }).writeSystemHelperSubAgent({
+      backend: "acp:grok", threadId: "parent",
+      subAgent: { monitorId: "system:title-helper:test", task: "Name the thread", status: "success",
+        createdAt: Date.now(), updatedAt: Date.now() },
+      usage: { result: { accountKey: "actual-helper-account", helperThreadId: "codex-helper",
+        helperTurnId: "helper-turn", model: "gpt-5.6-luna" },
+      snapshot: { model: "gpt-5.6-luna", tokenUsage: { inputTokens: 100, outputTokens: 10, totalTokens: 110 } } },
+    });
+    const { lines } = await store.readThreadPricing({ backend: "acp:grok", threadId: "parent" });
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({ accountKey: "actual-helper-account", provider: "openai", scope: "monitor" });
+  });
+
   const rememberTitle = async (backend: AppServerBackendKind, threadId: string, title: string) => {
     await (registry as unknown as { emit(event: AgentEvent): Promise<void> }).emit({
       backend,

@@ -78,6 +78,7 @@ describe("AcpThreadTitleGenerator", () => {
     const configureHelperSession = vi.fn(async () => undefined);
     const generator = new AcpThreadTitleGenerator({
       backend,
+      resolveUsageAccountKey: async () => "qwen-helper-account",
       configureHelperSession,
       helperSession: {
         reasoningEffort: "low",
@@ -126,6 +127,7 @@ describe("AcpThreadTitleGenerator", () => {
       }),
     ).resolves.toMatchObject({
       status: "ok",
+      accountKey: "qwen-helper-account",
       object,
       helperThreadId: "qwen-title-helper",
       model: "qwen3.6-plus",

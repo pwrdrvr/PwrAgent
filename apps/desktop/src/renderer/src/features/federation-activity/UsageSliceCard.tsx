@@ -2,7 +2,11 @@ import type { CSSProperties } from "react";
 import { usageMoney, type UsageBucket, type UsageBucketMember } from "./usage-activity-presentation";
 
 /** A thread, model, provider or instance as the chart names it, with what clicking its name does. */
-export type UsageChartMember = { title: string; onOpen?: () => void; onFilter?: () => void; filtered?: boolean };
+export type UsageChartMember = {
+  title: string; onOpen?: () => void; onFilter?: () => void; filtered?: boolean;
+  /** Tooltips for a filter whose reach is wider than the thread list. */
+  filterTitle?: string; clearTitle?: string;
+};
 /** A segment of a bar: a series index, or the Other segment. */
 export type UsageSliceSegment = number | "other";
 

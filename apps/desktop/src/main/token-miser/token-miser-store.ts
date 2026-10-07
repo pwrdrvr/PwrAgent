@@ -1383,6 +1383,7 @@ export class TokenMiserStore {
 
 function safeHelperUsage(value: TokenMiserHelperUsage): TokenMiserHelperUsage {
   return {
+    ...(value.accountKey ? { accountKey: value.accountKey } : {}),
     helperThreadId: value.helperThreadId,
     helperTurnId: value.helperTurnId,
     model: value.model,

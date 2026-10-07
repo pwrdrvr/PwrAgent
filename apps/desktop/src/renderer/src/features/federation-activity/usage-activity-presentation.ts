@@ -2,6 +2,7 @@ import { usageActivityCoverage, usageChartStep, type UsageActivityRollup } from 
 import type { OwnedUsageRow } from "./usage-activity-summary";
 import { formatUsedPercent as usagePercent } from "../../lib/backend-status-format";
 import { projectLimit, type LimitProjection, type LimitSeries } from "./usage-limits";
+import { usageAccountKey, usageProviderLabel } from "./usage-activity-accounts";
 
 export const usageMoney = (micros: number) => new Intl.NumberFormat(undefined, {
   style: "currency", currency: "USD", minimumFractionDigits: 2,
@@ -79,16 +80,13 @@ export function usageRollupLabel(rollup: UsageActivityRollup): string {
 export const USAGE_SERIES = 5;
 
 /** What the chart stacks spend by. */
-export type UsageDimension = "thread" | "model" | "provider" | "instance";
-
-const PROVIDER_LABELS: Record<string, string> = {
-  openai: "OpenAI", xai: "xAI", anthropic: "Anthropic", google: "Google", moonshot: "Moonshot", qwen: "Qwen",
-};
+export type UsageDimension = "thread" | "model" | "provider" | "account" | "instance";
 
 /** A row's model, provider or owning instance, as the legend names it. */
 export function usageDimensionValue(row: OwnedUsageRow, dimension: Exclude<UsageDimension, "thread">): string {
+  if (dimension === "account") return usageAccountKey(row);
   if (dimension === "instance") return row.owner;
-  if (dimension === "provider") return PROVIDER_LABELS[row.line.provider] ?? row.line.provider;
+  if (dimension === "provider") return usageProviderLabel(row.line.provider);
   return row.line.modelLabel ?? row.line.model ?? "Unknown model";
 }
 

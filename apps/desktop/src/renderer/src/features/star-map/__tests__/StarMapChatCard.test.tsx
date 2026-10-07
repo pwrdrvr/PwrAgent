@@ -19,6 +19,7 @@ import type {
   NavigationThreadSummary,
   NavigationQueryRequest,
   NavigationQueryPage,
+  ThreadQueuedTurnSummary,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { normalizeImageFile } from "../../../lib/image-normalization";
@@ -258,6 +259,47 @@ async function findReadyTextbox(options: { name: string | RegExp }) {
   const element = await screen.findByRole("textbox", options);
   await waitFor(() => expect(element.getAttribute("contenteditable")).toBe("true"));
   return element;
+}
+
+/**
+ * A backend queue that keeps the turn `startTurn` admits. The card re-reads
+ * the queue projection 250 ms after any queue change and drops an owned row
+ * the backend no longer lists, so a fake that admits a queued turn and then
+ * reports an empty queue removes the row whenever a test outlives that
+ * debounce. `readsSinceAdmission` lets a test wait for that read instead.
+ */
+function admittingQueue(threadId: string, queueEntryId: string) {
+  const entries: ThreadQueuedTurnSummary[] = [];
+  let readsSinceAdmission = 0;
+  return {
+    startTurn: vi.fn(async (request: { input?: Array<{ type: string; text?: string }> }) => {
+      entries.push({
+        queueEntryId, origin: "manual", createdAt: 123, position: entries.length,
+        displayText: request.input?.find((item) => item.type === "text")?.text ?? "",
+      });
+      return {
+        backend: "codex" as const,
+        threadId,
+        turnId: "turn-queued",
+        queueStatus: "queued" as const,
+        queueEntryId,
+        queueEntryCreatedAt: 123,
+      };
+    }),
+    getNavigationQueueProjection: vi.fn(async (request: Parameters<NonNullable<DesktopApi["getNavigationQueueProjection"]>>[0]) => {
+      if (entries.length) readsSinceAdmission += 1;
+      return {
+        protocol: 2, ref: request.ref, revision: `fifo:${entries.length}`, readiness: "ready", complete: true, entries: [...entries],
+      };
+    }),
+    readsSinceAdmission: () => readsSinceAdmission,
+  };
+}
+
+/** Wait for the projection read that follows a queued send, and its reconcile. */
+async function settleQueueProjection(queue: ReturnType<typeof admittingQueue>) {
+  await waitFor(() => expect(queue.readsSinceAdmission()).toBeGreaterThan(0));
+  await act(async () => {});
 }
 
 async function typeAndSend(title: string, text: string) {
@@ -2076,16 +2118,13 @@ describe("StarMapChatCard start-turn queue handling", () => {
       listeners.push(listener);
       return () => undefined;
     });
-    const startTurn = vi.fn(async () => ({
-      backend: "codex" as const,
-      threadId: "t-remote",
-      turnId: "turn-queued",
-      queueStatus: "queued" as const,
-      queueEntryId: "queue-owner-remote",
-      queueEntryCreatedAt: 123,
-    }));
+    const queue = admittingQueue("t-remote", "queue-owner-remote");
     const { result } = renderHook(() => useComposerDraftStore());
-    const desktopApi = buildApi({ onAgentEvent, startTurn });
+    const desktopApi = buildApi({
+      onAgentEvent,
+      startTurn: queue.startTurn,
+      getNavigationQueueProjection: queue.getNavigationQueueProjection,
+    } as unknown as Partial<DesktopApi>);
     renderCard({
       composerDraftStore: result.current,
       desktopApi,
@@ -2093,6 +2132,8 @@ describe("StarMapChatCard start-turn queue handling", () => {
     });
     await typeAndSend("Remote work", "remote queue");
     await screen.findByLabelText("Queued message");
+    await settleQueueProjection(queue);
+    expect(screen.getByLabelText("Queued message")).toBeTruthy();
 
     act(() => {
       for (const listener of listeners) {
@@ -2139,23 +2180,22 @@ describe("StarMapChatCard start-turn queue handling", () => {
       listeners.push(listener);
       return () => undefined;
     });
-    const startTurn = vi.fn(async () => ({
-      backend: "codex" as const,
-      threadId: "t-local",
-      turnId: "turn-queued",
-      queueStatus: "queued" as const,
-      queueEntryId: "queue-owner-titled",
-      queueEntryCreatedAt: 123,
-    }));
+    const queue = admittingQueue("t-local", "queue-owner-titled");
     const { result } = renderHook(() => useComposerDraftStore());
-    const desktopApi = buildApi({ onAgentEvent, startTurn });
+    const desktopApi = buildApi({
+      onAgentEvent,
+      startTurn: queue.startTurn,
+      getNavigationQueueProjection: queue.getNavigationQueueProjection,
+    } as unknown as Partial<DesktopApi>);
     renderCard({
       composerDraftStore: result.current,
       desktopApi,
       thread: localThread(),
     });
     await typeAndSend("Local work", "a long queued message");
-    const row = await screen.findByLabelText("Queued message");
+    await screen.findByLabelText("Queued message");
+    await settleQueueProjection(queue);
+    const row = screen.getByLabelText("Queued message");
     const emit = (params: Record<string, unknown>): void => {
       act(() => {
         for (const listener of listeners) {

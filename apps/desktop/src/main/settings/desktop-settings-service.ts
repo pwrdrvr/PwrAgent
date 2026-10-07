@@ -1553,6 +1553,8 @@ export class DesktopSettingsService {
         },
       },
       models: {
+        usageAccountGroups: config.models?.usageAccountGroups ?? {},
+        usageAccountNames: config.models?.usageAccountNames ?? {},
         providerDefaults: config.models?.providerDefaults ?? {},
         providerThreadMigrations:
           config.models?.providerThreadMigrations ?? {},
@@ -3042,6 +3044,10 @@ export class DesktopSettingsService {
 
   resolveHelperModelSettings(): DesktopHelperModelSettings {
     return this.readModelsConfig().helperModels ?? { helpers: {} };
+  }
+
+  resolveUsageAccountGroups(): Record<string, string> {
+    return this.readModelsConfig().usageAccountGroups ?? {};
   }
 
   resolveDecisionModelSettings(): DesktopDecisionModelSettings {

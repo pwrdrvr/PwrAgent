@@ -58,7 +58,7 @@ them.
 - Background helpers (Token Miser, title generation) write one monitor line
   per run: thousands a week, each worth a fraction of a cent. The owner sums
   the ones contained in the window into one line per parent thread, helper
-  kind, model and rollup step, so they count toward the thread they worked
+  kind, account, model and rollup step, so they count toward the thread they worked
   for and cannot spend the row bound. The rollup step is the chart's bar
   width capped at an hour, on epoch boundaries, so a rollup never straddles a
   bar in any whole-hour time zone. The line id is derived from the window,
@@ -73,7 +73,8 @@ them.
 ## Account limits
 
 - When a Codex turn completes, its owner stamps the account's current limit
-  reading on the turn's ledger row (`rate_limit_snapshot`). It rides the same
+  reading on the turn's ledger row (`rate_limit_snapshot`) when its account
+  matches the identity captured for that turn. It rides the same
   completion `UPDATE` and commit, so it adds no write; the
   `completed-turn-usage-limit-reading` budget pins that. A reading holds each
   limit's used percent, used and limit amounts when stated, reset time and
@@ -99,10 +100,69 @@ them.
   a limit, resetting at month end, plus a **Credits** row. Both are shown as
   reported.
 
+## Account selection
+
+**All accounts** shows the combined pricing ledger for the selected instances.
+The account selector sits beside the instance chips, because like them it
+chooses which data the page shows. Selecting one account focuses totals,
+tokens, chart, thread ranking and limit readings on it, and a scope line under
+the toolbar names the account and links back to **All accounts**. When the
+period holds more than one account, **Spend by → Account** segments the chart,
+and each thread row names its account. Clicking an account in the chart legend
+selects it, the same as the selector. **Provider** still groups all accounts'
+spend for each provider.
+
+One rule names an account on every surface: the selector, the legend, the
+limits band, the scope line and the thread rows. An operator name comes first.
+Otherwise the name is the provider and plan, such as **OpenAI Pro**. When two
+accounts would share a name, they add their first machine and a count
+(**OpenAI Pro · Studio Mac +1**), then the start of the opaque key.
+**Rename** in the scope line stores a name in this profile's `config.toml`
+(`[[models.usage_account_names]]`, keyed by provider and opaque key). Names
+are local presentation only: they are never relayed through Federation, and
+another machine shows its own name or the derived one. A blank name returns
+to the derived one.
+
+Account choices use an opaque key and the instances that reported it, without
+relaying an email. The same recorded key merges across machines and profiles;
+different providers keep separate accounts even if their keys match. Requests
+capture identity when they start, independently of account limits. Codex uses
+the provider's workspace/account ID when available; older App Servers fall
+back to their reported email hash. The key is stored on the usage line, and
+helpers carry their own request's key through title and Token Miser metadata.
+Earlier usage stays with its recorded account after a profile changes login.
+Since-reset and
+5-hour periods follow the selected account's limit window when known. Clock
+periods filter the loaded snapshot without another owner read.
+A selected historical account stays selected when the next period has no
+usage for it; its total is zero until usage is available in that scope.
+
+For API-key accounts and providers without a stable protocol identity, set
+**Settings → AI Providers → [provider] → Account group**. Use the same group
+on profiles using the same provider account, and different groups for distinct
+accounts. Blank uses automatic identity. A group is hashed before it enters
+the ledger or Federation; changes apply to future requests. The provider
+still scopes the group, so the same text cannot blend two providers.
+
+Rows without a recorded key appear as **No account recorded · [machine]**,
+separately for each provider and instance. They cannot be renamed. This includes historical rows without identity
+and providers with neither a protocol identity nor an explicit group.
+Legacy completion readings remain a fallback for old rows; historical keys
+are never rewritten using today's login. They remain in the all-account total and can be selected
+as their own group; they are never assigned to the instance's current login.
+Duplicate ledger representations are resolved before account filtering.
+Mixed-version copies retain recorded keys. For helper buckets, account-split
+rollups replace an older peer's combined sum unless that sum is more recent,
+so the same ledger is counted once while a peer is upgrading.
+
+Attribution uses the existing ledger and helper metadata writes. The paired
+`usage-line-account-attribution` and `usage-line-without-account-attribution`
+SQLite budgets measure one commit each and no additional idle writes.
+
 ## Chart and ranking
 
 The chart stacks each completed turn's API-equivalent cost at its completion
-time, by **Thread**, **Model**, **Provider** (OpenAI, xAI, …) or, with more
+time, by **Thread**, **Model**, **Provider** (OpenAI, xAI, …), **Account** or, with more
 than one instance read, **Instance**. Bars are clock steps (15 or 30 minutes, 1, 2, 3, 6 or 12 hours, or a
 day), the finest that keeps the window within 40 bars, starting on local
 quarter hours, hours or midnight; only the first and last bar can be partial,

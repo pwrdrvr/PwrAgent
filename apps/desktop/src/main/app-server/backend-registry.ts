@@ -17,6 +17,7 @@ import { ArchiveCleanupReadPool } from "./archive-cleanup-read-pool";
 import { supportsNativeVoice, type NativeVoiceBackend, type NativeVoiceToolCall } from "../codex-app-server/native-voice-protocol";
 import type { NativeVoiceCapability } from "../../shared/native-voice";
 import { analyzeUsageActivity, usageAnalysisModelBackend } from "./usage-activity-analysis";
+import { usageAccountKey } from "../usage-account-identity";
 import { generateAcpStructuredObject, hasAcpStructuredHelper } from "./acp-structured-generation";
 import { USAGE_ANALYSIS_MODEL_BACKENDS, type ReadUsageActivityRequest, type ReadUsageActivityResponse, type AnalyzeUsageActivityRequest, type AnalyzeUsageActivityResponse, type UsageLimitObservation } from "@pwragent/shared";
 import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
@@ -4719,6 +4720,7 @@ function collectThreadUsageLinesFromReplay(
 
 function buildTaskMonitorUsageLine(params: {
   backend: AppServerBackendKind;
+  accountKey?: string;
   fastMode?: boolean;
   model?: string;
   monitorId: string;
@@ -4776,6 +4778,7 @@ function buildTaskMonitorUsageLine(params: {
   return {
     backend: params.backend,
     cacheWriteInputCostMicros: cost?.cacheWriteInputCostMicros ?? 0,
+    ...(params.accountKey ? { accountKey: params.accountKey } : {}),
     cacheWriteInputTokens,
     cachedInputCostMicros: cost?.cachedInputCostMicros ?? 0,
     cachedInputTokens,
@@ -8541,6 +8544,7 @@ export class DesktopBackendRegistry {
     "read" | "subscribe"
   >;
   private codexBackendSummary?: BackendSummary;
+  private readonly usageTurnAccounts = new Map<string, Promise<string | undefined>>();
   private codexBackendGeneration = 0;
   /** Reject quota reads started before refreshed account or plan metadata changed. */
   private codexAccountRevision = 0;
@@ -8556,6 +8560,8 @@ export class DesktopBackendRegistry {
   private codexRateLimitsNotificationVersion = 0;
   /** When Codex last reported account limits; readings carry this, not "now". */
   private codexRateLimitsObservedAt?: number;
+  /** Identity captured with the reading; later Settings edits cannot relabel it. */
+  private codexRateLimitsAccountKey?: string;
   private codexQuotaRefresh?: Promise<void>;
   private codexQuotaRefreshAt?: number;
   private providerRuntimeFingerprints?: Readonly<Record<ProviderId, string>>;
@@ -9292,6 +9298,7 @@ export class DesktopBackendRegistry {
     DesktopProviderModelDefaults
   >;
   private readonly resolveHelperModelSettingsFn: () => DesktopHelperModelSettings;
+  private readonly resolveUsageAccountGroupsFn: () => Record<string, string>;
   private readonly resolveProviderThreadModelMigrationsFn: () => Record<
     string,
     DesktopProviderThreadModelMigration
@@ -9428,6 +9435,7 @@ export class DesktopBackendRegistry {
       DesktopProviderModelDefaults
     >;
     resolveHelperModelSettings?: () => DesktopHelperModelSettings;
+    resolveUsageAccountGroups?: () => Record<string, string>;
     resolveProviderThreadModelMigrations?: () => Record<
       string,
       DesktopProviderThreadModelMigration
@@ -9585,6 +9593,8 @@ export class DesktopBackendRegistry {
     this.resolveHelperModelSettingsFn =
       options?.resolveHelperModelSettings ??
       (() => settingsService?.resolveHelperModelSettings?.() ?? { helpers: {} });
+    this.resolveUsageAccountGroupsFn = options?.resolveUsageAccountGroups
+      ?? (() => settingsService?.resolveUsageAccountGroups?.() ?? {});
     this.resolveProviderThreadModelMigrationsFn =
       options?.resolveProviderThreadModelMigrations ??
       (() => settingsService?.resolveProviderThreadModelMigrations() ?? {});
@@ -9790,6 +9800,7 @@ export class DesktopBackendRegistry {
           : undefined,
         clientVersion,
         readHelperModelSettings: () => this.resolveHelperModelSettingsFn(),
+        resolveUsageAccountKey: () => this.captureUsageAccount("codex"),
         resolvePwrdrvrTokenMiserActivationNonce: () =>
           this.resolveTokenMiserEnabledFn()
             ? tokenMiserActivationNonce
@@ -10182,6 +10193,7 @@ export class DesktopBackendRegistry {
                       : undefined;
                   return new AcpThreadTitleGenerator({
                     backend,
+                    resolveUsageAccountKey: () => this.captureUsageAccount(backend),
                     configureHelperSession: async ({
                       client,
                       parentSession,
@@ -11574,6 +11586,7 @@ export class DesktopBackendRegistry {
     this.codexBackendSummary = undefined;
     this.pendingCodexRateLimits = undefined;
     this.codexRateLimitsObservedAt = undefined;
+    this.codexRateLimitsAccountKey = undefined;
     this.codexQuotaRefresh = undefined;
     this.codexQuotaRefreshAt = undefined;
     this.pendingCodexRateLimitBroadcast = undefined;
@@ -16009,6 +16022,49 @@ export class DesktopBackendRegistry {
         backend === "codex" || hasAcpStructuredHelper(backend)) };
   }
 
+  private async captureUsageAccount(backend: AppServerBackendKind): Promise<string | undefined> {
+    // Read the group synchronously: editing Settings during an in-flight turn
+    // must affect the next request, never this one.
+    try {
+      const group = this.resolveUsageAccountGroupsFn()[backend];
+      if (group || backend !== "codex") return usageAccountKey(undefined, group);
+      const account = this.codexClient.readAccount
+        ? await this.codexClient.readAccount()
+        : this.codexBackendSummary?.account;
+      if (this.codexBackendSummary
+        && usageAccountKey(this.codexBackendSummary.account) !== usageAccountKey(account)) {
+        this.codexBackendSummary = { ...this.codexBackendSummary, account, rateLimits: [] };
+        this.forgetCodexAccountRateLimits();
+      }
+      return usageAccountKey(account);
+    } catch {
+      // Identity/configuration failures must not prevent accounting. A cached
+      // login can belong to a different
+      // account after a switch or failed authentication refresh.
+      return undefined;
+    }
+  }
+
+  /**
+   * The account changed: drop its limits and reject quota reads already in
+   * flight, as the account refresh does, so the old account's reply cannot
+   * return under its old key.
+   */
+  private forgetCodexAccountRateLimits(): void {
+    this.codexAccountRevision += 1;
+    this.codexRateLimitsObservedAt = undefined;
+    this.codexRateLimitsAccountKey = undefined;
+    this.pendingCodexRateLimits = undefined;
+  }
+
+  private async usageAccountForTurn(
+    backend: AppServerBackendKind,
+    threadId: string,
+    turnId: string | undefined,
+  ): Promise<string | undefined> {
+    return turnId ? await this.usageTurnAccounts.get(JSON.stringify([backend, threadId, turnId])) : undefined;
+  }
+
   /**
    * The Codex account limits this instance holds, keyed by an opaque account
    * hash so owners on different accounts never blend and no email is relayed.
@@ -16018,12 +16074,9 @@ export class DesktopBackendRegistry {
     const observedAt = this.codexRateLimitsObservedAt;
     if (!summary?.rateLimits?.length || observedAt === undefined) return undefined;
     const account = summary.account;
-    const identity = account?.email ?? account?.label;
     return {
       observedAt,
-      accountKey: identity
-        ? createHash("sha256").update(`${account?.type ?? ""}\u0000${identity}`).digest("hex").slice(0, 16)
-        : undefined,
+      accountKey: this.codexRateLimitsAccountKey,
       planType: account?.planType,
       limits: summary.rateLimits.map((limit) => ({
         name: limit.name, limitId: limit.limitId, windowKey: limit.windowKey,
@@ -26761,6 +26814,12 @@ export class DesktopBackendRegistry {
       client.onNotification(async (notification) => {
         logBackendLifecycleNotification(backend, notification);
         this.invalidateArchiveCleanupForNotification(backend, notification);
+        if (backend === "codex" && notification.method === "account/updated") {
+          if (this.codexBackendSummary) {
+            this.codexBackendSummary = { ...this.codexBackendSummary, rateLimits: [] };
+          }
+          this.forgetCodexAccountRateLimits();
+        }
         if (
           backend === "codex"
           && notification.method === "account/rateLimits/updated"
@@ -28734,9 +28793,14 @@ export class DesktopBackendRegistry {
     }
     // A sparse update is still a fresh observation of the account, even when
     // its values match what we already hold.
-    this.codexRateLimitsObservedAt = Date.now();
     const notificationVersion = ++this.codexRateLimitsNotificationVersion;
     const backendGeneration = this.codexBackendGeneration;
+    const observedAt = Date.now();
+    const accountKey = await this.captureUsageAccount("codex");
+    if (notificationVersion !== this.codexRateLimitsNotificationVersion
+      || backendGeneration !== this.codexBackendGeneration) return false;
+    this.codexRateLimitsObservedAt = observedAt;
+    this.codexRateLimitsAccountKey = accountKey;
     const currentSummary = this.codexBackendSummary;
     const currentRateLimits = currentSummary?.rateLimits ?? [];
     const currentKeys = new Set(currentRateLimits.map(rateLimitSummaryKey));
@@ -28751,6 +28815,7 @@ export class DesktopBackendRegistry {
       return await this.refetchCodexRateLimits({
         backendGeneration,
         notificationVersion,
+        accountKey,
       });
     }
     const updatesByKey = new Map(
@@ -28795,6 +28860,17 @@ export class DesktopBackendRegistry {
     this.codexQuotaRefreshAt = Date.now();
     const backendGeneration = this.codexBackendGeneration;
     const work = (async () => {
+      // Snapshot the group before reading the account so a concurrent Settings
+      // save cannot relabel the quota observation already being requested.
+      let usageAccountGroup: string | undefined;
+      let accountGroupRead = false;
+      try {
+        usageAccountGroup = this.resolveUsageAccountGroupsFn().codex;
+        accountGroupRead = true;
+      } catch {
+        // Configuration failures leave attribution unknown without preventing
+        // account recovery or quota reads.
+      }
       let account: BackendAccountSummary | undefined;
       try {
         account = await readClientAccount(this.codexClient);
@@ -28808,6 +28884,7 @@ export class DesktopBackendRegistry {
       if (isMeaningfulAccountSummary(account)) {
         const previous = currentSummary.account;
         const accountChanged = previous?.type !== account.type
+          || previous?.accountId !== account.accountId
           || previous?.email !== account.email
           || previous?.label !== account.label
           || previous?.planType !== account.planType;
@@ -28830,6 +28907,7 @@ export class DesktopBackendRegistry {
       await this.refetchCodexRateLimits({
         backendGeneration,
         notificationVersion: this.codexRateLimitsNotificationVersion,
+        accountKey: accountGroupRead ? usageAccountKey(account, usageAccountGroup) : undefined,
       });
     })();
     this.codexQuotaRefresh = work;
@@ -28843,6 +28921,7 @@ export class DesktopBackendRegistry {
   private async refetchCodexRateLimits(params: {
     backendGeneration: number;
     notificationVersion: number;
+    accountKey: string | undefined;
   }): Promise<boolean> {
     if (this.codexClient.isAuthenticationRequired?.()) return false;
     if (isUnauthenticatedCodexProvider(this.codexBackendSummary?.account)) return false;
@@ -28867,6 +28946,7 @@ export class DesktopBackendRegistry {
       return false;
     }
     this.codexRateLimitsObservedAt = Date.now();
+    this.codexRateLimitsAccountKey = params.accountKey;
     const currentSummary = this.codexBackendSummary;
     if (!currentSummary) {
       this.pendingCodexRateLimits = {
@@ -28957,6 +29037,7 @@ export class DesktopBackendRegistry {
     const accountRevision = this.codexAccountRevision;
     const rateLimitsNotificationVersion = this.codexRateLimitsNotificationVersion;
     const { lastKnownGood } = this.readCodexProvider();
+    const usageAccountGroup = this.resolveUsageAccountGroupsFn().codex;
     const accountRead = readClientAccount(this.codexClient);
     const [
       initializeResult,
@@ -29112,6 +29193,7 @@ export class DesktopBackendRegistry {
     this.codexBackendSummary = summary;
     if (rateLimits === discoveredRateLimits && discoveredRateLimits?.length) {
       this.codexRateLimitsObservedAt = Date.now();
+      this.codexRateLimitsAccountKey = usageAccountKey(summary.account, usageAccountGroup);
     }
     if (this.pendingCodexRateLimits?.backendGeneration === backendGeneration) {
       this.pendingCodexRateLimits = undefined;
@@ -29174,6 +29256,7 @@ export class DesktopBackendRegistry {
         if (typeof this.overlayStore.upsertThreadUsageLine === "function") {
           const line = buildTaskMonitorUsageLine({
             backend: reviewRecord.parentBackend,
+            accountKey: await this.usageAccountForTurn(event.backend, notification.params.threadId, notification.params.turnId),
             fastMode,
             model,
             monitorId: reviewSubAgentId(reviewRecord.turnId),
@@ -29214,6 +29297,7 @@ export class DesktopBackendRegistry {
         if (typeof this.overlayStore.upsertThreadUsageLine === "function") {
           const line = buildTaskMonitorUsageLine({
             backend: completedReviewRecord?.parentBackend ?? event.backend,
+            accountKey: await this.usageAccountForTurn(event.backend, notification.params.threadId, notification.params.turnId),
             fastMode,
             model,
             monitorId: reviewSubAgentId(notification.params.turnId),
@@ -29297,6 +29381,8 @@ export class DesktopBackendRegistry {
       if (typeof this.overlayStore.upsertThreadUsageLine === "function") {
         const line = buildTaskMonitorUsageLine({
           backend: monitorRecord.backend,
+          accountKey: await this.usageAccountForTurn(event.backend, notification.params.threadId,
+            notification.params.turnId ?? monitorRecord.monitorTurnId),
           model,
           monitorId: monitorRecord.monitorId,
           monitorThreadId: monitorRecord.monitorThreadId ?? notification.params.threadId,
@@ -29971,6 +30057,8 @@ export class DesktopBackendRegistry {
     if (!line) {
       return;
     }
+    const accountKey = await this.usageAccountForTurn(event.backend, threadId, turnId);
+    if (accountKey) line.accountKey = accountKey;
     if (typeof this.overlayStore.upsertThreadUsageLine === "function") {
       logUnpricedThreadUsageLine(line);
       const batchesLiveUsage =
@@ -30458,6 +30546,7 @@ export class DesktopBackendRegistry {
     const line = buildTaskMonitorUsageLine({
       backend: "codex",
       fastMode,
+      accountKey: await this.usageAccountForTurn("codex", event.notification.params.threadId, monitorTurnId),
       model,
       monitorId,
       monitorThreadId: event.notification.params.threadId,
@@ -34195,6 +34284,7 @@ export class DesktopBackendRegistry {
     subAgent: ThreadSubAgentSummary;
     usage?: {
       result: {
+        accountKey?: string;
         helperThreadId?: string;
         helperTurnId?: string;
         model?: string;
@@ -34225,6 +34315,7 @@ export class DesktopBackendRegistry {
     ) {
       const line = buildTaskMonitorUsageLine({
         backend: params.backend,
+        accountKey: usage.result.accountKey,
         model: usage.result.model,
         monitorId: params.subAgent.monitorId,
         monitorThreadId: usage.result.helperThreadId,
@@ -34256,6 +34347,7 @@ export class DesktopBackendRegistry {
     if (!usage) return;
     const line = buildTaskMonitorUsageLine({
       backend: "codex", parentThreadId: threadId,
+      accountKey: result.accountKey,
       monitorId: `system:token-miser-focused:${inferenceId}`,
       monitorThreadId: result.helperThreadId ?? `token-miser-focused:${inferenceId}`,
       monitorTurnId: result.helperTurnId ?? turnId,
@@ -35014,6 +35106,7 @@ export class DesktopBackendRegistry {
     if (!gateUsageLine && usage) {
       gateUsageLine = buildTaskMonitorUsageLine({
         backend: "codex",
+        accountKey: entry.helperUsage?.accountKey,
         model: entry.helperUsage?.model,
         monitorId,
         monitorThreadId:
@@ -43378,6 +43471,17 @@ export class DesktopBackendRegistry {
   private trackRecentThreadUsageTurn(event: AgentEvent): void {
     if (event.notification.method === "turn/started") {
       const threadId = event.notification.params.threadId;
+      const turnId = readOptionalString(event.notification.params, ["turnId"])
+        ?? readOptionalString(readRecord(event.notification.params.turn) ?? {}, ["id"]);
+      if (turnId) {
+        const accountKey = JSON.stringify([event.backend, threadId, turnId]);
+        if (!this.usageTurnAccounts.has(accountKey)) {
+          this.usageTurnAccounts.set(accountKey, this.captureUsageAccount(event.backend));
+          if (this.usageTurnAccounts.size > 1_000) {
+            this.usageTurnAccounts.delete(this.usageTurnAccounts.keys().next().value!);
+          }
+        }
+      }
       const key = [event.backend, threadId].join(":");
       const completedTurn = this.recentlyCompletedThreadUsageTurns.get(key);
       if (completedTurn) {
@@ -43796,12 +43900,14 @@ export class DesktopBackendRegistry {
       // The final token snapshot can precede this notification, with no later
       // usage event to carry the end time into the pricing row.
       if (turnId && this.overlayStore.completeThreadUsageTurn) {
+        const accountKey = await this.usageAccountForTurn(event.backend, notification.params.threadId, turnId);
+        const limits = event.backend === "codex" ? this.codexLimitObservation() : undefined;
         const completed = await this.overlayStore.completeThreadUsageTurn({
           backend: event.backend,
           threadId: notification.params.threadId,
           turnId,
           completedAt: completedAtFromTerminalNotification(event.notification) ?? Date.now(),
-          limitObservation: event.backend === "codex" ? this.codexLimitObservation() : undefined,
+          limitObservation: accountKey && limits?.accountKey === accountKey ? limits : undefined,
         });
         if (completed) {
           await this.emitThreadPricingUpdated({

@@ -44,6 +44,7 @@ export type ThreadTitleAdapterResult =
   | {
       status: "ok";
       object: unknown;
+      accountKey?: string;
       cachedTokens?: number;
       helperThreadId?: string;
       helperTurnId?: string;
@@ -76,6 +77,7 @@ export type ThreadTitleGenerationResult =
     };
 
 export type ThreadTitleGenerationMetadata = {
+  accountKey?: string;
   cachedTokens?: number;
   helperThreadId?: string;
   helperTurnId?: string;
@@ -191,6 +193,7 @@ function threadTitleGenerationMetadata(
   result: Extract<ThreadTitleAdapterResult, { status: "ok" }>,
 ): ThreadTitleGenerationMetadata {
   return {
+    ...(result.accountKey ? { accountKey: result.accountKey } : {}),
     ...(result.cachedTokens !== undefined ? { cachedTokens: result.cachedTokens } : {}),
     ...(result.helperThreadId ? { helperThreadId: result.helperThreadId } : {}),
     ...(result.helperTurnId ? { helperTurnId: result.helperTurnId } : {}),
