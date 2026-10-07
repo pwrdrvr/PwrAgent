@@ -34,6 +34,8 @@ export type AppNoticeToastNotice = {
   message: string;
   /** Offers a profile-scoped dismissal for this one Codex development warning. */
   skillQuestionsWarning?: boolean;
+  /** Offers a profile-scoped dismissal saved under this Codex warning id. */
+  warningSuppressionId?: string;
   /** Optional notice-specific dismissal, including any durable disposition. */
   onDismiss?: () => void;
   /**
@@ -77,6 +79,7 @@ export function AppNoticeToast(props: {
   onDismiss: () => void;
   onOpenThread?: (link: ResolvedThreadLink) => void;
   onSuppressSkillQuestionsWarning?: () => Promise<boolean>;
+  onSuppressCodexWarning?: (id: string) => Promise<boolean>;
 }) {
   const [paused, setPaused] = useState(false);
   // The checkbox records a choice; closing the toast applies it.
@@ -167,17 +170,21 @@ export function AppNoticeToast(props: {
               : "neutral";
   const facts = props.notice.facts ?? [];
   const dismissNotice = props.notice.onDismiss ?? props.onDismiss;
-  const onSuppressSkillQuestionsWarning = props.notice.skillQuestionsWarning
+  const { warningSuppressionId } = props.notice;
+  const onSuppressCodexWarning = props.onSuppressCodexWarning;
+  const suppressWarning = props.notice.skillQuestionsWarning
     ? props.onSuppressSkillQuestionsWarning
-    : undefined;
+    : warningSuppressionId && onSuppressCodexWarning
+      ? () => onSuppressCodexWarning(warningSuppressionId)
+      : undefined;
   const closeNotice = (): void => {
-    if (!suppressOnDismiss || !onSuppressSkillQuestionsWarning) {
+    if (!suppressOnDismiss || !suppressWarning) {
       dismissNotice();
       return;
     }
     setSuppressionSaving(true);
     setSuppressionError(false);
-    void onSuppressSkillQuestionsWarning().then(
+    void suppressWarning().then(
       (saved) => {
         setSuppressionSaving(false);
         if (saved) dismissNotice();
@@ -273,7 +280,7 @@ export function AppNoticeToast(props: {
             ))}
           </dl>
         ) : null}
-        {onSuppressSkillQuestionsWarning ? (
+        {suppressWarning ? (
           <>
             <label className="composer__checkbox app-notice-toast__suppress">
               <input

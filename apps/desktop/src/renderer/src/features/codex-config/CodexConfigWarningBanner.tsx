@@ -3,12 +3,14 @@ import type { AgentEvent } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import { federationTargetsEqual } from "../../lib/federated-thread-events";
+import { codexWarningSuppressionId } from "./codex-warning-suppression";
 
 const EMPTY_DISMISSED_WARNING_IDS: readonly string[] = [];
 
 type ConfigWarningNotice = {
   id: string;
   summary: string;
+  remoteInstanceId?: string;
   details?: string | null;
   trustedProjectPath?: string;
   configPath?: string;
@@ -36,23 +38,39 @@ function noticeFromEvent(event: AgentEvent): ConfigWarningNotice | undefined {
   const configPath =
     typeof rawConfigPath === "string" ? rawConfigPath.trim() : undefined;
   const details = typeof rawDetails === "string" ? rawDetails : null;
-  const id = JSON.stringify([
+  const remoteInstanceId = event.federationTarget?.scope === "remote"
+    ? event.federationTarget.instanceId
+    : undefined;
+  const id = codexWarningSuppressionId({
     summary,
-    details ?? "",
-    trustedProjectPath ?? "",
-    configPath ?? "",
-    event.federationTarget?.scope === "remote"
-      ? event.federationTarget.instanceId
-      : "",
-  ]);
+    details,
+    trustedProjectPath,
+    configPath,
+    remoteInstanceId,
+  });
 
   return {
     id,
     summary,
+    ...(remoteInstanceId ? { remoteInstanceId } : {}),
     ...(details ? { details } : {}),
     ...(trustedProjectPath ? { trustedProjectPath } : {}),
     ...(configPath ? { configPath } : {}),
   };
+}
+
+// A thread warning toast saves its summary alone, which silences every
+// banner with that summary. A banner's own id also carries its details and
+// paths, so it silences only that exact warning.
+function isNoticeSuppressed(
+  notice: ConfigWarningNotice,
+  dismissedWarningIds: readonly string[],
+): boolean {
+  return dismissedWarningIds.includes(notice.id)
+    || dismissedWarningIds.includes(codexWarningSuppressionId({
+      summary: notice.summary,
+      remoteInstanceId: notice.remoteInstanceId,
+    }));
 }
 
 export function CodexConfigWarningBanner(props: {
@@ -79,7 +97,7 @@ export function CodexConfigWarningBanner(props: {
     if (!preferencesLoaded) {
       return;
     }
-    setNotice((current) => current && dismissedWarningIds.includes(current.id)
+    setNotice((current) => current && isNoticeSuppressed(current, dismissedWarningIds)
       ? null
       : current);
     if (!desktopApi?.onAgentEvent && !desktopApi?.getLatestCodexConfigWarning) {
@@ -101,7 +119,10 @@ export function CodexConfigWarningBanner(props: {
       if (!nextNotice) {
         return;
       }
-      if (dismissedIds.has(nextNotice.id) || dismissedWarningIds.includes(nextNotice.id)) {
+      if (
+        dismissedIds.has(nextNotice.id)
+        || isNoticeSuppressed(nextNotice, dismissedWarningIds)
+      ) {
         return;
       }
       setNotice(nextNotice);

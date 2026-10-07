@@ -11,6 +11,7 @@ import type { AgentEvent, TrustCodexProjectRequest } from "@pwragent/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { CodexConfigWarningBanner } from "../CodexConfigWarningBanner";
+import { codexWarningSuppressionId } from "../codex-warning-suppression";
 
 function configWarningEvent(params: {
   federationTarget?: AgentEvent["federationTarget"];
@@ -150,6 +151,26 @@ describe("CodexConfigWarningBanner", () => {
     });
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(suppress).not.toHaveBeenCalled();
+  });
+
+  it("stays hidden when a thread warning toast saved the same text", async () => {
+    const desktopApi: DesktopApi = {
+      getLatestCodexConfigWarning: async () => ({
+        event: configWarningEvent({
+          summary: "Unsupported feature",
+          details: "Unsupported example_feature",
+        }),
+      }),
+    };
+    await act(async () => {
+      render(
+        <CodexConfigWarningBanner
+          desktopApi={desktopApi}
+          dismissedWarningIds={[codexWarningSuppressionId({ summary: "Unsupported feature" })]}
+        />,
+      );
+    });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("does not persist an ordinary dismissal", async () => {

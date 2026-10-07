@@ -226,6 +226,36 @@ describe("AppNoticeToast", () => {
     expect(onSuppressSkillQuestionsWarning).toHaveBeenCalledTimes(1);
   });
 
+  it("saves a Codex warning's suppression id when the checked toast is closed", async () => {
+    const onDismiss = vi.fn();
+    const onSuppressCodexWarning = vi.fn(async (_id: string) => true);
+    render(
+      <AppNoticeToast
+        notice={{ ...notice, warningSuppressionId: "warning-id" }}
+        onDismiss={onDismiss}
+        onSuppressCodexWarning={onSuppressCodexWarning}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Don't show again" }));
+    expect(onSuppressCodexWarning).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss notice" }));
+    await waitFor(() => expect(onDismiss).toHaveBeenCalledTimes(1));
+    expect(onSuppressCodexWarning).toHaveBeenCalledWith("warning-id");
+  });
+
+  it("offers no Don't show again for a notice without a suppression", () => {
+    render(
+      <AppNoticeToast
+        notice={notice}
+        onDismiss={vi.fn()}
+        onSuppressCodexWarning={vi.fn(async () => true)}
+        onSuppressSkillQuestionsWarning={vi.fn(async () => true)}
+      />,
+    );
+    expect(screen.queryByRole("checkbox", { name: "Don't show again" })).not.toBeInTheDocument();
+  });
+
   it("closes an unchecked Skill Questions warning without saving", () => {
     const onDismiss = vi.fn();
     const onSuppressSkillQuestionsWarning = vi.fn(async () => true);
