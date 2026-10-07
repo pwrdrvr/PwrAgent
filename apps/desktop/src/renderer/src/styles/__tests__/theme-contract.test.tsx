@@ -642,6 +642,10 @@ describe("Tangerine Terminal theme contract", () => {
       // The notice, the line gutter and the table all read it. Geometry, not
       // theme.
       "file-preview-inset",
+      // The gap between usage chart bars, defined on `.usage-timeline__plot`.
+      // The bars and the slice card's inline position both read it, so the
+      // card cannot drift off its bar. Geometry, not theme.
+      "usage-bar-gap",
     ]);
     const tokenReferences = [...css.matchAll(/var\(--([a-z0-9-]+)\)/g)].map(
       ([, token]) => token
