@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { registerApplicationIpcHandlers } from "../ipc/applications";
@@ -132,6 +132,9 @@ describe("application IPC", () => {
       for (const name of ["script.js", ".env", "secrets.env"]) {
         expect(await read(path.join(root, name))).toMatchObject({ error: "This file type cannot be previewed." });
       }
+      await writeFile(path.join(root, ".env"), "SECRET=1");
+      await symlink(path.join(root, ".env"), path.join(root, "notes.txt"));
+      expect(await read(path.join(root, "notes.txt"))).toMatchObject({ error: "This file type cannot be previewed." });
       expect(await read(path.join(root, "missing.json"))).toMatchObject({ error: expect.stringContaining("does not exist") });
       const directory = path.join(root, "directory.json");
       await mkdir(directory);

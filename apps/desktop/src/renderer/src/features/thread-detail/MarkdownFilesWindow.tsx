@@ -18,8 +18,8 @@ import { tildifyPath } from "../../lib/tildify-path";
 
 type LoadState =
   | { status: "idle" | "loading" }
-  | { status: "loaded"; content: string }
-  | { status: "error"; error: string };
+  | { status: "loaded"; content: string; path: string }
+  | { status: "error"; error: string; path: string };
 
 export function MarkdownFilesWindow() {
   const desktopApi = useDesktopApi();
@@ -44,7 +44,12 @@ export function MarkdownFilesWindow() {
     () => markdownFilesBreadcrumbParts(snapshot?.context),
     [snapshot?.context],
   );
-  const [loadState, setLoadState] = useState<LoadState>({ status: "idle" });
+  const [rawLoadState, setLoadState] = useState<LoadState>({ status: "idle" });
+  // Selecting another file renders once before the read effect runs. Never
+  // show the previous file's content under the new file's kind.
+  const loadState: LoadState = "path" in rawLoadState && rawLoadState.path !== selectedPath
+    ? { status: "loading" }
+    : rawLoadState;
   const readMarkdownFile = viewerApi?.readMarkdownFile;
 
   useEffect(() => {
@@ -104,16 +109,18 @@ export function MarkdownFilesWindow() {
           setLoadState({
             status: "error",
             error: response.error ?? "File could not be read.",
+            path: selectedPath,
           });
           return;
         }
-        setLoadState({ status: "loaded", content: response.content });
+        setLoadState({ status: "loaded", content: response.content, path: selectedPath });
       })
       .catch((error: unknown) => {
         if (cancelled) return;
         setLoadState({
           status: "error",
           error: error instanceof Error ? error.message : "File could not be read.",
+          path: selectedPath,
         });
       });
 

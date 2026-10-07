@@ -23716,6 +23716,8 @@ a.transcript-message__messaging-origin:focus-visible {
 
 .file-preview__line::before {
   content: attr(data-line);
+  /* Empty alt text keeps the numbers out of the accessibility tree. */
+  content: attr(data-line) / "";
   padding-right: 12px;
   border-right: 1px solid var(--border-subtle);
   color: var(--text-muted);

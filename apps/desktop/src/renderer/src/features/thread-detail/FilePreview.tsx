@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef, type CSSProperties } from "react";
+import { memo, useLayoutEffect, useMemo, useRef, type CSSProperties } from "react";
 import {
   filePreviewKindLabel,
   type FilePreviewKind,
@@ -17,8 +17,12 @@ type CodeKind = Exclude<FilePreviewKind, "markdown" | "csv" | "tsv">;
 
 /** "JSON document", "Text document": names the preview dialog. */
 export function filePreviewDocumentName(kind: FilePreviewKind): string {
+  return `${capitalizedKindLabel(kind)} document`;
+}
+
+function capitalizedKindLabel(kind: FilePreviewKind): string {
   const label = filePreviewKindLabel(kind);
-  return `${label.charAt(0).toUpperCase()}${label.slice(1)} document`;
+  return `${label.charAt(0).toUpperCase()}${label.slice(1)}`;
 }
 
 /** Copies the file as written, whatever the view shows. */
@@ -43,7 +47,9 @@ export function FilePreviewCopyButton(props: {
  * The body for every previewable kind except Markdown, which the callers
  * render with ThreadMarkdown so links and skills keep working.
  */
-export function FilePreviewBody(props: {
+// Memoized: a dialog opened from a streaming message re-renders with every
+// delta, and the body can hold 20,000 rows. Every prop is a primitive.
+export const FilePreviewBody = memo(function FilePreviewBody(props: {
   content: string;
   kind: Exclude<FilePreviewKind, "markdown">;
   targetLine?: number;
@@ -58,7 +64,7 @@ export function FilePreviewBody(props: {
     );
   }
   return <CodeFilePreview content={props.content} kind={props.kind} targetLine={props.targetLine} />;
-}
+});
 
 function CodeFilePreview(props: {
   content: string;
@@ -88,7 +94,7 @@ function CodeFilePreview(props: {
   }, [scrollLine, preview]);
 
   const notice = props.notice ?? preview.notice;
-  const label = `${filePreviewKindLabel(props.kind).replace(/^text$/, "Text")} contents`;
+  const label = `${capitalizedKindLabel(props.kind)} contents`;
   return (
     <div className="file-preview">
       {notice ? <FilePreviewNoticeLine notice={notice} /> : null}
@@ -176,7 +182,7 @@ function DelimitedTable(props: { kind: "csv" | "tsv"; table: FilePreviewTable })
       <div
         className="thread-markdown__table-scroll file-preview__table"
         role="region"
-        aria-label={`${filePreviewKindLabel(props.kind)} contents`}
+        aria-label={`${capitalizedKindLabel(props.kind)} contents`}
         tabIndex={0}
       >
         <table className="thread-markdown__table">

@@ -68,8 +68,7 @@ function finish(analysis: Analysis): FilePreviewText {
   if (lineCount > MAX_PREVIEW_ROWS) {
     return result;
   }
-  const highlighted = tokens
-    && tokens.filter((token) => token.kind).length <= MAX_PREVIEW_TOKENS
+  const highlighted = tokens && countHighlighted(tokens) <= MAX_PREVIEW_TOKENS
     ? tokens
     : [{ text: result.text }];
   const lines = splitTokenLines(highlighted);
@@ -78,6 +77,14 @@ function finish(analysis: Analysis): FilePreviewText {
     lines.pop();
   }
   return { ...result, lines };
+}
+
+function countHighlighted(tokens: FilePreviewToken[]): number {
+  let count = 0;
+  for (const token of tokens) {
+    if (token.kind) count++;
+  }
+  return count;
 }
 
 function countLines(text: string): number {
@@ -123,7 +130,10 @@ function scanJson(text: string): RawJsonToken[] {
 }
 
 export function tokenizeJson(text: string): FilePreviewToken[] {
-  const raw = scanJson(text);
+  return classifyJsonTokens(scanJson(text));
+}
+
+function classifyJsonTokens(raw: RawJsonToken[]): FilePreviewToken[] {
   return raw.map((token, index) => {
     switch (token.type) {
       case "space":
@@ -158,12 +168,15 @@ function analyzeJson(content: string): Analysis {
   } catch (error) {
     parseError = error;
   }
-  if (parseError !== undefined && !parsesAsJsonWithComments(content)) {
+  // A file that fails strict parsing is scanned once, for both the
+  // JSON-with-comments check and the colors.
+  const raw = parseError === undefined ? undefined : scanJson(content);
+  if (raw && !parsesAsJsonWithComments(raw)) {
     const location = jsonErrorLocation(parseError, content);
     const detail = jsonErrorDetail(parseError);
     return {
       text: content,
-      tokens: tokenizeJson(content),
+      tokens: classifyJsonTokens(raw),
       errorLines: location ? [location.line] : undefined,
       notice: {
         tone: "danger",
@@ -189,12 +202,12 @@ function analyzeJson(content: string): Analysis {
       };
     }
   }
-  return { text: content, tokens: tokenizeJson(content) };
+  return { text: content, tokens: raw ? classifyJsonTokens(raw) : tokenizeJson(content) };
 }
 
 /** JSON with comments, as tsconfig.json and VS Code settings use it. */
-function parsesAsJsonWithComments(content: string): boolean {
-  const significant = scanJson(content).filter((token) =>
+function parsesAsJsonWithComments(raw: RawJsonToken[]): boolean {
+  const significant = raw.filter((token) =>
     token.type !== "space" && token.type !== "comment");
   if (!significant.length) return false;
   const kept = significant.filter((token, index) =>
@@ -218,7 +231,8 @@ function jsonErrorLocation(
   }
   const position = /at position (\d+)/.exec(message);
   const offset = position ? Number(position[1])
-    : /Unexpected end of JSON input/.test(message) && content.trim() ? content.length
+    // Point at the last character, not past a trailing newline.
+    : /Unexpected end of JSON input/.test(message) && content.trim() ? content.trimEnd().length
     : undefined;
   if (offset === undefined) return undefined;
   const before = content.slice(0, offset);
@@ -400,8 +414,12 @@ const TOML_VALUE_PATTERN = new RegExp([
 export function tokenizeToml(text: string): FilePreviewToken[] {
   const tokens: FilePreviewToken[] = [];
   let openString: string | undefined;
+  // Inside a multi-line array, a line that starts with `[` is a nested
+  // array, not a table header.
+  let arrayDepth = 0;
   text.split("\n").forEach((line, index) => {
     if (index > 0) tokens.push({ text: "\n" });
+    const lineStart = tokens.length;
     let rest = line;
     if (openString) {
       const close = rest.indexOf(openString);
@@ -412,7 +430,7 @@ export function tokenizeToml(text: string): FilePreviewToken[] {
       tokens.push({ text: rest.slice(0, close + 3), kind: "string" });
       rest = rest.slice(close + 3);
       openString = undefined;
-    } else if (/^\s*\[/.test(rest)) {
+    } else if (arrayDepth === 0 && /^\s*\[/.test(rest)) {
       const header = /^(\s*)(\[\[?[^\]#]*\]?\]?)/.exec(rest)!;
       if (header[1]) tokens.push({ text: header[1] });
       tokens.push({ text: header[2], kind: "section" });
@@ -426,6 +444,11 @@ export function tokenizeToml(text: string): FilePreviewToken[] {
       }
     }
     openString = tokenizeTomlValue(rest, tokens);
+    for (let token = lineStart; token < tokens.length; token++) {
+      if (tokens[token].kind !== "punctuation") continue;
+      if (tokens[token].text === "[") arrayDepth++;
+      else if (tokens[token].text === "]") arrayDepth = Math.max(0, arrayDepth - 1);
+    }
   });
   return tokens;
 }
@@ -468,6 +491,8 @@ export function parseDelimitedTable(
   let totalRows = 0;
   let row: string[] = [];
   let field = "";
+  // TSV has no quoting convention; only CSV fields may be quoted.
+  const quoting = delimiter === ",";
   let quoted = false;
   let fieldStarted = false;
   const endRow = () => {
@@ -492,7 +517,7 @@ export function parseDelimitedTable(
       } else {
         quoted = false;
       }
-    } else if (char === '"' && !field) {
+    } else if (quoting && char === '"' && !field) {
       quoted = true;
       fieldStarted = true;
     } else if (char === delimiter) {

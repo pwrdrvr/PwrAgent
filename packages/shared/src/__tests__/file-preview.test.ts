@@ -30,6 +30,8 @@ describe("file preview kinds", () => {
     "/repo/archive.json.gz",
     "/Users/example/.codex/sessions/2026/10/06/events.jsonl",
     "/Users/example/.codex/archived_sessions/events.jsonl",
+    "/Users/example/.codex/history.jsonl",
+    "C:\\Users\\example\\.codex\\session_index.jsonl",
     "/tmp/codex-home/sessions/rollout-2026-10-06T12-00-00-abc.jsonl",
   ])("keeps %s editor-first", (filePath) => {
     expect(filePreviewKind(filePath)).toBeUndefined();

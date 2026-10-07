@@ -52,8 +52,9 @@ export function filePreviewKind(filePath: string): FilePreviewKind | undefined {
 }
 
 function isCodexSessionLogPath(filePath: string): boolean {
-  // Codex worktrees also live under ~/.codex, so match the session folders.
-  return /(?:^|[\\/])\.codex[\\/](?:archived_)?sessions[\\/]/i.test(filePath)
+  // Codex worktrees also live under ~/.codex, so match its session folders
+  // and the logs at its root (history.jsonl, session_index.jsonl).
+  return /(?:^|[\\/])\.codex[\\/](?:(?:archived_)?sessions[\\/]|[^\\/]+$)/i.test(filePath)
     || /(?:^|[\\/])rollout-[^\\/]*$/i.test(filePath);
 }
 

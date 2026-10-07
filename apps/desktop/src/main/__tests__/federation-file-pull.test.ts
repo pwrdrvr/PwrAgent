@@ -166,6 +166,9 @@ describe("Federation file pull", () => {
     await expect(pull(path.join(directory, "folder.md"))).rejects.toThrow("regular file");
     await expect(pull(path.join(directory, "script.js"))).rejects.toThrow("file type that can be previewed");
     await expect(pull(path.join(directory, ".env"))).rejects.toThrow("file type that can be previewed");
+    await writeFile(path.join(directory, ".env"), "SECRET=1");
+    await symlink(path.join(directory, ".env"), path.join(directory, "notes.txt"));
+    await expect(pull(path.join(directory, "notes.txt"))).rejects.toThrow("file type that can be previewed");
     await writeFile(path.join(directory, "large.md"), Buffer.alloc(FILE_PULL_MAX_BYTES + 1));
     await expect(pull(path.join(directory, "large.md"))).rejects.toThrow("too large");
   });

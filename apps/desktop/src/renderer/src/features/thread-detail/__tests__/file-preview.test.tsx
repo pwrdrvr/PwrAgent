@@ -53,6 +53,12 @@ describe("file preview", () => {
     expect(container.querySelector('[data-state="error"]')).toHaveAttribute("data-line", "4");
   });
 
+  it("locates truncated JSON on its last line, not past a final newline", () => {
+    const { container } = render(<FilePreviewBody content={'{\n  "broken": [1,\n'} kind="json" />);
+    expect(screen.getByRole("status")).toHaveTextContent("Invalid JSON at line 2,");
+    expect(container.querySelector('[data-state="error"]')).toHaveAttribute("data-line", "2");
+  });
+
   it.each(["", '{"broken":', '<script>alert("example")</script>'])("shows invalid JSON as escaped original text: %s", (content) => {
     const { container } = render(<FilePreviewBody content={content} kind="json" />);
     expect(screen.getByRole("status")).toHaveTextContent("Invalid JSON");
@@ -146,6 +152,22 @@ describe("file preview", () => {
     expect(kinds("number")).toEqual(["2026-10-06"]);
     expect(kinds("literal")).toEqual(["true"]);
     expect(kinds("comment")).toEqual(["# on"]);
+  });
+
+  it("keeps the rows of a multi-line TOML array out of the table headers", () => {
+    const content = "matrix = [\n  [1, 2],\n  [3, 4],\n]\n[next]";
+    const { container } = render(<FilePreviewBody content={content} kind="toml" />);
+    expect([...container.querySelectorAll(".file-preview__token--section")].map((token) => token.textContent))
+      .toEqual(["[next]"]);
+    expect(container.querySelectorAll(".file-preview__token--number")).toHaveLength(4);
+  });
+
+  it("treats quotes in TSV as text", () => {
+    const content = 'size\tnote\n5"\t"open quote\n7\tok';
+    render(<FilePreviewBody content={content} kind="tsv" />);
+    const cells = [...screen.getByRole("region", { name: "TSV contents" }).querySelectorAll("tbody td")]
+      .map((cell) => cell.textContent);
+    expect(cells).toEqual(['5"', '"open quote', "7", "ok"]);
   });
 
   it("renders CSV as a table with quoted fields and right-aligned numbers", () => {

@@ -1,4 +1,4 @@
-import { access, readFile, stat } from "node:fs/promises";
+import { access, readFile, realpath, stat } from "node:fs/promises";
 import { BrowserWindow, ipcMain, shell } from "electron";
 import {
   isFilePreviewPath,
@@ -115,7 +115,13 @@ async function readMarkdownFile(
   }
 
   try {
-    const fileStat = await stat(target);
+    // Gate the file a symlink resolves to as well, so a previewable name
+    // cannot reach a `.env` file or a Codex session log.
+    const resolved = await realpath(target);
+    if (!isFilePreviewPath(resolved)) {
+      return { path: target, error: "This file type cannot be previewed." };
+    }
+    const fileStat = await stat(resolved);
     if (!fileStat.isFile()) {
       return { path: target, error: `Path is not a file: ${target}` };
     }
@@ -125,7 +131,7 @@ async function readMarkdownFile(
 
     return {
       path: target,
-      content: await readFile(target, "utf8"),
+      content: await readFile(resolved, "utf8"),
     };
   } catch {
     return { path: target, error: `Path does not exist: ${target}` };

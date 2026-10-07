@@ -70,6 +70,10 @@ export class FederationFilePullReader {
     const thread = await this.options.resolveThread(identity.backend, identity.threadId);
     if (!thread) throw new Error("File pull thread was not found on the owning machine.");
     const target = await realpath(request.path);
+    // A previewable name can be a symlink to a file that must stay out.
+    if (!isFilePreviewPath(target)) {
+      throw new Error("Select an absolute path to a file type that can be previewed.");
+    }
     if (!permissions.filePullOutsideThreadDirectories) {
       const directories = thread.linkedDirectories.flatMap((directory) =>
         [directory.path, directory.worktreePath]);
