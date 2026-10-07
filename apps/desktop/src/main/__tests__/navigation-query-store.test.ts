@@ -869,3 +869,34 @@ it("admits fresh queries and refresh generations under cursor pressure", async (
     .rejects.toMatchObject({ code: "navigation_cursor_expired" });
   await expect(store.readPage({ scopeKey: "window-0", request: request({ pageSize: 10 }), loadIndex })).resolves.toMatchObject({ protocol: 2 });
 });
+
+it.each([
+  ["pinned", (threads: NavigationThreadSummary[]) => { threads[1] = { ...threads[1]!, pinnedRank: "1024" }; }],
+  ["child", (threads: NavigationThreadSummary[]) => { threads[1] = { ...threads[1]!, parentThreadId: "0", parentThreadBackend: "codex" }; }],
+  ["not-indexed", (threads: NavigationThreadSummary[]) => { threads.splice(1, 1); }],
+  ["other-owner", (threads: NavigationThreadSummary[]) => { threads[1] = { ...threads[1]!, federation: { instanceLabel: "Peer",
+    ref: { backend: "codex", threadId: "1", target: { scope: "remote", instanceId: "peer" } } } }; }],
+  ["other-directory", (_threads: NavigationThreadSummary[], keys: string[]) => { keys.splice(1, 1); }],
+] as const)("names why a directory anchor left its query: %s", async (reason, change) => {
+  const threads = Array.from({ length: 3 }, (_, index) => thread(String(index)));
+  const keys = threads.map((row) => `codex:${row.id}`);
+  change(threads, keys);
+  const loadIndex = async () => ({ ...snapshot(threads),
+    directories: [{ key: "repo", kind: "directory" as const, label: "Repo", threadKeys: keys, needsAttentionCount: 0 }] });
+  const anchored = request({ pageSize: 10, query: { kind: "directory", directoryKey: "repo", roots: "unpinned" },
+    anchor: { kind: "thread", ref: { backend: "codex", threadId: "1" } } });
+  const refused = new NavigationQueryStore().readPage({ scopeKey: "window", loadIndex, request: anchored });
+  await expect(refused).rejects.toMatchObject({ code: "navigation_anchor_missing" });
+  // Electron keeps only the message, so the reason has to live there.
+  await expect(refused).rejects.toThrow(`(reason: ${reason})`);
+  await expect(refused).rejects.not.toThrow(/Thread 1|codex:1/);
+});
+
+it("names an archived anchor that a Star Map query filters out", async () => {
+  const threads = Array.from({ length: 3 }, (_, index) => thread(String(index)));
+  threads[1] = { ...threads[1]!, archivedAt: 5 };
+  const anchored = request({ pageSize: 10, query: { kind: "star-map", filters: {} },
+    anchor: { kind: "thread", ref: { backend: "codex", threadId: "1" } } });
+  await expect(new NavigationQueryStore().readPage({ scopeKey: "window", loadIndex: async () => snapshot(threads), request: anchored }))
+    .rejects.toThrow("(reason: archived)");
+});

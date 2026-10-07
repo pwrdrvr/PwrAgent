@@ -417,7 +417,7 @@ function directoryOwner(state: { threads: string[]; revision: string; expiredCur
     if (!request.cursor && request.anchor?.kind === "thread") {
       start = state.threads.indexOf(request.anchor.ref.threadId);
       if (start < 0) {
-        throw new Error("Error invoking remote method 'navigation:get-query-page': NavigationQueryError: [navigation_anchor_missing] The visible navigation anchor is no longer in this query. Choose another item or restart this list explicitly.");
+        throw new Error("Error invoking remote method 'navigation:get-query-page': NavigationQueryError: [navigation_anchor_missing] The visible navigation anchor is no longer in this query (reason: not-indexed). Choose another item or restart this list explicitly.");
       }
     }
     const end = Math.min(state.threads.length, start + (request.pageSize ?? 10));
