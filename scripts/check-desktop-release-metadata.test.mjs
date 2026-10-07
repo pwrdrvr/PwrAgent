@@ -60,6 +60,39 @@ test("accepts the current packaging contract with Linux naming delegated to its 
   expect(result.status, result.stderr).toBe(0);
 });
 
+test.each(
+  ["sign", "linux-package", "windows-prepare"].flatMap((job) =>
+    ["lint", "test"].map((dependency) => ({ job, dependency })),
+  ),
+)("rejects $job bypassing the $dependency release gate", ({ job, dependency }) => {
+  const root = fixture();
+  const path = ".github/workflows/release.yml";
+  const workflow = readFileSync(join(root, path), "utf8");
+  const jobBody = workflow.split(`\n  ${job}:\n`)[1].split(/\n  [A-Za-z0-9_-]+:\n/)[0];
+  const need = `      - ${dependency}\n`;
+  expect(jobBody).toContain(need);
+  replace(root, path, jobBody, jobBody.replace(need, ""));
+  const result = check(root);
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain(`${job} must depend on ${dependency}`);
+});
+
+test("rejects a release test matrix that omits half the suite", () => {
+  const root = fixture();
+  replace(root, ".github/workflows/release.yml", "lane: [1, 2]", "lane: [1]");
+  const result = check(root);
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain("test must contain \"lane: [1, 2]\"");
+});
+
+test("rejects release unit tests that may skip the macOS icon compile", () => {
+  const root = fixture();
+  replace(root, ".github/workflows/release.yml", "PWRAGENT_REQUIRE_ACTOOL: \"1\"", "PWRAGENT_REQUIRE_ACTOOL: \"0\"");
+  const result = check(root);
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain("test must contain \"PWRAGENT_REQUIRE_ACTOOL:");
+});
+
 test.each([
   ["a stale protocol version", "@pwrdrvr/codex-app-server-protocol@0.133.0"],
   ["a package-wide protocol exception", "@pwrdrvr/codex-app-server-protocol"],

@@ -267,32 +267,44 @@ git push origin v1.0.0-alpha.7
 ```
 
 The `Release Desktop (macOS universal + arm64 + Windows + Linux DEB)` workflow contains
-seven job definitions (the Linux package job fans out across two architectures):
+ten job definitions (unit tests fan out across two lanes and Linux packaging
+across two architectures). All macOS jobs use standard `macos-26` runners:
 
-1. `Test and prepare signing input`, with `contents: read`, explicit
-   `id-token: none`, no Apple secrets, and checkout credentials disabled. It
-   installs dependencies, runs release metadata checks, typecheck, tests, and
-   `apps/desktop/scripts/release.mjs --prepare-only`.
-2. `Sign, notarize, package macOS`, gated by the protected `apple-signing`
+1. `Install macOS dependencies` populates the dependency and Electron caches
+   on a miss, using the same lookup-only setup as CI.
+2. `Lint and typecheck` restores dependencies, checks release metadata and
+   authoritative Homebrew/Winget channels, and runs `pnpm lint`, including
+   typecheck, licensing, ESLint, and the repository's correctness gates.
+3. `macOS unit tests (lane N of 2)` runs the complete workspace suite split
+   with `pnpm test --shard=<lane>/2`. Both lanes select Xcode with actool 26 and
+   set `PWRAGENT_REQUIRE_ACTOOL=1`, so the icon compile test cannot silently skip.
+4. `Prepare macOS signing input` runs
+   `apps/desktop/scripts/release.mjs --prepare-only` for both architectures.
+   It runs alongside lint/typecheck and the unit test lanes after cache setup.
+   These jobs have `contents: read`, explicit `id-token: none`, no Apple secrets,
+   and checkout credentials disabled. macOS signing, Linux packaging, and
+   Windows preparation require this job, lint/typecheck, and both test lanes
+   to succeed.
+5. `Sign, notarize, package macOS`, gated by the protected `apple-signing`
    environment, with `contents: read` and explicit `id-token: none`. It does
    not check out the repository or run dependency installation/postinstall
    scripts. It downloads the prepared artifact, verifies its SHA-256 digest,
    expands it, and runs `apps/desktop/scripts/release.mjs --sign-stage-only
    --no-publish`
    with the environment-scoped Apple secrets.
-3. `Package Linux`, running on native Ubuntu x64 and arm64 GitHub-hosted
+6. `Package Linux`, running on native Ubuntu x64 and arm64 GitHub-hosted
    runners. Each job runs `apps/desktop/scripts/release.mjs --linux
    --no-publish`, verifies the packaged ASAR, writes a stable download alias,
    and uploads DEB, RPM, pacman, and tar.gz files as short-retention
    workflow artifacts. The publication job requires both architectures and
    every format (including its stable alias) before hashing or publishing.
-4. `Prepare Windows signing input`, running on Windows without an environment
+7. `Prepare Windows signing input`, running on Windows without an environment
    or signing credentials. It builds a self-contained, hoisted Windows release
    stage that includes the electron-builder toolchain, archives that stage and
    the small signing scripts without workspace `node_modules` links, records
    the archive SHA-256 as a job output, and uploads the archive. This avoids
    Windows tar recursively following pnpm workspace junctions.
-5. `Sign and package Windows installer`, gated by the protected
+8. `Sign and package Windows installer`, gated by the protected
    `windows-signing` environment. It does not check out source or install
    project dependencies/lifecycle scripts. It verifies and expands the exact
    prepared archive, installs `TrustedSigning`, and runs `release.mjs --win
@@ -305,14 +317,14 @@ seven job definitions (the Linux package job fans out across two architectures):
    `PwrAgent.Setup.exe`, and records that copy in the Windows `SHA256SUMS`
    manifest. Cutting the alias here and nowhere earlier is what makes it a copy
    of a signed installer rather than of an unsigned intermediate.
-6. `Publish release assets`, which waits for successful macOS signing, both
+9. `Publish release assets`, which waits for successful macOS signing, both
    Linux packages, and the signed Windows installer. Only then does it create
    the GitHub Release — always as a `Pre-release`, whatever the tag suffix —
    upload every platform's assets, and generate Linux `SHA256SUMS`. The step
    then reads the release back and fails the job if GitHub did not record
    `isPrerelease: true`. The Windows package checksum manifest is uploaded as
    `PwrAgent-windows-SHA256SUMS` so GitHub Release assets have unique names.
-7. `Publish release notes`, which waits for successful all-platform asset
+10. `Publish release notes`, which waits for successful all-platform asset
    publishing, extracts the matching `CHANGELOG.md` section, updates the
    GitHub Release body, and fails the workflow if the body still reads back as
    empty.
