@@ -20,6 +20,8 @@ const MENU_GAP = 4;
  * lens lists. Without one the breadcrumb keeps its plain-text label.
  */
 export type ThreadHeaderProject = {
+  /** The project's directory key. Two projects can share a label. */
+  directoryKey: string;
   /** Show the project in the Directories lens. */
   onReveal: () => void;
   /** Open this project's new-thread launchpad. */

@@ -21096,6 +21096,9 @@ a.button {
   white-space: nowrap;
 }
 
+/* The breadcrumb's two links, the project name and the thread title, share
+   one reset: each is a button inside a trimmed text span that ellipsizes. */
+.thread-header__project-button,
 .thread-header__title-button {
   display: inline-block;
   max-width: 100%;
@@ -21117,6 +21120,7 @@ a.button {
   color: var(--accent-bright);
 }
 
+.thread-header__project-button:focus-visible,
 .thread-header__title-button:focus-visible {
   border-radius: 4px;
   outline: 2px solid var(--focus-ring);
@@ -21125,7 +21129,7 @@ a.button {
 
 /* The breadcrumb's project name, when it links to the project's section in
    Directories. Built like the title: the eyebrow span keeps its trim and
-   baseline, and a reset button inside it carries the ellipsis. The span
+   baseline, and the shared reset button above carries the ellipsis. The span
    clips with the same 4px margin as the title, so the ring survives.
    `min-width: 0` because `clip`, unlike the plain eyebrow's `hidden`, does
    not make a scroll container: the flex item's automatic minimum became the
@@ -21137,23 +21141,6 @@ a.button {
   overflow-clip-margin: 4px;
 }
 
-.thread-header__project-button {
-  display: inline-block;
-  max-width: 100%;
-  min-width: 0;
-  overflow: hidden;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  line-height: inherit;
-  text-align: left;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
 /* Underlined where the title is not: the eyebrow is already accent-coloured,
    and brightening it alone is too slight a change to read as a link. */
 .thread-header__project-button:hover {
@@ -21161,12 +21148,6 @@ a.button {
   text-decoration: underline;
   text-decoration-thickness: 1px;
   text-underline-offset: 3px;
-}
-
-.thread-header__project-button:focus-visible {
-  border-radius: 4px;
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 2px;
 }
 
 /* Opens the project's new-thread menu, like the chevron on the project's

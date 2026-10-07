@@ -3921,6 +3921,7 @@ export function ThreadView(props: ThreadViewProps) {
   const headerProject: ThreadHeaderProject | undefined =
     headerDirectory && onRevealSelectedProjectInList && projectThreadActions
       ? {
+          directoryKey: headerDirectory.key,
           onReveal: () => onRevealSelectedProjectInList(headerDirectory),
           onCreateThread: () => projectThreadActions.onCreateThread(headerDirectory),
           ...(projectThreadActions.federationTargets.length > 0
@@ -3974,7 +3975,7 @@ export function ThreadView(props: ThreadViewProps) {
         // Navigation rows already carry the primary project name. Keep it
         // visible while selected detail or its directory summary is loading,
         // including remote projects with no local directory counterpart.
-        ?? selectedThread?.linkedDirectories[0]?.label
+        ?? rowPrimaryDirectory?.label
       }
       project={headerProject}
       thread={selectedThread!}

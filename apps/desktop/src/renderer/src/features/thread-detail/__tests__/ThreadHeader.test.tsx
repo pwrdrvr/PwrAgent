@@ -62,7 +62,7 @@ describe("ThreadHeader", () => {
     render(
       <ThreadHeader
         projectLabel="PwrSnap"
-        project={{ onReveal, onCreateThread: vi.fn() }}
+        project={{ directoryKey: "directory:/repo", onReveal, onCreateThread: vi.fn() }}
         thread={thread}
       />,
     );
@@ -82,7 +82,7 @@ describe("ThreadHeader", () => {
     render(
       <ThreadHeader
         projectLabel="PwrSnap"
-        project={{ onReveal: vi.fn(), onCreateThread }}
+        project={{ directoryKey: "directory:/repo", onReveal: vi.fn(), onCreateThread }}
         thread={thread}
       />,
     );
@@ -103,6 +103,31 @@ describe("ThreadHeader", () => {
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 
+  it("closes the caret's menu when the project changes under a same label", () => {
+    const view = render(
+      <ThreadHeader
+        projectLabel="api"
+        project={{ directoryKey: "directory:/work/a/api", onReveal: vi.fn(), onCreateThread: vi.fn() }}
+        thread={thread}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "New thread in api" }));
+    expect(screen.getByRole("menu", { name: "New thread in api" })).toBeInTheDocument();
+
+    const onCreateThread = vi.fn();
+    view.rerender(
+      <ThreadHeader
+        projectLabel="api"
+        project={{ directoryKey: "directory:/work/b/api", onReveal: vi.fn(), onCreateThread }}
+        thread={thread}
+      />,
+    );
+
+    // A menu opened for one checkout must not start a thread in another.
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(onCreateThread).not.toHaveBeenCalled();
+  });
+
   it("offers the project on other machines and closes on Escape", () => {
     const onCreateRemote = vi.fn();
     const directory = { kind: "directory" as const, label: "PwrSnap", path: "/repo" };
@@ -111,6 +136,7 @@ describe("ThreadHeader", () => {
       <ThreadHeader
         projectLabel="PwrSnap"
         project={{
+          directoryKey: "directory:/repo",
           onReveal: vi.fn(),
           onCreateThread: vi.fn(),
           federation: {

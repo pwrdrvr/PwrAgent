@@ -188,8 +188,9 @@ export function ThreadHeader(props: ThreadHeaderProps) {
                 <>
                   {props.project ? (
                     <ThreadHeaderProjectCrumb
-                      // A new project closes a menu opened for the old one.
-                      key={projectLabel}
+                      // A new project closes a menu opened for the old one,
+                      // even one with the same label.
+                      key={props.project.directoryKey}
                       label={projectLabel}
                       project={props.project}
                     />
