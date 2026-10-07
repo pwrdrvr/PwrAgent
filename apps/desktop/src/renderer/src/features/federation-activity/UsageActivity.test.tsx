@@ -20,7 +20,7 @@ function chooseCustomRange(from: string, to: string) {
   fireEvent.change(screen.getByLabelText("To"), { target: { value: to } });
 }
 
-const peers = (list: Array<{ id: string; label: string; status: string }>) =>
+const peers = (list: Array<{ id: string; label: string; status: string; profileName?: string }>) =>
   vi.fn(async () => ({ health: { localLabel: "Local", peers: list } }) as ReadFederationActivityResponse);
 
 it("reads on open, skips offline peers, names outdated ones, and analyzes the selected turn on its owner", async () => {
@@ -249,6 +249,54 @@ it("filters totals, tokens, limits and threads by recorded account across owners
   expect(band().getByText("$15.00")).toBeInTheDocument();
   expect(screen.queryByText(/These rows have no recorded account identity/)).not.toBeInTheDocument();
   expect(readUsageActivity).toHaveBeenCalledTimes(4); // Clock-period account filtering stays local.
+});
+
+it("reads ten federated profiles, sums their provider usage and selects an account outside the five chart series", async () => {
+  const now = new Date(2026, 8, 28, 12).getTime();
+  vi.spyOn(Date, "now").mockReturnValue(now);
+  let activeReads = 0;
+  let peakReads = 0;
+  const readUsageActivity = vi.fn(async (request) => {
+    activeReads += 1;
+    peakReads = Math.max(peakReads, activeReads);
+    await Promise.resolve();
+    activeReads -= 1;
+    const index = request.federationTarget.scope === "local" ? 0 : Number(request.federationTarget.instanceId.slice("machine-".length));
+    const accountKey = `acct-${index}`;
+    return { readAt: now, rateLimits: [], truncated: false,
+      rows: [{ ...usageFixture({ threadId: `thread-${index}`, turnId: `turn-${index}`, usageLineId: `line-${index}`,
+        createdAt: now - 2 * HOUR, startedAt: now - 2 * HOUR, completedAt: now - HOUR, totalCostMicros: (index + 1) * 1_000_000 }),
+      title: `Account ${index} work`, accountKey }],
+      limitObservation: { observedAt: now, accountKey, limits: [] } };
+  });
+  const remoteProfiles = Array.from({ length: 9 }, (_, offset) => ({ id: `machine-${offset + 1}`,
+    label: `Machine ${offset + 1}`, profileName: `profile-${offset + 1}`, status: "connected" }));
+  render(<UsageActivity desktopApi={{ readUsageActivity, readFederationActivity: peers(remoteProfiles) }} />);
+  await screen.findByRole("button", { name: "Inspect Account 9 work" });
+  expect(readUsageActivity).toHaveBeenCalledTimes(10);
+  expect(new Set(readUsageActivity.mock.calls.map(([request]) => request.federationTarget.instanceId ?? "local")).size).toBe(10);
+  expect(peakReads).toBe(4);
+  const band = () => within(screen.getByRole("region", { name: "Limits and cost" }));
+  expect(band().getByText("$55.00")).toBeInTheDocument();
+  expect(band().getByText("10 threads · 10 turns")).toBeInTheDocument();
+  const picker = screen.getByRole("combobox", { name: "Account" });
+  expect(selectOptionLabels(picker)).toHaveLength(11); // All accounts, plus each of the ten accounts.
+  expect(selectOptionLabels(picker)).toContain("OpenAI · Account acct-9 · Machine 9 (profile-9)");
+  const spendBy = screen.getByRole("group", { name: "Spend by" });
+  fireEvent.click(within(spendBy).getByRole("button", { name: "Provider" }));
+  expect(screen.getByRole("button", { name: /^OpenAI · \$55\.00$/ })).toBeInTheDocument();
+  fireEvent.click(within(spendBy).getByRole("button", { name: "Account" }));
+  expect(screen.getByText("Other accounts")).toBeInTheDocument();
+  chooseSelectOption(picker, "OpenAI · Account acct-0 · Local");
+  expect(band().getByText("$1.00")).toBeInTheDocument();
+  expect(band().getByText("1 thread · 1 turn")).toBeInTheDocument();
+  expect(band().getByText("300")).toBeInTheDocument();
+  expect(band().getByText("200")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Inspect Account 0 work" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Inspect Account 9 work" })).not.toBeInTheDocument();
+  chooseSelectOption(picker, "All accounts");
+  expect(band().getByText("$55.00")).toBeInTheDocument();
+  expect(band().getByText("10 threads · 10 turns")).toBeInTheDocument();
 });
 
 it("keeps a mixed-version ledger copy in its recorded account when the unkeyed peer is read first", async () => {
