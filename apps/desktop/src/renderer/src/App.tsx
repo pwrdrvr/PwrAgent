@@ -2880,23 +2880,23 @@ function DesktopAppShell(props: {
   // The breadcrumb's project name. Only Directories lists projects, so the
   // click switches to it, the way clicking its lens tab would (leaving
   // Attention clears the selected thread's cookie, as any exit does). A
-  // hidden sidebar is shown: the click asks to see the list.
-  const selectedProjectDirectoryKey = navigation.selectedDirectory?.key;
+  // hidden sidebar is shown: the click asks to see the list. The header
+  // names the project, since it can link one before the thread's detail
+  // (and so `navigation.selectedDirectory`) has loaded.
   const selectedItemKey = navigation.selectedItemKey;
   const browseMode = navigation.browseMode;
   const setBrowseMode = navigation.setBrowseMode;
-  const revealSelectedProjectInList = useCallback(() => {
-    if (!selectedProjectDirectoryKey || !selectedItemKey) return;
+  const revealSelectedProjectInList = useCallback((directory: NavigationDirectorySummary) => {
+    if (!selectedItemKey) return;
     if (sidebarHidden) setSidebarHiddenPersisted(false);
     if (browseMode !== "directories") setBrowseMode("directories");
     setProjectRevealRequest({
-      key: selectedProjectDirectoryKey,
+      key: directory.key,
       selectedThreadKey: selectedItemKey,
     });
   }, [
     browseMode,
     selectedItemKey,
-    selectedProjectDirectoryKey,
     setBrowseMode,
     setSidebarHiddenPersisted,
     sidebarHidden,

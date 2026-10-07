@@ -886,8 +886,8 @@ export type ThreadViewProps = {
    */
   onOpenPluginSettings?: () => void;
   onRevealSelectedThreadInList?: () => void;
-  /** Show `selectedDirectory` in the Directories lens (the breadcrumb's project). */
-  onRevealSelectedProjectInList?: () => void;
+  /** Show the breadcrumb's project in the Directories lens. */
+  onRevealSelectedProjectInList?: (directory: NavigationDirectorySummary) => void;
   /** What the breadcrumb's project caret offers. */
   projectThreadActions?: {
     onCreateThread: (directory: NavigationDirectorySummary) => void;
@@ -3904,13 +3904,24 @@ export function ThreadView(props: ThreadViewProps) {
   };
   // Only a project the thread list shows is a link. A remote thread whose
   // project has no local counterpart still names it, as plain text.
-  const headerDirectory = props.selectedDirectory;
+  // `selectedDirectory` waits for the selected thread's detail, so until it
+  // arrives the row's primary project is looked up the same way, by key. The
+  // link and its caret are then there from the first frame, instead of
+  // appearing a request later and pushing the title right.
+  const rowPrimaryDirectory = selectedThread?.linkedDirectories[0];
+  const rowPrimaryDirectoryKey = rowPrimaryDirectory
+    ? classifyDirectory(rowPrimaryDirectory).key
+    : undefined;
+  const headerDirectory = props.selectedDirectory
+    ?? (rowPrimaryDirectoryKey
+      ? props.directories?.find((directory) => directory.key === rowPrimaryDirectoryKey)
+      : undefined);
   const onRevealSelectedProjectInList = props.onRevealSelectedProjectInList;
   const projectThreadActions = props.projectThreadActions;
   const headerProject: ThreadHeaderProject | undefined =
     headerDirectory && onRevealSelectedProjectInList && projectThreadActions
       ? {
-          onReveal: onRevealSelectedProjectInList,
+          onReveal: () => onRevealSelectedProjectInList(headerDirectory),
           onCreateThread: () => projectThreadActions.onCreateThread(headerDirectory),
           ...(projectThreadActions.federationTargets.length > 0
             ? {
@@ -3959,7 +3970,7 @@ export function ThreadView(props: ThreadViewProps) {
       hasApprovalRequest={Boolean(props.pendingRequest)}
       machine={props.threadMachine}
       projectLabel={
-        props.selectedDirectory?.label
+        headerDirectory?.label
         // Navigation rows already carry the primary project name. Keep it
         // visible while selected detail or its directory summary is loading,
         // including remote projects with no local directory counterpart.
