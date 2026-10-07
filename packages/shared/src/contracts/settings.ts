@@ -3,6 +3,7 @@ import type { MessagingToolUpdateMode } from "./messaging";
 import type { AppServerBackendKind } from "./normalized-app-server";
 import type { FederationTarget } from "./federation";
 import type { DesktopHelperModelSettings } from "../helper-models";
+import type { DesktopDecisionModelSettings } from "../decision-models";
 import type { ThreadTodoMergeMethod } from "./thread-todos";
 import {
   TOOL_OUTPUT_WARNING_INVOCATIONS,
@@ -623,7 +624,9 @@ export type DesktopSettingsSecretName =
   | "federationCloudflareAccessClientSecret"
   | "mcpConnectionCredentials"
   | "pwrsnapMcpCredential"
-  | "pwrgitMcpCredential";
+  | "pwrgitMcpCredential"
+  | "decisionLocalApiKey"
+  | "typesafeJevApiKey";
 
 /**
  * Predicate: does writing or clearing this secret affect the
@@ -666,6 +669,8 @@ export function isMessagingRuntimeSecret(
     case "mcpConnectionCredentials":
     case "pwrsnapMcpCredential":
     case "pwrgitMcpCredential":
+    case "decisionLocalApiKey":
+    case "typesafeJevApiKey":
       return false;
   }
 }
@@ -1371,6 +1376,13 @@ export type DesktopSettingsSnapshot = {
     >;
     /** Models for work PwrAgent starts on its own. Absent on older builds. */
     helperModels?: DesktopHelperModelSettings;
+    /** The decision model and its providers. Absent on older builds. */
+    decisionModels?: DesktopDecisionModelSettings;
+    decisionSecrets?: {
+      /** Optional; sent as a bearer token to the local decision server. */
+      localApiKey: DesktopSettingsSecretState;
+      jevApiKey: DesktopSettingsSecretState;
+    };
     codex: {
       path: DesktopSettingsValue<string>;
       profile: DesktopSettingsValue<string>;
@@ -1682,6 +1694,8 @@ export type DesktopSettingsConfigPatch = {
     >;
     /** Replaces every helper model choice; omit a helper to use Helper default. */
     helperModels?: DesktopHelperModelSettings;
+    /** Replaces the whole decision model section. */
+    decisionModels?: DesktopDecisionModelSettings;
     codex?: {
       path?: string;
       profile?: string;
@@ -2448,6 +2462,8 @@ export const SETTINGS_CREDENTIAL_TEST_KINDS = [
   "slack",
   "feishu",
   "line",
+  "decision-local",
+  "decision-jev",
 ] as const;
 
 export type SettingsCredentialTestKind =

@@ -69,6 +69,7 @@ describe("ThreadView project breadcrumb", () => {
       return ownerApi.getNavigationSelectedDetail!(request, consumer);
     });
     const api = { ...ownerApi, getNavigationSelectedDetail: readDetail };
+    const onReveal = vi.fn<NonNullable<ThreadViewProps["onRevealSelectedProjectInList"]>>();
     function Harness() {
       const navigation = useThreadNavigation(api);
       return (
@@ -77,6 +78,13 @@ describe("ThreadView project breadcrumb", () => {
           <output aria-label="Configuration ready">{String(navigation.selectedThreadConfigurationReady)}</output>
           <ThreadView
             {...baseProps}
+            directories={navigation.directories}
+            onRevealSelectedProjectInList={onReveal}
+            projectThreadActions={{
+              onCreateThread: () => undefined,
+              federationTargets: [],
+              onCreateThreadOnFederationTarget: () => undefined,
+            }}
             selectedDirectory={navigation.selectedDirectory}
             selectedThread={navigation.selectedThread}
           />
@@ -95,6 +103,17 @@ describe("ThreadView project breadcrumb", () => {
       if (nextLabel !== "Catalog") {
         expect(within(screen.getByRole("banner")).queryByText("Catalog")).not.toBeInTheDocument();
       }
+      // The link and its caret come from the row too, so neither appears a
+      // request late and shifts the title.
+      expect(within(screen.getByRole("banner")).getByRole("button", {
+        name: `New thread in ${nextLabel}`,
+      })).toBeInTheDocument();
+      fireEvent.click(within(screen.getByRole("banner")).getByRole("button", {
+        name: `Show ${nextLabel} in Directories`,
+      }));
+      expect(onReveal).toHaveBeenCalledWith(
+        expect.objectContaining({ key: `directory:/repo/${nextLabel}` }),
+      );
     } finally {
       await act(async () => { release(); await pending; });
     }

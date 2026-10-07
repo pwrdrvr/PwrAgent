@@ -25,6 +25,8 @@ import type {
   DesktopCodexAuthProfileDiscoverySnapshot,
   DesktopCodexCandidateSource,
   DesktopHelperModelSettings,
+  DesktopDecisionModelSettings,
+  DecisionProviderId,
   DesktopCodexDiscoverySnapshot,
   DesktopCodexVersionAdvisory,
   DesktopCodexProfileModel,
@@ -781,6 +783,16 @@ export class DesktopSettingsService {
     );
     const federationCloudflareAccessClientSecret = await this.readSecretState(
       "federationCloudflareAccessClientSecret",
+      undefined,
+      secretStorage.available,
+    );
+    const decisionLocalApiKey = await this.readSecretState(
+      "decisionLocalApiKey",
+      undefined,
+      secretStorage.available,
+    );
+    const typesafeJevApiKey = await this.readSecretState(
+      "typesafeJevApiKey",
       undefined,
       secretStorage.available,
     );
@@ -1549,6 +1561,8 @@ export class DesktopSettingsService {
         providerThreadMigrations:
           config.models?.providerThreadMigrations ?? {},
         helperModels: config.models?.helperModels ?? { helpers: {} },
+        decisionModels: config.models?.decisionModels ?? {},
+        decisionSecrets: { localApiKey: decisionLocalApiKey, jevApiKey: typesafeJevApiKey },
         codex: {
           path: this.resolveString(config.models?.codex?.path, CODEX_COMMAND_ENV),
           profile: this.resolveConfigString(config.models?.codex?.profile),
@@ -3009,6 +3023,16 @@ export class DesktopSettingsService {
     return this.readModelsConfig().usageAccountGroups ?? {};
   }
 
+  resolveDecisionModelSettings(): DesktopDecisionModelSettings {
+    return this.readModelsConfig().decisionModels ?? {};
+  }
+
+  async resolveDecisionApiKey(provider: DecisionProviderId): Promise<string | undefined> {
+    return await this.options.secretStore.getSecret(
+      provider === "local" ? "decisionLocalApiKey" : "typesafeJevApiKey",
+    );
+  }
+
   resolveCodexConfigOverrides(): string[] {
     const status = this.configStore.fileStatus();
     if (status.kind === "invalid" && status.serving === "defaults") {
@@ -4262,6 +4286,8 @@ function secretEnvironmentKey(
     case "federationCloudflareAccessClientSecret":
     case "pwrsnapMcpCredential":
     case "pwrgitMcpCredential":
+    case "decisionLocalApiKey":
+    case "typesafeJevApiKey":
       return undefined;
   }
 }

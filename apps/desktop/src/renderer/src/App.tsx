@@ -48,6 +48,7 @@ import {
   toolOutputWarningChars,
 } from "@pwragent/shared";
 import { Sidebar } from "./features/navigation/Sidebar";
+import type { ProjectRevealRequest } from "./features/navigation/DirectoriesList";
 import { isSubthreadLaunchpadDraft } from "./features/navigation/StartingThreadRow";
 import { SidebarResizeHandle } from "./features/navigation/SidebarResizeHandle";
 import { useThreadJump } from "./features/navigation/useThreadJump";
@@ -415,6 +416,8 @@ function DesktopAppShell(props: {
   );
   const [revealSelectedThreadRequest, setRevealSelectedThreadRequest] =
     useState(0);
+  const [projectRevealRequest, setProjectRevealRequest] =
+    useState<ProjectRevealRequest>();
   const [contextRailPinned, setContextRailPinned] = useState(
     () => readBootstrapLayoutPreferences().contextRailPinned,
   );
@@ -2874,6 +2877,30 @@ function DesktopAppShell(props: {
       federatedTargetHasProject({ scope: "remote", instanceId }, directory),
     [federatedTargetHasProject],
   );
+  // The breadcrumb's project name. Only Directories lists projects, so the
+  // click switches to it, the way clicking its lens tab would (leaving
+  // Attention clears the selected thread's cookie, as any exit does). A
+  // hidden sidebar is shown: the click asks to see the list. The header
+  // names the project, since it can link one before the thread's detail
+  // (and so `navigation.selectedDirectory`) has loaded.
+  const selectedItemKey = navigation.selectedItemKey;
+  const browseMode = navigation.browseMode;
+  const setBrowseMode = navigation.setBrowseMode;
+  const revealSelectedProjectInList = useCallback((directory: NavigationDirectorySummary) => {
+    if (!selectedItemKey) return;
+    if (sidebarHidden) setSidebarHiddenPersisted(false);
+    if (browseMode !== "directories") setBrowseMode("directories");
+    setProjectRevealRequest({
+      key: directory.key,
+      selectedThreadKey: selectedItemKey,
+    });
+  }, [
+    browseMode,
+    selectedItemKey,
+    setBrowseMode,
+    setSidebarHiddenPersisted,
+    sidebarHidden,
+  ]);
   // This instance, as the machine chips name it.
   const localMachine: MachineChipValue = {
     label: liveFederationHealth?.localLabel ?? "This machine",
@@ -3369,6 +3396,18 @@ function DesktopAppShell(props: {
     onOpenMessagingSettings: openMessagingSettings,
     onOpenPluginSettings: openPluginSettings,
     onRevealSelectedThreadInList: revealSelectedThreadInList,
+    onRevealSelectedProjectInList: revealSelectedProjectInList,
+    projectThreadActions: {
+      onCreateThread: (directory) => {
+        setMainView("thread");
+        void navigation.openDirectoryLaunchpad(directory, directory.launchpad?.backend);
+      },
+      federationTargets: newThreadFederationTargets,
+      checkFederationTargetProject,
+      onCreateThreadOnFederationTarget: (instanceId, directory) => {
+        void createThreadOnFederationTarget(instanceId, directory);
+      },
+    },
     contextRailPinned,
     onContextRailPinnedChange: setContextRailPinnedPersisted,
     activeContextTab,
@@ -3635,6 +3674,7 @@ function DesktopAppShell(props: {
           composerSourceThreadKey={navigation.composerSourceThreadKey}
           revealSelectedThreadRequest={revealSelectedThreadRequest}
           onRevealSelectedThreadComplete={threadJump.completePeekRestore}
+          projectRevealRequest={projectRevealRequest}
           selectedItemKey={navigation.selectedItemKey}
           thinkingThreadKeys={session.thinkingThreadKeys}
           agentCommandThreadKeys={session.agentCommandThreadKeys}

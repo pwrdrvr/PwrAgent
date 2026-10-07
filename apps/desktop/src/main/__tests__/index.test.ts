@@ -10,6 +10,7 @@ import type {
 import { ElectronQuitModel } from "./helpers/electron-quit-model";
 
 const appEventHandlers = new Map<string, (...args: unknown[]) => void>();
+const powerMonitorEventHandlers = new Map<string, (...args: unknown[]) => void>();
 const processEventHandlers = new Map<string, (...args: unknown[]) => void>();
 // Captures the listeners createMainWindow's return value registers via
 // `window.on(...)` — lets tests drive the main window's "close" handler
@@ -270,6 +271,11 @@ const buildDockProfileSnapshotMock = vi.fn(() => ({
 const writeDockProfileSnapshotMock = vi.fn();
 
 vi.mock("electron", () => ({
+  powerMonitor: {
+    on: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
+      powerMonitorEventHandlers.set(event, handler);
+    }),
+  },
   app: {
     setName: setNameMock,
     isPackaged: false,
@@ -692,6 +698,7 @@ async function flushMicrotasks(): Promise<void> {
 describe("bootstrapApp", () => {
   beforeEach(() => {
     appEventHandlers.clear();
+    powerMonitorEventHandlers.clear();
     processEventHandlers.clear();
     vi.spyOn(process, "once").mockImplementation(
       (event: string | symbol, handler: (...args: unknown[]) => void) => {
@@ -2711,6 +2718,51 @@ describe("bootstrapApp", () => {
       disposeScheduledThreadActionServiceMock.mock.invocationCallOrder[0]!,
     );
   });
+
+  it.each(["linux", "darwin"] as const)(
+    "handles %s system shutdown during profiler startup through normal cleanup without confirmation",
+    async (platform) => {
+      vi.stubGlobal("process", Object.create(process, { platform: { value: platform } }));
+      let finishStart!: () => void;
+      startupProfilerInstance.start.mockImplementation(() => new Promise<void>((resolve) => {
+        finishStart = resolve;
+      }));
+      await import("../index");
+      await flushMicrotasks();
+
+      // Registration must precede the first asynchronous startup operation.
+      expect(powerMonitorEventHandlers.get("shutdown")).toBeTypeOf("function");
+      expect(createMainWindowMock).not.toHaveBeenCalled();
+      const model = new ElectronQuitModel([]);
+      let quitAllowed = false;
+      isQuitAllowedMock.mockImplementation(() => quitAllowed);
+      const preventDefault = vi.fn();
+      allowImmediateQuitMock.mockImplementation(() => {
+        expect(preventDefault).toHaveBeenCalledOnce();
+        quitAllowed = true;
+      });
+      quitMock.mockImplementation(model.quit);
+      for (const name of ["before-quit", "will-quit", "window-all-closed", "quit"]) {
+        model.on(name, (event) => appEventHandlers.get(name)?.(event));
+      }
+
+      powerMonitorEventHandlers.get("shutdown")?.({ preventDefault });
+      await model.settle();
+      expect(model.hasQuit).toBe(true);
+      expect(model.reentrantQuits).toBe(0);
+      expect(requestQuitMock).not.toHaveBeenCalled();
+      expect(startupProfilerInstance.stop).toHaveBeenCalledExactlyOnceWith("app-quit");
+      expect(disposeDesktopMessagingRuntimeMock).toHaveBeenCalledOnce();
+      expect(disposeDesktopFederationRuntimeMock).toHaveBeenCalledOnce();
+      expect(disposeAppServerIpcHandlersMock).toHaveBeenCalledOnce();
+      expect(exitMock).not.toHaveBeenCalled();
+
+      finishStart();
+      await flushMicrotasks();
+      expect(createMainWindowMock).not.toHaveBeenCalled();
+      expect(initializeAppStateMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not create the lease coordinators on early SIGTERM", async () => {
     whenReadyMock.mockReturnValue(new Promise(() => {}));

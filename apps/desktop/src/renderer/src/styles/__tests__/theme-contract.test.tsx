@@ -1020,6 +1020,27 @@ describe("Tangerine Terminal theme contract", () => {
     );
   });
 
+  it("keeps everything inside a title-strip control out of the drag region", () => {
+    // `.thread-header *` and `.settings-titlebar *` make every descendant a
+    // drag region. Opting out only the control left its icon one, so the
+    // breadcrumb's project caret took clicks and hover only at its edges.
+    expect(css).toMatch(
+      /\.thread-header button,\s*\.thread-header button \*,\s*\.thread-header input,\s*\.thread-header a,\s*\.thread-header a \*,\s*\.thread-header select\s*\{\s*-webkit-app-region:\s*no-drag;\s*\}/,
+    );
+    expect(css).toMatch(
+      /\.settings-titlebar button,\s*\.settings-titlebar button \*,[\s\S]*?\.settings-titlebar \[role="button"\] \*\s*\{\s*-webkit-app-region:\s*no-drag;\s*\}/,
+    );
+  });
+
+  it("lets the breadcrumb's project link shrink beside the thread title", () => {
+    // `overflow: clip` is not a scroll container, so without an explicit
+    // `min-width: 0` the flex item's minimum is the whole unwrapped name, and
+    // a narrow header squeezed the thread title to 0px instead.
+    const rule = extractRuleBody(css, ".thread-header__eyebrow--link");
+    expect(rule).toMatch(/overflow:\s*clip;/);
+    expect(rule).toMatch(/min-width:\s*0;/);
+  });
+
   it("keeps the header machine chip and its menu out of the drag region", () => {
     // The menu is a descendant of `.thread-header`, so the header's
     // `.thread-header *` drag rule reaches every box in it.

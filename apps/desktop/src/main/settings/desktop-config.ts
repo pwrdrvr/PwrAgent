@@ -12,6 +12,7 @@ import type {
   DesktopChatReplyComposer,
   DesktopAuthorizedContact,
   DesktopCodexProfileModel,
+  DesktopDecisionModelSettings,
   DesktopFederationMode,
   DesktopHelperModelChoice,
   DesktopHelperModelSettings,
@@ -57,6 +58,7 @@ import {
   isDesktopCodexProfileModel,
   isDesktopFederationMode,
   isFederationGatewayEndpointUrl,
+  normalizeDecisionModelSettings,
   isDesktopHotCpuProfileStartDelayMs,
   isDesktopHotCpuProfileTriggerMode,
   isDesktopIntegratedTerminalWindowsShell,
@@ -297,6 +299,7 @@ export type DesktopSettingsConfig = {
       DesktopProviderThreadModelMigration
     >;
     helperModels?: DesktopHelperModelSettings;
+    decisionModels?: DesktopDecisionModelSettings;
     codex?: {
       path?: string;
       profile?: string;
@@ -1736,6 +1739,29 @@ export function desktopSettingsPatchToEdits(
       });
     }
   }
+  if (patch.models?.decisionModels !== undefined) {
+    // `[models.decision]`: new keys with no legacy shape. A key left at its
+    // default is removed rather than written.
+    const decision = patch.models.decisionModels;
+    const normalized = normalizeDecisionModelSettings({
+      model: decision.model,
+      cameraCues: decision.cameraCues,
+      localEndpoint: decision.local?.endpoint,
+      localModel: decision.local?.model,
+      jevModel: decision.jev?.model,
+    });
+    const keys: [string, string | boolean | undefined][] = [
+      ["model", normalized?.model],
+      ["camera_cues", normalized?.cameraCues],
+      ["local_endpoint", normalized?.local?.endpoint],
+      ["local_model", normalized?.local?.model],
+      ["jev_model", normalized?.jev?.model],
+    ];
+    for (const [key, value] of keys) {
+      if (value === undefined) edits.push({ op: "delete", path: ["models", "decision", key] });
+      else set(["models", "decision", key], value);
+    }
+  }
   if (patch.models?.providerThreadMigrations !== undefined) {
     const providerThreadMigrations = normalizeProviderThreadModelMigrations(
       patch.models.providerThreadMigrations,
@@ -1941,6 +1967,7 @@ function normalizeDesktopConfig(
   const line = tables["messaging.line"];
   const models = tables["models"];
   const codex = tables["models.codex"];
+  const decision = tables["models.decision"];
   const acpAgentsGemini = tables["acp_agents.gemini"];
   const acpAgentsGrok = tables["acp_agents.grok"];
   const acpAgentsKimi = tables["acp_agents.kimi"];
@@ -2313,6 +2340,13 @@ function normalizeDesktopConfig(
         models?.helper_default_reasoning_effort,
         models?.helper_models,
       ),
+      decisionModels: normalizeDecisionModelSettings({
+        model: decision?.model,
+        cameraCues: decision?.camera_cues,
+        localEndpoint: decision?.local_endpoint,
+        localModel: decision?.local_model,
+        jevModel: decision?.jev_model,
+      }),
       codex: {
         path: readString(codex?.path),
         profile: readString(codex?.profile),
@@ -2641,6 +2675,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const providerThreadMigrations = config.models?.providerThreadMigrations;
   const helperModels = config.models?.helperModels;
   const usageAccountGroups = config.models?.usageAccountGroups;
+  const decisionModels = config.models?.decisionModels;
   const hasHelperModels = Boolean(
     helperModels
     && (
@@ -2658,10 +2693,12 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     )
     || hasHelperModels
     || (usageAccountGroups && Object.keys(usageAccountGroups).length > 0)
+    || decisionModels
   ) {
     pruned.models = {
       ...(usageAccountGroups && Object.keys(usageAccountGroups).length > 0 ? { usageAccountGroups } : {}),
       ...(hasHelperModels ? { helperModels } : {}),
+      ...(decisionModels ? { decisionModels } : {}),
       ...(providerDefaults && Object.keys(providerDefaults).length > 0
         ? { providerDefaults }
         : {}),

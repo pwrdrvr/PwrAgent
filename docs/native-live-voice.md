@@ -96,15 +96,25 @@ and under the notice stack.
 
 The panel shows:
 
-- a header with the title, the session clock, the microphone toggle, copy, and
-  **End director voice**, which ends the session and closes the panel;
+- a header with the title, the session clock, the microphone toggle, the camera
+  toggle, copy, and **Close director voice**, which ends a live session and
+  closes the panel;
 - the state on its own row: **Microphone live** with the level meter, **Muted ·
-  ends 30s after the reply**, or the connecting, ending, and ended states;
+  ends 30s after the reply**, or the connecting, ending, and ended states, with
+  **End** at the row's end. End stops the session and keeps the panel and its
+  transcript;
 - what the window is looking at, which is what "this" means to the voice:
   **Looking at: Sample thread**, or **Looking at: new thread in Sample
   project** on a launchpad. It follows the window live, so it is hidden once
   the session ends;
-- the transcript with its receipts, and **Message voice**.
+- the transcript, with the director's lines labeled **Director**, tool
+  receipts, and a one-line receipt for each camera cue sent to the voice;
+- the camera dock while camera cues are on;
+- **Message director**.
+
+Mute, End, and Close are three intents: mute stops the director hearing the
+room, End stops the session and keeps the conversation, and Close ends a live
+session and closes the panel.
 
 The header holds only items whose width does not change with the state, so it
 fits the panel's 300px minimum width in every state. The state labels differ
@@ -114,9 +124,9 @@ yields, by ellipsis.
 
 The panel outlives a session that ends on its own: muted after its reply, closed
 by the service, or failed. It keeps the transcript and stops the clock at the
-session's length. The state reads **Ended after the reply** or **Voice ended**.
-The mic button becomes **Start director voice**, and the close button becomes
-**Close director voice**. Starting again clears the old transcript.
+session's length. The state reads **Ended after the reply** or **Voice ended**,
+and End becomes **Start again** in the same place. The microphone and camera
+toggles leave the header. Starting again clears the old transcript.
 
 The panel also shows any question that the Voice manager's turn is waiting on.
 A tool can ask the operator something on the thread it runs in, and nobody
@@ -232,7 +242,8 @@ emits `started`, and the peer connects. Stop, permission denial, late permission
 results, startup failure, connection loss, thread change and window teardown
 clean these resources. Main also watches navigation, renderer crashes, window
 destruction and backend disconnect. Electron grants audio capture only to the
-opted-in, established voice owner, and rejects camera/subframe media requests.
+opted-in, established voice owner. Video additionally requires that owner's
+separate camera opt-in; subframe and combined audio/video requests are rejected.
 macOS packaging includes its microphone purpose string and audio-input
 entitlement.
 
@@ -344,3 +355,307 @@ Official context: [Codex App Server](https://learn.chatgpt.com/docs/app-server),
 [GPT-Live](https://developers.openai.com/api/docs/guides/live).
 Desktop voice availability/pricing statements do not establish terms for this
 external experimental App Server integration.
+
+
+## Camera context integration
+
+During a listening director session, the camera button beside the microphone
+in the Director voice panel can opt into local camera cues. Capture belongs to the window's voice controller
+and ends on camera opt-out, voice stop, navigation teardown, or failure.
+
+The camera dock sits between the transcript and **Message director**, as a
+sibling of the transcript rather than inside it, so the preview holds one place
+while the transcript scrolls. Its bar shows model latency and completed
+decisions per second. An idle `none` or `neutral` pick stays in the secondary
+color, so the accent appears only when the camera sees something. The row whose
+cue was just delivered shows **sent** for four seconds.
+
+The panel's size picks the layout, through a container query. At
+the default width the mirrored preview sits beside each question's top pick
+(gesture, vibe, present) with its confidence. Dragged to about 470px wide and
+800px tall, every option's meter for all three questions spans the dock below
+the preview and picks, plus the filter status. From about 790px wide and 660px
+tall, the meters move beside a larger preview, the way the Clef demo lays them
+out. The preview keeps a 4:3 frame at every size, so extra width goes to the
+meters instead of cropping the video to a strip. The height floors keep the
+transcript readable; the panel is a size container, so both dimensions count.
+Both readouts stay mounted, so a resize never restarts the video.
+**Copy camera diagnostics** copies what the dock leaves off-screen: frame age,
+stale-result count, acknowledgment counts, the latest repeat check, and the
+owning thread and session.
+Received results and acknowledged context are counted separately.
+
+Each gesture or presence cue sent to the voice is also a transcript row
+(camera · **stop** · sent), in order with the speech, so reading back answers
+whether the voice was told. Vibe cues reach the voice too but are ambient, so
+they appear only in the dock.
+The row reads **sending…** until the context RPC acknowledges and **not
+delivered** if it fails.
+An appendText RPC acknowledgment confirms delivery to Codex, not whether the
+realtime model incorporated the observation into its next answer.
+
+### Decision model settings
+
+Settings → AI Providers configures the decision model. **Defaults →
+Decisions** picks it (the local decision model, TypeSafe Jev, or Off) and holds
+the **Camera cues in live voice** switch. Off is the default: with nothing set
+up, live voice has no camera button and none of the camera features below. Both providers speak TypeSafe's
+[System One API](https://docs.typesafe.ai/api): `POST <base URL>/v1/systemone`
+with `model`, `state` and typed `questions`. The Providers index lists both,
+each with its own screen:
+
+- **Local decision model**: the endpoint (default `http://127.0.0.1:8787`,
+  PwrSuiteLab's Clef runtime), the model id (default `clef-flash`, the only id
+  that runtime accepts), an optional API key sent as a bearer token, a
+  connection test that confirms `GET /v1/models` lists the model and reads
+  `/health` for load, and links to Cloudflare's Clef as the suggested model.
+- **TypeSafe Jev**: the API key, the model id (default `jev-latest`), a
+  connection test that asks one yes/no question, and links to the TypeSafe
+  console and docs.
+
+Camera frames go only to the local decision model, and the endpoint must be an
+address on this Mac: `localhost`, `127.0.0.0/8` or `::1`, with no path. The
+camera button appears only when the local decision model is chosen and the
+switch is on; Jev takes text only, so choosing it hides the button too. A
+session reads this when it starts, and main re-reads the
+setting before every frame, so turning cues off mid-session stops the next
+frame; the local API key is read once, when the camera turns on.
+
+The keys are stored in `[models.decision]` (`model`, `camera_cues`,
+`local_endpoint`, `local_model`, `jev_model`); the API keys are secrets, never
+config.
+
+### Frames and questions
+
+Main sends 336-pixel JPEG frames to the local decision model's
+`/v1/systemone`, as data URLs in `images`: Clef's extension to the System One
+request, which takes up to four inline images. Each request is a burst of the
+latest four frames, 100ms apart, oldest first (see
+[Head movement](#head-movement)). The questions are short
+demo-style ones for gestures, boolean
+presence and vibe. Gestures include pointing, OK, stop, thumbs-up, double
+thumbs-up, thumbs-down, facepalm and none. Vibe includes neutral, exasperated,
+frustrated, yelling and talking. All 15 returned scores
+are shown in the camera dock at wide panel widths. The state is the demo’s compact
+“A live webcam frame from a laptop.”, with no instruction to favor neutral; a
+burst says how many frames it holds and how far apart. One request
+runs at a time, at up to two requests per second. System One responses carry no
+timing, so the latency the dock shows is main's round trip. A request the
+server refuses (HTTP 4xx other than 408 or 429, such as a model id it does not
+serve) stops camera cues with the server's reason, since every later frame
+would be refused the same way. Camera permissions and frame
+requests require the owning, established voice session and a separate camera
+opt-in. Frames and decisions remain in memory; this integration adds no
+PwrAgent SQLite writes or image files.
+
+The local preview shows "warming up" until the first valid decision. That
+request has a five-minute deadline and waits for one response at a time,
+retrying connection failures and temporary HTTP 429/5xx responses after a
+one-second pause. Opt-out, voice stop and backend closure abort both the
+request and retry pause immediately. Intentional cancellation resolves without
+a Clef-unavailable error. Main logs first-decision waiting/completion, real
+failures, cancellations, and context RPC acknowledgments; it never logs frames
+or raw Clef responses. After the first decision, ordinary
+inference retains its eight-second deadline. After that, a Clef failure skips
+the frame, not the camera. Clef serializes requests, so a warm model that
+misses the deadline is usually serving another client, such as a benchmark
+(**cue model busy**); one that refuses the connection may be restarting
+(**cue model offline**). The preview stays up with that caption in place of
+the stale reading, the skipped frame resets continuity so it never completes a
+gesture or counts as absence, and the next frame waits 2s, doubling to 16s,
+because an abandoned request still runs to completion inside Clef. The first
+result after a skip resumes normal sampling. After a missed deadline, the
+next frame first asks the PwrSuiteLab Clef runtime's `GET /health` for
+`requests_processing`, which it answers without the model lock and which counts
+the abandoned request. While that is above zero no frame is sent; the dock
+reads **busy · N in flight** and asks again each second. A server without the
+route falls back to the backoff. Responses to frames older than ten seconds are
+discarded and reset continuity; model-loading time cannot count as absence.
+
+The filter requires presence confidence of at least 80% and reaction
+confidence of at least 70%, three consecutive samples spanning 1.5 seconds,
+and an eight-second cooldown between reaction changes. Repeated cues are
+suppressed after the first sustained cue, including initial neutral context.
+Uncertain presence, a visible return, or a ten-second sampling
+gap resets the absence countdown. Ordinary gestures require 80% confidence
+and three samples spanning 1.5 seconds; stop and thumbs-down require 85% and
+two consecutive frames spanning 500ms, bypassing ordinary cue cooldowns.
+Gestures require confident presence, and stale frames never establish a cue.
+Thirty seconds of confident absence ends
+voice, leaving coding turns running.
+
+### Head movement
+
+A still cannot show a nod, so the renderer keeps the camera's latest four
+frames, drawn every 100ms into a ring of canvases and encoded only when a
+request takes them. A burst of two or more frames is also asked
+`Head movement across the frames?`: nodding (yes), shaking (no), or still. A
+single frame (the first request, before the ring fills) is never asked, and
+its dock row reads "—". Nodding sends **head_nod**, which tells the voice the
+operator agreed or wants it to go on and approves no action; shaking sends
+**head_shake**, which asks the voice to pause the current direction and ask a
+short clarifying question, and cancels no running work.
+
+The head has its own debounce, cooldown and repeat record, separate from the
+hands, so a nod never makes a held stop look new. A burst already spans the
+motion, so two consecutive bursts over 500ms are enough. A shake is urgent like
+stop and thumbs-down: 85% confidence, no eight-second cooldown, and a held
+shake holds the vibe cues. A nod needs 80% and waits out the cooldown. When a
+hand gesture and a head cue fire on the same burst the hand goes first, and the
+head track is not advanced that burst, so the nod follows on the next one
+instead of being recorded as sent. A repeated nod or shake goes through the
+same conversation check as a repeated gesture.
+
+The burst costs rate, not accuracy on the other questions. Measured against
+PwrSuiteLab's `clef-flash` System One route on 2026-10-04, warmed up, 20
+requests each:
+
+| Images | Three questions | With the head question |
+|---|---|---|
+| 1 | 487ms | 608ms (1.64/s) |
+| 2 | 531ms | 601ms (1.66/s) |
+| 3 | 672ms | 692ms (1.44/s) |
+| 4 | 685ms | 811ms (1.23/s) |
+
+Each image adds about 90 prompt tokens and the head question about 100. Before
+the burst a single frame ran at about 2.05 per second; four frames run at 1.23.
+Identical frames read as still at 0.92 to 0.98, and synthetic pans of a still
+image also read as still, so the question does not invent motion. No recorded
+nod or shake has been run through it yet: the thresholds are the gesture
+thresholds, untuned, and true-positive accuracy needs a live check with the
+camera dock open.
+
+### Repeated gestures and the conversation
+
+A cue the voice has already answered is noise. If the operator holds a stop
+after the voice says "Okay, pausing.", or makes it again, the voice gains
+nothing from a second stop. A stop after the voice changes course is new
+feedback. Telling the two apart takes the conversation, so the decision step
+reads it.
+
+- **Deterministic gate (filter).** The filter remembers the last gesture it
+  sent and the number of lines the voice had finished saying at that moment.
+  Tool actions do not count. The same gesture, held or made
+  again, is not even considered until that count moves. Dropping the hand no
+  longer re-arms it. A confirmed away clears the record, so a gesture after
+  the operator returns is new. Ordinary gestures keep their eight-second
+  cooldown, and the cooldown applies before Clef is asked.
+- **Conversation check (Clef).** Once the voice has finished a line since,
+  the controller asks Clef one yes/no question about the conversation since
+  the latest camera cue. The question asks whether the voice said anything
+  beyond acknowledging the cue. A yes (probability of 0.5 or more) sends the
+  gesture again. A no records the current count, so the same acknowledgment
+  is never judged twice. Asking costs at most one check per voice line, never
+  one per frame. If Clef is busy, offline or unavailable in the window, the
+  repeat is held, because the noise is what the check prevents. An
+  unanswered check waits two seconds, or as long as main asks while Clef is
+  contended, before it is asked again. The check is an extra request on top
+  of the frames, so main asks `/health` before every check and skips it while
+  any decision is in flight. A check that misses its deadline also makes the
+  next frame ask `/health` first.
+
+The check's `state` is a bounded excerpt of the last 90 seconds, at most 12
+rows. It holds operator and voice lines, voice tool actions, and the cues
+handed to the voice (failed ones excluded). Each row has a negative relative
+timestamp, oldest first:
+
+```text
+Voice conversation, oldest first, in seconds before now:
+-37s operator: Make every cloud in the scene pink.
+-30s voice: Sure, I'll turn every cloud pink and soften the edges.
+-11s camera cue: stop (delivered)
+-9s voice: Okay, pausing.
+```
+
+Rows carry their start time in memory only, for this excerpt. Each line's
+whitespace is collapsed, so spoken text cannot start a row of its own, and
+each line is clipped to 240 characters. Main revalidates the excerpt's shape
+and never logs it. The excerpt is built on demand and never stored.
+
+The check is its own request, never part of a frame's request. Clef decides
+all of a request's questions jointly, and a transcript in the frame's `state`
+moved the frame's own answers. On a photo with no person in it, adding a
+conversation that mentioned a stop cue raised "stop" from 0.21 to 0.50 and
+"present" from 0.42 to 0.71. Rewording the frame questions, or leaving the
+word "stop" out of the excerpt, still left "stop" at 0.44 to 0.53. The check
+is text only, with no `images`. Every camera request body comes from
+`cameraDecisionRequest` in `clef-camera.ts`. A refusal (a 4xx other than 408
+or 429) stops camera cues, as it does for a frame. A timeout or an
+unreachable model holds the repeat.
+
+The question's wording was chosen against ten probe conversations. It answered
+all ten correctly, both alongside a blank image and text only through
+`/v1/systemone`. The text-only scores:
+
+| Conversation after the cue | Moved on |
+|---|---|
+| nothing | 0.06 |
+| "Okay, pausing." | 0.04 |
+| "Oops, I'll stop." | 0.08 |
+| "Okay, stopping. What would you like instead?" | 0.33 |
+| "Paused. Let me know when you want me to continue." | 0.03 |
+| substantive line spoken before the cue, acknowledgment after | 0.04 |
+| ack, then "deleting all the whipped cream off every apple pie instead" | 0.96 |
+| the new plan alone | 0.95 |
+| ack, then resuming the old plan | 0.88 |
+| ack, then answering a new operator question | 0.76 |
+
+A voice tool action after the acknowledgment scored 0.13 to 0.46 across three
+phrasings (measured with the blank image), so an action alone does not re-arm a gesture. That is
+defensible: a `stop_turn` right after a stop cue is the voice acting on it.
+Actions therefore do not open the gate. They appear in the excerpt only as
+context, and only something the voice says re-arms the gesture.
+
+The first wording tried ("did the voice say something new?") scored the ack
+plus a question at 0.94. The closest bare acknowledgment is still the ack plus
+a question, at 0.33. A voice answering an unrelated new question counts as new
+feedback, which errs toward sending the gesture.
+
+Latency, measured against the lab's clef-flash on an M5 Max with an idle GPU
+and 20 runs per row. The joint rows went through the old `/decide` route,
+whose `latency_ms` was model time. The System One rows are round trips.
+
+| Request | Input tokens | p50 | p95 | Decisions/s |
+|---|---|---|---|---|
+| Frame, plain `state` (unchanged), `/decide` model time | 478 | 446 ms | 467 ms | 2.2 |
+| Frame + 4-row conversation, joint (rejected) | 657 | 613 ms | 633 ms | 1.6 |
+| Frame + 12-row conversation, joint (rejected) | 947 | 853 ms | 872 ms | 1.2 |
+| Frame, plain `state`, `/v1/systemone` round trip | 478 | 445 ms | 538 ms | 2.2 |
+| Repeat check, text only, 4 rows | 237 | 207 ms | 223 ms | on demand |
+| Repeat check, text only, 12 long rows | 526 | 425 ms | 481 ms | on demand |
+
+Frame sampling keeps its full rate. Only a repeat that has passed the gate
+waits one check, about 0.2 to 0.5 seconds, before it is sent.
+
+### Presence hysteresis
+
+The filter remembers what the voice was last told about presence, across
+skipped frames and continuity resets. Once away is reported, it is not
+reported again while the operator stays gone. A glimpse too short to count as
+a return does not reset it.
+
+Reporting away takes three confident absent samples spanning 1.5 seconds.
+Reporting a return takes four confident present samples spanning three
+seconds. The return's frames also build the next vibe, so the return cue goes
+out as soon as the return is confirmed. An operator half out of frame,
+alternating 1.5-second runs, gets one away cue rather than one per run.
+
+The 30-second end counts only sustained absence, as before. Any confident
+sight of the operator, or an uncertain frame, restarts it, including before a
+return is confirmed.
+
+Camera observations are pushed automatically by the voice controller; there
+is no model tool to poll for them. Only an allowlisted, debounced text cue
+reaches GPT-Live, through Codex
+`thread/realtime/appendText` with role `developer`. The prompt treats cues as
+uncertain visible observations: exasperation asks for reconsideration,
+enthusiasm develops the current direction, boredom asks for brevity or a
+question, and absence informs the model the operator has left. Stop/no or
+thumbs-down requests a pause and spoken clarification before another action.
+The payload is explicitly labeled as uncertain camera context, never invented
+spoken user text. This context RPC does not guarantee immediate audio
+barge-in or cancellation of an already dispatched action. A camera cue cannot
+approve or cancel
+work. Before the first decision, a Clef failure stops camera capture and shows
+a dismissible error while voice remains available. Facial-expression accuracy and the model's spoken
+adaptation still need live evaluation by the operator.

@@ -97,6 +97,25 @@ import {
 import { PendingThreadRow } from "./SubthreadDraftRow";
 import type { SubthreadLaunchpadDraft } from "../../lib/useThreadNavigation";
 
+/**
+ * Scroll a project's section to the top of the lens, expanding it first.
+ *
+ * Each reveal waits for a selection, because its caller selects and reveals
+ * in one gesture and the selection can land a render later. A launchpad
+ * reveal (⌘K's project jump, a selected launchpad) waits for that project's
+ * launchpad. A reveal from the thread header's project name names the thread
+ * it was clicked from instead: it keeps that row in view, and flashes the
+ * project's summary, because that click can also switch the lens and the
+ * eye needs somewhere to land.
+ */
+export type ProjectRevealRequest = {
+  key: string;
+  selectedThreadKey?: string;
+};
+
+/** How long a header reveal outlines the project's summary. */
+const PROJECT_REVEAL_FLASH_MS = 1200;
+
 type DirectoriesListProps = {
   presentationOrder?: NavigationPresentationOrder;
   /**
@@ -134,7 +153,7 @@ type DirectoriesListProps = {
   actionsMenuThreadKey?: string;
   directories: NavigationDirectorySummary[];
   /** Expand and scroll to a project. Focus stays where it is: the launchpad's composer takes it. */
-  projectReveal?: { key: string };
+  projectReveal?: ProjectRevealRequest;
   onProjectRevealComplete?: () => void;
   revealSelectedThreadRequest?: number;
   selectedItemKey?: string;
@@ -931,7 +950,16 @@ export function DirectoriesList(props: DirectoriesListProps) {
     threadsByKey,
   );
   const projectHeaders = useRef(new Map<string, HTMLButtonElement>());
-  const handledProjectReveal = useRef<{ key: string } | undefined>(undefined);
+  const handledProjectReveal = useRef<ProjectRevealRequest | undefined>(undefined);
+  const [flashedProjectKey, setFlashedProjectKey] = useState<string>();
+  useEffect(() => {
+    if (flashedProjectKey === undefined) return;
+    const timeout = window.setTimeout(
+      () => setFlashedProjectKey(undefined),
+      PROJECT_REVEAL_FLASH_MS,
+    );
+    return () => window.clearTimeout(timeout);
+  }, [flashedProjectKey]);
 
   const pinnedDirectories = useMemo(
     () =>
@@ -996,7 +1024,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
   useEffect(() => {
     const request = props.projectReveal;
     if (!request || handledProjectReveal.current === request
-      || props.selectedItemKey !== buildLaunchpadSelectionKey(request.key)) return;
+      || props.selectedItemKey !== (
+        request.selectedThreadKey ?? buildLaunchpadSelectionKey(request.key)
+      )) return;
     const header = projectHeaders.current.get(request.key);
     if (!header) return;
     if (expandedByKey[request.key] !== true) {
@@ -1010,7 +1040,19 @@ export function DirectoriesList(props: DirectoriesListProps) {
       // The header is sticky: its visual top may already be at the viewport
       // edge while the project's threads are scrolled out above it. Reveal the
       // section's normal-flow start.
-      header.closest(".directory-row")?.scrollIntoView?.({ block: "start" });
+      const section = header.closest(".directory-row");
+      section?.scrollIntoView?.({ block: "start" });
+      if (request.selectedThreadKey) {
+        // Then bring the thread the reveal came from to the nearest edge.
+        // The header is sticky, so it stays on screen wherever the section
+        // scrolls to; when the project is too long for both, the row wins.
+        // The summary carries `.thread-row.is-selected` too, when the
+        // project itself is selected, so it is excluded by name.
+        section
+          ?.querySelector(".thread-row.is-selected:not(.directory-row__summary)")
+          ?.scrollIntoView?.({ block: "nearest" });
+        setFlashedProjectKey(request.key);
+      }
       handledProjectReveal.current = request;
       props.onProjectRevealComplete?.();
     });
@@ -1955,6 +1997,8 @@ export function DirectoriesList(props: DirectoriesListProps) {
             aria-pressed={selectedDirectory}
             className={`thread-row thread-row--compact directory-row__summary${
               selectedDirectory ? " is-selected" : ""
+            }${
+              flashedProjectKey === directory.key ? " is-revealed" : ""
             }${
               directoryUnconfigured ? " directory-row__summary--unconfigured" : ""
             }`}

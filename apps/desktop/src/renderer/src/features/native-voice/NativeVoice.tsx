@@ -11,6 +11,7 @@ import {
   type NativeVoiceController,
   type VoiceView,
 } from "./native-voice-controller";
+import { CameraGlyph, cameraCueLabel } from "./VoiceCameraButton";
 import "./native-voice.css";
 
 export function isNativeVoiceApi(api: DesktopApi | undefined): api is DesktopApi & NativeVoiceApi {
@@ -49,11 +50,11 @@ export function useNativeVoiceNotices(
       previous = view.status;
       // Director voice keeps its panel open after the session, and the
       // panel says how it ended; the notice is for thread voice's bar.
-      if (ended && view.endedAfterReply && view.mode !== "director") {
+      if (ended && (view.endedAfterReply || view.endedAfterAway) && view.mode !== "director") {
         showNotice({
           id: NATIVE_VOICE_ENDED_NOTICE_ID,
           title: "Live voice",
-          message: "Voice ended after its reply because the microphone was muted.",
+          message: view.endedAfterAway ? "Voice ended because the camera detected 30 seconds away." : "Voice ended after its reply because the microphone was muted.",
           tone: "neutral",
         });
       } else if (view.status === "error") {
@@ -206,26 +207,50 @@ function micHint(muted: boolean): string {
     : `Mute. The reply keeps playing, then voice ends ${MUTED_IDLE_END_SECONDS} seconds after it finishes.`;
 }
 
-/** Transcript rows and tool receipts, in the order they happened. */
-export function VoiceFeed({ view, limit }: { view: VoiceView; limit?: number }) {
+export const CUE_DELIVERY_LABEL = { pending: "sending…", acknowledged: "sent", failed: "not delivered" } as const;
+
+/**
+ * Transcript rows, tool receipts, and sent camera cues, in the order they
+ * happened. A cue is a moment like a tool call, so it reads back in place:
+ * "did it see my stop?" is answered by the transcript. `assistant` names
+ * the speaker: the director panel says Director, thread voice says Voice.
+ */
+export function VoiceFeed({ view, limit, scrollParent = false, assistant = "Voice" }: {
+  view: VoiceView;
+  limit?: number;
+  scrollParent?: boolean;
+  assistant?: string;
+}) {
   const rows = useMemo(() => {
     const merged = [
       ...view.transcript.map((row) => ({ kind: "say" as const, ...row })),
       ...view.actions.map((row) => ({ kind: "action" as const, ...row })),
+      ...(view.cameraCues ?? []).map((row) => ({ kind: "cue" as const, ...row })),
     ].sort((left, right) => left.seq - right.seq);
     return limit ? merged.slice(-limit) : merged;
-  }, [view.transcript, view.actions, limit]);
+  }, [view.transcript, view.actions, view.cameraCues, limit]);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const node = ref.current;
-    if (node) node.scrollTop = node.scrollHeight;
-  }, [rows]);
+    if (!node) return;
+    if (scrollParent && node.parentElement) {
+      const parent = node.parentElement;
+      parent.scrollTop = Math.max(0, node.offsetTop - parent.offsetTop + node.offsetHeight - parent.clientHeight);
+    } else node.scrollTop = node.scrollHeight;
+  }, [rows, scrollParent]);
   if (!rows.length) return null;
   return (
     <div className="native-voice-feed" ref={ref} role="log" aria-label="Voice transcript">
       {rows.map((row) => row.kind === "say" ? (
-        <p key={`say-${row.seq}`} className="native-voice-feed__say">
-          <strong>{row.role === "user" ? "You" : "Voice"}: </strong>{row.text}
+        <p key={`say-${row.seq}`} className={row.role === "user" ? "native-voice-feed__say" : "native-voice-feed__say native-voice-feed__say--assistant"}>
+          <strong>{row.role === "user" ? "You" : assistant}: </strong>{row.text}
+        </p>
+      ) : row.kind === "cue" ? (
+        <p key={`cue-${row.seq}`} className={`native-voice-feed__cue native-voice-feed__cue--${row.delivery}`}>
+          <CameraGlyph />
+          <span className="native-voice-feed__cue-kind">camera</span>
+          <span className="native-voice-feed__cue-name">{cameraCueLabel(row.cue)}</span>
+          <span className="native-voice-feed__cue-outcome">{CUE_DELIVERY_LABEL[row.delivery]}</span>
         </p>
       ) : (
         <p key={`action-${row.seq}`} className={row.ok ? "native-voice-feed__action" : "native-voice-feed__action native-voice-feed__action--failed"}>
@@ -244,7 +269,12 @@ export function VoiceFeed({ view, limit }: { view: VoiceView; limit?: number }) 
  * button, never a nested form: Enter is consumed here so it cannot submit
  * the coding draft or a configured review.
  */
-export function VoiceTextInput({ controller }: { controller: NativeVoiceController }) {
+export function VoiceTextInput({ controller, recipient = "voice", sendLabel = "Send to voice" }: {
+  controller: NativeVoiceController;
+  /** Who the message goes to, in the field's name and placeholder. */
+  recipient?: string;
+  sendLabel?: string;
+}) {
   const [text, setText] = useState("");
   const sendText = () => {
     if (text.trim()) { void controller.text(text.trim()); setText(""); }
@@ -257,8 +287,8 @@ export function VoiceTextInput({ controller }: { controller: NativeVoiceControll
         if (!event.nativeEvent.isComposing) sendText();
       }
     }}>
-      <input className="native-voice__input" aria-label="Message voice" placeholder="Message voice…" value={text} maxLength={8000} onChange={(event) => setText(event.target.value)} />
-      <button className="button button--ghost" type="button" disabled={!text.trim()} onClick={sendText}>Send to voice</button>
+      <input className="native-voice__input" aria-label={`Message ${recipient}`} placeholder={`Message ${recipient}…`} value={text} maxLength={8000} onChange={(event) => setText(event.target.value)} />
+      <button className="button button--ghost" type="button" disabled={!text.trim()} onClick={sendText}>{sendLabel}</button>
     </div>
   );
 }
