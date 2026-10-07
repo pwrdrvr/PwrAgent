@@ -1,56 +1,92 @@
 import {
+  memo,
   useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
-  type MutableRefObject,
-  type ReactNode,
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
 } from "react";
+import {
+  DESKTOP_LOGS_CONTEXT_LINE_OPTIONS,
+  type DesktopLogsContextLines,
+  type DesktopLogsStoredLevel,
+} from "@pwragent/shared";
 import type { AppLogEntry, AppLogSnapshot } from "../../../../shared/app-metadata";
-import { CheckIcon, CopyIcon, FolderIcon } from "../../icons";
-import { copyText } from "../../lib/copy-text";
+import { buildTroubleshootingDiagnosticsInfo } from "../../../../shared/local-diagnostics-info";
+import { Select, type SelectOption } from "../../components/Select";
+import {
+  BookmarkIcon,
+  CheckIcon,
+  ChevronDownIcon,
+  ChevronUpIcon,
+  CloseIcon,
+  CopyIcon,
+  FolderIcon,
+  SearchIcon,
+  WrapIcon,
+} from "../../icons";
+import { copyText, copyTextAsCodeBlock } from "../../lib/copy-text";
 import { useDesktopApi } from "../../lib/desktop-api";
+import {
+  buildInstanceReferenceMarkdown,
+  listInstanceReferences,
+} from "../../lib/instance-references";
 import { BrandLockup } from "../chrome/BrandLockup";
+import {
+  addLogSearchToken,
+  appendRenderedLogEntry,
+  buildLogCopyText,
+  buildLogDisplayRows,
+  countLogLevels,
+  createRenderedLogEntryBuffer,
+  displayedLogEntries,
+  extractTypedLogSearchToken,
+  formatLogCount,
+  hasLogSearchCriteria,
+  highlightLogLineParts,
+  logSearchTokenLabel,
+  normalizeLogLevel,
+  orderedRenderedLogEntries,
+  selectedLogEntries,
+  shouldShowLogEntry,
+  tokenizedLogEntry,
+  MAX_RENDERED_LOG_ENTRIES,
+  type LogLevelFilter,
+  type LogLineSelection,
+  type LogMark,
+  type LogSearch,
+  type LogSearchToken,
+  type LogSearchTokenKind,
+} from "./log-view-model";
+import { useLogsViewerPreferences } from "./useLogsViewerPreferences";
+
+export {
+  MAX_RENDERED_LOG_ENTRIES,
+  appendRenderedLogEntry,
+  createRenderedLogEntryBuffer,
+  orderedRenderedLogEntries,
+  tokenizeLogLine,
+} from "./log-view-model";
 
 const BOTTOM_THRESHOLD_PX = 32;
-export const MAX_RENDERED_LOG_ENTRIES = 5000;
-const DEFAULT_SELECTED_LOG_LEVELS: LogLevelFilter[] = ["error", "warn", "info"];
-const LOG_LEVEL_FILTERS: Array<{ value: LogLevelFilter; label: string }> = [
+const COPIED_BUTTON_MS = 2000;
+const COPIED_FLASH_MS = 900;
+const STORED_LEVEL_FILTERS: Array<{ value: DesktopLogsStoredLevel; label: string }> = [
   { value: "error", label: "Error" },
   { value: "warn", label: "Warning" },
   { value: "info", label: "Info" },
-  { value: "debug", label: "Debug" },
 ];
-
-type RenderedLogEntryBuffer = {
-  slots: Array<AppLogEntry | undefined>;
-  oldestEntryIndex: number;
-  entryCount: number;
-};
-
-type LogLinePart = {
-  text: string;
-  matchIndex?: number;
-  tone?: LogLinePartTone;
-};
-
-type RenderedLogLine = {
-  level?: LogLevel;
-  lineNumber: number;
-  parts: LogLinePart[];
-};
-
-type LogLevel = "error" | "warn" | "info" | "debug" | "trace" | "verbose";
-type LogLevelFilter = "error" | "warn" | "info" | "debug";
-
-type LogLinePartTone =
-  | "timestamp"
-  | "level-debug"
-  | "level-error"
-  | "level-info"
-  | "level-warn"
-  | "scope";
+const CONTEXT_OPTIONS: SelectOption<string>[] = DESKTOP_LOGS_CONTEXT_LINE_OPTIONS.map(
+  (lines) => ({
+    value: String(lines),
+    label: lines === 0 ? "No context" : `Context ±${lines}`,
+  }),
+);
+const EMPTY_SEARCH: LogSearch = { text: "", tokens: [] };
 
 // The log file path is also injected at window-creation time via the preload
 // (`window.__pwragentLogFilePath`). The snapshot IPC normally supplies it, but
@@ -62,34 +98,59 @@ function readBootstrapLogFilePath(): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
+type PausedState = {
+  newLines: number;
+  newErrors: number;
+  since?: number;
+};
+
+const NOT_PAUSED: PausedState = { newLines: 0, newErrors: 0 };
+
 export function LogsWindow() {
   const desktopApi = useDesktopApi();
+  const [preferences, updatePreferences] = useLogsViewerPreferences(desktopApi);
   const logViewportRef = useRef<HTMLDivElement | null>(null);
-  const activeMatchRef = useRef<HTMLElement | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
   const followingRef = useRef(true);
   const confirmedDebugCollectionRef = useRef(false);
   const desiredDebugCollectionRef = useRef(false);
   const debugCollectionSyncInFlightRef = useRef(false);
   const syncDebugCollectionRef = useRef<() => void>(() => undefined);
   const entryBufferRef = useRef(createRenderedLogEntryBuffer());
-  const copyResetTimerRef = useRef<number | undefined>(undefined);
-  const lineCopyResetTimerRef = useRef<number | undefined>(undefined);
+  const pathCopyResetTimerRef = useRef<number | undefined>(undefined);
+  const copyButtonResetTimerRef = useRef<number | undefined>(undefined);
+  const flashResetTimerRef = useRef<number | undefined>(undefined);
+  const draggingSelectionRef = useRef(false);
+  const scrollToSequenceRef = useRef<number | undefined>(undefined);
   const [renderVersion, setRenderVersion] = useState(0);
   const [truncated, setTruncated] = useState(false);
   const [logFilePath, setLogFilePath] = useState<string | undefined>(
     readBootstrapLogFilePath,
   );
   const [copiedLogFilePath, setCopiedLogFilePath] = useState(false);
-  const [copiedLineNumber, setCopiedLineNumber] = useState<number | undefined>();
   const [error, setError] = useState<string | undefined>();
   const [loading, setLoading] = useState(false);
-  const [query, setQuery] = useState("");
+  const [search, setSearch] = useState<LogSearch>(EMPTY_SEARCH);
   const [activeMatchIndex, setActiveMatchIndex] = useState(0);
-  const [following, setFollowing] = useState(true);
-  const [selectedLevels, setSelectedLevels] = useState<LogLevelFilter[]>(
-    DEFAULT_SELECTED_LOG_LEVELS,
+  const [expandedGaps, setExpandedGaps] = useState<ReadonlySet<string>>(
+    () => new Set(),
   );
+  const [following, setFollowing] = useState(true);
+  const [paused, setPaused] = useState<PausedState>(NOT_PAUSED);
+  const [debugSelected, setDebugSelected] = useState(false);
   const [debugCollectionEnabled, setDebugCollectionEnabled] = useState(false);
+  const [selection, setSelection] = useState<LogLineSelection | undefined>();
+  const [mark, setMark] = useState<LogMark | undefined>();
+  const [copyState, setCopyState] = useState<"idle" | "copying" | "copied">("idle");
+  const [flashSequences, setFlashSequences] = useState<ReadonlySet<number>>(
+    () => new Set(),
+  );
+  const [statusMessage, setStatusMessage] = useState<string | undefined>();
+
+  const selectedLevels = useMemo<LogLevelFilter[]>(
+    () => [...preferences.levels, ...(debugSelected ? ["debug" as const] : [])],
+    [debugSelected, preferences.levels],
+  );
 
   const setFollowingMode = useCallback((value: boolean) => {
     followingRef.current = value;
@@ -149,11 +210,12 @@ export function LogsWindow() {
 
   useEffect(() => {
     return () => {
-      if (copyResetTimerRef.current) {
-        window.clearTimeout(copyResetTimerRef.current);
-      }
-      if (lineCopyResetTimerRef.current) {
-        window.clearTimeout(lineCopyResetTimerRef.current);
+      for (const timer of [
+        pathCopyResetTimerRef.current,
+        copyButtonResetTimerRef.current,
+        flashResetTimerRef.current,
+      ]) {
+        if (timer) window.clearTimeout(timer);
       }
     };
   }, []);
@@ -183,12 +245,20 @@ export function LogsWindow() {
     followingRef.current = following;
   }, [following]);
 
+  // While paused the view holds still. New entries are counted, not drawn;
+  // resuming reads the main process's buffer again, which still has them.
   useEffect(() => {
     if (!desktopApi?.onAppLogEntry) {
       return;
     }
     return desktopApi.onAppLogEntry((entry) => {
       if (!followingRef.current) {
+        setPaused((current) => ({
+          newLines: current.newLines + 1,
+          newErrors:
+            current.newErrors + (normalizeLogLevel(entry.level) === "error" ? 1 : 0),
+          since: current.since ?? entry.timestamp,
+        }));
         return;
       }
       const droppedEntry = appendRenderedLogEntry(entryBufferRef.current, entry);
@@ -199,11 +269,30 @@ export function LogsWindow() {
     });
   }, [desktopApi]);
 
+  const pause = useCallback(() => {
+    if (followingRef.current) {
+      setPaused(NOT_PAUSED);
+    }
+    setFollowingMode(false);
+  }, [setFollowingMode]);
+
+  const resume = useCallback(() => {
+    setFollowingMode(true);
+    setPaused(NOT_PAUSED);
+    const element = logViewportRef.current;
+    if (element) {
+      element.scrollTop = element.scrollHeight;
+    }
+    void loadSnapshot();
+  }, [loadSnapshot, setFollowingMode]);
+
+  // A text drag inside one line still pauses, so the live tail cannot move
+  // the text being selected. Line-number selection does not.
   useEffect(() => {
     const handleSelectionChange = (): void => {
       const viewport = logViewportRef.current;
-      if (viewport && selectionTouchesElement(viewport)) {
-        setFollowingMode(false);
+      if (viewport && textSelectionTouchesElement(viewport)) {
+        pause();
       }
     };
 
@@ -211,7 +300,51 @@ export function LogsWindow() {
     return () => {
       document.removeEventListener("selectionchange", handleSelectionChange);
     };
-  }, [setFollowingMode]);
+  }, [pause]);
+
+  const allEntries = useMemo(
+    () => orderedRenderedLogEntries(entryBufferRef.current),
+    // The buffer is mutated in place; renderVersion is the change signal.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [renderVersion],
+  );
+  const levelCounts = useMemo(() => countLogLevels(allEntries), [allEntries]);
+  const levelFilteredEntries = useMemo(
+    () => allEntries.filter((entry) => shouldShowLogEntry(entry, selectedLevels)),
+    [allEntries, selectedLevels],
+  );
+  const searching = hasLogSearchCriteria(search);
+  const display = useMemo(
+    () =>
+      buildLogDisplayRows({
+        entries: levelFilteredEntries,
+        search,
+        mode: preferences.searchMode,
+        contextLines: preferences.contextLines,
+        expandedGaps,
+        mark,
+      }),
+    [
+      expandedGaps,
+      levelFilteredEntries,
+      mark,
+      preferences.contextLines,
+      preferences.searchMode,
+      search,
+    ],
+  );
+  const matchCount = display.matchSequences.length;
+  const activeMatchSequence = display.matchSequences[activeMatchIndex];
+  const selectedEntries = useMemo(
+    () => selectedLogEntries(display.rows, selection),
+    [display.rows, selection],
+  );
+  const selectedSequences = useMemo(
+    () => new Set(selectedEntries.map((entry) => entry.sequence)),
+    [selectedEntries],
+  );
+  const lastSequence = allEntries.at(-1)?.sequence ?? 0;
+  const gutterDigits = Math.max(3, String(lastSequence).length);
 
   useEffect(() => {
     if (!following) {
@@ -222,107 +355,397 @@ export function LogsWindow() {
       return;
     }
     element.scrollTop = element.scrollHeight;
-  }, [following, renderVersion]);
-
-  const rendered = useMemo(() => {
-    const entries = orderedRenderedLogEntries(entryBufferRef.current);
-    const visibleEntries = entries.filter((entry) =>
-      shouldShowLogEntry(entry, selectedLevels),
-    );
-    return buildRenderedLogLines(
-      visibleEntries.map((entry) => entry.line).join("\n"),
-      query,
-    );
-  }, [query, renderVersion, selectedLevels]);
+  }, [following, renderVersion, preferences.wrap]);
 
   useEffect(() => {
     setActiveMatchIndex(0);
-  }, [query]);
+    setExpandedGaps(new Set());
+  }, [search, preferences.searchMode, preferences.contextLines]);
 
   useEffect(() => {
-    if (activeMatchIndex >= rendered.matchCount) {
-      setActiveMatchIndex(Math.max(0, rendered.matchCount - 1));
+    if (activeMatchIndex >= matchCount) {
+      setActiveMatchIndex(Math.max(0, matchCount - 1));
     }
-  }, [activeMatchIndex, rendered.matchCount]);
+  }, [activeMatchIndex, matchCount]);
+
+  const scrollSequenceIntoView = useCallback((sequence: number) => {
+    const row = logViewportRef.current?.querySelector<HTMLElement>(
+      `[data-log-sequence="${sequence}"]`,
+    );
+    row?.scrollIntoView?.({ block: "center", inline: "nearest" });
+  }, []);
 
   useEffect(() => {
-    activeMatchRef.current?.scrollIntoView({
-      block: "center",
-      inline: "nearest",
-    });
-  }, [activeMatchIndex]);
-
-  const jumpToEnd = useCallback(() => {
-    setFollowingMode(true);
-    const element = logViewportRef.current;
-    if (element) {
-      element.scrollTop = element.scrollHeight;
+    if (activeMatchSequence !== undefined && searching) {
+      scrollSequenceIntoView(activeMatchSequence);
     }
-    void loadSnapshot();
-  }, [loadSnapshot, setFollowingMode]);
+  }, [activeMatchSequence, scrollSequenceIntoView, searching]);
+
+  // After Esc clears the search, put the last active match back in view.
+  useEffect(() => {
+    const sequence = scrollToSequenceRef.current;
+    if (sequence === undefined || searching) return;
+    scrollToSequenceRef.current = undefined;
+    scrollSequenceIntoView(sequence);
+  }, [display.rows, scrollSequenceIntoView, searching]);
 
   const handleScroll = useCallback(() => {
     const element = logViewportRef.current;
     if (!element) {
       return;
     }
-    if (selectionTouchesElement(element)) {
-      setFollowingMode(false);
+    if (textSelectionTouchesElement(element)) {
+      pause();
       return;
     }
     const distanceFromBottom =
       element.scrollHeight - element.scrollTop - element.clientHeight;
-    const shouldFollow = distanceFromBottom <= BOTTOM_THRESHOLD_PX;
-    if (shouldFollow && !followingRef.current) {
-      setFollowingMode(true);
-      void loadSnapshot();
+    const atBottom = distanceFromBottom <= BOTTOM_THRESHOLD_PX;
+    if (atBottom && !followingRef.current) {
+      resume();
       return;
     }
-    setFollowingMode(shouldFollow);
-  }, [loadSnapshot, setFollowingMode]);
-
-  const pauseFollowingForInteraction = useCallback(() => {
-    setFollowingMode(false);
-  }, [setFollowingMode]);
+    if (!atBottom) {
+      pause();
+    }
+  }, [pause, resume]);
 
   const goToMatch = useCallback(
     (direction: -1 | 1) => {
-      if (rendered.matchCount === 0) {
+      if (matchCount === 0) {
         return;
       }
-      setFollowingMode(false);
+      pause();
       setActiveMatchIndex(
-        (current) =>
-          (current + direction + rendered.matchCount) % rendered.matchCount,
+        (current) => (current + direction + matchCount) % matchCount,
       );
     },
-    [rendered.matchCount, setFollowingMode],
+    [matchCount, pause],
   );
 
-  const handleSearchChange = useCallback((value: string) => {
-    setQuery(value);
-    if (value.trim()) {
-      setFollowingMode(false);
-    }
-  }, [setFollowingMode]);
+  const applySearch = useCallback(
+    (next: LogSearch) => {
+      setSearch(next);
+      if (hasLogSearchCriteria(next)) {
+        pause();
+      }
+    },
+    [pause],
+  );
 
-  const handleLogLevelToggle = useCallback(
-    (value: LogLevelFilter) => {
-      const nextLevels = selectedLevels.includes(value)
-        ? selectedLevels.filter((level) => level !== value)
-        : [...selectedLevels, value];
-      setSelectedLevels(nextLevels);
-
-      const nextDebugCollectionEnabled = nextLevels.includes("debug");
-      if (desiredDebugCollectionRef.current === nextDebugCollectionEnabled) {
+  const handleSearchInput = useCallback(
+    (value: string) => {
+      const typed = extractTypedLogSearchToken(value);
+      if (typed) {
+        applySearch({
+          text: typed.text,
+          tokens: addLogSearchToken(search.tokens, typed.token),
+        });
         return;
       }
-
-      desiredDebugCollectionRef.current = nextDebugCollectionEnabled;
-      syncDebugCollection();
+      applySearch({ ...search, text: value });
     },
-    [selectedLevels, syncDebugCollection],
+    [applySearch, search],
   );
+
+  const clearSearch = useCallback(() => {
+    scrollToSequenceRef.current = activeMatchSequence;
+    setSearch(EMPTY_SEARCH);
+  }, [activeMatchSequence]);
+
+  const removeSearchToken = useCallback(
+    (token: LogSearchToken) => {
+      applySearch({
+        ...search,
+        tokens: search.tokens.filter(
+          (existing) =>
+            existing.kind !== token.kind || existing.value !== token.value,
+        ),
+      });
+    },
+    [applySearch, search],
+  );
+
+  const handleSearchKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLInputElement>) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        goToMatch(event.shiftKey ? -1 : 1);
+      } else if (event.key === "Escape") {
+        if (searching) {
+          event.preventDefault();
+          clearSearch();
+        } else {
+          event.currentTarget.blur();
+        }
+      } else if (
+        event.key === "Backspace"
+        && event.currentTarget.value === ""
+        && search.tokens.length > 0
+      ) {
+        event.preventDefault();
+        const last = search.tokens.at(-1);
+        if (last) removeSearchToken(last);
+      }
+    },
+    [clearSearch, goToMatch, removeSearchToken, search.tokens, searching],
+  );
+
+  const handleLevelToggle = useCallback(
+    (value: DesktopLogsStoredLevel) => {
+      const nextLevels = preferences.levels.includes(value)
+        ? preferences.levels.filter((level) => level !== value)
+        : [...preferences.levels, value];
+      updatePreferences({ levels: nextLevels });
+    },
+    [preferences.levels, updatePreferences],
+  );
+
+  const handleDebugToggle = useCallback(() => {
+    const nextDebugSelected = !debugSelected;
+    setDebugSelected(nextDebugSelected);
+    if (desiredDebugCollectionRef.current === nextDebugSelected) {
+      return;
+    }
+    desiredDebugCollectionRef.current = nextDebugSelected;
+    syncDebugCollection();
+  }, [debugSelected, syncDebugCollection]);
+
+  // -------------------------------------------------------------------------
+  // Selection
+  // -------------------------------------------------------------------------
+
+  const changeSelection = useCallback((next: LogLineSelection | undefined) => {
+    setSelection(next);
+    setStatusMessage(undefined);
+    setCopyState("idle");
+  }, []);
+
+  const selectSequence = useCallback(
+    (sequence: number, extend: boolean) => {
+      const newest = displayedLogEntries(display.rows).at(-1)?.sequence;
+      if (extend && selection) {
+        changeSelection({
+          anchor: selection.anchor,
+          focus: sequence,
+          followsTail: sequence === newest,
+          sinceMark: false,
+        });
+        return;
+      }
+      changeSelection({
+        anchor: sequence,
+        focus: sequence,
+        followsTail: false,
+        sinceMark: false,
+      });
+    },
+    [changeSelection, display.rows, selection],
+  );
+
+  const selectAllShown = useCallback(() => {
+    const shown = displayedLogEntries(display.rows);
+    const first = shown[0];
+    const last = shown.at(-1);
+    if (!first || !last) return;
+    changeSelection({
+      anchor: first.sequence,
+      focus: last.sequence,
+      followsTail: false,
+      sinceMark: false,
+    });
+  }, [changeSelection, display.rows]);
+
+  const selectSinceMark = useCallback(() => {
+    if (!mark) return;
+    const shown = displayedLogEntries(display.rows).filter(
+      (entry) => entry.sequence > mark.afterSequence,
+    );
+    const first = shown[0];
+    const last = shown.at(-1);
+    if (!first || !last) return;
+    changeSelection({
+      anchor: first.sequence,
+      focus: last.sequence,
+      followsTail: true,
+      sinceMark: true,
+    });
+  }, [changeSelection, display.rows, mark]);
+
+  useEffect(() => {
+    const endDrag = (): void => {
+      draggingSelectionRef.current = false;
+    };
+    window.addEventListener("pointerup", endDrag);
+    window.addEventListener("pointercancel", endDrag);
+    return () => {
+      window.removeEventListener("pointerup", endDrag);
+      window.removeEventListener("pointercancel", endDrag);
+    };
+  }, []);
+
+  const handleLinesPointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (event.button !== 0) return;
+      const sequence = gutterSequence(event.target);
+      if (sequence === undefined) return;
+      event.preventDefault();
+      window.getSelection()?.removeAllRanges();
+      draggingSelectionRef.current = true;
+      selectSequence(sequence, event.shiftKey);
+    },
+    [selectSequence],
+  );
+
+  const handleLinesPointerOver = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (!draggingSelectionRef.current || !selection) return;
+      const sequence = gutterSequence(event.target);
+      if (sequence === undefined || sequence === selection.focus) return;
+      selectSequence(sequence, true);
+    },
+    [selectSequence, selection],
+  );
+
+  const handleLinesClick = useCallback(
+    (event: ReactMouseEvent<HTMLDivElement>) => {
+      const target = event.target instanceof Element
+        ? event.target.closest<HTMLElement>("[data-log-token-kind]")
+        : null;
+      if (!target) return;
+      const textSelection = window.getSelection();
+      if (textSelection && !textSelection.isCollapsed) return;
+      const kind = target.dataset.logTokenKind as LogSearchTokenKind;
+      const value = target.dataset.logTokenValue;
+      if (!value) return;
+      applySearch({
+        ...search,
+        tokens: addLogSearchToken(search.tokens, { kind, value }),
+      });
+    },
+    [applySearch, search],
+  );
+
+  // -------------------------------------------------------------------------
+  // Copy
+  // -------------------------------------------------------------------------
+
+  const readDiagnostics = useCallback(async (): Promise<{
+    diagnostics?: string;
+    instanceReference?: string;
+  }> => {
+    const metadata = await desktopApi?.readAppMetadata?.().catch(() => undefined);
+    if (!metadata) return {};
+    const health = await desktopApi
+      ?.readFederationHealth?.({})
+      .then((response) => response.health)
+      .catch(() => undefined);
+    const local = listInstanceReferences(health).find(
+      (reference) => reference.instanceId === health?.instanceId,
+    );
+    return {
+      diagnostics: buildTroubleshootingDiagnosticsInfo(metadata),
+      ...(local ? { instanceReference: buildInstanceReferenceMarkdown(local) } : {}),
+    };
+  }, [desktopApi]);
+
+  const copySelection = useCallback(async () => {
+    const entries = selectedEntries;
+    if (entries.length === 0 || copyState === "copying") return;
+    setCopyState("copying");
+    const wantDiagnostics = preferences.includeDiagnostics;
+    const diagnostics = wantDiagnostics ? await readDiagnostics() : {};
+    const text = buildLogCopyText({
+      entries,
+      totalLoaded: allEntries.length,
+      levels: selectedLevels,
+      search,
+      mode: preferences.searchMode,
+      contextLines: preferences.contextLines,
+      ...diagnostics,
+    });
+    try {
+      await copyTextAsCodeBlock(text, desktopApi);
+    } catch (copyError: unknown) {
+      console.error("Failed to copy log lines", copyError);
+      setCopyState("idle");
+      setStatusMessage("Could not copy to the clipboard");
+      return;
+    }
+    const lineCount = entries.length === 1
+      ? "1 line"
+      : `${formatLogCount(entries.length)} lines`;
+    setStatusMessage(
+      !wantDiagnostics
+        ? `Copied ${lineCount}`
+        : diagnostics.diagnostics
+          ? `Copied ${lineCount} with diagnostics`
+          : `Copied ${lineCount}; diagnostics unavailable`,
+    );
+    setCopyState("copied");
+    setFlashSequences(new Set(entries.map((entry) => entry.sequence)));
+    if (copyButtonResetTimerRef.current) {
+      window.clearTimeout(copyButtonResetTimerRef.current);
+    }
+    copyButtonResetTimerRef.current = window.setTimeout(() => {
+      setCopyState("idle");
+      copyButtonResetTimerRef.current = undefined;
+    }, COPIED_BUTTON_MS);
+    if (flashResetTimerRef.current) {
+      window.clearTimeout(flashResetTimerRef.current);
+    }
+    flashResetTimerRef.current = window.setTimeout(() => {
+      setFlashSequences(new Set());
+      flashResetTimerRef.current = undefined;
+    }, COPIED_FLASH_MS);
+  }, [
+    allEntries.length,
+    copyState,
+    desktopApi,
+    preferences.contextLines,
+    preferences.includeDiagnostics,
+    preferences.searchMode,
+    readDiagnostics,
+    search,
+    selectedEntries,
+    selectedLevels,
+  ]);
+
+  // Window shortcuts. ⌘C copies the line selection unless a text selection
+  // sits inside one line, which keeps the native copy.
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      if (event.defaultPrevented) return;
+      const mod = event.metaKey || event.ctrlKey;
+      if (mod && event.key.toLowerCase() === "f") {
+        event.preventDefault();
+        searchInputRef.current?.focus();
+        searchInputRef.current?.select();
+        return;
+      }
+      if (isEditableTarget(event.target)) return;
+      if (mod && event.key.toLowerCase() === "a") {
+        event.preventDefault();
+        window.getSelection()?.removeAllRanges();
+        selectAllShown();
+        return;
+      }
+      if (mod && event.key.toLowerCase() === "c") {
+        if (selectedEntries.length === 0 || textSelectionWithinOneLine()) return;
+        event.preventDefault();
+        void copySelection();
+        return;
+      }
+      if (event.key === "Escape" && selection) {
+        event.preventDefault();
+        changeSelection(undefined);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [changeSelection, copySelection, selectAllShown, selectedEntries.length, selection]);
 
   const handleCopyLogFilePath = useCallback(() => {
     if (!logFilePath) {
@@ -330,13 +753,14 @@ export function LogsWindow() {
     }
     void copyText(logFilePath, desktopApi)
       .then(() => {
-        if (copyResetTimerRef.current) {
-          window.clearTimeout(copyResetTimerRef.current);
+        if (pathCopyResetTimerRef.current) {
+          window.clearTimeout(pathCopyResetTimerRef.current);
         }
         setCopiedLogFilePath(true);
-        copyResetTimerRef.current = window.setTimeout(() => {
+        setStatusMessage("Copied the log file path");
+        pathCopyResetTimerRef.current = window.setTimeout(() => {
           setCopiedLogFilePath(false);
-          copyResetTimerRef.current = undefined;
+          pathCopyResetTimerRef.current = undefined;
         }, 1400);
       })
       .catch((copyError: unknown) => {
@@ -354,28 +778,35 @@ export function LogsWindow() {
     });
   }, [desktopApi, logFilePath]);
 
-  const handleCopyLogLine = useCallback(
-    (lineNumber: number, text: string) => {
-      void copyText(text, desktopApi)
-        .then(() => {
-          if (lineCopyResetTimerRef.current) {
-            window.clearTimeout(lineCopyResetTimerRef.current);
-          }
-          setCopiedLineNumber(lineNumber);
-          lineCopyResetTimerRef.current = window.setTimeout(() => {
-            setCopiedLineNumber(undefined);
-            lineCopyResetTimerRef.current = undefined;
-          }, 1400);
-        })
-        .catch((copyError: unknown) => {
-          console.error("Failed to copy log line", copyError);
-        });
-    },
-    [desktopApi],
-  );
+  const handleMark = useCallback(() => {
+    setMark({ afterSequence: lastSequence, at: Date.now() });
+  }, [lastSequence]);
 
-  const activeMatchLabel =
-    rendered.matchCount > 0 ? `${activeMatchIndex + 1} / ${rendered.matchCount}` : "0";
+  const expandGap = useCallback((key: string) => {
+    setExpandedGaps((current) => new Set(current).add(key));
+  }, []);
+
+  // -------------------------------------------------------------------------
+  // Render
+  // -------------------------------------------------------------------------
+
+  const searchCountLabel = searching
+    ? matchCount > 0
+      ? `${activeMatchIndex + 1} of ${formatLogCount(matchCount)} ${matchCount === 1 ? "line" : "lines"}`
+      : "No matches"
+    : undefined;
+  const showContext = preferences.searchMode === "filter" && searching;
+  const firstSelected = selectedEntries[0]?.sequence;
+  const lastSelected = selectedEntries.at(-1)?.sequence;
+  const selectionLabel = selection?.sinceMark
+    ? `${formatLogCount(selectedEntries.length)} ${selectedEntries.length === 1 ? "line" : "lines"} since mark`
+    : selectedEntries.length === 1
+      ? `Line ${firstSelected}`
+      : `${formatLogCount(selectedEntries.length)} lines selected`;
+  const pausedSince = paused.since === undefined
+    ? undefined
+    : formatClockTime(paused.since);
+  const fileName = logFilePath?.split(/[\\/]/).at(-1);
 
   return (
     <div className="document-window document-window--logs">
@@ -394,115 +825,187 @@ export function LogsWindow() {
 
         <main className="log-window__content">
           <div className="log-window__toolbar" aria-label="Log controls">
-            <label className="log-window__search">
-              <span className="log-window__search-label">Search</span>
+            <div
+              className="log-window__search"
+              data-has-tokens={search.tokens.length > 0 ? "true" : undefined}
+              onPointerDown={(event) => {
+                if (event.target === event.currentTarget) {
+                  event.preventDefault();
+                  searchInputRef.current?.focus();
+                }
+              }}
+            >
+              <SearchIcon aria-hidden="true" className="log-window__search-icon" size={14} />
+              {search.tokens.map((token) => (
+                <span
+                  key={`${token.kind}:${token.value}`}
+                  className="log-window__token-chip"
+                  title={`${token.kind}:${token.value}`}
+                >
+                  <span className="log-window__token-chip-kind">{token.kind}</span>
+                  <span className="log-window__token-chip-value">
+                    {logSearchTokenLabel(token)}
+                  </span>
+                  <button
+                    aria-label={`Remove ${token.kind} filter ${token.value}`}
+                    className="log-window__token-chip-remove"
+                    type="button"
+                    onClick={() => removeSearchToken(token)}
+                  >
+                    <CloseIcon aria-hidden="true" size={11} />
+                  </button>
+                </span>
+              ))}
               <input
+                ref={searchInputRef}
                 aria-label="Search logs"
-                value={query}
-                onChange={(event) => handleSearchChange(event.target.value)}
-                placeholder="Find in logs"
+                value={search.text}
+                onChange={(event) => handleSearchInput(event.target.value)}
+                onKeyDown={handleSearchKeyDown}
+                placeholder={search.tokens.length > 0 ? "" : "Search logs"}
                 spellCheck={false}
               />
-            </label>
-            <div
-              aria-label="Log levels"
-              className="log-window__level-filter"
-              role="group"
-            >
-              {LOG_LEVEL_FILTERS.map((option) => (
-                <button
-                  key={option.value}
-                  aria-pressed={selectedLevels.includes(option.value)}
-                  className="log-window__level-option"
-                  data-debug-collection={
-                    option.value === "debug" &&
-                    selectedLevels.includes("debug") &&
-                    !debugCollectionEnabled
-                      ? "off"
-                      : undefined
-                  }
-                  type="button"
-                  onClick={() => handleLogLevelToggle(option.value)}
-                >
-                  {option.label}
-                </button>
-              ))}
+              {searchCountLabel ? (
+                <>
+                  <span className="log-window__match-count" aria-live="polite">
+                    {searchCountLabel}
+                  </span>
+                  <button
+                    aria-label="Previous match"
+                    className="log-window__search-step"
+                    disabled={matchCount === 0}
+                    title="Previous match (Shift-Enter)"
+                    type="button"
+                    onClick={() => goToMatch(-1)}
+                  >
+                    <ChevronUpIcon aria-hidden="true" size={14} />
+                  </button>
+                  <button
+                    aria-label="Next match"
+                    className="log-window__search-step"
+                    disabled={matchCount === 0}
+                    title="Next match (Enter)"
+                    type="button"
+                    onClick={() => goToMatch(1)}
+                  >
+                    <ChevronDownIcon aria-hidden="true" size={14} />
+                  </button>
+                </>
+              ) : (
+                <kbd className="log-window__search-hint">⌘F</kbd>
+              )}
             </div>
-            <span className="log-window__match-count" aria-live="polite">
-              {activeMatchLabel}
-            </span>
+
+            <div aria-label="Search mode" className="log-window__segmented" role="group">
+              <button
+                aria-pressed={preferences.searchMode === "filter"}
+                className="log-window__segment"
+                title="Show only matching lines"
+                type="button"
+                onClick={() => updatePreferences({ searchMode: "filter" })}
+              >
+                Filter
+              </button>
+              <button
+                aria-pressed={preferences.searchMode === "highlight"}
+                className="log-window__segment"
+                title="Show every line and highlight matches"
+                type="button"
+                onClick={() => updatePreferences({ searchMode: "highlight" })}
+              >
+                Highlight
+              </button>
+            </div>
+
+            {showContext ? (
+              <Select
+                aria-label="Context lines"
+                className="log-window__context"
+                options={CONTEXT_OPTIONS}
+                value={String(preferences.contextLines)}
+                onChange={(value) =>
+                  updatePreferences({
+                    contextLines: Number(value) as DesktopLogsContextLines,
+                  })
+                }
+              />
+            ) : null}
+
+            <div aria-label="Log levels" className="log-window__segmented" role="group">
+              {STORED_LEVEL_FILTERS.map((option) => {
+                const count = option.value === "error"
+                  ? levelCounts.error
+                  : option.value === "warn"
+                    ? levelCounts.warn
+                    : undefined;
+                return (
+                  <button
+                    key={option.value}
+                    aria-pressed={preferences.levels.includes(option.value)}
+                    className="log-window__segment"
+                    type="button"
+                    onClick={() => handleLevelToggle(option.value)}
+                  >
+                    {option.label}
+                    {count ? (
+                      <span className="log-window__segment-count">
+                        {formatLogCount(count)}
+                      </span>
+                    ) : null}
+                  </button>
+                );
+              })}
+              <button
+                aria-pressed={debugSelected}
+                className="log-window__segment"
+                data-debug-collection={
+                  debugSelected && !debugCollectionEnabled ? "off" : undefined
+                }
+                title="Show debug lines; turns on debug collection"
+                type="button"
+                onClick={handleDebugToggle}
+              >
+                Debug
+              </button>
+            </div>
+
+            <span aria-hidden="true" className="log-window__toolbar-divider" />
+
             <button
+              aria-label="Wrap"
+              aria-pressed={preferences.wrap}
               className="log-window__button"
-              disabled={rendered.matchCount === 0}
+              title="Wrap long lines"
               type="button"
-              onClick={() => goToMatch(-1)}
+              onClick={() => updatePreferences({ wrap: !preferences.wrap })}
             >
-              Prev
+              <WrapIcon aria-hidden="true" size={14} />
+              <span className="log-window__button-label">Wrap</span>
             </button>
             <button
+              aria-label="Mark"
               className="log-window__button"
-              disabled={rendered.matchCount === 0}
+              title="Drop a mark after the newest line"
               type="button"
-              onClick={() => goToMatch(1)}
+              onClick={handleMark}
             >
-              Next
+              <BookmarkIcon aria-hidden="true" size={14} />
+              <span className="log-window__button-label">Mark</span>
             </button>
             <button
               aria-pressed={following}
-              className="log-window__button"
+              className="log-window__button log-window__button--live"
+              title={following ? "Pause the live log" : "Resume the live log"}
               type="button"
-              onClick={jumpToEnd}
+              onClick={following ? pause : resume}
             >
-              Follow
+              <span
+                aria-hidden="true"
+                className="log-window__live-dot"
+                data-live={following ? "true" : "false"}
+              />
+              {following ? "Live" : "Paused"}
             </button>
-          </div>
-
-          {logFilePath ? (
-            <div className="log-window__file" aria-label="Log file path">
-              <span className="log-window__file-label">File</span>
-              <code className="log-window__file-path" title={logFilePath}>
-                {logFilePath}
-              </code>
-              <button
-                className="log-window__file-copy"
-                type="button"
-                data-copied={copiedLogFilePath ? "true" : undefined}
-                aria-label={
-                  copiedLogFilePath ? "Copied log file path" : "Copy log file path"
-                }
-                title={
-                  copiedLogFilePath ? "Copied log file path" : "Copy log file path"
-                }
-                onClick={handleCopyLogFilePath}
-              >
-                <CopyIcon size={13} aria-hidden="true" />
-                <span>{copiedLogFilePath ? "Copied" : "Copy"}</span>
-              </button>
-              <button
-                className="log-window__file-copy"
-                type="button"
-                aria-label="Reveal log file in file manager"
-                title="Reveal log file in file manager"
-                onClick={handleRevealLogFile}
-              >
-                <FolderIcon size={13} aria-hidden="true" />
-                <span>Reveal</span>
-              </button>
-            </div>
-          ) : null}
-
-          <div className="log-window__status">
-            <span className="log-window__status-text">
-              {following
-                ? "Live app log stream"
-                : "Paused app log stream"}
-            </span>
-            {truncated ? (
-              <span className="log-window__status-note">Showing tail</span>
-            ) : null}
-            {debugCollectionEnabled ? (
-              <span className="log-window__status-note">Debug collection on</span>
-            ) : null}
           </div>
 
           {error ? (
@@ -511,184 +1014,322 @@ export function LogsWindow() {
             </p>
           ) : null}
 
-          <div
-            ref={logViewportRef}
-            aria-label="Log viewport"
-            className="log-window__viewport"
-            onPointerDown={pauseFollowingForInteraction}
-            onScroll={handleScroll}
-          >
-            {rendered.lines.length > 0 ? (
-              <pre className="log-window__lines" aria-label="Log output">
-                {rendered.lines.map((line) => (
-                  <LogLine
-                    key={line.lineNumber}
-                    activeMatchIndex={activeMatchIndex}
-                    copied={copiedLineNumber === line.lineNumber}
-                    line={line}
-                    activeMatchRef={activeMatchRef}
-                    onCopy={handleCopyLogLine}
-                  />
-                ))}
-              </pre>
-            ) : (
-              <p className="document-window__empty">
-                {loading ? "Loading..." : "No log output yet."}
-              </p>
-            )}
+          <div className="log-window__viewport-frame">
+            <div
+              ref={logViewportRef}
+              aria-label="Log viewport"
+              className="log-window__viewport"
+              onScroll={handleScroll}
+            >
+              {display.rows.length > 0 ? (
+                <div
+                  aria-label="Log output"
+                  className={`log-window__lines${preferences.wrap ? " log-window__lines--wrap" : ""}`}
+                  role="log"
+                  style={{ "--log-gutter-digits": gutterDigits } as CSSProperties}
+                  onClick={handleLinesClick}
+                  onPointerDown={handleLinesPointerDown}
+                  onPointerOver={handleLinesPointerOver}
+                >
+                  {display.rows.map((row) => {
+                    if (row.kind === "gap") {
+                      return (
+                        <button
+                          key={row.key}
+                          className="log-window__gap"
+                          type="button"
+                          onClick={() => expandGap(row.key)}
+                        >
+                          {row.hiddenCount === 1
+                            ? "1 line hidden"
+                            : `${formatLogCount(row.hiddenCount)} lines hidden`}
+                        </button>
+                      );
+                    }
+                    if (row.kind === "mark") {
+                      return mark ? (
+                        <div key="mark" className="log-window__mark">
+                          <BookmarkIcon aria-hidden="true" size={13} />
+                          <span>Mark · {formatClockTime(mark.at)}</span>
+                          <span aria-hidden="true" className="log-window__mark-rule" />
+                          <button
+                            className="log-window__mark-action"
+                            disabled={lastSequence <= mark.afterSequence}
+                            type="button"
+                            onClick={selectSinceMark}
+                          >
+                            Select since mark
+                          </button>
+                          <button
+                            aria-label="Remove mark"
+                            className="log-window__mark-remove"
+                            type="button"
+                            onClick={() => setMark(undefined)}
+                          >
+                            <CloseIcon aria-hidden="true" size={11} />
+                          </button>
+                        </div>
+                      ) : null;
+                    }
+                    const sequence = row.entry.sequence;
+                    return (
+                      <LogLine
+                        key={sequence}
+                        activeMatch={searching && sequence === activeMatchSequence}
+                        context={row.context}
+                        entry={row.entry}
+                        flashing={flashSequences.has(sequence)}
+                        highlightQuery={search.text}
+                        selected={selectedSequences.has(sequence)}
+                      />
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="document-window__empty">
+                  {loading
+                    ? "Loading..."
+                    : searching
+                      ? "No lines match."
+                      : "No log output yet."}
+                </p>
+              )}
+            </div>
+
+            {selectedEntries.length > 0 ? (
+              <div aria-label="Selected lines" className="log-window__selection-bar" role="toolbar">
+                <span className="log-window__selection-count">
+                  {selectionLabel}
+                  {selectedEntries.length > 1 ? (
+                    <span className="log-window__selection-range">
+                      {firstSelected}–{lastSelected}
+                    </span>
+                  ) : null}
+                </span>
+                <span aria-hidden="true" className="log-window__selection-divider" />
+                <button
+                  aria-checked={preferences.includeDiagnostics}
+                  className="log-window__check"
+                  role="checkbox"
+                  title="Start the copy with version, profile, process, log path and instance details"
+                  type="button"
+                  onClick={() =>
+                    updatePreferences({
+                      includeDiagnostics: !preferences.includeDiagnostics,
+                    })
+                  }
+                >
+                  <span aria-hidden="true" className="log-window__check-box">
+                    {preferences.includeDiagnostics ? (
+                      <CheckIcon size={11} />
+                    ) : null}
+                  </span>
+                  Include diagnostics
+                </button>
+                <button
+                  className="log-window__copy"
+                  data-copied={copyState === "copied" ? "true" : undefined}
+                  disabled={copyState === "copying"}
+                  title="Copy the selected lines (⌘C)"
+                  type="button"
+                  onClick={() => void copySelection()}
+                >
+                  {copyState === "copied" ? (
+                    <CheckIcon aria-hidden="true" size={13} />
+                  ) : (
+                    <CopyIcon aria-hidden="true" size={13} />
+                  )}
+                  {copyState === "copied" ? "Copied" : "Copy"}
+                </button>
+                <button
+                  aria-label="Clear selection"
+                  className="log-window__selection-clear"
+                  title="Clear selection (Esc)"
+                  type="button"
+                  onClick={() => changeSelection(undefined)}
+                >
+                  <CloseIcon aria-hidden="true" size={12} />
+                </button>
+              </div>
+            ) : !following && paused.newLines > 0 ? (
+              <button className="log-window__new-lines" type="button" onClick={resume}>
+                <ChevronDownIcon aria-hidden="true" size={13} />
+                {paused.newLines === 1
+                  ? "1 new line"
+                  : `${formatLogCount(paused.newLines)} new lines`}
+                {paused.newErrors > 0
+                  ? ` · ${formatLogCount(paused.newErrors)} ${paused.newErrors === 1 ? "error" : "errors"}`
+                  : ""}
+              </button>
+            ) : null}
           </div>
+
+          <footer className="log-window__status-bar">
+            <span className="log-window__status-text">
+              {searching
+                ? `${formatLogCount(matchCount)} of ${formatLogCount(levelFilteredEntries.length)} lines match`
+                : following
+                  ? `${formatLogCount(allEntries.length)} lines`
+                  : paused.newLines > 0 && pausedSince
+                    ? `Paused · ${formatLogCount(paused.newLines)} new since ${pausedSince}`
+                    : `Paused · ${formatLogCount(allEntries.length)} lines`}
+            </span>
+            {truncated ? (
+              <span className="log-window__status-note">Showing tail</span>
+            ) : null}
+            {debugCollectionEnabled ? (
+              <span className="log-window__status-note">Debug collection on</span>
+            ) : null}
+            {fileName ? (
+              <span className="log-window__status-file" title={logFilePath}>
+                {fileName}
+              </span>
+            ) : null}
+            <span className="log-window__status-spacer" />
+            <span
+              aria-live="polite"
+              className="log-window__status-message"
+              data-visible={statusMessage ? "true" : undefined}
+              role="status"
+            >
+              {statusMessage ? (
+                <>
+                  <CheckIcon aria-hidden="true" size={12} />
+                  {statusMessage}
+                </>
+              ) : null}
+            </span>
+            {logFilePath ? (
+              <>
+                <button
+                  aria-label={copiedLogFilePath ? "Copied log file path" : "Copy log file path"}
+                  className="log-window__status-action"
+                  data-copied={copiedLogFilePath ? "true" : undefined}
+                  title={logFilePath}
+                  type="button"
+                  onClick={handleCopyLogFilePath}
+                >
+                  {copiedLogFilePath ? (
+                    <CheckIcon aria-hidden="true" size={12} />
+                  ) : (
+                    <CopyIcon aria-hidden="true" size={12} />
+                  )}
+                  Copy path
+                </button>
+                <button
+                  aria-label="Reveal log file in file manager"
+                  className="log-window__status-action"
+                  title="Reveal log file in file manager"
+                  type="button"
+                  onClick={handleRevealLogFile}
+                >
+                  <FolderIcon aria-hidden="true" size={12} />
+                  Reveal
+                </button>
+              </>
+            ) : null}
+          </footer>
         </main>
       </section>
     </div>
   );
 }
 
-export function appendRenderedLogEntry(
-  buffer: RenderedLogEntryBuffer,
-  entry: AppLogEntry,
-): boolean {
-  if (buffer.entryCount < MAX_RENDERED_LOG_ENTRIES) {
-    const writeIndex =
-      (buffer.oldestEntryIndex + buffer.entryCount) % buffer.slots.length;
-    buffer.slots[writeIndex] = entry;
-    buffer.entryCount += 1;
-    return false;
-  }
-
-  buffer.slots[buffer.oldestEntryIndex] = entry;
-  buffer.oldestEntryIndex = (buffer.oldestEntryIndex + 1) % buffer.slots.length;
-  return true;
-}
-
-export function createRenderedLogEntryBuffer(
-  entries: AppLogEntry[] = [],
-): RenderedLogEntryBuffer {
-  const buffer: RenderedLogEntryBuffer = {
-    slots: new Array<AppLogEntry | undefined>(MAX_RENDERED_LOG_ENTRIES),
-    oldestEntryIndex: 0,
-    entryCount: 0,
-  };
-  for (const entry of entries.slice(-MAX_RENDERED_LOG_ENTRIES)) {
-    appendRenderedLogEntry(buffer, entry);
-  }
-  return buffer;
-}
-
-export function orderedRenderedLogEntries(
-  buffer: RenderedLogEntryBuffer,
-): AppLogEntry[] {
-  const ordered: AppLogEntry[] = [];
-  for (let offset = 0; offset < buffer.entryCount; offset += 1) {
-    const entry =
-      buffer.slots[(buffer.oldestEntryIndex + offset) % buffer.slots.length];
-    if (entry) {
-      ordered.push(entry);
-    }
-  }
-  return ordered;
-}
-
-function shouldShowLogEntry(
-  entry: AppLogEntry,
-  selectedLevels: LogLevelFilter[],
-): boolean {
-  const level = normalizeLogLevel(entry.level);
-  if (!level) {
-    return selectedLevels.includes("info");
-  }
-  if (level === "trace" || level === "verbose") {
-    return selectedLevels.includes("debug");
-  }
-  return selectedLevels.includes(level);
-}
-
-function LogLine(props: {
-  activeMatchIndex: number;
-  activeMatchRef: MutableRefObject<HTMLElement | null>;
-  copied: boolean;
-  line: RenderedLogLine;
-  onCopy: (lineNumber: number, text: string) => void;
+const LogLine = memo(function LogLine(props: {
+  entry: AppLogEntry;
+  highlightQuery: string;
+  activeMatch: boolean;
+  context: boolean;
+  selected: boolean;
+  flashing: boolean;
 }) {
-  const levelClass = props.line.level
-    ? ` log-window__line--${props.line.level}`
-    : "";
-  const copyLabel = props.copied
-    ? `Copied line ${props.line.lineNumber}`
-    : `Copy line ${props.line.lineNumber}`;
-  const lineText = props.line.parts.map((part) => part.text).join("");
-  return (
-    <span className={`log-window__line${levelClass}`}>
-      <span className="log-window__line-gutter">
-        <button
-          aria-label={copyLabel}
-          className="log-window__line-copy"
-          data-copied={props.copied ? "true" : undefined}
-          title={copyLabel}
-          type="button"
-          onClick={() => props.onCopy(props.line.lineNumber, lineText)}
-          onPointerDown={(event) => event.stopPropagation()}
-        >
-          {props.copied ? (
-            <CheckIcon aria-hidden="true" size={12} />
-          ) : (
-            <CopyIcon aria-hidden="true" size={12} />
-          )}
-        </button>
-        <span className="log-window__line-number">{props.line.lineNumber}</span>
-      </span>
-      <span className="log-window__line-text">
-        {props.line.parts.map((part, index) =>
-          renderLogLinePart({
-            activeMatchIndex: props.activeMatchIndex,
-            activeMatchRef: props.activeMatchRef,
-            key: `${props.line.lineNumber}-${index}`,
-            part,
-          }),
-        )}
-      </span>
-      {"\n"}
-    </span>
+  const tokenized = tokenizedLogEntry(props.entry);
+  const parts = useMemo(
+    () => highlightLogLineParts(tokenized.parts, props.highlightQuery),
+    [props.highlightQuery, tokenized.parts],
   );
-}
-
-function renderLogLinePart(params: {
-  activeMatchIndex: number;
-  activeMatchRef: MutableRefObject<HTMLElement | null>;
-  key: string;
-  part: LogLinePart;
-}): ReactNode {
-  if (params.part.matchIndex === undefined) {
-    return (
-      <span key={params.key} className={classNameForLinePart(params.part)}>
-        {params.part.text}
-      </span>
-    );
-  }
-
-  const active = params.part.matchIndex === params.activeMatchIndex;
+  const level = tokenized.level ?? normalizeLogLevel(props.entry.level);
   const className = [
-    "log-window__match",
-    active ? "log-window__match--active" : undefined,
-    classNameForLinePart(params.part),
+    "log-window__line",
+    level ? `log-window__line--${level}` : undefined,
+    props.context ? "log-window__line--context" : undefined,
+    props.activeMatch ? "log-window__line--active-match" : undefined,
+    props.selected ? "log-window__line--selected" : undefined,
+    props.flashing ? "log-window__line--copied" : undefined,
   ]
     .filter(Boolean)
     .join(" ");
+  let firstMatch = true;
   return (
-    <mark
-      key={params.key}
-      ref={active ? params.activeMatchRef : undefined}
+    <div
+      aria-selected={props.selected || undefined}
       className={className}
+      data-log-sequence={props.entry.sequence}
     >
-      {params.part.text}
-    </mark>
+      <span
+        className="log-window__line-number"
+        data-log-gutter={props.entry.sequence}
+        title="Click to select · Shift-click to extend · Drag to select a range"
+      >
+        {props.entry.sequence}
+      </span>
+      <span className="log-window__line-text">
+        {parts.map((part, index) => {
+          const tone = part.tone ? ` log-window__part--${part.tone}` : "";
+          const tokenProps = part.token
+            ? {
+                "data-log-token-kind": part.token.kind,
+                "data-log-token-value": part.token.value,
+                title: `Filter by ${part.token.kind} ${part.token.value}`,
+              }
+            : {};
+          const tokenClass = part.token ? " log-window__token" : "";
+          if (part.match) {
+            const active = props.activeMatch && firstMatch;
+            firstMatch = false;
+            return (
+              <mark
+                key={index}
+                className={`log-window__match${active ? " log-window__match--active" : ""}${tone}${tokenClass}`}
+                {...tokenProps}
+              >
+                {part.text}
+              </mark>
+            );
+          }
+          return (
+            <span
+              key={index}
+              className={`log-window__part${tone}${tokenClass}`}
+              {...tokenProps}
+            >
+              {part.text}
+            </span>
+          );
+        })}
+      </span>
+    </div>
+  );
+});
+
+function gutterSequence(target: EventTarget | null): number | undefined {
+  if (!(target instanceof Element)) return undefined;
+  const gutter = target.closest<HTMLElement>("[data-log-gutter]");
+  const value = gutter?.dataset.logGutter;
+  return value === undefined ? undefined : Number(value);
+}
+
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return (
+    target.isContentEditable
+    || target.tagName === "INPUT"
+    || target.tagName === "TEXTAREA"
+    || target.tagName === "SELECT"
   );
 }
 
-function classNameForLinePart(part: LogLinePart): string | undefined {
-  return part.tone ? `log-window__part log-window__part--${part.tone}` : undefined;
-}
-
-function selectionTouchesElement(element: HTMLElement): boolean {
+function textSelectionTouchesElement(element: HTMLElement): boolean {
   const selection = window.getSelection();
   if (!selection || selection.isCollapsed || selection.toString().length === 0) {
     return false;
@@ -697,133 +1338,31 @@ function selectionTouchesElement(element: HTMLElement): boolean {
   const anchorNode = selection.anchorNode;
   const focusNode = selection.focusNode;
   return Boolean(
-    (anchorNode && element.contains(anchorNode)) ||
-      (focusNode && element.contains(focusNode)),
+    (anchorNode && element.contains(anchorNode))
+      || (focusNode && element.contains(focusNode)),
   );
 }
 
-export function buildRenderedLogLines(
-  content: string,
-  query: string,
-): { lines: RenderedLogLine[]; matchCount: number } {
-  const normalizedQuery = query.trim().toLowerCase();
-  let matchCount = 0;
-  const sourceLines = content.length > 0 ? content.split(/\r?\n/) : [];
-  const lines = sourceLines.map((line, index) => {
-    const renderedLine = renderLogLine(line, normalizedQuery, matchCount);
-    matchCount += renderedLine.matchCount;
-    return {
-      level: renderedLine.level,
-      lineNumber: index + 1,
-      parts: renderedLine.parts,
-    };
+function lineRowFor(node: Node | null): Element | null {
+  const element = node instanceof Element ? node : node?.parentElement ?? null;
+  return element?.closest(".log-window__line") ?? null;
+}
+
+/** A text selection that starts and ends inside the same log line. */
+function textSelectionWithinOneLine(): boolean {
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed || selection.toString().length === 0) {
+    return false;
+  }
+  const anchorRow = lineRowFor(selection.anchorNode);
+  return anchorRow !== null && anchorRow === lineRowFor(selection.focusNode);
+}
+
+function formatClockTime(timestamp: number): string {
+  return new Date(timestamp).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
   });
-
-  return { lines, matchCount };
-}
-
-function renderLogLine(
-  line: string,
-  normalizedQuery: string,
-  startMatchIndex: number,
-): { level?: LogLevel; matchCount: number; parts: LogLinePart[] } {
-  const tokens = tokenizeLogLine(line);
-  let nextMatchIndex = startMatchIndex;
-  const parts: LogLinePart[] = [];
-  for (const token of tokens.parts) {
-    const tokenParts = normalizedQuery
-      ? splitLineMatches(token.text, normalizedQuery, nextMatchIndex, token.tone)
-      : [token];
-    parts.push(...tokenParts);
-    nextMatchIndex += tokenParts.filter((part) => part.matchIndex !== undefined).length;
-  }
-
-  return {
-    level: tokens.level,
-    matchCount: nextMatchIndex - startMatchIndex,
-    parts,
-  };
-}
-
-export function tokenizeLogLine(line: string): {
-  level?: LogLevel;
-  parts: LogLinePart[];
-} {
-  const match = line.match(/^(\[[^\]]+\])(\s+)(\[[^\]]+\])(\s+)(\([^)]+\))(\s*)(.*)$/);
-  if (!match) {
-    return { parts: [{ text: line }] };
-  }
-
-  const level = normalizeLogLevel(match[3]);
-  const levelTone = toneForLogLevel(level);
-  return {
-    level,
-    parts: [
-      { text: match[1], tone: "timestamp" },
-      { text: match[2] },
-      { text: match[3], tone: levelTone },
-      { text: match[4] },
-      { text: match[5], tone: "scope" },
-      { text: match[6] },
-      { text: match[7] },
-    ],
-  };
-}
-
-function normalizeLogLevel(levelToken: string): LogLevel | undefined {
-  const value = levelToken.replace(/[[\]\s]/g, "").toLowerCase();
-  if (
-    value === "error" ||
-    value === "warn" ||
-    value === "info" ||
-    value === "debug" ||
-    value === "trace" ||
-    value === "verbose"
-  ) {
-    return value;
-  }
-  return undefined;
-}
-
-function toneForLogLevel(level: LogLevel | undefined): LogLinePartTone | undefined {
-  if (level === "error") return "level-error";
-  if (level === "warn") return "level-warn";
-  if (level === "info") return "level-info";
-  if (level === "debug" || level === "trace" || level === "verbose") {
-    return "level-debug";
-  }
-  return undefined;
-}
-
-function splitLineMatches(
-  line: string,
-  normalizedQuery: string,
-  startMatchIndex: number,
-  tone?: LogLinePartTone,
-): LogLinePart[] {
-  const lowerLine = line.toLowerCase();
-  const parts: LogLinePart[] = [];
-  let cursor = 0;
-  let matchIndex = startMatchIndex;
-
-  while (cursor < line.length) {
-    const foundAt = lowerLine.indexOf(normalizedQuery, cursor);
-    if (foundAt === -1) {
-      parts.push({ text: line.slice(cursor), tone });
-      break;
-    }
-    if (foundAt > cursor) {
-      parts.push({ text: line.slice(cursor, foundAt), tone });
-    }
-    const end = foundAt + normalizedQuery.length;
-    parts.push({
-      text: line.slice(foundAt, end),
-      matchIndex,
-      tone,
-    });
-    matchIndex += 1;
-    cursor = end;
-  }
-
-  return parts.length > 0 ? parts : [{ text: line, tone }];
 }

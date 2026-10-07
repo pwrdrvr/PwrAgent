@@ -315,6 +315,62 @@ export const DESKTOP_UI_LAYOUT_DEFAULTS: {
   sidebarHidden: false,
 };
 
+/** Help → Logs: what a search does to the lines it does not match. */
+export type DesktopLogsSearchMode = "filter" | "highlight";
+/** The log levels the Logs window remembers. Debug is never stored. */
+export type DesktopLogsStoredLevel = "error" | "warn" | "info";
+
+export const DESKTOP_LOGS_CONTEXT_LINE_OPTIONS = [0, 1, 3, 5] as const;
+export type DesktopLogsContextLines =
+  (typeof DESKTOP_LOGS_CONTEXT_LINE_OPTIONS)[number];
+
+/**
+ * Help → Logs viewer preferences, stored in the profile's `[ui.logs]` table.
+ * Debug is deliberately absent: turning it on starts debug collection in the
+ * main process, so it always opens off.
+ */
+export type DesktopLogsViewerPreferences = {
+  wrap: boolean;
+  searchMode: DesktopLogsSearchMode;
+  contextLines: DesktopLogsContextLines;
+  includeDiagnostics: boolean;
+  levels: DesktopLogsStoredLevel[];
+};
+
+export const DESKTOP_LOGS_VIEWER_DEFAULTS: Readonly<DesktopLogsViewerPreferences> = {
+  wrap: true,
+  searchMode: "filter",
+  contextLines: 0,
+  includeDiagnostics: true,
+  levels: ["error", "warn", "info"],
+};
+
+export function isDesktopLogsSearchMode(value: unknown): value is DesktopLogsSearchMode {
+  return value === "filter" || value === "highlight";
+}
+
+export function isDesktopLogsContextLines(value: unknown): value is DesktopLogsContextLines {
+  return (DESKTOP_LOGS_CONTEXT_LINE_OPTIONS as readonly unknown[]).includes(value);
+}
+
+export function isDesktopLogsStoredLevel(value: unknown): value is DesktopLogsStoredLevel {
+  return value === "error" || value === "warn" || value === "info";
+}
+
+/** Fill unset `[ui.logs]` keys with the defaults. */
+export function resolveDesktopLogsViewerPreferences(
+  stored: Partial<DesktopLogsViewerPreferences> | undefined,
+): DesktopLogsViewerPreferences {
+  return {
+    wrap: stored?.wrap ?? DESKTOP_LOGS_VIEWER_DEFAULTS.wrap,
+    searchMode: stored?.searchMode ?? DESKTOP_LOGS_VIEWER_DEFAULTS.searchMode,
+    contextLines: stored?.contextLines ?? DESKTOP_LOGS_VIEWER_DEFAULTS.contextLines,
+    includeDiagnostics:
+      stored?.includeDiagnostics ?? DESKTOP_LOGS_VIEWER_DEFAULTS.includeDiagnostics,
+    levels: stored?.levels ? [...stored.levels] : [...DESKTOP_LOGS_VIEWER_DEFAULTS.levels],
+  };
+}
+
 export const DESKTOP_APPEARANCE_THEME_DEFAULT: DesktopAppearanceTheme = "system";
 
 /**
@@ -1588,6 +1644,7 @@ export type DesktopSettingsConfigPatch = {
     activeContextTab?: string;
     editedFilesDock?: string;
     actionRunsDock?: string;
+    logs?: Partial<DesktopLogsViewerPreferences>;
   };
   federation?: {
     mode?: DesktopFederationMode;
@@ -1822,6 +1879,8 @@ export type DesktopConfigBootstrapSnapshot = {
     completed: boolean;
     completedSource: DesktopOnboardingCompletedSource | "";
   };
+  /** Help → Logs viewer preferences, defaults filled in. */
+  logs: DesktopLogsViewerPreferences;
 };
 
 export type ReadDesktopConfigBootstrapResponse = {

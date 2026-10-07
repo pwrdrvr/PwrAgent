@@ -19,6 +19,7 @@ import type {
   DesktopHotCpuProfileStartDelayMs,
   DesktopHotCpuProfileTriggerMode,
   DesktopIntegratedTerminalWindowsShell,
+  DesktopLogsViewerPreferences,
   DesktopMessagingAcknowledgment,
   DesktopMessagingAuthorizationMode,
   DesktopMessagingFullAccessWarningGlobalPolicy,
@@ -62,7 +63,11 @@ import {
   isDesktopHotCpuProfileStartDelayMs,
   isDesktopHotCpuProfileTriggerMode,
   isDesktopIntegratedTerminalWindowsShell,
+  isDesktopLogsContextLines,
+  isDesktopLogsSearchMode,
+  isDesktopLogsStoredLevel,
   isDesktopOnboardingCompletedSource,
+  DESKTOP_LOGS_VIEWER_DEFAULTS,
   isDesktopWorktreeStorageLocation,
   isDesktopUpdateSelectionSource,
   isDesktopUpdateTrain,
@@ -183,6 +188,7 @@ export type DesktopSettingsConfig = {
     activeContextTab?: string;
     editedFilesDock?: string;
     actionRunsDock?: string;
+    logs?: Partial<DesktopLogsViewerPreferences>;
   };
   federation?: {
     mode?: DesktopFederationMode;
@@ -1123,6 +1129,53 @@ export function desktopSettingsPatchToEdits(
       set(["ui", "action_runs_dock"], patch.ui.actionRunsDock);
     }
   }
+  // Help → Logs viewer prefs: same delete-on-default rule, in [ui.logs].
+  const logsPatch = patch.ui?.logs;
+  if (logsPatch) {
+    const setLogsKey = (
+      key: string,
+      value: boolean | number | string | readonly string[] | undefined,
+      isDefault: boolean,
+    ): void => {
+      if (value === undefined) return;
+      if (isDefault) {
+        edits.push({ op: "delete", path: ["ui", "logs", key] });
+      } else {
+        set(["ui", "logs", key], value);
+      }
+    };
+    setLogsKey(
+      "wrap",
+      logsPatch.wrap,
+      logsPatch.wrap === DESKTOP_LOGS_VIEWER_DEFAULTS.wrap,
+    );
+    setLogsKey(
+      "search_mode",
+      logsPatch.searchMode,
+      logsPatch.searchMode === DESKTOP_LOGS_VIEWER_DEFAULTS.searchMode,
+    );
+    setLogsKey(
+      "context_lines",
+      logsPatch.contextLines,
+      logsPatch.contextLines === DESKTOP_LOGS_VIEWER_DEFAULTS.contextLines,
+    );
+    setLogsKey(
+      "include_diagnostics",
+      logsPatch.includeDiagnostics,
+      logsPatch.includeDiagnostics
+        === DESKTOP_LOGS_VIEWER_DEFAULTS.includeDiagnostics,
+    );
+    if (logsPatch.levels !== undefined) {
+      const levels = DESKTOP_LOGS_VIEWER_DEFAULTS.levels.filter((level) =>
+        logsPatch.levels?.includes(level),
+      );
+      setLogsKey(
+        "levels",
+        levels,
+        levels.length === DESKTOP_LOGS_VIEWER_DEFAULTS.levels.length,
+      );
+    }
+  }
 
   if (patch.federation?.mode !== undefined) {
     if (patch.federation.mode === DESKTOP_FEDERATION_MODE_DEFAULT) {
@@ -1954,6 +2007,7 @@ function normalizeDesktopConfig(
   const updates = tables["updates"];
   const integratedTerminal = tables["integrated_terminal"];
   const ui = tables["ui"];
+  const uiLogs = tables["ui.logs"];
   const federation = tables["federation"];
   const messaging = tables["messaging"];
   const attachments = tables["messaging.attachments"];
@@ -2138,6 +2192,7 @@ function normalizeDesktopConfig(
       activeContextTab: readString(ui?.active_context_tab),
       editedFilesDock: readString(ui?.edited_files_dock),
       actionRunsDock: readString(ui?.action_runs_dock),
+      logs: readLogsViewerConfig(uiLogs),
     },
     federation: {
       mode: readFederationMode(federation?.mode),
@@ -3058,6 +3113,29 @@ function isFullAccessWarningUserPolicy(
     value === "dismissable" ||
     value === "never"
   );
+}
+
+function readLogsViewerConfig(
+  table: Record<string, TomlScalar> | undefined,
+): Partial<DesktopLogsViewerPreferences> | undefined {
+  if (!table) return undefined;
+  const logs: Partial<DesktopLogsViewerPreferences> = {};
+  const wrap = readBoolean(table.wrap);
+  if (wrap !== undefined) logs.wrap = wrap;
+  const searchMode = readString(table.search_mode);
+  if (isDesktopLogsSearchMode(searchMode)) logs.searchMode = searchMode;
+  if (isDesktopLogsContextLines(table.context_lines)) {
+    logs.contextLines = table.context_lines;
+  }
+  const includeDiagnostics = readBoolean(table.include_diagnostics);
+  if (includeDiagnostics !== undefined) {
+    logs.includeDiagnostics = includeDiagnostics;
+  }
+  const levels = readStringArray(table.levels);
+  if (levels !== undefined) {
+    logs.levels = levels.filter(isDesktopLogsStoredLevel);
+  }
+  return hasDefinedValue(logs) ? logs : undefined;
 }
 
 function readBoolean(value: TomlScalar | undefined): boolean | undefined {
