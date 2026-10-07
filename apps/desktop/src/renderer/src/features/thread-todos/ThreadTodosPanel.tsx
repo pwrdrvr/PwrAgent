@@ -228,12 +228,15 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
               onClick={() => setScope(entry.id)}
             >
               <span>{entry.label}</span>
-              <span className="subagent-lens-switch__count">{lensCounts[entry.id].open}</span>
+              {/* Filled when something is unread, plain otherwise, as on the
+                  rail tab: the rail is too narrow for both counts. */}
               {lensCounts[entry.id].unread > 0 ? (
                 <span className="thread-todos-panel__unread-count">
                   {lensCounts[entry.id].unread}
                 </span>
-              ) : null}
+              ) : (
+                <span className="subagent-lens-switch__count">{lensCounts[entry.id].open}</span>
+              )}
             </button>
           ))}
         </div>
