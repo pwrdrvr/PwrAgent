@@ -11,35 +11,37 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { runResourceCommand } from "./resource-run.mjs";
+import { getToolResourcePolicy, resourceCommand } from "./tool-resource-policy.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const outDir = path.join(tmpdir(), "pwragent-sqlite-write-metrics");
-const metricsFile = path.join(outDir, `run-${process.pid}.jsonl`);
+export function runSqliteWriteTests(args, { policy = getToolResourcePolicy(), ...options } = {}) {
+  const vitestArgs = ["run", "--config", "vitest.workspace.ts", ...args];
+  return runResourceCommand("pnpm", ["exec", "vitest", ...resourceCommand("vitest", vitestArgs, policy)], {
+    policy, cwd: repoRoot, ...options,
+  });
+}
 
-rmSync(metricsFile, { force: true });
-mkdirSync(outDir, { recursive: true });
-
-const vitest = spawnSync(
-  "pnpm",
-  ["exec", "vitest", "run", "--config", "vitest.workspace.ts", ...process.argv.slice(2)],
-  {
-    cwd: repoRoot,
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+  const outDir = path.join(tmpdir(), "pwragent-sqlite-write-metrics");
+  const metricsFile = path.join(outDir, `run-${process.pid}.jsonl`);
+  rmSync(metricsFile, { force: true });
+  mkdirSync(outDir, { recursive: true });
+  const vitest = await runSqliteWriteTests(process.argv.slice(2), {
     env: {
       ...process.env,
       PWRAGENT_DEV_SQLITE_WRITE_METRICS: "1",
       PWRAGENT_DEV_SQLITE_WRITE_METRICS_FILE: metricsFile,
     },
-    stdio: "inherit",
-  },
-);
+  });
 
-// Report regardless of suite outcome — a failing run still tells you where the
-// writes went, and that is often why you started the run.
-const report = spawnSync(
-  "node",
-  [path.join(repoRoot, "scripts", "report-sqlite-writes.mjs"), metricsFile],
-  { cwd: repoRoot, stdio: "inherit" },
-);
-
-process.exit(vitest.status ?? report.status ?? 0);
+  // Report regardless of suite outcome — a failing run still tells you where
+  // the writes went, and that is often why you started the run.
+  const report = spawnSync(
+    "node",
+    [path.join(repoRoot, "scripts", "report-sqlite-writes.mjs"), metricsFile],
+    { cwd: repoRoot, stdio: "inherit" },
+  );
+  process.exit(vitest.code ?? report.status ?? 0);
+}

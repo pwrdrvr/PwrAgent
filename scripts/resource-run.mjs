@@ -63,6 +63,7 @@ async function inheritedLock(env, lockPath) {
     if (!owner || owner.path !== lockPath || typeof owner.token !== "string" || !alive(owner.pid) || !isAncestorPid(owner.pid)) return false;
     const recorded = await readOwner(lockPath);
     return recorded?.pid === owner.pid && recorded?.token === owner.token && recorded?.path === lockPath
+      && ownerRunning(recorded)
       && await lockfile.check(lockPath, { realpath: false, stale: 30_000 });
   } catch { return false; }
 }
@@ -81,23 +82,38 @@ function groupRunning(pid) {
   });
 }
 
-function groupStartedAt(pid) {
+export function processStartedAt(pid) {
   try {
     if (process.platform === "linux") {
       const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
       return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
     }
-    return execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", timeout: 5_000 }).trim() || null;
+    if (process.platform === "win32") {
+      return execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
+        `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().Ticks`], { encoding: "utf8", timeout: 5_000, windowsHide: true }).trim() || null;
+    }
+    return execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], {
+      encoding: "utf8", timeout: 5_000, env: { ...process.env, LC_ALL: "C" },
+    }).trim() || null;
   } catch (error) {
     if (error.code === "ENOENT" || error.status === 1) return null;
     throw error;
   }
 }
 
+function ownerRunning(owner) {
+  if (!alive(owner.pid)) return false;
+  // Older peers did not publish an owner identity. Keep their fail-closed
+  // behavior, and also refuse recovery if a live process cannot be identified.
+  if (!owner.ownerStartedAt) return true;
+  const currentStartedAt = processStartedAt(owner.pid);
+  return !currentStartedAt || currentStartedAt === owner.ownerStartedAt;
+}
+
 async function finishGroup(pid, expectedStartedAt) {
   // A PGID cannot be reused while any original member remains. If its leader
   // exists with a different start identity, the old group is already gone.
-  const currentStartedAt = groupStartedAt(pid);
+  const currentStartedAt = processStartedAt(pid);
   if (expectedStartedAt && currentStartedAt && currentStartedAt !== expectedStartedAt) return;
   signalGroup(pid, "SIGKILL");
   for (let attempt = 0; attempt < 100; attempt += 1) {
@@ -156,15 +172,17 @@ export async function runResourceCommand(command, args, {
             onCompromised(error) { compromised = error; stop("SIGTERM"); },
           });
           const previous = await readOwner(lockPath);
-          if (previous && alive(previous.pid)) throw new Error("Stale tool lease still has a live owner; refusing concurrent execution.");
+          if (previous && ownerRunning(previous)) throw new Error("Stale tool lease still has a live owner; refusing concurrent execution.");
           if (previous?.groupPid && process.platform !== "win32") {
             if (!previous.groupStartedAt) {
               if (groupRunning(previous.groupPid)) throw new Error("Stale process group has no start identity; refusing unsafe recovery.");
             } else await finishGroup(previous.groupPid, previous.groupStartedAt);
           }
-          owner = { pid: process.pid, path: lockPath, token: randomUUID() };
+          const ownerStartedAt = processStartedAt(process.pid);
+          if (!ownerStartedAt) throw new Error("Cannot identify the tool lease owner; refusing unsafe ownership.");
+          owner = { pid: process.pid, path: lockPath, token: randomUUID(), ownerStartedAt };
           await writeOwner(lockPath, owner);
-          childEnv[OWNER_ENV] = JSON.stringify(owner);
+          childEnv[OWNER_ENV] = JSON.stringify({ pid: owner.pid, path: owner.path, token: owner.token });
           break;
         } catch (error) {
           if (error.code !== "ELOCKED") throw error;
@@ -197,7 +215,7 @@ export async function runResourceCommand(command, args, {
     // Observe spawn errors immediately even while publishing ownership.
     completion.catch(() => {});
     if (owner && ownsGroup && child.pid) {
-      ownedGroupStartedAt = groupStartedAt(child.pid);
+      ownedGroupStartedAt = processStartedAt(child.pid);
       if (!ownedGroupStartedAt) throw new Error("Tool bridge exited before publishing process ownership.");
       await writeOwner(lockPath, { ...owner, groupPid: child.pid, groupStartedAt: ownedGroupStartedAt });
       if (abort.signal.aborted) stopChild(stoppedBy);

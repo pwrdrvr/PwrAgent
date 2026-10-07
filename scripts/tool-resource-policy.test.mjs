@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
-import { isAncestorPid, MACHINE_TOOL_LOCK, OWNER_ENV, runResourceCommand } from "./resource-run.mjs";
+import { isAncestorPid, MACHINE_TOOL_LOCK, OWNER_ENV, processStartedAt, runResourceCommand } from "./resource-run.mjs";
+import { runSqliteWriteTests } from "./run-sqlite-write-report.mjs";
 import {
   GIB,
   cappedNodeOptions,
@@ -478,6 +479,46 @@ describe("parallel and option-prefix escapes", () => {
 });
 
 describe("stale process identity", () => {
+  it("recovers a stale lease whose owner PID now belongs to an unrelated process", async () => {
+    const directory = await fixture();
+    const ready = path.join(directory, "ready");
+    const unrelated = spawn(process.execPath, ["-e", `require('fs').writeFileSync(${JSON.stringify(ready)}, 'ready'); setInterval(() => {}, 1000)`], { stdio: "ignore" });
+    const exited = new Promise((resolve) => unrelated.once("exit", resolve));
+    const lockPath = path.join(directory, "lock");
+    try {
+      await waitForFile(ready);
+      const actualStartedAt = processStartedAt(unrelated.pid);
+      expect(actualStartedAt).toBeTruthy();
+      await mkdir(`${lockPath}.lock`);
+      const old = new Date(Date.now() - 60_000);
+      await utimes(`${lockPath}.lock`, old, old);
+      await writeFile(`${lockPath}.owner.json`, JSON.stringify({
+        pid: unrelated.pid, path: lockPath, token: "crashed-owner", ownerStartedAt: `previous:${actualStartedAt}`,
+      }));
+      const child = await startFixture(directory, ["-e", "0"], { lockPath });
+      expect(await child.exited).toEqual({ code: 0, signal: null });
+      expect(() => process.kill(unrelated.pid, 0)).not.toThrow();
+      await expect(readFile(`${lockPath}.owner.json`)).rejects.toThrow();
+    } finally { unrelated.kill("SIGKILL"); await exited; }
+  }, 30_000);
+
+  it.each(["identified", "legacy"])("refuses a stale lease with a live %s owner", async (kind) => {
+    const directory = await fixture();
+    const lockPath = path.join(directory, "lock");
+    const output = path.join(directory, "unexpected-child");
+    await mkdir(`${lockPath}.lock`);
+    const old = new Date(Date.now() - 60_000);
+    await utimes(`${lockPath}.lock`, old, old);
+    const owner = { pid: process.pid, path: lockPath, token: "live-owner" };
+    if (kind === "identified") owner.ownerStartedAt = processStartedAt(process.pid);
+    await writeFile(`${lockPath}.owner.json`, JSON.stringify(owner));
+    await expect(runResourceCommand(process.execPath, ["-e", `require('fs').writeFileSync(${JSON.stringify(output)}, 'started')`], {
+      policy: low, lockPath, stdio: "ignore", log: () => {},
+    })).rejects.toThrow("Stale tool lease still has a live owner");
+    await expect(readFile(output)).rejects.toThrow();
+    expect(JSON.parse(await readFile(`${lockPath}.owner.json`, "utf8"))).toEqual(owner);
+  }, 15_000);
+
   it.skipIf(process.platform === "win32")("does not terminate a new process group that reused an old PGID", async () => {
     const directory = await fixture();
     const ready = path.join(directory, "unrelated");
@@ -500,6 +541,31 @@ describe("stale process identity", () => {
       expect(() => process.kill(unrelated.pid, 0)).not.toThrow();
     } finally { process.kill(-unrelated.pid, "SIGKILL"); await exited; }
   }, 15_000);
+});
+
+describe("SQLite survey resource policy", () => {
+  it.each([low, high])("applies the capacity policy to the actual pnpm exec Vitest child ($constrained)", async (policy) => {
+    const directory = await fixture();
+    const bin = path.join(directory, "node_modules", ".bin");
+    const output = path.join(directory, "invocation.json");
+    const workspace = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+    await writeFile(path.join(directory, "package.json"), JSON.stringify({ name: "sqlite-survey-fixture", private: true, packageManager: workspace.packageManager }));
+    await mkdir(bin, { recursive: true });
+    const probe = path.join(bin, "vitest");
+    await writeFile(probe, `#!${process.execPath}\nrequire('fs').writeFileSync(${JSON.stringify(output)}, JSON.stringify({ args: process.argv.slice(2), options: process.env.NODE_OPTIONS, metrics: process.env.PWRAGENT_DEV_SQLITE_WRITE_METRICS })); process.exit(7);`, { mode: 0o755 });
+    await writeFile(`${probe}.cmd`, `@"${process.execPath}" "${probe}" %*\r\n`);
+    const args = ["selected.test.ts", "--maxWorkers=8", "--maxConcurrency=7", "--fileParallelism", "true"];
+    const env = { ...process.env, NODE_OPTIONS: "--trace-warnings --max-old-space-size=6144", PWRAGENT_DEV_SQLITE_WRITE_METRICS: "1" };
+    expect(await runSqliteWriteTests(args, {
+      policy, cwd: directory, env, lockPath: path.join(directory, "lock"), stdio: "ignore", log: () => {},
+    })).toEqual({ code: 7, signal: null });
+    const invocation = JSON.parse(await readFile(output, "utf8"));
+    expect(invocation.args).toEqual(policy.constrained
+      ? ["run", "--config", "vitest.workspace.ts", "selected.test.ts", "--maxWorkers=1", "--maxConcurrency=1", "--no-file-parallelism"]
+      : ["run", "--config", "vitest.workspace.ts", ...args]);
+    expect(invocation.options).toBe(policy.constrained ? "--trace-warnings --max-old-space-size=2048" : env.NODE_OPTIONS);
+    expect(invocation.metrics).toBe("1");
+  }, 30_000);
 });
 
 it("uses the same default machine/user lane across processes with different temp roots", async () => {

@@ -48,7 +48,7 @@ homedir()/.cache/pwragent-tools-${sha256(homedir()).slice(0,16)}/heavy-tool
 
 `proper-lockfile` owns the empty `heavy-tool.lock` directory with a 30-second
 stale interval and a 5-second heartbeat. An atomic, private
-`heavy-tool.owner.json` sidecar records `{pid,path,token}` and the top-level
+`heavy-tool.owner.json` sidecar records `{pid,path,token,ownerStartedAt}` and the top-level
 POSIX `groupPid` and `groupStartedAt` identity. It sits **outside** the lock directory so stale recovery can
 remove that directory. `PWRAGENT_TOOL_RESOURCE_OWNER` passes `{pid,path,token}`
 to nested scripts. Inheritance requires a matching token and path, a live PID,
@@ -61,7 +61,9 @@ Cancellation terminates and drains the group before releasing the lease.
 Owner death disconnects the bridge, which kills its group. Stale recovery also
 terminates any recorded group belonging to a dead owner before starting the
 next tool. Group start identity prevents a reused PGID from targeting an
-unrelated process. A stale lease with a live owner fails rather than starting a second
+unrelated process. Owner start identity permits recovery when an unrelated
+process reuses the crashed owner's PID. Legacy sidecars without that identity
+still refuse recovery while their PID is live. A stale lease with a verified live owner fails rather than starting a second
 command.
 
 On constrained Windows, PowerShell creates a native Windows Job with
