@@ -1756,6 +1756,7 @@ export function registerSettingsIpcHandlers(
       const discoveryPermit = (
         request.patch.models?.codex?.path !== undefined
         || request.patch.models?.codex?.managedBuilds !== undefined
+        || request.patch.models?.codex?.managedBuildChannel !== undefined
         || request.patch.experimental?.tokenMiserEnabled !== undefined
       )
         ? issueProviderDiscoveryPermit("settings-user-action")

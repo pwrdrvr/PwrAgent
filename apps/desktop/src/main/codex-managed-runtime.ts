@@ -1,4 +1,9 @@
 import { fetchGitHubReleaseMetadata, ReleaseCheckDeferredError } from "./github-release-cache.js";
+import type { DesktopUpdateChannel } from "@pwragent/shared";
+import {
+  MANAGED_CODEX_BUILD_CHANNEL_DEFAULT,
+  parseDesktopUpdateChannel,
+} from "@pwragent/shared";
 import { createHash, randomUUID } from "node:crypto";
 import { execFile as execFileCallback } from "node:child_process";
 import {
@@ -77,6 +82,7 @@ type GithubReleaseAsset = {
 type GithubRelease = {
   assets?: unknown;
   draft?: unknown;
+  prerelease?: unknown;
   published_at?: unknown;
   tag_name?: unknown;
 };
@@ -110,8 +116,14 @@ export type ManagedCodexRelease = {
 
 export type ManagedCodexMetadata = {
   asset: string;
+  /** Track the check that installed this bundle was following. */
+  channel?: DesktopUpdateChannel;
   checkedAt: number;
   installedAt: number;
+  /** Newest promoted tag the last check saw, whichever track it served. */
+  latestTag?: string;
+  /** Newest tag overall the last check saw, promoted or not. */
+  prereleaseTag?: string;
   repository: string;
   schemaVersion: number;
   sha256: string;
@@ -129,6 +141,7 @@ export type ManagedCodexRuntime = {
 type ManagedCodexRuntimeOptions = {
   applicationCommand?: string;
   arch?: NodeJS.Architecture;
+  channel?: DesktopUpdateChannel;
   checkMode?: ManagedCodexCheckMode;
   extractArchive?: (
     archivePath: string,
@@ -255,8 +268,14 @@ export async function ensureManagedCodexRuntime(
     const cached = await readCachedRuntime(rootDir, options);
     if (cached) {
       const now = options.now?.() ?? Date.now();
+      // A cache installed for the other track still serves this launch, the
+      // same as a stale one: startup never waits on a download. Its refresh
+      // starts now rather than when the TTL runs out.
       if (
-        now - cached.metadata.checkedAt >= MANAGED_CODEX_CHECK_TTL_MS
+        (
+          now - cached.metadata.checkedAt >= MANAGED_CODEX_CHECK_TTL_MS
+          || isCachedForOtherTrack(cached, options)
+        )
         && now >= (retryChecksAfter.get(rootDir) ?? 0)
       ) {
         void ensureManagedCodexRuntime({
@@ -293,12 +312,16 @@ async function ensureManagedCodexRuntimeInner(
   const now = options.now?.() ?? Date.now();
   const cached = await readCachedRuntime(rootDir, options);
   const checkMode = options.checkMode ?? "ttl";
+  const channel = options.channel ?? MANAGED_CODEX_BUILD_CHANNEL_DEFAULT;
   if (
-    (checkMode === "once-per-process" && processChecks.has(rootDir))
-    || (
-      checkMode === "ttl"
-      && cached
-      && now - cached.metadata.checkedAt < MANAGED_CODEX_CHECK_TTL_MS
+    !(cached && isCachedForOtherTrack(cached, options))
+    && (
+      (checkMode === "once-per-process" && processChecks.has(rootDir))
+      || (
+        checkMode === "ttl"
+        && cached
+        && now - cached.metadata.checkedAt < MANAGED_CODEX_CHECK_TTL_MS
+      )
     )
   ) {
     if (!cached) {
@@ -311,12 +334,28 @@ async function ensureManagedCodexRuntimeInner(
   const progress = createManagedRuntimeProgressReporter("codex");
   progress.checking();
   try {
-    const release = await fetchLatestCompatibleRelease(options);
+    const slots = await fetchCompatibleReleaseSlots(options, channel);
+    const release = slots[channel];
     if (!release) {
-      throw new Error("No compatible complete PwrAgent Codex release was found.");
+      throw new Error(
+        `No compatible complete PwrAgent Codex release was found on the ${channel} track.`,
+      );
     }
+    // What each track resolved to, recorded on every check so Settings can
+    // name both versions without a second network round trip. A check that
+    // answered from the Atom feed saw one track only; carry the other track's
+    // last known tag rather than blanking a version this machine already
+    // learned.
+    const latestTag = slots.latest?.tag ?? cached?.metadata.latestTag;
+    const prereleaseTag =
+      slots.prerelease?.tag ?? cached?.metadata.prereleaseTag;
+    const observed = {
+      channel,
+      ...(latestTag ? { latestTag } : {}),
+      ...(prereleaseTag ? { prereleaseTag } : {}),
+    };
     if (cached?.metadata.tag === release.tag) {
-      const metadata = { ...cached.metadata, checkedAt: now };
+      const metadata = { ...cached.metadata, ...observed, checkedAt: now };
       await writeMetadata(rootDir, metadata);
       retryChecksAfter.delete(rootDir);
       // Nothing new to fetch: the check ends quietly instead of leaving a
@@ -333,6 +372,7 @@ async function ensureManagedCodexRuntimeInner(
       release,
       now,
       options,
+      observed,
       progress,
     );
     retryChecksAfter.delete(rootDir);
@@ -346,6 +386,7 @@ async function ensureManagedCodexRuntimeInner(
     return active;
   } catch (error) {
     managedCodexLog.warn("managed_codex_runtime_update_failed", {
+      channel,
       error: error instanceof Error ? error.message : String(error),
       usingCachedTag: cached?.metadata.tag,
     });
@@ -367,15 +408,33 @@ async function ensureManagedCodexRuntimeInner(
   }
 }
 
-async function fetchLatestCompatibleRelease(
+/**
+ * Whether the cached bundle was installed by a check following the other
+ * track. The managed root is machine-wide, so a profile on Prerelease rewrites
+ * the record a profile on Latest reads next; a fresh `checkedAt` alone would
+ * hand Latest the build it exists to avoid. A record written before tracks
+ * existed names no channel and is left alone, so an offline machine does not
+ * re-check on every launch forever.
+ */
+function isCachedForOtherTrack(
+  cached: ManagedCodexRuntime,
   options: ManagedCodexRuntimeOptions,
-): Promise<ManagedCodexRelease | undefined> {
+): boolean {
+  const channel = options.channel ?? MANAGED_CODEX_BUILD_CHANNEL_DEFAULT;
+  return cached.metadata.channel !== undefined
+    && cached.metadata.channel !== channel;
+}
+
+async function fetchCompatibleReleaseSlots(
+  options: ManagedCodexRuntimeOptions,
+  channel: DesktopUpdateChannel,
+): Promise<ManagedCodexReleaseSlots> {
   const assetPlatform = managedCodexAssetPlatform(
     options.platform ?? process.platform,
     options.arch ?? process.arch,
   );
   if (!assetPlatform) {
-    return undefined;
+    return {};
   }
   const fetchImpl = options.fetch ?? globalThis.fetch;
   const response = await (options.fetch ?? ((url, init) => fetchGitHubReleaseMetadata(String(url), init, {
@@ -399,7 +458,7 @@ async function fetchLatestCompatibleRelease(
     if (!Array.isArray(releases)) {
       throw new Error("GitHub release check returned an invalid response.");
     }
-    return selectManagedCodexRelease(releases, assetPlatform);
+    return selectManagedCodexReleaseSlots(releases, assetPlatform);
   }
   if (response.status !== 403 && response.status !== 429) {
     throw new Error(
@@ -416,23 +475,47 @@ async function fetchLatestCompatibleRelease(
       `GitHub release feed failed with HTTP ${feedResponse.status} after API HTTP ${response.status}.`,
     );
   }
-  return selectManagedCodexReleaseFromFeed(
+  const fromFeed = selectManagedCodexReleaseFromFeed(
     await feedResponse.text(),
     assetPlatform,
+    channel,
   );
+  // The feed answers one track. Reporting the other track's slot from it
+  // would be a guess, and Settings would print that guess as a version.
+  return fromFeed ? { [channel]: fromFeed } : {};
 }
 
-export function selectManagedCodexRelease(
+/**
+ * The newest complete release on each track.
+ *
+ * `latest` holds the newest release GitHub reports as promoted; `prerelease`
+ * holds the newest release overall. When the newest release is a promoted one
+ * both slots hold it, which is the point: the tracks agree until a build is
+ * published for testing, and the control stays meaningful in between.
+ */
+export type ManagedCodexReleaseSlots = {
+  latest?: ManagedCodexRelease;
+  prerelease?: ManagedCodexRelease;
+};
+
+export function selectManagedCodexReleaseSlots(
   releases: GithubRelease[],
   assetPlatform: string,
-): ManagedCodexRelease | undefined {
+): ManagedCodexReleaseSlots {
+  const candidates: Array<{
+    prerelease: boolean;
+    release: ManagedCodexRelease;
+    version: ParsedSemver;
+  }> = [];
   for (const release of releases) {
     const tag = typeof release.tag_name === "string"
       ? release.tag_name.trim()
       : "";
+    const version = parseManagedCodexSemver(tag);
     if (
       release.draft === true
       || !isManagedCodexTagEligible(tag)
+      || version === undefined
       || !Array.isArray(release.assets)
     ) {
       continue;
@@ -461,35 +544,74 @@ export function selectManagedCodexRelease(
     if (!checksum || !archive || !completion || !manifest || !signature) {
       continue;
     }
-    return {
-      archive,
-      checksum,
-      completion,
-      manifest,
-      signature,
-      ...(typeof release.published_at === "string"
-        ? { publishedAt: release.published_at }
-        : {}),
-      tag,
-    };
+    candidates.push({
+      prerelease: release.prerelease === true,
+      release: {
+        archive,
+        checksum,
+        completion,
+        manifest,
+        signature,
+        ...(typeof release.published_at === "string"
+          ? { publishedAt: release.published_at }
+          : {}),
+        tag,
+      },
+      version,
+    });
   }
-  return undefined;
+  // Precedence, not publish order. A promotion lands on a release published
+  // days ago, and a repair to an older line is published last; either one
+  // makes the newest entry in the response the wrong answer.
+  candidates.sort(
+    (left, right) => compareParsedSemver(right.version, left.version),
+  );
+  const latest = candidates.find((candidate) => !candidate.prerelease)?.release;
+  const newest = candidates[0]?.release;
+  return {
+    ...(latest ? { latest } : {}),
+    ...(newest ? { prerelease: newest } : {}),
+  };
+}
+
+export function selectManagedCodexRelease(
+  releases: GithubRelease[],
+  assetPlatform: string,
+  channel: DesktopUpdateChannel,
+): ManagedCodexRelease | undefined {
+  return selectManagedCodexReleaseSlots(releases, assetPlatform)[channel];
 }
 
 export function selectManagedCodexReleaseFromFeed(
   feed: string,
   assetPlatform: string,
+  channel: DesktopUpdateChannel,
 ): ManagedCodexRelease | undefined {
+  if (channel === "latest") {
+    // The Atom feed carries tags, not release records: it cannot tell a
+    // promoted release from one published for testing, and it lists tags that
+    // have no release at all. Serving it to the Latest track would hand an
+    // operator exactly the build they opted out of, so the track goes without
+    // an update this cycle and keeps the cached runtime.
+    return undefined;
+  }
   const linkPattern = new RegExp(
     `https://github\\.com/${MANAGED_CODEX_REPOSITORY}/releases/tag/`
       + "(pwragent-v[0-9A-Za-z][0-9A-Za-z.+-]*)",
     "gu",
   );
+  const candidates: Array<{ tag: string; version: ParsedSemver }> = [];
   for (const match of feed.matchAll(linkPattern)) {
-    const tag = match[1];
-    if (!isManagedCodexTagEligible(tag)) {
-      continue;
+    const version = parseManagedCodexSemver(match[1]);
+    if (isManagedCodexTagEligible(match[1]) && version !== undefined) {
+      candidates.push({ tag: match[1], version });
     }
+  }
+  candidates.sort(
+    (left, right) => compareParsedSemver(right.version, left.version),
+  );
+  const tag = candidates[0]?.tag;
+  if (tag !== undefined) {
     const assetName = managedCodexArchiveName(tag, assetPlatform);
     const releaseBase =
       `https://github.com/${MANAGED_CODEX_REPOSITORY}/releases/download/${tag}`;
@@ -531,6 +653,15 @@ export function isManagedCodexTagEligible(tag: string): boolean {
     && minimum
     && compareParsedSemver(candidate, minimum) >= 0,
   );
+}
+
+function readMetadataTag(value: unknown): string | undefined {
+  // The same bar the record's own tag is held to. A tag below the first signed
+  // release can never be installed, so reporting one as a track's version
+  // would offer the operator a build that selecting the track cannot produce.
+  return typeof value === "string" && isManagedCodexTagEligible(value)
+    ? value
+    : undefined;
 }
 
 function isManagedCodexTag(tag: string): boolean {
@@ -640,6 +771,10 @@ async function installRelease(
   release: ManagedCodexRelease,
   now: number,
   options: ManagedCodexRuntimeOptions,
+  observed: Pick<
+    ManagedCodexMetadata,
+    "channel" | "latestTag" | "prereleaseTag"
+  >,
   progress: ManagedRuntimeProgressReporter,
 ): Promise<ManagedCodexRuntime> {
   options.signal?.throwIfAborted();
@@ -802,6 +937,7 @@ async function installRelease(
     const version = versionForTag(release.tag);
     const metadata: ManagedCodexMetadata = {
       asset: release.archive.name,
+      ...observed,
       checkedAt: now,
       installedAt: now,
       repository: MANAGED_CODEX_REPOSITORY,
@@ -1522,9 +1658,18 @@ async function readCachedRuntime(
       validation: "reuse",
       tag: metadata.tag,
     });
+    // The track fields arrived after the first shipped format, so a bundle
+    // installed by an older build carries none of them. They are reporting
+    // detail, never a reason to reject an otherwise valid install: drop a
+    // field that does not parse and keep the record.
     return runtimeAtRoot(
       versionRoot,
-      metadata as ManagedCodexMetadata,
+      {
+        ...(metadata as ManagedCodexMetadata),
+        channel: parseDesktopUpdateChannel(metadata.channel),
+        latestTag: readMetadataTag(metadata.latestTag),
+        prereleaseTag: readMetadataTag(metadata.prereleaseTag),
+      },
       platform,
     );
   } catch {

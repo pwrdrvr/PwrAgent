@@ -3,6 +3,7 @@ import {
   DECISION_PROVIDER_IDS,
   formatFilesystemPath,
   isValidatedDiscoveryCandidate,
+  MANAGED_CODEX_BUILD_CHANNEL_DEFAULT,
   resolveDecisionModelSettings,
 } from "@pwragent/shared";
 import type {
@@ -28,6 +29,7 @@ import {
   SettingsIndexRow,
   SettingsPanelHead,
   SettingsPendingIndicator,
+  SegmentedField,
   SettingsSection,
   SettingsSectionStack,
   ToggleField,
@@ -39,7 +41,10 @@ import {
 } from "./SettingsPathRow";
 import { SettingsTestBlock } from "./SettingsTestBlock";
 import { sourceBadge } from "./settings-fields";
-import { checkForManagedCodexUpdates } from "./managed-codex-actions";
+import {
+  checkForManagedCodexUpdates,
+  refreshManagedCodexModelCatalog,
+} from "./managed-codex-actions";
 import {
   CodexAuthProfileCreateButton,
   CodexAuthProfileLoginButton,
@@ -55,7 +60,12 @@ import {
   useProviderCatalogRefresh,
   type ProviderCatalogRefreshController,
 } from "./ProviderCatalogRefresh";
-import { acpRelativeTime, acpStatusLabel } from "./acp-agent-copy";
+import {
+  acpRelativeTime,
+  acpStatusLabel,
+  MANAGED_BUILD_TRACK_SUB,
+  managedBuildTrackOptions,
+} from "./acp-agent-copy";
 import {
   acpAgentEnabledInSnapshot,
   displayOrderedAcpEntries,
@@ -152,6 +162,10 @@ export function ModelsSettings(props: {
   onSaveDecisionModels?: (settings: DesktopDecisionModelSettings) => Promise<unknown>;
   /** Persist whether PwrAgent downloads and prefers its own Codex build. */
   onManagedCodexBuildsChange?: (enabled: boolean) => Promise<boolean>;
+  /** Persist which pwrdrvr/codex track the managed runtime follows. */
+  onManagedCodexBuildChannelChange?: (
+    channel: DesktopUpdateChannel,
+  ) => Promise<boolean>;
   /** Jump to Experimental, where Token Miser is switched. */
   onOpenTokenMiser?: () => void;
   /** Persist a per-ACP-agent CLI-path override (also pins a discovered install). */
@@ -291,6 +305,28 @@ export function ModelsSettings(props: {
     }
   };
 
+  const changeManagedCodexTrack = async (
+    channel: DesktopUpdateChannel,
+  ): Promise<void> => {
+    setManagedCodexCheckError(undefined);
+    // The write holds until main has checked the track and installed its
+    // build, the same transaction as the PwrAgent build switch.
+    const saved = await props.onManagedCodexBuildChannelChange?.(channel);
+    if (!saved) {
+      return;
+    }
+    await props.onRefresh();
+    try {
+      // The track's build is a different Codex, and its models can differ.
+      await refreshManagedCodexModelCatalog(props.desktopApi);
+      await refreshCatalog();
+    } catch (error) {
+      setManagedCodexCheckError(
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  };
+
   useEffect(() => {
     void refreshCatalog();
     // Mount is a cache-only read. Provider discovery belongs to the explicit
@@ -392,6 +428,22 @@ export function ModelsSettings(props: {
                   }
                 }) ?? Promise.resolve();
               }}
+            />
+          ) : null}
+          {managedCodexOn && props.onManagedCodexBuildChannelChange ? (
+            <SegmentedField
+              label="Build track"
+              sub={MANAGED_BUILD_TRACK_SUB}
+              disabled={props.saving || catalogBusy || checkingManagedCodex}
+              options={managedBuildTrackOptions(managedCodexRuntime ?? {})}
+              // Same wait as the switch above: the config write, then the
+              // release check that installs and activates the track's build.
+              pendingLabel="Downloading and installing…"
+              value={
+                codex.managedBuildChannel?.value
+                ?? MANAGED_CODEX_BUILD_CHANNEL_DEFAULT
+              }
+              onChange={changeManagedCodexTrack}
             />
           ) : null}
           <SettingsField
