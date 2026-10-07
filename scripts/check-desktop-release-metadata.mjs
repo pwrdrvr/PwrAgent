@@ -430,18 +430,29 @@ assertWorkflowJobOrdersText(
   "node apps/desktop/scripts/release.mjs --linux --no-publish",
   "Upload Linux package artifact",
 );
-assertWorkflowJobRunner(
+for (const jobName of ["install-deps", "lint", "test", "prepare", "sign"]) {
+  assertWorkflowJobRunner(releaseWorkflow, ".github/workflows/release.yml", jobName, "macos-26");
+}
+for (const jobName of ["lint", "test", "prepare"]) {
+  assertWorkflowJobNeeds(releaseWorkflow, ".github/workflows/release.yml", jobName, "install-deps");
+}
+// Preparing the unsigned macOS stage may overlap validation, but no platform
+// may proceed past the old prepare gate without every validation lane passing.
+for (const jobName of ["sign", "linux-package", "windows-prepare"]) {
+  for (const dependency of ["prepare", "lint", "test"]) {
+    assertWorkflowJobNeeds(releaseWorkflow, ".github/workflows/release.yml", jobName, dependency);
+  }
+}
+assertWorkflowStepContainsText(
   releaseWorkflow,
   ".github/workflows/release.yml",
-  "prepare",
-  "macos-26",
+  "lint",
+  "Lint and typecheck",
+  "run: pnpm lint",
 );
-assertWorkflowJobRunner(
-  releaseWorkflow,
-  ".github/workflows/release.yml",
-  "sign",
-  "macos-26",
-);
+for (const expected of ["lane: [1, 2]", "run: pnpm test --shard=${{ matrix.lane }}/2"]) {
+  assertWorkflowJobContainsText(releaseWorkflow, ".github/workflows/release.yml", "test", expected);
+}
 assertWorkflowJobRunner(
   previewBuildWorkflow,
   ".github/workflows/preview-build.yml",
@@ -456,7 +467,7 @@ for (const expected of [
   assertWorkflowJobContainsText(
     releaseWorkflow,
     ".github/workflows/release.yml",
-    "prepare",
+    "test",
     expected,
   );
 }
