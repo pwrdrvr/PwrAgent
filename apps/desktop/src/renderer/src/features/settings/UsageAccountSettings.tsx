@@ -31,8 +31,8 @@ export function UsageAccountSettings(props: {
     <SettingsSection eyebrow="Usage Activity" title="Account grouping">
       <SettingsField
         label="Account group"
-        sub="For accounts whose provider does not report a stable identity."
-        help="Use the same group on profiles using the same provider account. Leave blank for automatic identity. Changes apply to future requests, including helpers."
+        sub="Only for API keys and providers that report no account."
+        help="Use the same group on every profile that uses this account. Leave blank to use the account the provider reports. Changes apply to future requests, including helpers. To name an account, use Rename in Usage."
         error={error}
         control={
           <input

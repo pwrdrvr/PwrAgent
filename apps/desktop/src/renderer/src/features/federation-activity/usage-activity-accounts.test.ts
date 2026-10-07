@@ -35,3 +35,42 @@ it("keeps historical accounts on the same instance selectable alongside the curr
   expect(accounts.find((account) => account.key === usageAccountKey({ ...row, accountKey: "previous" }))?.limitKey).toBeUndefined();
   expect(accounts.find((account) => account.key === usageAccountKey({ ...row, accountKey: "current" }))?.limitKey).toBe("account:current");
 });
+
+it("names an account by provider and plan, adding machines, then key, only where names collide", () => {
+  const keyed = (accountKey: string, owner: string, provider = "openai") => ({
+    ...usageFixture(), accountKey, owner, line: { ...usageFixture().line, provider },
+    target: { scope: "remote" as const, instanceId: owner },
+  });
+  const limits = buildLimitAccounts([
+    { owner: "Studio Mac", current: { observedAt: 300, accountKey: "work", planType: "pro", limits: [] } },
+    { owner: "Build server", current: { observedAt: 300, accountKey: "work", planType: "pro", limits: [] } },
+    { owner: "Travel laptop", current: { observedAt: 300, accountKey: "personal", planType: "pro", limits: [] } },
+    { owner: "Lab", current: { observedAt: 300, accountKey: "team", planType: "business", limits: [] } },
+  ]);
+  const labels = (names?: Record<string, string>) => Object.fromEntries(buildUsageAccounts([
+    keyed("work", "Studio Mac"), keyed("personal", "Travel laptop"), keyed("same-a", "Spare"), keyed("same-b", "Spare"),
+    keyed("grok", "Studio Mac", "xai"), usageFixture(),
+    { ...usageFixture(), line: { ...usageFixture().line, provider: "xai" } },
+  ], limits, names).map((account) => [account.label, account.detail]));
+  expect(labels()).toEqual({
+    "OpenAI Business": "Lab",
+    "OpenAI Pro · Build server +1": "Build server, Studio Mac",
+    "OpenAI Pro · Travel laptop": "",
+    "OpenAI · Spare · same-a": "",
+    "OpenAI · Spare · same-b": "",
+    xAI: "Studio Mac",
+    "OpenAI · No account recorded · Local": "Older turns, or a provider that reports no account",
+    "xAI · No account recorded · Local": "Older turns, or a provider that reports no account",
+  });
+  // An operator name wins, its detail regains the provider and plan, and the
+  // account it no longer collides with drops back to the short name.
+  expect(labels({ "openai:personal": "Personal" })).toMatchObject({
+    Personal: "OpenAI Pro · Travel laptop",
+    "OpenAI Pro": "Build server, Studio Mac",
+  });
+  // A name is never lengthened; the derived name it collides with is.
+  expect(labels({ "openai:work": "OpenAI Pro" })).toMatchObject({
+    "OpenAI Pro": "OpenAI Pro · Build server, Studio Mac",
+    "OpenAI Pro · Travel laptop": "",
+  });
+});

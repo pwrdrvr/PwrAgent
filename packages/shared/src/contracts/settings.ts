@@ -1369,6 +1369,8 @@ export type DesktopSettingsSnapshot = {
   models: {
     /** Explicit account groups for providers without a stable protocol identity. */
     usageAccountGroups?: Record<string, string>;
+    /** Usage Activity names, keyed `provider:accountKey`. Local to this profile. */
+    usageAccountNames?: Record<string, string>;
     providerDefaults?: Record<string, DesktopProviderModelDefaults>;
     providerThreadMigrations?: Record<
       string,
@@ -1687,6 +1689,8 @@ export type DesktopSettingsConfigPatch = {
   models?: {
     /** Replaces account groups; blank/omitted entries use protocol identity. */
     usageAccountGroups?: Record<string, string>;
+    /** Replaces Usage Activity account names; an omitted account uses its default name. */
+    usageAccountNames?: Record<string, string>;
     providerDefaults?: Record<string, DesktopProviderModelDefaults>;
     providerThreadMigrations?: Record<
       string,

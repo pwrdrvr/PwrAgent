@@ -7,7 +7,11 @@ export type UsageChartLimit = { label: string; points: LimitPoint[]; resets: Lim
  * A stacked series: a thread, which can open in the main window, or a model,
  * provider, account or instance, which can filter the view.
  */
-export type UsageChartSeries = { title: string; cost: string; onOpen?: () => void; onFilter?: () => void; filtered?: boolean };
+export type UsageChartSeries = {
+  title: string; cost: string; onOpen?: () => void; onFilter?: () => void; filtered?: boolean;
+  /** Tooltips for a filter whose reach is wider than the thread list. */
+  filterTitle?: string; clearTitle?: string;
+};
 
 const DIMENSION_NAMES: Record<UsageDimension, string> = { thread: "Thread", model: "Model", provider: "Provider", account: "Account", instance: "Instance" };
 /**
@@ -158,7 +162,7 @@ export function UsageTimeline({ buckets, series, limit, forecast, selected, onSe
     <div className="usage-timeline__legend">
       {series.map((item, index) => item.onFilter
         ? <button type="button" key={index} className="usage-timeline__legend-item" aria-pressed={item.filtered ?? false}
-          title={item.filtered ? "Show every thread" : `Show only ${item.title}`} onClick={item.onFilter}>
+          title={item.filtered ? item.clearTitle ?? "Show every thread" : item.filterTitle ?? `Show only ${item.title}`} onClick={item.onFilter}>
           <i className={`usage-series--${index}`} /><span>{item.title}</span> · {item.cost}</button>
         : item.onOpen
         ? <button type="button" key={index} className="usage-timeline__legend-item" title={`Open ${item.title}`}

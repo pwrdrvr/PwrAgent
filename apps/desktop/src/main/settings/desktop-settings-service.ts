@@ -1557,6 +1557,7 @@ export class DesktopSettingsService {
       },
       models: {
         usageAccountGroups: config.models?.usageAccountGroups ?? {},
+        usageAccountNames: config.models?.usageAccountNames ?? {},
         providerDefaults: config.models?.providerDefaults ?? {},
         providerThreadMigrations:
           config.models?.providerThreadMigrations ?? {},

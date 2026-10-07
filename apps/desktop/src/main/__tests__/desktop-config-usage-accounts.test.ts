@@ -27,4 +27,22 @@ describe("usage account configuration", () => {
     expect(parseDesktopSettingsToml("[models]\nusage_account_groups = 3\n", "test.toml").models)
       .toBeUndefined();
   });
+
+  it("round trips Usage account names beside groups and clears them independently", () => {
+    const withGroup = save("", { codex: "Work API" });
+    const names = (existing: string, usageAccountNames: Record<string, string>) => applyTomlEdits(
+      existing,
+      desktopSettingsPatchToEdits({ models: { usageAccountNames } }, parseTomlTables(existing, "test.toml")),
+    );
+    const written = names(withGroup, {
+      "openai:0123abcd": " Personal ", "xai:9f8e": "Grok team",
+      "OpenAI:bad": "case", "openai:": "empty key", "openai:long": "x".repeat(61), "openai:blank": " ",
+    });
+    const parsed = parseDesktopSettingsToml(written, "test.toml").models;
+    expect(parsed?.usageAccountNames).toEqual({ "openai:0123abcd": "Personal", "xai:9f8e": "Grok team" });
+    expect(parsed?.usageAccountGroups).toEqual({ codex: "Work API" });
+    const cleared = names(written, {});
+    expect(cleared).not.toContain("usage_account_names");
+    expect(parseDesktopSettingsToml(cleared, "test.toml").models?.usageAccountGroups).toEqual({ codex: "Work API" });
+  });
 });

@@ -293,6 +293,7 @@ export type DesktopSettingsConfig = {
   };
   models?: {
     usageAccountGroups?: Record<string, string>;
+    usageAccountNames?: Record<string, string>;
     providerDefaults?: Record<string, DesktopProviderModelDefaults>;
     providerThreadMigrations?: Record<
       string,
@@ -1698,6 +1699,15 @@ export function desktopSettingsPatchToEdits(
       ? { op: "setTableArray", path: ["models", "usage_account_groups"], value: entries }
       : { op: "deleteTableArray", path: ["models", "usage_account_groups"] });
   }
+  if (patch.models?.usageAccountNames !== undefined) {
+    const names = readUsageAccountNames(patch.models.usageAccountNames);
+    const entries = Object.entries(names ?? {})
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([account, name]) => ({ account, name }));
+    edits.push(entries.length
+      ? { op: "setTableArray", path: ["models", "usage_account_names"], value: entries }
+      : { op: "deleteTableArray", path: ["models", "usage_account_names"] });
+  }
   if (patch.models?.helperModels !== undefined) {
     const helperModels = normalizeHelperModelSettings(patch.models.helperModels);
     if (helperModels.defaultModel) {
@@ -2331,6 +2341,7 @@ function normalizeDesktopConfig(
     },
     models: {
       usageAccountGroups: readUsageAccountGroups(models?.usage_account_groups),
+      usageAccountNames: readUsageAccountNames(models?.usage_account_names),
       providerDefaults: readProviderModelDefaults(models?.provider_defaults),
       providerThreadMigrations: readProviderThreadModelMigrations(
         models?.provider_thread_migrations,
@@ -2675,6 +2686,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const providerThreadMigrations = config.models?.providerThreadMigrations;
   const helperModels = config.models?.helperModels;
   const usageAccountGroups = config.models?.usageAccountGroups;
+  const usageAccountNames = config.models?.usageAccountNames;
   const decisionModels = config.models?.decisionModels;
   const hasHelperModels = Boolean(
     helperModels
@@ -2693,10 +2705,12 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     )
     || hasHelperModels
     || (usageAccountGroups && Object.keys(usageAccountGroups).length > 0)
+    || (usageAccountNames && Object.keys(usageAccountNames).length > 0)
     || decisionModels
   ) {
     pruned.models = {
       ...(usageAccountGroups && Object.keys(usageAccountGroups).length > 0 ? { usageAccountGroups } : {}),
+      ...(usageAccountNames && Object.keys(usageAccountNames).length > 0 ? { usageAccountNames } : {}),
       ...(hasHelperModels ? { helperModels } : {}),
       ...(decisionModels ? { decisionModels } : {}),
       ...(providerDefaults && Object.keys(providerDefaults).length > 0
@@ -3116,6 +3130,23 @@ function readUsageAccountGroups(value: unknown): Record<string, string> | undefi
     groups[backend] = group.trim();
   }
   return Object.keys(groups).length ? groups : undefined;
+}
+
+// Additive setting, like account groups. Names are local presentation only:
+// keyed by provider and opaque account key, and never sent to peers.
+function readUsageAccountNames(value: unknown): Record<string, string> | undefined {
+  const entries = Array.isArray(value)
+    ? value.map((row) => [readString(row?.account), readString(row?.name)])
+    : value && typeof value === "object"
+      ? Object.entries(value)
+      : [];
+  const names: Record<string, string> = {};
+  for (const [account, name] of entries) {
+    if (typeof account !== "string" || !/^[a-z0-9_-]+:[A-Za-z0-9_-]{1,64}$/.test(account)
+      || typeof name !== "string" || !name.trim() || name.trim().length > 60) continue;
+    names[account] = name.trim();
+  }
+  return Object.keys(names).length ? names : undefined;
 }
 
 function normalizeHelperModelSettings(

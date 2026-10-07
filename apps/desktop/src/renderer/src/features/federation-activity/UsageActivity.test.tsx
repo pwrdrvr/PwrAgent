@@ -1,7 +1,8 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
-import type { BackendSummary, ListBackendsResponse, ReadFederationActivityResponse, UsageLimitObservation } from "@pwragent/shared";
+import type { BackendSummary, DesktopSettingsConfigPatch, DesktopSettingsWriteResponse, ListBackendsResponse,
+  ReadDesktopSettingsResponse, ReadFederationActivityResponse, UsageLimitObservation } from "@pwragent/shared";
 import { UsageActivity } from "./UsageActivity";
 import { usageFixture } from "./usage-activity-fixture";
 import { chooseSelectOption, selectListbox, selectOptionLabels } from "../../test/select";
@@ -219,15 +220,18 @@ it("filters totals, tokens, limits and threads by recorded account across owners
   expect(band().getByText("$15.00")).toBeInTheDocument();
   const picker = screen.getByRole("combobox", { name: "Account" });
   expect(selectOptionLabels(picker)).toEqual([
-    "All accounts", "OpenAI · Account alpha · Local, Remote", "OpenAI · Account beta · Local",
-    "OpenAI · Unknown account · Local", "xAI · Account alpha · Remote",
+    "All accounts", "OpenAI · Local", "OpenAI · Local +1", "xAI", "No account recorded · Local",
   ]);
   const spendBy = screen.getByRole("group", { name: "Spend by" });
   fireEvent.click(within(spendBy).getByRole("button", { name: "Provider" }));
   expect(screen.getByRole("button", { name: /^OpenAI · \$10\.00$/ })).toBeInTheDocument();
   fireEvent.click(within(spendBy).getByRole("button", { name: "Account" }));
-  fireEvent.click(screen.getByRole("button", { name: /^OpenAI · Account alpha · Local, Remote · \$5\.00$/ }));
-  expect(picker).toHaveTextContent("OpenAI · Account alpha");
+  expect(screen.getByRole("button", { name: /^OpenAI · Local \+1 · \$5\.00$/ })).toHaveAttribute("title",
+    "Show only OpenAI · Local +1: limits, spend and threads");
+  fireEvent.click(screen.getByRole("button", { name: /^OpenAI · Local \+1 · \$5\.00$/ }));
+  expect(picker).toHaveTextContent("OpenAI · Local +1");
+  expect(screen.getByRole("group", { name: "Account scope" })).toHaveTextContent(
+    "Showing OpenAI · Local +1 · Local, Remote. Limits, spend, chart and threads are this account only.");
   expect(band().getByText("$5.00")).toBeInTheDocument();
   expect(band().getByText("2 threads · 2 turns")).toBeInTheDocument();
   expect(band().getByText("600")).toBeInTheDocument();
@@ -237,17 +241,18 @@ it("filters totals, tokens, limits and threads by recorded account across owners
   expect(screen.queryByRole("button", { name: "Inspect Current login" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Inspect Another provider" })).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Inspect Previous login" }));
-  chooseSelectOption(picker, "OpenAI · Account beta · Local");
+  chooseSelectOption(picker, "OpenAI · Local");
   expect(band().getByText("$2.00")).toBeInTheDocument();
   expect(screen.queryByRole("group", { name: "Turns in window" })).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Inspect Current login" })).toBeInTheDocument();
-  chooseSelectOption(picker, "OpenAI · Unknown account · Local");
+  chooseSelectOption(picker, "No account recorded · Local");
   expect(band().getByText("$3.00")).toBeInTheDocument();
-  expect(screen.getByText(/These rows have no recorded account identity/)).toBeInTheDocument();
+  expect(screen.getByText(/No account was recorded for these turns/)).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Rename" })).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Inspect Unkeyed history" })).toBeInTheDocument();
   chooseSelectOption(picker, "All accounts");
   expect(band().getByText("$15.00")).toBeInTheDocument();
-  expect(screen.queryByText(/These rows have no recorded account identity/)).not.toBeInTheDocument();
+  expect(screen.queryByRole("group", { name: "Account scope" })).not.toBeInTheDocument();
   expect(readUsageActivity).toHaveBeenCalledTimes(4); // Clock-period account filtering stays local.
 });
 
@@ -268,7 +273,7 @@ it("focuses an account's turns and helper costs without any limit reading", asyn
   await screen.findByRole("button", { name: "Inspect Account B turn" });
   choosePeriod("7 days");
   await waitFor(() => expect(readUsageActivity).toHaveBeenCalledTimes(2));
-  chooseSelectOption(screen.getByRole("combobox", { name: "Account" }), "OpenAI · Account alpha · This instance");
+  chooseSelectOption(screen.getByRole("combobox", { name: "Account" }), "OpenAI · This instance · alph");
   expect(within(screen.getByRole("region", { name: "Limits and cost" })).getByText("$3.00")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Inspect Account A helpers" })).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Inspect Account B turn" })).not.toBeInTheDocument();
@@ -305,13 +310,13 @@ it("reads ten federated profiles, sums their provider usage and selects an accou
   expect(band().getByText("10 threads · 10 turns")).toBeInTheDocument();
   const picker = screen.getByRole("combobox", { name: "Account" });
   expect(selectOptionLabels(picker)).toHaveLength(11); // All accounts, plus each of the ten accounts.
-  expect(selectOptionLabels(picker)).toContain("OpenAI · Account acct-9 · Machine 9 (profile-9)");
+  expect(selectOptionLabels(picker)).toContain("OpenAI · Machine 9 (profile-9)");
   const spendBy = screen.getByRole("group", { name: "Spend by" });
   fireEvent.click(within(spendBy).getByRole("button", { name: "Provider" }));
   expect(screen.getByRole("button", { name: /^OpenAI · \$55\.00$/ })).toBeInTheDocument();
   fireEvent.click(within(spendBy).getByRole("button", { name: "Account" }));
   expect(screen.getByText("Other accounts")).toBeInTheDocument();
-  chooseSelectOption(picker, "OpenAI · Account acct-0 · Local");
+  chooseSelectOption(picker, "OpenAI · Local");
   expect(band().getByText("$1.00")).toBeInTheDocument();
   expect(band().getByText("1 thread · 1 turn")).toBeInTheDocument();
   expect(band().getByText("300")).toBeInTheDocument();
@@ -339,12 +344,12 @@ it("keeps a mixed-version ledger copy in its recorded account when the unkeyed p
   choosePeriod("7 days");
   await waitFor(() => expect(readUsageActivity).toHaveBeenCalledTimes(4));
   const picker = screen.getByRole("combobox", { name: "Account" });
-  chooseSelectOption(picker, /^OpenAI · Account recorded/);
+  chooseSelectOption(picker, "OpenAI · Local +1");
   const band = within(screen.getByRole("region", { name: "Limits and cost" }));
   expect(band.getByText("$5.00")).toBeInTheDocument();
   expect(band.getByText("1 thread · 1 turn")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Inspect Fixture thread" })).toBeInTheDocument();
-  expect(selectOptionLabels(picker).some((label) => label.includes("Unknown account"))).toBe(false);
+  expect(selectOptionLabels(picker).some((label) => label.includes("No account recorded"))).toBe(false);
   expect(readUsageActivity).toHaveBeenCalledTimes(4);
 });
 
@@ -361,12 +366,76 @@ it("uses the selected account's reset window rather than another instance's curr
   await waitFor(() => expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled());
   await screen.findByRole("combobox", { name: "Account" });
   await waitFor(() => expect(readUsageActivity).toHaveBeenCalledTimes(4));
-  chooseSelectOption(screen.getByRole("combobox", { name: "Account" }), "OpenAI · Account remote-a · Remote");
+  chooseSelectOption(screen.getByRole("combobox", { name: "Account" }), "OpenAI · Remote");
   await waitFor(() => expect(readUsageActivity).toHaveBeenCalledTimes(6));
   await waitFor(() => expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled());
   expect(readUsageActivity.mock.calls.slice(-2).map(([request]) => request.from)).toEqual([now - 2 * 24 * HOUR, now - 2 * 24 * HOUR]);
   expect(screen.queryByText(/Limits are the newest reading, from Local/)).not.toBeInTheDocument();
   expect(screen.getByText(/Limits are the newest reading, from Remote/)).toBeInTheDocument();
+});
+
+it("names an account on this machine, from the scope line, without undoing another window's names", async () => {
+  const now = new Date(2026, 8, 28, 12).getTime();
+  vi.spyOn(Date, "now").mockReturnValue(now);
+  const row = (id: string, accountKey: string, cost: number) => ({
+    ...usageFixture({ threadId: id, turnId: `${id}-turn`, usageLineId: id,
+      createdAt: now - 2 * HOUR, startedAt: now - 2 * HOUR, completedAt: now - HOUR, totalCostMicros: cost * 1_000_000 }),
+    title: id, accountKey,
+  });
+  let stored: Record<string, string> = {};
+  const settings = () => ({ snapshot: { models: { usageAccountNames: { ...stored } } } }) as unknown as ReadDesktopSettingsResponse;
+  const readSettings = vi.fn(async () => settings());
+  const writeSettingsConfig = vi.fn(async ({ patch }: { patch: DesktopSettingsConfigPatch }) => {
+    stored = patch.models!.usageAccountNames!;
+    return settings() as unknown as DesktopSettingsWriteResponse;
+  });
+  const readUsageActivity = vi.fn(async () => ({ readAt: now, rateLimits: [], truncated: false,
+    rows: [row("Work thread", "work", 2), row("Home thread", "home", 1)],
+    limitObservation: { observedAt: now, accountKey: "home", planType: "plus", limits: [] } }));
+  render(<UsageActivity desktopApi={{ readUsageActivity, readSettings, writeSettingsConfig }} />);
+  await screen.findByRole("button", { name: "Inspect Home thread" });
+  // Mixed rows say which account they ran on.
+  expect(within(screen.getByRole("button", { name: "Inspect Home thread" })).getByText("This instance · Unknown model · OpenAI Plus")).toBeInTheDocument();
+  expect(within(screen.getByRole("button", { name: "Inspect Work thread" })).getByText("This instance · Unknown model · OpenAI")).toBeInTheDocument();
+  const picker = screen.getByRole("combobox", { name: "Account" });
+  expect(selectOptionLabels(picker)).toEqual(["All accounts", "OpenAI", "OpenAI Plus"]);
+  chooseSelectOption(picker, "OpenAI Plus");
+  // Since reset follows the selected account's window, so selecting rereads once; naming never does.
+  await waitFor(() => expect(readUsageActivity).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled());
+  const scope = () => screen.getByRole("group", { name: "Account scope" });
+  expect(scope()).toHaveTextContent("Showing OpenAI Plus · This instance. Limits, spend, chart and threads are this account only.");
+  expect(screen.getByRole("button", { name: "Inspect Home thread" })).not.toHaveTextContent("OpenAI Plus");
+
+  stored = { "openai:elsewhere": "Named in another window" };
+  fireEvent.click(within(scope()).getByRole("button", { name: "Rename" }));
+  fireEvent.change(within(scope()).getByRole("textbox", { name: "Account name" }), { target: { value: " Home " } });
+  fireEvent.click(within(scope()).getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(picker).toHaveTextContent("Home"));
+  expect(writeSettingsConfig).toHaveBeenLastCalledWith({ patch: { models: { usageAccountNames: {
+    "openai:elsewhere": "Named in another window", "openai:home": "Home" } } } });
+  expect(scope()).toHaveTextContent("Showing Home · OpenAI Plus · This instance.");
+  expect(within(screen.getByRole("region", { name: "Limits and cost" })).getByText("$1.00")).toBeInTheDocument();
+
+  // Blank returns the derived name.
+  fireEvent.click(within(scope()).getByRole("button", { name: "Rename" }));
+  fireEvent.change(within(scope()).getByRole("textbox", { name: "Account name" }), { target: { value: "" } });
+  fireEvent.click(within(scope()).getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(picker).toHaveTextContent("OpenAI Plus"));
+  expect(stored).toEqual({ "openai:elsewhere": "Named in another window" });
+  expect(readUsageActivity).toHaveBeenCalledTimes(2);
+});
+
+it("offers Spend by Account only when the period has more than one account", async () => {
+  const now = new Date(2026, 8, 28, 12).getTime();
+  vi.spyOn(Date, "now").mockReturnValue(now);
+  const readUsageActivity = vi.fn(async () => ({ readAt: now, rateLimits: [], truncated: false,
+    rows: [{ ...usageFixture({ createdAt: now - 2 * HOUR, startedAt: now - 2 * HOUR, completedAt: now - HOUR }), accountKey: "only" }] }));
+  render(<UsageActivity desktopApi={{ readUsageActivity }} />);
+  await screen.findByRole("button", { name: "Inspect Fixture thread" });
+  expect(within(screen.getByRole("group", { name: "Spend by" })).getAllByRole("button").map((button) => button.textContent))
+    .toEqual(["Thread", "Model", "Provider"]);
+  expect(screen.getByRole("button", { name: "Inspect Fixture thread" })).not.toHaveTextContent("OpenAI");
 });
 
 it("keeps a historical account selected when the new period has no usage for it", async () => {
@@ -383,11 +452,11 @@ it("keeps a historical account selected when the new period has no usage for it"
     limitObservation: { observedAt: now, accountKey: "current", limits: [] } }));
   render(<UsageActivity desktopApi={{ readUsageActivity }} />);
   await screen.findByRole("button", { name: "Inspect Previous account" });
-  chooseSelectOption(screen.getByRole("combobox", { name: "Account" }), "OpenAI · Account previous · This instance");
+  chooseSelectOption(screen.getByRole("combobox", { name: "Account" }), "OpenAI · This instance · prev");
   choosePeriod("Today");
   await waitFor(() => expect(readUsageActivity).toHaveBeenLastCalledWith(expect.objectContaining({ from: new Date(2026, 8, 28).getTime() })));
   await waitFor(() => expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled());
-  expect(screen.getByRole("combobox", { name: "Account" })).toHaveTextContent("Account previous");
+  expect(screen.getByRole("combobox", { name: "Account" })).toHaveTextContent("OpenAI · This instance · prev");
   expect(within(screen.getByRole("region", { name: "Limits and cost" })).getByText("$0.00")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Inspect Current account" })).not.toBeInTheDocument();
   expect(screen.getByText("No usage in this period")).toBeInTheDocument();

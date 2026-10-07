@@ -103,11 +103,25 @@ them.
 ## Account selection
 
 **All accounts** shows the combined pricing ledger for the selected instances.
-Choose **Account** under **Spend by** to segment the chart by provider account,
-or use the **Account** selector to focus totals, tokens, chart, thread ranking
-and limit readings on one account. Clicking an account in the chart legend
-selects it; choosing **All accounts** restores the combined view. **Provider**
-still groups all accounts' spend for each provider.
+The account selector sits beside the instance chips, because like them it
+chooses which data the page shows. Selecting one account focuses totals,
+tokens, chart, thread ranking and limit readings on it, and a scope line under
+the toolbar names the account and links back to **All accounts**. When the
+period holds more than one account, **Spend by → Account** segments the chart,
+and each thread row names its account. Clicking an account in the chart legend
+selects it, the same as the selector. **Provider** still groups all accounts'
+spend for each provider.
+
+One rule names an account on every surface: the selector, the legend, the
+limits band, the scope line and the thread rows. An operator name comes first.
+Otherwise the name is the provider and plan, such as **OpenAI Pro**. When two
+accounts would share a name, they add their first machine and a count
+(**OpenAI Pro · Studio Mac +1**), then the start of the opaque key.
+**Rename** in the scope line stores a name in this profile's `config.toml`
+(`[[models.usage_account_names]]`, keyed by provider and opaque key). Names
+are local presentation only: they are never relayed through Federation, and
+another machine shows its own name or the derived one. A blank name returns
+to the derived one.
 
 Account choices use an opaque key and the instances that reported it, without
 relaying an email. The same recorded key merges across machines and profiles;
@@ -130,8 +144,8 @@ accounts. Blank uses automatic identity. A group is hashed before it enters
 the ledger or Federation; changes apply to future requests. The provider
 still scopes the group, so the same text cannot blend two providers.
 
-Rows without a recorded key appear as **Unknown account**, separately for
-each provider and instance. This includes historical rows without identity
+Rows without a recorded key appear as **No account recorded · [machine]**,
+separately for each provider and instance. They cannot be renamed. This includes historical rows without identity
 and providers with neither a protocol identity nor an explicit group.
 Legacy completion readings remain a fallback for old rows; historical keys
 are never rewritten using today's login. They remain in the all-account total and can be selected
