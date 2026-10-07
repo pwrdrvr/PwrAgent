@@ -108,7 +108,15 @@ function checkedGroup(group) {
 
 function send(pid, signal) {
   try { process.kill(pid, signal); }
-  catch (error) { if (error.code !== "ESRCH") throw error; }
+  catch (error) {
+    if (error.code === "ESRCH") return;
+    // macOS answers EPERM, not ESRCH, for a group whose only members are
+    // unreaped zombies. A stopped parent cannot reap them, so drain would
+    // otherwise retry the same EPERM forever.
+    if (error.code === "EPERM" && pid < 0
+      && ![...readPosixProcesses().values()].some((row) => row.groupPid === -pid && !row.state.startsWith("Z"))) return;
+    throw error;
+  }
 }
 
 // Only groups whose leaders were proven descendants are added. Remembering

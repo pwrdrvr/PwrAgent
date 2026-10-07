@@ -126,8 +126,11 @@ export function toolHeapMiB(command, args, cwd = process.cwd()) {
   const project = args.find((arg) => arg.startsWith("--project="))?.slice("--project=".length)
     ?? (projectIndex >= 0 ? args[projectIndex + 1] : "tsconfig.json")
     ?? "tsconfig.json";
+  // tsc -p also accepts the directory that holds tsconfig.json.
+  const projectPath = path.resolve(cwd, project);
+  const projectFile = path.extname(projectPath) === ".json" ? projectPath : path.join(projectPath, "tsconfig.json");
   const fullDesktopProgram = name === "tsc"
-    && path.resolve(cwd, project) === path.resolve(import.meta.dirname, "../apps/desktop/tsconfig.json");
+    && projectFile === path.resolve(import.meta.dirname, "../apps/desktop/tsconfig.json");
   const configIndex = args.findIndex((arg) => arg === "--config" || arg === "-c");
   const lintConfig = args.find((arg) => arg.startsWith("--config="))?.slice("--config=".length)
     ?? (configIndex >= 0 ? args[configIndex + 1] : "")
