@@ -120,19 +120,36 @@ export function threadMatchesQuery(
   thread: ThreadJumpCandidate,
   query: string,
 ): boolean {
+  return createThreadJumpMatcher(query)(thread);
+}
+
+/**
+ * `threadMatchesQuery` with the query parsed once, for filtering a
+ * collection: the parse is several regex passes, and an owner search runs
+ * it against every thread it has.
+ */
+export function createThreadJumpMatcher(
+  query: string,
+): (thread: ThreadJumpCandidate) => boolean {
   const { text, projects, terms } = parseThreadJumpQuery(query);
-  if (projects.length && !matchesThreadSearchProjects(thread, projects)) {
-    return false;
-  }
   const needle = text.trim().toLowerCase();
-  if (!needle) {
-    return projects.length > 0;
-  }
-  if (threadMatchesNeedle(thread, needle)) {
-    return true;
-  }
-  return terms.length > 1
-    && terms.every((term) => threadMatchesNeedle(thread, term.toLowerCase()));
+  const words = terms.map((term) => term.toLowerCase());
+  // A lone quoted phrase is one term that differs from the quoted needle.
+  const wordsDiffer = words.join(" ") !== needle;
+  return (thread) => {
+    if (projects.length && !matchesThreadSearchProjects(thread, projects)) {
+      return false;
+    }
+    if (!needle) {
+      return projects.length > 0;
+    }
+    if (threadMatchesNeedle(thread, needle)) {
+      return true;
+    }
+    return words.length > 0
+      && (words.length > 1 || wordsDiffer)
+      && words.every((word) => threadMatchesNeedle(thread, word));
+  };
 }
 
 function threadMatchesNeedle(
@@ -173,7 +190,7 @@ export function rankThreadJumpMatches<T extends ThreadJumpCandidate>(
   threads: readonly T[],
   query: string,
 ): T[] {
-  return sortThreadJumpMatches(threads.filter((thread) => threadMatchesQuery(thread, query)), query);
+  return sortThreadJumpMatches(threads.filter(createThreadJumpMatcher(query)), query);
 }
 
 /** Merge owner-matched results without re-filtering their compact display data. */

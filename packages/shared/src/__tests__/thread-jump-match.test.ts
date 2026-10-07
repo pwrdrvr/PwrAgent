@@ -221,6 +221,8 @@ describe("multi-word queries", () => {
     expect(threadMatchesQuery(warning, "pnpm zzz")).toBe(false);
     expect(threadMatchesQuery(warning, '"pnpm mcp"')).toBe(false);
     expect(threadMatchesQuery(warning, '"pnpm install" mcp')).toBe(true);
+    expect(threadMatchesQuery(warning, '"pnpm install"')).toBe(true);
+    expect(threadMatchesQuery(warning, '"install pnpm"')).toBe(false);
     expect(threadMatchesQuery(warning, '@widgetry "install pnpm"')).toBe(false);
   });
 });

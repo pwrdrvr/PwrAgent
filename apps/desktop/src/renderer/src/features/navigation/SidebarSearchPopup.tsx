@@ -13,6 +13,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import {
+  createThreadJumpMatcher,
   isSubthreadLaunchpadKey,
   isWindowsFilesystemPath,
   parseThreadJumpQuery,
@@ -29,7 +30,6 @@ import {
   FEDERATED_THREAD_SEARCH_LIMIT,
   useFederatedThreadSearch,
 } from "../../lib/useFederatedThreadSearch";
-import { threadMatchesQuery } from "../thread-search/thread-match";
 import { insertProjectMention, projectMentionAtCursor } from "../thread-search/ProjectSearchInput";
 import { AgentThreadChip } from "./AgentThreadChip";
 import { InstanceChip } from "../federation/InstanceGlyph";
@@ -167,7 +167,7 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
       return [];
     }
     const immediate = props.threads
-      .filter((thread) => threadMatchesQuery(thread, threadQuery))
+      .filter(createThreadJumpMatcher(threadQuery))
       .sort(
         (left, right) =>
           Number(threadHasExactPrNumberMatch(right, jumpText))
