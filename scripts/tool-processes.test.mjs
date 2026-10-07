@@ -23,11 +23,13 @@ beforeEach(() => { execFileSync.mockReset(); });
 afterEach(() => Object.defineProperty(process, "platform", platform));
 
 describe("processStartedAt on Windows", () => {
-  it("gives a cold PowerShell start far more than the POSIX 5 s budget", async () => {
+  it("gives a cold PowerShell start room, but two lookups stay inside the lease's stale window", async () => {
     const { processStartedAt, WINDOWS_START_TIMEOUT_MS } = await onPlatform("win32");
     execFileSync.mockReturnValue(`${TICKS}\r\n`);
     expect(processStartedAt(OTHER_PID)).toBe(TICKS);
-    expect(WINDOWS_START_TIMEOUT_MS).toBeGreaterThanOrEqual(30_000);
+    expect(WINDOWS_START_TIMEOUT_MS).toBeGreaterThanOrEqual(10_000);
+    // resource-run.mjs: lockfile stale 30_000, and ownerRunning + own lookup run before a heartbeat.
+    expect(2 * WINDOWS_START_TIMEOUT_MS).toBeLessThan(30_000);
     expect(execFileSync).toHaveBeenCalledWith("powershell.exe", expect.arrayContaining([
       `(Get-Process -Id ${OTHER_PID} -ErrorAction Stop).StartTime.ToUniversalTime().Ticks`,
     ]), expect.objectContaining({ timeout: WINDOWS_START_TIMEOUT_MS, windowsHide: true }));

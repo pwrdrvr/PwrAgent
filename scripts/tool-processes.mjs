@@ -5,8 +5,11 @@ import { setTimeout as delay } from "node:timers/promises";
 export const DESCENDANT_ENV = "PWRAGENT_TOOL_DESCENDANT_TOKEN";
 const psEnv = { ...process.env, LC_ALL: "C" };
 // A cold powershell.exe start takes about 3 s on a GitHub Windows runner, so
-// the 5 s budget the POSIX lookups use left no headroom there.
-export const WINDOWS_START_TIMEOUT_MS = 30_000;
+// the 5 s budget the POSIX lookups use left no headroom there. The lookup is
+// synchronous: a new lease holder makes two of them back to back before its
+// 5 s heartbeat can run, and both together must finish inside the lease's
+// 30 s stale window, or a waiter recovers a lease that is still in use.
+export const WINDOWS_START_TIMEOUT_MS = 12_000;
 let ownWindowsStartedAt;
 
 // PwrGit compares this exact string: .NET UTC ticks from GetProcessTimes.
