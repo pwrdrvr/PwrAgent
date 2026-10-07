@@ -381,7 +381,8 @@ meters instead of cropping the video to a strip. The height floors keep the
 transcript readable; the panel is a size container, so both dimensions count.
 Both readouts stay mounted, so a resize never restarts the video.
 **Copy camera diagnostics** copies what the dock leaves off-screen: frame age,
-stale-result count, acknowledgment counts, and the owning thread and session.
+stale-result count, acknowledgment counts, the latest repeat check, and the
+owning thread and session.
 Received results and acknowledged context are counted separately.
 
 Each gesture or presence cue sent to the voice is also a transcript row
@@ -476,10 +477,128 @@ Uncertain presence, a visible return, or a ten-second sampling
 gap resets the absence countdown. Ordinary gestures require 80% confidence
 and three samples spanning 1.5 seconds; stop and thumbs-down require 85% and
 two consecutive frames spanning 500ms, bypassing ordinary cue cooldowns.
-Repeated gestures are suppressed until a confident no-gesture transition.
 Gestures require confident presence, and stale frames never establish a cue.
 Thirty seconds of confident absence ends
 voice, leaving coding turns running.
+
+### Repeated gestures and the conversation
+
+A cue the voice has already answered is noise. If the operator holds a stop
+after the voice says "Okay, pausing.", or makes it again, the voice gains
+nothing from a second stop. A stop after the voice changes course is new
+feedback. Telling the two apart takes the conversation, so the decision step
+reads it.
+
+- **Deterministic gate (filter).** The filter remembers the last gesture it
+  sent and the number of lines the voice had finished saying at that moment.
+  Tool actions do not count. The same gesture, held or made
+  again, is not even considered until that count moves. Dropping the hand no
+  longer re-arms it. A confirmed away clears the record, so a gesture after
+  the operator returns is new. Ordinary gestures keep their eight-second
+  cooldown, and the cooldown applies before Clef is asked.
+- **Conversation check (Clef).** Once the voice has finished a line since,
+  the controller asks Clef one yes/no question about the conversation since
+  the latest camera cue. The question asks whether the voice said anything
+  beyond acknowledging the cue. A yes (probability of 0.5 or more) sends the
+  gesture again. A no records the current count, so the same acknowledgment
+  is never judged twice. Asking costs at most one check per voice line, never
+  one per frame. If Clef is busy, offline or unavailable in the window, the
+  repeat is held, because the noise is what the check prevents. An
+  unanswered check waits two seconds, or as long as main asks while Clef is
+  contended, before it is asked again. The check is an extra request on top
+  of the frames, so main asks `/health` before every check and skips it while
+  any decision is in flight. A check that misses its deadline also makes the
+  next frame ask `/health` first.
+
+The check's `state` is a bounded excerpt of the last 90 seconds, at most 12
+rows. It holds operator and voice lines, voice tool actions, and the cues
+handed to the voice (failed ones excluded). Each row has a negative relative
+timestamp, oldest first:
+
+```text
+Voice conversation, oldest first, in seconds before now:
+-37s operator: Make every cloud in the scene pink.
+-30s voice: Sure, I'll turn every cloud pink and soften the edges.
+-11s camera cue: stop (delivered)
+-9s voice: Okay, pausing.
+```
+
+Rows carry their start time in memory only, for this excerpt. Each line's
+whitespace is collapsed, so spoken text cannot start a row of its own, and
+each line is clipped to 240 characters. Main revalidates the excerpt's shape
+and never logs it. The excerpt is built on demand and never stored.
+
+The check is its own request, never part of a frame's request. Clef decides
+all of a request's questions jointly, and a transcript in the frame's `state`
+moved the frame's own answers. On a photo with no person in it, adding a
+conversation that mentioned a stop cue raised "stop" from 0.21 to 0.50 and
+"present" from 0.42 to 0.71. Rewording the frame questions, or leaving the
+word "stop" out of the excerpt, still left "stop" at 0.44 to 0.53. The check
+is text only, with no `images`. Every camera request body comes from
+`cameraDecisionRequest` in `clef-camera.ts`. A refusal (a 4xx other than 408
+or 429) stops camera cues, as it does for a frame. A timeout or an
+unreachable model holds the repeat.
+
+The question's wording was chosen against ten probe conversations. It answered
+all ten correctly, both alongside a blank image and text only through
+`/v1/systemone`. The text-only scores:
+
+| Conversation after the cue | Moved on |
+|---|---|
+| nothing | 0.06 |
+| "Okay, pausing." | 0.04 |
+| "Oops, I'll stop." | 0.08 |
+| "Okay, stopping. What would you like instead?" | 0.33 |
+| "Paused. Let me know when you want me to continue." | 0.03 |
+| substantive line spoken before the cue, acknowledgment after | 0.04 |
+| ack, then "deleting all the whipped cream off every apple pie instead" | 0.96 |
+| the new plan alone | 0.95 |
+| ack, then resuming the old plan | 0.88 |
+| ack, then answering a new operator question | 0.76 |
+
+A voice tool action after the acknowledgment scored 0.13 to 0.46 across three
+phrasings (measured with the blank image), so an action alone does not re-arm a gesture. That is
+defensible: a `stop_turn` right after a stop cue is the voice acting on it.
+Actions therefore do not open the gate. They appear in the excerpt only as
+context, and only something the voice says re-arms the gesture.
+
+The first wording tried ("did the voice say something new?") scored the ack
+plus a question at 0.94. The closest bare acknowledgment is still the ack plus
+a question, at 0.33. A voice answering an unrelated new question counts as new
+feedback, which errs toward sending the gesture.
+
+Latency, measured against the lab's clef-flash on an M5 Max with an idle GPU
+and 20 runs per row. The joint rows went through the old `/decide` route,
+whose `latency_ms` was model time. The System One rows are round trips.
+
+| Request | Input tokens | p50 | p95 | Decisions/s |
+|---|---|---|---|---|
+| Frame, plain `state` (unchanged), `/decide` model time | 478 | 446 ms | 467 ms | 2.2 |
+| Frame + 4-row conversation, joint (rejected) | 657 | 613 ms | 633 ms | 1.6 |
+| Frame + 12-row conversation, joint (rejected) | 947 | 853 ms | 872 ms | 1.2 |
+| Frame, plain `state`, `/v1/systemone` round trip | 478 | 445 ms | 538 ms | 2.2 |
+| Repeat check, text only, 4 rows | 237 | 207 ms | 223 ms | on demand |
+| Repeat check, text only, 12 long rows | 526 | 425 ms | 481 ms | on demand |
+
+Frame sampling keeps its full rate. Only a repeat that has passed the gate
+waits one check, about 0.2 to 0.5 seconds, before it is sent.
+
+### Presence hysteresis
+
+The filter remembers what the voice was last told about presence, across
+skipped frames and continuity resets. Once away is reported, it is not
+reported again while the operator stays gone. A glimpse too short to count as
+a return does not reset it.
+
+Reporting away takes three confident absent samples spanning 1.5 seconds.
+Reporting a return takes four confident present samples spanning three
+seconds. The return's frames also build the next vibe, so the return cue goes
+out as soon as the return is confirmed. An operator half out of frame,
+alternating 1.5-second runs, gets one away cue rather than one per run.
+
+The 30-second end counts only sustained absence, as before. Any confident
+sight of the operator, or an uncertain frame, restarts it, including before a
+return is confirmed.
 
 Camera observations are pushed automatically by the voice controller; there
 is no model tool to poll for them. Only an allowlisted, debounced text cue

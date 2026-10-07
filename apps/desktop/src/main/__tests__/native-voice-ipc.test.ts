@@ -1,6 +1,6 @@
-import { NATIVE_VOICE_CAMERA_CHANNEL, NATIVE_VOICE_CAMERA_FRAME_CHANNEL, NATIVE_VOICE_CAMERA_CUE_CHANNEL } from "../../shared/native-voice-camera";
+import { NATIVE_VOICE_CAMERA_CHANNEL, NATIVE_VOICE_CAMERA_FRAME_CHANNEL, NATIVE_VOICE_CAMERA_CUE_CHANNEL, NATIVE_VOICE_CAMERA_REPEAT_CHANNEL } from "../../shared/native-voice-camera";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { VoiceCameraObservation } from "../../shared/native-voice-camera";
+import type { VoiceCameraConversationLine, VoiceCameraObservation, VoiceCameraRepeatVerdict } from "../../shared/native-voice-camera";
 import type { DesktopDecisionModelSettings } from "@pwragent/shared";
 import { SystemOneRejected } from "../decision/system-one";
 import {
@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   check: vi.fn(), request: vi.fn(), start: vi.fn(async () => {}), stop: vi.fn(async () => {}), release: vi.fn(),
   classify: vi.fn<(target: { endpoint: string; model: string; apiKey?: string }, image: string, signal: AbortSignal, warming: boolean) => Promise<VoiceCameraObservation>>(),
   inFlight: vi.fn<(target: { endpoint: string; model: string; apiKey?: string }, signal: AbortSignal) => Promise<number | undefined>>(async () => undefined),
+  judge: vi.fn<(target: { endpoint: string; model: string; apiKey?: string }, conversation: VoiceCameraConversationLine[], signal: AbortSignal) => Promise<VoiceCameraRepeatVerdict>>(),
   decisionSettings: { model: "local" } as DesktopDecisionModelSettings,
   decisionApiKey: vi.fn(async (): Promise<string | undefined> => undefined),
   disconnects: new Set<() => void>(),
@@ -23,7 +24,7 @@ const mocks = vi.hoisted(() => ({
   openManager: vi.fn(async () => ({ status: "ready", threadId: "sample-voice-manager", created: false })),
 }));
 vi.mock("../log", () => ({ getMainLogger: () => ({ info: mocks.info, warn: mocks.warn }) }));
-vi.mock("../native-voice/clef-camera", () => ({ classifyVoiceCamera: mocks.classify, clefRequestsInFlight: mocks.inFlight }));
+vi.mock("../native-voice/clef-camera", () => ({ classifyVoiceCamera: mocks.classify, clefRequestsInFlight: mocks.inFlight, judgeVoiceCameraRepeat: mocks.judge }));
 vi.mock("../settings/desktop-settings-singleton", () => ({
   getDesktopSettingsService: () => ({
     resolveDecisionModelSettings: () => mocks.decisionSettings,
@@ -267,6 +268,64 @@ describe("native voice IPC permission boundary", () => {
     expect(mocks.warn).not.toHaveBeenCalled();
     expect(signal.aborted).toBe(true);
     expect(mocks.check.mock.calls[0][0](sender, "media", "", { mediaType: "video", isMainFrame: true })).toBe(false);
+  });
+
+  it("judges a repeat only for the owner's camera session, validates the excerpt, and never logs it", async () => {
+    vi.useFakeTimers();
+    const sender = { id: 279, on: vi.fn(), once: vi.fn(), isDestroyed: () => false, send: vi.fn() };
+    const target = { sessionId: "camera-repeat-session" };
+    const conversation = [{ ago: 6, speaker: "cue", text: "stop (delivered)" }, { ago: 1, speaker: "voice", text: "Private words: okay, pausing." }];
+    const check = mocks.handlers.get(NATIVE_VOICE_CAMERA_REPEAT_CHANNEL)!;
+    await mocks.handlers.get(NATIVE_VOICE_START_CHANNEL)!({ sender }, { ...target, threadId: "camera-repeat-thread", sdp: "v=0\r\nfixture" });
+    await expect(check({ sender }, { ...target, conversation })).rejects.toThrow("Enable the camera");
+    await mocks.handlers.get(NATIVE_VOICE_CAMERA_CHANNEL)!({ sender }, { ...target, enabled: true });
+    // A warm model: checks only ever follow a frame decision.
+    mocks.classify.mockResolvedValueOnce({ present: true, presenceConfidence: 0.9, reaction: "neutral", reactionConfidence: 0.9, latencyMs: 400 });
+    await mocks.handlers.get(NATIVE_VOICE_CAMERA_FRAME_CHANNEL)!({ sender }, { ...target, image: "data:image/jpeg;base64,AA==" });
+    await expect(check({ sender: { ...sender, id: 280 } }, { ...target, conversation })).rejects.toThrow("Enable the camera");
+    for (const invalid of [
+      [{ ago: 6, speaker: "system", text: "stop" }], [{ ago: -1, speaker: "voice", text: "x" }], [{ ago: 1.5, speaker: "voice", text: "x" }],
+      [{ ago: 1, speaker: "voice", text: "x".repeat(241) }], Array.from({ length: 13 }, () => ({ ago: 1, speaker: "voice", text: "x" })), "not lines",
+    ]) await expect(check({ sender }, { ...target, conversation: invalid })).rejects.toThrow("Invalid camera conversation");
+    expect(mocks.judge).not.toHaveBeenCalled();
+    // An extra request: skipped while any decision is running, even uncontended.
+    mocks.inFlight.mockResolvedValueOnce(2);
+    await expect(check({ sender }, { ...target, conversation })).resolves.toEqual({ skipped: "busy", inFlight: 2, retryAfterMs: 1000 });
+    expect(mocks.inFlight).toHaveBeenLastCalledWith({ endpoint: "http://127.0.0.1:8787", model: "clef-flash" }, expect.any(AbortSignal));
+    expect(mocks.judge).not.toHaveBeenCalled();
+    mocks.judge.mockResolvedValueOnce({ movedOn: 0.07 });
+    await expect(check({ sender }, { ...target, conversation })).resolves.toEqual({ movedOn: 0.07 });
+    expect(mocks.judge).toHaveBeenCalledWith({ endpoint: "http://127.0.0.1:8787", model: "clef-flash" }, conversation, expect.any(AbortSignal));
+    mocks.judge.mockRejectedValueOnce(new Error("connect ECONNREFUSED 127.0.0.1:8787"));
+    await expect(check({ sender }, { ...target, conversation })).resolves.toEqual({ skipped: "offline" });
+    mocks.judge.mockImplementationOnce((_target, _conversation, abort) => new Promise((_resolve, reject) => {
+      abort.addEventListener("abort", () => reject(abort.reason), { once: true });
+    }));
+    const slow = check({ sender }, { ...target, conversation });
+    // One request per owner: a frame waits for the check.
+    await expect(mocks.handlers.get(NATIVE_VOICE_CAMERA_FRAME_CHANNEL)!({ sender }, { ...target, image: "data:image/jpeg;base64,AA==" })).rejects.toThrow("already being analyzed");
+    await vi.advanceTimersByTimeAsync(8000);
+    await expect(slow).resolves.toEqual({ skipped: "busy" });
+    // A missed deadline also paces the next frame through /health.
+    mocks.inFlight.mockResolvedValueOnce(1).mockResolvedValueOnce(1);
+    await expect(check({ sender }, { ...target, conversation })).resolves.toEqual({ skipped: "busy", inFlight: 1, retryAfterMs: 1000 });
+    await expect(mocks.handlers.get(NATIVE_VOICE_CAMERA_FRAME_CHANNEL)!({ sender }, { ...target, image: "data:image/jpeg;base64,AA==" }))
+      .resolves.toEqual({ skipped: "busy", inFlight: 1, retryAfterMs: 1000 });
+    expect(mocks.judge).toHaveBeenCalledTimes(3);
+    mocks.inFlight.mockResolvedValueOnce(0);
+    mocks.judge.mockResolvedValueOnce({ movedOn: 0.9 });
+    await expect(check({ sender }, { ...target, conversation })).resolves.toEqual({ movedOn: 0.9 });
+    expect(JSON.stringify(mocks.warn.mock.calls)).not.toContain("Private words");
+    expect(JSON.stringify(mocks.info.mock.calls)).not.toContain("Private words");
+    // A refusal stops camera cues, as it does for a frame, instead of reading as busy.
+    mocks.judge.mockRejectedValueOnce(new SystemOneRejected(422, "model must be clef-flash"));
+    await expect(check({ sender }, { ...target, conversation }))
+      .rejects.toThrow("Camera cues stopped: the local decision model rejected the request (model must be clef-flash).");
+    // The conversation follows the frame's Settings gate: never to a hosted model.
+    const judged = mocks.judge.mock.calls.length;
+    mocks.decisionSettings = { model: "jev" };
+    await expect(check({ sender }, { ...target, conversation })).rejects.toThrow("local decision model");
+    expect(mocks.judge).toHaveBeenCalledTimes(judged);
   });
 
   it("rejects malformed offers before acquiring a session", async () => {

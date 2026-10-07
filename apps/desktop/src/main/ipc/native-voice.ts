@@ -1,10 +1,11 @@
 import {
   NATIVE_VOICE_CAMERA_CHANNEL, NATIVE_VOICE_CAMERA_FRAME_CHANNEL,
-  NATIVE_VOICE_CAMERA_CUE_CHANNEL, isCameraCue,
+  NATIVE_VOICE_CAMERA_CUE_CHANNEL, NATIVE_VOICE_CAMERA_REPEAT_CHANNEL, isCameraCue, isCameraConversation,
   type VoiceCameraRequest, type VoiceCameraFrame, type VoiceCameraCue, type VoiceCameraSkipped,
+  type VoiceCameraRepeatCheck, type VoiceCameraRepeatVerdict,
 } from "../../shared/native-voice-camera";
 import { getMainLogger } from "../log";
-import { classifyVoiceCamera, clefRequestsInFlight } from "../native-voice/clef-camera";
+import { classifyVoiceCamera, clefRequestsInFlight, judgeVoiceCameraRepeat } from "../native-voice/clef-camera";
 import { SystemOneRejected, type SystemOneTarget } from "../decision/system-one";
 import { decisionCameraCueAvailability } from "@pwragent/shared";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
@@ -62,6 +63,13 @@ function observeOwner(sender: WebContents): void {
   sender.on("render-process-gone", stop);
   sender.on("did-start-navigation", (_event, _url, _inPlace, mainFrame) => { if (mainFrame) stop(); });
   sender.once("destroyed", () => { owners.delete(owner); stop(); });
+}
+/** A decision request the server refused outright stops camera cues: sending it again cannot succeed. */
+function cameraRefusal(error: SystemOneRejected): Error {
+  const reason = error.status === 401 || error.status === 403
+    ? "the local decision model refused its API key"
+    : `the local decision model rejected the request${error.detail ? ` (${error.detail})` : ""}`;
+  return new Error(`Camera cues stopped: ${reason}. Check it in Settings → AI Providers.`, { cause: error });
 }
 function validTarget(request: NativeVoiceTarget): void {
   if (!request || typeof request.sessionId !== "string" || !/^[a-zA-Z0-9-]{1,80}$/.test(request.sessionId)) {
@@ -192,12 +200,7 @@ export function registerNativeVoiceIpcHandlers(): void {
       }
       cameraLog.warn("camera analysis failed", { sessionId: request.sessionId, warming, timedOut, elapsedMs: Date.now() - started, error: error instanceof Error ? error.message : String(error) });
       // A refused request fails the same way every time, so stop rather than retry.
-      if (error instanceof SystemOneRejected) {
-        const reason = error.status === 401 || error.status === 403
-          ? "the local decision model refused its API key"
-          : `the local decision model rejected the request${error.detail ? ` (${error.detail})` : ""}`;
-        throw new Error(`Camera cues stopped: ${reason}. Check it in Settings → AI Providers.`, { cause: error });
-      }
+      if (error instanceof SystemOneRejected) throw cameraRefusal(error);
       // Once Clef has answered, a failure skips this frame, not the camera. A
       // warm model that answers slowly is usually busy with another client
       // (it serializes requests); one that refuses may be restarting.
@@ -211,6 +214,53 @@ export function registerNativeVoiceIpcHandlers(): void {
       throw new Error(message, { cause: error });
     }
     finally {
+      clearTimeout(timeout);
+      if (cameraRequests.get(event.sender.id) === pending) cameraRequests.delete(event.sender.id);
+    }
+  });
+  ipcMain.handle(NATIVE_VOICE_CAMERA_REPEAT_CHANNEL, async (event, request: VoiceCameraRepeatCheck): Promise<VoiceCameraRepeatVerdict | VoiceCameraSkipped | undefined> => {
+    validTarget(request);
+    if (!sessions.allowsCameraSession(event.sender.id, request.sessionId) || !sessions.allowsCamera(event.sender.id)) {
+      throw new Error("Enable the camera in this voice session first.");
+    }
+    if (!isCameraConversation(request.conversation)) throw new Error("Invalid camera conversation.");
+    // Shares the frame's single-flight slot: the check is asked between frames.
+    if (cameraRequests.has(event.sender.id)) throw new Error("A camera frame is already being analyzed.");
+    // The same Settings gate and target as a frame: the conversation goes
+    // only to the local decision model.
+    const availability = cameraCueAvailability();
+    if (!availability.available) throw new Error(availability.reason);
+    const target: SystemOneTarget = {
+      endpoint: availability.endpoint,
+      model: availability.model,
+      apiKey: cameraApiKeys.get(event.sender.id),
+    };
+    const abort = new AbortController();
+    const pending = { sessionId: request.sessionId, abort };
+    cameraRequests.set(event.sender.id, pending);
+    let timedOut = false;
+    const timeout = setTimeout(() => { timedOut = true; abort.abort(); }, CAMERA_ANALYSIS_TIMEOUT_MS);
+    try {
+      // The check is an extra request on top of the frames, so it never
+      // queues behind a running decision: /health answers without the model
+      // lock, and a server without that route is asked anyway.
+      const inFlight = await clefRequestsInFlight(target, abort.signal);
+      if (inFlight !== undefined && inFlight > 0) {
+        return { skipped: "busy", inFlight, retryAfterMs: CAMERA_HEALTH_RETRY_MS } satisfies VoiceCameraSkipped;
+      }
+      const verdict = await judgeVoiceCameraRepeat(target, request.conversation, abort.signal);
+      cameraContended.delete(event.sender.id);
+      if (abort.signal.aborted || !sessions.allowsCameraSession(event.sender.id, request.sessionId) || !sessions.allowsCamera(event.sender.id)) return undefined;
+      return verdict;
+    } catch (error) {
+      if (abort.signal.aborted && !timedOut) return undefined;
+      // The conversation is the operator's words: never log it.
+      cameraLog.warn("camera repeat check failed", { sessionId: request.sessionId, timedOut, error: error instanceof Error ? error.message : String(error) });
+      // Refused like a frame: the camera stops instead of retrying.
+      if (error instanceof SystemOneRejected) throw cameraRefusal(error);
+      if (timedOut) cameraContended.add(event.sender.id);
+      return { skipped: timedOut ? "busy" : "offline" } satisfies VoiceCameraSkipped;
+    } finally {
       clearTimeout(timeout);
       if (cameraRequests.get(event.sender.id) === pending) cameraRequests.delete(event.sender.id);
     }

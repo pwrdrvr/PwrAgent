@@ -325,6 +325,167 @@ describe("voice camera ownership", () => {
     }
   });
 
+  describe("conversation-aware repeats", () => {
+    // No confident vibe, so only the gesture and presence decide.
+    const stop = { present: true, presenceConfidence: 0.95, reaction: "neutral" as const, reactionConfidence: 0.5,
+      gesture: "stop" as const, gestureConfidence: 0.93, latencyMs: 250 };
+    const say = (f: Awaited<ReturnType<typeof liveCamera>>, role: "user" | "assistant", text: string) =>
+      f.send({ sessionId: "fixture-session", type: "transcript", role, text, done: true });
+
+    it("does not re-send an acknowledged stop held across frames, and re-arms it on a substantive line", async () => {
+      const f = await liveCamera();
+      f.api.analyzeNativeVoiceCamera = vi.fn(async () => stop);
+      const check = vi.fn<NonNullable<NativeVoiceApi["checkNativeVoiceCameraRepeat"]>>(async () => ({ movedOn: 0.06 }));
+      f.api.checkNativeVoiceCameraRepeat = check;
+      say(f, "user", "Make every cloud in the scene pink.");
+      await vi.advanceTimersByTimeAsync(4000);
+      say(f, "assistant", "Sure, I'll turn every cloud pink.");
+      await f.controller.setCamera(true);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(f.api.sendNativeVoiceCameraCue).toHaveBeenCalledExactlyOnceWith({ sessionId: "fixture-session", cue: "stop" });
+      // Held while the voice says nothing: no check, no cue.
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(check).not.toHaveBeenCalled();
+      say(f, "assistant", "Okay, pausing.");
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(check).toHaveBeenCalledOnce();
+      expect(check.mock.calls[0]![0]).toEqual({ sessionId: "fixture-session", conversation: [
+        { ago: 10, speaker: "operator", text: "Make every cloud in the scene pink." },
+        { ago: 6, speaker: "voice", text: "Sure, I'll turn every cloud pink." },
+        { ago: 6, speaker: "cue", text: "stop (delivered)" },
+        { ago: 1, speaker: "voice", text: "Okay, pausing." },
+      ] });
+      expect(f.api.sendNativeVoiceCameraCue).toHaveBeenCalledOnce();
+      expect(f.controller.getView().cameraDiagnostics?.repeatCheck).toMatchObject({ cue: "stop", movedOn: 0.06 });
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(check).toHaveBeenCalledOnce();
+      check.mockResolvedValue({ movedOn: 0.96 });
+      say(f, "assistant", "Got it, I'm deleting all the whipped cream off every apple pie instead of the clouds.");
+      await vi.advanceTimersByTimeAsync(500);
+      expect(check).toHaveBeenCalledTimes(2);
+      expect(f.api.sendNativeVoiceCameraCue).toHaveBeenCalledTimes(2);
+      expect(f.controller.getView().cameraCues?.map((row) => row.cue)).toEqual(["stop", "stop"]);
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(f.api.sendNativeVoiceCameraCue).toHaveBeenCalledTimes(2);
+      await f.controller.stop();
+    });
+
+    it("holds a repeat when Clef cannot judge the conversation, backing off instead of asking every frame", async () => {
+      const f = await liveCamera();
+      f.api.analyzeNativeVoiceCamera = vi.fn(async () => stop);
+      f.api.checkNativeVoiceCameraRepeat = vi.fn()
+        .mockResolvedValueOnce({ skipped: "offline" })
+        .mockResolvedValueOnce({ skipped: "busy", inFlight: 1, retryAfterMs: 1000 })
+        .mockResolvedValue({ movedOn: 0.9 });
+      await f.controller.setCamera(true);
+      await vi.advanceTimersByTimeAsync(500);
+      say(f, "assistant", "Here is a new plan for the pies.");
+      await vi.advanceTimersByTimeAsync(500);
+      expect(f.api.checkNativeVoiceCameraRepeat).toHaveBeenCalledOnce();
+      // Held for two seconds, not re-asked on each frame.
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(f.api.checkNativeVoiceCameraRepeat).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(500);
+      expect(f.api.checkNativeVoiceCameraRepeat).toHaveBeenCalledTimes(2);
+      expect(f.controller.getView().cameraDiagnostics?.repeatCheck).toMatchObject({ cue: "stop", movedOn: undefined });
+      expect(f.api.sendNativeVoiceCameraCue).toHaveBeenCalledOnce();
+      expect(f.controller.getView()).toMatchObject({ camera: "on", cameraError: undefined });
+      // Main's retry hint while a decision is in flight: one second.
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(f.api.checkNativeVoiceCameraRepeat).toHaveBeenCalledTimes(3);
+      expect(f.api.sendNativeVoiceCameraCue).toHaveBeenCalledTimes(2);
+      expect(f.controller.getView().cameraDiagnostics?.repeatCheck).toMatchObject({ movedOn: 0.9 });
+      await f.controller.stop();
+    });
+
+    it("stops the camera when the decision model refuses the check, as it does for a frame", async () => {
+      const f = await liveCamera();
+      f.api.analyzeNativeVoiceCamera = vi.fn(async () => stop);
+      f.api.checkNativeVoiceCameraRepeat = vi.fn(async () => {
+        throw new Error("Error invoking remote method 'native-voice:camera-repeat': Error: Camera cues stopped: the local decision model refused its API key. Check it in Settings → AI Providers.");
+      });
+      await f.controller.setCamera(true);
+      await vi.advanceTimersByTimeAsync(500);
+      say(f, "assistant", "Here is a new plan for the pies.");
+      await vi.advanceTimersByTimeAsync(500);
+      expect(f.controller.getView()).toMatchObject({
+        status: "listening", camera: undefined,
+        cameraError: "Camera cues stopped: the local decision model refused its API key. Check it in Settings → AI Providers.",
+      });
+      expect(f.capture.close).toHaveBeenCalledOnce();
+      expect(f.api.sendNativeVoiceCameraCue).toHaveBeenCalledOnce();
+      await f.controller.stop();
+    });
+
+    it("does not ask about a held stop when the voice only runs a tool", async () => {
+      const f = await liveCamera();
+      f.api.analyzeNativeVoiceCamera = vi.fn(async () => stop);
+      f.api.checkNativeVoiceCameraRepeat = vi.fn(async () => ({ movedOn: 0.9 }));
+      await f.controller.setCamera(true);
+      await vi.advanceTimersByTimeAsync(500);
+      f.send({ sessionId: "fixture-session", type: "action", tool: "stop_turn", ok: true, outcome: "stopped" });
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(f.api.checkNativeVoiceCameraRepeat).not.toHaveBeenCalled();
+      expect(f.api.sendNativeVoiceCameraCue).toHaveBeenCalledOnce();
+      await f.controller.stop();
+    });
+
+    it("bounds the excerpt to the last 90 seconds and 12 rows, and never sends a failed cue", async () => {
+      const f = await liveCamera();
+      f.api.analyzeNativeVoiceCamera = vi.fn(async () => stop);
+      const check = vi.fn<NonNullable<NativeVoiceApi["checkNativeVoiceCameraRepeat"]>>(async () => ({ movedOn: 0.1 }));
+      f.api.checkNativeVoiceCameraRepeat = check;
+      say(f, "user", "This was said long ago.");
+      await vi.advanceTimersByTimeAsync(91_000);
+      for (let line = 0; line < 14; line++) say(f, line % 2 ? "assistant" : "user", `Line ${line}\n  with   space ${"x".repeat(300)}`);
+      f.send({ sessionId: "fixture-session", type: "action", tool: "send_to_thread", ok: true, outcome: "queued" });
+      await f.controller.setCamera(true);
+      await vi.advanceTimersByTimeAsync(500);
+      say(f, "assistant", "Okay.");
+      await vi.advanceTimersByTimeAsync(500);
+      const { conversation } = check.mock.calls[0]![0];
+      expect(conversation).toHaveLength(12);
+      expect(conversation.some((line) => line.text.includes("long ago"))).toBe(false);
+      expect(conversation.slice(-3).map((line) => [line.speaker, line.text])).toEqual([
+        ["action", "send_to_thread queued"], ["cue", "stop (delivered)"], ["voice", "Okay."],
+      ]);
+      expect(conversation.every((line) => line.text.length <= 240 && !/\s{2}|\n/.test(line.text))).toBe(true);
+      await f.controller.stop();
+    });
+
+    it("does not re-send away while the operator is still gone", async () => {
+      const f = await liveCamera();
+      const away = { present: false, presenceConfidence: 0.95, reaction: "neutral" as const, reactionConfidence: 0.9, latencyMs: 400 };
+      f.api.analyzeNativeVoiceCamera = vi.fn()
+        .mockResolvedValueOnce(away).mockResolvedValueOnce(away).mockResolvedValueOnce(away).mockResolvedValueOnce(away)
+        .mockResolvedValueOnce({ skipped: "busy" })
+        .mockResolvedValue(away);
+      await f.controller.setCamera(true);
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(f.api.sendNativeVoiceCameraCue).toHaveBeenCalledExactlyOnceWith({ sessionId: "fixture-session", cue: "away" });
+      expect(f.controller.getView().cameraDiagnostics?.filter).toBe("Away already reported");
+      expect(f.controller.getView().cameraCues?.map((row) => row.cue)).toEqual(["away"]);
+      await f.controller.stop();
+    });
+
+    it("keeps presence steady while the operator sits half out of frame", async () => {
+      const f = await liveCamera();
+      const present = { present: true, presenceConfidence: 0.9, reaction: "neutral" as const, reactionConfidence: 0.9, latencyMs: 400 };
+      const away = { ...present, present: false };
+      const frames = [present, present, present, present, away, away, away, away];
+      // Runs of four frames: 1.5 seconds each way, enough to flip a plain debounce.
+      for (let flap = 0; flap < 6; flap++) frames.push(present, present, present, present, away, away, away, away);
+      f.api.analyzeNativeVoiceCamera = vi.fn(async () => frames.shift() ?? present);
+      await f.controller.setCamera(true);
+      await vi.advanceTimersByTimeAsync(500 * 56);
+      expect(vi.mocked(f.api.sendNativeVoiceCameraCue!).mock.calls.map(([request]) => request.cue)).toEqual(["neutral", "away"]);
+      // Steady presence for three seconds confirms the return.
+      await vi.advanceTimersByTimeAsync(3500);
+      expect(vi.mocked(f.api.sendNativeVoiceCameraCue!).mock.calls.map(([request]) => request.cue)).toEqual(["neutral", "away", "neutral"]);
+      await f.controller.stop();
+    });
+  });
+
   it("shows a camera failure without Electron's IPC wrapper", async () => {
     const f = await liveCamera();
     f.api.analyzeNativeVoiceCamera = vi.fn(async () => {
