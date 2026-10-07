@@ -251,6 +251,30 @@ it("filters totals, tokens, limits and threads by recorded account across owners
   expect(readUsageActivity).toHaveBeenCalledTimes(4); // Clock-period account filtering stays local.
 });
 
+it("focuses an account's turns and helper costs without any limit reading", async () => {
+  const now = new Date(2026, 8, 28, 12).getTime();
+  vi.spyOn(Date, "now").mockReturnValue(now);
+  const row = (id: string, accountKey: string, cost: number, helper = false) => ({
+    ...usageFixture({ threadId: id, turnId: helper ? undefined : `${id}-turn`, usageLineId: id,
+      scope: helper ? "monitor" as const : "turn" as const,
+      createdAt: now - 2 * HOUR, startedAt: now - 2 * HOUR, completedAt: now - HOUR,
+      totalCostMicros: cost * 1_000_000 }),
+    title: id, accountKey,
+    ...(helper ? { rollup: { kind: "title-helper", count: 2, groupKey: id } } : {}),
+  });
+  const readUsageActivity = vi.fn(async () => ({ readAt: now, rateLimits: [], truncated: false,
+    rows: [row("Account A turn", "alpha", 1), row("Account A helpers", "alpha", 2, true), row("Account B turn", "beta", 4)] }));
+  render(<UsageActivity desktopApi={{ readUsageActivity }} />);
+  await screen.findByRole("button", { name: "Inspect Account B turn" });
+  choosePeriod("7 days");
+  await waitFor(() => expect(readUsageActivity).toHaveBeenCalledTimes(2));
+  chooseSelectOption(screen.getByRole("combobox", { name: "Account" }), "OpenAI · Account alpha · This instance");
+  expect(within(screen.getByRole("region", { name: "Limits and cost" })).getByText("$3.00")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Inspect Account A helpers" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Inspect Account B turn" })).not.toBeInTheDocument();
+  expect(readUsageActivity).toHaveBeenCalledTimes(2);
+});
+
 it("reads ten federated profiles, sums their provider usage and selects an account outside the five chart series", async () => {
   const now = new Date(2026, 8, 28, 12).getTime();
   vi.spyOn(Date, "now").mockReturnValue(now);

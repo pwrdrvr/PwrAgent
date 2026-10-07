@@ -290,6 +290,7 @@ export type DesktopSettingsConfig = {
     };
   };
   models?: {
+    usageAccountGroups?: Record<string, string>;
     providerDefaults?: Record<string, DesktopProviderModelDefaults>;
     providerThreadMigrations?: Record<
       string,
@@ -1685,6 +1686,15 @@ export function desktopSettingsPatchToEdits(
       });
     }
   }
+  if (patch.models?.usageAccountGroups !== undefined) {
+    const groups = readUsageAccountGroups(patch.models.usageAccountGroups);
+    const entries = Object.entries(groups ?? {})
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([backend, group]) => ({ backend, group }));
+    edits.push(entries.length
+      ? { op: "setTableArray", path: ["models", "usage_account_groups"], value: entries }
+      : { op: "deleteTableArray", path: ["models", "usage_account_groups"] });
+  }
   if (patch.models?.helperModels !== undefined) {
     const helperModels = normalizeHelperModelSettings(patch.models.helperModels);
     if (helperModels.defaultModel) {
@@ -2293,6 +2303,7 @@ function normalizeDesktopConfig(
       },
     },
     models: {
+      usageAccountGroups: readUsageAccountGroups(models?.usage_account_groups),
       providerDefaults: readProviderModelDefaults(models?.provider_defaults),
       providerThreadMigrations: readProviderThreadModelMigrations(
         models?.provider_thread_migrations,
@@ -2629,6 +2640,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const providerDefaults = config.models?.providerDefaults;
   const providerThreadMigrations = config.models?.providerThreadMigrations;
   const helperModels = config.models?.helperModels;
+  const usageAccountGroups = config.models?.usageAccountGroups;
   const hasHelperModels = Boolean(
     helperModels
     && (
@@ -2645,8 +2657,10 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
       && Object.keys(providerThreadMigrations).length > 0
     )
     || hasHelperModels
+    || (usageAccountGroups && Object.keys(usageAccountGroups).length > 0)
   ) {
     pruned.models = {
+      ...(usageAccountGroups && Object.keys(usageAccountGroups).length > 0 ? { usageAccountGroups } : {}),
       ...(hasHelperModels ? { helperModels } : {}),
       ...(providerDefaults && Object.keys(providerDefaults).length > 0
         ? { providerDefaults }
@@ -3048,6 +3062,23 @@ function normalizeHelperModelChoice(
     ...(model ? { model } : {}),
     ...(reasoningEffort ? { reasoningEffort } : {}),
   };
+}
+
+// Additive setting: older builds ignore these rows. Reading never rewrites
+// config, and saving replaces only this table array.
+function readUsageAccountGroups(value: unknown): Record<string, string> | undefined {
+  const entries = Array.isArray(value)
+    ? value.map((row) => [readString(row?.backend), readString(row?.group)])
+    : value && typeof value === "object"
+      ? Object.entries(value)
+      : [];
+  const groups: Record<string, string> = {};
+  for (const [backend, group] of entries) {
+    if (typeof backend !== "string" || !/^(codex|acp:[a-z0-9_-]+)$/.test(backend)
+      || typeof group !== "string" || !group.trim() || group.trim().length > 120) continue;
+    groups[backend] = group.trim();
+  }
+  return Object.keys(groups).length ? groups : undefined;
 }
 
 function normalizeHelperModelSettings(

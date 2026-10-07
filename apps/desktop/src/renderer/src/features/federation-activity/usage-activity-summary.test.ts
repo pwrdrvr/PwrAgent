@@ -4,6 +4,22 @@ import { summarizeUsageActivity, type OwnedUsageRow } from "./usage-activity-sum
 import { usageFixture } from "./usage-activity-fixture";
 
 describe("usage activity aggregation", () => {
+  it.each([false, true])("counts account-split and legacy helper buckets once, keyed first: %s", (keyedFirst) => {
+    const keyed = ["a", "b"].map((accountKey) => ({ ...usageFixture({
+      scope: "monitor", source: "monitor", turnId: undefined, usageLineId: `bucket:${accountKey}`,
+    }), accountKey, rollup: { kind: "title-helper", count: 1, groupKey: "bucket" } }));
+    const legacy = { ...usageFixture({ scope: "monitor", source: "monitor", turnId: undefined,
+      usageLineId: "bucket", totalCostMicros: 600 }), rollup: { kind: "title-helper", count: 2 } };
+    const rows = keyedFirst ? [...keyed, legacy] : [legacy, ...keyed];
+    const result = summarizeUsageActivity(rows, 100, 300);
+    expect(result.groups[0].cost).toBe(600);
+    expect(result.rows.map((row) => row.accountKey).sort()).toEqual(["a", "b"]);
+    const newerLegacy = { ...legacy, updatedAt: 250, line: { ...legacy.line, totalCostMicros: 700 } };
+    const newer = summarizeUsageActivity([...keyed, newerLegacy], 100, 300);
+    expect(newer.groups[0].cost).toBe(700);
+    expect(newer.rows).toEqual([newerLegacy]);
+  });
+
   it("keeps reasoning/cache-write subsets and ignores cumulative counters and peer copies", () => {
     const original = usageFixture();
     const copy = { ...original, owner: "Peer", target: { scope: "remote" as const, instanceId: "peer" } };

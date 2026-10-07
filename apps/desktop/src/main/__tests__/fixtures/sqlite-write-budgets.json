@@ -1035,6 +1035,8 @@
     "rowsChanged": 26,
     "statements": 27
   },
+  "usage-line-account-attribution": {"commits": 1, "note": "Identity rides the existing line transaction: zero additional commits and observed WAL bytes versus the baseline; ~6.6 MB/day existing ledger cost at 100 new lines/day, 0 MB/day measured attribution overhead", "observedWalBytes": 65920, "rowsChanged": 3, "statements": 3},
+  "usage-line-without-account-attribution": {"commits": 1, "note": "Baseline line write: one existing commit; compare usage-line-account-attribution for account overhead", "observedWalBytes": 65920, "rowsChanged": 3, "statements": 3},
   "usage-turn-shutdown-completion": {
     "commits": 1,
     "note": "Two turns still running at shutdown: one commit per shutdown, only when a running turn has a ledger row",

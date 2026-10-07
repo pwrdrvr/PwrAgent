@@ -1937,6 +1937,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
             usage_line_id,
             usage_turn_id,
             provider,
+            account_key,
             backend,
             thread_id,
             parent_thread_id,
@@ -1990,6 +1991,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
             @usageLineId,
             @usageTurnId,
             @provider,
+            @accountKey,
             @backend,
             @threadId,
             @parentThreadId,
@@ -2043,6 +2045,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           ON CONFLICT(usage_line_id) DO UPDATE SET
             usage_turn_id = excluded.usage_turn_id,
             provider = excluded.provider,
+            account_key = COALESCE(thread_usage_lines.account_key, excluded.account_key),
             backend = excluded.backend,
             thread_id = excluded.thread_id,
             parent_thread_id = excluded.parent_thread_id,
@@ -2516,10 +2519,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
             completedAt: row.activity_completed_at ?? undefined },
           title: titles.get(identityFor(row)) || row.thread_id,
           updatedAt: row.updated_at,
-          accountKey: readings.get(row.activity_rate_limit_snapshot ?? "")?.accountKey,
+          accountKey: row.account_key ?? readings.get(row.activity_rate_limit_snapshot ?? "")?.accountKey,
         })),
         ...rollups.map(({ line, rollup, updatedAt }) => ({
           line, rollup, updatedAt,
+          accountKey: line.accountKey,
           title: titles.get(identityFor({ backend: line.backend, thread_id: line.threadId })) || line.threadId,
         })),
       ],
@@ -8331,6 +8335,7 @@ type ThreadUsageLineRow = {
   usage_line_id: string;
   usage_turn_id: string | null;
   provider: string;
+  account_key: string | null;
   backend: string;
   thread_id: string;
   parent_thread_id: string | null;
@@ -8700,6 +8705,9 @@ function mergeThreadUsageLineForUpsert(
 ): ThreadUsageLineRecord {
   const merged: ThreadUsageLineRecord = {
     ...line,
+    ...(existing.accountKey || line.accountKey
+      ? { accountKey: existing.accountKey ?? line.accountKey }
+      : {}),
     createdAt: Math.min(existing.createdAt, line.createdAt),
     ...(line.fastMode !== undefined
       ? { fastMode: line.fastMode }
@@ -8916,6 +8924,7 @@ function clampTokenCount(value: number | undefined): number {
 function toThreadUsageLineRowParams(line: ThreadUsageLineRecord): Record<string, unknown> {
   return {
     backend: line.backend,
+    accountKey: line.accountKey ?? null,
     cacheWriteInputCostMicros: line.cacheWriteInputCostMicros ?? 0,
     cacheWriteInputTokens: line.cacheWriteInputTokens ?? 0,
     cachedInputCostMicros: line.cachedInputCostMicros,
@@ -9068,14 +9077,16 @@ function rollUpBackgroundHelperRows(
     const kind = (row.source_item_id ?? "").split(":")[1] || "helper";
     const threadId = row.parent_thread_id ?? row.thread_id;
     const bucket = Math.floor(completed / step) * step;
-    const usageLineId = ["monitor-rollup", row.provider, kind, threadId, row.model ?? "",
+    const groupKey = ["monitor-rollup", row.provider, kind, threadId, row.model ?? "",
       row.price_status, row.currency, window.from, window.to, bucket].join(":");
+    const usageLineId = row.account_key ? `${groupKey}:${row.account_key}` : groupKey;
     const line = threadUsageLineFromRow(row);
     const existing = groups.get(usageLineId);
     if (!existing) {
       groups.set(usageLineId, {
         line: {
           backend: line.backend, provider: line.provider, threadId, usageLineId,
+          ...(line.accountKey ? { accountKey: line.accountKey } : {}),
           scope: "monitor", source: line.source, status: "finalized",
           ...(line.model ? { model: line.model } : {}),
           ...(line.modelLabel ? { modelLabel: line.modelLabel } : {}),
@@ -9089,7 +9100,7 @@ function rollUpBackgroundHelperRows(
           cacheWriteInputCostMicros: line.cacheWriteInputCostMicros, outputCostMicros: line.outputCostMicros,
           totalCostMicros: line.totalCostMicros,
         } as ThreadUsageLineRecord,
-        rollup: { kind, count: 1 },
+        rollup: { kind, count: 1, groupKey },
         updatedAt: row.updated_at,
       });
       continue;
@@ -9119,6 +9130,7 @@ function rollUpBackgroundHelperRows(
 function threadUsageLineFromRow(row: ThreadUsageLineRow): ThreadUsageLineRecord {
   return {
     backend: row.backend,
+    ...(row.account_key ? { accountKey: row.account_key } : {}),
     cacheWriteInputCostMicros: row.cache_write_input_cost_micros,
     cacheWriteInputTokens: row.cache_write_input_tokens,
     cachedInputCostMicros: row.cached_input_cost_micros,

@@ -1544,6 +1544,7 @@ export class DesktopSettingsService {
         },
       },
       models: {
+        usageAccountGroups: config.models?.usageAccountGroups ?? {},
         providerDefaults: config.models?.providerDefaults ?? {},
         providerThreadMigrations:
           config.models?.providerThreadMigrations ?? {},
@@ -3002,6 +3003,10 @@ export class DesktopSettingsService {
 
   resolveHelperModelSettings(): DesktopHelperModelSettings {
     return this.readModelsConfig().helperModels ?? { helpers: {} };
+  }
+
+  resolveUsageAccountGroups(): Record<string, string> {
+    return this.readModelsConfig().usageAccountGroups ?? {};
   }
 
   resolveCodexConfigOverrides(): string[] {

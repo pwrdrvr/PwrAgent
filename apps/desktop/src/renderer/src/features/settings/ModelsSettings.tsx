@@ -40,6 +40,7 @@ import {
 } from "./CodexAuthProfileSelect";
 import { AcpAgentsSettings } from "./AcpAgentsSettings";
 import { HelperModelSettings } from "./HelperModelSettings";
+import { UsageAccountSettings } from "./UsageAccountSettings";
 import {
   ManagedRuntimeProgressStrip,
   useManagedRuntimeProgress,
@@ -134,6 +135,7 @@ export function ModelsSettings(props: {
   onSaveHelperModels?: (
     helperModels: DesktopHelperModelSettings,
   ) => Promise<unknown>;
+  onSaveUsageAccountGroups?: (groups: Record<string, string>) => Promise<unknown>;
   onSaveCodexFastAllowed: (allowed: boolean) => Promise<boolean>;
   /** Persist whether PwrAgent downloads and prefers its own Codex build. */
   onManagedCodexBuildsChange?: (enabled: boolean) => Promise<boolean>;
@@ -570,6 +572,14 @@ export function ModelsSettings(props: {
           onEditDefaults={editDefaults}
         />
         {codexSection}
+        {props.onSaveUsageAccountGroups ? (
+          <UsageAccountSettings
+            backend="codex"
+            groups={props.snapshot.models.usageAccountGroups ?? {}}
+            saving={props.saving}
+            onSave={props.onSaveUsageAccountGroups}
+          />
+        ) : null}
       </SettingsSectionStack>
     );
   }
@@ -592,6 +602,14 @@ export function ModelsSettings(props: {
           error={catalogError}
           onEditDefaults={editDefaults}
         />
+        {focusedAcpEntry && props.onSaveUsageAccountGroups ? (
+          <UsageAccountSettings
+            backend={focusedAcpEntry.backendId}
+            groups={props.snapshot.models.usageAccountGroups ?? {}}
+            saving={props.saving}
+            onSave={props.onSaveUsageAccountGroups}
+          />
+        ) : null}
         <AcpAgentsSettings
           catalogRefreshing={catalogBusy}
           desktopApi={props.desktopApi}

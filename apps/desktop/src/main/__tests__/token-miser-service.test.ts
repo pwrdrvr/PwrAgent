@@ -186,6 +186,7 @@ describe("TokenMiserService", () => {
         summary: "The command printed many numbered records.",
         usefulDetails: ["The final record is 4000."],
       },
+      accountKey: "helper-account",
       helperThreadId: "helper-thread-1",
       helperTurnId: "helper-turn-1",
       model: "gpt-5.6-luna",
@@ -262,6 +263,7 @@ describe("TokenMiserService", () => {
       replayTrackingVersion: 2,
       lastParentCumulativeInputTokens: 12_345,
       helperUsage: {
+        accountKey: "helper-account",
         helperThreadId: "helper-thread-1",
         helperTurnId: "helper-turn-1",
         model: "gpt-5.6-luna",

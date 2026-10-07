@@ -1504,6 +1504,9 @@ function SettingsSectionBody(props: {
           models: { helperModels },
         });
       }}
+      onSaveUsageAccountGroups={async (usageAccountGroups) => {
+        return await props.settings.writeConfig({ models: { usageAccountGroups } });
+      }}
       onSaveCodexFastAllowed={async (allowFast) => {
         return await props.settings.writeConfig({
           models: {

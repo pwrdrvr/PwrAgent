@@ -49,6 +49,56 @@ afterEach(() => {
 });
 
 describe("SqliteOverlayStore thread usage pricing ledger", () => {
+  it("measures the existing usage line transaction without account identity", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    useFileStateDb();
+    const { writes } = await measureSqliteWrites(() => store.upsertThreadUsageLine({
+      line: buildUsageLine({ source: "live", status: "pending" }),
+    }));
+    expectSqliteWriteBudget({ scenario: "usage-line-without-account-attribution", writes,
+      note: "Baseline line write: one existing commit; compare usage-line-account-attribution for account overhead" });
+  });
+
+  it("persists account identity independently of limits in the existing ledger commit", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const dbPath = useFileStateDb();
+    const line = buildUsageLine({ source: "live", status: "pending", accountKey: "account-a" });
+    const { writes } = await measureSqliteWrites(() => store.upsertThreadUsageLine({ line }));
+    expectSqliteWriteBudget({
+      scenario: "usage-line-account-attribution", writes,
+      note: "Account identity rides the existing line transaction: one commit, no separate account write",
+    });
+    await store.upsertThreadUsageLine({ line: { ...line, accountKey: "account-b", outputTokens: 101 } });
+    stateDb.close();
+    stateDb = StateDb.open(dbPath);
+    store = new SqliteOverlayStore(stateDb);
+    expect((await store.readThreadPricing({ backend: "codex", threadId: line.threadId })).lines[0].accountKey)
+      .toBe("account-a");
+    const snapshot = await store.readUsageActivity({ from: PRICING_CATALOG_TIME - 1, to: PRICING_CATALOG_TIME + 60_000 });
+    expect(snapshot.limitHistory).toEqual([]);
+    expect(snapshot.rows[0].accountKey).toBe("account-a");
+    await store.upsertThreadUsageLine({ line: { ...line, source: "hydration", status: "finalized" } });
+    expect((await store.readThreadPricing({ backend: "codex", threadId: line.threadId })).lines[0].accountKey)
+      .toBe("account-a");
+  });
+
+  it("keeps helpers from distinct accounts separate while rolling the same account together", async () => {
+    const start = PRICING_CATALOG_TIME;
+    for (const [id, accountKey] of [["a", "account-a"], ["b", "account-b"], ["c", "account-a"], ["d", undefined]]) {
+      await store.upsertThreadUsageLine({ line: buildUsageLine({
+        usageLineId: `helper-${id}`, scope: "monitor", source: "monitor", status: "finalized",
+        sourceItemId: `system:title-helper:${id}`, threadId: `helper-${id}`, turnId: `turn-${id}`,
+        parentThreadId: "thread-1", accountKey, createdAt: start + 1_000,
+      }) });
+    }
+    const snapshot = await store.readUsageActivity({ from: start, to: start + 240_000 });
+    expect(snapshot.rows).toHaveLength(3);
+    expect(snapshot.rows.find((row) => row.accountKey === "account-a")?.rollup?.count).toBe(2);
+    expect(snapshot.rows.find((row) => row.accountKey === "account-b")?.rollup?.count).toBe(1);
+    expect(snapshot.rows.find((row) => !row.accountKey)?.rollup?.count).toBe(1);
+    expect(snapshot.rows.reduce((sum, row) => sum + row.line.totalCostMicros, 0)).toBe(4 * 16_100);
+  });
+
   it("keeps an unfinished interval only while its ledger row can hold usage in the window", async () => {
     const start = PRICING_CATALOG_TIME;
     await store.upsertThreadUsageLine({ line: buildUsageLine({
@@ -91,7 +141,7 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     const { rows, truncated } = await store.readUsageActivity(window);
     expect(truncated).toBe(false);
     const rollups = rows.filter((row) => row.rollup).sort((a, b) => a.rollup!.kind.localeCompare(b.rollup!.kind));
-    expect(rollups.map((row) => [row.rollup, row.line.threadId, row.line.totalCostMicros])).toEqual([
+    expect(rollups.map((row) => [{ kind: row.rollup!.kind, count: row.rollup!.count }, row.line.threadId, row.line.totalCostMicros])).toEqual([
       [{ kind: "title-helper", count: 1 }, "thread-1", 16_100],
       [{ kind: "token-miser", count: 2 }, "thread-1", 32_200],
     ]);

@@ -62,6 +62,8 @@ export type ThreadUsageLineStatus = "pending" | "finalized" | "superseded";
 
 export type ThreadUsageLineRecord = {
   backend: string;
+  /** Opaque account identity captured for this request, independently of limits. */
+  accountKey?: string;
   // Cache-write cost is separate from uncachedInputCostMicros; the tokens are
   // still a subset of uncachedInputTokens.
   cacheWriteInputCostMicros?: number;

@@ -213,6 +213,7 @@ class MockTransport implements JsonRpcTransport {
     summary: {},
     dailyUsageBuckets: [],
   };
+  static accountResult: unknown = { account: null, workspaceRouting: null };
   static unfilteredThreadListResult: unknown[] | undefined;
   static threadListNextCursor: string | undefined;
   static threadListResultBySearchTerm = new Map<string, unknown[]>();
@@ -876,6 +877,10 @@ class MockTransport implements JsonRpcTransport {
       return;
     }
 
+    if (payload.method === "account/read") {
+      this.messageHandler(JSON.stringify({ jsonrpc: "2.0", id: payload.id, result: MockTransport.accountResult }));
+      return;
+    }
     if (payload.method === "account/rateLimits/read") {
       this.messageHandler(
         JSON.stringify({
@@ -1948,6 +1953,7 @@ describe("CodexAppServerClient", () => {
       summary: {},
       dailyUsageBuckets: [],
     };
+    MockTransport.accountResult = { account: null, workspaceRouting: null };
     MockTransport.unfilteredThreadListResult = undefined;
     MockTransport.threadListNextCursor = undefined;
     MockTransport.threadListResultBySearchTerm.clear();
@@ -1955,6 +1961,20 @@ describe("CodexAppServerClient", () => {
     MockTransport.threadResumeError = undefined;
     MockTransport.accountUsageError = undefined;
     MockTransport.threadSettingsUpdateError = undefined;
+  });
+
+  it("retains the provider workspace ID independently of email and rate limits", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.accountResult = {
+      account: { type: "chatgpt", email: null, planType: "team" },
+      workspaceRouting: { chatgptAccountId: "fixture-workspace", backendOrigin: "https://example.test" },
+      requiresOpenaiAuth: true,
+    };
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    expect(await client.readAccount()).toMatchObject({ type: "chatgpt", accountId: "fixture-workspace" });
+    expect(MockTransport.instances.flatMap((transport) => transport.sentMessages.map((message) => JSON.parse(message)))
+      .filter((request) => request.method === "account/rateLimits/read")).toHaveLength(0);
+    await client.close();
   });
 
   it("passes hydrated env into dynamic launch args", async () => {
@@ -11835,6 +11855,7 @@ describe("CodexAppServerClient", () => {
   it("generates thread titles through an ephemeral Codex helper turn", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     const observedMessages: string[] = [];
+    let helperAccount = "original-helper-account";
     MockTransport.threadMcpServerStatusResult = {
       data: [
         { name: "context7", tools: {} },
@@ -11859,6 +11880,7 @@ describe("CodexAppServerClient", () => {
 
     const client = new CodexAppServerClient({
       command: "codex",
+      resolveUsageAccountKey: async () => helperAccount,
       directoryResolver: async () => [],
       connectionObserver: {
         onMessage: (event) => {
@@ -11886,6 +11908,7 @@ describe("CodexAppServerClient", () => {
     });
 
     const transport = await waitForLatestTransportRequest("thread/start");
+    helperAccount = "switched-helper-account";
 
     transport!.emitInbound({
       jsonrpc: "2.0",
@@ -11936,6 +11959,7 @@ describe("CodexAppServerClient", () => {
 
     await expect(titlePromise).resolves.toEqual({
       status: "ok",
+      accountKey: "original-helper-account",
       object: {
         title: "Add animated leopard tea button",
       },

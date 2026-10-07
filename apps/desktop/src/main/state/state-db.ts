@@ -17,7 +17,7 @@ import {
   isSqliteWriteMetricsEnabled,
 } from "./sqlite-write-metrics.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 70;
+export const CURRENT_STATE_DB_USER_VERSION = 71;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -989,6 +989,7 @@ CREATE TABLE IF NOT EXISTS thread_usage_lines (
   usage_line_id              TEXT PRIMARY KEY,
   usage_turn_id              TEXT,
   provider                   TEXT NOT NULL DEFAULT 'openai',
+  account_key                TEXT,
   backend                    TEXT NOT NULL,
   thread_id                  TEXT NOT NULL,
   parent_thread_id           TEXT,
@@ -1947,6 +1948,15 @@ export class StateDb {
         db.transaction(() => {
           ensureThreadTodoProjectColumns(db);
           db.pragma("user_version = 70");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 71) {
+        db.transaction(() => {
+          if (tableExists(db, "thread_usage_lines")
+            && !tableColumnExists(db, "thread_usage_lines", "account_key")) {
+            db.exec("ALTER TABLE thread_usage_lines ADD COLUMN account_key TEXT");
+          }
+          db.pragma("user_version = 71");
         })();
       }
       // Keep current-version databases converged without asking pre-v36 profiles

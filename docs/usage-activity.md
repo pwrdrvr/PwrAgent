@@ -58,7 +58,7 @@ them.
 - Background helpers (Token Miser, title generation) write one monitor line
   per run: thousands a week, each worth a fraction of a cent. The owner sums
   the ones contained in the window into one line per parent thread, helper
-  kind, model and rollup step, so they count toward the thread they worked
+  kind, account, model and rollup step, so they count toward the thread they worked
   for and cannot spend the row bound. The rollup step is the chart's bar
   width capped at an hour, on epoch boundaries, so a rollup never straddles a
   bar in any whole-hour time zone. The line id is derived from the window,
@@ -73,7 +73,8 @@ them.
 ## Account limits
 
 - When a Codex turn completes, its owner stamps the account's current limit
-  reading on the turn's ledger row (`rate_limit_snapshot`). It rides the same
+  reading on the turn's ledger row (`rate_limit_snapshot`) when its account
+  matches the identity captured for that turn. It rides the same
   completion `UPDATE` and commit, so it adds no write; the
   `completed-turn-usage-limit-reading` budget pins that. A reading holds each
   limit's used percent, used and limit amounts when stated, reset time and
@@ -110,20 +111,39 @@ still groups all accounts' spend for each provider.
 
 Account choices use an opaque key and the instances that reported it, without
 relaying an email. The same recorded key merges across machines and profiles;
-different providers keep separate accounts even if their keys match. Codex
-turns use the key stamped in their completion reading, so earlier usage stays
-with its recorded account after a profile changes login. Since-reset and
+different providers keep separate accounts even if their keys match. Requests
+capture identity when they start, independently of account limits. Codex uses
+the provider's workspace/account ID when available; older App Servers fall
+back to their reported email hash. The key is stored on the usage line, and
+helpers carry their own request's key through title and Token Miser metadata.
+Earlier usage stays with its recorded account after a profile changes login.
+Since-reset and
 5-hour periods follow the selected account's limit window when known. Clock
 periods filter the loaded snapshot without another owner read.
 A selected historical account stays selected when the next period has no
 usage for it; its total is zero until usage is available in that scope.
 
+For API-key accounts and providers without a stable protocol identity, set
+**Settings → AI Providers → [provider] → Account group**. Use the same group
+on profiles using the same provider account, and different groups for distinct
+accounts. Blank uses automatic identity. A group is hashed before it enters
+the ledger or Federation; changes apply to future requests. The provider
+still scopes the group, so the same text cannot blend two providers.
+
 Rows without a recorded key appear as **Unknown account**, separately for
-each provider and instance. This includes older peers, turns without a stored
-account reading, background-helper rollups and providers that do not report
-an account identity. They remain in the all-account total and can be selected
+each provider and instance. This includes historical rows without identity
+and providers with neither a protocol identity nor an explicit group.
+Legacy completion readings remain a fallback for old rows; historical keys
+are never rewritten using today's login. They remain in the all-account total and can be selected
 as their own group; they are never assigned to the instance's current login.
 Duplicate ledger representations are resolved before account filtering.
+Mixed-version copies retain recorded keys. For helper buckets, account-split
+rollups replace an older peer's combined sum unless that sum is more recent,
+so the same ledger is counted once while a peer is upgrading.
+
+Attribution uses the existing ledger and helper metadata writes. The paired
+`usage-line-account-attribution` and `usage-line-without-account-attribution`
+SQLite budgets measure one commit each and no additional idle writes.
 
 ## Chart and ranking
 

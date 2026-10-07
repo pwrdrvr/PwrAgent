@@ -1362,6 +1362,8 @@ export type DesktopSettingsSnapshot = {
     };
   };
   models: {
+    /** Explicit account groups for providers without a stable protocol identity. */
+    usageAccountGroups?: Record<string, string>;
     providerDefaults?: Record<string, DesktopProviderModelDefaults>;
     providerThreadMigrations?: Record<
       string,
@@ -1671,6 +1673,8 @@ export type DesktopSettingsConfigPatch = {
     };
   };
   models?: {
+    /** Replaces account groups; blank/omitted entries use protocol identity. */
+    usageAccountGroups?: Record<string, string>;
     providerDefaults?: Record<string, DesktopProviderModelDefaults>;
     providerThreadMigrations?: Record<
       string,
