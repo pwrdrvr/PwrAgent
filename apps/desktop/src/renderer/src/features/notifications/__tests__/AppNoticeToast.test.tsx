@@ -202,7 +202,52 @@ describe("AppNoticeToast", () => {
     expect(screen.getByRole("status")).toHaveAttribute("data-tone", "warning");
   });
 
-  it("saves a Skill Questions warning dismissal before closing the toast", async () => {
+  it("saves a Skill Questions warning dismissal when the checked toast is closed", async () => {
+    const onDismiss = vi.fn();
+    const onSuppressSkillQuestionsWarning = vi.fn(async () => true);
+    render(
+      <AppNoticeToast
+        notice={{ ...notice, skillQuestionsWarning: true }}
+        onDismiss={onDismiss}
+        onSuppressSkillQuestionsWarning={onSuppressSkillQuestionsWarning}
+      />,
+    );
+
+    const checkbox = screen.getByRole("checkbox", { name: "Don't show again" });
+    await act(async () => {
+      fireEvent.click(checkbox);
+    });
+    expect(checkbox).toBeChecked();
+    expect(onSuppressSkillQuestionsWarning).not.toHaveBeenCalled();
+    expect(onDismiss).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss notice" }));
+    await waitFor(() => expect(onDismiss).toHaveBeenCalledTimes(1));
+    expect(onSuppressSkillQuestionsWarning).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes an unchecked Skill Questions warning without saving", () => {
+    const onDismiss = vi.fn();
+    const onSuppressSkillQuestionsWarning = vi.fn(async () => true);
+    render(
+      <AppNoticeToast
+        notice={{ ...notice, skillQuestionsWarning: true }}
+        onDismiss={onDismiss}
+        onSuppressSkillQuestionsWarning={onSuppressSkillQuestionsWarning}
+      />,
+    );
+
+    const checkbox = screen.getByRole("checkbox", { name: "Don't show again" });
+    fireEvent.click(checkbox);
+    fireEvent.click(checkbox);
+    expect(checkbox).not.toBeChecked();
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss notice" }));
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+    expect(onSuppressSkillQuestionsWarning).not.toHaveBeenCalled();
+  });
+
+  it("keeps a checked Skill Questions warning open past the auto-dismiss timer", () => {
+    vi.useFakeTimers();
     const onDismiss = vi.fn();
     const onSuppressSkillQuestionsWarning = vi.fn(async () => true);
     render(
@@ -214,8 +259,31 @@ describe("AppNoticeToast", () => {
     );
 
     fireEvent.click(screen.getByRole("checkbox", { name: "Don't show again" }));
-    await waitFor(() => expect(onDismiss).toHaveBeenCalledTimes(1));
-    expect(onSuppressSkillQuestionsWarning).toHaveBeenCalledTimes(1);
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+    expect(onDismiss).not.toHaveBeenCalled();
+    expect(onSuppressSkillQuestionsWarning).not.toHaveBeenCalled();
+  });
+
+  it("keeps a checked Skill Questions warning open when saving fails", async () => {
+    const onDismiss = vi.fn();
+    const onSuppressSkillQuestionsWarning = vi.fn(async () => false);
+    render(
+      <AppNoticeToast
+        notice={{ ...notice, skillQuestionsWarning: true }}
+        onDismiss={onDismiss}
+        onSuppressSkillQuestionsWarning={onSuppressSkillQuestionsWarning}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Don't show again" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Dismiss notice" }));
+    });
+    expect(screen.getByRole("status")).toHaveTextContent("Could not save this preference.");
+    expect(screen.getByRole("checkbox", { name: "Don't show again" })).toBeChecked();
+    expect(onDismiss).not.toHaveBeenCalled();
   });
 
   it("copies an explicit handoff value without rendering it", () => {

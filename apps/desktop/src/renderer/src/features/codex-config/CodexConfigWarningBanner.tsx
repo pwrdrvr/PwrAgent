@@ -67,6 +67,9 @@ export function CodexConfigWarningBanner(props: {
   const [trustError, setTrustError] = useState<string | null>(null);
   const [savingWarningId, setSavingWarningId] = useState<string | null>(null);
   const [suppressionErrorId, setSuppressionErrorId] = useState<string | null>(null);
+  // The checkbox records a choice; Dismiss applies it. Keyed by notice id so
+  // a newer warning never inherits the previous warning's choice.
+  const [suppressOnDismissId, setSuppressOnDismissId] = useState<string | null>(null);
   const desktopApi = props.desktopApi;
   const preferencesLoaded = props.preferencesLoaded !== false;
   const dismissedWarningIds = props.dismissedWarningIds ?? EMPTY_DISMISSED_WARNING_IDS;
@@ -165,12 +168,9 @@ export function CodexConfigWarningBanner(props: {
     }
   };
 
-  const dismiss = (): void => {
-    setDismissedIds((current) => new Set(current).add(notice.id));
-    setNotice(null);
-  };
+  const suppressOnDismiss = suppressOnDismissId === notice.id;
 
-  const suppressWarning = async (): Promise<void> => {
+  const suppressWarningAndDismiss = async (): Promise<void> => {
     const id = notice.id;
     setSavingWarningId(id);
     setSuppressionErrorId(null);
@@ -187,6 +187,15 @@ export function CodexConfigWarningBanner(props: {
     } finally {
       setSavingWarningId((current) => current === id ? null : current);
     }
+  };
+
+  const dismiss = (): void => {
+    if (suppressOnDismiss) {
+      void suppressWarningAndDismiss();
+      return;
+    }
+    setDismissedIds((current) => new Set(current).add(notice.id));
+    setNotice(null);
   };
   const suppressionSaving = savingWarningId === notice.id;
 
@@ -212,9 +221,12 @@ export function CodexConfigWarningBanner(props: {
           <label className="composer__checkbox codex-config-warning-banner__suppress">
             <input
               type="checkbox"
-              checked={suppressionSaving}
+              checked={suppressOnDismiss}
               disabled={trusting || suppressionSaving}
-              onChange={() => { void suppressWarning(); }}
+              onChange={(event) => {
+                setSuppressOnDismissId(event.currentTarget.checked ? notice.id : null);
+                setSuppressionErrorId(null);
+              }}
             />
             Don't show again
           </label>
