@@ -4399,6 +4399,44 @@ describe("SettingsScreen", () => {
     }));
   });
 
+  it("keeps the Codex models when both tracks name the running build", async () => {
+    const snapshot = createSnapshot();
+    snapshot.models.codex.managedBuilds = { value: true, source: "config" };
+    snapshot.runtime.tokenMiser = {
+      managedCodex: {
+        state: "ready",
+        version: "0.160.0-pwragent.1",
+        latestTag: "pwragent-v0.160.0-pwragent.1",
+        prereleaseTag: "pwragent-v0.160.0-pwragent.1",
+      },
+    };
+    const settings = createSettingsState(snapshot);
+    const listBackends = vi.fn(async () => ({ fetchedAt: Date.now(), backends: [] }));
+
+    render(
+      <SettingsScreen
+        desktopApi={{ listBackends } as unknown as DesktopApi}
+        initialSection="models"
+        initialSubsection="codex"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    const track = screen.getByRole("radiogroup", { name: "Build track" });
+    await waitFor(() => expect(
+      within(track).getByRole("radio", { name: /Prerelease/ }),
+    ).toBeEnabled());
+    listBackends.mockClear();
+    fireEvent.click(within(track).getByRole("radio", { name: /Prerelease/ }));
+
+    await waitFor(() => expect(settings.refresh).toHaveBeenCalled());
+    // The switch installed nothing, so there is nothing to rediscover.
+    expect(listBackends).not.toHaveBeenCalledWith(expect.objectContaining({
+      refreshModels: "codex",
+    }));
+  });
+
   it("offers no managed Codex track while the PwrAgent build is off", () => {
     const snapshot = createSnapshot();
     snapshot.models.codex.managedBuilds = { value: false, source: "config" };

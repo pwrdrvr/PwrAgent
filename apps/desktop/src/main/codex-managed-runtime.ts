@@ -211,7 +211,10 @@ type ParsedSemver = {
 };
 
 const processChecks = new Set<string>();
-const activeChecks = new Map<string, Promise<ManagedCodexRuntime>>();
+const activeChecks = new Map<string, {
+  channel: DesktopUpdateChannel;
+  check: Promise<ManagedCodexRuntime>;
+}>();
 const retryChecksAfter = new Map<string, number>();
 const markedRuntimeCommands = new Map<string, string>();
 const MANAGED_CODEX_ARTIFACT_TARGETS = [
@@ -291,17 +294,28 @@ export async function ensureManagedCodexRuntime(
       return await activateRuntime(rootDir, cached, options);
     }
   }
-  const existing = activeChecks.get(rootDir);
-  if (existing) {
-    return await existing;
+  const channel = options.channel ?? MANAGED_CODEX_BUILD_CHANNEL_DEFAULT;
+  for (
+    let existing = activeChecks.get(rootDir);
+    existing;
+    existing = activeChecks.get(rootDir)
+  ) {
+    if (existing.channel === channel) {
+      return await existing.check;
+    }
+    // A check for the other track is installing into the same root. Joining
+    // it would hand this caller that track's build — a track switch during a
+    // background refresh would publish the build the operator just left.
+    // Let it finish, then check this track.
+    await existing.check.catch(() => undefined);
   }
   const check = ensureManagedCodexRuntimeInner(rootDir, options)
     .finally(() => {
-      if (activeChecks.get(rootDir) === check) {
+      if (activeChecks.get(rootDir)?.check === check) {
         activeChecks.delete(rootDir);
       }
     });
-  activeChecks.set(rootDir, check);
+  activeChecks.set(rootDir, { channel, check });
   return await check;
 }
 

@@ -898,50 +898,28 @@ export class DesktopSettingsService {
       configPath: this.configPath,
       configError: error,
       runtime: {
-        tokenMiser: tokenMiserActivation
-          ? {
-              activation: tokenMiserActivation,
-              ...(managedCodexRuntime
-                ? {
-                    managedCodex: {
-                      state: this.managedCodexRuntimeSwitchPending
-                        ? "pending-switch" as const
-                        : "ready" as const,
-                      version: managedCodexRuntime.metadata.version,
-                      checkedAt: managedCodexRuntime.metadata.checkedAt,
-                      ...managedCodexTrackTags(managedCodexRuntime),
-                    },
-                  }
-                : managedCodexError
-                  ? {
-                      managedCodex: {
-                        state: "unavailable" as const,
-                        reason: managedCodexError,
-                      },
-                    }
-                  : {}),
-            }
-          : {
-              ...(managedCodexRuntime
-                ? {
-                    managedCodex: {
-                      state: this.managedCodexRuntimeSwitchPending
-                        ? "pending-switch" as const
-                        : "ready" as const,
-                      version: managedCodexRuntime.metadata.version,
-                      checkedAt: managedCodexRuntime.metadata.checkedAt,
-                      ...managedCodexTrackTags(managedCodexRuntime),
-                    },
-                  }
-                : managedCodexError
-                  ? {
-                      managedCodex: {
-                        state: "unavailable" as const,
-                        reason: managedCodexError,
-                      },
-                    }
-                  : {}),
-            },
+        tokenMiser: {
+          ...(tokenMiserActivation ? { activation: tokenMiserActivation } : {}),
+          ...(managedCodexRuntime
+            ? {
+                managedCodex: {
+                  state: this.managedCodexRuntimeSwitchPending
+                    ? "pending-switch" as const
+                    : "ready" as const,
+                  version: managedCodexRuntime.metadata.version,
+                  checkedAt: managedCodexRuntime.metadata.checkedAt,
+                  ...managedCodexTrackTags(managedCodexRuntime),
+                },
+              }
+            : managedCodexError
+              ? {
+                  managedCodex: {
+                    state: "unavailable" as const,
+                    reason: managedCodexError,
+                  },
+                }
+              : {}),
+        },
         tokenMiserDiagnosticsDirectory: path.join(
           this.tokenMiserStateDir(),
           TOKEN_MISER_DIAGNOSTICS_DIRNAME,

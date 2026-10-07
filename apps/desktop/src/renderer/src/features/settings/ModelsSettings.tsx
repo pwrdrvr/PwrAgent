@@ -65,6 +65,7 @@ import {
   acpStatusLabel,
   MANAGED_BUILD_TRACK_SUB,
   managedBuildTrackOptions,
+  managedBuildVersion,
 } from "./acp-agent-copy";
 import {
   acpAgentEnabledInSnapshot,
@@ -309,6 +310,15 @@ export function ModelsSettings(props: {
     channel: DesktopUpdateChannel,
   ): Promise<void> => {
     setManagedCodexCheckError(undefined);
+    // Between promotions both tracks name the build already running, and a
+    // switch installs nothing. Read before the write, which replaces the
+    // snapshot this closure sees.
+    const trackTag = channel === "latest"
+      ? managedCodexRuntime?.latestTag
+      : managedCodexRuntime?.prereleaseTag;
+    const sameBuild =
+      trackTag !== undefined
+      && managedBuildVersion(trackTag) === managedCodexRuntime?.version;
     // The write holds until main has checked the track and installed its
     // build, the same transaction as the PwrAgent build switch.
     const saved = await props.onManagedCodexBuildChannelChange?.(channel);
@@ -316,6 +326,9 @@ export function ModelsSettings(props: {
       return;
     }
     await props.onRefresh();
+    if (sameBuild) {
+      return;
+    }
     try {
       // The track's build is a different Codex, and its models can differ.
       await refreshManagedCodexModelCatalog(props.desktopApi);

@@ -633,6 +633,55 @@ describe("ensureManagedCodexRuntime", () => {
     });
   });
 
+  it("checks the new track after an in-flight check for the other one", async () => {
+    // A track switch can land while the old track's check is still running.
+    // Joining that check would hand the switch the build the operator left.
+    const rootDir = await temporaryRoot();
+    const tag = "pwragent-v0.201.0-pwragent.1";
+    const version = "0.201.0-pwragent.1";
+    const archiveName = `pwragent-codex-${version}-linux-x86_64.tar.gz`;
+    const archive = Buffer.from("prerelease codex archive");
+    const digest = createHash("sha256").update(archive).digest("hex");
+    const installable = releaseFetch({ archive, archiveName, digest, tag });
+    let finishLatestCheck!: () => void;
+    const latestCheckGate = new Promise<void>((resolve) => {
+      finishLatestCheck = resolve;
+    });
+    let firstReleaseCheck = true;
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      if (String(input) === MANAGED_CODEX_RELEASES_URL && firstReleaseCheck) {
+        firstReleaseCheck = false;
+        await latestCheckGate;
+        return new Response("offline", { status: 503 });
+      }
+      return await installable(input);
+    });
+    const common = {
+      arch: "x64" as const,
+      checkMode: "force" as const,
+      extractArchive: async (_archivePath: string, targetDir: string) => {
+        await writeFakeBundle(targetDir, "linux");
+      },
+      fetch: fetchMock as typeof globalThis.fetch,
+      platform: "linux" as const,
+      probeVersion: versionProbe(version),
+      rootDir,
+    };
+
+    const latest = ensureManagedCodexRuntime({ ...common, channel: "latest" });
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    const prerelease = ensureManagedCodexRuntime({
+      ...common,
+      channel: "prerelease",
+    });
+    finishLatestCheck();
+
+    await expect(latest).rejects.toThrow("HTTP 503");
+    await expect(prerelease).resolves.toMatchObject({
+      metadata: { channel: "prerelease", tag },
+    });
+  });
+
   it("serves an other-track cache at startup while its re-check runs", async () => {
     // Startup never waits on a download, for a stale cache or a mistracked
     // one. The re-check starts now instead of when the TTL runs out.
