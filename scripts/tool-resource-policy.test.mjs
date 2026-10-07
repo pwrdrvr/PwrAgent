@@ -23,15 +23,18 @@ const high = getToolResourcePolicy({ hostMemory: 32 * GIB, constrainedMemory: 0,
 
 // Call the public API from an independent process with a private fixture
 // lease. There is no production env override/bypass for the global lane.
-async function startFixture(directory, args, { env = process.env, lockPath = path.join(directory, "lock"), policy = low, cwd = directory } = {}) {
+async function startFixture(directory, args, { env = process.env, lockPath = path.join(directory, "lock"), policy = low, cwd = directory, stdio = "ignore" } = {}) {
   const entry = path.join(directory, `fixture-${Math.random()}.mjs`);
   await writeFile(entry, `import { runResourceCommand } from ${JSON.stringify(new URL("./resource-run.mjs", import.meta.url).href)};
 const result = await runResourceCommand(process.execPath, ${JSON.stringify(args)}, {
-  policy: ${JSON.stringify(policy)}, lockPath: ${JSON.stringify(lockPath)}, cwd: ${JSON.stringify(cwd)}, log: () => {}, stdio: "ignore",
+  policy: ${JSON.stringify(policy)}, lockPath: ${JSON.stringify(lockPath)}, cwd: ${JSON.stringify(cwd)}, log: () => {}, stdio: ${JSON.stringify(stdio)},
 });
 if (result.signal) { setTimeout(() => process.exit(1), 1000); process.kill(process.pid, result.signal); }
 else process.exitCode = result.code ?? 1;`);
-  const child = spawn(process.execPath, [entry], { env, stdio: "ignore" });
+  const child = spawn(process.execPath, [entry], { env, stdio: stdio === "inherit" ? ["ignore", "pipe", "pipe"] : "ignore" });
+  child.stdout?.resume();
+  child.stderr?.resume();
+  child.closed = new Promise((resolve) => child.once("close", (code, signal) => resolve({ code, signal })));
   child.exited = new Promise((resolve, reject) => {
     child.once("error", reject);
     child.once("exit", (code, signal) => resolve({ code, signal }));
@@ -169,13 +172,13 @@ describe("resource command ownership", () => {
     const old = new Date(Date.now() - 60_000);
     await utimes(`${lockPath}.lock`, old, old);
     expect(await runResourceCommand(process.execPath, ["-e", "process.exit(0)"], {
-      policy: low, env: {}, lockPath, stdio: "ignore", log: () => {},
+      policy: low, env: { ...process.env, NODE_OPTIONS: "" }, lockPath, stdio: "ignore", log: () => {},
     })).toEqual({ code: 0, signal: null });
   });
 
   it("releases the lock when a command cannot start", async () => {
     const directory = await fixture();
-    const options = { policy: low, env: {}, lockPath: path.join(directory, "lock"), stdio: "ignore", log: () => {} };
+    const options = { policy: low, env: { ...process.env, NODE_OPTIONS: "" }, lockPath: path.join(directory, "lock"), stdio: "ignore", log: () => {} };
     const result = await runResourceCommand(path.join(directory, "missing-command"), [], options);
     expect(result.code).not.toBe(0);
     expect(await runResourceCommand(process.execPath, ["-e", "process.exit(0)"], options)).toEqual({ code: 0, signal: null });
@@ -329,11 +332,11 @@ describe("independent process leases", () => {
     } finally { a.kill("SIGKILL"); }
   }, 15_000);
 
-  it("rejects forged inherited ownership even when the alleged owner PID is live", async () => {
+  it.each(["SIGTERM", "SIGKILL"])("rejects forged inherited ownership and recovers after owner %s", async (signal) => {
     const directory = await fixture();
     const marker = path.join(directory, "ready");
     const output = path.join(directory, "second");
-    const a = await startFixture(directory, ["-e", `require('fs').writeFileSync(${JSON.stringify(marker)}, 'ready'); setInterval(() => {}, 1000)`]);
+    const a = await startFixture(directory, ["-e", `require('fs').writeFileSync(${JSON.stringify(marker)}, 'ready'); setInterval(() => {}, 1000)`], { stdio: "inherit" });
     let b;
     try {
       await waitForFile(marker);
@@ -343,7 +346,14 @@ describe("independent process leases", () => {
       });
       await delay(350);
       await expect(readFile(output)).rejects.toThrow();
-      a.kill("SIGTERM"); await a.exited;
+      a.kill(signal); await a.closed;
+      if (process.platform === "win32" || signal === "SIGKILL") {
+        // Forced termination cannot run the owner's release handler. The
+        // inherited pipes close only after the bridge/Job drains; now simulate
+        // expiry of its abandoned lease without extending the test timeout.
+        const old = new Date(Date.now() - 60_000);
+        await utimes(path.join(directory, "lock.lock"), old, old);
+      }
       expect(await b.exited).toEqual({ code: 0, signal: null });
       expect(await readFile(output, "utf8")).toBe("done");
     } finally { a.kill("SIGKILL"); b?.kill("SIGKILL"); }
