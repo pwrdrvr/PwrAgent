@@ -238,6 +238,32 @@ describe("desktop config [federation] section", () => {
     ]);
   });
 
+  it("drops empty DNS labels from configured and advertised endpoint lists on read and write", () => {
+    const valid = "ws://studio.tail1234.ts.net:47830";
+    const invalid = "ws://studio.tail1234.ts..net:47830";
+    const endpoints = [invalid, valid];
+    const src = [
+      "[federation]",
+      `gateway_endpoints = ${JSON.stringify(endpoints)}`,
+      `advertised_endpoints = ${JSON.stringify(endpoints)}`,
+      "",
+    ].join("\n");
+
+    expect(parseDesktopSettingsToml(src, "test.toml").federation).toMatchObject({
+      gatewayEndpoints: [valid],
+      advertisedEndpoints: [valid],
+    });
+
+    const written = applyTomlEdits("", desktopSettingsPatchToEdits({
+      federation: { gatewayEndpoints: endpoints, advertisedEndpoints: endpoints },
+    }));
+    expect(written).not.toContain(invalid);
+    expect(parseDesktopSettingsToml(written, "test.toml").federation).toMatchObject({
+      gatewayEndpoints: [valid],
+      advertisedEndpoints: [valid],
+    });
+  });
+
   it("clearing the endpoint list preserves the legacy gateway_url", () => {
     const existing = [
       "[federation]",

@@ -401,6 +401,12 @@ export function parseFederationGatewayEndpoint(
     ? hostPort.slice(0, hostPort.indexOf("]") + 1)
     : hostPort.split(":")[0];
   if (host.length === 0) return undefined;
+  // URL accepts empty DNS labels, but the resolver cannot dial them. A single
+  // trailing root dot is valid; a leading dot or consecutive dots are not.
+  if (
+    !host.startsWith("[")
+    && (host.startsWith(".") || host.includes(".."))
+  ) return undefined;
   return {
     scheme: scheme as FederationEndpointScheme,
     host,
