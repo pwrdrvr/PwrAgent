@@ -256,7 +256,7 @@ it("retains a range with a removed anchor until explicit recovery and does not c
   queries.dispose();
 });
 
-it("does not retry a remembered missing anchor or flicker its error on background invalidations", async () => {
+it("forgets a remembered missing anchor once, without an error, and keeps refreshing from the top", async () => {
   const read = vi.fn().mockResolvedValueOnce(page())
     .mockRejectedValueOnce(new Error("[navigation_anchor_missing] The visible anchor was removed."))
     .mockResolvedValue(page({ complete: true, nextCursor: undefined }));
@@ -265,22 +265,23 @@ it("does not retry a remembered missing anchor or flicker its error on backgroun
   await vi.waitFor(() => expect(queries.getSnapshot().resources.get("lens")?.loading).toBe(false));
   const anchor = { kind: "thread" as const, ref: { backend: "codex" as const, threadId: "removed" } };
   queries.setVisibleAnchor("lens", anchor);
-  await queries.refresh();
-  const states: { loading: boolean; error?: string }[] = [];
+  const states: { loading: boolean; error?: string; rebaselineRequired?: boolean }[] = [];
   queries.subscribe(() => {
     const resource = queries.getSnapshot().resources.get("lens");
-    if (resource) states.push({ loading: resource.loading, error: resource.state.error });
+    if (resource) states.push({ loading: resource.loading, error: resource.state.error, rebaselineRequired: resource.state.rebaselineRequired });
   });
+  await queries.refresh();
+  // The anchored read and its replacement from the top share one logical read.
+  expect(read).toHaveBeenCalledTimes(3);
+  expect(read.mock.calls[1]?.[0].anchor).toEqual(anchor);
+  expect(read.mock.calls[2]?.[0]).toMatchObject({ anchor: undefined, retainedRange: undefined });
   for (let index = 0; index < 3; index += 1) {
     queries.invalidate();
     await queries.refresh();
   }
-  expect(read).toHaveBeenCalledTimes(2);
-  expect(states.every((state) => !state.loading && state.error?.includes("navigation_anchor_missing"))).toBe(true);
-  await queries.restart("lens");
-  expect(read).toHaveBeenCalledTimes(3);
-  expect(read.mock.calls[2]?.[0].anchor).toBeUndefined();
-  expect(queries.getSnapshot().resources.get("lens")?.state.error).toBeUndefined();
+  expect(read).toHaveBeenCalledTimes(6);
+  expect(read.mock.calls.slice(2).every(([sent]) => sent.anchor === undefined)).toBe(true);
+  expect(states.every((state) => !state.error && !state.rebaselineRequired)).toBe(true);
   queries.dispose();
 });
 
@@ -388,12 +389,128 @@ it("honors explicit recovery queued behind a failing anchor read", async () => {
   const recovery = queries.rebaseline("lens", anchor);
   pending.resolve(page());
   await Promise.all([refresh, recovery]);
-  expect(read).toHaveBeenCalledTimes(3);
-  expect(read.mock.calls[2]?.[0].anchor).toEqual(anchor);
+  // The failing read falls back to the top, then the explicit anchor runs.
+  expect(read).toHaveBeenCalledTimes(4);
+  expect(read.mock.calls[2]?.[0].anchor).toBeUndefined();
+  expect(read.mock.calls[3]?.[0].anchor).toEqual(anchor);
   expect(queries.getSnapshot().resources.get("lens")?.state.error).toBeUndefined();
   queries.dispose();
 });
 
+/**
+ * A directory's unpinned roots as their owner serves them: ten-row pages, an
+ * anchor seeks the page start, and an anchor outside the query is refused the
+ * way `NavigationQueryStore.readPage` refuses it across Electron IPC.
+ */
+function directoryOwner(state: { threads: string[]; revision: string; expiredCursors?: Set<string> }) {
+  const entry = (threadId: string): NavigationQueryEntry => ({
+    row: { id: threadId, source: "codex", title: threadId, titleSource: "explicit", ref: { backend: "codex", threadId },
+      rowRevision: "r", linkedDirectories: [], inbox: { inInbox: false }, ordinaryChildCount: 0,
+      nativeSubAgentGroupPresent: false, queueCount: 0, queueState: "unknown" },
+    placement: { kind: "root" }, orderKey: threadId,
+  });
+  return vi.fn(async (request: NavigationQueryRequest): Promise<NavigationQueryPage> => {
+    if (request.cursor && state.expiredCursors?.has(request.cursor)) {
+      throw new Error("Error invoking remote method 'navigation:get-query-page': NavigationQueryError: [navigation_cursor_expired] Navigation cursor expired; rebaseline around the visible anchor.");
+    }
+    let start = request.cursor ? Number(request.cursor.split(":")[1]) : 0;
+    if (!request.cursor && request.anchor?.kind === "thread") {
+      start = state.threads.indexOf(request.anchor.ref.threadId);
+      if (start < 0) {
+        throw new Error("Error invoking remote method 'navigation:get-query-page': NavigationQueryError: [navigation_anchor_missing] The visible navigation anchor is no longer in this query (reason: not-indexed). Choose another item or restart this list explicitly.");
+      }
+    }
+    const end = Math.min(state.threads.length, start + (request.pageSize ?? 10));
+    return page({ generation: state.revision, countsRevision: state.revision, ...(start ? { rangeStart: start } : {}),
+      complete: end >= state.threads.length, nextCursor: end < state.threads.length ? `${state.revision}:${end}` : undefined,
+      entries: state.threads.slice(start, end).map(entry) });
+  });
+}
+const threadNames = (count: number) => Array.from({ length: count }, (_, index) => `thread-${index}`);
+const unpinnedDirectory = () => new Map([["directory:project", { ...request(),
+  query: { kind: "directory" as const, directoryKey: "project", roots: "unpinned" as const } }]]);
+const loadedThreads = (queries: NavigationWindowQueries) =>
+  queries.getSnapshot().resources.get("directory:project")?.state.page?.entries.map(({ row }) => row.ref.threadId);
+
+it("keeps a directory list working after the selected root it was revealed at leaves the directory", async () => {
+  // Twelve threads: the selected thread's root is on the second page, so
+  // selection reveals it with an anchored rebaseline. That anchor is then
+  // remembered for every later refresh of this directory.
+  const owned = { threads: threadNames(12), revision: "initial" };
+  const read = directoryOwner(owned);
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  queries.setDemand(unpinnedDirectory());
+  await vi.waitFor(() => expect(loadedThreads(queries)).toHaveLength(10));
+  await queries.rebaseline("directory:project", { kind: "thread", ref: { backend: "codex", threadId: "thread-11" } });
+  expect(loadedThreads(queries)).toEqual(["thread-11"]);
+
+  // The revealed root is archived, moved, or reparented. Its canonical event
+  // refreshes the directory, which still carries the remembered anchor.
+  owned.threads = owned.threads.filter((threadId) => threadId !== "thread-11");
+  owned.revision = "archived";
+  queries.invalidate();
+  await queries.refresh();
+
+  const state = queries.getSnapshot().resources.get("directory:project")!.state;
+  expect(state.error).toBeUndefined();
+  expect(state.rebaselineRequired).toBeFalsy();
+  expect(loadedThreads(queries)).toEqual(threadNames(10));
+  expect(state.page?.rangeStart ?? 0).toBe(0);
+
+  // The list keeps following its owner without an explicit restart.
+  owned.threads = ["thread-new", ...owned.threads];
+  owned.revision = "created";
+  queries.invalidate();
+  await queries.refresh();
+  expect(loadedThreads(queries)?.[0]).toBe("thread-new");
+  expect(queries.getSnapshot().resources.get("directory:project")?.state.error).toBeUndefined();
+  queries.dispose();
+});
+
+it("re-anchors a mid-list window on the nearest surviving row when its anchor leaves", async () => {
+  const owned = { threads: threadNames(30), revision: "initial" };
+  const read = directoryOwner(owned);
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  queries.setDemand(unpinnedDirectory());
+  await vi.waitFor(() => expect(loadedThreads(queries)).toHaveLength(10));
+  await queries.rebaseline("directory:project", { kind: "thread", ref: { backend: "codex", threadId: "thread-12" } });
+  expect(loadedThreads(queries)?.[0]).toBe("thread-12");
+
+  owned.threads = owned.threads.filter((threadId) => threadId !== "thread-12");
+  owned.revision = "archived";
+  queries.invalidate();
+  await queries.refresh();
+
+  const state = queries.getSnapshot().resources.get("directory:project")!.state;
+  expect(state.error).toBeUndefined();
+  // The window stays where the operator was reading instead of jumping to the top.
+  expect(loadedThreads(queries)).toEqual(threadNames(23).slice(13));
+  expect(state.page?.rangeStart).toBe(12);
+  queries.dispose();
+});
+
+it("loads more after an idle cursor expires even when the remembered anchor has left", async () => {
+  const owned = { threads: threadNames(12), revision: "initial", expiredCursors: new Set<string>() };
+  const read = directoryOwner(owned);
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  queries.setDemand(unpinnedDirectory());
+  await vi.waitFor(() => expect(loadedThreads(queries)).toHaveLength(10));
+  await queries.rebaseline("directory:project", { kind: "thread", ref: { backend: "codex", threadId: "thread-0" } });
+  expect(queries.getSnapshot().resources.get("directory:project")?.state.page?.nextCursor).toBe("initial:10");
+
+  // Owners keep a cursor for 60 seconds. The remembered anchor also left
+  // while the operator read the page.
+  owned.threads = owned.threads.filter((threadId) => threadId !== "thread-0");
+  owned.revision = "archived";
+  owned.expiredCursors.add("initial:10");
+  await queries.loadMore("directory:project");
+
+  const state = queries.getSnapshot().resources.get("directory:project")!.state;
+  expect(state.error).toBeUndefined();
+  expect(state.rebaselineRequired).toBeFalsy();
+  expect(loadedThreads(queries)).toEqual(threadNames(12).slice(1));
+  queries.dispose();
+});
 
 it("preserves loaded rows through refresh and transparently rebuilds an evicted continuation", async () => {
   let serve = owner("old", 130);

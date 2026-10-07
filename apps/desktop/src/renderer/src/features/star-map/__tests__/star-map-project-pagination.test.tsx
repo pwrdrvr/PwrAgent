@@ -62,7 +62,7 @@ it.each(["local", "remote"])("renders 15 complete project clouds and three indep
 });
 
 it.each(["orbit", "projects"].flatMap((layout) => ["local", "remote"].map((owner) => [layout, owner])))(
-  "restarts a removed project anchor in %s for %s after the final page", async (layout, owner) => {
+  "resumes from the top when a removed card was the project anchor in %s for %s", async (layout, owner) => {
     window.localStorage.setItem("pwragent.starMap.viewPreferences", JSON.stringify({ layout }));
     let threads: NavigationThreadSummary[] = Array.from({ length: 13 }, (_, card) => ({
       id: `c${card}`, source: "codex", title: `Card ${card}`, titleSource: "derived", inbox: { inInbox: false }, updatedAt: 1000 - card,
@@ -90,23 +90,19 @@ it.each(["orbit", "projects"].flatMap((layout) => ["local", "remote"].map((owner
     await waitFor(() => expect(view.queryByRole("button", { name: loadLabel })).toBeNull());
     removed = true;
     threads = threads.slice(1);
+    const before = read.mock.calls.length;
     act(() => { for (const listener of listeners) listener({ backend: "codex",
       ...(owner === "remote" ? { federationTarget: { scope: "remote", instanceId: "remote" } } : {}),
       notification: { method: "thread/status/changed", params: { threadId: "c0", status: { type: "idle" } } } }); });
-    const restart = await view.findByRole("button", { name: "Restart project threads" });
-    const before = read.mock.calls.length;
-    fireEvent.click(restart);
-    await waitFor(() => expect(view.queryByRole("button", { name: "Restart project threads" })).toBeNull());
-    const restarted = read.mock.calls.slice(before).map(([request]) => request).filter((request) => request.query.kind === "star-map");
-    expect(restarted).toHaveLength(1);
-    expect(restarted[0]!.anchor).toBeUndefined();
-    expect(restarted[0]!.cursor).toBeUndefined();
-    // `findByRole`, not `getByRole`: the restart clears the anchor and refetches,
-    // and the two halves of that land in separate commits. Waiting for the
-    // Restart button to disappear says the refetch started, not that its first
-    // page arrived, so a synchronous get here was asserting on whichever commit
-    // happened to be first.
-    expect(await view.findByRole("button", { name: loadLabel })).toBeTruthy();
+    // The refresh still asks for the remembered card, then reads the project
+    // from the top in the same logical read and restores the range already
+    // loaded: no Restart control, and no Load more for rows already shown.
+    const refreshed = () => read.mock.calls.slice(before).map(([request]) => request).filter((request) => request.query.kind === "star-map");
+    await waitFor(() => expect(refreshed().map((request) => request.anchor?.kind === "thread" ? request.anchor.ref.threadId
+      : request.cursor ? "cursor" : undefined).slice(-3)).toEqual(["c0", undefined, "cursor"]));
+    await waitFor(() => expect(view.container.querySelector('[data-thread-key$="c12"]')).not.toBeNull());
+    expect(view.queryByRole("button", { name: "Restart project threads" })).toBeNull();
+    expect(view.queryByRole("button", { name: loadLabel })).toBeNull();
     view.unmount();
   },
 );

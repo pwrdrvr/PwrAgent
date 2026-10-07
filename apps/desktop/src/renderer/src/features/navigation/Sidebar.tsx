@@ -7,7 +7,7 @@ import {
 } from "../../lib/subthread-launchpads";
 import { readNavigationPresentationOrder } from "./navigation-presentation-order";
 import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationWindow";
-import { navigationThreadSelectionKey } from "../../lib/navigation-query-state";
+import { navigationPageErrorCopy, navigationThreadSelectionKey } from "../../lib/navigation-query-state";
 import { useEventCallback } from "../../lib/useEventCallback";
 import { useLensScrollRestoration } from "../../lib/useLensScrollRestoration";
 import { useMenuNavigation } from "../../lib/useMenuNavigation";
@@ -2817,7 +2817,7 @@ export function Sidebar(props: SidebarProps) {
           {props.pagedNavigation?.admissionError ? <p className="sidebar-error">{props.pagedNavigation.admissionError}</p> : null}
           {props.browseMode !== "directories" ? lensResources.map((resource) => (
             <div key={resource.id}>
-              {resource.state.error ? <p className="sidebar-error">{resource.state.error}</p> : null}
+              {resource.state.error ? <p className="sidebar-error">{navigationPageErrorCopy(resource.state.error)}</p> : null}
               {resource.state.rebaselineRequired ? (
                 <SidebarShowMore label="Reload this lens" onClick={() => void props.pagedNavigation?.restart(resource.id)} />
               ) : resource.state.page?.nextCursor ? (
