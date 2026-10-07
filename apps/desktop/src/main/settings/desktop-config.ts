@@ -1,5 +1,5 @@
 import type { DesktopThreadArchivePolicy, ThreadTodoMergeMethod } from "@pwragent/shared";
-import { isThreadTodoMergeMethod, validateLocalModelIds } from "@pwragent/shared";
+import { isAcpBackendId, isThreadTodoMergeMethod, validateLocalModelIds } from "@pwragent/shared";
 import fs from "node:fs";
 import { validateCodexConfigOverrides } from "./codex-config-overrides";
 import os from "node:os";
@@ -3134,7 +3134,7 @@ function readUsageAccountGroups(value: unknown): Record<string, string> | undefi
       : [];
   const groups: Record<string, string> = {};
   for (const [backend, group] of entries) {
-    if (typeof backend !== "string" || !/^(codex|acp:[a-z0-9_-]+)$/.test(backend)
+    if (typeof backend !== "string" || (backend !== "codex" && !isAcpBackendId(backend))
       || typeof group !== "string" || !group.trim() || group.trim().length > 120) continue;
     groups[backend] = group.trim();
   }

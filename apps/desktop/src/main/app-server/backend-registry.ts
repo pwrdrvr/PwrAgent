@@ -16034,8 +16034,7 @@ export class DesktopBackendRegistry {
       if (this.codexBackendSummary
         && usageAccountKey(this.codexBackendSummary.account) !== usageAccountKey(account)) {
         this.codexBackendSummary = { ...this.codexBackendSummary, account, rateLimits: [] };
-        this.codexRateLimitsObservedAt = undefined;
-        this.codexRateLimitsAccountKey = undefined;
+        this.forgetCodexAccountRateLimits();
       }
       return usageAccountKey(account);
     } catch {
@@ -16044,6 +16043,18 @@ export class DesktopBackendRegistry {
       // account after a switch or failed authentication refresh.
       return undefined;
     }
+  }
+
+  /**
+   * The account changed: drop its limits and reject quota reads already in
+   * flight, as the account refresh does, so the old account's reply cannot
+   * return under its old key.
+   */
+  private forgetCodexAccountRateLimits(): void {
+    this.codexAccountRevision += 1;
+    this.codexRateLimitsObservedAt = undefined;
+    this.codexRateLimitsAccountKey = undefined;
+    this.pendingCodexRateLimits = undefined;
   }
 
   private async usageAccountForTurn(
@@ -26804,11 +26815,10 @@ export class DesktopBackendRegistry {
         logBackendLifecycleNotification(backend, notification);
         this.invalidateArchiveCleanupForNotification(backend, notification);
         if (backend === "codex" && notification.method === "account/updated") {
-          this.codexRateLimitsObservedAt = undefined;
-          this.codexRateLimitsAccountKey = undefined;
           if (this.codexBackendSummary) {
             this.codexBackendSummary = { ...this.codexBackendSummary, rateLimits: [] };
           }
+          this.forgetCodexAccountRateLimits();
         }
         if (
           backend === "codex"

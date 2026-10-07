@@ -10407,7 +10407,8 @@ export class CodexAppServerClient {
     if (!helperModel) {
       return { status: "unavailable", reason: "codex_helper_no_available_model" };
     }
-    const accountKey = await (this.options.resolveUsageAccountKey?.()
+    // Captured now, awaited with the result, so the helper turn does not wait on it.
+    const accountKeyRead = (this.options.resolveUsageAccountKey?.()
       ?? this.readAccount().then((account) => usageAccountKey(account))).catch(() => undefined);
     const helperReasoningEffort = normalizeCodexReasoningEffort(
       selection.reasoningEffort,
@@ -10550,6 +10551,7 @@ export class CodexAppServerClient {
       if (immediateObject) {
         helperTurnCompleted = true;
         const tokenUsage = readHelperTokenUsage(turnStartResult);
+        const accountKey = await accountKeyRead;
         return {
           status: "ok",
           object: immediateObject,
@@ -10575,6 +10577,7 @@ export class CodexAppServerClient {
         timeoutMs: turnTimeoutMs,
       });
       helperTurnCompleted = true;
+      const accountKey = await accountKeyRead;
       return {
         status: "ok",
         object: helperResult.object,

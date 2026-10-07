@@ -21,9 +21,13 @@ describe("usage account configuration", () => {
   });
 
   it("skips malformed rows and retains a newer build's backend group", () => {
-    const written = save("", { codex: "", "acp:future": "team", invalid: "bad", "acp:grok": "x".repeat(121) });
+    const written = save("", {
+      codex: "", "acp:future": "team", "acp:Gemini.CLI": "Work Gemini", invalid: "bad", "acp:bad id": "space",
+      "acp:grok": "x".repeat(121),
+    });
+    // Any registry id an ACP agent can have keeps its group.
     expect(parseDesktopSettingsToml(written, "test.toml").models?.usageAccountGroups)
-      .toEqual({ "acp:future": "team" });
+      .toEqual({ "acp:future": "team", "acp:Gemini.CLI": "Work Gemini" });
     expect(parseDesktopSettingsToml("[models]\nusage_account_groups = 3\n", "test.toml").models)
       .toBeUndefined();
   });
