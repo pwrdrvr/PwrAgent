@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { BackendSummary, FederationTarget, ReadUsageActivityRequest, ReadUsageActivityResponse } from "@pwragent/shared";
-import { buildLimitAccounts, seriesStart, sinceResetSeries, type LimitAccount } from "./usage-limits";
+import { buildLimitAccounts, limitSeriesFor, seriesStart, sinceResetSeries, type LimitAccount } from "./usage-limits";
 import { summarizeUsageActivity } from "./usage-activity-summary";
 
 const DAY = 86_400_000;
@@ -50,9 +50,27 @@ export function usagePaceAccountKey(backends: readonly BackendSummary[] | undefi
 let readSequence = 0;
 let shared: { read: UsageReader; accountKey: string; key: string; sequence: number; pace: LocalUsagePace } | undefined;
 
-const accountOf = (data: ReadUsageActivityResponse) => buildLimitAccounts([{
-  owner: "local", current: data.limitObservation, history: data.limitHistory,
-}])[0];
+const accountOf = (data: ReadUsageActivityResponse) => {
+  const current = data.limitObservation;
+  // History can survive a failed startup or a login change. Only the current
+  // account observation establishes which account the rail may describe.
+  if (!current) return undefined;
+  const account = buildLimitAccounts([{
+    owner: "local",
+    current,
+    history: data.limitHistory?.filter((observation) =>
+      observation.accountKey === current.accountKey
+      && observation.observedAt <= current.observedAt),
+  }])[0];
+  // A plan change can remove or move a bucket. History supplies its chart,
+  // while the current observation supplies the plan and active buckets.
+  return {
+    ...account,
+    planType: current.planType,
+    series: account.series.filter((series) =>
+      current.limits.some((limit) => limitSeriesFor(account, limit) === series)),
+  };
+};
 
 /**
  * This instance's account limits and spend since the limit window began, read

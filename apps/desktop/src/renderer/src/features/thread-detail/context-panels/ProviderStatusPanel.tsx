@@ -107,16 +107,16 @@ export const ProviderStatusPanel = memo(function ProviderStatusPanel(props: Prov
                       <dd>{formatAcpAuthStatus(backend.acp.authStatus)}</dd>
                     </div>
                   ) : null}
-                  {showsAccount(backend) ? (
+                  {backend.kind === "codex" || showsAccount(backend) ? (
                     <div>
                       <dt>Account</dt>
-                      <dd>{formatBackendAccountText(backend.account!)}</dd>
+                      <dd>{backend.account ? formatBackendAccountText(backend.account) : "Unavailable"}</dd>
                     </div>
                   ) : null}
-                  {backend.account?.planType ? (
+                  {backend.kind === "codex" || backend.account?.planType ? (
                     <div>
                       <dt>Plan</dt>
-                      <dd>{formatBackendPlanType(backend, backend.account.planType)}</dd>
+                      <dd>{providerPlanText(backend)}</dd>
                     </div>
                   ) : null}
                   {selectVisibleRateLimits(backend).map((limit) => (
@@ -202,13 +202,26 @@ function showsAccount(backend: BackendSummary): boolean {
 
 function hasProviderMetadata(backend: BackendSummary): boolean {
   return Boolean(
-    backendVersion(backend)
+    backend.kind === "codex"
+    || backendVersion(backend)
     || backend.runtimeBuild
     || backend.acp
     || backend.account?.planType
     || showsAccount(backend)
     || selectVisibleRateLimits(backend).length,
   );
+}
+
+function providerPlanText(backend: BackendSummary): string {
+  if (backend.account?.planType) {
+    return formatBackendPlanType(backend, backend.account.planType);
+  }
+  const account = backend.account;
+  if (account?.type === "apiKey") return "API billing";
+  if (account?.type === "chatgpt") return "Unavailable";
+  if (account?.requiresOpenaiAuth === false) return "Not required";
+  if (account?.requiresOpenaiAuth === true) return "Not signed in";
+  return "Unavailable";
 }
 
 /**

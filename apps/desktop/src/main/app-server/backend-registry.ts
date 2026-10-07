@@ -8542,6 +8542,8 @@ export class DesktopBackendRegistry {
   >;
   private codexBackendSummary?: BackendSummary;
   private codexBackendGeneration = 0;
+  /** Reject quota reads started before refreshed account or plan metadata changed. */
+  private codexAccountRevision = 0;
   private codexRateLimitBroadcastTimer?: ReturnType<typeof setTimeout>;
   private codexRateLimitLastBroadcastAt?: number;
   private codexRateLimitNotificationWork?: Promise<boolean>;
@@ -28767,17 +28769,55 @@ export class DesktopBackendRegistry {
 
   private async refreshCodexQuotas(): Promise<void> {
     // Quota reads must not launch discovery or persist provider observations.
-    if (this.closed || !this.codexBackendSummary?.available) return;
+    // A failed startup thread read can leave only the selected executable's
+    // projection. It still authorizes account reads on that selected runtime.
+    if (this.closed || !this.readCodexBackendSummary().available) return;
+    if (this.codexClient.isAuthenticationRequired?.()) return;
     if (this.codexQuotaRefresh) return await this.codexQuotaRefresh;
     if (
       this.codexQuotaRefreshAt !== undefined
       && Date.now() - this.codexQuotaRefreshAt < 5_000
     ) return;
     this.codexQuotaRefreshAt = Date.now();
-    const work = this.refetchCodexRateLimits({
-      backendGeneration: this.codexBackendGeneration,
-      notificationVersion: this.codexRateLimitsNotificationVersion,
-    }).then(() => undefined);
+    const backendGeneration = this.codexBackendGeneration;
+    const work = (async () => {
+      let account: BackendAccountSummary | undefined;
+      try {
+        account = await readClientAccount(this.codexClient);
+      } catch (error) {
+        backendRegistryLog.warn("Codex account refresh failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      if (this.closed || backendGeneration !== this.codexBackendGeneration) return;
+      const currentSummary = this.readCodexBackendSummary();
+      if (isMeaningfulAccountSummary(account)) {
+        const previous = currentSummary.account;
+        const accountChanged = previous?.type !== account.type
+          || previous?.email !== account.email
+          || previous?.label !== account.label
+          || previous?.planType !== account.planType;
+        const withoutChatgptQuotas = account.type === "apiKey"
+          || (!account.type && typeof account.requiresOpenaiAuth === "boolean");
+        this.codexBackendSummary = {
+          ...currentSummary,
+          account,
+          ...(accountChanged || withoutChatgptQuotas ? { rateLimits: [] } : {}),
+        };
+        if (accountChanged || withoutChatgptQuotas) {
+          this.codexAccountRevision += 1;
+          this.codexRateLimitsObservedAt = undefined;
+          this.pendingCodexRateLimits = undefined;
+        }
+        if (withoutChatgptQuotas) return;
+      } else if (!this.codexBackendSummary) {
+        this.codexBackendSummary = currentSummary;
+      }
+      await this.refetchCodexRateLimits({
+        backendGeneration,
+        notificationVersion: this.codexRateLimitsNotificationVersion,
+      });
+    })();
     this.codexQuotaRefresh = work;
     try {
       await work;
@@ -28792,6 +28832,7 @@ export class DesktopBackendRegistry {
   }): Promise<boolean> {
     if (this.codexClient.isAuthenticationRequired?.()) return false;
     if (isUnauthenticatedCodexProvider(this.codexBackendSummary?.account)) return false;
+    const accountRevision = this.codexAccountRevision;
     let refetchedRateLimits: BackendRateLimitSummary[];
     try {
       refetchedRateLimits = await readClientRateLimits(this.codexClient);
@@ -28805,6 +28846,7 @@ export class DesktopBackendRegistry {
     if (
       this.closed
       || params.backendGeneration !== this.codexBackendGeneration
+      || accountRevision !== this.codexAccountRevision
       || params.notificationVersion !== this.codexRateLimitsNotificationVersion
       || refetchedRateLimits.length === 0
     ) {
@@ -28898,6 +28940,7 @@ export class DesktopBackendRegistry {
     assertProviderDiscoveryPermit(permit);
     const previousSummary = this.readCodexBackendSummary();
     const backendGeneration = this.codexBackendGeneration;
+    const accountRevision = this.codexAccountRevision;
     const rateLimitsNotificationVersion = this.codexRateLimitsNotificationVersion;
     const { lastKnownGood } = this.readCodexProvider();
     const accountRead = readClientAccount(this.codexClient);
@@ -28924,8 +28967,8 @@ export class DesktopBackendRegistry {
     }
     let settledRateLimitsNotificationVersion = rateLimitsNotificationVersion;
     while (
-      settledRateLimitsNotificationVersion
-      !== this.codexRateLimitsNotificationVersion
+      accountRevision === this.codexAccountRevision
+      && settledRateLimitsNotificationVersion !== this.codexRateLimitsNotificationVersion
     ) {
       const observedVersion = this.codexRateLimitsNotificationVersion;
       await this.codexRateLimitNotificationWork;
@@ -28970,8 +29013,11 @@ export class DesktopBackendRegistry {
     }
     const capabilities = buildCapabilities(methods, "codex");
 
+    // Runtime metadata still applies after an account transition. Its older
+    // account and quota replies must not replace the refreshed account state.
+    const accountChangedDuringDiscovery = accountRevision !== this.codexAccountRevision;
     const discoveredRateLimits =
-      rateLimitsResult.status === "fulfilled"
+      !accountChangedDuringDiscovery && rateLimitsResult.status === "fulfilled"
         ? rateLimitsResult.value
         : undefined;
     const pendingRateLimits =
@@ -28981,20 +29027,24 @@ export class DesktopBackendRegistry {
         ? this.pendingCodexRateLimits.rateLimits
         : undefined;
     const rateLimits =
-      rateLimitsNotificationVersion !== this.codexRateLimitsNotificationVersion
-        ? pendingRateLimits
-          ?? this.codexBackendSummary?.rateLimits
-          ?? discoveredRateLimits
-        : discoveredRateLimits;
+      accountChangedDuringDiscovery
+        ? this.codexBackendSummary?.rateLimits
+        : rateLimitsNotificationVersion !== this.codexRateLimitsNotificationVersion
+          ? pendingRateLimits
+            ?? this.codexBackendSummary?.rateLimits
+            ?? discoveredRateLimits
+          : discoveredRateLimits;
     const summary: BackendSummary = {
       kind: "codex",
       label: BACKEND_LABELS.codex,
       available,
       account:
-        accountResult.status === "fulfilled" &&
-        isMeaningfulAccountSummary(accountResult.value)
-          ? accountResult.value
-          : undefined,
+        accountChangedDuringDiscovery
+          ? this.codexBackendSummary?.account
+          : accountResult.status === "fulfilled"
+            && isMeaningfulAccountSummary(accountResult.value)
+            ? accountResult.value
+            : undefined,
       rateLimits,
       serverName: successful[0]?.serverInfo?.name,
       // Today's `initialize` carries no `serverInfo` at all; the App Server's
