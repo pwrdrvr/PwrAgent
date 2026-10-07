@@ -6,9 +6,9 @@
     "bytes": 119512
   },
   "vacuum": {
-    "frames": 272,
-    "uniquePages": 271,
+    "frames": 273,
+    "uniquePages": 272,
     "commits": 2,
-    "bytes": 1120672
+    "bytes": 1124792
   }
 }
