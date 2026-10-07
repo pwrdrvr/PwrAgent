@@ -74,15 +74,28 @@ export function getToolResourcePolicy({
 }
 
 const NODE_VALUE_OPTIONS = new Set([
+  "-e", "--eval", "-p", "--print", "-pe", "-ep", "--run",
   "-r", "--require", "--import", "--loader", "--experimental-loader",
-  "-C", "--conditions", "--title", "--inspect-port", "--inspect-publish-uid",
-  "--env-file", "--env-file-if-exists", "--input-type",
-  "--redirect-warnings", "--diagnostic-dir", "--heap-snapshot-signal",
-  "--heapsnapshot-signal", "--cpu-prof-dir", "--cpu-prof-name",
-  "--cpu-prof-interval", "--heap-prof-dir", "--heap-prof-name",
-  "--heap-prof-interval", "--trace-event-categories", "--trace-event-file-pattern",
-  "--experimental-policy", "--policy-integrity", "--openssl-config",
-  "--icu-data-dir", "--use-largepages", "--unhandled-rejections",
+  "--title", "-C", "--conditions", "--input-type", "--env-file", "--env-file-if-exists",
+  "--experimental-config-file", "--diagnostic-dir", "--icu-data-dir", "--openssl-config",
+  "--inspect-port", "--max-http-header-size", "--dns-result-order",
+  "--heapsnapshot-signal", "--heapsnapshot-near-heap-limit",
+  "--heap-prof-dir", "--heap-prof-name", "--heap-prof-interval",
+  "--cpu-prof-dir", "--cpu-prof-name", "--cpu-prof-interval",
+  "--max-semi-space-size", "--max_semi_space_size", "--stack-size", "--stack_size",
+  "--allow-fs-read", "--allow-fs-write", "--build-snapshot-config",
+  "--disable-proto", "--disable-warning", "--experimental-package-map",
+  "--experimental-sea-config", "--experimental-test-tag-filter", "--debug-port",
+  "--inspect-publish-uid", "--localstorage-file", "--network-family-autoselection-attempt-timeout",
+  "--redirect-warnings", "--report-directory", "--report-dir", "--report-filename", "--report-signal",
+  "--secure-heap", "--secure-heap-min", "--snapshot-blob", "--test-concurrency",
+  "--test-coverage-branches", "--test-coverage-exclude", "--test-coverage-functions",
+  "--test-coverage-include", "--test-coverage-lines", "--test-global-setup",
+  "--experimental-test-isolation", "--test-isolation", "--test-name-pattern", "--test-random-seed",
+  "--test-reporter", "--test-reporter-destination", "--test-rerun-failures", "--test-shard",
+  "--test-skip-pattern", "--test-timeout", "--tls-cipher-list", "--tls-keylog",
+  "--trace-event-categories", "--trace-event-file-pattern", "--trace-require-module",
+  "--unhandled-rejections", "--use-largepages", "--v8-pool-size", "--watch-kill-signal", "--watch-path",
 ]);
 const HEAP_OPTION = /^--max[-_]old[-_]space[-_]size(?:[-_]percentage)?(?:=|$)/;
 
@@ -92,7 +105,10 @@ function withoutHeapOptions(tokens) {
     const token = tokens[index].replace(/^"|"$/g, "");
     if (HEAP_OPTION.test(token)) {
       if (!token.includes("=")) index += 1;
-    } else retained.push(tokens[index]);
+    } else {
+      retained.push(tokens[index]);
+      if (NODE_VALUE_OPTIONS.has(token) && index + 1 < tokens.length) retained.push(tokens[++index]);
+    }
   }
   return retained;
 }
@@ -161,13 +177,20 @@ export function resourceCommand(command, args, policy) {
     // CLI V8 flags take precedence over NODE_OPTIONS. Only rewrite Node's
     // option prefix; flags passed to a script are application arguments.
     let end = 0;
+    const retained = [];
     while (end < args.length && args[end].startsWith("-")) {
       const arg = args[end++];
-      if (arg === "--" || /^(?:-e|-p|--eval|--print)(?:=|$)/.test(arg)) break;
-      if (HEAP_OPTION.test(arg) && !arg.includes("=")) end += 1;
-      else if (NODE_VALUE_OPTIONS.has(arg)) end += 1;
+      if (HEAP_OPTION.test(arg)) {
+        if (!arg.includes("=")) end += 1;
+        continue;
+      }
+      retained.push(arg);
+      if (arg === "--" || arg === "-") break;
+      // Eval/print consume an expression, but Node still accepts startup
+      // options after it until -- or the first application argument.
+      if (NODE_VALUE_OPTIONS.has(arg) && end < args.length) retained.push(args[end++]);
     }
-    return [`--max-old-space-size=${toolHeapMiB(command, args)}`, ...withoutHeapOptions(args.slice(0, end)), ...args.slice(end)];
+    return [`--max-old-space-size=${toolHeapMiB(command, args)}`, ...retained, ...args.slice(end)];
   }
   if (name === "pnpm") {
     // pnpm 12's native CLI rejects --node-options. Consume it in the

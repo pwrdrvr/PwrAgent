@@ -349,6 +349,22 @@ describe("independent process leases", () => {
 });
 
 describe("real runner integration", () => {
+  it.each(["-e", "--eval", "-p", "--print", "-pe"])("caps heap flags after the %s expression in actual Node", async (flag) => {
+    const directory = await fixture();
+    const output = path.join(directory, "heap");
+    const baselineFile = path.join(directory, "baseline");
+    const program = (file) => `require('fs').writeFileSync(${JSON.stringify(file)}, String(require('v8').getHeapStatistics().heap_size_limit))`;
+    expect(await runResourceCommand(process.execPath, [flag, program(output), "--max-old-space-size=6144", "--max-old-space-size-percentage=90"], {
+      policy: low, env: { ...process.env, NODE_OPTIONS: "--trace-warnings --max-old-space-size=6144" },
+      lockPath: path.join(directory, "lock"), stdio: "ignore", log: () => {},
+    })).toEqual({ code: 0, signal: null });
+    const baseline = spawn(process.execPath, ["--max-old-space-size=2048", "-e", program(baselineFile)], {
+      env: { ...process.env, NODE_OPTIONS: "" }, stdio: "ignore",
+    });
+    expect(await new Promise((resolve, reject) => { baseline.once("error", reject); baseline.once("close", resolve); })).toBe(0);
+    expect(await readFile(output, "utf8")).toBe(await readFile(baselineFile, "utf8"));
+  }, 30_000);
+
   it("enforces the Node heap despite an explicit CLI override", async () => {
     const directory = await fixture();
     const output = path.join(directory, "heap");
@@ -409,6 +425,27 @@ setTimeout(() => fs.appendFileSync(${JSON.stringify(events)}, '${name}:end\\n'),
 });
 
 describe("parallel and option-prefix escapes", () => {
+  it("preserves heap-shaped Node option operands and application arguments", () => {
+    expect(cappedNodeOptions('--title "--max-old-space-size=6144" --max-old-space-size=6144'))
+      .toBe('--title "--max-old-space-size=6144" --max-old-space-size=2048');
+    expect(resourceCommand("node", ["--title", "--max-old-space-size=6144", "--max-old-space-size=6144", "app.mjs"], low))
+      .toEqual(["--max-old-space-size=2048", "--title", "--max-old-space-size=6144", "app.mjs"]);
+    for (const args of [
+      ["-e", "code", "argument", "--max-old-space-size=6144"],
+      ["-e", "code", "--", "--max-old-space-size=6144"],
+      ["-", "--max-old-space-size=6144"],
+    ]) {
+      expect(resourceCommand("node", args, low)).toEqual(["--max-old-space-size=2048", ...args]);
+      expect(resourceCommand("node", args, high)).toBe(args);
+    }
+  });
+
+  it.each(["--eval=code", "--print=code"])("removes startup heap flags after inline %s", (flag) => {
+    const args = [flag, "--max-old-space-size-percentage", "90", "--max_old_space_size=6144"];
+    expect(resourceCommand("node", args, low)).toEqual(["--max-old-space-size=2048", flag]);
+    expect(resourceCommand("node", args, high)).toBe(args);
+  });
+
   it("removes pnpm parallel overrides and boolean option values", () => {
     expect(resourceCommand("pnpm", ["-r", "--parallel", "true", "typecheck"], low)).toEqual(["--workspace-concurrency=1", "-r", "typecheck"]);
     expect(resourceCommand("pnpm", ["--recursive", "--parallel=true", "typecheck"], low)).toEqual(["--workspace-concurrency=1", "--recursive", "typecheck"]);
@@ -420,7 +457,7 @@ describe("parallel and option-prefix escapes", () => {
     expect(resourceCommand("node", ["--conditions", "development", "--require", "init.cjs", "--max-old-space-size=6144", "app.mjs"], low))
       .toEqual(["--max-old-space-size=2048", "--conditions", "development", "--require", "init.cjs", "app.mjs"]);
     expect(resourceCommand("node", ["--eval=code", "--max-old-space-size=6144"], low))
-      .toEqual(["--max-old-space-size=2048", "--eval=code", "--max-old-space-size=6144"]);
+      .toEqual(["--max-old-space-size=2048", "--eval=code"]);
   });
 
   it.skipIf(process.platform === "win32")("does not start a POSIX tool before the group ownership gate is published", async () => {

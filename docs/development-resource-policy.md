@@ -21,8 +21,8 @@ Strictly below **16 GiB**, the runner:
   The full desktop TypeScript check and typed ESLint use **4096 MiB**: the desktop
   TypeScript program fails with a V8 heap exhaustion at 2048 MiB. Their original
   source coverage, configurations and diagnostics are preserved.
-- Removes conflicting explicit Node CLI heap flags before the script/eval
-  argument. Application arguments remain intact. Recursive pnpm workspace
+- Removes conflicting explicit Node CLI startup heap flags, including flags
+  following eval/print expressions. Application arguments remain intact. Recursive pnpm workspace
   concurrency is one; Vitest file/worker/test concurrency and Playwright workers
   are one. Native desktop-main test isolation remains in separate forks.
 - Queues heavy commands across all updated worktrees and PwrGit for the same
