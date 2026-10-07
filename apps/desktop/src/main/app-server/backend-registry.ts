@@ -8683,6 +8683,9 @@ export class DesktopBackendRegistry {
   private latestCodexConfigWarning?: AgentEvent;
   private readonly unsubscribers: Array<() => void> = [];
   private readonly pendingServerRequests = new Map<string, PendingServerRequest>();
+  // Process-local conversation grants. A source's revision also includes the
+  // broker's authorization generation, so reauthorization needs fresh consent.
+  private readonly mcpGatewaySessionApprovals = new Map<string, Map<string, string>>();
   private readonly fileChangeApprovalContexts = new Map<
     string,
     PendingRequestApprovalContext
@@ -23033,6 +23036,7 @@ export class DesktopBackendRegistry {
     request: SetThreadMcpConnectionsRequest,
   ): Promise<SetThreadMcpConnectionsResponse> {
     this.mcpGatewayTools?.cancel(request.backend, request.threadId);
+    this.mcpGatewaySessionApprovals.delete(JSON.stringify([request.backend, request.threadId]));
     // A backend that cannot suppress its own servers must never be left
     // holding an "off" it will ignore. The flag is sticky and its control is
     // hidden for those backends, so a value stored once — by an older build,
@@ -25492,6 +25496,7 @@ export class DesktopBackendRegistry {
       await this.stopRunningTurnsForShutdown();
     }
     this.mcpGatewayTools?.cancel();
+    this.mcpGatewaySessionApprovals.clear();
     for (const run of this.headlessAutomationTurns.values()) {
       for (const registration of run.mcpRegistrations ?? []) registration.revoke();
     }
@@ -36609,9 +36614,13 @@ export class DesktopBackendRegistry {
         requestId,
         serverName: invocation.serverName,
         mode: "form",
-        message: `Allow ${invocation.serverName} / ${invocation.toolName} for this call?\nConnection: ${invocation.connectionId}\nArguments:\n${JSON.stringify(invocation.arguments, null, 2)}`,
+        message: `Allow ${invocation.serverName} / ${invocation.toolName}?\nConnection: ${invocation.connectionId}\nArguments:\n${JSON.stringify(invocation.arguments, null, 2)}`,
         requestedSchema: { type: "object", properties: {} },
-        _meta: null,
+        _meta: {
+          pwragent_approval_kind: "mcp_tool_call",
+          persist: ["session"],
+          subtitle: "Allows this tool with any arguments in this conversation. Expires when PwrAgent restarts, MCP access changes, or the tool changes.",
+        },
       },
     };
     // This is a host-owned invocation approval, not upstream MCP elicitation.
@@ -36641,6 +36650,14 @@ export class DesktopBackendRegistry {
     // Codex auto_review has no client API for reviewing host-owned dynamic
     // calls. Keep scoped confirmation until that integration is available.
     if (automation) return false;
+    signal.throwIfAborted();
+    const sessionKey = JSON.stringify([context.backend, context.threadId]);
+    const sourceKey = JSON.stringify([invocation.connectionId, invocation.serverName, invocation.toolName]);
+    const approvals = this.mcpGatewaySessionApprovals.get(sessionKey);
+    if (approvals?.get(sourceKey) === invocation.schemaRevision) return true;
+    // Once a changed schema/auth generation is observed, the old grant cannot
+    // come back even if the catalog later returns to the previous revision.
+    approvals?.delete(sourceKey);
     const key = buildPendingRequestKey({ ...context, requestId });
     return await new Promise<boolean>((resolve, reject) => {
       const finish = (approved: boolean, error?: unknown): void => {
@@ -36657,7 +36674,16 @@ export class DesktopBackendRegistry {
       };
       this.pendingServerRequests.set(key, {
         backend: context.backend, notification,
-        resolve: (response) => finish(Boolean(response && "action" in response && response.action === "accept")),
+        resolve: (response) => {
+          if (signal.aborted) { aborted(); return; }
+          const approved = Boolean(response && "action" in response && response.action === "accept");
+          if (approved && "_meta" in response && readRecord(response._meta)?.persist === "session") {
+            const grants = this.mcpGatewaySessionApprovals.get(sessionKey) ?? new Map<string, string>();
+            grants.set(sourceKey, invocation.schemaRevision);
+            this.mcpGatewaySessionApprovals.set(sessionKey, grants);
+          }
+          finish(approved);
+        },
         reject: (error) => finish(false, error),
       });
       signal.addEventListener("abort", aborted, { once: true });
