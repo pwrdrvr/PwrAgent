@@ -11,6 +11,7 @@ import type { AgentEvent, TrustCodexProjectRequest } from "@pwragent/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { CodexConfigWarningBanner } from "../CodexConfigWarningBanner";
+import { codexWarningSuppressionId } from "../codex-warning-suppression";
 
 function configWarningEvent(params: {
   federationTarget?: AgentEvent["federationTarget"];
@@ -77,6 +78,7 @@ describe("CodexConfigWarningBanner", () => {
     await screen.findByRole("alert");
     await act(async () => {
       fireEvent.click(screen.getByRole("checkbox", { name: "Don't show again" }));
+      fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
     });
     expect(suppress).toHaveBeenCalledOnce();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
@@ -115,10 +117,60 @@ describe("CodexConfigWarningBanner", () => {
     await screen.findByRole("alert");
     await act(async () => {
       fireEvent.click(screen.getByRole("checkbox", { name: "Don't show again" }));
+      fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
     });
     expect(screen.getByRole("alert")).toHaveTextContent("Could not save this preference.");
     expect(screen.getByRole("checkbox", { name: "Don't show again" })).toBeEnabled();
-    expect(screen.getByRole("checkbox", { name: "Don't show again" })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Don't show again" })).toBeChecked();
+  });
+
+  it("keeps the warning open when Don't show again is checked until Dismiss", async () => {
+    const suppress = vi.fn(async () => true);
+    const desktopApi: DesktopApi = {
+      getLatestCodexConfigWarning: async () => ({
+        event: configWarningEvent({ summary: "Unsupported feature" }),
+      }),
+    };
+    render(<CodexConfigWarningBanner desktopApi={desktopApi} onSuppressWarning={suppress} />);
+    await screen.findByRole("alert");
+    const checkbox = screen.getByRole("checkbox", { name: "Don't show again" });
+
+    await act(async () => {
+      fireEvent.click(checkbox);
+    });
+    expect(screen.getByRole("alert")).toHaveTextContent("Unsupported feature");
+    expect(checkbox).toBeChecked();
+    expect(suppress).not.toHaveBeenCalled();
+
+    await act(async () => {
+      fireEvent.click(checkbox);
+    });
+    expect(checkbox).not.toBeChecked();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(suppress).not.toHaveBeenCalled();
+  });
+
+  it("stays hidden when a thread warning toast saved the same text", async () => {
+    const desktopApi: DesktopApi = {
+      getLatestCodexConfigWarning: async () => ({
+        event: configWarningEvent({
+          summary: "Unsupported feature",
+          details: "Unsupported example_feature",
+        }),
+      }),
+    };
+    await act(async () => {
+      render(
+        <CodexConfigWarningBanner
+          desktopApi={desktopApi}
+          dismissedWarningIds={[codexWarningSuppressionId({ summary: "Unsupported feature" })]}
+        />,
+      );
+    });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("does not persist an ordinary dismissal", async () => {

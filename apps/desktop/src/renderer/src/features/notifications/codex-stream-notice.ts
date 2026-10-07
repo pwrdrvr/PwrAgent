@@ -1,10 +1,16 @@
 import type { FederationInstanceId } from "@pwragent/shared";
+import {
+  codexWarningSuppressionId,
+  isCodexWarningSuppressed,
+} from "../codex-config/codex-warning-suppression";
 import type { AppNoticeToastNotice } from "./AppNoticeToast";
 
 export type CodexStreamSignal = {
   notification: { method: string; params: Record<string, unknown> };
   instanceId?: FederationInstanceId;
   skillQuestionsWarningDismissed?: boolean;
+  /** Saved `experimental.codexConfigWarningsDismissed` ids. */
+  dismissedWarningIds?: readonly string[];
   threadLabel: string;
 };
 
@@ -54,6 +60,20 @@ export function resolveCodexStreamNotice(
     const skillQuestionsWarning = method === "warning"
       && isSkillQuestionsDevelopmentWarning(message);
     if (skillQuestionsWarning && signal.skillQuestionsWarningDismissed) return undefined;
+    // Codex repeats a config requirement warning on every thread. It shares
+    // the config banner's saved dismissals, so either surface silences both.
+    const warningSuppressionId = method === "warning" && !skillQuestionsWarning
+      ? codexWarningSuppressionId({
+          summary: message,
+          remoteInstanceId: signal.instanceId,
+        })
+      : undefined;
+    if (
+      warningSuppressionId
+      && isCodexWarningSuppressed(signal.dismissedWarningIds, message, signal.instanceId)
+    ) {
+      return undefined;
+    }
     const details = readText(error?.additionalDetails);
     const retrying = method === "error" && params.willRetry === true;
     return {
@@ -67,6 +87,7 @@ export function resolveCodexStreamNotice(
           : retrying ? "Codex is retrying" : "Codex error",
         message: details ? `${message}\n${details}` : message,
         ...(skillQuestionsWarning ? { skillQuestionsWarning: true } : {}),
+        ...(warningSuppressionId ? { warningSuppressionId } : {}),
         tone: method === "warning" || retrying ? "warning" : "error",
         detail: signal.threadLabel,
         threadLink: {
