@@ -4022,6 +4022,12 @@ textarea,
   transition: background 600ms ease-out;
 }
 
+/* A match among every line, in Highlight mode. */
+.log-window__line--match .log-window__line-number {
+  box-shadow: inset 3px 0 0 var(--accent-border);
+  color: var(--accent-bright);
+}
+
 /* Line numbers are the selection gutter. */
 .log-window__line-number {
   position: sticky;
@@ -4365,8 +4371,13 @@ textarea,
   flex: 1;
 }
 
+.log-window__status-live {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
 .log-window__status-message {
-  display: none;
+  display: inline-flex;
   align-items: center;
   gap: 6px;
   height: 22px;
@@ -4376,10 +4387,6 @@ textarea,
   background: var(--success-soft);
   color: var(--success-text);
   font-weight: 600;
-}
-
-.log-window__status-message[data-visible="true"] {
-  display: inline-flex;
 }
 
 .log-window__status-action {

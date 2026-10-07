@@ -122,6 +122,11 @@ export function LogsWindow() {
   const flashResetTimerRef = useRef<number | undefined>(undefined);
   const draggingSelectionRef = useRef(false);
   const scrollToSequenceRef = useRef<number | undefined>(undefined);
+  // The newest sequence seen, drawn or not: while paused, entries are only
+  // counted, and a Mark must still land after them.
+  const newestSequenceRef = useRef(0);
+  const selectedLevelsRef = useRef<readonly LogLevelFilter[]>([]);
+  const searchingRef = useRef(false);
   const [renderVersion, setRenderVersion] = useState(0);
   const [truncated, setTruncated] = useState(false);
   const [logFilePath, setLogFilePath] = useState<string | undefined>(
@@ -152,6 +157,10 @@ export function LogsWindow() {
     [debugSelected, preferences.levels],
   );
 
+  useEffect(() => {
+    selectedLevelsRef.current = selectedLevels;
+  }, [selectedLevels]);
+
   const setFollowingMode = useCallback((value: boolean) => {
     followingRef.current = value;
     setFollowing(value);
@@ -159,6 +168,10 @@ export function LogsWindow() {
 
   const applySnapshot = useCallback((value: AppLogSnapshot) => {
     entryBufferRef.current = createRenderedLogEntryBuffer(value.entries);
+    newestSequenceRef.current = Math.max(
+      newestSequenceRef.current,
+      value.entries.at(-1)?.sequence ?? 0,
+    );
     setRenderVersion((version) => version + 1);
     setLogFilePath(value.logFilePath ?? readBootstrapLogFilePath());
     confirmedDebugCollectionRef.current = value.debugCollectionEnabled;
@@ -252,7 +265,12 @@ export function LogsWindow() {
       return;
     }
     return desktopApi.onAppLogEntry((entry) => {
+      newestSequenceRef.current = Math.max(newestSequenceRef.current, entry.sequence);
       if (!followingRef.current) {
+        // Count only what resuming will show at the current levels.
+        if (!shouldShowLogEntry(entry, selectedLevelsRef.current)) {
+          return;
+        }
         setPaused((current) => ({
           newLines: current.newLines + 1,
           newErrors:
@@ -314,6 +332,10 @@ export function LogsWindow() {
     [allEntries, selectedLevels],
   );
   const searching = hasLogSearchCriteria(search);
+
+  useEffect(() => {
+    searchingRef.current = searching;
+  }, [searching]);
   const display = useMemo(
     () =>
       buildLogDisplayRows({
@@ -402,7 +424,12 @@ export function LogsWindow() {
       element.scrollHeight - element.scrollTop - element.clientHeight;
     const atBottom = distanceFromBottom <= BOTTOM_THRESHOLD_PX;
     if (atBottom && !followingRef.current) {
-      resume();
+      // A search holds the view still: a short filtered list clamps
+      // scrollTop to the bottom, and a match near the end lands there too.
+      // Only Live or the new-lines pill resumes it.
+      if (!searchingRef.current) {
+        resume();
+      }
       return;
     }
     if (!atBottom) {
@@ -711,8 +738,8 @@ export function LogsWindow() {
     selectedLevels,
   ]);
 
-  // Window shortcuts. ⌘C copies the line selection unless a text selection
-  // sits inside one line, which keeps the native copy.
+  // Window shortcuts. ⌘C copies the line selection unless text is selected,
+  // which keeps the native copy of exactly what is highlighted.
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent): void => {
       if (event.defaultPrevented) return;
@@ -731,7 +758,7 @@ export function LogsWindow() {
         return;
       }
       if (mod && event.key.toLowerCase() === "c") {
-        if (selectedEntries.length === 0 || textSelectionWithinOneLine()) return;
+        if (selectedEntries.length === 0 || hasTextSelection()) return;
         event.preventDefault();
         void copySelection();
         return;
@@ -779,7 +806,10 @@ export function LogsWindow() {
   }, [desktopApi, logFilePath]);
 
   const handleMark = useCallback(() => {
-    setMark({ afterSequence: lastSequence, at: Date.now() });
+    setMark({
+      afterSequence: Math.max(lastSequence, newestSequenceRef.current),
+      at: Date.now(),
+    });
   }, [lastSequence]);
 
   const expandGap = useCallback((key: string) => {
@@ -839,8 +869,8 @@ export function LogsWindow() {
               {search.tokens.map((token) => (
                 <span
                   key={`${token.kind}:${token.value}`}
-                  className="log-window__token-chip"
-                  title={`${token.kind}:${token.value}`}
+                  className="log-window__token-chip tooltip-target"
+                  data-tooltip={`${token.kind}:${token.value}`}
                 >
                   <span className="log-window__token-chip-kind">{token.kind}</span>
                   <span className="log-window__token-chip-value">
@@ -872,9 +902,9 @@ export function LogsWindow() {
                   </span>
                   <button
                     aria-label="Previous match"
-                    className="log-window__search-step"
+                    className="log-window__search-step tooltip-target"
                     disabled={matchCount === 0}
-                    title="Previous match (Shift-Enter)"
+                    data-tooltip="Previous match (Shift-Enter)"
                     type="button"
                     onClick={() => goToMatch(-1)}
                   >
@@ -882,9 +912,9 @@ export function LogsWindow() {
                   </button>
                   <button
                     aria-label="Next match"
-                    className="log-window__search-step"
+                    className="log-window__search-step tooltip-target"
                     disabled={matchCount === 0}
-                    title="Next match (Enter)"
+                    data-tooltip="Next match (Enter)"
                     type="button"
                     onClick={() => goToMatch(1)}
                   >
@@ -899,8 +929,8 @@ export function LogsWindow() {
             <div aria-label="Search mode" className="log-window__segmented" role="group">
               <button
                 aria-pressed={preferences.searchMode === "filter"}
-                className="log-window__segment"
-                title="Show only matching lines"
+                className="log-window__segment tooltip-target"
+                data-tooltip="Show only matching lines"
                 type="button"
                 onClick={() => updatePreferences({ searchMode: "filter" })}
               >
@@ -908,8 +938,8 @@ export function LogsWindow() {
               </button>
               <button
                 aria-pressed={preferences.searchMode === "highlight"}
-                className="log-window__segment"
-                title="Show every line and highlight matches"
+                className="log-window__segment tooltip-target"
+                data-tooltip="Show every line and highlight matches"
                 type="button"
                 onClick={() => updatePreferences({ searchMode: "highlight" })}
               >
@@ -957,11 +987,11 @@ export function LogsWindow() {
               })}
               <button
                 aria-pressed={debugSelected}
-                className="log-window__segment"
+                className="log-window__segment tooltip-target"
                 data-debug-collection={
                   debugSelected && !debugCollectionEnabled ? "off" : undefined
                 }
-                title="Show debug lines; turns on debug collection"
+                data-tooltip="Show debug lines; turns on debug collection"
                 type="button"
                 onClick={handleDebugToggle}
               >
@@ -974,8 +1004,8 @@ export function LogsWindow() {
             <button
               aria-label="Wrap"
               aria-pressed={preferences.wrap}
-              className="log-window__button"
-              title="Wrap long lines"
+              className="log-window__button tooltip-target"
+              data-tooltip="Wrap long lines"
               type="button"
               onClick={() => updatePreferences({ wrap: !preferences.wrap })}
             >
@@ -984,8 +1014,8 @@ export function LogsWindow() {
             </button>
             <button
               aria-label="Mark"
-              className="log-window__button"
-              title="Drop a mark after the newest line"
+              className="log-window__button tooltip-target"
+              data-tooltip="Drop a mark after the newest line"
               type="button"
               onClick={handleMark}
             >
@@ -994,8 +1024,8 @@ export function LogsWindow() {
             </button>
             <button
               aria-pressed={following}
-              className="log-window__button log-window__button--live"
-              title={following ? "Pause the live log" : "Resume the live log"}
+              className="log-window__button log-window__button--live tooltip-target"
+              data-tooltip={following ? "Pause the live log" : "Resume the live log"}
               type="button"
               onClick={following ? pause : resume}
             >
@@ -1025,6 +1055,7 @@ export function LogsWindow() {
                 <div
                   aria-label="Log output"
                   className={`log-window__lines${preferences.wrap ? " log-window__lines--wrap" : ""}`}
+                  aria-live="off"
                   role="log"
                   style={{ "--log-gutter-digits": gutterDigits } as CSSProperties}
                   onClick={handleLinesClick}
@@ -1080,6 +1111,7 @@ export function LogsWindow() {
                         entry={row.entry}
                         flashing={flashSequences.has(sequence)}
                         highlightQuery={search.text}
+                        match={row.match && preferences.searchMode === "highlight"}
                         selected={selectedSequences.has(sequence)}
                       />
                     );
@@ -1109,9 +1141,9 @@ export function LogsWindow() {
                 <span aria-hidden="true" className="log-window__selection-divider" />
                 <button
                   aria-checked={preferences.includeDiagnostics}
-                  className="log-window__check"
+                  className="log-window__check tooltip-target"
                   role="checkbox"
-                  title="Start the copy with version, profile, process, log path and instance details"
+                  data-tooltip="Start the copy with version, profile, process, log path and instance details"
                   type="button"
                   onClick={() =>
                     updatePreferences({
@@ -1127,10 +1159,10 @@ export function LogsWindow() {
                   Include diagnostics
                 </button>
                 <button
-                  className="log-window__copy"
+                  className="log-window__copy tooltip-target"
                   data-copied={copyState === "copied" ? "true" : undefined}
                   disabled={copyState === "copying"}
-                  title="Copy the selected lines (⌘C)"
+                  data-tooltip="Copy the selected lines (⌘C)"
                   type="button"
                   onClick={() => void copySelection()}
                 >
@@ -1143,8 +1175,8 @@ export function LogsWindow() {
                 </button>
                 <button
                   aria-label="Clear selection"
-                  className="log-window__selection-clear"
-                  title="Clear selection (Esc)"
+                  className="log-window__selection-clear tooltip-target"
+                  data-tooltip="Clear selection (Esc)"
                   type="button"
                   onClick={() => changeSelection(undefined)}
                 >
@@ -1181,31 +1213,26 @@ export function LogsWindow() {
               <span className="log-window__status-note">Debug collection on</span>
             ) : null}
             {fileName ? (
-              <span className="log-window__status-file" title={logFilePath}>
+              <span className="log-window__status-file tooltip-target" data-tooltip={logFilePath}>
                 {fileName}
               </span>
             ) : null}
             <span className="log-window__status-spacer" />
-            <span
-              aria-live="polite"
-              className="log-window__status-message"
-              data-visible={statusMessage ? "true" : undefined}
-              role="status"
-            >
+            <span aria-live="polite" className="log-window__status-live" role="status">
               {statusMessage ? (
-                <>
+                <span className="log-window__status-message">
                   <CheckIcon aria-hidden="true" size={12} />
                   {statusMessage}
-                </>
+                </span>
               ) : null}
             </span>
             {logFilePath ? (
               <>
                 <button
                   aria-label={copiedLogFilePath ? "Copied log file path" : "Copy log file path"}
-                  className="log-window__status-action"
+                  className="log-window__status-action tooltip-target"
                   data-copied={copiedLogFilePath ? "true" : undefined}
-                  title={logFilePath}
+                  data-tooltip={logFilePath}
                   type="button"
                   onClick={handleCopyLogFilePath}
                 >
@@ -1218,8 +1245,8 @@ export function LogsWindow() {
                 </button>
                 <button
                   aria-label="Reveal log file in file manager"
-                  className="log-window__status-action"
-                  title="Reveal log file in file manager"
+                  className="log-window__status-action tooltip-target"
+                  data-tooltip="Reveal log file in file manager"
                   type="button"
                   onClick={handleRevealLogFile}
                 >
@@ -1239,6 +1266,8 @@ const LogLine = memo(function LogLine(props: {
   entry: AppLogEntry;
   highlightQuery: string;
   activeMatch: boolean;
+  /** A match shown among every line (Highlight mode). */
+  match: boolean;
   context: boolean;
   selected: boolean;
   flashing: boolean;
@@ -1253,6 +1282,7 @@ const LogLine = memo(function LogLine(props: {
     "log-window__line",
     level ? `log-window__line--${level}` : undefined,
     props.context ? "log-window__line--context" : undefined,
+    props.match ? "log-window__line--match" : undefined,
     props.activeMatch ? "log-window__line--active-match" : undefined,
     props.selected ? "log-window__line--selected" : undefined,
     props.flashing ? "log-window__line--copied" : undefined,
@@ -1262,15 +1292,10 @@ const LogLine = memo(function LogLine(props: {
   let firstMatch = true;
   return (
     <div
-      aria-selected={props.selected || undefined}
       className={className}
       data-log-sequence={props.entry.sequence}
     >
-      <span
-        className="log-window__line-number"
-        data-log-gutter={props.entry.sequence}
-        title="Click to select · Shift-click to extend · Drag to select a range"
-      >
+      <span className="log-window__line-number" data-log-gutter={props.entry.sequence}>
         {props.entry.sequence}
       </span>
       <span className="log-window__line-text">
@@ -1280,7 +1305,6 @@ const LogLine = memo(function LogLine(props: {
             ? {
                 "data-log-token-kind": part.token.kind,
                 "data-log-token-value": part.token.value,
-                title: `Filter by ${part.token.kind} ${part.token.value}`,
               }
             : {};
           const tokenClass = part.token ? " log-window__token" : "";
@@ -1343,19 +1367,12 @@ function textSelectionTouchesElement(element: HTMLElement): boolean {
   );
 }
 
-function lineRowFor(node: Node | null): Element | null {
-  const element = node instanceof Element ? node : node?.parentElement ?? null;
-  return element?.closest(".log-window__line") ?? null;
-}
-
-/** A text selection that starts and ends inside the same log line. */
-function textSelectionWithinOneLine(): boolean {
+/** Any highlighted text in the window; ⌘C then copies it natively. */
+function hasTextSelection(): boolean {
   const selection = window.getSelection();
-  if (!selection || selection.isCollapsed || selection.toString().length === 0) {
-    return false;
-  }
-  const anchorRow = lineRowFor(selection.anchorNode);
-  return anchorRow !== null && anchorRow === lineRowFor(selection.focusNode);
+  return Boolean(
+    selection && !selection.isCollapsed && selection.toString().length > 0,
+  );
 }
 
 function formatClockTime(timestamp: number): string {

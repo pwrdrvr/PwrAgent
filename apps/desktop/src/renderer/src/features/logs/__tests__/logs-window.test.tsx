@@ -98,7 +98,7 @@ describe("LogsWindow", () => {
     expect(await screen.findByText(/startThread backend=codex/)).toBeInTheDocument();
     expect(screen.getByText("5 lines")).toBeInTheDocument();
     expect(screen.getByText("main.log")).toHaveAttribute(
-      "title",
+      "data-tooltip",
       "/Users/example/Library/Logs/PwrAgent/main.log",
     );
     expect(screen.getByRole("button", { name: /^Error/ })).toHaveTextContent("Error3");
@@ -279,6 +279,113 @@ describe("LogsWindow", () => {
 
     emit(MCP_ENTRIES[4]);
     expect(screen.getByText("3 lines since mark")).toBeInTheDocument();
+  });
+
+  it("places a mark dropped while paused after the lines that arrived meanwhile", async () => {
+    const readAppLogSnapshot = vi
+      .fn()
+      .mockResolvedValueOnce(snapshot(MCP_ENTRIES.slice(0, 2)))
+      .mockResolvedValueOnce(snapshot(MCP_ENTRIES.slice(0, 4)));
+    const { emit } = installApi({ readAppLogSnapshot });
+
+    render(<LogsWindow />);
+    const viewport = await screen.findByLabelText("Log viewport");
+    await screen.findByText(/startThread/);
+    scrollViewportAwayFromBottom(viewport);
+    emit(MCP_ENTRIES[2]);
+    emit(MCP_ENTRIES[3]);
+    fireEvent.click(screen.getByRole("button", { name: "Mark" }));
+    fireEvent.click(screen.getByRole("button", { name: "2 new lines · 2 errors" }));
+    await screen.findByText(/diskhound/);
+
+    expect(screen.getByRole("button", { name: "Select since mark" })).toBeDisabled();
+    emit(MCP_ENTRIES[4]);
+    fireEvent.click(screen.getByRole("button", { name: "Select since mark" }));
+    expect(screen.getByRole("toolbar", { name: "Selected lines" })).toHaveTextContent(
+      "1 line since mark",
+    );
+  });
+
+  it("counts only lines at the shown levels while paused", async () => {
+    const { emit } = installApi({
+      entries: MCP_ENTRIES,
+      readConfigBootstrap: vi.fn(async () => ({
+        snapshot: {
+          logs: {
+            wrap: true,
+            searchMode: "filter",
+            contextLines: 0,
+            includeDiagnostics: true,
+            levels: ["error", "warn"],
+          },
+        },
+      })),
+    });
+
+    render(<LogsWindow />);
+    const viewport = await screen.findByLabelText("Log viewport");
+    await waitFor(() => {
+      expect(screen.queryByText(/startThread/)).not.toBeInTheDocument();
+    });
+    scrollViewportAwayFromBottom(viewport);
+    emit(logLine(6, "info", "main", "hidden info"));
+    emit(logLine(7, "warn", "main", "shown warning"));
+
+    expect(screen.getByRole("button", { name: "1 new line" })).toBeInTheDocument();
+  });
+
+  it("keeps a search paused when the filtered view sits at the bottom", async () => {
+    installApi({ entries: MCP_ENTRIES });
+
+    render(<LogsWindow />);
+    const viewport = await screen.findByLabelText("Log viewport");
+    await screen.findByText(/startThread/);
+    fireEvent.change(screen.getByLabelText("Search logs"), {
+      target: { value: "diskhound" },
+    });
+    Object.defineProperty(viewport, "scrollHeight", { configurable: true, value: 100 });
+    Object.defineProperty(viewport, "clientHeight", { configurable: true, value: 100 });
+    Object.defineProperty(viewport, "scrollTop", { configurable: true, value: 0, writable: true });
+    fireEvent.scroll(viewport);
+
+    expect(screen.getByRole("button", { name: "Paused" })).toBeInTheDocument();
+  });
+
+  it("marks every match in Highlight mode, not only the active one", async () => {
+    installApi({ entries: MCP_ENTRIES });
+
+    render(<LogsWindow />);
+    await screen.findByText(/startThread/);
+    fireEvent.click(screen.getByRole("button", { name: "Highlight" }));
+    const row = document.querySelector<HTMLElement>('[data-log-sequence="4"]');
+    fireEvent.click(within(row as HTMLElement).getByText("(pwragent:codex-client)"));
+
+    expect(document.querySelector('[data-log-sequence="4"]')).toHaveClass(
+      "log-window__line--match",
+    );
+    expect(document.querySelector('[data-log-sequence="3"]')).not.toHaveClass(
+      "log-window__line--match",
+    );
+  });
+
+  it("leaves ⌘C to the native copy while text is selected", async () => {
+    const copyRichText = vi.fn(async () => undefined);
+    installApi({ entries: MCP_ENTRIES, copyRichText });
+
+    render(<LogsWindow />);
+    await screen.findByText(/startThread/);
+    fireEvent.pointerDown(lineNumber(5), { button: 0 });
+    const text = within(
+      document.querySelector('[data-log-sequence="2"]') as HTMLElement,
+    ).getByText(/MCP server startup failed/);
+    const range = document.createRange();
+    range.selectNodeContents(text);
+    window.getSelection()?.addRange(range);
+
+    fireEvent.keyDown(document.body, { key: "c", metaKey: true });
+
+    expect(copyRichText).not.toHaveBeenCalled();
+    window.getSelection()?.removeAllRanges();
   });
 
   it("remembers Wrap and starts from the stored preferences", async () => {
