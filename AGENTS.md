@@ -25,6 +25,17 @@
 - Exclude `apps/desktop/.local/protocol-captures/` from broad searches.
   - Search that directory only for captured E2E protocol work.
 
+### Development tool resources
+
+- Build, lint, typecheck and test scripts apply the machine policy documented in
+  [docs/development-resource-policy.md](docs/development-resource-policy.md).
+- Below 16 GiB effective total RAM, use the shared PwrAgent/PwrGit tool lane;
+  do not launch concurrent raw checks across worktrees or override its heap cap.
+- Normal tools use 2048 MiB old space; full desktop TypeScript and typed ESLint use
+  4096 MiB. At 16 GiB or above the environment and parallelism are unchanged.
+- Keep native test process isolation. The constrained-machine worker limit is
+  a capacity policy, never a substitute for process ownership/readiness fixes.
+
 ### Command output
 
 - Keep model-visible command output bounded.
