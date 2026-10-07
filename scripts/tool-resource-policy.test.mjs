@@ -7,6 +7,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import { isAncestorPid, MACHINE_TOOL_LOCK, OWNER_ENV, processStartedAt, runResourceCommand } from "./resource-run.mjs";
 import { runSqliteWriteTests } from "./run-sqlite-write-report.mjs";
+import { createPosixProcessTracker } from "./tool-processes.mjs";
 import {
   GIB,
   cappedNodeOptions,
@@ -312,6 +313,10 @@ describe("policy boundaries and overrides", () => {
   it("uses 4 GiB only for full TypeScript and typed ESLint; keeps other tools at 2 GiB", () => {
     expect(toolHeapMiB("tsc", ["--noEmit"], path.join(import.meta.dirname, "../apps/desktop"))).toBe(4096);
     expect(toolHeapMiB("tsc", ["--noEmit"], path.join(import.meta.dirname, "../packages/shared"))).toBe(2048);
+    // tsc -p also takes the directory that holds tsconfig.json.
+    expect(toolHeapMiB("tsc", ["--noEmit", "-p", "apps/desktop"], path.join(import.meta.dirname, ".."))).toBe(4096);
+    expect(toolHeapMiB("tsc", ["--noEmit", "--project=."], path.join(import.meta.dirname, "../apps/desktop"))).toBe(4096);
+    expect(toolHeapMiB("tsc", ["--noEmit", "-p", "eval/tsconfig.json"], path.join(import.meta.dirname, "../apps/desktop"))).toBe(2048);
     expect(toolHeapMiB("eslint", ["--config", "eslint.typed.config.mjs"])).toBe(4096);
     expect(toolHeapMiB("eslint", ["--config=./eslint.typed.config.mjs"])).toBe(4096);
     expect(toolHeapMiB("eslint", ["--cache"])).toBe(2048);
@@ -351,6 +356,12 @@ describe("policy boundaries and overrides", () => {
     expect(isAncestorPid(2, 5, () => 5)).toBe(false);
     expect(isAncestorPid(2, 5, () => { throw new Error("gone"); })).toBe(false);
   });
+
+  it("walks this process's real ancestry from one process-table snapshot", () => {
+    expect(isAncestorPid(process.ppid)).toBe(true);
+    expect(isAncestorPid(process.pid)).toBe(true);
+    expect(isAncestorPid(2 ** 30)).toBe(false);
+  }, 30_000);
 });
 
 describe("independent process leases", () => {
@@ -760,6 +771,32 @@ describe.skipIf(process.platform === "win32")("detached POSIX tool descendants",
       if (matches) await drained(child.pid);
       else expect(running(child.pid)).toBe(true);
     } finally { cleanup({ holder: child, pid: child.pid, startedAt }); await exited; }
+  }, 15_000);
+});
+
+describe.skipIf(process.platform === "win32")("zombie-only tool process groups", () => {
+  it("signals and drains a group whose only member is an unreaped zombie", async () => {
+    const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { detached: true, stdio: "ignore" });
+    const exited = new Promise((resolve) => child.once("exit", resolve));
+    try {
+      let startedAt;
+      for (let attempt = 0; attempt < 100 && !startedAt; attempt += 1) {
+        startedAt = processStartedAt(child.pid);
+        if (!startedAt) await delay(20);
+      }
+      const tracker = createPosixProcessTracker({ pid: child.pid, startedAt });
+      child.kill("SIGKILL");
+      // Synchronous until the end: Node cannot reap the child while this runs,
+      // so the group holds only a zombie that keeps its start identity.
+      let state = "";
+      for (let attempt = 0; attempt < 200 && !state.startsWith("Z"); attempt += 1) {
+        state = execFileSync("ps", ["-o", "stat=", "-p", String(child.pid)], { encoding: "utf8", timeout: 5_000 }).trim();
+      }
+      expect(state).toMatch(/^Z/);
+      expect(processStartedAt(child.pid)).toBe(startedAt);
+      expect(() => tracker.signal("SIGKILL")).not.toThrow();
+      await tracker.drain();
+    } finally { child.kill("SIGKILL"); await exited; }
   }, 15_000);
 });
 

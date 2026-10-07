@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 import { execFileSync, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { readFileSync, renameSync, writeFileSync } from "node:fs";
+import { renameSync, writeFileSync } from "node:fs";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { createPosixProcessTracker, DESCENDANT_ENV, ownerRunning, processStartedAt } from "./tool-processes.mjs";
+import { createPosixProcessTracker, DESCENDANT_ENV, ownerRunning, processStartedAt, readPosixProcesses } from "./tool-processes.mjs";
 export { processStartedAt } from "./tool-processes.mjs";
 import { pathToFileURL } from "node:url";
 import lockfile from "proper-lockfile";
@@ -25,19 +25,23 @@ function alive(pid) {
   try { process.kill(pid, 0); return true; } catch (error) { return error.code === "EPERM"; }
 }
 
-function parentPid(pid) {
-  if (process.platform === "linux") {
-    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-    return Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1]);
+// One snapshot per check: a cold powershell.exe start takes about 3 s on a
+// GitHub Windows runner, so a lookup per ancestor multiplied that by the depth.
+function parentPids() {
+  if (process.platform !== "win32") {
+    return new Map([...readPosixProcesses().values()].map((row) => [row.pid, row.parentPid]));
   }
-  if (process.platform === "win32") {
-    return Number(execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
-      `(Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}').ParentProcessId`], { encoding: "utf8", timeout: 5_000, windowsHide: true }).trim());
-  }
-  return Number(execFileSync("ps", ["-o", "ppid=", "-p", String(pid)], { encoding: "utf8", timeout: 5_000 }).trim());
+  const text = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
+    "Get-CimInstance Win32_Process | ForEach-Object { \"$($_.ProcessId) $($_.ParentProcessId)\" }"],
+  { encoding: "utf8", timeout: 30_000, windowsHide: true, maxBuffer: 16 * 1024 ** 2 });
+  return new Map(text.trim().split(/\r?\n/).map((line) => line.trim().split(/\s+/).map(Number)));
 }
 
-export function isAncestorPid(ownerPid, pid = process.pid, getParent = parentPid) {
+export function isAncestorPid(ownerPid, pid = process.pid, getParent) {
+  if (!getParent) {
+    const parents = parentPids();
+    getParent = (child) => parents.get(child);
+  }
   const visited = new Set();
   try {
     while (Number.isInteger(pid) && pid > 0 && !visited.has(pid)) {
@@ -60,9 +64,13 @@ async function writeOwner(lockPath, owner) {
 }
 
 async function inheritedLock(env, lockPath) {
+  let owner;
+  try { owner = JSON.parse(env[OWNER_ENV] ?? "null"); } catch { return false; }
+  if (!owner || owner.path !== lockPath || typeof owner.token !== "string" || !alive(owner.pid)) return false;
+  // Outside the catch: a failed process-table read must fail this command.
+  // Read as "not inherited", it would queue behind its own ancestor forever.
+  if (!isAncestorPid(owner.pid)) return false;
   try {
-    const owner = JSON.parse(env[OWNER_ENV] ?? "null");
-    if (!owner || owner.path !== lockPath || typeof owner.token !== "string" || !alive(owner.pid) || !isAncestorPid(owner.pid)) return false;
     const recorded = await readOwner(lockPath);
     return recorded?.pid === owner.pid && recorded?.token === owner.token && recorded?.path === lockPath
       && ownerRunning(recorded) && await lockfile.check(lockPath, { realpath: false, stale: 30_000 });
@@ -71,7 +79,11 @@ async function inheritedLock(env, lockPath) {
 
 function signalGroup(pid, signal) {
   if (!Number.isInteger(pid) || pid <= 0) throw new Error("Invalid tool process group identity");
-  try { process.kill(-pid, signal); } catch (error) { if (error.code !== "ESRCH") throw error; }
+  try { process.kill(-pid, signal); } catch (error) {
+    // macOS answers EPERM, not ESRCH, for a group whose only members are
+    // unreaped zombies.
+    if (error.code !== "ESRCH" && (error.code !== "EPERM" || groupRunning(pid))) throw error;
+  }
 }
 
 function groupRunning(pid) {
