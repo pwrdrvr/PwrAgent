@@ -3323,10 +3323,10 @@ export class DesktopFederationRuntime {
     if (mode === "client" || mode === "dual") {
       const configured = config.gatewayEndpoints;
       // Last line of defense before anything is dialed: the config file is
-      // hand-editable and may predate the scheme allowlist.
+      // hand-editable and may predate endpoint validation.
       const endpoints = configured.filter(isFederationGatewayEndpointUrl);
       if (endpoints.length !== configured.length) {
-        log.warn("ignoring federation endpoints with an unsupported scheme", {
+        log.warn("ignoring invalid federation gateway endpoints", {
           ignored: configured.length - endpoints.length,
         });
       }
@@ -3334,7 +3334,7 @@ export class DesktopFederationRuntime {
       if (endpoints.length === 0) {
         this.lastConnectionError =
           configured.length > 0
-            ? "No federation gateway endpoint uses a supported ws://, wss://, or ssh:// scheme."
+            ? "No federation gateway endpoint has a valid hostname and supported ws://, wss://, or ssh:// scheme."
             : "Federation gateway URL is not configured.";
       } else {
         await this.connectToGateway().catch((error) => {
