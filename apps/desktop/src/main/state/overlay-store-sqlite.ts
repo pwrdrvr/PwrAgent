@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { READ_NAVIGATION_BACKEND_METADATA } from "./navigation-backend-metadata";
 import { sqliteBackendChangeVersion } from "./sqlite-backend-change-version";
 import { sqliteThreadChangeVersion } from "./sqlite-thread-change-version";
+import { sqliteNavigationChangeVersion } from "./sqlite-navigation-change-version";
 import { buildAppendPinRank, insertSubthreadIdAfter, sortSubthreadSummaries } from "@pwragent/shared";
 import path from "node:path";
 import { relativePinRanks } from "./relative-pin-order";
@@ -690,8 +691,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
   /** Read-only stamp prevents a post-mutation query joining pre-mutation work. */
   readNavigationSourceVersion(): string {
     const external = this.stateDb.raw.pragma("data_version", { simple: true });
-    const local = this.stateDb.raw.prepare("SELECT total_changes() AS changes").get() as { changes: number };
-    return `${external}:${local.changes}${this.stateDb.raw.inTransaction ? `:transaction:${++this.transactionNavigationRead}` : ""}`;
+    const local = sqliteNavigationChangeVersion(this.stateDb.raw);
+    return `${external}:${local}${this.stateDb.raw.inTransaction ? `:transaction:${++this.transactionNavigationRead}` : ""}`;
   }
 
   /**
@@ -5711,20 +5712,41 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     threads: Array<{ backend: ThreadOverlayState["backend"]; threadId: string; prKeys: string[] }>;
     now: number;
   }): Promise<void> {
-    const existing = this.stateDb.raw.prepare(
-      `SELECT pr_key FROM pr_auto_dispatch_candidates WHERE backend = ? AND thread_id = ?`,
-    );
-    const changesFor = (thread: typeof params.threads[number]) => {
-      const enabled = this.getThread(buildThreadIdentityKey(thread.backend, thread.threadId))?.prAutoDispatchEnabled === true;
-      const desired = new Set(enabled ? thread.prKeys : []);
-      const retained = new Set((existing.all(thread.backend, thread.threadId) as Array<{ pr_key: string }>).map((row) => row.pr_key));
-      return { add: [...desired].filter((key) => !retained.has(key)), remove: [...retained].filter((key) => !desired.has(key)) };
+    const readChanges = () => {
+      const changes: Array<{ thread: typeof params.threads[number]; add: string[]; remove: string[] }> = [];
+      for (let offset = 0; offset < params.threads.length; offset += 500) {
+        const batch = params.threads.slice(offset, offset + 500);
+        const requested = batch.map((thread, index) => ({ index, backend: thread.backend, threadId: thread.threadId,
+          key: encodeThreadIdentityKeyForStorage(buildThreadIdentityKey(thread.backend, thread.threadId)) }));
+        // Only eligibility and election membership are inputs. Never parse a
+        // full history or pending dispatch prompt to read this one boolean.
+        const rows = this.stateDb.raw.prepare(`
+          SELECT json_extract(requested.value, '$.index') AS ordinal,
+            json_type(threads.payload, '$.prAutoDispatchEnabled') = 'true' AS enabled,
+            candidates.pr_key
+          FROM json_each(?) AS requested
+          LEFT JOIN threads ON threads.thread_id = json_extract(requested.value, '$.key')
+          LEFT JOIN pr_auto_dispatch_candidates AS candidates
+            ON candidates.backend = json_extract(requested.value, '$.backend')
+            AND candidates.thread_id = json_extract(requested.value, '$.threadId')
+        `).all(JSON.stringify(requested)) as Array<{ ordinal: number; enabled: number | null; pr_key: string | null }>;
+        const memberships = batch.map(() => ({ enabled: false, retained: new Set<string>() }));
+        for (const row of rows) {
+          const membership = memberships[row.ordinal]!;
+          membership.enabled = row.enabled === 1;
+          if (row.pr_key !== null) membership.retained.add(row.pr_key);
+        }
+        for (const [index, thread] of batch.entries()) {
+          const { enabled, retained } = memberships[index]!;
+          const desired = new Set(enabled ? thread.prKeys : []);
+          changes.push({ thread, add: [...desired].filter((key) => !retained.has(key)),
+            remove: [...retained].filter((key) => !desired.has(key)) });
+        }
+      }
+      return changes;
     };
     // Do not create even an empty transaction for an unchanged owner index.
-    if (!params.threads.some((thread) => {
-      const changes = changesFor(thread);
-      return changes.add.length > 0 || changes.remove.length > 0;
-    })) return;
+    if (!readChanges().some((changes) => changes.add.length > 0 || changes.remove.length > 0)) return;
     this.stateDb.raw.transaction(() => {
       const remove = this.stateDb.raw.prepare(
         `DELETE FROM pr_auto_dispatch_candidates WHERE pr_key = ? AND backend = ? AND thread_id = ?`,
@@ -5733,10 +5755,10 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         `INSERT INTO pr_auto_dispatch_candidates(pr_key, backend, thread_id, eligible_since, updated_at)
          VALUES (?, ?, ?, ?, ?) ON CONFLICT(pr_key, backend, thread_id) DO NOTHING`,
       );
-      for (const thread of params.threads) {
-        // Revalidate eligibility and membership inside the write transaction;
-        // another process may have changed them after the read-only preflight.
-        const changes = changesFor(thread);
+      // Revalidate eligibility and membership inside the write transaction;
+      // another process may have changed them after the read-only preflight.
+      for (const changes of readChanges()) {
+        const { thread } = changes;
         for (const key of changes.remove) remove.run(key, thread.backend, thread.threadId);
         for (const key of changes.add) insert.run(key, thread.backend, thread.threadId, params.now, params.now);
       }

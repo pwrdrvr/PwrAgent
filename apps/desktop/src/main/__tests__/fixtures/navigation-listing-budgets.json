@@ -51,5 +51,20 @@
     "deletedPendingIntentThreads": 0,
     "archivedRpcsFromPreMutationRegistryListing": 1,
     "pageRpcsForForwardedNotification": 1
+  },
+  "sidebar-archive-pr-bookkeeping": {
+    "logicalRequests": 40,
+    "indexConstructions": 1,
+    "providerListings": 2,
+    "paginatedRpcs": 6,
+    "fullOverlayParses": 0,
+    "fullOverlayBytes": 0,
+    "compactOverlayParses": 119,
+    "compactOverlayBytes": 79729
+  },
+  "pr-candidate-bootstrap-and-unchanged": {
+    "readsPerBatch": 3,
+    "payloadBytes": 0,
+    "fullOverlayParses": 0
   }
 }
