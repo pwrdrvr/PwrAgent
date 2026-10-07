@@ -8033,6 +8033,39 @@ describe("app server ipc", () => {
     ]);
   });
 
+  it.each(["checking", "degraded"])(
+    "refreshes a registered threadless directory while provider discovery is %s",
+    async (state) => {
+      const { NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL } = await import("../../shared/ipc");
+      registerAppServerIpcHandlers();
+      getStartupProviderRefreshStatus.mockReturnValueOnce({ state, failedProviders: state === "degraded" ? 1 : 0 });
+      readNavigationQueryIndex.mockReturnValueOnce({
+        threads: [],
+        directories: [{ key: "directory:/repo/new", kind: "directory", label: "new", path: "/repo/new",
+          threadKeys: [], needsAttentionCount: 0 }],
+      });
+
+      await expect(handlers.get(NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL)!({}, {
+        directoryKeys: ["directory:/repo/new", "directory:/missing"], force: true,
+      })).resolves.toEqual({ scheduledCount: 1 });
+
+      await vi.waitFor(() => expect(readDirectoryStatusEntries).toHaveBeenCalledExactlyOnceWith([
+        expect.objectContaining({ key: "directory:/repo/new", path: "/repo/new" }),
+      ], { userAction: true, caller: "directory-status-ipc" }));
+      expect(listThreads).not.toHaveBeenCalledWith(expect.objectContaining({ forceRefresh: true }));
+    },
+  );
+
+  it.each(["checking", "degraded"])("does not invent a path for a missing directory while discovery is %s", async (state) => {
+    const { NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL } = await import("../../shared/ipc");
+    registerAppServerIpcHandlers();
+    getStartupProviderRefreshStatus.mockReturnValueOnce({ state });
+    await expect(handlers.get(NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL)!({}, {
+      directoryKeys: ["directory:/missing"], force: true,
+    })).resolves.toEqual({ scheduledCount: 0 });
+    expect(readDirectoryStatusEntries).not.toHaveBeenCalled();
+  });
+
   it("does not probe removed directories and bounds explicit directory refresh admission", async () => {
     const { NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL } = await import("../../shared/ipc");
     registerAppServerIpcHandlers();

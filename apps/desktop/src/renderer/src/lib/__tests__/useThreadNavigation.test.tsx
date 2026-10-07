@@ -14051,8 +14051,9 @@ describe("useThreadNavigation", () => {
       expect(result.current.selectedItemKey).toBe(`launchpad:${launchpad.directoryKey}`);
       expect(result.current.selectedLaunchpad).toMatchObject(launchpad);
       expect(result.current.selectedDirectory?.key).toBe(launchpad.directoryKey);
+      expect(result.current.pickDirectoryError).toBeUndefined();
       expect(latestThreadActionError(onThreadActionError, "add-directory"))
-        .toBe(metadataFailure ? "Git metadata unavailable" : undefined);
+        .toBeUndefined();
       expect(result.current.directories).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
