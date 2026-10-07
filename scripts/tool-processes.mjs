@@ -4,6 +4,30 @@ import { setTimeout as delay } from "node:timers/promises";
 
 export const DESCENDANT_ENV = "PWRAGENT_TOOL_DESCENDANT_TOKEN";
 const psEnv = { ...process.env, LC_ALL: "C" };
+// A cold powershell.exe start takes about 3 s on a GitHub Windows runner, so
+// the 5 s budget the POSIX lookups use left no headroom there.
+export const WINDOWS_START_TIMEOUT_MS = 30_000;
+let ownWindowsStartedAt;
+
+// PwrGit compares this exact string: .NET UTC ticks from GetProcessTimes.
+// WMI's CreationDate (wmic, CIM) stops at microseconds, so it cannot stand in.
+function windowsStartedAt(pid) {
+  if (pid === process.pid && ownWindowsStartedAt) return ownWindowsStartedAt;
+  let stdout;
+  try {
+    stdout = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
+      `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().Ticks`],
+    { encoding: "utf8", timeout: WINDOWS_START_TIMEOUT_MS, windowsHide: true });
+  } catch (error) {
+    // Killed while exiting: a newline-terminated answer was already complete.
+    if (error.code !== "ETIMEDOUT" || !/^\d+\r?\n/.test(error.stdout ?? "")) throw error;
+    stdout = error.stdout;
+  }
+  const startedAt = stdout.trim() || null;
+  // Only our own PID is safe to remember; any other can be reused.
+  if (pid === process.pid) ownWindowsStartedAt = startedAt;
+  return startedAt;
+}
 
 export function processStartedAt(pid) {
   if (!Number.isInteger(pid) || pid <= 0) throw new Error("Invalid tool process identity");
@@ -12,11 +36,7 @@ export function processStartedAt(pid) {
       const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
       return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
     }
-    if (process.platform === "win32") {
-      return execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
-        `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().Ticks`],
-      { encoding: "utf8", timeout: 5_000, windowsHide: true }).trim() || null;
-    }
+    if (process.platform === "win32") return windowsStartedAt(pid);
     return execFileSync("ps", ["-o", "lstart=", "-p", String(pid)],
       { encoding: "utf8", timeout: 5_000, env: psEnv }).trim() || null;
   } catch (error) {
