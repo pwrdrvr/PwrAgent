@@ -37,6 +37,24 @@ describe("usage activity aggregation", () => {
     expect(summarizeUsageActivity([latest, old], 100, 300).groups[0]).toMatchObject({ cost: 0, unpriced: 1, output: 300 });
   });
 
+  it.each([
+    { keyedFirst: false, unkeyedUpdatedAt: 200 },
+    { keyedFirst: true, unkeyedUpdatedAt: 200 },
+    { keyedFirst: false, unkeyedUpdatedAt: 250 },
+    { keyedFirst: true, unkeyedUpdatedAt: 250 },
+  ])("retains recorded account identity across mixed-version copies: %j", ({ keyedFirst, unkeyedUpdatedAt }) => {
+    const unkeyed = { ...usageFixture({ outputTokens: 500 }), owner: "Older peer", updatedAt: unkeyedUpdatedAt };
+    const keyed = { ...usageFixture(), accountKey: "recorded-account", owner: "Newer peer",
+      target: { scope: "remote" as const, instanceId: "newer-peer" } };
+    const result = summarizeUsageActivity(keyedFirst ? [keyed, unkeyed] : [unkeyed, keyed], 100, 300);
+    const winner = unkeyedUpdatedAt > keyed.updatedAt || !keyedFirst ? unkeyed : keyed;
+    expect(result).toMatchObject({ duplicates: 1, contained: 1 });
+    expect(result.rows).toHaveLength(1);
+    expect(result.rows[0]).toMatchObject({ accountKey: "recorded-account", owner: winner.owner, target: winner.target });
+    expect(result.groups[0]).toMatchObject({ cost: 300, output: winner.line.outputTokens });
+    expect(unkeyed).not.toHaveProperty("accountKey");
+  });
+
   it("counts a helper recorded as both a monitor and its own live turn once", () => {
     const monitor = { ...usageFixture({ scope: "monitor", source: "monitor", usageLineId: "parent:monitor", turnUsageAttributed: undefined }), updatedAt: 300 };
     const live = usageFixture();

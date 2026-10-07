@@ -251,6 +251,31 @@ it("filters totals, tokens, limits and threads by recorded account across owners
   expect(readUsageActivity).toHaveBeenCalledTimes(4); // Clock-period account filtering stays local.
 });
 
+it("keeps a mixed-version ledger copy in its recorded account when the unkeyed peer is read first", async () => {
+  const now = new Date(2026, 8, 28, 12).getTime();
+  vi.spyOn(Date, "now").mockReturnValue(now);
+  const row = usageFixture({ createdAt: now - 2 * HOUR, startedAt: now - 2 * HOUR,
+    completedAt: now - HOUR, totalCostMicros: 5_000_000 });
+  const readUsageActivity = vi.fn(async (request) => ({ readAt: now, rateLimits: [], truncated: false,
+    ...request.federationTarget?.scope === "local" ? { rows: [row] } : {
+      rows: [{ ...row, accountKey: "recorded" }],
+      limitObservation: { observedAt: now, accountKey: "current", limits: [] },
+      limitHistory: [{ observedAt: now - HOUR, accountKey: "recorded", limits: [] }],
+    } }));
+  render(<UsageActivity desktopApi={{ readUsageActivity, readFederationActivity: peers([{ id: "remote", label: "Remote", status: "connected" }]) }} />);
+  await screen.findByRole("button", { name: "Inspect Fixture thread" });
+  choosePeriod("7 days");
+  await waitFor(() => expect(readUsageActivity).toHaveBeenCalledTimes(4));
+  const picker = screen.getByRole("combobox", { name: "Account" });
+  chooseSelectOption(picker, /^OpenAI · Account recorded/);
+  const band = within(screen.getByRole("region", { name: "Limits and cost" }));
+  expect(band.getByText("$5.00")).toBeInTheDocument();
+  expect(band.getByText("1 thread · 1 turn")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Inspect Fixture thread" })).toBeInTheDocument();
+  expect(selectOptionLabels(picker).some((label) => label.includes("Unknown account"))).toBe(false);
+  expect(readUsageActivity).toHaveBeenCalledTimes(4);
+});
+
 it("uses the selected account's reset window rather than another instance's current account", async () => {
   const now = new Date(2026, 8, 28, 12).getTime();
   vi.spyOn(Date, "now").mockReturnValue(now);

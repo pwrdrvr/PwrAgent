@@ -34,10 +34,17 @@ export function summarizeUsageActivity(rows: OwnedUsageRow[], from: number, to: 
   for (const row of rows) {
     const key = usageActivityIdentity(row);
     const existing = unique.get(key);
+    if (!existing) { unique.set(key, row); continue; }
     const authoritative = row.line.scope === "turn" && row.line.turnUsageAttributed === true;
-    const existingAuthoritative = existing?.line.scope === "turn" && existing.line.turnUsageAttributed === true;
-    if (!existing || (authoritative && !existingAuthoritative)
-      || (authoritative === existingAuthoritative && row.updatedAt > existing.updatedAt)) unique.set(key, row);
+    const existingAuthoritative = existing.line.scope === "turn" && existing.line.turnUsageAttributed === true;
+    const replace = (authoritative && !existingAuthoritative)
+      || (authoritative === existingAuthoritative && row.updatedAt > existing.updatedAt);
+    const preferred = replace ? row : existing;
+    // Older peers omit account identity even for the same durable turn. Keep
+    // any recorded key while preserving the authoritative/newest copy's usage
+    // and routing fields. Neither peer's current login proves attribution.
+    const accountKey = preferred.accountKey ?? (replace ? existing.accountKey : row.accountKey);
+    unique.set(key, accountKey === preferred.accountKey ? preferred : { ...preferred, accountKey });
   }
   const contained: OwnedUsageRow[] = [];
   let boundary = 0;
