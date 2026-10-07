@@ -46,6 +46,36 @@ describe("UsagePaceCard", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
+  it("does not present historical quota as current when account metadata is unavailable", async () => {
+    const readUsageActivity = reader({ limitHistory: [reading(54)] });
+    render(<UsagePaceCard desktopApi={{ openUsageActivity: vi.fn(), readUsageActivity }} />);
+    await act(async () => { await vi.waitFor(() => expect(readUsageActivity).toHaveBeenCalled()); });
+    expect(screen.queryByRole("button", { name: /54% used/ })).not.toBeInTheDocument();
+    expect(screen.getByText("Limits, pace, and spend for every instance.")).toBeInTheDocument();
+  });
+
+  it("uses the current account even when another account has newer historical readings", async () => {
+    const readUsageActivity = reader({
+      limitObservation: reading(22),
+      limitHistory: [{ ...reading(54, NOW + HOUR), accountKey: "previous-account" }],
+    });
+    render(<UsagePaceCard desktopApi={{ openUsageActivity: vi.fn(), readUsageActivity }} />);
+    expect(await screen.findByRole("button", { name: "Open Usage Activity. Weekly limit 22% used." })).toBeInTheDocument();
+  });
+
+  it("uses the current plan and quota buckets when the provider changes them", async () => {
+    const readUsageActivity = reader({
+      limitObservation: {
+        ...reading(22), planType: "free",
+        limits: [{ ...WEEKLY, windowKey: "primary", usedPercent: 22 }],
+      },
+      limitHistory: [reading(54, NOW - HOUR)],
+    });
+    render(<UsagePaceCard desktopApi={{ openUsageActivity: vi.fn(), readUsageActivity }} />);
+    const card = await screen.findByRole("button", { name: "Open Usage Activity. Weekly limit 22% used." });
+    expect(card).toHaveTextContent("Weekly limit · OpenAI Free");
+  });
+
   it("warns when the weekly pace reaches 100% before the reset, with this machine's spend", async () => {
     vi.spyOn(Date, "now").mockReturnValue(NOW);
     const windowStart = RESET_AT - 168 * HOUR;

@@ -9,7 +9,8 @@
   checking, available, downloading (with percent and bytes), downloaded,
   canceled, error. Every check moves it, including the hourly background ones.
 - **`app:update-check-result-event`** is emitted from exactly one trigger —
-  `checkForAppUpdatesNow("menu")`, i.e. Help → Check for Updates. It is the
+  `checkForAppUpdatesNow("menu")`, i.e. Check for Updates… in the menu bar
+  (the PwrAgent menu on macOS, Help elsewhere). It is the
   only thing that distinguishes "the operator is waiting for this answer" from
   "the hour hand looked again". Settings → Updates deliberately does
   not emit it: that surface reports its `manual` result inline beside the

@@ -50,4 +50,17 @@ describe("macOS Dock tile plug-in packaging", () => {
     expect(source).not.toMatch(/NSTask|\/bin\/sh|sqlite/i);
   });
 
+  it("follows the snapshot's Profiles-menu order and visibility", async () => {
+    const source = await readDesktopFile(
+      "native/dock-tile-plugin/PwrAgentDockTilePlugin.m",
+    );
+
+    // The app writes these into a schemaVersion 2 snapshot (profile.ts
+    // `buildDockProfileSnapshot`); a bump would blank the Dock menu of an
+    // older installed plug-in reading the same cache file.
+    expect(source).toContain("[snapshot[@\"schemaVersion\"] isEqual:@2]");
+    expect(source).toContain("[snapshot[@\"ordered\"] isEqual:@YES]");
+    expect(source).toContain("[value[@\"showInMenu\"] isEqual:@NO]");
+  });
+
 });

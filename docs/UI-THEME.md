@@ -221,7 +221,7 @@ The light block is **not** uniformly AA-clean. These predate the accent retune a
 | Token / pair | Worst-case | Rules |
 |---|---|---|
 | `--accent` on `--accent-soft` | 3.88–4.39 | 7 (6 onboarding wizard + `.launchpad-pending__status`) — should move to `--accent-bright` |
-| `--status-warning` `#a86b00` | 3.87:1 | 16 `color:` rules — move text to `--status-warning-text` |
+| `--status-warning` `#a86b00` | 3.87:1 | 0 `color:` rules — text reads `--status-warning-text`, and `theme-contract.test.tsx` fails on a `color:` that reads `--status-warning` |
 | `--info-teal` `#0e9b95` | 3.01:1 | 1 |
 | `--text-subtle` `rgba(26,22,18,.42)` | 2.38:1 | 3 |
 | `--status-ok` `#2e7d3c` | 4.49:1 | 2 (marginal) |
@@ -256,7 +256,9 @@ The light block is **not** uniformly AA-clean. These predate the accent retune a
 `--status-warning` is for dots, strokes, and meters. Use `--status-warning-text`
 when the warning is something read: a figure, a sentence, or a chip label. Its
 light value is the `--savings-over` amber, at least 4.5:1 on every light
-surface. The usage pace sentence and the Pricing rail's pace card use it.
+surface. Every warning `color:` rule reads it, and the theme contract test
+fails on one that reads `--status-warning`. Every theme except Tangerine light
+aliases the two, so only Tangerine light shows the difference.
 
 #### Token Miser verdict
 

@@ -15,8 +15,11 @@ export type PwrAgentProfilesState = {
   createProfile: (profile: string) => Promise<void>;
   openProfile: (profile: string) => Promise<void>;
   refresh: () => Promise<void>;
+  /** `order` names every listed profile; main refuses a stale one. */
+  reorderProfiles: (order: string[]) => Promise<void>;
   setCodexProfile: (profile: string, codexProfile: string) => Promise<void>;
   setDefaultProfile: (profile: string) => Promise<void>;
+  setShowInMenu: (profile: string, showInMenu: boolean) => Promise<void>;
 };
 
 export function usePwrAgentProfiles(
@@ -94,6 +97,42 @@ export function usePwrAgentProfiles(
     [desktopApi, refresh],
   );
 
+  const reorderProfiles = useCallback(
+    async (order: string[]) => {
+      if (!desktopApi?.reorderPwrAgentProfiles) return;
+      // Show the drop where it landed while main writes it. A refused order
+      // is stale by definition, so the refresh below replaces this guess
+      // with what main actually holds either way.
+      setResponse((current) => {
+        if (!current) return current;
+        const byName = new Map(
+          current.profiles.map((profile) => [profile.name, profile]),
+        );
+        const reordered = order
+          .map((name) => byName.get(name))
+          .filter((profile) => profile !== undefined);
+        return reordered.length === current.profiles.length
+          ? { ...current, profiles: reordered }
+          : current;
+      });
+      try {
+        await desktopApi.reorderPwrAgentProfiles({ order });
+      } finally {
+        await refresh();
+      }
+    },
+    [desktopApi, refresh],
+  );
+
+  const setShowInMenu = useCallback(
+    async (profile: string, showInMenu: boolean) => {
+      if (!desktopApi?.setPwrAgentProfileMenuVisibility) return;
+      await desktopApi.setPwrAgentProfileMenuVisibility({ profile, showInMenu });
+      await refresh();
+    },
+    [desktopApi, refresh],
+  );
+
   return {
     activeProfile: response?.activeProfile,
     createProfile,
@@ -104,7 +143,9 @@ export function usePwrAgentProfiles(
     profiles: response?.profiles ?? [],
     openProfile,
     refresh,
+    reorderProfiles,
     setCodexProfile,
     setDefaultProfile,
+    setShowInMenu,
   };
 }

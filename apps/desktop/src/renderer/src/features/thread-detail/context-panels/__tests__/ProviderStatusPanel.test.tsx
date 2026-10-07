@@ -196,6 +196,36 @@ describe("ProviderStatusPanel", () => {
     expect(openUsageActivity).toHaveBeenCalledTimes(1);
   });
 
+  it("shows unavailable account and plan data instead of omitting them", () => {
+    render(<ProviderStatusPanel backends={[{ ...codexBackend, account: undefined, rateLimits: undefined }]} />);
+    expect(valueFor("Account")).toHaveTextContent(/^Unavailable$/);
+    expect(valueFor("Plan")).toHaveTextContent(/^Unavailable$/);
+  });
+
+  it("identifies a Free plan even without an account email", () => {
+    render(<ProviderStatusPanel backends={[{ ...codexBackend, account: { type: "chatgpt", planType: "free", requiresOpenaiAuth: true } }]} />);
+    expect(valueFor("Account")).toHaveTextContent(/^ChatGPT account$/);
+    expect(valueFor("Plan")).toHaveTextContent(/^Free$/);
+  });
+
+  it("identifies a signed-out account without implying a Free plan", () => {
+    render(<ProviderStatusPanel backends={[{ ...codexBackend, account: { requiresOpenaiAuth: true }, rateLimits: undefined }]} />);
+    expect(valueFor("Account")).toHaveTextContent(/^Not signed in$/);
+    expect(valueFor("Plan")).toHaveTextContent(/^Not signed in$/);
+  });
+
+  it("identifies API billing instead of guessing a subscription plan", () => {
+    render(<ProviderStatusPanel backends={[{ ...codexBackend, account: { type: "apiKey", requiresOpenaiAuth: true }, rateLimits: undefined }]} />);
+    expect(valueFor("Account")).toHaveTextContent(/^API key$/);
+    expect(valueFor("Plan")).toHaveTextContent(/^API billing$/);
+  });
+
+  it("identifies a provider that does not require OpenAI authentication", () => {
+    render(<ProviderStatusPanel backends={[{ ...codexBackend, account: { requiresOpenaiAuth: false }, rateLimits: undefined }]} />);
+    expect(valueFor("Account")).toHaveTextContent(/^Not required$/);
+    expect(valueFor("Plan")).toHaveTextContent(/^Not required$/);
+  });
+
   it("projects the Codex weekly pace under its limit from the recorded history", async () => {
     const now = new Date(2026, 9, 1, 21, 35).getTime();
     vi.spyOn(Date, "now").mockReturnValue(now);

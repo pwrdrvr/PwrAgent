@@ -444,6 +444,10 @@ import type {
   ReadMarkdownFileViewerSnapshotResponse,
   OpenDesktopPwrAgentProfileRequest,
   OpenDesktopPwrAgentProfileResponse,
+  ReorderDesktopPwrAgentProfilesRequest,
+  ReorderDesktopPwrAgentProfilesResponse,
+  SetDesktopPwrAgentProfileMenuVisibilityRequest,
+  SetDesktopPwrAgentProfileMenuVisibilityResponse,
   ReadFederationActivityRequest,
   ReadFederationActivityResponse,
   ReadFederationHealthRequest,
@@ -918,8 +922,10 @@ import {
   PROFILES_GRADUATE_BOOTSTRAP_CONFIG_CHANNEL,
   PROFILES_LIST_CHANNEL,
   PROFILES_OPEN_CHANNEL,
+  PROFILES_REORDER_CHANNEL,
   PROFILES_SET_CODEX_PROFILE_CHANNEL,
   PROFILES_SET_DEFAULT_CHANNEL,
+  PROFILES_SET_MENU_VISIBILITY_CHANNEL,
   PROFILES_WRITE_SECRETS_CHANNEL,
   RENDERER_ERROR_REPORT_CHANNEL,
   RUNTIME_IDENTITY_CHANNEL,
@@ -1377,6 +1383,14 @@ const desktopApi = Object.freeze({
     request: SetDesktopPwrAgentProfileCodexProfileRequest,
   ): Promise<SetDesktopPwrAgentProfileCodexProfileResponse> =>
     await ipcRenderer.invoke(PROFILES_SET_CODEX_PROFILE_CHANNEL, request),
+  reorderPwrAgentProfiles: async (
+    request: ReorderDesktopPwrAgentProfilesRequest,
+  ): Promise<ReorderDesktopPwrAgentProfilesResponse> =>
+    await ipcRenderer.invoke(PROFILES_REORDER_CHANNEL, request),
+  setPwrAgentProfileMenuVisibility: async (
+    request: SetDesktopPwrAgentProfileMenuVisibilityRequest,
+  ): Promise<SetDesktopPwrAgentProfileMenuVisibilityResponse> =>
+    await ipcRenderer.invoke(PROFILES_SET_MENU_VISIBILITY_CHANNEL, request),
   graduateBootstrapConfigToProfile: async (
     request: GraduateDesktopBootstrapConfigToProfileRequest,
   ): Promise<GraduateDesktopBootstrapConfigToProfileResponse> =>
@@ -2723,12 +2737,19 @@ const desktopApi = Object.freeze({
     };
   },
   onOpenSettingsRequested: (
-    callback: (section?: string) => void,
+    callback: (section?: string, subsection?: string) => void,
   ): (() => void) => {
     // Main → renderer push from the PwrAgent → Settings… menu item.
     // App.tsx subscribes and switches `mainView` to "settings".
-    const listener = (_event: Electron.IpcRendererEvent, section?: unknown) =>
-      callback(typeof section === "string" ? section : undefined);
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      section?: unknown,
+      subsection?: unknown,
+    ) =>
+      callback(
+        typeof section === "string" ? section : undefined,
+        typeof subsection === "string" ? subsection : undefined,
+      );
     ipcRenderer.on(WINDOW_OPEN_SETTINGS_CHANNEL, listener);
     return () => {
       ipcRenderer.off(WINDOW_OPEN_SETTINGS_CHANNEL, listener);

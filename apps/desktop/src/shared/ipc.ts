@@ -664,8 +664,9 @@ export const WINDOW_OPEN_NEW_THREAD_CHANNEL = "window:open-new-thread";
 export const WINDOW_SHOW_THREAD_CHANNEL = "window:show-thread";
 /**
  * Main → renderer push: fired when the user invokes the app's
- * "Settings…" menu item (PwrAgent → Settings… on macOS, Help → ...
- * on Linux/Windows). The renderer's `App` shell listens on this
+ * "Settings…" menu item (PwrAgent → Settings… on macOS, File → ...
+ * on Linux/Windows), or a menu item that lands on one section. The
+ * payload is `(section?, subsection?)`. The renderer's `App` shell listens on this
  * channel and switches `mainView` to the Settings overlay, mirroring
  * what the sidebar gear-icon button does. Settings is an in-renderer
  * overlay (not a separate BrowserWindow) so the menu can't open it
@@ -806,6 +807,8 @@ export const PROFILES_CREATE_CHANNEL = "profiles:create";
 export const PROFILES_SET_DEFAULT_CHANNEL = "profiles:set-default";
 export const PROFILES_DELETE_CHANNEL = "profiles:delete";
 export const PROFILES_SET_CODEX_PROFILE_CHANNEL = "profiles:set-codex-profile";
+export const PROFILES_REORDER_CHANNEL = "profiles:reorder";
+export const PROFILES_SET_MENU_VISIBILITY_CHANNEL = "profiles:set-menu-visibility";
 export const PROFILES_GRADUATE_BOOTSTRAP_CONFIG_CHANNEL =
   "profiles:graduate-bootstrap-config";
 export const APP_GET_BOOT_INFO_CHANNEL = "app:get-boot-info";

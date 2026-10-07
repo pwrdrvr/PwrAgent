@@ -3916,12 +3916,10 @@ export function ThreadView(props: ThreadViewProps) {
       machine={props.threadMachine}
       projectLabel={
         props.selectedDirectory?.label
-        // A remote-pinned thread whose project has no local counterpart
-        // belongs to no local directory summary; the breadcrumb still
-        // shows the owner-reported project name.
-        ?? (selectedThread?.federation
-          ? selectedThread.linkedDirectories?.[0]?.label
-          : undefined)
+        // Navigation rows already carry the primary project name. Keep it
+        // visible while selected detail or its directory summary is loading,
+        // including remote projects with no local directory counterpart.
+        ?? selectedThread?.linkedDirectories[0]?.label
       }
       thread={selectedThread!}
       backends={props.backends}

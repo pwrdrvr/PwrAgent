@@ -1,6 +1,7 @@
-import { access, readFile, stat } from "node:fs/promises";
+import { access, readFile, realpath, stat } from "node:fs/promises";
 import { BrowserWindow, ipcMain, shell } from "electron";
 import {
+  isFilePreviewPath,
   isRemoteFederationTarget,
   type OpenDesktopApplicationRequest,
   type OpenDesktopApplicationResponse,
@@ -47,7 +48,7 @@ import {
   openDesktopApplication,
 } from "../settings/application-discovery";
 
-const MAX_MARKDOWN_FILE_BYTES = 2 * 1024 * 1024;
+const MAX_PREVIEW_FILE_BYTES = 2 * 1024 * 1024;
 
 /**
  * Open a filesystem path with the OS default handler. The fallback the
@@ -92,6 +93,8 @@ async function revealPathInFolder(
   return { opened: true };
 }
 
+// The existing file-viewer channel serves every preview kind, not only
+// Markdown. Keep the channel name stable for preload and federation clients.
 async function readMarkdownFile(
   request: ReadMarkdownFileRequest,
 ): Promise<ReadMarkdownFileResponse> {
@@ -99,7 +102,7 @@ async function readMarkdownFile(
     try {
       return await getDesktopFederationRuntime().pullMarkdownFile(request.federationTarget, request);
     } catch (error) {
-      return { path: request.path, error: error instanceof Error ? error.message : "Remote Markdown file could not be read." };
+      return { path: request.path, error: error instanceof Error ? error.message : "Remote file could not be read." };
     }
   }
   const target = request.path?.trim();
@@ -107,22 +110,28 @@ async function readMarkdownFile(
     return { path: "", error: "No file path was provided." };
   }
 
-  if (!/\.(?:md|markdown)$/i.test(target)) {
-    return { path: target, error: "Only Markdown files can be previewed." };
+  if (!isFilePreviewPath(target)) {
+    return { path: target, error: "This file type cannot be previewed." };
   }
 
   try {
-    const fileStat = await stat(target);
+    // Gate the file a symlink resolves to as well, so a previewable name
+    // cannot reach a `.env` file or a Codex session log.
+    const resolved = await realpath(target);
+    if (!isFilePreviewPath(resolved)) {
+      return { path: target, error: "This file type cannot be previewed." };
+    }
+    const fileStat = await stat(resolved);
     if (!fileStat.isFile()) {
       return { path: target, error: `Path is not a file: ${target}` };
     }
-    if (fileStat.size > MAX_MARKDOWN_FILE_BYTES) {
-      return { path: target, error: "Markdown file is too large to preview." };
+    if (fileStat.size > MAX_PREVIEW_FILE_BYTES) {
+      return { path: target, error: "File is too large to preview." };
     }
 
     return {
       path: target,
-      content: await readFile(target, "utf8"),
+      content: await readFile(resolved, "utf8"),
     };
   } catch {
     return { path: target, error: `Path does not exist: ${target}` };
