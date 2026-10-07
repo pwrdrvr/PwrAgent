@@ -7940,6 +7940,85 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("applies each sparse Codex rate-limit update that arrives during an account read", async () => {
+    const account: BackendAccountSummary = {
+      type: "chatgpt",
+      email: "user@example.com",
+      planType: "pro",
+    };
+    const codexClient = new MockBackendClient({
+      initializeResult: {
+        methods: ["thread/list", "thread/read", "thread/start", "turn/start"],
+      },
+      account,
+      rateLimits: [
+        {
+          name: "5h limit",
+          limitId: "codex",
+          limitName: "Codex",
+          windowKey: "primary",
+          usedPercent: 10,
+          remaining: 90,
+          windowMinutes: 300,
+        },
+        {
+          name: "Weekly limit",
+          limitId: "codex",
+          limitName: "Codex",
+          windowKey: "secondary",
+          usedPercent: 20,
+          remaining: 80,
+          windowMinutes: 10_080,
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+    onTestFinished(async () => { await registry.close(); });
+    await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
+    const pendingAccount = createDeferred<BackendAccountSummary>();
+    const accountRead = vi.spyOn(codexClient, "readAccount")
+      .mockReturnValueOnce(pendingAccount.promise);
+    const sparseUpdate = (
+      window: "primary" | "secondary",
+      usedPercent: number,
+    ): AppServerNotification => ({
+      method: "account/rateLimits/updated",
+      params: {
+        rateLimits: {
+          limitId: "codex",
+          limitName: "Codex",
+          primary: window === "primary"
+            ? { usedPercent, windowDurationMins: 300, resetsAt: null }
+            : null,
+          secondary: window === "secondary"
+            ? { usedPercent, windowDurationMins: 10_080, resetsAt: null }
+            : null,
+          individualLimit: null,
+          credits: null,
+          planType: null,
+          rateLimitReachedType: null,
+        },
+      },
+    });
+
+    // The transport dispatches each notification without waiting for the
+    // previous one, so the second arrives while the first reads the account.
+    const primaryUpdate = codexClient.emit(sparseUpdate("primary", 40));
+    await vi.waitFor(() => expect(accountRead).toHaveBeenCalledOnce());
+    const secondaryUpdate = codexClient.emit(sparseUpdate("secondary", 60));
+    pendingAccount.resolve(account);
+    await Promise.all([primaryUpdate, secondaryUpdate]);
+
+    const codex = (await registry.listBackends()).backends[0];
+    expect(codex.rateLimits).toEqual([
+      expect.objectContaining({ windowKey: "primary", usedPercent: 40 }),
+      expect.objectContaining({ windowKey: "secondary", usedPercent: 60 }),
+    ]);
+  });
+
   it("replaces a credits balance when a later snapshot omits the amount", async () => {
     const creditsLimit: BackendRateLimitSummary = {
       name: "Credits",
