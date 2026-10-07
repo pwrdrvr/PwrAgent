@@ -615,6 +615,19 @@ export function StarMapScreen(props: StarMapScreenProps) {
     new Set(),
   );
   /**
+   * The entrance timers, by thread key. Owned here so an unmount cancels
+   * them: a timer that outlives the screen calls a setter on a dead fiber,
+   * and after test teardown that setter runs with no `window` at all.
+   */
+  const enteringTimersRef = useRef(new Map<string, number>());
+  useEffect(() => {
+    const timers = enteringTimersRef.current;
+    return () => {
+      for (const timer of timers.values()) window.clearTimeout(timer);
+      timers.clear();
+    };
+  }, []);
+  /**
    * Play the arrival animation for a card that was not on the map a moment
    * ago. Shared by intake (a thread that did not exist) and the ⌘K summon
    * (a thread the lens was not drawing): both are a card appearing where
@@ -623,13 +636,21 @@ export function StarMapScreen(props: StarMapScreenProps) {
    */
   const markThreadEntering = useCallback((threadKey: string) => {
     setEnteringThreadKeys((current) => new Set(current).add(threadKey));
-    window.setTimeout(() => {
-      setEnteringThreadKeys((current) => {
-        const next = new Set(current);
-        next.delete(threadKey);
-        return next;
-      });
-    }, 2_000);
+    // A second mark for the same card restarts its window rather than
+    // letting the first mark's timer cut the second arrival short.
+    const timers = enteringTimersRef.current;
+    window.clearTimeout(timers.get(threadKey));
+    timers.set(
+      threadKey,
+      window.setTimeout(() => {
+        timers.delete(threadKey);
+        setEnteringThreadKeys((current) => {
+          const next = new Set(current);
+          next.delete(threadKey);
+          return next;
+        });
+      }, 2_000),
+    );
   }, []);
   /** Open state of the ⌘K palette. */
   const [jumpOpen, setJumpOpen] = useState(false);
@@ -3802,6 +3823,21 @@ export function StarMapScreen(props: StarMapScreenProps) {
    * identical cards.
    */
   const [locatedThreadKey, setLocatedThreadKey] = useState<string>();
+  /**
+   * The timers that drop the ring and give up on a pending flight. One of
+   * each: a newer pick replaces the older one's timer, and an unmount
+   * cancels both rather than leaving them to call setters on a dead fiber.
+   */
+  const summonTimersRef = useRef<{ located?: number; pendingFlight?: number }>(
+    {},
+  );
+  useEffect(() => {
+    const timers = summonTimersRef.current;
+    return () => {
+      window.clearTimeout(timers.located);
+      window.clearTimeout(timers.pendingFlight);
+    };
+  }, []);
 
   /**
    * Cards an Agent ringed with `highlight_star_map_threads`, by thread key:
@@ -3834,7 +3870,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
         markThreadEntering(threadKey);
       }
       setLocatedThreadKey(threadKey);
-      window.setTimeout(() => {
+      const timers = summonTimersRef.current;
+      window.clearTimeout(timers.located);
+      timers.located = window.setTimeout(() => {
+        timers.located = undefined;
         setLocatedThreadKey((current) =>
           current === threadKey ? undefined : current,
         );
@@ -3843,7 +3882,9 @@ export function StarMapScreen(props: StarMapScreenProps) {
       // A destination that never produces a rect must not sit waiting for
       // one: an unrelated snapshot minutes later would otherwise fly the
       // map somewhere the operator has long stopped expecting.
-      window.setTimeout(() => {
+      window.clearTimeout(timers.pendingFlight);
+      timers.pendingFlight = window.setTimeout(() => {
+        timers.pendingFlight = undefined;
         setPendingFlight((current) =>
           current === threadKey ? undefined : current,
         );

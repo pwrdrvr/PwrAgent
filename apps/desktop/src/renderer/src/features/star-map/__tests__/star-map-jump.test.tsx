@@ -288,6 +288,50 @@ describe("Star Map ⌘K", () => {
     });
   });
 
+  it("cancels the summon's timers when the map unmounts", async () => {
+    // A summon starts three timers: the entrance animation, the located
+    // ring, and the pending-flight give-up. Each calls a setter when it
+    // fires, so one that outlives the screen calls it on a dead fiber —
+    // and when it outlives the test file, react-dom reads `window.event`
+    // after teardown and Vitest reports `window is not defined`. Taking
+    // `window` away here is that teardown, made to happen on demand.
+    window.localStorage.setItem(
+      "pwragent.starMap.filterSelection",
+      JSON.stringify({ unread: "include" }),
+    );
+    const { container, unmount } = renderMap([
+      thread("t1", "Windows job wrapper"),
+      quietThread("t2", "Release notarization"),
+    ]);
+    await waitFor(() => {
+      expect(container.querySelector(".star-map-card")).not.toBeNull();
+    });
+    await openPalette();
+    search("notarization");
+    const palette = screen.getByRole("dialog", { name: "Fly to thread" });
+    const result = await within(palette).findByRole("button", {
+      name: /Release notarization/,
+    });
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      fireEvent.click(result);
+      // The summon happened: the card the filter hid is on the map.
+      expect(
+        screen.queryByRole("button", {
+          name: "Open thread: Release notarization",
+        }),
+      ).not.toBeNull();
+      unmount();
+
+      vi.stubGlobal("window", undefined);
+      expect(() => vi.advanceTimersByTime(10_000)).not.toThrow();
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
+  });
+
   it("flies to a peer's card without cloning it onto the local cloud", async () => {
     // A card key names its OWNING instance, and the owner of a search hit
     // is not always the instance the picker happens to be sitting on: this
