@@ -25,6 +25,15 @@ vi.mock("../state/app-state", () => ({
   isAppStateInitialized: () => false,
 }));
 
+vi.mock("../settings/desktop-settings-singleton", () => ({
+  getDesktopSettingsService: () => ({
+    readFederationConfig: () => ({
+      cloudflareAccessOAuthEnabled: true,
+      cloudflareEndpoint: ENDPOINT,
+    }),
+  }),
+}));
+
 type FailureHarness = {
   stopping: boolean;
   parked: boolean;
