@@ -6,167 +6,175 @@
 
 <strong>Run coding agents by the dozen.</strong>
 
+<p>A desktop for running coding agents on machines you own.<br>
+Many threads across many repositories, each in its own Git worktree, on Codex,
+Gemini CLI, Grok Build, Kimi Code, or Qwen Code.</p>
+
 <p>
   <a href="https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent.dmg"><img src="docs/assets/buttons/download-mac-universal.png" alt="Download for Mac — Universal, Intel and Apple Silicon" width="250"></a>
-  <a href="https://github.com/pwrdrvr/PwrAgent/releases/latest"><img src="docs/assets/buttons/download-mac-apple-silicon.png" alt="Download for Mac — Apple Silicon" width="250"></a>
+  <a href="https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent-arm64.dmg"><img src="docs/assets/buttons/download-mac-apple-silicon.png" alt="Download for Mac — Apple Silicon" width="250"></a>
   <a href="https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent.Setup.exe"><img src="docs/assets/buttons/download-windows.png" alt="Download for Windows — x64 installer" width="250"></a>
 </p>
 
 <p>
-  <a href="https://docs.pwragent.ai/linux/"><img src="docs/assets/buttons/link-linux.png" alt="Linux installation" width="180"></a>
+  <a href="https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent-linux-x64.deb"><img src="docs/assets/buttons/download-linux-x64.png" alt="Download for Linux — x64 .deb for Debian and Ubuntu" width="250"></a>
+  <a href="https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent-linux-arm64.deb"><img src="docs/assets/buttons/download-linux-arm64.png" alt="Download for Linux — arm64 .deb for Debian and Ubuntu" width="250"></a>
+</p>
+
+<sub>More Linux formats — x64: <a href="https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent-linux-x64.rpm">.rpm</a> · <a href="https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent-linux-x64.pacman">.pacman</a> · <a href="https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent-linux-x64.tar.gz">.tar.gz</a> &nbsp;·&nbsp; arm64: <a href="https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent-linux-arm64.rpm">.rpm</a> · <a href="https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent-linux-arm64.pacman">.pacman</a> · <a href="https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent-linux-arm64.tar.gz">.tar.gz</a></sub><br>
+<sub>Homebrew: <code>brew install --cask pwrdrvr/tap/pwragent</code></sub>
+
+<p>
   <a href="https://docs.pwragent.ai"><img src="docs/assets/buttons/link-docs.png" alt="Documentation" width="180"></a>
   <a href="https://pwragent.ai"><img src="docs/assets/buttons/link-website.png" alt="pwragent.ai" width="180"></a>
   <a href="https://pwrdrvr.com/about"><img src="docs/assets/buttons/link-about.png" alt="About PwrDrvr" width="180"></a>
 </p>
 
-<sub>macOS 13 or newer · Windows 10 or newer · Linux · MIT · Developer ID-signed and Apple-notarized
-No cloud, no account, no telemetry. The agent and your credentials stay on your machine.</sub>
+<sub>macOS 12 Monterey or newer · Windows 10 or newer · Linux x64 and arm64 · MIT</sub><br>
+<sub>Signed and notarized for macOS, Authenticode-signed for Windows. Git and Git LFS ship inside the app.</sub>
 
-<br>
+<br><br>
 
-<img src="https://docs.pwragent.ai/assets/screenshots/desktop-hero.png" alt="PwrAgent desktop in use — Directories lens grouping threads across two repos, a thread mid-conversation, four messenger status icons in the title bar, per-thread model / access / fast-mode / worktree controls above the composer.">
+<img src="docs/assets/screenshots/hero.webp" width="100%" alt="PwrAgent's main window. The sidebar's Directories lens groups threads across several repositories and their worktrees. The selected thread shows its transcript and a task plan, and the Edits rail on the right shows a diff of a changed file.">
 
 </div>
 
-**Universal** is the right Mac download today — it runs natively on both Apple Silicon (M1+)
-and Intel. A separate, smaller **Apple Silicon** build is built but has not ridden a release
-yet, so that chip points at the releases page until one carries it. Linux releases include
-DEB (Debian/Ubuntu), RPM (Fedora), pacman (Arch/Omarchy), and tar.gz
-packages for x64 and arm64. Download them from [GitHub Releases](https://github.com/pwrdrvr/PwrAgent/releases/latest).
+## Why PwrAgent
 
-An open-source desktop for running coding agents on machines you own. Start threads across
-every repo you have, each in its own git worktree so they never collide, on **Codex, Gemini,
-Grok, Kimi Code, or Qwen Code** — whichever CLI you already pay for. Let one thread hand work
-off to another. Watch the diffs, track the PRs, and steer any of it from Telegram, Discord,
-Slack, Mattermost, Feishu / Lark, or LINE when you're nowhere near the keyboard.
+One agent in one terminal is easy. A dozen, across repositories, each needing a
+review and a pull request, is the part PwrAgent is for.
 
-## Why you might want it
+- **Threads that don't collide.** Each thread can run in its own Git worktree.
+  The Directories lens groups threads by repository and worktree, and a
+  thread's work can be handed off to another worktree or another agent.
+- **Five agent CLIs.** Codex is the default. Gemini CLI, Grok Build, Kimi Code,
+  and Qwen Code run over ACP; pick the agent per thread. Grok Build ships with
+  the installer and you sign in with your own xAI account. The others use the
+  CLI you already installed and signed in to.
+- **Works alongside Codex Desktop.** Codex threads share Codex's thread store:
+  start in either app, finish in the other.
+- **Review and pull requests in the thread.** Code reviews with prioritized
+  findings, PR status and checks in the rail, and **Auto-fix PR**, which sends
+  the thread back to work when CI fails or a merge conflict appears.
+- **A terminal where the agent works.** An integrated terminal opens in the
+  thread's worktree.
+- **Queue and steer.** Stack follow-ups while a turn runs, or steer the turn in
+  progress.
+- **<kbd>Command+K</kbd> to any thread or project**, including threads on your
+  other machines. <kbd>Control+K</kbd> on Windows and Linux.
+- **Your machines, one view.** Federation connects the machines you run agents
+  on. The Star Map shows threads around their projects on each machine, and a
+  Codex thread can be copied or moved to another machine with its workspace and
+  uncommitted work. Roles are set in **Settings → Access Control**.
+- **Reach it from your phone.** Telegram, Discord, Slack, Mattermost,
+  Feishu / Lark, or LINE. Closed by default; see [Privacy](#privacy).
+- **Profiles.** Separate windows for work and personal projects, each with its
+  own state, Codex sign-in, and messaging credentials.
 
-- **Code keeps moving when you're away from the keyboard.** Approvals, follow-up prompts, "what did you ship while I was at lunch" check-ins — all from your phone. Cellular or hotel WiFi is fine; the agent is on your laptop, the messenger is just the steering wheel.
-- **Stack three asks and walk away.** `make a branch and PR for the OAuth refactor` → queue `/review main` → queue `squash and force-push`. The composer dispatches FIFO, one turn at a time. Come back: three things done.
-- **Isolated profiles for work and life.** As many PwrAgent windows as you want, each on its own profile, each bound to its own Codex identity. Auth and messaging credentials never cross.
-- **Works alongside Codex Desktop.** Shares thread state by default; start a thread in either, finish in the other. PwrAgent adds per-thread controls, worktree isolation with handoff, the Markdown composer, and the messaging surface — things Codex Desktop doesn't have today.
-- **No cloud, no account, no telemetry.** Everything runs on your machine. Bot tokens encrypted in the macOS Keychain. Closed-by-default messaging with two-keyed allowlists (see [Is this safe for work?](#is-this-safe-for-work)).
-- **Free, MIT, dogfooded.** The author uses PwrAgent as their primary coding environment. Hundreds of PRs in this repository and others were created or reviewed through it.
+## A closer look
 
-The longer-form pitch lives at **[pwragent.ai](https://pwragent.ai)**; the operator-facing setup walkthroughs live at **[docs.pwragent.ai](https://docs.pwragent.ai)**.
+<table>
+  <tr>
+    <td width="50%"><img src="docs/assets/screenshots/star-map.webp" width="100%" alt="The Star Map in its Lanes layout. Two machines, riley-macbook and the federated riley-workstation, each head a column of thread cards showing the thread's project, worktree, and diff counts."></td>
+    <td width="50%"><img src="docs/assets/screenshots/backends.webp" width="100%" alt="A new thread in the storefront project with the provider menu open: OpenAI, which is Codex, is checked, followed by Gemini, Kimi, Grok, and Qwen. The rail on the right lists each provider's version and status."></td>
+  </tr>
+  <tr>
+    <td><b>The Star Map.</b> Threads on this machine and the machines it is federated with, in one view.</td>
+    <td><b>Choose the agent per thread.</b> Codex by default; Gemini CLI, Grok Build, Kimi Code, and Qwen Code over ACP.</td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/assets/screenshots/review.webp" width="100%" alt="A review of a database migration in a thread. The Code review card lists three findings, marked P1, P2, and P3, each naming the migration file and the lines it refers to."></td>
+    <td width="50%"><img src="docs/assets/screenshots/terminal.webp" width="100%" alt="A thread with the integrated terminal open beneath the transcript. The shell is in the thread's fix/cart-e2e worktree and shows git log and the diff of the agent's fix."></td>
+  </tr>
+  <tr>
+    <td><b>Reviews in the thread.</b> Findings ranked P1 to P3, each pointing at the file and lines it is about.</td>
+    <td><b>Integrated terminal.</b> A shell in the thread's worktree, one click from the transcript.</td>
+  </tr>
+</table>
 
-## Take a look
+## Install
 
-| | |
-|---|---|
-| ![Thread bound to a messenger](docs/assets/screenshots/screenshot-bound-thread.png) <br/>*Bound thread — desktop and messenger stay in sync* | ![Messenger status surface](docs/assets/screenshots/screenshot-messenger-status.png) <br/>*Messenger status at a glance* |
-| ![Pairing flow](docs/assets/screenshots/screenshot-pairing.gif) <br/>*Paste-token pairing with in-app connection test* | ![Messaging activity with denied unauthorized users](docs/assets/screenshots/screenshot-closed-by-default.png) <br/>*Closed by default — only allowlisted users can reach the bot* |
-
-Screenshots are produced by a Playwright spec that drives the real UI surfaces against deterministic replay fixtures, then shells out to a Swift script for native window capture (stoplights + drop-shadow + retina). See [`apps/desktop/AGENTS.md`](apps/desktop/AGENTS.md) → "Capturing README Screenshots" for regen.
-
-## Get it
-
-### Just want to use it
-
-1. **Download** [PwrAgent.dmg](https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent.dmg), the Universal build that runs natively on both Apple Silicon (M1+) and Intel Macs. Developer ID-signed and Apple-notarized, so first launch is a single Gatekeeper prompt (no right-click-open dance). On Windows, [PwrAgent.Setup.exe](https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent.Setup.exe); on Linux, choose a DEB, RPM, pacman, or tar.gz from [GitHub Releases](https://github.com/pwrdrvr/PwrAgent/releases/latest).
-2. **Install** by opening the DMG and dragging PwrAgent into Applications.
-3. **(Optional) Pair a messenger** from **Settings → Messaging → \<your platform\>**. End-to-end walkthroughs at **[docs.pwragent.ai/providers/](https://docs.pwragent.ai/providers/)**; the usage guide (bound threads, slash commands, queue/steer, monitor cards, detach) lives at **[docs.pwragent.ai/using-codex/](https://docs.pwragent.ai/using-codex/)**.
-
-Config + state live under `~/.pwragent/profiles/<name>/` ([on-disk layout](docs/state-layout.md)). Multiple profiles via `--profile <name>` at launch.
-
-### Want to hack on it
-
-```bash
-git clone https://github.com/pwrdrvr/PwrAgent.git
-cd PwrAgent
-pnpm install
-pnpm dev:no-messaging   # full UI, no live messaging adapters
-# or
-pnpm dev                # full UI + live messaging
-```
-
-On Linux, install and desktop dev/preview warn if Electron's setuid sandbox
-helper lacks root ownership and mode `4755`. If launch reports the SUID sandbox
-error, run these commands from the repository root:
-
-```bash
-pnpm fix:linux-sandbox
-pnpm dev
-```
-
-The fixer resolves this checkout's installed Electron helper, runs `sudo chown
-root:root` followed by `sudo chmod 4755`, and verifies the result. It is safe to
-repeat; reinstalling dependencies or replacing Electron may require another
-repair. Run the app as your normal user. Install and launch never request sudo
-automatically or disable sandboxing. Both sandbox commands safely do nothing
-on non-Linux platforms.
-
-`pnpm check:linux-sandbox` repeats the read-only advisory check. User namespaces
-may permit launch without the setuid helper; `nosuid` mounts or other security
-policy can still prevent startup even after its permissions are repaired.
-
-Run a separate `pnpm install` in each worktree. Sharing root `node_modules` does
-not create package-local dependency links, and sharing package `node_modules`
-can bind workspace imports to the donor checkout's source. Installs and native
-staging would also mutate shared dependencies. A symlink to a repaired helper
-inherits its permissions, but sharing dependencies is not a complete setup fix.
-
-Codex and ACP CLI setup, the full development workflow, test strategy, replay fixtures, and diagnostics are documented in **[CONTRIBUTING.md](CONTRIBUTING.md)**.
-
-## How it's built
-
-| Layer | Stack | Where it lives |
+| Platform | Download | Notes |
 |---|---|---|
-| Desktop shell | Electron + TypeScript + React + TipTap composer | `apps/desktop/` |
-| Codex protocol | Codex App Server protocol contracts | `@pwrdrvr/codex-app-server-protocol` |
-| ACP integration | Installed coding-agent CLIs, including Grok Build | `apps/desktop/src/main/acp/` |
-| Messaging interface | Capability-profile contract; one shape, six providers | `packages/messaging/interface/` |
-| Messaging providers | Telegram, Discord, Slack, Mattermost, Feishu / Lark, LINE | `packages/messaging/providers/*/` |
-| Shared types | Cross-package contracts and helpers | `packages/shared/` |
-| Local persistence | sqlite WAL via `better-sqlite3`, forward-compatible config TOML | `apps/desktop/src/main/state/` |
+| macOS, Intel or not sure | [PwrAgent.dmg](https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent.dmg) | Universal. Runs natively on Intel and Apple Silicon. |
+| macOS, Apple Silicon | [PwrAgent-arm64.dmg](https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent-arm64.dmg) | M1 or newer. The smaller download. |
+| macOS, Homebrew | `brew install --cask pwrdrvr/tap/pwragent` | Picks the right build for your Mac. |
+| Windows 10 / 11, x64 | [PwrAgent.Setup.exe](https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent.Setup.exe) | Per-user installer. |
+| Linux, x64 / arm64 | `.deb` · `.rpm` · `.pacman` · `.tar.gz` | Commands below. |
 
-The dependency graph is **strictly layered and enforced** by `dependency-cruiser`: leaf (`shared`) → mid-tier (`messaging/*`) → desktop. The renderer can only import `@pwragent/shared`; other package access crosses the IPC bridge. CI fails any boundary violation — see [`.dependency-cruiser.cjs`](.dependency-cruiser.cjs).
+macOS builds are Developer ID-signed and Apple-notarized; macOS 12 Monterey or
+newer. The Windows installer is Authenticode-signed through Azure Artifact
+Signing. There is no Windows arm64 build yet.
 
-Architecture deep-dive: **[ARCHITECTURE.md](ARCHITECTURE.md)**.
+**Linux** — swap `x64` for `arm64` on an ARM machine:
 
-## Is this safe for work?
+```bash
+# Debian, Ubuntu
+curl -fLO https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent-linux-x64.deb \
+  && sudo apt install ./PwrAgent-linux-x64.deb
 
-**Research and comply with your company's policies before installing PwrAgent on a work machine or connecting it to a work messaging platform.** That responsibility is yours, not the project's.
+# Fedora, RHEL, openSUSE (zypper also accepts the URL)
+sudo dnf install https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent-linux-x64.rpm
 
-A sensible adoption path:
+# Arch
+sudo pacman -U https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent-linux-x64.pacman
+```
 
-- **Start on a personal project on a personally owned machine.** Run it locally without messaging enabled, or pair to a personal Telegram / Discord bot. Get a feel for what the agent does and what data it touches.
-- **Confirm policy before installing on a work machine.** Some employers disallow third-party developer tools by default; some allow them only after a security review.
-- **If you bind PwrAgent to a messaging platform at work, use only your employer's approved platform** (usually Slack or Mattermost) and walk the integration through your security team first. What ends up in your messenger from the agent matters as much as the agent itself.
-- **Don't mix work and personal.** Don't connect a work installation to a personal Telegram bot. Don't point a work Slack workspace at a personal experimentation install. Use [profiles](https://docs.pwragent.ai/desktop/#multiple-profiles) to keep them isolated.
+The `.tar.gz` is a portable build: extract it and run `pwragent`. Each release
+carries checksum files per platform: `SHA256SUMS` (Linux),
+`PwrAgent-windows-SHA256SUMS`, and `PwrAgent-macos-SHA256SUMS`.
 
-**Messaging is closed by default — and stays that way.** Only platform user IDs you've explicitly allowlisted can DM the bot. Inside shared spaces (Slack workspaces, Discord servers, Telegram supergroups), authorization is **two-keyed**: the space has to be on the allowlist *and* the user has to be on the allowlist. Inviting the bot into a workspace doesn't authorize anyone in it; being in an authorized workspace doesn't authorize a user. Unauthorized attempts are denied and surfaced in PwrAgent's messaging activity log, so you can see who tried and from where. Adding a new authorized user or space is a deliberate, opt-in change made from the desktop — never a side effect of someone discovering the bot.
+**Agents.** PwrAgent drives agent CLIs; it does not replace them. Install and
+sign in to Codex, or any of Gemini CLI, Kimi Code, or Qwen Code. Grok Build is
+included; sign in with your xAI account. **Settings → AI Providers** shows what
+PwrAgent found.
 
-Secrets are encrypted at rest via Electron `safeStorage` (macOS Keychain backend). The entire state surface lives at `~/.pwragent/` ([documented layout](docs/state-layout.md)). The agent's permissions mode is set per thread (Default Access or Full Access — see the in-app description before changing it). What the project can't tell you is whether the policies at your employer permit any of this. That's still your call to make.
+**Updates** come from GitHub Releases, on a Stable or Beta train with Latest
+and Prerelease tracks (**Settings → Updates → Release channel**; the default is
+Stable, Latest). macOS and Windows update in place. On Linux, install the newer
+package the same way you installed the first one.
 
-## Roadmap
+Setup walkthroughs, messaging pairing, and settings reference:
+[docs.pwragent.ai](https://docs.pwragent.ai).
 
-macOS-first today. Linux and Windows aren't supported yet. The honest list of what's still missing (thread forking, restoring archived threads, time-based auto-archiving, branch auto-naming) and what's actively in flight lives at **[docs.pwragent.ai/desktop/#not-yet](https://docs.pwragent.ai/desktop/#not-yet)**.
+## Privacy
 
-The desktop release pipeline (signing, notarization, auto-update) is documented in [docs/desktop-release-runbook.md](docs/desktop-release-runbook.md).
+No account, no telemetry, no PwrAgent server. Agents run on your machine
+through your own CLI sign-ins. Configuration and state live under
+`~/.pwragent/` ([layout](docs/state-layout.md)). Secrets such as bot tokens
+are encrypted at rest through Electron `safeStorage`, which uses the operating
+system's credential store.
 
-## Background
+Messaging is closed by default. Only platform user IDs you allowlist can reach
+the bot. In shared spaces — Slack workspaces, Discord servers, Telegram
+supergroups — the space and the user must both be on the allowlist; inviting
+the bot into a workspace authorizes no one. Denied attempts appear in the
+messaging activity log. Adding a user or space is a change you make on the
+desktop.
 
-PwrAgent grew out of [openclaw-codex-app-server](https://github.com/pwrdrvr/openclaw-codex-app-server), a project that aimed to be the best Codex-into-Telegram-and-Discord integration. PwrAgent supersedes it: a desktop-first, thread-centric coding-agent shell with first-class messenger integration, and a generic messaging protocol that lets one workflow layer drive six providers from the same code path. That protocol is stable today and is a candidate to submit upstream to OpenClaw.
+Before installing on a work machine or connecting a work messenger, check your
+employer's policy. Keep work and personal installs apart with
+[profiles](https://docs.pwragent.ai/desktop/#multiple-profiles), and don't pair
+a work install with a personal bot.
 
-## Going deeper
+## Ways to help
 
-| Doc | What it covers |
-|---|---|
-| **[pwragent.ai](https://pwragent.ai)** | Marketing landing — the WHY in 60 seconds. |
-| **[docs.pwragent.ai](https://docs.pwragent.ai)** | Operator reference — per-platform setup, the streaming-responses tradeoff, the webhook security note, settings reference. |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | Process model, storage layers, messaging layer summary, dependency boundaries, workspace map. |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | Development workflow, testing, replay fixtures, diagnostics. |
-| [SECURITY.md](SECURITY.md) | How to report vulnerabilities. |
-| [docs/messaging-architecture.md](docs/messaging-architecture.md) | Layered messaging architecture, capability profiles, callback delivery models. |
-| [docs/messaging-adapter-contract.md](docs/messaging-adapter-contract.md) | Formal per-adapter contract for the messaging interface. |
-| [docs/messaging-adding-a-provider.md](docs/messaging-adding-a-provider.md) | Hands-on walkthrough when adding a seventh provider. |
-| [docs/state-layout.md](docs/state-layout.md) | On-disk state layout, environment variables, profiles. |
-| [docs/config-file-evolution.md](docs/config-file-evolution.md) | Forward-compatible config migration rules. |
+- **[Star the repository](https://github.com/pwrdrvr/PwrAgent)** — it is the
+  main way anyone else finds PwrAgent.
+- **[Open an issue](https://github.com/pwrdrvr/PwrAgent/issues)** for a bug or
+  a rough edge.
+- **Send a pull request.** Development setup, architecture, and the checks CI
+  runs are in [CONTRIBUTING.md](CONTRIBUTING.md).
+- **Report vulnerabilities privately** — see [SECURITY.md](SECURITY.md).
+
+What changed in each release: [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
-PwrAgent is licensed under the [MIT License](LICENSE). Third-party dependency notices are aggregated in [THIRD_PARTY_LICENSES](THIRD_PARTY_LICENSES) and shipped with desktop distributions. See [docs/third-party-license-notices.md](docs/third-party-license-notices.md) for the Electron / Chromium runtime notice policy.
+[MIT](LICENSE). Third-party dependency notices are in
+[THIRD_PARTY_LICENSES](THIRD_PARTY_LICENSES) and ship with every release; the
+Electron and Chromium runtime notice policy is in
+[docs/third-party-license-notices.md](docs/third-party-license-notices.md).
 
-Created by [PwrDrvr LLC](https://pwrdrvr.com). Follow [@PwrAgentAI](https://x.com/PwrAgentAI) for releases.
+Created by [PwrDrvr LLC](https://pwrdrvr.com). Follow
+[@PwrAgentAI](https://x.com/PwrAgentAI) for releases.
