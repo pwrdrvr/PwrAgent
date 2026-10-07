@@ -33,7 +33,12 @@ const THREAD_TOOLTIP_LENGTH_LIMIT = 300;
  * `includes(needle)` tests over fixed haystacks (title, id, branch,
  * agent metadata, PR numbers, directory labels), so extending a query
  * can only ever narrow the result set. A query matching nothing at
- * eight characters cannot start matching at nine. Without this, a `#`
+ * eight characters cannot start matching at nine. The one exception is a
+ * `@project` mention (see `parseThreadJumpQuery`): a trailing `@` is text
+ * until its next character turns it into a project filter, so
+ * `#release @` can match nothing and go cold before `#release @pine`
+ * would have matched. Mentions are a ⌘K filter, and the picker forgoes
+ * them past this length. Without this, a `#`
  * anywhere in a sentence keeps the picker armed — and the federated
  * search re-firing — for the whole rest of the line.
  */

@@ -87,13 +87,15 @@ export function agentMetadataMatchesQuery(
 /**
  * Split a quick-jump query into its free text and its `@project` /
  * `in:@project` mentions, with the same grammar as thread search (⌘⇧F).
- * Without a mention the text is the query as typed, quotes included. With
- * one, quoted phrases are unwrapped, since jump matching has no phrase
- * syntax of its own.
+ * Quoting is the escape for a literal `"@word"`, so a query with a mention or
+ * a quoted would-be mention has its quoted phrases unwrapped; jump matching
+ * has no phrase syntax of its own. Any other query is matched as typed.
  */
 export function parseThreadJumpQuery(query: string): { text: string; projects: string[] } {
   const parsed = parseThreadSearchQuery(query);
-  if (!parsed.projects.length) return { text: parsed.query, projects: [] };
+  if (!parsed.projects.length && !/"(?:in:)?@[^"]*"/i.test(parsed.query)) {
+    return { text: parsed.query, projects: [] };
+  }
   return {
     text: threadSearchTextTerms(parsed.query).map((term) => term.text).join(" "),
     projects: parsed.projects,

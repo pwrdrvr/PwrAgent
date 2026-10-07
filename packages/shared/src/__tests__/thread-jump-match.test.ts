@@ -194,4 +194,11 @@ describe("project mentions", () => {
     expect(threadMatchesQuery(thread({ title: "user@example" }), "user@example")).toBe(true);
     expect(threadMatchesQuery(thread({ title: "@" }), "@")).toBe(true);
   });
+
+  it("keeps a quoted @word literal, so titles that contain one stay reachable", () => {
+    const title = thread({ title: "Ping @release-bot about the freeze" });
+    expect(threadMatchesQuery(title, "@release-bot")).toBe(false);
+    expect(threadMatchesQuery(title, '"@release-bot"')).toBe(true);
+    expect(parseThreadJumpQuery('"@release-bot" freeze')).toEqual({ text: "@release-bot freeze", projects: [] });
+  });
 });
