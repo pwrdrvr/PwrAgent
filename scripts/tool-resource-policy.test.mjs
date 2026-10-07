@@ -677,7 +677,11 @@ describe.skipIf(process.platform === "win32")("detached POSIX tool descendants",
   function cleanup({ holder, pid, startedAt }) {
     holder.kill("SIGKILL");
     if (processStartedAt(pid) === startedAt) {
-      try { process.kill(-pid, "SIGKILL"); } catch (error) { if (error.code !== "ESRCH") throw error; }
+      // An unreaped zombie keeps its start time, and macOS answers EPERM, not
+      // ESRCH, for a group whose only members are zombies.
+      try { process.kill(-pid, "SIGKILL"); } catch (error) {
+        if (error.code !== "ESRCH" && (error.code !== "EPERM" || running(pid))) throw error;
+      }
     }
   }
 
