@@ -1607,7 +1607,10 @@ describe("DesktopSettingsService", () => {
       issueProviderDiscoveryPermit("settings-user-action"),
     );
 
-    expect(ensureManaged).toHaveBeenNthCalledWith(1, { checkMode: "force" });
+    expect(ensureManaged).toHaveBeenNthCalledWith(1, {
+      channel: "latest",
+      checkMode: "force",
+    });
     expect(invalidate).toHaveBeenCalledOnce();
     expect(discover).not.toHaveBeenCalled();
     await expect(service.resolveCodexCommand()).resolves.toEqual({
@@ -1668,7 +1671,10 @@ describe("DesktopSettingsService", () => {
         issueProviderDiscoveryPermit("settings-user-action"),
       );
 
-      expect(ensureManaged).toHaveBeenNthCalledWith(1, { checkMode: "force" });
+      expect(ensureManaged).toHaveBeenNthCalledWith(1, {
+        channel: "latest",
+        checkMode: "force",
+      });
       await expect(service.resolveCodexCommand()).resolves.toMatchObject({
         command: "/managed/codex",
       });
@@ -2716,6 +2722,149 @@ describe("DesktopSettingsService", () => {
       },
     });
     stop();
+  });
+
+  it("installs the managed Codex track an operator switches to", async () => {
+    const configPath = path.join(createTempRoot(), "config.toml");
+    fs.writeFileSync(configPath, [
+      "[models.codex]",
+      "managed_builds = true",
+      "",
+    ].join("\n"));
+    const managedRuntime = (tag: string, channel: "latest" | "prerelease") => ({
+      appServerCommand: `/managed/${tag}/codex-app-server`,
+      codeModeHostCommand: `/managed/${tag}/codex-code-mode-host`,
+      command: `/managed/${tag}/codex`,
+      metadata: {
+        asset: `pwragent-codex-${tag.slice("pwragent-v".length)}-linux-x86_64.tar.gz`,
+        channel,
+        checkedAt: 1,
+        installedAt: 1,
+        latestTag: "pwragent-v0.200.0-pwragent.1",
+        prereleaseTag: "pwragent-v0.201.0-pwragent.1",
+        repository: "pwrdrvr/codex",
+        schemaVersion: 1 as const,
+        sha256: "a".repeat(64),
+        tag,
+        version: tag.slice("pwragent-v".length),
+      },
+    });
+    const latest = managedRuntime("pwragent-v0.200.0-pwragent.1", "latest");
+    const prerelease = managedRuntime(
+      "pwragent-v0.201.0-pwragent.1",
+      "prerelease",
+    );
+    const ensureManaged = vi.fn(
+      async (options: { channel: "latest" | "prerelease" }) =>
+        options.channel === "prerelease" ? prerelease : latest,
+    );
+    const service = new DesktopSettingsService({
+      codexDiscoveryCoordinator: {
+        discover: vi.fn(async () => ({ candidates: [] })),
+        invalidate: vi.fn(),
+        resolve: vi.fn(async () => ({
+          command: "/path/codex",
+          source: "path" as const,
+        })),
+      },
+      configPath,
+      ensureManagedCodexRuntime: ensureManaged,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+    await service.refreshCodexDiscovery(
+      issueProviderDiscoveryPermit("settings-user-action"),
+    );
+    // Latest is the default: nobody inherits a build published for testing.
+    expect(ensureManaged).toHaveBeenLastCalledWith(
+      expect.objectContaining({ channel: "latest", checkMode: "force" }),
+    );
+    const before = await service.readSettingsProjection();
+    expect(before.models.codex.managedBuildChannel).toEqual({
+      value: "latest",
+      source: "default",
+    });
+    const changes = vi.fn();
+    const stop = service.watchManagedCodexRuntime(changes);
+
+    await service.writeConfigPatchTargeted(
+      { models: { codex: { managedBuildChannel: "prerelease" } } },
+      issueProviderDiscoveryPermit("settings-user-action"),
+    );
+
+    // The write does not wait out the 24-hour window: it checks the new track
+    // and hands its build to the runtime before returning.
+    expect(ensureManaged).toHaveBeenLastCalledWith(
+      expect.objectContaining({ channel: "prerelease", checkMode: "force" }),
+    );
+    expect(changes).toHaveBeenCalledWith({
+      enabled: true,
+      reason: "update",
+      runtime: prerelease,
+    });
+    expect(fs.readFileSync(configPath, "utf8")).toContain(
+      'managed_build_channel = "prerelease"',
+    );
+    const after = await service.readSettingsProjection();
+    expect(after.models.codex.managedBuildChannel).toEqual({
+      value: "prerelease",
+      source: "config",
+    });
+    expect(after.runtime.tokenMiser?.managedCodex).toMatchObject({
+      version: "0.201.0-pwragent.1",
+      latestTag: "pwragent-v0.200.0-pwragent.1",
+      prereleaseTag: "pwragent-v0.201.0-pwragent.1",
+    });
+    stop();
+  });
+
+  it("installs the saved track when the PwrAgent Codex build is turned on", async () => {
+    const configPath = path.join(createTempRoot(), "config.toml");
+    const ensureManaged = vi.fn(async () => ({
+      appServerCommand: "/managed/codex-app-server",
+      codeModeHostCommand: "/managed/codex-code-mode-host",
+      command: "/managed/codex",
+      metadata: {
+        asset: "pwragent-codex-0.201.0-pwragent.1-linux-x86_64.tar.gz",
+        checkedAt: 1,
+        installedAt: 1,
+        repository: "pwrdrvr/codex",
+        schemaVersion: 1 as const,
+        sha256: "a".repeat(64),
+        tag: "pwragent-v0.201.0-pwragent.1",
+        version: "0.201.0-pwragent.1",
+      },
+    }));
+    const service = new DesktopSettingsService({
+      codexDiscoveryCoordinator: {
+        discover: vi.fn(async () => ({ candidates: [] })),
+        invalidate: vi.fn(),
+        resolve: vi.fn(async () => ({
+          command: "/path/codex",
+          source: "path" as const,
+        })),
+      },
+      configPath,
+      ensureManagedCodexRuntime: ensureManaged,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    await service.writeConfigPatchTargeted(
+      {
+        models: {
+          codex: { managedBuilds: true, managedBuildChannel: "prerelease" },
+        },
+      },
+      issueProviderDiscoveryPermit("settings-user-action"),
+    );
+
+    // One check, for the track this write saves rather than the default it
+    // replaces, and no second check for the track change riding along.
+    expect(ensureManaged).toHaveBeenCalledOnce();
+    expect(ensureManaged).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: "prerelease", checkMode: "force" }),
+    );
   });
 
   it("does not install or announce updates from an ordinary settings read", async () => {

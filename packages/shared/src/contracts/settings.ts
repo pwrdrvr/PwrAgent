@@ -71,6 +71,14 @@ export const DESKTOP_UPDATE_CHANNEL_DEFAULT: DesktopUpdateChannel = "latest";
 export const MANAGED_GROK_BUILD_CHANNEL_DEFAULT: DesktopUpdateChannel =
   "latest";
 
+/**
+ * PwrAgent's managed Codex build follows the same two tracks, for the same
+ * reason: pwrdrvr/codex publishes a build for testing as a GitHub pre-release,
+ * and an operator has to opt in to run one.
+ */
+export const MANAGED_CODEX_BUILD_CHANNEL_DEFAULT: DesktopUpdateChannel =
+  "latest";
+
 export const DESKTOP_UPDATE_TRAINS = ["stable", "beta"] as const;
 
 export type DesktopUpdateTrain = (typeof DESKTOP_UPDATE_TRAINS)[number];
@@ -1126,6 +1134,10 @@ export type DesktopSettingsSnapshot = {
         reason?: string;
         version?: string;
         checkedAt?: number;
+        /** Newest promoted tag the last release check saw. */
+        latestTag?: string;
+        /** Newest tag overall the last release check saw, promoted or not. */
+        prereleaseTag?: string;
       };
       /**
        * Whether the Codex-side gate is actually installed. The feature fails
@@ -1395,6 +1407,8 @@ export type DesktopSettingsSnapshot = {
        * on whatever this says.
        */
       managedBuilds?: DesktopSettingsValue<boolean>;
+      /** Which pwrdrvr/codex track the managed runtime follows. */
+      managedBuildChannel?: DesktopSettingsValue<DesktopUpdateChannel>;
       managedBuildsRequiredBy?: "token-miser";
       versionAdvisory?: DesktopCodexVersionAdvisory;
       configOverrides?: DesktopSettingsValue<string[]>;
@@ -1705,6 +1719,8 @@ export type DesktopSettingsConfigPatch = {
       profile?: string;
       allowFast?: boolean;
       managedBuilds?: boolean;
+      /** Which pwrdrvr/codex track the managed runtime follows. */
+      managedBuildChannel?: DesktopUpdateChannel;
       /** Ordered process-local Codex key=value overrides; never written to CODEX_HOME. */
       configOverrides?: string[];
       /** Exact model IDs explicitly declared to have zero local API cost. */

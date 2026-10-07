@@ -226,7 +226,7 @@ it("filters totals, tokens, limits and threads by recorded account across owners
   fireEvent.click(within(spendBy).getByRole("button", { name: "Provider" }));
   expect(screen.getByRole("button", { name: /^OpenAI · \$10\.00$/ })).toBeInTheDocument();
   fireEvent.click(within(spendBy).getByRole("button", { name: "Account" }));
-  expect(screen.getByRole("button", { name: /^OpenAI · Local \+1 · \$5\.00$/ })).toHaveAttribute("title",
+  expect(screen.getByRole("button", { name: /^OpenAI · Local \+1 · \$5\.00$/ })).toHaveAttribute("data-tooltip",
     "Show only OpenAI · Local +1: limits, spend and threads");
   fireEvent.click(screen.getByRole("button", { name: /^OpenAI · Local \+1 · \$5\.00$/ }));
   expect(picker).toHaveTextContent("OpenAI · Local +1");
@@ -621,4 +621,126 @@ it("reads a monthly credit limit from its start, once more, within the 31-day bo
   expect(screen.getByText("Available")).toBeInTheDocument();
   expect(readUsageActivity).toHaveBeenCalledTimes(2);
   expect(readUsageActivity).toHaveBeenLastCalledWith(expect.objectContaining({ from: new Date(2026, 7, 30).getTime(), to: now }));
+});
+
+/** Turns over a 9 AM–noon custom range, which charts as quarter-hour bars. */
+async function renderSlices(rows: ReturnType<typeof usageFixture>[], desktopApi: Record<string, unknown> = {}) {
+  const readUsageActivity = vi.fn(async () => ({ rows, readAt: new Date(2026, 8, 28, 12).getTime(), rateLimits: [], truncated: false }));
+  render(<UsageActivity desktopApi={{ readUsageActivity, ...desktopApi }} />);
+  chooseCustomRange("2026-09-28T09:00", "2026-09-28T12:00");
+  await waitFor(() => expect(readUsageActivity).toHaveBeenLastCalledWith(expect.objectContaining({ from: new Date(2026, 8, 28, 9).getTime() })));
+  await screen.findAllByRole("button", { name: /^Inspect / });
+  const plot = screen.getByRole("group", { name: "Filter threads by completion time" });
+  return { plot, bar: (label: RegExp) => within(plot).getByRole("button", { name: label }) };
+}
+const sliceTurn = (thread: string, minute: number, dollars: number, extra: Record<string, unknown> = {}) => {
+  const start = new Date(2026, 8, 28, 9, 30).getTime();
+  return { ...usageFixture({ threadId: thread, usageLineId: `${thread}-${minute}`, turnId: `${thread}-${minute}`, createdAt: start, startedAt: start,
+    completedAt: new Date(2026, 8, 28, 10, minute).getTime(), totalCostMicros: dollars * 1_000_000, ...extra }), title: `${thread} thread` };
+};
+const cardOf = (bar: HTMLElement) => document.getElementById(bar.getAttribute("aria-describedby") ?? "")!;
+const cardRows = (card: HTMLElement) => [...card.querySelectorAll(".usage-slice-card__row")].map((row) => row.textContent);
+
+it("names what is in a slice on hover, in stack order, and follows the segment under the pointer", async () => {
+  // Five threads get chart colors; f and g share Other.
+  const { plot, bar } = await renderSlices([sliceTurn("a", 5, 4), sliceTurn("a", 6, 3), sliceTurn("b", 5, 6), sliceTurn("c", 5, 5),
+    sliceTurn("d", 5, 4), sliceTurn("e", 5, 3), sliceTurn("f", 5, 2), sliceTurn("g", 5, 1), sliceTurn("h", 65, 1)]);
+  const slice = bar(/^10\sAM–10:15\sAM:/);
+  expect(slice).not.toHaveAttribute("aria-describedby");
+  fireEvent.mouseEnter(slice);
+  const card = cardOf(slice);
+  expect(card).toHaveTextContent(/^10\sAM–10:15\sAM\$28\.00/);
+  expect(card).toHaveTextContent("8 completed turns · 7 threads");
+  // Top of the stack first: the highest series down to series 0, then Other, counted.
+  expect(cardRows(card)).toEqual(["e thread1 turn · This instance$3.00", "d thread1 turn · This instance$4.00",
+    "c thread1 turn · This instance$5.00", "b thread1 turn · This instance$6.00", "a thread2 turns · This instance$7.00",
+    "2 other threads2 turns$3.00"]);
+  expect(card).toHaveTextContent("Click to pin and filter");
+  expect(plot).toHaveClass("is-dimmed");
+  expect(slice).toHaveClass("is-shown");
+
+  // The segment under the pointer is outlined, and its card row and legend entry light.
+  const segment = slice.querySelector(".usage-series--1")!;
+  fireEvent.mouseEnter(segment);
+  expect(segment).toHaveClass("is-hot");
+  expect(card.querySelector(".usage-slice-card__row.is-hot")).toHaveTextContent("b thread");
+  expect(document.querySelector(".usage-timeline__legend")).toHaveAttribute("data-hot", "1");
+  fireEvent.mouseLeave(slice);
+  expect(document.getElementById(card.id)).toBeNull();
+  expect(plot).not.toHaveClass("is-dimmed");
+  // An empty slice draws no card.
+  fireEvent.mouseEnter(bar(/^9\sAM–9:15\sAM:/));
+  expect(document.querySelector(".usage-slice-card")).toBeNull();
+
+  // The legend names its threads through the portal tooltip, never a native
+  // title, which could linger over the bars and name the wrong one.
+  const legend = document.querySelector(".usage-timeline__legend")!;
+  expect(legend.querySelectorAll("[title]")).toHaveLength(0);
+  expect(legend.querySelector(".usage-timeline__legend-item")).toHaveAttribute("data-tooltip", "a thread");
+});
+
+it("pins a slice on click, says so in the chart and the list, and walks slices by keyboard", async () => {
+  const openUsageThreadInMainWindow = vi.fn(async () => undefined);
+  const { plot, bar } = await renderSlices([sliceTurn("a", 5, 7), sliceTurn("b", 5, 6), sliceTurn("c", 5, 5), sliceTurn("d", 5, 4),
+    sliceTurn("e", 5, 3), sliceTurn("f", 5, 2), sliceTurn("g", 5, 1), sliceTurn("h", 65, 1)], { openUsageThreadInMainWindow });
+  const slice = bar(/^10\sAM–10:15\sAM:/);
+  // The bars are one Tab stop, the latest slice with turns in it.
+  expect(within(plot).getAllByRole("button").filter((button) => button.tabIndex === 0)).toEqual([bar(/^11\sAM–11:15\sAM:/)]);
+  fireEvent.mouseEnter(slice);
+  fireEvent.click(slice);
+  fireEvent.mouseLeave(slice);
+  const card = screen.getByRole("group", { name: /^10\sAM–10:15\sAM slice$/ });
+  expect(slice).toHaveAttribute("aria-pressed", "true");
+  expect(slice).toHaveClass("is-selected");
+  expect(plot).not.toHaveClass("is-dimmed");
+  expect(screen.getByRole("button", { name: /^Unpin 10\sAM–10:15\sAM$/ })).toBeInTheDocument();
+  expect(document.querySelector(".usage-results__title")).toHaveTextContent("Threads 7 of 8");
+  expect(screen.getByRole("button", { name: "Clear time filter" })).toHaveTextContent(/^Completed 10\sAM–10:15\sAM×$/);
+  // Pinned, Other lists its threads, and each name opens its thread.
+  expect(cardRows(card).slice(-2)).toEqual(["f thread ↗1 turn · This instance$2.00", "g thread ↗1 turn · This instance$1.00"]);
+  fireEvent.click(within(card).getByRole("button", { name: "Open g thread" }));
+  expect(openUsageThreadInMainWindow).toHaveBeenCalledExactlyOnceWith({ backend: "codex", threadId: "g" });
+  expect(within(document.querySelector<HTMLElement>(".usage-timeline__legend")!).getByRole("button", { name: "Open a thread" }))
+    .toHaveAttribute("data-tooltip", "Open a thread");
+
+  // The arrows pass over empty slices, and the pin and focus follow.
+  act(() => slice.focus());
+  fireEvent.keyDown(slice, { key: "ArrowRight" });
+  const next = bar(/^11\sAM–11:15\sAM:/);
+  expect(next).toHaveFocus();
+  expect(next).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByRole("group", { name: /^11\sAM–11:15\sAM slice$/ })).toHaveTextContent("h thread");
+  expect(document.querySelector(".usage-results__title")).toHaveTextContent("Threads 1 of 8");
+  // Escape from inside the card unpins and puts focus back on the bar.
+  const action = within(screen.getByRole("group", { name: /slice$/ })).getByRole("button", { name: "Open h thread" });
+  act(() => action.focus());
+  fireEvent.keyDown(action, { key: "Escape" });
+  expect(screen.queryByRole("group", { name: /slice$/ })).not.toBeInTheDocument();
+  expect(next).toHaveFocus();
+  expect(next).toHaveAttribute("aria-pressed", "false");
+  expect(document.querySelector(".usage-results__title")).toHaveTextContent(/^Threads 8$/);
+
+  // A single-segment slice still pins, and the chip unpins it.
+  fireEvent.click(next);
+  expect(screen.getByRole("group", { name: /^11\sAM–11:15\sAM slice$/ })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /^Unpin 11\sAM–11:15\sAM$/ }));
+  expect(screen.queryByRole("button", { name: "Clear time filter" })).not.toBeInTheDocument();
+  expect(next).toHaveFocus();
+});
+
+it("reads a slice by model, and a pinned model name narrows the threads to it", async () => {
+  const { bar } = await renderSlices([sliceTurn("a", 5, 3, { model: "gpt-6", modelLabel: "GPT-6" }),
+    sliceTurn("b", 6, 2, { model: "gpt-6", modelLabel: "GPT-6" }), sliceTurn("c", 7, 1, { model: "grok-5", modelLabel: "Grok 5" })]);
+  fireEvent.click(within(screen.getByRole("group", { name: "Spend by" })).getByRole("button", { name: "Model" }));
+  const slice = bar(/^10\sAM–10:15\sAM:/);
+  fireEvent.mouseEnter(slice);
+  expect(cardOf(slice)).toHaveTextContent("3 completed turns · 2 models");
+  expect(cardRows(cardOf(slice))).toEqual(["Grok 51 turn · This instance$1.00", "GPT-62 threads · 2 turns$5.00"]);
+  fireEvent.click(slice);
+  const card = screen.getByRole("group", { name: /slice$/ });
+  fireEvent.click(within(card).getByRole("button", { name: "Grok 5" }));
+  expect(screen.getByText("Model: Grok 5")).toBeInTheDocument();
+  expect(within(card).getByRole("button", { name: "Grok 5" })).toHaveAttribute("aria-pressed", "true");
+  expect(screen.queryByRole("button", { name: "Inspect a thread" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Inspect c thread" })).toBeInTheDocument();
 });

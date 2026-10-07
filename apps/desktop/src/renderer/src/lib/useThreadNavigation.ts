@@ -6860,11 +6860,15 @@ export function useThreadNavigation(
         });
         return result.directoryKey;
       } catch (error) {
-        recordPickDirectoryError(
-          error instanceof Error ? error.message : String(error),
-        );
-        // A metadata refresh can fail after registration has committed. Keep
-        // the successful directory selection/reveal and report that error.
+        if (pendingPickedDirectoryKey) {
+          // Registration committed and its launchpad is already selected.
+          // A follow-up metadata failure must not report that adding it failed.
+          console.warn("Could not refresh metadata after adding the directory:", error);
+        } else {
+          recordPickDirectoryError(
+            error instanceof Error ? error.message : String(error),
+          );
+        }
         return pendingPickedDirectoryKey;
       } finally {
         if (pendingPickedDirectoryKey) {

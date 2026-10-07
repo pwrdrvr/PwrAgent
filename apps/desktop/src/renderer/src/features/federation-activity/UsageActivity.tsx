@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import type { AppServerBackendKind, DesktopHelperModelSettings, FederationTarget, ReadUsageActivityResponse,
   UsageAnalysisModelBackend } from "@pwragent/shared";
-import { UsageTimeline, type UsageChartForecast } from "./UsageTimeline";
+import { UsageTimeline, type UsageChartForecast, type UsageChartMember } from "./UsageTimeline";
 import { UsageLimitsBand } from "./UsageLimitsBand";
 import { UsageInspector, analysisModelKey, defaultAnalysisModel, parseAnalysisModelKey,
   type AnalysisModelChoice, type AnalysisScope, type UsageAnalysis } from "./UsageInspector";
@@ -352,7 +352,13 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
     }
   }
   const activeFacet = shownDimension !== "thread" && facet !== undefined && facets.some((item) => item.value === facet) ? facet : undefined;
-  const buckets = snapshot ? usageCompletionBuckets(included, snapshot.from, snapshot.to, (row) => rowSeries.get(row)) : undefined;
+  // A bucket member is the row's thread, model, provider or instance; its
+  // thread is the group it rolls up to, so a helper counts as its parent.
+  const rowThread = new Map((summary?.groups ?? []).flatMap((group) => group.rows.map((row) => [row, group.key] as const)));
+  const buckets = snapshot ? usageCompletionBuckets(included, snapshot.from, snapshot.to, (row) => rowSeries.get(row), (row) => {
+    const thread = rowThread.get(row) ?? "";
+    return { key: shownDimension === "thread" ? thread : usageDimensionValue(row, shownDimension), thread };
+  }) : undefined;
   const selectedInterval = bucket === undefined ? undefined : buckets?.[bucket];
   const filteredSummary = snapshot && (selectedInterval || activeFacet !== undefined)
     ? summarizeUsageActivity(included.filter((row) => (!selectedInterval
@@ -397,6 +403,23 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
       ...row.target.scope === "remote" ? { federationTarget: row.target } : {},
     }).catch((cause: unknown) => { if (mounted.current) setError(`Could not open the thread: ${String(cause)}`); })
     : undefined;
+
+  // A thread opens in the main window; a model, provider or instance narrows
+  // the thread list to itself, and an account scopes the page. The legend and
+  // the slice card both name members this way.
+  const groupsByKey = new Map((summary?.groups ?? []).map((group) => [group.key, group]));
+  const chartMember = (key: string): UsageChartMember => {
+    if (shownDimension === "thread") {
+      const group = groupsByKey.get(key);
+      return { title: group?.title ?? key, onOpen: group ? openThread(group.rows[0]) : undefined };
+    }
+    if (shownDimension === "account") {
+      const title = accountLabels.get(key) ?? key;
+      return { title, filtered: accountFilter === key, filterTitle: `Show only ${title}: limits, spend and threads`,
+        clearTitle: "Show all accounts", onFilter: () => selectAccount(accountFilter === key ? "" : key) };
+    }
+    return { title: key, filtered: activeFacet === key, onFilter: () => setFacet((current) => current === key ? undefined : key) };
+  };
 
   const inspectGroup = (group: UsageGroup) => {
     setSelectedExcluded(undefined); setSelectedKey(group.key); setError(undefined);
@@ -548,30 +571,25 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
         dimension={shownDimension} onDimension={(next) => { setDimension(next); setFacet(undefined); }}
         dimensions={["thread", "model", "provider", ...multipleAccounts ? ["account" as const] : [], ...instances > 1 ? ["instance" as const] : []]}
         series={shownDimension === "thread"
-          ? summary.groups.slice(0, USAGE_SERIES).map((group) => ({ title: group.title, cost: money(group.cost), onOpen: openThread(group.rows[0]) }))
-          : facets.slice(0, USAGE_SERIES).map((item) => ({
-            title: shownDimension === "account" ? accountLabels.get(item.value) ?? item.value : item.value,
-            cost: money(item.cost), filtered: shownDimension === "account" ? accountFilter === item.value : activeFacet === item.value,
-            // An account scopes the whole page; the other dimensions narrow the thread list.
-            ...shownDimension === "account" ? { filterTitle: `Show only ${accountLabels.get(item.value) ?? item.value}: limits, spend and threads`,
-              clearTitle: "Show all accounts" } : {},
-            onFilter: () => shownDimension === "account" ? selectAccount(accountFilter === item.value ? "" : item.value)
-              : setFacet((current) => current === item.value ? undefined : item.value) }))}
+          ? summary.groups.slice(0, USAGE_SERIES).map((group) => ({ ...chartMember(group.key), cost: money(group.cost) }))
+          : facets.slice(0, USAGE_SERIES).map((item) => ({ ...chartMember(item.value), cost: money(item.cost) }))}
+        member={chartMember}
         limit={lineSeries ? { label: limitLabel(lineSeries), points: lineSeries.points, resets: lineSeries.resets } : undefined}
         forecast={forecast} /> : null}
       <div className={`usage-results${inspected ? " has-inspector" : ""}`} ref={resultsRef}
         style={resultsHeight === undefined ? undefined : { flex: "none", height: resultsHeight }}>
         <section className="usage-results__main" aria-label="Usage results">
           <div className="usage-results__toolbar">
-            {lens === "threads" ? <span className="usage-results__title"><span className="usage-eyebrow">Threads</span> <span className="usage-subtle">{filteredSummary?.groups.length ?? 0}</span></span>
+            {lens === "threads" ? <span className="usage-results__title"><span className="usage-eyebrow">Threads</span> <span className="usage-subtle">{filteredSummary?.groups.length ?? 0}{filteredSummary !== summary ? ` of ${summary.groups.length}` : ""}</span></span>
               : <button type="button" className="usage-link" onClick={() => setLens("threads")}>← Threads</button>}
+            {selectedInterval && lens === "threads" ? <button type="button" className="usage-chip" aria-label="Clear time filter"
+              onClick={() => setBucket(undefined)}>Completed {usageBucketLabel(selectedInterval, snapshot.to)}<span aria-hidden="true">×</span></button> : null}
             <span className="usage-controls__spacer" />
             <label className="usage-search"><span className="usage-sr-only">Find a thread</span><input placeholder="Find a thread…" value={search} onChange={(event) => setSearch(event.target.value)} /></label>
             {lens === "threads" ? <label><span className="usage-sr-only">Sort threads</span><Select value={sort} onChange={setSort} options={[
               { value: "cost", label: "Highest cost" }, { value: "tokens", label: "Most tokens" }, { value: "recent", label: "Latest completion" },
             ]} /></label> : null}
           </div>
-          {selectedInterval && lens === "threads" ? <div className="usage-filter-note">Completed {usageBucketLabel(selectedInterval, snapshot.to)}<button type="button" onClick={() => setBucket(undefined)}>Clear time filter ×</button></div> : null}
           {activeFacet !== undefined && lens === "threads" ? <div className="usage-filter-note">{DIMENSION_LABELS[shownDimension]}: {activeFacet}<button type="button" onClick={() => setFacet(undefined)}>Clear {DIMENSION_LABELS[shownDimension].toLocaleLowerCase()} filter ×</button></div> : null}
           {lens === "excluded" ? <p className="usage-list-note">Only work that both started and finished in this period counts toward the total.
             These did not, or were never tied to a turn. Their prices are shown for context and are not part of any total above.</p> : null}

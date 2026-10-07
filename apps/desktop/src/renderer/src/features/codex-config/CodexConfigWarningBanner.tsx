@@ -3,12 +3,14 @@ import type { AgentEvent } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import { federationTargetsEqual } from "../../lib/federated-thread-events";
+import { codexWarningSuppressionId } from "./codex-warning-suppression";
 
 const EMPTY_DISMISSED_WARNING_IDS: readonly string[] = [];
 
 type ConfigWarningNotice = {
   id: string;
   summary: string;
+  remoteInstanceId?: string;
   details?: string | null;
   trustedProjectPath?: string;
   configPath?: string;
@@ -36,23 +38,39 @@ function noticeFromEvent(event: AgentEvent): ConfigWarningNotice | undefined {
   const configPath =
     typeof rawConfigPath === "string" ? rawConfigPath.trim() : undefined;
   const details = typeof rawDetails === "string" ? rawDetails : null;
-  const id = JSON.stringify([
+  const remoteInstanceId = event.federationTarget?.scope === "remote"
+    ? event.federationTarget.instanceId
+    : undefined;
+  const id = codexWarningSuppressionId({
     summary,
-    details ?? "",
-    trustedProjectPath ?? "",
-    configPath ?? "",
-    event.federationTarget?.scope === "remote"
-      ? event.federationTarget.instanceId
-      : "",
-  ]);
+    details,
+    trustedProjectPath,
+    configPath,
+    remoteInstanceId,
+  });
 
   return {
     id,
     summary,
+    ...(remoteInstanceId ? { remoteInstanceId } : {}),
     ...(details ? { details } : {}),
     ...(trustedProjectPath ? { trustedProjectPath } : {}),
     ...(configPath ? { configPath } : {}),
   };
+}
+
+// A thread warning toast saves its summary alone, which silences every
+// banner with that summary. A banner's own id also carries its details and
+// paths, so it silences only that exact warning.
+function isNoticeSuppressed(
+  notice: ConfigWarningNotice,
+  dismissedWarningIds: readonly string[],
+): boolean {
+  return dismissedWarningIds.includes(notice.id)
+    || dismissedWarningIds.includes(codexWarningSuppressionId({
+      summary: notice.summary,
+      remoteInstanceId: notice.remoteInstanceId,
+    }));
 }
 
 export function CodexConfigWarningBanner(props: {
@@ -67,6 +85,9 @@ export function CodexConfigWarningBanner(props: {
   const [trustError, setTrustError] = useState<string | null>(null);
   const [savingWarningId, setSavingWarningId] = useState<string | null>(null);
   const [suppressionErrorId, setSuppressionErrorId] = useState<string | null>(null);
+  // The checkbox records a choice; Dismiss applies it. Keyed by notice id so
+  // a newer warning never inherits the previous warning's choice.
+  const [suppressOnDismissId, setSuppressOnDismissId] = useState<string | null>(null);
   const desktopApi = props.desktopApi;
   const preferencesLoaded = props.preferencesLoaded !== false;
   const dismissedWarningIds = props.dismissedWarningIds ?? EMPTY_DISMISSED_WARNING_IDS;
@@ -76,7 +97,7 @@ export function CodexConfigWarningBanner(props: {
     if (!preferencesLoaded) {
       return;
     }
-    setNotice((current) => current && dismissedWarningIds.includes(current.id)
+    setNotice((current) => current && isNoticeSuppressed(current, dismissedWarningIds)
       ? null
       : current);
     if (!desktopApi?.onAgentEvent && !desktopApi?.getLatestCodexConfigWarning) {
@@ -98,7 +119,10 @@ export function CodexConfigWarningBanner(props: {
       if (!nextNotice) {
         return;
       }
-      if (dismissedIds.has(nextNotice.id) || dismissedWarningIds.includes(nextNotice.id)) {
+      if (
+        dismissedIds.has(nextNotice.id)
+        || isNoticeSuppressed(nextNotice, dismissedWarningIds)
+      ) {
         return;
       }
       setNotice(nextNotice);
@@ -165,12 +189,9 @@ export function CodexConfigWarningBanner(props: {
     }
   };
 
-  const dismiss = (): void => {
-    setDismissedIds((current) => new Set(current).add(notice.id));
-    setNotice(null);
-  };
+  const suppressOnDismiss = suppressOnDismissId === notice.id;
 
-  const suppressWarning = async (): Promise<void> => {
+  const suppressWarningAndDismiss = async (): Promise<void> => {
     const id = notice.id;
     setSavingWarningId(id);
     setSuppressionErrorId(null);
@@ -187,6 +208,15 @@ export function CodexConfigWarningBanner(props: {
     } finally {
       setSavingWarningId((current) => current === id ? null : current);
     }
+  };
+
+  const dismiss = (): void => {
+    if (suppressOnDismiss) {
+      void suppressWarningAndDismiss();
+      return;
+    }
+    setDismissedIds((current) => new Set(current).add(notice.id));
+    setNotice(null);
   };
   const suppressionSaving = savingWarningId === notice.id;
 
@@ -212,9 +242,12 @@ export function CodexConfigWarningBanner(props: {
           <label className="composer__checkbox codex-config-warning-banner__suppress">
             <input
               type="checkbox"
-              checked={suppressionSaving}
+              checked={suppressOnDismiss}
               disabled={trusting || suppressionSaving}
-              onChange={() => { void suppressWarning(); }}
+              onChange={(event) => {
+                setSuppressOnDismissId(event.currentTarget.checked ? notice.id : null);
+                setSuppressionErrorId(null);
+              }}
             />
             Don't show again
           </label>

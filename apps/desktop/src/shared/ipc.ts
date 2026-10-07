@@ -658,6 +658,14 @@ export type WindowFrameState = { maximized: boolean };
  */
 export const WINDOW_OPEN_NEW_THREAD_CHANNEL = "window:open-new-thread";
 /**
+ * Main → renderer push: fired from View → Search Threads and View →
+ * Automations. The renderer's `App` shell switches `mainView` to the named
+ * screen. Like Settings, both are in-renderer screens, so main can only ask.
+ */
+export const WINDOW_OPEN_MAIN_VIEW_CHANNEL = "window:open-main-view";
+/** The screens `WINDOW_OPEN_MAIN_VIEW_CHANNEL` can open. */
+export type WindowOpenMainViewRequest = "automations" | "search";
+/**
  * Main -> renderer push: fired when an out-of-app surface, such as a
  * native approval notification, asks the main window to focus a known thread.
  */

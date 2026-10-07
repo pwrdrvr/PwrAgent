@@ -27,6 +27,8 @@ export type ApplicationMenuActions = {
   checkForUpdates: () => void;
   copyLocalDiagnosticsInfo: () => void;
   focusWindow: (windowId: number) => void;
+  /** The Automations screen in a local main window. */
+  openAutomations: () => void;
   openDocumentation: () => void | Promise<void>;
   openFederationWindow: (peer: ApplicationMenuFederationPeer) => void;
   openIssueReporter: () => void | Promise<void>;
@@ -39,6 +41,8 @@ export type ApplicationMenuActions = {
   openSecurityReporter: () => void | Promise<void>;
   openSettings: () => void;
   openSource: () => void | Promise<void>;
+  /** The Search All screen (⇧⌘F) in the focused main window. */
+  openThreadSearch: () => void;
   openWebsite: () => void | Promise<void>;
   quit: () => void | Promise<void>;
   replayOnboarding: () => void;
@@ -74,7 +78,9 @@ export type ApplicationMenuOptions = {
  * The PwrSuite menu standard (v1), shared with PwrGit and PwrSnap:
  * [App] · File · Edit · View · Profiles · Window · Help. On macOS the app menu
  * holds About, updates, Settings and the account items; elsewhere File holds
- * Settings and the account items and Help ends with updates and About.
+ * Settings and the account items and Help ends with updates and About. View
+ * opens with the app's own screens (its views slot), so every window-level
+ * surface the sidebar masthead sheds at a narrow rail stays one menu away.
  * `menu.test.ts` pins the exact label and separator order per platform.
  */
 export function buildApplicationMenuTemplate(
@@ -181,6 +187,21 @@ function buildViewMenu(options: ApplicationMenuOptions): MenuItemConstructorOpti
   return {
     label: "View",
     submenu: [
+      // The app's views slot. The sidebar masthead drops Automations (and
+      // Settings, which lives in the app menu / File) when the rail is too
+      // narrow for them beside the mic, so these rows are their other home.
+      {
+        label: "Search Threads",
+        // The renderer owns this chord (useFindHotkeys) and claims the
+        // keydown, so the row shows the shortcut without a second handler.
+        accelerator: "CmdOrCtrl+Shift+F",
+        click: options.actions.openThreadSearch,
+      },
+      {
+        label: "Automations",
+        click: options.actions.openAutomations,
+      },
+      { type: "separator" },
       // Recovery must remain reachable when the renderer cannot draw controls.
       { label: "Reload Window", role: "reload" },
       ...(options.developerMode

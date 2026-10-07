@@ -11130,6 +11130,20 @@ export class DesktopBackendRegistry {
   }
 
   async publishLocalEvent(event: AgentEvent): Promise<void> {
+    if (event.notification.method === "directory/threadsCollapsed/updated"
+      && event.federationTarget?.scope !== "remote") {
+      const params = readRecord(event.notification.params);
+      const directoryKey = readOptionalString(params, ["directoryKey"]);
+      const directory = directoryKey
+        ? this.createdThreadDirectoryVisibility.get(directoryKey)
+        : undefined;
+      if (directory && typeof params?.collapsed === "boolean") {
+        // Creation can finish before another complete navigation read, or
+        // while a provider failure prevents one. Use the persisted disclosure
+        // immediately so auto-pinning follows what the operator sees.
+        directory.directoryThreadsCollapsed = params.collapsed;
+      }
+    }
     await this.emit(event);
   }
 

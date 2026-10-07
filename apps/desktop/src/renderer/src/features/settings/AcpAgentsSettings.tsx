@@ -24,7 +24,8 @@ import { SettingsPathRow, type SettingsPathRowChip } from "./SettingsPathRow";
 import {
   acpRelativeTime,
   acpStatusLabel,
-  managedGrokBuildVersion,
+  MANAGED_BUILD_TRACK_SUB,
+  managedBuildTrackOptions,
 } from "./acp-agent-copy";
 import {
   acpAgentEnabledInSnapshot,
@@ -525,14 +526,11 @@ function AcpAgentSection(props: {
           && props.onManagedGrokBuildChannelChange ? (
           <SegmentedField
             label="Build track"
-            sub="Latest installs promoted builds only. Prerelease installs the newest build whether or not it has been promoted — and stays selectable while both tracks name the same version, which is where a build sits between publication and promotion."
+            sub={MANAGED_BUILD_TRACK_SUB}
             disabled={
               props.saving || pathUpdating || props.refreshing || !enabled
             }
-            options={MANAGED_BUILD_CHANNEL_OPTIONS.map((option) => ({
-              ...option,
-              meta: managedBuildTrackVersion(managedBuild, option.value),
-            }))}
+            options={managedBuildTrackOptions(managedBuild)}
             // Same wait as the toggle: the config write, then the rescan that
             // installs and activates the track's build.
             pendingLabel="Saving and rescanning…"
@@ -748,32 +746,6 @@ function AcpAgentSection(props: {
       </div>
     </SettingsSection>
   );
-}
-
-const MANAGED_BUILD_CHANNEL_OPTIONS: Array<{
-  label: string;
-  value: DesktopUpdateChannel;
-}> = [
-  { label: "Latest", value: "latest" },
-  { label: "Prerelease", value: "prerelease" },
-];
-
-/**
- * The version a track resolves to, as of the last release check.
- *
- * "Unavailable" is not "there is no such build": a check that fell back to the
- * public Atom feed can only speak for one track, and no check has run at all
- * before the first install.
- */
-function managedBuildTrackVersion(
-  managedBuild: AcpManagedBuildStatus,
-  channel: DesktopUpdateChannel,
-): string {
-  const tag =
-    channel === "latest"
-      ? managedBuild.latestTag
-      : managedBuild.prereleaseTag;
-  return tag ? managedGrokBuildVersion(tag) : "Unavailable";
 }
 
 /**

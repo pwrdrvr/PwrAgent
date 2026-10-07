@@ -675,6 +675,14 @@ function DesktopAppShell(props: {
   // effect below, once `navigation` is defined.
   const backendErrorThreadsRef = useRef<NavigationThreadSummary[]>([]);
   const backendErrorDirectoriesRef = useRef<NavigationDirectorySummary[]>([]);
+  const codexConfigWarningsDismissed =
+    props.settings.snapshot?.experimental.codexConfigWarningsDismissed?.value;
+  // Read by the toast subscription without re-subscribing on every settings
+  // write, which replaces this array.
+  const codexConfigWarningsDismissedRef = useRef(codexConfigWarningsDismissed);
+  useEffect(() => {
+    codexConfigWarningsDismissedRef.current = codexConfigWarningsDismissed;
+  }, [codexConfigWarningsDismissed]);
   /* Per-thread incident disposition, keyed by notice id. Mirrors what the
      overlay persists so a reply to a live notification does not need to wait
      on a round trip to know whether the operator already silenced this. */
@@ -1183,6 +1191,7 @@ function DesktopAppShell(props: {
           ...(instanceId ? { instanceId } : {}),
           skillQuestionsWarningDismissed:
             props.settings.snapshot?.experimental.codexSkillQuestionsWarningDismissed?.value,
+          dismissedWarningIds: codexConfigWarningsDismissedRef.current,
           threadLabel: labelForThread(
             "codex",
             typeof params.threadId === "string" ? params.threadId : undefined,
@@ -1606,6 +1615,15 @@ function DesktopAppShell(props: {
   // writeConfig call is fire-and-forget; a failed write just means the
   // preference isn't remembered next launch.
   const writeConfig = settings.writeConfig;
+  // The config banner and the thread warning toast save into one list.
+  const suppressCodexWarning = (id: string): Promise<boolean> => writeConfig({
+    experimental: {
+      codexConfigWarningsDismissed: [...new Set([
+        ...(codexConfigWarningsDismissedRef.current ?? []),
+        id,
+      ])],
+    },
+  });
   const interactiveSvgSkipNotice =
     settings.snapshot?.general.interactiveSvgSkipNotice?.value ?? false;
   const interactiveSvgAutoOpen =
@@ -1619,6 +1637,7 @@ function DesktopAppShell(props: {
   // its own open state and the sidebar peek a jump's landing scroll needs.
   const threadJump = useThreadJump({ sidebarHidden, setSidebarHidden });
   const endSidebarPeek = threadJump.endPeek;
+  const closeThreadJump = threadJump.closeJump;
   const toggleGlobalThreadSearch = () => {
     threadJump.closeJump();
     setMainView((current) => current === "search" ? "thread" : "search");
@@ -2542,6 +2561,18 @@ function DesktopAppShell(props: {
       );
     });
   }, [desktopApi, openSettingsSection]);
+  useEffect(() => {
+    // View → Search Threads / View → Automations. The menu opens rather than
+    // toggles: the row names a screen, so choosing it again keeps it up.
+    if (!desktopApi?.onOpenMainViewRequested) {
+      return;
+    }
+    return desktopApi.onOpenMainViewRequested((view) => {
+      // The ⌘K palette sits above every screen, so it would cover either one.
+      closeThreadJump();
+      setMainView(view);
+    });
+  }, [closeThreadJump, desktopApi, setMainView]);
   useEffect(() => {
     if (!desktopApi?.onOpenNewThreadRequested) {
       return;
@@ -4095,15 +4126,8 @@ function DesktopAppShell(props: {
             Boolean(props.settings.snapshot)
             || !desktopApi?.readSettings
           }
-          dismissedWarningIds={props.settings.snapshot?.experimental.codexConfigWarningsDismissed?.value}
-          onSuppressWarning={(id) => settings.writeConfig({
-            experimental: {
-              codexConfigWarningsDismissed: [...new Set([
-                ...(props.settings.snapshot?.experimental.codexConfigWarningsDismissed?.value ?? []),
-                id,
-              ])],
-            },
-          })}
+          dismissedWarningIds={codexConfigWarningsDismissed}
+          onSuppressWarning={suppressCodexWarning}
         />
         <FederationShutdownNotices desktopApi={desktopApi} onNoticeChanged={syncFederationShutdownNotice} />
         <MessagingErrorNotices
@@ -4139,6 +4163,7 @@ function DesktopAppShell(props: {
           onSuppressSkillQuestionsWarning={() => settings.writeConfig({
             experimental: { codexSkillQuestionsWarningDismissed: true },
           })}
+          onSuppressCodexWarning={suppressCodexWarning}
           transientNotices={[
             {
               notice: navigation.archiveThreadNotice,

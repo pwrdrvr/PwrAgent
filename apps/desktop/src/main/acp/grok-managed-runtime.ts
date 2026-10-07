@@ -212,7 +212,10 @@ type ParsedSemver = {
 };
 
 const processChecks = new Set<string>();
-const activeChecks = new Map<string, Promise<ManagedGrokRuntime | undefined>>();
+const activeChecks = new Map<string, {
+  channel: DesktopUpdateChannel;
+  check: Promise<ManagedGrokRuntime | undefined>;
+}>();
 const markedRuntimeCommands = new Map<string, string>();
 
 /**
@@ -314,17 +317,28 @@ export async function ensureManagedGrokRuntime(
   options: ManagedGrokRuntimeOptions = {},
 ): Promise<ManagedGrokRuntime | undefined> {
   const rootDir = options.rootDir ?? managedGrokRoot();
-  const existing = activeChecks.get(rootDir);
-  if (existing) {
-    return await existing;
+  const channel = options.channel ?? MANAGED_GROK_BUILD_CHANNEL_DEFAULT;
+  for (
+    let existing = activeChecks.get(rootDir);
+    existing;
+    existing = activeChecks.get(rootDir)
+  ) {
+    if (existing.channel === channel) {
+      return await existing.check;
+    }
+    // A check for the other track is installing into the same root. Joining
+    // it would hand this caller that track's build — a track switch during a
+    // refresh would activate the build the operator just left. Let it
+    // finish, then check this track.
+    await existing.check.catch(() => undefined);
   }
   const check = ensureManagedGrokRuntimeInner(rootDir, options)
     .finally(() => {
-      if (activeChecks.get(rootDir) === check) {
+      if (activeChecks.get(rootDir)?.check === check) {
         activeChecks.delete(rootDir);
       }
     });
-  activeChecks.set(rootDir, check);
+  activeChecks.set(rootDir, { channel, check });
   return await check;
 }
 

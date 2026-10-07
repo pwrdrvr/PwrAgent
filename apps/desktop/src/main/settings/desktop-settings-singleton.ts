@@ -59,11 +59,13 @@ export function getDesktopSettingsService(): DesktopSettingsService {
         requirePlatformSignature: app.isPackaged === true,
       }),
       ensureManagedCodexRuntime: async ({
+        channel,
         checkMode,
         signal,
         waitForUpdate,
       }) =>
         await ensureManagedCodexRuntime({
+          channel,
           checkMode,
           requirePlatformSignature: app.isPackaged === true,
           signal,

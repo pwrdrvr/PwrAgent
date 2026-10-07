@@ -1535,6 +1535,13 @@ function SettingsSectionBody(props: {
           },
         });
       }}
+      onManagedCodexBuildChannelChange={async (managedBuildChannel) => {
+        return await props.settings.writeConfig({
+          models: {
+            codex: { managedBuildChannel },
+          },
+        });
+      }}
       onOpenTokenMiser={() => props.onOpenRoute("experimental")}
       onAcpCliPathChange={async (registryId, cliPath) => {
         return await props.settings.writeConfig({
