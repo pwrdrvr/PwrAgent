@@ -6511,7 +6511,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
         <SidebarSearchPopup
           threads={searchThreads}
           label="Fly to thread"
-          placeholder="Fly to thread, PR #, branch, repo…"
+          placeholder="Fly to thread, PR #, branch · @project to narrow"
           onJumpToThread={flyToThread}
           onClose={() => setJumpOpen(false)}
         />

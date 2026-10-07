@@ -1007,12 +1007,47 @@ describe("project mentions", () => {
     expect(onJumpToThread).toHaveBeenCalledWith(quiet);
   });
 
-  it("lists a project's threads for a bare in:@project mention", async () => {
+  it("lists a project's threads once a bare in:@project mention is complete", async () => {
     render(<SidebarSearchPopup threads={[
       inProject("a", "Alpha", "pinecone-api", 2), inProject("b", "Beta", "media-services", 3),
     ]} onJumpToThread={vi.fn()} onClose={vi.fn()} />);
-    fireEvent.change(screen.getByRole("textbox"), { target: { value: "in:@pine" } });
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "in:@pine " } });
     await settleRemoteSearch();
     expect(screen.getAllByRole("option").map((row) => row.textContent)).toEqual([expect.stringContaining("Alpha")]);
+  });
+
+  const directories = [
+    { key: "directory:/repos/pinecone-api", kind: "directory" as const, label: "pinecone-api", path: "/repos/pinecone-api" },
+    { key: "directory:/repos/media-services", kind: "directory" as const, label: "media-services", path: "/repos/media-services" },
+  ];
+
+  it.each([["Enter"], ["Tab"]])("suggests projects for a partial mention and %s completes it", async (key) => {
+    const onJumpToProject = vi.fn();
+    render(<SidebarSearchPopup projects={directories}
+      threads={[inProject("a", "MCP config", "pinecone-api", 2), inProject("b", "MCP gateway", "media-services", 3)]}
+      onJumpToProject={onJumpToProject} onJumpToThread={vi.fn()} onClose={vi.fn()} />);
+    const input = screen.getByRole("textbox") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "mcp in:@pin" } });
+    await settleRemoteSearch();
+    expect(screen.getByRole("listbox", { name: "Projects" })).toBeInTheDocument();
+    expect(screen.getAllByRole("option").map((row) => row.textContent)).toEqual([expect.stringContaining("pinecone-api")]);
+    expect(screen.getByText("↵ narrow to project")).toBeInTheDocument();
+    fireEvent.keyDown(input, { key });
+    expect(input.value).toBe("mcp in:@pinecone-api ");
+    expect(input.selectionStart).toBe(input.value.length);
+    expect(onJumpToProject).not.toHaveBeenCalled();
+    await settleRemoteSearch();
+    expect(screen.getAllByRole("option").map((row) => row.textContent)).toEqual([expect.stringContaining("MCP config")]);
+  });
+
+  it("lists every project for a bare @ and says when none match", async () => {
+    render(<SidebarSearchPopup projects={directories} threads={[]} onJumpToThread={vi.fn()} onClose={vi.fn()} />);
+    const input = screen.getByRole("textbox");
+    fireEvent.change(input, { target: { value: "@" } });
+    await settleRemoteSearch();
+    expect(screen.getAllByRole("option")).toHaveLength(2);
+    fireEvent.change(input, { target: { value: "@zzz" } });
+    await settleRemoteSearch();
+    expect(screen.getByText("No matching projects")).toBeInTheDocument();
   });
 });
