@@ -539,7 +539,7 @@ import type {
   UpdateThreadExpectedBranchResponse,
   WriteDesktopSettingsConfigRequest,
 } from "@pwragent/shared";
-import type { WindowControlAction } from "../shared/ipc";
+import type { WindowControlAction, WindowOpenMainViewRequest } from "../shared/ipc";
 import type { StarMapIntakeDispatchRequest } from "../shared/star-map-intake";
 import type { RendererErrorReport } from "../shared/renderer-error";
 import type { RendererDiagnosticLogRequest } from "../shared/renderer-diagnostic";
@@ -969,6 +969,7 @@ import {
   WINDOW_FULLSCREEN_SYNC_CHANNEL,
   WINDOW_CONTROL_CHANNEL,
   WINDOW_FRAME_SYNC_CHANNEL,
+  WINDOW_OPEN_MAIN_VIEW_CHANNEL,
   WINDOW_OPEN_NEW_THREAD_CHANNEL,
   WINDOW_OPEN_SETTINGS_CHANNEL,
   WINDOW_POINTER_SNAPSHOT_CHANNEL,
@@ -2761,6 +2762,20 @@ const desktopApi = Object.freeze({
     ipcRenderer.on(WINDOW_OPEN_SETTINGS_CHANNEL, listener);
     return () => {
       ipcRenderer.off(WINDOW_OPEN_SETTINGS_CHANNEL, listener);
+    };
+  },
+  onOpenMainViewRequested: (
+    callback: (view: WindowOpenMainViewRequest) => void,
+  ): (() => void) => {
+    // Main → renderer push from View → Search Threads / View → Automations.
+    const listener = (_event: Electron.IpcRendererEvent, view: unknown) => {
+      if (view === "automations" || view === "search") {
+        callback(view);
+      }
+    };
+    ipcRenderer.on(WINDOW_OPEN_MAIN_VIEW_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(WINDOW_OPEN_MAIN_VIEW_CHANNEL, listener);
     };
   },
   onOpenNewThreadRequested: (callback: () => void): (() => void) => {

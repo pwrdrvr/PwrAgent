@@ -553,7 +553,7 @@ import type { RuntimeIdentity } from "../../../shared/runtime-identity";
 import type { WindowPointerSnapshot } from "../../../shared/window-pointer";
 import type { WindowShowThreadRequest } from "../../../shared/window-show-thread";
 import type { AppMenuTopLevel, AppMenuPopupRequest } from "../../../shared/app-menu";
-import type { WindowControlAction } from "../../../shared/ipc";
+import type { WindowControlAction, WindowOpenMainViewRequest } from "../../../shared/ipc";
 import type {
   AppChangelogDocument,
   AppLogEntry,
@@ -1690,6 +1690,13 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
    */
   onOpenSettingsRequested?: (
     callback: (section?: string, subsection?: string) => void,
+  ) => () => void;
+  /**
+   * Main → renderer push: fires from View → Search Threads and View →
+   * Automations, naming the screen to show.
+   */
+  onOpenMainViewRequested?: (
+    callback: (view: WindowOpenMainViewRequest) => void,
   ) => () => void;
   /**
    * Main → renderer push: fires when the user invokes File → New Thread
