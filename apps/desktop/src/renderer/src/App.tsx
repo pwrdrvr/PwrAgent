@@ -2550,9 +2550,8 @@ function DesktopAppShell(props: {
       return;
     }
     return desktopApi.onOpenMainViewRequested((view) => {
-      if (view === "search") {
-        closeThreadJump();
-      }
+      // The ⌘K palette sits above every screen, so it would cover either one.
+      closeThreadJump();
       setMainView(view);
     });
   }, [closeThreadJump, desktopApi, setMainView]);
