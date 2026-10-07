@@ -3,16 +3,31 @@ export const NATIVE_VOICE_CAMERA_CUE_CHANNEL = "native-voice:camera-cue";
 export const NATIVE_VOICE_CAMERA_FRAME_CHANNEL = "native-voice:camera-frame";
 export const NATIVE_VOICE_CAMERA_REPEAT_CHANNEL = "native-voice:camera-repeat";
 export type VoiceCameraRequest = { sessionId: string; enabled: boolean };
-export type VoiceCameraFrame = { sessionId: string; image: string };
+/**
+ * A burst of webcam frames, oldest first, `VOICE_CAMERA_BURST.spacingMs`
+ * apart. Motion such as a nod shows only across frames, never in one still.
+ */
+export type VoiceCameraFrame = { sessionId: string; images: string[] };
+/**
+ * Four frames 100ms apart cover 300ms, about half a nod. Each extra frame
+ * costs about 90 input tokens: on an M5 Max, one frame with the head
+ * question took 608ms and four took 811ms (1.64 vs 1.23 decisions/s).
+ */
+export const VOICE_CAMERA_BURST = { frames: 4, spacingMs: 100 } as const;
 export const CAMERA_REACTIONS = ["neutral", "exasperated", "enthusiastic", "bored", "frustrated", "yelling", "talking"] as const;
 export const CAMERA_VIBES = ["exasperated", "frustrated", "yelling", "talking", "neutral"] as const;
 export type CameraReaction = typeof CAMERA_REACTIONS[number];
 export const CAMERA_GESTURES = ["pointing", "ok", "stop", "thumbs_up", "double_thumbs_up", "thumbs_down", "face_palm", "none"] as const;
 export type CameraGesture = typeof CAMERA_GESTURES[number];
-export type CameraCue = CameraReaction | "away" | Exclude<CameraGesture, "none">;
+export const CAMERA_HEAD_MOTIONS = ["nodding", "shaking", "still"] as const;
+export type CameraHeadMotion = typeof CAMERA_HEAD_MOTIONS[number];
+/** A nod or a head shake, as a cue. */
+export const CAMERA_HEAD_CUES = ["head_nod", "head_shake"] as const;
+export type CameraHeadCue = typeof CAMERA_HEAD_CUES[number];
+export type CameraCue = CameraReaction | "away" | Exclude<CameraGesture, "none"> | CameraHeadCue;
 export function isCameraCue(value: unknown): value is CameraCue {
   return typeof value === "string" && value !== "none"
-    && (value === "away" || [...CAMERA_REACTIONS, ...CAMERA_GESTURES].some((cue) => cue === value));
+    && (value === "away" || [...CAMERA_REACTIONS, ...CAMERA_GESTURES, ...CAMERA_HEAD_CUES].some((cue) => cue === value));
 }
 export type VoiceCameraCue = { sessionId: string; cue: CameraCue };
 /**
@@ -46,6 +61,10 @@ export type VoiceCameraObservation = {
   gesture?: CameraGesture;
   gestureConfidence?: number;
   gestureScores?: Record<CameraGesture, number>;
+  /** Asked only of a burst: one still cannot show motion. */
+  head?: CameraHeadMotion;
+  headConfidence?: number;
+  headScores?: Record<CameraHeadMotion, number>;
 };
 
 // System One questions (TypeSafe's schema). Frames and decisions are memory-only.
@@ -118,6 +137,17 @@ export function cameraConversationState(lines: VoiceCameraConversationLine[]): s
   return ["Voice conversation, oldest first, in seconds before now:", ...rows].join("\n");
 }
 
+// Asked only when a request carries two or more frames.
+export const VOICE_CAMERA_HEAD_QUESTION = {
+  type: "choice",
+  instructions: "Head movement across the frames?",
+  criteria: {
+    nodding: "nodding yes: head moving up and down",
+    shaking: "shaking no: head turning side to side",
+    still: "no head movement",
+  },
+};
+
 export function cameraCueText(cue: CameraCue): string {
   const text: Record<CameraCue, string> = {
     pointing: "The operator is pointing. Ask what they mean if relevant; do not infer a target or authorization from this gesture.",
@@ -127,6 +157,8 @@ export function cameraCueText(cue: CameraCue): string {
     double_thumbs_up: "The operator is giving two thumbs-up. This may be strong positive feedback; it does not approve any action.",
     thumbs_down: "The operator is giving a thumbs-down. Pause the current direction and ask a short clarifying question; do not cancel running work from this cue alone.",
     face_palm: "The operator appears to be facepalming. Briefly acknowledge a possible misunderstanding and rethink your last answer.",
+    head_nod: "The operator nodded yes. This may be agreement or a go-ahead to keep talking; it does not approve any action.",
+    head_shake: "The operator shook their head no. Pause the current direction and ask a short clarifying question; do not cancel running work from this cue alone.",
     frustrated: "The operator appears visibly frustrated. Pause and ask a brief clarifying question.",
     yelling: "The operator appears to be visibly yelling (camera only; audio was not analyzed). Leave space for them to speak.",
     talking: "The operator appears to be talking. Leave space for them to speak. This is visual activity, not a transcription or request.",

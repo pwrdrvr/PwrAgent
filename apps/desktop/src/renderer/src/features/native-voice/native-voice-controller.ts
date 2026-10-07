@@ -1,7 +1,7 @@
 import { CAMERA_SAMPLE_GAP_MS, CameraCueFilter, openVoiceCamera, type CameraCapture, type CameraGestureCue } from "./voice-camera";
 import type { NativeVoiceAction, NativeVoiceApi, NativeVoiceEvent, NativeVoiceMode } from "../../../../shared/native-voice";
 import {
-  CAMERA_GESTURES, VOICE_CAMERA_CONVERSATION_LIMITS,
+  CAMERA_GESTURES, CAMERA_HEAD_CUES, VOICE_CAMERA_CONVERSATION_LIMITS,
   type CameraCue, type VoiceCameraConversationLine, type VoiceCameraObservation,
 } from "../../../../shared/native-voice-camera";
 
@@ -37,9 +37,9 @@ export type VoiceStatus = "idle" | "checking" | "connecting" | "listening" | "st
  */
 export type VoiceTranscriptRow = { role: string; text: string; seq: number; at: number };
 export type VoiceActionRow = NativeVoiceAction & { seq: number; at: number };
-/** Gestures and presence go in the transcript; vibes stay in the dock. */
+/** Gestures, head nods and shakes, and presence go in the transcript; vibes stay in the dock. */
 export function isTranscriptCue(cue: CameraCue): boolean {
-  return cue === "away" || CAMERA_GESTURES.some((gesture) => gesture === cue);
+  return cue === "away" || [...CAMERA_GESTURES, ...CAMERA_HEAD_CUES].some((gesture) => gesture === cue);
 }
 
 /** A camera cue handed to the voice, in order with what was said. */
@@ -565,9 +565,11 @@ export class NativeVoiceController {
         if (!current()) return;
         const started = Date.now();
         try {
-          const image = capture.frame();
-          if (image) {
-            const observation = await this.api.analyzeNativeVoiceCamera!({ sessionId: resources.id, image });
+          // The latest burst, oldest first: motion such as a nod shows only
+          // across frames.
+          const images = capture.frames();
+          if (images.length) {
+            const observation = await this.api.analyzeNativeVoiceCamera!({ sessionId: resources.id, images });
             if (!current()) return;
             if (!observation) {
               this.closeCamera(resources);
@@ -613,7 +615,11 @@ export class NativeVoiceController {
               if (!current()) return;
               decision = cue ? { cue } : {};
             }
-            debug({ filter: observation.gesture ? `${filter.status}; gesture: ${filter.gestureStatus}` : filter.status });
+            debug({ filter: [
+              filter.status,
+              ...(observation.gesture ? [`gesture: ${filter.gestureStatus}`] : []),
+              ...(observation.head ? [`head: ${filter.headStatus}`] : []),
+            ].join("; ") });
             if (decision.end) {
               this.publish({ endedAfterAway: true });
               void this.stop();

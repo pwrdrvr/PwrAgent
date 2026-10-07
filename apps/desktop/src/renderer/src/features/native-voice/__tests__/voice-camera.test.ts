@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { VoiceCameraObservation } from "../../../../../shared/native-voice-camera";
-import { CAMERA_AWAY_END_MS, CameraCueFilter, type CameraDecision } from "../voice-camera";
+import { CAMERA_AWAY_END_MS, CameraCueFilter, openVoiceCamera, type CameraDecision } from "../voice-camera";
 
 const sample: VoiceCameraObservation = {
   present: true, presenceConfidence: 0.95, reaction: "exasperated", reactionConfidence: 0.9, latencyMs: 400,
@@ -239,5 +239,112 @@ describe("camera gesture cues", () => {
     const negative = { ...sample, gesture: "thumbs_down" as const, gestureConfidence: 0.9 };
     filter.observe(negative, 4000);
     expect(filter.observe(negative, 4500)).toEqual({ cue: "thumbs_down" });
+  });
+});
+
+describe("camera head cues", () => {
+  // No confident vibe, so only the head and hands decide.
+  const quiet = { ...sample, reactionConfidence: 0.5 };
+  const nod = { ...quiet, head: "nodding" as const, headConfidence: 0.88 };
+  const shake = { ...quiet, head: "shaking" as const, headConfidence: 0.9 };
+  const still = { ...quiet, head: "still" as const, headConfidence: 0.95 };
+  it("sends a nod after two bursts, and not from one burst, a still head, or a single frame", () => {
+    const filter = new CameraCueFilter();
+    expect(filter.observe(nod, 0)).toEqual({});
+    expect(filter.observe(still, 500)).toEqual({});
+    expect(filter.observe(still, 1000)).toEqual({});
+    expect(filter.headStatus).toBe("No head movement");
+    expect(filter.observe({ ...nod, headConfidence: 0.7 }, 1500)).toEqual({});
+    // A single frame is never asked about head movement.
+    expect(filter.observe(quiet, 2000)).toEqual({});
+    expect(filter.observe(nod, 2500)).toEqual({});
+    expect(filter.observe(nod, 3000)).toEqual({ cue: "head_nod" });
+    expect(filter.observe(nod, 3500)).toEqual({});
+    expect(filter.headStatus).toBe("Already sent; waiting for the voice");
+  });
+
+  it("treats a head shake as urgent: past the cooldown, and holding the vibe cues", () => {
+    const filter = new CameraCueFilter();
+    filter.observe(nod, 0);
+    expect(filter.observe(nod, 500)).toEqual({ cue: "head_nod" });
+    filter.observe(shake, 1000);
+    expect(filter.observe(shake, 1500)).toEqual({ cue: "head_shake" });
+    // An exasperated face behind a held shake stays with the shake.
+    const exasperated = { ...shake, reactionConfidence: 0.9 };
+    for (let now = 2000; now <= 5000; now += 500) expect(filter.observe(exasperated, now)).toEqual({});
+    expect(filter.status).toBe("Vibe cue held for gesture");
+    // A nod is not urgent: inside its cooldown it waits.
+    const changed = new CameraCueFilter();
+    changed.observe(shake, 0);
+    expect(changed.observe(shake, 500)).toEqual({ cue: "head_shake" });
+    changed.observe(nod, 1000);
+    expect(changed.observe(nod, 1500)).toEqual({});
+    expect(changed.headStatus).toBe("Eight-second head movement cooldown");
+    for (let now = 2000; now < 8500; now += 500) changed.observe(nod, now);
+    expect(changed.observe(nod, 8500)).toEqual({ cue: "head_nod" });
+  });
+
+  it("keeps hands and head apart: a nod does not make a held stop new, and a stop does not swallow a nod", () => {
+    const stop = { ...quiet, gesture: "stop" as const, gestureConfidence: 0.93 };
+    const filter = new CameraCueFilter();
+    filter.observe({ ...stop, ...still }, 0);
+    expect(filter.observe({ ...still, ...stop }, 500)).toEqual({ cue: "stop" });
+    filter.observe({ ...stop, head: "nodding", headConfidence: 0.88 }, 1000);
+    expect(filter.observe({ ...stop, head: "nodding", headConfidence: 0.88 }, 1500)).toEqual({ cue: "head_nod" });
+    // Both at once: the stop goes first, and the nod on the next burst.
+    const both = new CameraCueFilter();
+    const stopAndNod = { ...nod, gesture: "stop" as const, gestureConfidence: 0.93 };
+    expect(both.observe(stopAndNod, 0)).toEqual({});
+    expect(both.observe(stopAndNod, 500)).toEqual({ cue: "stop" });
+    expect(both.headStatus).toBe("Held for gesture");
+    expect(both.observe(stopAndNod, 1000)).toEqual({ cue: "head_nod" });
+  });
+
+  it("asks before repeating a nod, and routes the answer to the head", () => {
+    const filter = new CameraCueFilter();
+    filter.observe(nod, 0, { voiceActivity: 1 });
+    expect(filter.observe(nod, 500, { voiceActivity: 1 })).toEqual({ cue: "head_nod" });
+    for (let now = 1000; now < 8500; now += 500) expect(filter.observe(nod, now, { voiceActivity: 2 })).toEqual({});
+    expect(filter.observe(nod, 8500, { voiceActivity: 2 })).toEqual({ recheck: "head_nod" });
+    expect(filter.settleRecheck("head_nod", false, { voiceActivity: 2 }, 8800)).toBeUndefined();
+    expect(filter.headStatus).toBe("Acknowledged; waiting for the voice to move on");
+    expect(filter.observe(nod, 9000, { voiceActivity: 2 })).toEqual({});
+    expect(filter.observe(nod, 9500, { voiceActivity: 3 })).toEqual({ recheck: "head_nod" });
+    expect(filter.settleRecheck("head_nod", true, { voiceActivity: 3 }, 9800)).toBe("head_nod");
+  });
+});
+
+describe("camera burst capture", () => {
+  afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+  it("keeps the latest four frames 100ms apart and hands them over oldest first", async () => {
+    vi.useFakeTimers();
+    const stop = vi.fn();
+    const stream = { active: true, getTracks: () => [{ stop }] };
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia: vi.fn(async () => stream) } });
+    vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue();
+    vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+    vi.spyOn(HTMLVideoElement.prototype, "videoWidth", "get").mockReturnValue(640);
+    vi.spyOn(HTMLVideoElement.prototype, "videoHeight", "get").mockReturnValue(480);
+    vi.spyOn(HTMLMediaElement.prototype, "readyState", "get").mockReturnValue(4);
+    // Each canvas reports the beat it was last drawn on.
+    let beat = 0;
+    const drawn = new WeakMap<object, number>();
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(function (this: HTMLCanvasElement) {
+      return { drawImage: () => { drawn.set(this, beat++); } } as unknown as CanvasRenderingContext2D;
+    });
+    vi.spyOn(HTMLCanvasElement.prototype, "toDataURL").mockImplementation(function (this: HTMLCanvasElement) { return `frame-${drawn.get(this)}`; });
+    const capture = await openVoiceCamera();
+    // Asked before the first beat, it draws one rather than wait.
+    expect(capture.frames()).toEqual(["frame-0"]);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(capture.frames()).toEqual(["frame-0", "frame-1", "frame-2"]);
+    await vi.advanceTimersByTimeAsync(400);
+    expect(capture.frames()).toEqual(["frame-3", "frame-4", "frame-5", "frame-6"]);
+    capture.close();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(beat).toBe(7);
+    expect(stop).toHaveBeenCalledOnce();
+    stream.active = false;
+    expect(() => capture.frames()).toThrow("Camera disconnected.");
   });
 });

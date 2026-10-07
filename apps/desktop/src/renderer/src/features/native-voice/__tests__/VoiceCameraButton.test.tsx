@@ -66,9 +66,10 @@ describe("camera voice control", () => {
     expect(dock).toHaveTextContent("570 ms");
     expect(dock).toHaveTextContent("2.2 /s");
     const reads = dock.querySelectorAll(".voice-camera-dock__read");
-    expect([...reads].map((row) => row.textContent)).toEqual(["gesturenone81%", "vibetalking78%", "presentyes98%"]);
+    expect([...reads].map((row) => row.textContent)).toEqual(["gesturenone81%", "head——", "vibetalking78%", "presentyes98%"]);
     expect(reads[0]).toHaveClass("voice-camera-dock__read--idle");
-    expect(reads[1]).not.toHaveClass("voice-camera-dock__read--idle");
+    expect(reads[1]).toHaveClass("voice-camera-dock__read--idle");
+    expect(reads[2]).not.toHaveClass("voice-camera-dock__read--idle");
   });
 
   it("marks the row whose cue was just delivered", () => {
@@ -102,12 +103,12 @@ describe("camera voice control", () => {
     // A container query shows one or the other by width; both are always mounted
     // so dragging the panel wider never remounts the video.
     const dock = screen.getByRole("region", { name: "Camera cues" });
-    expect(dock.querySelectorAll(".voice-camera-dock__read")).toHaveLength(3);
+    expect(dock.querySelectorAll(".voice-camera-dock__read")).toHaveLength(4);
     const cards = dock.querySelectorAll(".voice-camera-dock__card");
-    expect(cards).toHaveLength(3);
-    expect(within(cards[1] as HTMLElement).getByText("talking", { selector: ".voice-camera-dock__option span" }).parentElement)
+    expect(cards).toHaveLength(4);
+    expect(within(cards[2] as HTMLElement).getByText("talking", { selector: ".voice-camera-dock__option span" }).parentElement)
       .toHaveClass("voice-camera-dock__option--selected");
-    expect(cards[1]).toHaveTextContent("neutral16%");
+    expect(cards[2]).toHaveTextContent("neutral16%");
     expect(cards[0]).toHaveTextContent("two thumbs up1%");
     expect(dock).toHaveTextContent("Collecting consecutive frames");
     expect(dock.querySelectorAll("video")).toHaveLength(1);
@@ -124,10 +125,25 @@ describe("camera voice control", () => {
     expect(controller.dismissCameraError).toHaveBeenCalledOnce();
   });
 
+  it("reads a burst's head movement, and marks a delivered nod on the head row", () => {
+    const debug = diagnostics({ delivery: "acknowledged", lastCue: "head_nod", acknowledgedAt: Date.now(), cuesAcknowledged: 1 });
+    debug.observation = { ...debug.observation!, head: "nodding", headConfidence: 0.88, headScores: { nodding: 0.88, shaking: 0.02, still: 0.1 } };
+    render(<VoiceCameraDock controller={controller} view={{ ...view, camera: "on", cameraDiagnostics: debug }} />);
+    const dock = screen.getByRole("region", { name: "Camera cues" });
+    const head = dock.querySelectorAll(".voice-camera-dock__read")[1]!;
+    expect(head).toHaveClass("voice-camera-dock__read--sent");
+    expect(head).toHaveTextContent("headnoddingsent");
+    expect(dock.querySelector(".voice-camera-dock__card--head")).toHaveTextContent("shaking2%");
+    expect(cameraDiagnosticsText(debug, Date.now())).toContain("head: nodding 88%, shaking 2%, still 10%");
+  });
+
   it("names cues the way the operator would say them", () => {
     expect(cameraCueLabel("double_thumbs_up")).toBe("two thumbs up");
     expect(cameraCueLabel("face_palm")).toBe("face palm");
     expect(cameraCueLabel("frustrated")).toBe("frustrated");
+    expect(cameraCueLabel("head_nod")).toBe("nod");
+    expect(cameraCueLabel("head_shake")).toBe("head shake");
+    expect(cameraDiagnosticsText(diagnostics(), Date.now())).not.toContain("head:");
     expect(cameraDiagnosticsText(diagnostics(), Date.now())).toContain("vibe: exasperated 3%, frustrated 2%, yelling 1%, talking 78%, neutral 16%");
   });
 });

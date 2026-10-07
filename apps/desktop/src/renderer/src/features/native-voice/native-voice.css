@@ -775,6 +775,20 @@
   border-radius: 8px;
   background: var(--bg-panel-elevated);
 }
+/* Head motion and presence have three options each where the gesture and
+   vibe cards have many, so the short pair stacks in the third column. */
+.voice-camera-dock__card--gesture {
+  grid-area: 1 / 1 / span 2;
+}
+.voice-camera-dock__card--vibe {
+  grid-area: 1 / 2 / span 2;
+}
+.voice-camera-dock__card--head {
+  grid-area: 1 / 3;
+}
+.voice-camera-dock__card--present {
+  grid-area: 2 / 3;
+}
 .voice-camera-dock__card-head {
   display: flex;
   align-items: baseline;

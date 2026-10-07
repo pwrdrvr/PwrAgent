@@ -428,15 +428,18 @@ config.
 ### Frames and questions
 
 Main sends 336-pixel JPEG frames to the local decision model's
-`/v1/systemone`, as a data URL in `images`: Clef's extension to the System One
-request, which takes up to four inline images. The questions are short
+`/v1/systemone`, as data URLs in `images`: Clef's extension to the System One
+request, which takes up to four inline images. Each request is a burst of the
+latest four frames, 100ms apart, oldest first (see
+[Head movement](#head-movement)). The questions are short
 demo-style ones for gestures, boolean
 presence and vibe. Gestures include pointing, OK, stop, thumbs-up, double
 thumbs-up, thumbs-down, facepalm and none. Vibe includes neutral, exasperated,
 frustrated, yelling and talking. All 15 returned scores
 are shown in the camera dock at wide panel widths. The state is the demo’s compact
-“A live webcam frame from a laptop.”, with no instruction to favor neutral. One request
-runs at a time, at up to two frames per second. System One responses carry no
+“A live webcam frame from a laptop.”, with no instruction to favor neutral; a
+burst says how many frames it holds and how far apart. One request
+runs at a time, at up to two requests per second. System One responses carry no
 timing, so the latency the dock shows is main's round trip. A request the
 server refuses (HTTP 4xx other than 408 or 429, such as a model id it does not
 serve) stops camera cues with the server's reason, since every later frame
@@ -480,6 +483,47 @@ two consecutive frames spanning 500ms, bypassing ordinary cue cooldowns.
 Gestures require confident presence, and stale frames never establish a cue.
 Thirty seconds of confident absence ends
 voice, leaving coding turns running.
+
+### Head movement
+
+A still cannot show a nod, so the renderer keeps the camera's latest four
+frames, drawn every 100ms into a ring of canvases and encoded only when a
+request takes them. A burst of two or more frames is also asked
+`Head movement across the frames?`: nodding (yes), shaking (no), or still. A
+single frame (the first request, before the ring fills) is never asked, and
+its dock row reads "—". Nodding sends **head_nod**, which tells the voice the
+operator agreed or wants it to go on and approves no action; shaking sends
+**head_shake**, which asks the voice to pause the current direction and ask a
+short clarifying question, and cancels no running work.
+
+The head has its own debounce, cooldown and repeat record, separate from the
+hands, so a nod never makes a held stop look new. A burst already spans the
+motion, so two consecutive bursts over 500ms are enough. A shake is urgent like
+stop and thumbs-down: 85% confidence, no eight-second cooldown, and a held
+shake holds the vibe cues. A nod needs 80% and waits out the cooldown. When a
+hand gesture and a head cue fire on the same burst the hand goes first, and the
+head track is not advanced that burst, so the nod follows on the next one
+instead of being recorded as sent. A repeated nod or shake goes through the
+same conversation check as a repeated gesture.
+
+The burst costs rate, not accuracy on the other questions. Measured against
+PwrSuiteLab's `clef-flash` System One route on 2026-10-04, warmed up, 20
+requests each:
+
+| Images | Three questions | With the head question |
+|---|---|---|
+| 1 | 487ms | 608ms (1.64/s) |
+| 2 | 531ms | 601ms (1.66/s) |
+| 3 | 672ms | 692ms (1.44/s) |
+| 4 | 685ms | 811ms (1.23/s) |
+
+Each image adds about 90 prompt tokens and the head question about 100. Before
+the burst a single frame ran at about 2.05 per second; four frames run at 1.23.
+Identical frames read as still at 0.92 to 0.98, and synthetic pans of a still
+image also read as still, so the question does not invent motion. No recorded
+nod or shake has been run through it yet: the thresholds are the gesture
+thresholds, untuned, and true-positive accuracy needs a live check with the
+camera dock open.
 
 ### Repeated gestures and the conversation
 
