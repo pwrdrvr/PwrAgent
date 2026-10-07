@@ -4349,6 +4349,113 @@ describe("SettingsScreen", () => {
     expect(screen.getByText(/checked just now/)).toBeInTheDocument();
   });
 
+  it("names both managed Codex tracks and switches to the one picked", async () => {
+    const snapshot = createSnapshot();
+    snapshot.models.codex.managedBuilds = { value: true, source: "config" };
+    snapshot.runtime.tokenMiser = {
+      managedCodex: {
+        state: "ready",
+        version: "0.160.0-pwragent.1",
+        latestTag: "pwragent-v0.160.0-pwragent.1",
+        prereleaseTag: "pwragent-v0.162.0-pwragent.1",
+      },
+    };
+    const settings = createSettingsState(snapshot);
+    const listBackends = vi.fn(async () => ({ fetchedAt: Date.now(), backends: [] }));
+
+    render(
+      <SettingsScreen
+        desktopApi={{ listBackends } as unknown as DesktopApi}
+        initialSection="models"
+        initialSubsection="codex"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    const track = screen.getByRole("radiogroup", { name: "Build track" });
+    // Each track names the version it resolves to, so the operator can see
+    // what switching would get them before they switch. No config value means
+    // Latest: a build published for testing is opt-in.
+    expect(within(track).getByText("0.160.0-pwragent.1")).toBeInTheDocument();
+    expect(within(track).getByText("0.162.0-pwragent.1")).toBeInTheDocument();
+    expect(within(track).getByRole("radio", { name: /Latest/ }))
+      .toHaveAttribute("aria-checked", "true");
+    await waitFor(() => expect(
+      within(track).getByRole("radio", { name: /Prerelease/ }),
+    ).toBeEnabled());
+    listBackends.mockClear();
+
+    fireEvent.click(within(track).getByRole("radio", { name: /Prerelease/ }));
+
+    await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({
+      models: { codex: { managedBuildChannel: "prerelease" } },
+    }));
+    // The track's build is a different Codex, so its models are rediscovered.
+    await waitFor(() => expect(listBackends).toHaveBeenCalledWith({
+      includeUnavailable: true,
+      discoveryIntent: "settings-user-action",
+      refreshModels: "codex",
+    }));
+  });
+
+  it("keeps the Codex models when both tracks name the running build", async () => {
+    const snapshot = createSnapshot();
+    snapshot.models.codex.managedBuilds = { value: true, source: "config" };
+    snapshot.runtime.tokenMiser = {
+      managedCodex: {
+        state: "ready",
+        version: "0.160.0-pwragent.1",
+        latestTag: "pwragent-v0.160.0-pwragent.1",
+        prereleaseTag: "pwragent-v0.160.0-pwragent.1",
+      },
+    };
+    const settings = createSettingsState(snapshot);
+    const listBackends = vi.fn(async () => ({ fetchedAt: Date.now(), backends: [] }));
+
+    render(
+      <SettingsScreen
+        desktopApi={{ listBackends } as unknown as DesktopApi}
+        initialSection="models"
+        initialSubsection="codex"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    const track = screen.getByRole("radiogroup", { name: "Build track" });
+    await waitFor(() => expect(
+      within(track).getByRole("radio", { name: /Prerelease/ }),
+    ).toBeEnabled());
+    listBackends.mockClear();
+    fireEvent.click(within(track).getByRole("radio", { name: /Prerelease/ }));
+
+    await waitFor(() => expect(settings.refresh).toHaveBeenCalled());
+    // The switch installed nothing, so there is nothing to rediscover.
+    expect(listBackends).not.toHaveBeenCalledWith(expect.objectContaining({
+      refreshModels: "codex",
+    }));
+  });
+
+  it("offers no managed Codex track while the PwrAgent build is off", () => {
+    const snapshot = createSnapshot();
+    snapshot.models.codex.managedBuilds = { value: false, source: "config" };
+
+    render(
+      <SettingsScreen
+        desktopApi={{} as unknown as DesktopApi}
+        initialSection="models"
+        initialSubsection="codex"
+        settings={createSettingsState(snapshot)}
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(screen.getByText("PwrAgent build")).toBeInTheDocument();
+    expect(screen.queryByRole("radiogroup", { name: "Build track" }))
+      .not.toBeInTheDocument();
+  });
+
   it("rediscovers Codex models after installing a newer managed build", async () => {
     const snapshot = createSnapshot();
     snapshot.models.codex.managedBuilds = { value: true, source: "config" };
