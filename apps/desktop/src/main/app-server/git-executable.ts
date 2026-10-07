@@ -31,6 +31,7 @@ export async function runGitCommand(
     maxBuffer?: number;
     signal?: AbortSignal;
     input?: string;
+    beforeSpawn?: () => void;
   } = {},
 ): Promise<{
   stdout: string;
@@ -39,6 +40,8 @@ export async function runGitCommand(
   const env = gitEnvironment(options.env ?? process.env);
   options.signal?.throwIfAborted();
   const git = await resolveGitExecutable(options.env ?? process.env);
+  // Admission must survive the executable resolver's asynchronous boundary.
+  options.beforeSpawn?.();
   const gitArgs = ["-C", cwd, ...args];
   const windowsJobLaunch =
     process.platform === "win32" && options.ownProcessTree

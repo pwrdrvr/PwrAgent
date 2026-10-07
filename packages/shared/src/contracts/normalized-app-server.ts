@@ -969,6 +969,8 @@ export type ArchiveThreadRequest = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   federationTarget?: FederationTarget;
+  /** Return after archival; cleanup completion arrives as thread/archiveCleanup/completed. */
+  backgroundCleanup?: boolean;
   /** Group archive admission revalidates the exact persisted parent before mutation. */
   expectedParent?: { threadId: ThreadIdentifier; backend: AppServerBackendKind; instanceId?: FederationInstanceId } | null;
 };
@@ -978,6 +980,7 @@ export type ArchiveThreadResponse = {
   threadId: ThreadIdentifier;
   archivedAt: number;
   cleanup: ArchiveThreadCleanupResult[];
+  cleanupPending?: boolean;
 };
 
 /**
@@ -1892,6 +1895,15 @@ export type AppServerNotification =
       method: "thread/unarchived";
       params: {
         threadId: string;
+      };
+    }
+  | {
+      method: "thread/archiveCleanup/completed";
+      params: {
+        threadId: string;
+        archivedAt: number;
+        cleanup: ArchiveThreadCleanupResult[];
+        error?: string;
       };
     }
   | {

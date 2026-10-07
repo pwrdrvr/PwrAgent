@@ -5350,6 +5350,34 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       );
   }
 
+  /** Cleanup needs ownership/grouping only, never histories or PR claims. */
+  async getArchiveCleanupOverlayStates(params: {
+    backend: ThreadOverlayState["backend"];
+    threadIds: string[];
+  }): Promise<Record<string, ThreadOverlayState | undefined>> {
+    if (params.threadIds.length > 25) throw new Error("Archive overlay slice exceeded 25 identities.");
+    const requested = params.threadIds.map((id) => ({
+      id, key: encodeThreadIdentityKeyForStorage(buildThreadIdentityKey(params.backend, id)),
+    }));
+    const rows = this.stateDb.raw.prepare(`
+      SELECT json_extract(requested.value, '$.id') AS id,
+        CASE WHEN threads.payload IS NULL THEN NULL ELSE json_object(
+          'backend', json_extract(threads.payload, '$.backend'),
+          'threadId', json_extract(threads.payload, '$.threadId'),
+          'extraLinkedDirectories', json_extract(threads.payload, '$.extraLinkedDirectories'),
+          'parentThreadId', json_extract(threads.payload, '$.parentThreadId'),
+          'parentThreadBackend', json_extract(threads.payload, '$.parentThreadBackend'),
+          'parentThreadInstanceId', json_extract(threads.payload, '$.parentThreadInstanceId'),
+          'archiveTombstonedAt', json_extract(threads.payload, '$.archiveTombstonedAt')
+        ) END AS payload
+      FROM json_each(?) AS requested
+      LEFT JOIN threads ON threads.thread_id = json_extract(requested.value, '$.key')
+    `).all(JSON.stringify(requested)) as Array<{ id: string; payload: string | null }>;
+    return Object.fromEntries(rows.map((row) => [
+      row.id, row.payload === null ? undefined : normalizeThreadOverlayState(JSON.parse(row.payload)),
+    ]));
+  }
+
   async getThreadOverlayStates(params: {
     backend: ThreadOverlayState["backend"];
     threadIds: string[];

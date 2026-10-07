@@ -9161,6 +9161,49 @@ export class CodexAppServerClient {
     return await requestPromise;
   }
 
+  /** Archive safety reads own their cursor and pace each page and discovery
+   * separately. No navigation overlays, native-worker reconciliation or
+   * scheduled archived metadata walk belongs on this read-only path. */
+  async readArchiveCleanupThreadSummary(threadId: string, checkpoint: () => Promise<void>): Promise<AppServerThreadSummary> {
+    await this.ensureInitialized();
+    await checkpoint();
+    const result = await requestWithThreadMetadataReadRetry(async () =>
+      await this.connection.request("thread/read", { threadId, includeTurns: false },
+        this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS),
+    );
+    const rows = extractThreadsFromValue({ data: [asRecord(result)?.thread] }, this.threadListTextCache);
+    const raw = rows.find((row) => row.id === threadId);
+    if (!raw) throw new Error(`Thread metadata was not found: ${threadId}`);
+    const threads = await this.enrichRawThreadDirectories([raw], "thread-list", { checkpoint, strict: true, concurrency: 1 });
+    return threads[0]!;
+  }
+
+  async listArchiveCleanupThreadsPage(params: {
+    archived: boolean;
+    cursor?: string;
+    limit: number;
+    checkpoint: () => Promise<void>;
+    directoryObservations?: Map<string, Promise<ThreadDirectoryEnrichment>>;
+  }): Promise<{ threads: AppServerThreadSummary[]; nextCursor?: string }> {
+    await this.ensureInitialized();
+    const result = await requestWithFallbacks({
+      client: this.connection,
+      diagnostics: { callerReason: "archive-cleanup" },
+      methods: ["thread/list"] as CodexClientRequestMethod[],
+      payloads: buildThreadDiscoveryPayloads(undefined, params.archived, params.cursor, params.limit),
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
+    const page = extractThreadListPage(result, this.threadListTextCache);
+    if (page.threads.length > params.limit) throw new Error("Archive discovery exceeded the requested provider page budget.");
+    const threads = await this.enrichRawThreadDirectories(filterVisibleCodexThreads(page.threads), "thread-list", {
+      checkpoint: params.checkpoint,
+      strict: true,
+      concurrency: 1,
+      directoryObservations: params.directoryObservations,
+    });
+    return { threads: hydrateMissingLinkedDirectoriesFromSiblingRepos(threads), nextCursor: page.nextCursor };
+  }
+
   private async enrichThreads(
     threads: RawCodexThreadSummary[],
     options: { enrichDirectories: boolean },
@@ -9206,13 +9249,17 @@ export class CodexAppServerClient {
   private async enrichRawThreadDirectories(
     threads: RawCodexThreadSummary[],
     caller: DirectoryEnrichmentCaller,
+    background?: {
+      checkpoint: () => Promise<void>; strict: boolean; concurrency: number;
+      directoryObservations?: Map<string, Promise<ThreadDirectoryEnrichment>>;
+    },
   ): Promise<EnrichedCodexThread[]> {
     const enrichedThreads: Array<EnrichedCodexThread | undefined> = [];
     // A listing can span many mapper batches and contain hundreds of threads
     // sharing one checkout. Validate each directory once for this observation,
     // including failures, rather than once for every row. The next listing
     // observes it again so external workspace changes remain visible.
-    const directories = new Map<string, Promise<ThreadDirectoryEnrichment>>();
+    const directories = background?.directoryObservations ?? new Map<string, Promise<ThreadDirectoryEnrichment>>();
 
     for await (const enrichedThread of new IterableMapper(
       threads.map((thread, index) => ({ index, thread })),
@@ -9226,12 +9273,14 @@ export class CodexAppServerClient {
           const directoryKey = projectKey ? path.resolve(projectKey) : "";
           let pending = directories.get(directoryKey);
           if (!pending) {
+            await background?.checkpoint();
             pending = this.threadDirectoryEnricher(projectKey, caller);
             directories.set(directoryKey, pending);
           }
           enrichment = await pending;
           if (projectKey) this.lastDirectoryEnrichment.set(path.resolve(projectKey), enrichment);
         } catch (error) {
+          if (background?.strict) throw error;
           codexClientLog.warn("thread directory enrichment failed", {
             threadId: thread.id,
             projectKey,
@@ -9260,7 +9309,7 @@ export class CodexAppServerClient {
         };
       },
       {
-        concurrency: THREAD_DIRECTORY_ENRICHMENT_CONCURRENCY,
+        concurrency: background?.concurrency ?? THREAD_DIRECTORY_ENRICHMENT_CONCURRENCY,
         maxUnread: THREAD_DIRECTORY_ENRICHMENT_MAX_UNREAD,
       },
     )) {

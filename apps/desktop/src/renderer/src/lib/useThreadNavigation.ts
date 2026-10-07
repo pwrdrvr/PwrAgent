@@ -4303,6 +4303,16 @@ export function useThreadNavigation(
         return;
       }
 
+      if (method === "thread/archiveCleanup/completed") {
+        const completion = event.notification.params as {
+          threadId: string; cleanup: ArchiveThreadCleanupResult[]; error?: string;
+        };
+        if (completion.error) setArchiveThreadError(completion.error);
+        const notice = formatArchiveCleanupNotice(completion.cleanup);
+        if (notice) setArchiveThreadNotice(notice);
+        return;
+      }
+
       if (method === "thread/archived") {
         const { threadId } = event.notification.params as {
           threadId: string;
@@ -8132,6 +8142,9 @@ export function useThreadNavigation(
           const response = await archiveThreadRequest({
             backend: target.source,
             threadId: target.id,
+            // Remote viewers may drop their last event subscription with the
+            // archived pin. Retain the response's completion/errors there.
+            ...(federationTarget?.scope === "remote" ? {} : { backgroundCleanup: true }),
             ...(target.expectedParent !== undefined ? { expectedParent: target.expectedParent } : {}),
             ...(federationTarget ? { federationTarget } : {}),
           });

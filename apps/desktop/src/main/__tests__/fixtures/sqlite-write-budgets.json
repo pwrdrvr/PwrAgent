@@ -35,6 +35,7 @@
     "statements": 2
   },
   "agent-project-mark-read-140-threads": {"commits": 1, "note": "One explicit agent call marks 140 unread owner members across backends in one commit; observed ~0.054 MB/action (~0.54 MB/day at 10 actions), no idle writes", "observedWalBytes": 53560, "rowsChanged": 140, "statements": 140},
+  "archive-cleanup-read-only-inventory": {"commits": 0, "note": "One ownership projection and three ACP identity pages: zero SQLite writes; pacing and queue state add 0 MB/day.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "archive-retention-acp-delete": {
     "commits": 1,
     "note": "One permanent ACP deletion removes one metadata row; no recurring writes.",
