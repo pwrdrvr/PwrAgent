@@ -3148,7 +3148,12 @@ class DesktopAppServerService {
         const page = await this.getNavigationQueryPage({ protocol: 2, consumer: "main-sidebar", inventory: "owner",
           query: { kind: "directory-index", keys: directoryKeys }, pageSize: 100, cursor, deadlineAt,
         }, token);
-        if (page.coverage.state !== "complete" || page.unchanged) throw new Error("Directory metadata is incomplete. Retry after the owner finishes refreshing.");
+        // Coverage describes provider thread discovery, not whether a returned
+        // directory's path is usable. Probe only the requested owner members
+        // already present in this page, even while another provider is checking
+        // or degraded. Missing members schedule no work and are never inferred
+        // from caller-supplied keys.
+        if (page.unchanged) throw new Error("Directory refresh returned no metadata.");
         bytes += Buffer.byteLength(JSON.stringify(page), "utf8");
         if (bytes > 512 * 1024) throw new Error("Directory refresh metadata exceeds its bounded budget.");
         for (const directory of page.directories ?? []) {
