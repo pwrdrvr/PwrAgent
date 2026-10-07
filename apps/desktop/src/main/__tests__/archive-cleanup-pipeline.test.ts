@@ -49,15 +49,16 @@ function build(active: AppServerThreadSummary[], target = codexThread({ id: "tar
     getArchiveCleanupOverlayStates: readOverlays,
     getThreadOverlayState: vi.fn(async ({ threadId }: { threadId: string }) => overlays.get(threadId)),
     setThreadParent: vi.fn(async () => {}),
+    setThreadArchiveTombstone: vi.fn(async () => {}),
   }, { get(object, key) {
     if (key === "then") return undefined;
     if (key in object) return object[key as keyof typeof object];
     return vi.fn(async () => String(key).startsWith("list") ? [] : undefined);
   } });
-  const archiveWorktree = vi.fn(async (params: { beforeRemove?: () => Promise<() => void> }) => {
+  const archiveWorktree = vi.fn(async (params: { backend: string; threadId: string; worktreePath: string; beforeRemove?: () => Promise<() => void> }) => {
     const assertRemoval = await params.beforeRemove?.();
     assertRemoval?.();
-    return { id: "snapshot", backend: "codex", threadId: target.id, worktreePath: "/contrived/worktree",
+    return { id: "snapshot", backend: params.backend, threadId: params.threadId, worktreePath: params.worktreePath,
       repositoryPath: "/contrived/repo", snapshotRef: "refs/codex/snapshots/test", snapshotCommit: "abc",
       createdAt: 1, archivedAt: 2, state: "archived", ignoredFilesExcluded: true };
   });
@@ -104,6 +105,107 @@ describe("archive cleanup pipeline", () => {
     expect(await first).toEqual(await second);
     expect(fixture.client.archiveThread).toHaveBeenCalledOnce();
     expect(fixture.counts.providerPages).toBe(2);
+  });
+
+  it("recovers retained active metadata after a confirmed missing rollout, including removal admission", async () => {
+    vi.useFakeTimers();
+    const directory = { id: "directory", kind: "worktree" as const, label: "repo", path: "/contrived/repo", worktreePath: "/contrived/worktree" };
+    const target = codexThread({ id: "target", linkedDirectories: [directory] });
+    const fixture = build([target], target);
+    fixture.client.archiveThread.mockRejectedValue(new Error("json-rpc error (-32600): no rollout found for thread id target"));
+    const result = fixture.registry.archiveThread({ backend: "codex", threadId: "target" });
+    // Observe rejection while driving the pacer so the failing regression is
+    // not reported as an unhandled rejection by the test runner.
+    const observed = result.then((response) => ({ response }), (error: Error) => ({ error }));
+    expect(await drivePacer(observed)).toMatchObject({ response: { cleanup: [expect.objectContaining({ removedWorktree: true })] } });
+    expect(fixture.store.setThreadArchiveTombstone).toHaveBeenCalledWith(expect.objectContaining({ backend: "codex", threadId: "target" }));
+    expect(fixture.counts.providerPages).toBe(4);
+    expect(fixture.counts.aggregateLists).toBe(0);
+  });
+
+  it("removes independent worktrees for concurrent synchronous archives after both provider mutations settle", async () => {
+    vi.useFakeTimers();
+    const targets = ["target", "second"].map((id) => codexThread({ id, linkedDirectories: [{
+      id: `directory-${id}`, kind: "worktree", label: "repo", path: "/contrived/repo", worktreePath: `/contrived/${id}`,
+    }] }));
+    const fixture = build([], targets[0]);
+    const archived: AppServerThreadSummary[] = [];
+    fixture.client.archiveThread.mockImplementation(async ({ threadId }) => {
+      archived.push(targets.find((target) => target.id === threadId)!);
+      return { threadId };
+    });
+    fixture.client.listArchiveCleanupThreadsPage.mockImplementation(async ({ archived: isArchived }) => ({ threads: isArchived ? archived : [], nextCursor: undefined }));
+    const results = await drivePacer(Promise.all(targets.map((target) =>
+      fixture.registry.archiveThread({ backend: "codex", threadId: target.id }),
+    )));
+    expect(fixture.client.archiveThread).toHaveBeenCalledTimes(2);
+    expect(results.map((result) => result.cleanup[0])).toEqual([
+      expect.objectContaining({ removedWorktree: true, worktreePath: "/contrived/target" }),
+      expect.objectContaining({ removedWorktree: true, worktreePath: "/contrived/second" }),
+    ]);
+  });
+
+  it("keeps rejecting active target metadata without confirmed missing-rollout recovery", async () => {
+    vi.useFakeTimers();
+    const target = codexThread({ id: "target" });
+    const fixture = build([target], target);
+    const result = await drivePacer(fixture.registry.archiveThread({ backend: "codex", threadId: "target" }));
+    expect(result.cleanup[0]?.skippedReason).toContain("thread is active again");
+    expect(fixture.store.setThreadArchiveTombstone).not.toHaveBeenCalled();
+  });
+
+  it("preserves shared-checkout protection during missing-rollout recovery", async () => {
+    vi.useFakeTimers();
+    const directory = { id: "directory", kind: "worktree" as const, label: "repo", path: "/contrived/repo", worktreePath: "/contrived/worktree" };
+    const target = codexThread({ id: "target", linkedDirectories: [directory] });
+    const fixture = build([target, codexThread({ id: "shared-user", linkedDirectories: [directory] })], target);
+    fixture.client.archiveThread.mockRejectedValue(new Error("json-rpc error (-32600): no rollout found for thread id target"));
+    const result = await drivePacer(fixture.registry.archiveThread({ backend: "codex", threadId: "target" }));
+    expect(result.cleanup[0]?.skippedReason).toContain("another active thread: shared-user");
+    expect(fixture.archiveWorktree).not.toHaveBeenCalled();
+    expect(fixture.store.setThreadArchiveTombstone).toHaveBeenCalledOnce();
+  });
+
+  it("cancels missing-rollout recovery on genuine restore intent before removal", async () => {
+    vi.useFakeTimers();
+    const directory = { id: "directory", kind: "worktree" as const, label: "repo", path: "/contrived/repo", worktreePath: "/contrived/worktree" };
+    const target = codexThread({ id: "target", linkedDirectories: [directory] });
+    const fixture = build([target], target);
+    fixture.client.archiveThread.mockRejectedValue(new Error("json-rpc error (-32600): no rollout found for thread id target"));
+    fixture.archiveWorktree.mockImplementation(async (params) => {
+      await publishNotification(fixture.registry, { method: "thread/unarchived", params: { threadId: "target" } });
+      await params.beforeRemove?.();
+      throw new Error("Removal should have been cancelled.");
+    });
+    const result = fixture.registry.archiveThread({ backend: "codex", threadId: "target" });
+    const observed = result.then(() => undefined, (error: Error) => error.message);
+    const error = await drivePacer(observed);
+    expect(error).toContain("cleanup did not complete");
+    expect(error).toContain("cancelled");
+    expect(fixture.archiveWorktree).toHaveBeenCalledOnce();
+    expect(fixture.store.setThreadArchiveTombstone).not.toHaveBeenCalled();
+  });
+
+  it("still refuses removal while another provider archive mutation is in flight", async () => {
+    vi.useFakeTimers();
+    const directory = { id: "directory", kind: "worktree" as const, label: "repo", path: "/contrived/repo", worktreePath: "/contrived/worktree" };
+    const fixture = build([], codexThread({ id: "target", linkedDirectories: [directory] }));
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const archive = fixture.client.archiveThread.getMockImplementation()!;
+    fixture.client.archiveThread.mockImplementation(async (params) => {
+      if (params.threadId === "second") await gate;
+      return await archive(params);
+    });
+    const first = fixture.registry.archiveThread({ backend: "codex", threadId: "target" });
+    const second = fixture.registry.archiveThread({ backend: "codex", threadId: "second" });
+    try {
+      const result = await drivePacer(first);
+      expect(result.cleanup[0]?.error).toContain("lifecycle mutation is still in flight");
+    } finally {
+      release();
+      await drivePacer(second);
+    }
   });
 
   it("uses a targeted authoritative row and skips the archived inventory when no worktree can be removed", async () => {
