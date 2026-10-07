@@ -47,6 +47,7 @@ import {
   subscribeSidebarResizing,
 } from "../../lib/sidebar-resize-signal";
 import { ThinkingScanner } from "./ThinkingScanner";
+import { agentCommandPreview } from "./BackgroundTerminalsView";
 import type { AgentCommandsStatus } from "../../lib/useThreadSessionState";
 import { PendingQuestionnaire } from "./PendingQuestionnaire";
 import { PendingMcpInteraction } from "./PendingMcpInteraction";
@@ -1697,13 +1698,14 @@ export function TranscriptList(props: TranscriptListProps) {
             >
               <div className="transcript-list__pending transcript-list__agent-commands">
                 <span className="transcript-list__agent-commands-glyph" aria-hidden="true">&gt;_</span>
-                <span>
+                <span className="transcript-list__agent-commands-text">
                   {agentCommandsStatus.command ? (
                     <>
                       <code className="transcript-list__agent-commands-command">
-                        {agentCommandsStatus.command}
+                        {agentCommandPreview(agentCommandsStatus.command).text}
                       </code>
-                      {" is still running"}
+                      {" "}
+                      <span className="transcript-list__agent-commands-tail">is still running</span>
                     </>
                   ) : agentCommandsStatus.count === 1
                     ? "An agent command is still running"

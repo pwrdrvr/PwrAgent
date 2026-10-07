@@ -27581,7 +27581,14 @@ a.transcript-message__messaging-origin:focus-visible {
   padding-top: 8px;
 }
 
+/* The row names the command by its preview (`agentCommandPreview`): the
+   first line only, and at most two lines of that, so a 400-character
+   one-liner cannot make the collapsed row tall either. */
 .agent-command-run__command {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
   color: var(--text-primary);
   font-family: var(--font-mono);
   font-size: 12px;
@@ -27613,6 +27620,37 @@ a.transcript-message__messaging-origin:focus-visible {
   display: grid;
   gap: 10px;
   padding: 2px 10px 10px 40px;
+}
+
+/* An unbroken Output line must scroll its own box, not widen the grid. */
+.agent-command-run__body > * {
+  min-width: 0;
+}
+
+.agent-command-run__full-command {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* The whole command when the summary preview cut it: a heredoc keeps its
+   line breaks, and a long script scrolls instead of growing the panel. */
+.agent-command-run__command-text {
+  max-height: 220px;
+  margin: 0;
+  padding: 6px 8px;
+  overflow: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .agent-command-run__facts {
@@ -28445,14 +28483,32 @@ div.composer-error-row__toggle {
   line-height: 1;
 }
 
+/* One row whatever the command: the preview ellipsizes, and the words after
+   it and the Actions link never wrap away from it. */
+.transcript-list__agent-commands-text {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35em;
+  min-width: 0;
+}
+
 .transcript-list__agent-commands-command {
+  min-width: 0;
+  overflow: hidden;
   color: var(--text-primary);
   font-family: var(--font-mono);
   font-size: 12px;
-  overflow-wrap: anywhere;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.transcript-list__agent-commands-tail {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .transcript-list__agent-commands-link {
+  flex: 0 0 auto;
   padding: 0;
   border: 0;
   background: none;
