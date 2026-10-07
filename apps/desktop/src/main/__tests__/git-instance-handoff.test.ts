@@ -29,6 +29,7 @@ async function fixture() {
   await git(root, "clone", "--bare", source, remote);
   await git(source, "remote", "add", "origin", remote);
   await git(root, "clone", remote, receiver);
+  await git(receiver, "config", "core.autocrlf", "false");
   await git(source, "switch", "-c", "feature/handoff");
   await writeFile(path.join(source, "commit.txt"), "published feature\n");
   await git(source, "add", ".");

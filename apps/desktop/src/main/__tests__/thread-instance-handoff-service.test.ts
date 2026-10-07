@@ -106,6 +106,7 @@ async function gitFixture(root: string) {
   await git(root, "clone", "--bare", repository, remote);
   await git(repository, "remote", "add", "origin", remote);
   await git(root, "clone", remote, destinationRepo);
+  await git(destinationRepo, "config", "core.autocrlf", "false");
   return { repository, subdirectory, destinationRepo, canonicalDestinationRepo: await realpath(destinationRepo), git };
 }
 
