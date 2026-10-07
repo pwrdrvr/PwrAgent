@@ -88,18 +88,17 @@ export function agentMetadataMatchesQuery(
  * Split a quick-jump query into its free text and its `@project` /
  * `in:@project` mentions, with the same grammar as thread search (⌘⇧F).
  * Quoting is the escape for a literal `"@word"`, so a query with a mention or
- * a quoted would-be mention has its quoted phrases unwrapped; jump matching
- * has no phrase syntax of its own. Any other query is matched as typed.
+ * a quoted would-be mention has its quoted phrases unwrapped in `text`. Any
+ * other query's `text` is as typed. `terms` are the whitespace-separated
+ * words, with a quoted phrase kept whole.
  */
-export function parseThreadJumpQuery(query: string): { text: string; projects: string[] } {
+export function parseThreadJumpQuery(query: string): { text: string; projects: string[]; terms: string[] } {
   const parsed = parseThreadSearchQuery(query);
+  const terms = threadSearchTextTerms(parsed.query).map((term) => term.text);
   if (!parsed.projects.length && !/"(?:in:)?@[^"]*"/i.test(parsed.query)) {
-    return { text: parsed.query, projects: [] };
+    return { text: parsed.query, projects: [], terms };
   }
-  return {
-    text: threadSearchTextTerms(parsed.query).map((term) => term.text).join(" "),
-    projects: parsed.projects,
-  };
+  return { text: terms.join(" "), projects: parsed.projects, terms };
 }
 
 /**
@@ -108,6 +107,8 @@ export function parseThreadJumpQuery(query: string): { text: string; projects: s
  * label/path, including word-prefix abbreviations. PR numbers match with or
  * without the leading "#"; thread ids only
  * match sufficiently deliberate UUID-like fragments or longer pasted ids.
+ * The text matches as one phrase first; failing that, every word must match
+ * some field, so `pnpm mcp` finds "pnpm install foo-mcp warning".
  * An `@project` mention scopes the match to threads in that project; a query
  * that is only mentions matches every thread in them.
  *
@@ -119,7 +120,7 @@ export function threadMatchesQuery(
   thread: ThreadJumpCandidate,
   query: string,
 ): boolean {
-  const { text, projects } = parseThreadJumpQuery(query);
+  const { text, projects, terms } = parseThreadJumpQuery(query);
   if (projects.length && !matchesThreadSearchProjects(thread, projects)) {
     return false;
   }
@@ -127,6 +128,17 @@ export function threadMatchesQuery(
   if (!needle) {
     return projects.length > 0;
   }
+  if (threadMatchesNeedle(thread, needle)) {
+    return true;
+  }
+  return terms.length > 1
+    && terms.every((term) => threadMatchesNeedle(thread, term.toLowerCase()));
+}
+
+function threadMatchesNeedle(
+  thread: ThreadJumpCandidate,
+  needle: string,
+): boolean {
   if (textMatchesJumpQuery(thread.title, needle)) {
     return true;
   }
