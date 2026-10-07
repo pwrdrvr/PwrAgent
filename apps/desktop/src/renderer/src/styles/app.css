@@ -44057,7 +44057,7 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
 
 /* What is in a slice. It sits beside its bar on the side with room, measured
    like .context-usage-card; a click pins it, and only then does it take the pointer. */
-.usage-slice-card { position: absolute; top: -4px; z-index: 3; display: flex; flex-direction: column; gap: 6px; width: 264px; max-width: calc(100% - 16px); padding: 10px 10px 8px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--popover-bg); box-shadow: 0 12px 28px var(--shadow-tint-soft); color: var(--text-primary); font-size: 11px; pointer-events: none; text-align: left; }
+.usage-slice-card { position: absolute; top: -4px; z-index: 3; display: flex; flex-direction: column; gap: 6px; width: max-content; min-width: 264px; max-width: min(360px, calc(100% - 16px)); padding: 10px 10px 8px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--popover-bg); box-shadow: 0 12px 28px var(--shadow-tint-soft); color: var(--text-primary); font-size: 11px; pointer-events: none; text-align: left; }
 .usage-slice-card.is-pinned { pointer-events: auto; }
 .usage-slice-card__head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 0 4px; }
 .usage-slice-card__head span { color: var(--text-secondary); font: 10px var(--font-mono); }
