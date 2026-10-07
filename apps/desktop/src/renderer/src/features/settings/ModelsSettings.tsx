@@ -1,11 +1,17 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { formatFilesystemPath, isValidatedDiscoveryCandidate } from "@pwragent/shared";
+import {
+  DECISION_PROVIDER_IDS,
+  formatFilesystemPath,
+  isValidatedDiscoveryCandidate,
+  resolveDecisionModelSettings,
+} from "@pwragent/shared";
 import type {
   BackendModelOption,
   BackendSummary,
   DesktopCodexAuthProfileCandidate,
   DesktopCodexDiscoveryCandidate,
   DesktopHelperModelSettings,
+  DesktopDecisionModelSettings,
   DesktopProviderModelDefaults,
   DesktopProviderThreadModelMigration,
   DesktopSettingsSecretName,
@@ -56,6 +62,13 @@ import {
   useAcpAgentCatalog,
 } from "./useAcpAgentCatalog";
 import { SettingsSwitch } from "./SettingsSwitch";
+import {
+  DECISION_PROVIDER_FOCUS,
+  DECISION_PROVIDER_NAMES,
+  DecisionModelDefaults,
+  DecisionProviderScreen,
+  decisionSecrets,
+} from "./DecisionModelSettings";
 import {
   commandDiscoveryFailureDetail,
   describeCommandDiscoveryFailure,
@@ -135,6 +148,8 @@ export function ModelsSettings(props: {
     helperModels: DesktopHelperModelSettings,
   ) => Promise<unknown>;
   onSaveCodexFastAllowed: (allowed: boolean) => Promise<boolean>;
+  /** Persist Defaults → Decisions and the decision provider screens. */
+  onSaveDecisionModels?: (settings: DesktopDecisionModelSettings) => Promise<unknown>;
   /** Persist whether PwrAgent downloads and prefers its own Codex build. */
   onManagedCodexBuildsChange?: (enabled: boolean) => Promise<boolean>;
   /** Jump to Experimental, where Token Miser is switched. */
@@ -550,6 +565,23 @@ export function ModelsSettings(props: {
       </SettingsSection>
   );
 
+  const saveDecisionModels = async (settings: DesktopDecisionModelSettings) =>
+    await props.onSaveDecisionModels?.(settings);
+  const decisionProvider = DECISION_PROVIDER_IDS.find((id) => DECISION_PROVIDER_FOCUS[id] === props.focus);
+  if (decisionProvider) {
+    return (
+      <DecisionProviderScreen
+        provider={decisionProvider}
+        snapshot={props.snapshot}
+        desktopApi={props.desktopApi}
+        saving={props.saving}
+        onSave={saveDecisionModels}
+        onClearSecret={props.onClearSecret}
+        onReplaceSecret={props.onReplaceSecret}
+      />
+    );
+  }
+
   if (props.focus === "codex") {
     return (
       <SettingsSectionStack
@@ -640,6 +672,12 @@ export function ModelsSettings(props: {
         onSave={async (helperModels) => await props.onSaveHelperModels?.(helperModels)}
       />
 
+      <DecisionModelDefaults
+        snapshot={props.snapshot}
+        saving={props.saving}
+        onSave={saveDecisionModels}
+      />
+
       <SettingsSection
         eyebrow="Models"
         title="Providers"
@@ -681,6 +719,20 @@ export function ModelsSettings(props: {
                 }
                 off={!enabled}
                 onOpen={() => props.onFocusChange?.(entry.registryId)}
+              />
+            );
+          })}
+          {DECISION_PROVIDER_IDS.map((provider) => {
+            const decision = resolveDecisionModelSettings(props.snapshot.models.decisionModels);
+            const ready = provider === "local" || decisionSecrets(props.snapshot).jevApiKey.configured;
+            return (
+              <SettingsIndexRow
+                key={provider}
+                name={DECISION_PROVIDER_NAMES[provider]}
+                meta={provider === "local" ? decision.localEndpoint : decision.jevModel}
+                chip={decision.model === provider ? "In use" : ready ? "Decision model" : "No API key"}
+                chipKind={decision.model === provider ? "ok" : "muted"}
+                onOpen={() => props.onFocusChange?.(DECISION_PROVIDER_FOCUS[provider])}
               />
             );
           })}

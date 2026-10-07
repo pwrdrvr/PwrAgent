@@ -1,9 +1,41 @@
+import { CAMERA_SAMPLE_GAP_MS, CameraCueFilter, openVoiceCamera, type CameraCapture } from "./voice-camera";
 import type { NativeVoiceAction, NativeVoiceApi, NativeVoiceEvent, NativeVoiceMode } from "../../../../shared/native-voice";
+import { CAMERA_GESTURES, type CameraCue, type VoiceCameraObservation } from "../../../../shared/native-voice-camera";
+
+export type VoiceCameraDiagnostics = {
+  sessionId: string;
+  threadId: string;
+  startedAt: number;
+  observations: number;
+  staleObservations: number;
+  rateHz: number;
+  lastObservedAt?: number;
+  frameAgeMs?: number;
+  observation?: VoiceCameraObservation;
+  filter: string;
+  cuesAcknowledged: number;
+  lastCue?: CameraCue;
+  delivery?: "pending" | "acknowledged" | "failed";
+  acknowledgedAt?: number;
+  /** Why Clef skipped the latest frame; cleared by the next result. */
+  skipped?: "busy" | "offline";
+  skippedFrames?: number;
+  /** Decisions Clef reported running or waiting while it was busy. */
+  inFlight?: number;
+  error?: string;
+};
 
 export type VoiceStatus = "idle" | "checking" | "connecting" | "listening" | "stopping" | "stop-error" | "error";
 /** `seq` orders transcript rows and action receipts against each other. */
 export type VoiceTranscriptRow = { role: string; text: string; seq: number };
 export type VoiceActionRow = NativeVoiceAction & { seq: number };
+/** Gestures and presence go in the transcript; vibes stay in the dock. */
+export function isTranscriptCue(cue: CameraCue): boolean {
+  return cue === "away" || CAMERA_GESTURES.some((gesture) => gesture === cue);
+}
+
+/** A camera cue handed to the voice, in order with what was said. */
+export type VoiceCameraCueRow = { cue: CameraCue; seq: number; delivery: "pending" | "acknowledged" | "failed" };
 export type VoiceView = {
   status: VoiceStatus;
   error?: string;
@@ -12,16 +44,26 @@ export type VoiceView = {
   threadId?: string;
   /** The operator muted their microphone; the session stays open. */
   muted: boolean;
+  camera?: "starting" | "on";
+  cameraWarming?: boolean;
+  cameraCue?: string;
+  cameraError?: string;
+  /** Settings has a decision model that can read camera cues. Without one the camera is not offered. */
+  cameraOffered?: boolean;
+  cameraDiagnostics?: VoiceCameraDiagnostics;
+  endedAfterAway?: boolean;
   /** When the session went live, for the elapsed-time label. Billing runs from here. */
   liveSince?: number;
   /** The last session ended itself: muted, with its reply finished. */
   endedAfterReply?: boolean;
   transcript: VoiceTranscriptRow[];
   actions: VoiceActionRow[];
+  cameraCues?: VoiceCameraCueRow[];
 };
 type Meter = { read: () => number; close: () => void };
 type Resources = {
   id: string;
+  camera?: { cancelled: boolean; capture?: CameraCapture; timer?: ReturnType<typeof setTimeout> };
   meter?: Meter;
   peer?: RTCPeerConnection;
   stream?: MediaStream;
@@ -44,6 +86,7 @@ export type VoiceBrowser = {
   audio: () => HTMLAudioElement;
   microphone: () => Promise<MediaStream>;
   id: () => string;
+  camera?: () => Promise<CameraCapture>;
   /** Input level for the live meter. Optional: voice works without one. */
   meter?: (stream: MediaStream) => Meter | undefined;
 };
@@ -52,6 +95,7 @@ const browser: VoiceBrowser = {
   audio: () => new Audio(),
   microphone: () => navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false }),
   id: () => crypto.randomUUID(),
+  camera: openVoiceCamera,
   meter: (stream) => {
     if (typeof AudioContext !== "function") return undefined;
     const context = new AudioContext();
@@ -93,6 +137,15 @@ const TURN_ENDED = new Set(["turn/completed", "turn/failed", "turn/cancelled"]);
 
 const MAX_TRANSCRIPT_ROWS = 40;
 const MAX_ACTION_ROWS = 20;
+// A busy Clef keeps serving whoever holds it, and an abandoned request still
+// runs to completion there, so back off instead of queueing more frames. An
+// offline one is retried on the same schedule and recovers on its own.
+const CAMERA_SKIP_RETRY_MS = 2000;
+const CAMERA_SKIP_RETRY_MAX_MS = 16_000;
+/** An IPC failure's own message, without Electron's "Error invoking remote method" wrapper. */
+const cameraErrorText = (error: unknown) => error instanceof Error
+  ? error.message.replace(/^Error invoking remote method '[^']*': (?:Error: )?/, "") || "Camera cues failed."
+  : "Camera cues failed.";
 
 /** Owns every track, peer, audio element and listener for one window. */
 export class NativeVoiceController {
@@ -146,7 +199,7 @@ export class NativeVoiceController {
   /** Show a failure that happened before a session existed, such as resolving its thread. */
   reportError(message: string, mode: NativeVoiceMode): void {
     if (this.resources) return;
-    this.publish({ status: "error", error: message, mode, threadId: undefined, muted: false, transcript: [], actions: [] });
+    this.publish({ status: "error", error: message, mode, threadId: undefined, muted: false, transcript: [], actions: [], cameraCues: [] });
   }
 
   /**
@@ -205,14 +258,17 @@ export class NativeVoiceController {
     this.openRows.clear();
     this.publish({
       status: "checking", error: undefined, mode, threadId, muted: false,
-      liveSince: undefined, endedAfterReply: undefined, transcript: [], actions: [],
+      liveSince: undefined, endedAfterReply: undefined, endedAfterAway: undefined, camera: undefined, cameraWarming: undefined, cameraCue: undefined, cameraError: undefined, cameraOffered: undefined, cameraDiagnostics: undefined, transcript: [], actions: [], cameraCues: [],
     });
     this.watchTurns(resources, threadId);
     try {
       const capability = await this.api.nativeVoiceCapability();
       if (!this.current(resources)) return;
       if (!capability.available) throw new Error(capability.reason ?? "Live voice is unavailable.");
-      this.publish({ status: "connecting" });
+      this.publish({
+        status: "connecting",
+        cameraOffered: capability.camera?.available === true,
+      });
       const peer = this.platform.peer();
       resources.peer = peer;
       resources.audio = this.platform.audio();
@@ -347,6 +403,7 @@ export class NativeVoiceController {
     const resources = this.resources;
     if (!resources) return Promise.resolve();
     if (resources.stop) return resources.stop;
+    this.closeCamera(resources);
     resources.cancelled = true;
     clearTimeout(resources.timer);
     clearTimeout(resources.idleTimer);
@@ -381,6 +438,150 @@ export class NativeVoiceController {
       } else resources.stop = undefined;
     });
     return resources.stop;
+  }
+
+  dismissCameraError(): void { this.publish({ cameraError: undefined }); }
+
+  cameraStream(): MediaStream | undefined { return this.resources?.camera?.capture?.stream; }
+
+  private closeCamera(resources: Resources): void {
+    const camera = resources.camera;
+    if (!camera) return;
+    camera.cancelled = true;
+    clearTimeout(camera.timer);
+    camera.capture?.close();
+    resources.camera = undefined;
+    this.publish({ camera: undefined, cameraCue: undefined, cameraWarming: undefined });
+    void this.api.setNativeVoiceCamera?.({ sessionId: resources.id, enabled: false }).catch(() => undefined);
+  }
+
+  async setCamera(enabled: boolean): Promise<void> {
+    const resources = this.resources;
+    if (!resources || this.view.status !== "listening") return;
+    if (!enabled) { this.closeCamera(resources); return; }
+    if (resources.camera) return;
+    if (!this.api.setNativeVoiceCamera || !this.api.analyzeNativeVoiceCamera || !this.api.sendNativeVoiceCameraCue || !this.platform.camera) {
+      this.publish({ cameraError: "Camera cues are unavailable in this window." });
+      return;
+    }
+    const camera: NonNullable<Resources["camera"]> = { cancelled: false };
+    resources.camera = camera;
+    const current = () => this.current(resources) && resources.camera === camera && !camera.cancelled;
+    const filter = new CameraCueFilter();
+    const completed: number[] = [];
+    let diagnostics: VoiceCameraDiagnostics = {
+      sessionId: resources.id, threadId: this.view.threadId!, startedAt: Date.now(),
+      observations: 0, staleObservations: 0, rateHz: 0, cuesAcknowledged: 0, filter: "Waiting for first decision",
+    };
+    const debug = (change: Partial<VoiceCameraDiagnostics>) => {
+      diagnostics = { ...diagnostics, ...change };
+      this.publish({ cameraDiagnostics: diagnostics });
+    };
+    this.publish({ camera: "starting", cameraError: undefined, cameraDiagnostics: diagnostics });
+    const failed = (error: unknown) => {
+      if (!current()) return;
+      debug({ error: cameraErrorText(error), filter: "Camera stopped after failure" });
+      this.closeCamera(resources);
+      this.publish({ cameraError: cameraErrorText(error) });
+    };
+    let skipStreak = 0;
+    try {
+      await this.api.setNativeVoiceCamera({ sessionId: resources.id, enabled: true });
+      if (!current()) return;
+      const capture = await this.platform.camera();
+      if (!current()) { capture.close(); return; }
+      camera.capture = capture;
+      this.publish({ camera: "on", cameraWarming: true });
+      const sample = async () => {
+        if (!current()) return;
+        const started = Date.now();
+        try {
+          const image = capture.frame();
+          if (image) {
+            const observation = await this.api.analyzeNativeVoiceCamera!({ sessionId: resources.id, image });
+            if (!current()) return;
+            if (!observation) {
+              this.closeCamera(resources);
+              debug({ filter: "Analysis cancelled" });
+              return;
+            }
+            if ("skipped" in observation) {
+              // Skipped frames break continuity: they never count toward a
+              // gesture, and never as the operator being away.
+              // Main paces a skip that reached no model; otherwise back off.
+              if (observation.retryAfterMs === undefined) skipStreak += 1;
+              filter.resetContinuity();
+              debug({
+                skipped: observation.skipped, skippedFrames: (diagnostics.skippedFrames ?? 0) + 1, inFlight: observation.inFlight,
+                filter: observation.skipped === "busy" ? "Clef busy; retrying" : "Clef unavailable; retrying",
+              });
+              const retryMs = observation.retryAfterMs
+                ?? Math.min(CAMERA_SKIP_RETRY_MAX_MS, CAMERA_SKIP_RETRY_MS * 2 ** (skipStreak - 1));
+              camera.timer = setTimeout(() => { void sample(); }, retryMs);
+              return;
+            }
+            skipStreak = 0;
+            if (this.view.cameraWarming) this.publish({ cameraWarming: false });
+            // A cold-model response describes the old captured frame. Waiting
+            // never establishes absence or permits a stale expression cue.
+            const now = Date.now();
+            completed.push(now);
+            while (completed.length > 1 && now - completed[0] > 10_000) completed.shift();
+            const interval = now - completed[0];
+            debug({
+              skipped: undefined, inFlight: undefined, observations: diagnostics.observations + 1, observation, lastObservedAt: now, frameAgeMs: now - started,
+              rateHz: interval > 0 ? (completed.length - 1) * 1000 / interval : 0,
+            });
+            if (now - started > CAMERA_SAMPLE_GAP_MS) {
+              debug({ staleObservations: diagnostics.staleObservations + 1, filter: "Stale frame discarded; waiting for a fresh decision" });
+              filter.resetContinuity();
+              if (current()) camera.timer = setTimeout(() => { void sample(); }, 500);
+              return;
+            }
+            const decision = filter.observe(observation, now);
+            debug({ filter: observation.gesture ? `${filter.status}; gesture: ${filter.gestureStatus}` : filter.status });
+            if (decision.end) {
+              this.publish({ endedAfterAway: true });
+              void this.stop();
+              return;
+            }
+            if (decision.cue) {
+              // A gesture or a change in presence is something the operator
+              // did, so it earns a transcript row; a vibe is ambient and is
+              // only shown live, in the dock.
+              const receipt = isTranscriptCue(decision.cue);
+              const seq = receipt ? ++this.seq : undefined;
+              const delivered = (delivery: VoiceCameraCueRow["delivery"]) => {
+                if (seq === undefined) return;
+                this.publish({ cameraCues: (this.view.cameraCues ?? []).map((row) => row.seq === seq ? { ...row, delivery } : row) });
+              };
+              this.publish({
+                cameraCue: decision.cue,
+                ...(seq === undefined ? {} : {
+                  cameraCues: [...(this.view.cameraCues ?? []), { cue: decision.cue, seq, delivery: "pending" as const }].slice(-MAX_ACTION_ROWS),
+                }),
+              });
+              debug({ lastCue: decision.cue, delivery: "pending" });
+              // Do not reset muted-idle timers: a camera cue is not user activity.
+              // The receipt settles even if the camera stopped meanwhile: the
+              // transcript outlives the camera, and "sending…" must not stick.
+              try {
+                await this.api.sendNativeVoiceCameraCue!({ sessionId: resources.id, cue: decision.cue });
+                delivered("acknowledged");
+                if (!current()) return;
+                debug({ delivery: "acknowledged", acknowledgedAt: Date.now(), cuesAcknowledged: diagnostics.cuesAcknowledged + 1 });
+              } catch (error) {
+                delivered("failed");
+                if (current()) debug({ delivery: "failed" });
+                throw error;
+              }
+            }
+          }
+          if (current()) camera.timer = setTimeout(() => { void sample(); }, Math.max(0, 500 - (Date.now() - started)));
+        } catch (error) { failed(error); }
+      };
+      void sample();
+    } catch (error) { failed(error); }
   }
 
   async text(text: string): Promise<void> {

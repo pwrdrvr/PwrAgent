@@ -157,6 +157,7 @@ mac:
     - from: build/native/PwrAgentDockTilePlugin.plugin
       to: PlugIns/PwrAgentDockTilePlugin.plugin
   extendInfo:
+    NSCameraUsageDescription: "PwrAgent uses your camera only when you enable camera cues during live voice. Frames are analyzed on this machine."
     NSMicrophoneUsageDescription: "PwrAgent uses your microphone only when you start live voice for a coding thread."
     NSHumanReadableCopyright: "Copyright © 2026 PwrDrvr LLC."
     NSLocalNetworkUsageDescription: "PwrAgent connects to Federation gateways and other services you configure on your local network."

@@ -1,3 +1,4 @@
+import type { VoiceCameraRequest, VoiceCameraFrame, VoiceCameraObservation, VoiceCameraCue, VoiceCameraSkipped } from "./native-voice-camera";
 import type { AgentEvent, OperatorFocusSnapshot } from "@pwragent/shared";
 
 /** Window-local voice ownership. No credentials or service URLs cross IPC. */
@@ -18,7 +19,12 @@ export const OPERATOR_FOCUS_PUBLISH_CHANNEL = "operator-focus:publish";
  */
 export type NativeVoiceMode = "thread" | "director";
 
-export type NativeVoiceCapability = { available: boolean; reason?: string };
+export type NativeVoiceCapability = {
+  available: boolean;
+  reason?: string;
+  /** Whether Settings lets this session send camera frames to a decision model. */
+  camera?: { available: boolean; reason?: string };
+};
 export type NativeVoiceStart = { threadId: string; sessionId: string; sdp: string; mode?: NativeVoiceMode };
 export type NativeVoiceTarget = { sessionId: string };
 export type NativeVoiceText = NativeVoiceTarget & { text: string };
@@ -50,6 +56,9 @@ export type NativeVoiceApi = {
   stopNativeVoice: (request: NativeVoiceTarget) => Promise<void>;
   sendNativeVoiceText: (request: NativeVoiceText) => Promise<void>;
   onNativeVoiceEvent: (callback: (event: NativeVoiceEvent) => void) => () => void;
+  sendNativeVoiceCameraCue?: (request: VoiceCameraCue) => Promise<void>;
+  setNativeVoiceCamera?: (request: VoiceCameraRequest) => Promise<void>;
+  analyzeNativeVoiceCamera?: (request: VoiceCameraFrame) => Promise<VoiceCameraObservation | VoiceCameraSkipped | undefined>;
   openVoiceManager?: () => Promise<OpenVoiceManagerResponse>;
   publishOperatorFocus?: (focus: OperatorFocusSnapshot) => Promise<void>;
   /**

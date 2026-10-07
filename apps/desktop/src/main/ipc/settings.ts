@@ -104,6 +104,7 @@ import {
 import type { ManagedRuntimeProgress } from "../../shared/managed-runtime-progress";
 import { readManagedRuntimeProgress } from "../managed-runtime-progress";
 import type { DesktopSettingsService } from "../settings/desktop-settings-service";
+import { checkDecisionProvider } from "../decision/decision-provider-check";
 import {
   getDesktopConfigStore,
   getDesktopSettingsService,
@@ -1471,6 +1472,10 @@ function getCredentialTester(
       },
       validateMessagingCredentials: (request) =>
         getDesktopMessagingRuntime().requestCredentialValidation(request),
+      checkDecisionProvider: async (provider) => await checkDecisionProvider(provider, {
+        settings: resolveService().resolveDecisionModelSettings(),
+        apiKey: await resolveService().resolveDecisionApiKey(provider),
+      }),
     });
   }
   return credentialTesterInstance;

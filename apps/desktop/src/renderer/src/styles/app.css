@@ -265,6 +265,11 @@
   --shadow-tint-medium: color-mix(in srgb, var(--shadow-base) 40%, transparent);
   --shadow-tint-strong: color-mix(in srgb, var(--shadow-base) 58%, transparent);
 
+  /* Labels drawn over live video, on a scrim that is dark in every theme,
+     so the light theme deliberately does not override either. */
+  --media-overlay-scrim: color-mix(in srgb, var(--shadow-base) 62%, transparent);
+  --media-overlay-text: #f7f3eb;
+
   /* Surface-border overlays for inset box-shadows that read as
      hairline borders. */
   --surface-border-faint: color-mix(in srgb, var(--text-primary) 8%, transparent);

@@ -96,15 +96,25 @@ and under the notice stack.
 
 The panel shows:
 
-- a header with the title, the session clock, the microphone toggle, copy, and
-  **End director voice**, which ends the session and closes the panel;
+- a header with the title, the session clock, the microphone toggle, the camera
+  toggle, copy, and **Close director voice**, which ends a live session and
+  closes the panel;
 - the state on its own row: **Microphone live** with the level meter, **Muted ·
-  ends 30s after the reply**, or the connecting, ending, and ended states;
+  ends 30s after the reply**, or the connecting, ending, and ended states, with
+  **End** at the row's end. End stops the session and keeps the panel and its
+  transcript;
 - what the window is looking at, which is what "this" means to the voice:
   **Looking at: Sample thread**, or **Looking at: new thread in Sample
   project** on a launchpad. It follows the window live, so it is hidden once
   the session ends;
-- the transcript with its receipts, and **Message voice**.
+- the transcript, with the director's lines labeled **Director**, tool
+  receipts, and a one-line receipt for each camera cue sent to the voice;
+- the camera dock while camera cues are on;
+- **Message director**.
+
+Mute, End, and Close are three intents: mute stops the director hearing the
+room, End stops the session and keeps the conversation, and Close ends a live
+session and closes the panel.
 
 The header holds only items whose width does not change with the state, so it
 fits the panel's 300px minimum width in every state. The state labels differ
@@ -114,9 +124,9 @@ yields, by ellipsis.
 
 The panel outlives a session that ends on its own: muted after its reply, closed
 by the service, or failed. It keeps the transcript and stops the clock at the
-session's length. The state reads **Ended after the reply** or **Voice ended**.
-The mic button becomes **Start director voice**, and the close button becomes
-**Close director voice**. Starting again clears the old transcript.
+session's length. The state reads **Ended after the reply** or **Voice ended**,
+and End becomes **Start again** in the same place. The microphone and camera
+toggles leave the header. Starting again clears the old transcript.
 
 The panel also shows any question that the Voice manager's turn is waiting on.
 A tool can ask the operator something on the thread it runs in, and nobody
@@ -232,7 +242,8 @@ emits `started`, and the peer connects. Stop, permission denial, late permission
 results, startup failure, connection loss, thread change and window teardown
 clean these resources. Main also watches navigation, renderer crashes, window
 destruction and backend disconnect. Electron grants audio capture only to the
-opted-in, established voice owner, and rejects camera/subframe media requests.
+opted-in, established voice owner. Video additionally requires that owner's
+separate camera opt-in; subframe and combined audio/video requests are rejected.
 macOS packaging includes its microphone purpose string and audio-input
 entitlement.
 
@@ -344,3 +355,144 @@ Official context: [Codex App Server](https://learn.chatgpt.com/docs/app-server),
 [GPT-Live](https://developers.openai.com/api/docs/guides/live).
 Desktop voice availability/pricing statements do not establish terms for this
 external experimental App Server integration.
+
+
+## Camera context integration
+
+During a listening director session, the camera button beside the microphone
+in the Director voice panel can opt into local camera cues. Capture belongs to the window's voice controller
+and ends on camera opt-out, voice stop, navigation teardown, or failure.
+
+The camera dock sits between the transcript and **Message director**, as a
+sibling of the transcript rather than inside it, so the preview holds one place
+while the transcript scrolls. Its bar shows model latency and completed
+decisions per second. An idle `none` or `neutral` pick stays in the secondary
+color, so the accent appears only when the camera sees something. The row whose
+cue was just delivered shows **sent** for four seconds.
+
+The panel's size picks the layout, through a container query. At
+the default width the mirrored preview sits beside each question's top pick
+(gesture, vibe, present) with its confidence. Dragged to about 470px wide and
+800px tall, every option's meter for all three questions spans the dock below
+the preview and picks, plus the filter status. From about 790px wide and 660px
+tall, the meters move beside a larger preview, the way the Clef demo lays them
+out. The preview keeps a 4:3 frame at every size, so extra width goes to the
+meters instead of cropping the video to a strip. The height floors keep the
+transcript readable; the panel is a size container, so both dimensions count.
+Both readouts stay mounted, so a resize never restarts the video.
+**Copy camera diagnostics** copies what the dock leaves off-screen: frame age,
+stale-result count, acknowledgment counts, and the owning thread and session.
+Received results and acknowledged context are counted separately.
+
+Each gesture or presence cue sent to the voice is also a transcript row
+(camera · **stop** · sent), in order with the speech, so reading back answers
+whether the voice was told. Vibe cues reach the voice too but are ambient, so
+they appear only in the dock.
+The row reads **sending…** until the context RPC acknowledges and **not
+delivered** if it fails.
+An appendText RPC acknowledgment confirms delivery to Codex, not whether the
+realtime model incorporated the observation into its next answer.
+
+### Decision model settings
+
+Settings → AI Providers configures the decision model. **Defaults →
+Decisions** picks it (the local decision model, TypeSafe Jev, or Off) and holds
+the **Camera cues in live voice** switch. Off is the default: with nothing set
+up, live voice has no camera button and none of the camera features below. Both providers speak TypeSafe's
+[System One API](https://docs.typesafe.ai/api): `POST <base URL>/v1/systemone`
+with `model`, `state` and typed `questions`. The Providers index lists both,
+each with its own screen:
+
+- **Local decision model**: the endpoint (default `http://127.0.0.1:8787`,
+  PwrSuiteLab's Clef runtime), the model id (default `clef-flash`, the only id
+  that runtime accepts), an optional API key sent as a bearer token, a
+  connection test that confirms `GET /v1/models` lists the model and reads
+  `/health` for load, and links to Cloudflare's Clef as the suggested model.
+- **TypeSafe Jev**: the API key, the model id (default `jev-latest`), a
+  connection test that asks one yes/no question, and links to the TypeSafe
+  console and docs.
+
+Camera frames go only to the local decision model, and the endpoint must be an
+address on this Mac: `localhost`, `127.0.0.0/8` or `::1`, with no path. The
+camera button appears only when the local decision model is chosen and the
+switch is on; Jev takes text only, so choosing it hides the button too. A
+session reads this when it starts, and main re-reads the
+setting before every frame, so turning cues off mid-session stops the next
+frame; the local API key is read once, when the camera turns on.
+
+The keys are stored in `[models.decision]` (`model`, `camera_cues`,
+`local_endpoint`, `local_model`, `jev_model`); the API keys are secrets, never
+config.
+
+### Frames and questions
+
+Main sends 336-pixel JPEG frames to the local decision model's
+`/v1/systemone`, as a data URL in `images`: Clef's extension to the System One
+request, which takes up to four inline images. The questions are short
+demo-style ones for gestures, boolean
+presence and vibe. Gestures include pointing, OK, stop, thumbs-up, double
+thumbs-up, thumbs-down, facepalm and none. Vibe includes neutral, exasperated,
+frustrated, yelling and talking. All 15 returned scores
+are shown in the camera dock at wide panel widths. The state is the demo’s compact
+“A live webcam frame from a laptop.”, with no instruction to favor neutral. One request
+runs at a time, at up to two frames per second. System One responses carry no
+timing, so the latency the dock shows is main's round trip. A request the
+server refuses (HTTP 4xx other than 408 or 429, such as a model id it does not
+serve) stops camera cues with the server's reason, since every later frame
+would be refused the same way. Camera permissions and frame
+requests require the owning, established voice session and a separate camera
+opt-in. Frames and decisions remain in memory; this integration adds no
+PwrAgent SQLite writes or image files.
+
+The local preview shows "warming up" until the first valid decision. That
+request has a five-minute deadline and waits for one response at a time,
+retrying connection failures and temporary HTTP 429/5xx responses after a
+one-second pause. Opt-out, voice stop and backend closure abort both the
+request and retry pause immediately. Intentional cancellation resolves without
+a Clef-unavailable error. Main logs first-decision waiting/completion, real
+failures, cancellations, and context RPC acknowledgments; it never logs frames
+or raw Clef responses. After the first decision, ordinary
+inference retains its eight-second deadline. After that, a Clef failure skips
+the frame, not the camera. Clef serializes requests, so a warm model that
+misses the deadline is usually serving another client, such as a benchmark
+(**cue model busy**); one that refuses the connection may be restarting
+(**cue model offline**). The preview stays up with that caption in place of
+the stale reading, the skipped frame resets continuity so it never completes a
+gesture or counts as absence, and the next frame waits 2s, doubling to 16s,
+because an abandoned request still runs to completion inside Clef. The first
+result after a skip resumes normal sampling. After a missed deadline, the
+next frame first asks the PwrSuiteLab Clef runtime's `GET /health` for
+`requests_processing`, which it answers without the model lock and which counts
+the abandoned request. While that is above zero no frame is sent; the dock
+reads **busy · N in flight** and asks again each second. A server without the
+route falls back to the backoff. Responses to frames older than ten seconds are
+discarded and reset continuity; model-loading time cannot count as absence.
+
+The filter requires presence confidence of at least 80% and reaction
+confidence of at least 70%, three consecutive samples spanning 1.5 seconds,
+and an eight-second cooldown between reaction changes. Repeated cues are
+suppressed after the first sustained cue, including initial neutral context.
+Uncertain presence, a visible return, or a ten-second sampling
+gap resets the absence countdown. Ordinary gestures require 80% confidence
+and three samples spanning 1.5 seconds; stop and thumbs-down require 85% and
+two consecutive frames spanning 500ms, bypassing ordinary cue cooldowns.
+Repeated gestures are suppressed until a confident no-gesture transition.
+Gestures require confident presence, and stale frames never establish a cue.
+Thirty seconds of confident absence ends
+voice, leaving coding turns running.
+
+Camera observations are pushed automatically by the voice controller; there
+is no model tool to poll for them. Only an allowlisted, debounced text cue
+reaches GPT-Live, through Codex
+`thread/realtime/appendText` with role `developer`. The prompt treats cues as
+uncertain visible observations: exasperation asks for reconsideration,
+enthusiasm develops the current direction, boredom asks for brevity or a
+question, and absence informs the model the operator has left. Stop/no or
+thumbs-down requests a pause and spoken clarification before another action.
+The payload is explicitly labeled as uncertain camera context, never invented
+spoken user text. This context RPC does not guarantee immediate audio
+barge-in or cancellation of an already dispatched action. A camera cue cannot
+approve or cancel
+work. Before the first decision, a Clef failure stops camera capture and shows
+a dismissible error while voice remains available. Facial-expression accuracy and the model's spoken
+adaptation still need live evaluation by the operator.

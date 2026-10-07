@@ -15554,9 +15554,11 @@ describe("CodexAppServerClient", () => {
       expect(JSON.stringify(log.mock.calls)).not.toContain("Hello");
     }
     await client.appendRealtimeText("voice-fixture", "Check progress.");
+    await client.appendRealtimeText("voice-fixture", "[Camera observation] Neutral visible cue.", "developer");
     await client.stopRealtime("voice-fixture");
     const requests = transport.sentMessages.map((message) => JSON.parse(message));
     expect(requests).toContainEqual(expect.objectContaining({ method: "thread/realtime/appendText", params: { threadId: "voice-fixture", text: "Check progress.", role: "user" } }));
+    expect(requests).toContainEqual(expect.objectContaining({ method: "thread/realtime/appendText", params: { threadId: "voice-fixture", text: "[Camera observation] Neutral visible cue.", role: "developer" } }));
     expect(requests.some((request) => request.method === "turn/interrupt")).toBe(false);
     off();
     transport.emitInbound({ method: "thread/realtime/sdp", params: { threadId: "voice-fixture", sdp: "ignored" } });
