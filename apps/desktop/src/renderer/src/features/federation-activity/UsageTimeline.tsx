@@ -123,13 +123,17 @@ export function UsageTimeline({ buckets, series, member, limit, forecast, select
   const shownBucket = shown === undefined ? undefined : buckets[shown];
   const hotSegment = hot && hot.index === shown ? hot.segment : undefined;
   const filled = buckets.flatMap((bucket, index) => bucket.rows ? [index] : []);
-  const stop = selected ?? (cursor !== undefined && cursor < buckets.length ? cursor : filled.at(-1) ?? buckets.length - 1);
+  // A refresh can redraw the window with fewer bars than an index held.
+  const inRange = (index: number | undefined) => index !== undefined && index < buckets.length ? index : undefined;
+  const stop = inRange(selected) ?? inRange(cursor) ?? filled.at(-1) ?? buckets.length - 1;
   const focusBar = (index: number) => bars.current[index]?.focus();
   // Unpinning removes the card and the chip, so focus that was on either
   // returns to the bar.
   const unpin = (refocus: boolean) => {
     const pinned = selected;
     onSelect(undefined);
+    // A card row that unmounts under the pointer never reports leaving it.
+    setHot(undefined);
     if (refocus && pinned !== undefined) focusBar(pinned);
   };
   const onBarKey = (event: KeyboardEvent, index: number) => {
