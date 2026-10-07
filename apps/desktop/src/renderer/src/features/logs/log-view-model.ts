@@ -301,6 +301,58 @@ export function highlightLogLineParts(
 }
 
 // ---------------------------------------------------------------------------
+// Long lines
+// ---------------------------------------------------------------------------
+
+/**
+ * A line longer than this shows a preview until it is expanded. About three
+ * wrapped rows at the default window width: enough to read what the line is,
+ * not enough for one dump to bury the lines around it.
+ */
+export const LONG_LINE_PREVIEW_CHARS = 480;
+/** A cut that would hide less than this shows the whole line instead. */
+const LONG_LINE_MIN_HIDDEN_CHARS = 80;
+/** How much of the line after the first search match a preview keeps. */
+const PREVIEW_MATCH_TAIL_CHARS = 160;
+
+/**
+ * The parts a long line shows before it is expanded, and how many characters
+ * the preview leaves out. The preview always reaches past the first match of
+ * `query`, so a search never points at text it hides.
+ */
+export function previewLogLineParts(
+  parts: readonly LogLinePart[],
+  line: string,
+  query: string,
+): { parts: LogLinePart[]; hiddenChars: number } {
+  let limit = LONG_LINE_PREVIEW_CHARS;
+  const normalizedQuery = query.trim().toLowerCase();
+  if (normalizedQuery) {
+    const at = line.toLowerCase().indexOf(normalizedQuery);
+    if (at !== -1) {
+      limit = Math.max(limit, at + normalizedQuery.length + PREVIEW_MATCH_TAIL_CHARS);
+    }
+  }
+  if (line.length - limit < LONG_LINE_MIN_HIDDEN_CHARS) {
+    return { parts: [...parts], hiddenChars: 0 };
+  }
+  const shown: LogLinePart[] = [];
+  let used = 0;
+  for (const part of parts) {
+    if (used >= limit) break;
+    const room = limit - used;
+    if (part.text.length <= room) {
+      shown.push(part);
+      used += part.text.length;
+    } else {
+      shown.push({ ...part, text: part.text.slice(0, room) });
+      used = limit;
+    }
+  }
+  return { parts: shown, hiddenChars: line.length - used };
+}
+
+// ---------------------------------------------------------------------------
 // Search
 // ---------------------------------------------------------------------------
 

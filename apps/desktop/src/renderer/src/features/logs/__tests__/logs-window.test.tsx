@@ -388,6 +388,55 @@ describe("LogsWindow", () => {
     window.getSelection()?.removeAllRanges();
   });
 
+  it("previews a very long line, expands it in place, and copies it whole", async () => {
+    const long = logLine(
+      6,
+      "info",
+      "main",
+      `renderer globals keys=[${"listThing,".repeat(300)}end]`,
+    );
+    const copyRichText = vi.fn(async () => undefined);
+    installApi({
+      entries: [...MCP_ENTRIES, long],
+      copyRichText,
+      readConfigBootstrap: vi.fn(async () => ({
+        snapshot: {
+          logs: {
+            wrap: true,
+            searchMode: "filter",
+            contextLines: 0,
+            includeDiagnostics: false,
+            levels: ["error", "warn", "info"],
+          },
+        },
+      })),
+    });
+
+    render(<LogsWindow />);
+    const more = await screen.findByRole("button", { name: /more characters$/ });
+    const row = document.querySelector<HTMLElement>('[data-log-sequence="6"]') as HTMLElement;
+    expect(row).not.toHaveTextContent("end]");
+
+    fireEvent.click(more);
+    expect(row).toHaveTextContent("end]");
+    fireEvent.click(within(row).getByRole("button", { name: "Show less" }));
+    expect(row).not.toHaveTextContent("end]");
+
+    fireEvent.pointerDown(lineNumber(6), { button: 0 });
+    await waitFor(() => {
+      expect(screen.getByRole("checkbox", { name: "Include diagnostics" })).toHaveAttribute(
+        "aria-checked",
+        "false",
+      );
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+    await waitFor(() => {
+      expect(copyRichText).toHaveBeenCalledWith(
+        expect.objectContaining({ text: long.line }),
+      );
+    });
+  });
+
   it("remembers Wrap and starts from the stored preferences", async () => {
     const { api } = installApi({
       entries: MCP_ENTRIES,

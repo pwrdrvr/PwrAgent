@@ -3913,14 +3913,37 @@ textarea,
   outline-offset: 2px;
 }
 
-.log-window__button[aria-pressed="true"]:not(.log-window__button--live) {
+.log-window__button[aria-pressed="true"] {
   border-color: var(--accent-border);
   background: var(--accent-soft);
   color: var(--accent-bright);
 }
 
-.log-window__button--live {
-  min-width: 78px;
+/* Live / Paused leads the status bar. */
+.log-window__live {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel-elevated);
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.log-window__live:hover {
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+
+.log-window__live:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 .log-window__live-dot {
@@ -4074,6 +4097,35 @@ textarea,
   text-indent: -2ch;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+/* A long line's preview ends in this; it expands the line in place. */
+.log-window__line-more {
+  display: inline;
+  margin-left: 8px;
+  padding: 0 6px;
+  border: 1px solid var(--accent-border);
+  border-radius: 4px;
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 17px;
+  text-indent: 0;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.log-window__line-more:hover {
+  border-color: var(--accent);
+}
+
+.log-window__line-more:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
 }
 
 .log-window__part--timestamp {

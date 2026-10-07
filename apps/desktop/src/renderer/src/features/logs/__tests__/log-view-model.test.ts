@@ -10,7 +10,9 @@ import {
   highlightLogLineParts,
   logEntryMatchesSearch,
   logGapKey,
+  LONG_LINE_PREVIEW_CHARS,
   orderedRenderedLogEntries,
+  previewLogLineParts,
   selectedLogEntries,
   tokenizeLogLine,
   type LogDisplayRow,
@@ -303,5 +305,40 @@ describe("buildLogCopyText", () => {
         ...ENTRIES.slice(1, 4).map((item) => item.line),
       ].join("\n"),
     );
+  });
+});
+
+describe("previewLogLineParts", () => {
+  const longLine = `[2026-10-07 15:29:42.275] [info ] (pwragent:main) renderer globals keys=[${"a".repeat(1200)},listMcpConnections,${"b".repeat(400)}]`;
+  const { parts } = tokenizeLogLine(longLine);
+  const join = (items: { text: string }[]) => items.map((part) => part.text).join("");
+
+  it("leaves a short line whole", () => {
+    const short = tokenizeLogLine("[2026-10-07 15:29:42.275] [info ] (pwragent:main) short");
+    expect(previewLogLineParts(short.parts, "x".repeat(10), "")).toEqual({
+      parts: short.parts,
+      hiddenChars: 0,
+    });
+  });
+
+  it("cuts a long line to the preview length and keeps the tones", () => {
+    const preview = previewLogLineParts(parts, longLine, "");
+
+    expect(join(preview.parts)).toBe(longLine.slice(0, LONG_LINE_PREVIEW_CHARS));
+    expect(preview.hiddenChars).toBe(longLine.length - LONG_LINE_PREVIEW_CHARS);
+    expect(preview.parts[0]).toEqual({ text: "[2026-10-07 15:29:42.275]", tone: "timestamp" });
+  });
+
+  it("reaches past the first search match", () => {
+    const preview = previewLogLineParts(parts, longLine, "LISTMCP");
+    const shown = join(preview.parts);
+
+    expect(shown).toContain("listMcpConnections");
+    expect(shown.length + preview.hiddenChars).toBe(longLine.length);
+  });
+
+  it("shows the whole line when the cut would hide only a little", () => {
+    const line = "x".repeat(LONG_LINE_PREVIEW_CHARS + 40);
+    expect(previewLogLineParts([{ text: line }], line, "").hiddenChars).toBe(0);
   });
 });

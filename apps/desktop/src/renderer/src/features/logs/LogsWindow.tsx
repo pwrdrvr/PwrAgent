@@ -51,6 +51,7 @@ import {
   logSearchTokenLabel,
   normalizeLogLevel,
   orderedRenderedLogEntries,
+  previewLogLineParts,
   selectedLogEntries,
   shouldShowLogEntry,
   tokenizedLogEntry,
@@ -151,6 +152,9 @@ export function LogsWindow() {
     () => new Set(),
   );
   const [statusMessage, setStatusMessage] = useState<string | undefined>();
+  const [expandedLines, setExpandedLines] = useState<ReadonlySet<number>>(
+    () => new Set(),
+  );
 
   const selectedLevels = useMemo<LogLevelFilter[]>(
     () => [...preferences.levels, ...(debugSelected ? ["debug" as const] : [])],
@@ -636,6 +640,19 @@ export function LogsWindow() {
 
   const handleLinesClick = useCallback(
     (event: ReactMouseEvent<HTMLDivElement>) => {
+      const expander = event.target instanceof Element
+        ? event.target.closest<HTMLElement>("[data-log-expand]")
+        : null;
+      if (expander) {
+        const sequence = Number(expander.dataset.logExpand);
+        setExpandedLines((current) => {
+          const next = new Set(current);
+          if (next.has(sequence)) next.delete(sequence);
+          else next.add(sequence);
+          return next;
+        });
+        return;
+      }
       const target = event.target instanceof Element
         ? event.target.closest<HTMLElement>("[data-log-token-kind]")
         : null;
@@ -1022,20 +1039,6 @@ export function LogsWindow() {
               <BookmarkIcon aria-hidden="true" size={14} />
               <span className="log-window__button-label">Mark</span>
             </button>
-            <button
-              aria-pressed={following}
-              className="log-window__button log-window__button--live tooltip-target"
-              data-tooltip={following ? "Pause the live log" : "Resume the live log"}
-              type="button"
-              onClick={following ? pause : resume}
-            >
-              <span
-                aria-hidden="true"
-                className="log-window__live-dot"
-                data-live={following ? "true" : "false"}
-              />
-              {following ? "Live" : "Paused"}
-            </button>
           </div>
 
           {error ? (
@@ -1109,6 +1112,7 @@ export function LogsWindow() {
                         activeMatch={searching && sequence === activeMatchSequence}
                         context={row.context}
                         entry={row.entry}
+                        expanded={expandedLines.has(sequence)}
                         flashing={flashSequences.has(sequence)}
                         highlightQuery={search.text}
                         match={row.match && preferences.searchMode === "highlight"}
@@ -1197,14 +1201,26 @@ export function LogsWindow() {
           </div>
 
           <footer className="log-window__status-bar">
+            <button
+              aria-pressed={following}
+              className="log-window__live tooltip-target"
+              data-tooltip={following ? "Pause the live log" : "Resume the live log"}
+              type="button"
+              onClick={following ? pause : resume}
+            >
+              <span
+                aria-hidden="true"
+                className="log-window__live-dot"
+                data-live={following ? "true" : "false"}
+              />
+              {following ? "Live" : "Paused"}
+            </button>
             <span className="log-window__status-text">
               {searching
                 ? `${formatLogCount(matchCount)} of ${formatLogCount(levelFilteredEntries.length)} lines match`
-                : following
-                  ? `${formatLogCount(allEntries.length)} lines`
-                  : paused.newLines > 0 && pausedSince
-                    ? `Paused · ${formatLogCount(paused.newLines)} new since ${pausedSince}`
-                    : `Paused · ${formatLogCount(allEntries.length)} lines`}
+                : !following && paused.newLines > 0 && pausedSince
+                  ? `${formatLogCount(paused.newLines)} new since ${pausedSince}`
+                  : `${formatLogCount(allEntries.length)} lines`}
             </span>
             {truncated ? (
               <span className="log-window__status-note">Showing tail</span>
@@ -1264,6 +1280,8 @@ export function LogsWindow() {
 
 const LogLine = memo(function LogLine(props: {
   entry: AppLogEntry;
+  /** Show all of a long line instead of its preview. */
+  expanded: boolean;
   highlightQuery: string;
   activeMatch: boolean;
   /** A match shown among every line (Highlight mode). */
@@ -1273,10 +1291,19 @@ const LogLine = memo(function LogLine(props: {
   flashing: boolean;
 }) {
   const tokenized = tokenizedLogEntry(props.entry);
-  const parts = useMemo(
-    () => highlightLogLineParts(tokenized.parts, props.highlightQuery),
-    [props.highlightQuery, tokenized.parts],
-  );
+  const { parts, hiddenChars, long } = useMemo(() => {
+    const preview = previewLogLineParts(
+      tokenized.parts,
+      props.entry.line,
+      props.highlightQuery,
+    );
+    const shown = props.expanded ? tokenized.parts : preview.parts;
+    return {
+      parts: highlightLogLineParts(shown, props.highlightQuery),
+      hiddenChars: props.expanded ? 0 : preview.hiddenChars,
+      long: preview.hiddenChars > 0,
+    };
+  }, [props.entry.line, props.expanded, props.highlightQuery, tokenized.parts]);
   const level = tokenized.level ?? normalizeLogLevel(props.entry.level);
   const className = [
     "log-window__line",
@@ -1331,6 +1358,17 @@ const LogLine = memo(function LogLine(props: {
             </span>
           );
         })}
+        {long ? (
+          <button
+            className="log-window__line-more"
+            data-log-expand={props.entry.sequence}
+            type="button"
+          >
+            {hiddenChars > 0
+              ? `… ${formatLogCount(hiddenChars)} more characters`
+              : "Show less"}
+          </button>
+        ) : null}
       </span>
     </div>
   );
