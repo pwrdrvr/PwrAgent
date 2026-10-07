@@ -28791,6 +28791,7 @@ export class DesktopBackendRegistry {
       return await this.refetchCodexRateLimits({
         backendGeneration,
         notificationVersion,
+        accountKey,
       });
     }
     const updatesByKey = new Map(
@@ -28835,6 +28836,17 @@ export class DesktopBackendRegistry {
     this.codexQuotaRefreshAt = Date.now();
     const backendGeneration = this.codexBackendGeneration;
     const work = (async () => {
+      // Snapshot the group before reading the account so a concurrent Settings
+      // save cannot relabel the quota observation already being requested.
+      let usageAccountGroup: string | undefined;
+      let accountGroupRead = false;
+      try {
+        usageAccountGroup = this.resolveUsageAccountGroupsFn().codex;
+        accountGroupRead = true;
+      } catch {
+        // Configuration failures leave attribution unknown without preventing
+        // account recovery or quota reads.
+      }
       let account: BackendAccountSummary | undefined;
       try {
         account = await readClientAccount(this.codexClient);
@@ -28848,6 +28860,7 @@ export class DesktopBackendRegistry {
       if (isMeaningfulAccountSummary(account)) {
         const previous = currentSummary.account;
         const accountChanged = previous?.type !== account.type
+          || previous?.accountId !== account.accountId
           || previous?.email !== account.email
           || previous?.label !== account.label
           || previous?.planType !== account.planType;
@@ -28870,6 +28883,7 @@ export class DesktopBackendRegistry {
       await this.refetchCodexRateLimits({
         backendGeneration,
         notificationVersion: this.codexRateLimitsNotificationVersion,
+        accountKey: accountGroupRead ? usageAccountKey(account, usageAccountGroup) : undefined,
       });
     })();
     this.codexQuotaRefresh = work;
@@ -28883,12 +28897,12 @@ export class DesktopBackendRegistry {
   private async refetchCodexRateLimits(params: {
     backendGeneration: number;
     notificationVersion: number;
+    accountKey: string | undefined;
   }): Promise<boolean> {
     if (this.codexClient.isAuthenticationRequired?.()) return false;
     if (isUnauthenticatedCodexProvider(this.codexBackendSummary?.account)) return false;
     const accountRevision = this.codexAccountRevision;
     let refetchedRateLimits: BackendRateLimitSummary[];
-    const accountKey = await this.captureUsageAccount("codex");
     try {
       refetchedRateLimits = await readClientRateLimits(this.codexClient);
     } catch (error) {
@@ -28908,7 +28922,7 @@ export class DesktopBackendRegistry {
       return false;
     }
     this.codexRateLimitsObservedAt = Date.now();
-    this.codexRateLimitsAccountKey = accountKey;
+    this.codexRateLimitsAccountKey = params.accountKey;
     const currentSummary = this.codexBackendSummary;
     if (!currentSummary) {
       this.pendingCodexRateLimits = {

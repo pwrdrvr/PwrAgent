@@ -194,6 +194,77 @@ describe("DesktopBackendRegistry usage turn ends", () => {
     expect(snapshot.limitHistory).toEqual([]);
   });
 
+  it("attributes refreshed quotas to the account read used for metadata recovery", async () => {
+    const previous = { type: "chatgpt" as const, accountId: "previous", email: "same@example.test" };
+    const current = { ...previous, accountId: "current" };
+    const readAccount = vi.fn(async () => current);
+    const registry = createRegistry([], {
+      codexClient: { readAccount, readRateLimits: async () => [{ name: "5h limit", usedPercent: 22 }] },
+    });
+    Object.assign(registry, { codexBackendSummary: { kind: "codex", label: "Codex", available: true,
+      account: previous, rateLimits: [{ name: "5h limit", usedPercent: 54 }] } });
+    await internals(registry).refreshCodexQuotas();
+    const snapshot = await registry.readUsageActivity({ from: Date.now() - 60_000, to: Date.now() + 60_000 });
+    expect(readAccount).toHaveBeenCalledTimes(1);
+    expect((await registry.listBackends()).backends[0].account).toEqual(current);
+    expect(snapshot.limitObservation?.accountKey).toBe(usageAccountKey(current));
+    expect(snapshot.limitObservation?.limits[0].usedPercent).toBe(22);
+  });
+
+  it("retains the requested account group when Settings changes during the account read", async () => {
+    let group = "original-account";
+    const registry = createRegistry([], {
+      codexClient: {
+        readAccount: async () => {
+          group = "new-account";
+          return { type: "chatgpt", accountId: "current" };
+        },
+        readRateLimits: async () => [{ name: "5h limit", usedPercent: 22 }],
+      },
+      resolveUsageAccountGroups: () => ({ codex: group }),
+    });
+    Object.assign(registry, { codexBackendSummary: { kind: "codex", label: "Codex", available: true, rateLimits: [] } });
+    await internals(registry).refreshCodexQuotas();
+    const snapshot = await registry.readUsageActivity({ from: Date.now() - 60_000, to: Date.now() + 60_000 });
+    expect(group).toBe("new-account");
+    expect(snapshot.limitObservation?.accountKey).toBe(usageAccountKey(undefined, "original-account"));
+  });
+
+  it.each(["account", "configuration"])("refreshes quotas with unknown attribution when %s lookup fails", async (failure) => {
+    const account = { type: "chatgpt" as const, accountId: "previous", email: "user@example.test" };
+    const readAccount = vi.fn(async () => {
+      if (failure === "account") throw new Error("Account unavailable");
+      return account;
+    });
+    const registry = createRegistry([], {
+      codexClient: { readAccount, readRateLimits: async () => [{ name: "5h limit", usedPercent: 22 }] },
+      resolveUsageAccountGroups: () => {
+        if (failure === "configuration") throw new Error("Configuration unavailable");
+        return {};
+      },
+    });
+    Object.assign(registry, { codexBackendSummary: { kind: "codex", label: "Codex", available: true,
+      account, rateLimits: [{ name: "5h limit", usedPercent: 54 }] } });
+    await internals(registry).refreshCodexQuotas();
+    const snapshot = await registry.readUsageActivity({ from: Date.now() - 60_000, to: Date.now() + 60_000 });
+    expect(readAccount).toHaveBeenCalledTimes(1);
+    expect((await registry.listBackends()).backends[0].account).toEqual(account);
+    expect(snapshot.limitObservation?.accountKey).toBeUndefined();
+    expect(snapshot.limitObservation?.limits[0].usedPercent).toBe(22);
+  });
+
+  it("clears stale quotas when only the refreshed account ID changes", async () => {
+    const previous = { type: "chatgpt" as const, accountId: "previous", email: "same@example.test" };
+    const current = { ...previous, accountId: "current" };
+    const registry = createRegistry([], {
+      codexClient: { readAccount: async () => current, readRateLimits: async () => { throw new Error("Quota unavailable"); } },
+    });
+    Object.assign(registry, { codexBackendSummary: { kind: "codex", label: "Codex", available: true,
+      account: previous, rateLimits: [{ name: "5h limit", usedPercent: 54 }] } });
+    await internals(registry).refreshCodexQuotas();
+    expect((await registry.listBackends()).backends[0]).toMatchObject({ account: current, rateLimits: [] });
+  });
+
   it("records an operator-interrupted Codex turn's end from its interrupted completion", async () => {
     const registry = createRegistry();
     await runTurn(registry, "codex", "turn-1");
