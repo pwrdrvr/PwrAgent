@@ -1,5 +1,7 @@
+import { createWriteStream } from "node:fs";
 import { lstat, mkdir, readFile, readdir, readlink, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { pipeline } from "node:stream/promises";
 import { promisify } from "node:util";
 import { gunzip } from "node:zlib";
 import { unzipSync, zipSync } from "fflate";
@@ -67,7 +69,13 @@ export async function exportWorkspaceArchive(cwd: string, staging: string, targe
   if (format === "zip") {
     bytes = Buffer.from(zipSync(zipFiles));
   } else {
-    await tar.c({ cwd: root, file: archive, gzip: true, portable: true, follow: false, noDirRecurse: true, strict: true }, paths.length ? paths : ["."]);
+    // Pack.add treats every path literally. tar.c interprets leading @ paths
+    // as archives to expand, which can read an excluded external symlink.
+    const pack = new tar.Pack({ cwd: root, gzip: true, portable: true, follow: false, noDirRecurse: true, strict: true });
+    const writing = pipeline(pack, createWriteStream(archive));
+    for (const file of paths.length ? paths : ["."]) pack.add(file);
+    pack.end();
+    await writing;
     bytes = await readFile(archive);
   }
   if (bytes.length > THREAD_HANDOFF_MAX_BYTES) throw new Error("The non-Git archive exceeds 128 MiB.");

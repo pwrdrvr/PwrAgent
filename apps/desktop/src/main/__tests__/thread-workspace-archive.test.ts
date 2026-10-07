@@ -39,6 +39,32 @@ it("transfers an empty workspace", async () => {
   expect((await lstat(destination)).isDirectory()).toBe(true);
 });
 
+it.each(["linux", "win32"])("transfers leading @ filenames literally to %s", async (platform) => {
+  const { source, staging, destination } = await fixture();
+  await mkdir(path.join(source, "@directory"));
+  await writeFile(path.join(source, "@notes.txt"), "ordinary notes\n");
+  await writeFile(path.join(source, "@directory", "@nested.txt"), "nested notes\n");
+  const archive = await exportWorkspaceArchive(source, staging, platform);
+  await importWorkspaceArchive(destination, staging, archive);
+  expect(await readFile(path.join(destination, "@notes.txt"), "utf8")).toBe("ordinary notes\n");
+  expect(await readFile(path.join(destination, "@directory", "@nested.txt"), "utf8")).toBe("nested notes\n");
+});
+
+it.skipIf(process.platform === "win32")("does not expand an excluded external archive through a leading @ filename", async () => {
+  const { root, source, staging, destination } = await fixture();
+  const external = path.join(root, "external");
+  await mkdir(external);
+  await writeFile(path.join(external, "private.txt"), "private external bytes\n");
+  await tar.c({ cwd: external, file: path.join(root, "backup.tar") }, ["private.txt"]);
+  await symlink("../backup.tar", path.join(source, "backup.tar"));
+  await writeFile(path.join(source, "@backup.tar"), "ordinary workspace bytes\n");
+  const archive = await exportWorkspaceArchive(source, staging, "linux");
+  await importWorkspaceArchive(destination, staging, archive);
+  expect(await readFile(path.join(destination, "@backup.tar"), "utf8")).toBe("ordinary workspace bytes\n");
+  await expect(lstat(path.join(destination, "private.txt"))).rejects.toMatchObject({ code: "ENOENT" });
+  await expect(lstat(path.join(destination, "backup.tar"))).rejects.toMatchObject({ code: "ENOENT" });
+});
+
 it.skipIf(process.platform === "win32")("preserves executable files and internal tar links while omitting external links", async () => {
   const { root, source, staging, destination } = await fixture();
   await writeFile(path.join(source, "run.sh"), "#!/bin/sh\nexit 0\n");

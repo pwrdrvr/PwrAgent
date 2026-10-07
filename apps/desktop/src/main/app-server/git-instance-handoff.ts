@@ -31,12 +31,20 @@ async function assertClean(cwd: string): Promise<void> {
   if (status) throw new Error("Commit or stash your non-ignored workspace changes before handing off this thread, then push the commit.");
 }
 
+async function assertNoSubmodules(cwd: string, head: string): Promise<void> {
+  const modes = (await git(cwd, ["ls-tree", "-r", "--format=%(objectmode)", head])).stdout.split("\n");
+  if (modes.includes("160000")) {
+    throw new Error("Thread handoff does not yet support repositories containing submodules.");
+  }
+}
+
 /** Only a published reference is transferred. Git owns all workspace bytes. */
 export async function exportGitHandoff(cwd: string): Promise<ThreadHandoffGitReference> {
   await assertClean(cwd);
   const head = (await git(cwd, ["rev-parse", "HEAD"]).catch((error: unknown) => {
     throw new Error("Create and push the repository's first commit before handing off this thread.", { cause: error });
   })).stdout.trim();
+  await assertNoSubmodules(cwd, head);
   const sourceBranch = (await git(cwd, ["symbolic-ref", "--quiet", "--short", "HEAD"])
     .catch(() => ({ stdout: "" }))).stdout.trim();
   const remote = sourceBranch
@@ -53,7 +61,16 @@ export async function exportGitHandoff(cwd: string): Promise<ThreadHandoffGitRef
   const published = (await git(cwd, ["ls-remote", "--heads", remote, ...(branchRef ? [branchRef] : [])])).stdout
     .trim().split("\n").map((line) => line.split(/\s+/));
   const advertised = published.find(([oid, name]) => branchRef ? name === branchRef : oid === head);
-  const ref = advertised?.[1];
+  let ref = advertised?.[1];
+  if (!ref && !sourceBranch) {
+    // Imported worktrees are detached. A published branch can advance while
+    // still containing this commit; check fetched history, not stale local refs.
+    for (const [, name] of published) {
+      if (!name) continue;
+      const contains = await prepareGitHandoff(cwd, { head, ref: name, origin }).then(() => true, () => false);
+      if (contains) { ref = name; break; }
+    }
+  }
   if (!ref) {
     throw new Error(sourceBranch
       ? `Push branch ${sourceBranch} to ${remote} before handing off.`
@@ -63,7 +80,7 @@ export async function exportGitHandoff(cwd: string): Promise<ThreadHandoffGitRef
   validateGitHandoffReference(snapshot);
   // A published branch may have advanced beyond this checkout. Fetching its
   // history proves whether HEAD was pushed without moving the local branch.
-  if (advertised?.[0] !== head) {
+  if (sourceBranch && advertised?.[0] !== head) {
     await prepareGitHandoff(cwd, snapshot).catch((error: unknown) => {
       throw new Error(`Push branch ${sourceBranch} to ${remote} before handing off. Its published history must contain the source commit.`, { cause: error });
     });
@@ -105,6 +122,9 @@ async function withFetchedHandoff<T>(repository: string, snapshot: ThreadHandoff
     if (!published) {
       throw new Error("The published branch no longer contains the source commit. Push it before handing off, or retry after a branch rewrite.");
     }
+    // Worktree creation does not populate gitlinks. Reject before preflight
+    // succeeds or an incomplete checkout can be acknowledged to the sender.
+    await assertNoSubmodules(repository, snapshot.head);
     return await work();
   } finally {
     await git(repository, ["update-ref", "-d", ref]);

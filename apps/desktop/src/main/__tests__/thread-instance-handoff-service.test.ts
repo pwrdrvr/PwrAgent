@@ -162,15 +162,23 @@ it.skipIf(process.platform === "win32")("moves a published Git thread with symli
   expect(backend.readThread.mock.invocationCallOrder[0]).toBeLessThan(archive.mock.invocationCallOrder[0]);
 });
 
-it.each(["dirty", "unpushed", "missing receiver"])("stops before sending history for %s Git preflight", async (condition) => {
+it.each(["dirty", "unpushed", "submodules", "missing receiver"])("stops before sending history for %s Git preflight", async (condition) => {
   const { sender, backend, root, push, remoteImport, archive } = await setup();
   const { repository, subdirectory, destinationRepo, git } = await gitFixture(root);
   backend.exportThreadForHandoff.mockResolvedValue({ ...source, cwd: subdirectory });
   if (condition === "dirty") await writeFile(path.join(subdirectory, "code.txt"), "uncommitted\n");
   if (condition === "unpushed") await git(repository, "commit", "--allow-empty", "-m", "unpublished");
+  if (condition === "submodules") {
+    const dependency = path.join(root, "dependency");
+    await git(root, "clone", repository, dependency);
+    await git(repository, "-c", "protocol.file.allow=always", "submodule", "add", dependency, "vendor/dependency");
+    await git(repository, "commit", "-m", "submodule fixture");
+    await git(repository, "push", "origin", "main");
+  }
   await expect(sender.send({ sourceThreadId: "source-thread", targetInstanceId: "pwr_receiver",
     targetRepositoryPath: condition === "missing receiver" ? path.join(root, "not-cloned") : destinationRepo, operation: "move" }))
-    .rejects.toThrow(condition === "dirty" ? "Commit or stash" : condition === "unpushed" ? "Push branch" : "Clone it there");
+    .rejects.toThrow(condition === "dirty" ? "Commit or stash" : condition === "unpushed" ? "Push branch"
+      : condition === "submodules" ? "submodules" : "Clone it there");
   expect(push).not.toHaveBeenCalled();
   expect(remoteImport).not.toHaveBeenCalled();
   expect(archive).not.toHaveBeenCalled();

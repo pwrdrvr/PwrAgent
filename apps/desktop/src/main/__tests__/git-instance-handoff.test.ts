@@ -134,6 +134,52 @@ it("uses a published branch for a detached source and checks for subsequent edit
   await expect(assertGitHandoffUnchanged(source, snapshot)).rejects.toThrow("Commit or stash");
 });
 
+it("hands off an imported detached commit again after its published branch advances", async () => {
+  const { source, receiver, root } = await fixture();
+  const snapshot = await exportGitHandoff(source);
+  const imported = path.join(root, "first-handoff");
+  await importGitHandoff({ repository: receiver, worktree: imported, snapshot });
+  await git(source, "commit", "--allow-empty", "-m", "later published commit");
+  await git(source, "push");
+  // Try an unrelated advertised branch before the containing branch. Local
+  // remote-tracking refs in the first import still have the old branch tip.
+  await git(source, "push", "origin", "main:refs/heads/aaa-unrelated");
+  const next = await exportGitHandoff(imported);
+  expect(next).toEqual({ head: snapshot.head, ref: snapshot.ref, origin: snapshot.origin });
+  const worktree = path.join(root, "second-handoff");
+  await importGitHandoff({ repository: source, worktree, snapshot: next });
+  expect((await git(worktree, "rev-parse", "HEAD")).trim()).toBe(snapshot.head);
+  expect(await git(receiver, "for-each-ref", "refs/pwragent/handoffs")).toBe("");
+});
+
+it("rejects an unpublished detached commit even if its objects exist locally", async () => {
+  const { source } = await fixture();
+  await git(source, "switch", "--detach");
+  await git(source, "commit", "--allow-empty", "-m", "unpublished detached commit");
+  await expect(exportGitHandoff(source)).rejects.toThrow("Publish the detached source commit");
+  expect(await git(source, "for-each-ref", "refs/pwragent/handoffs")).toBe("");
+});
+
+it.each(["initialized", "uninitialized"])("rejects %s submodules at export, preflight, and import before creating an incomplete worktree", async (state) => {
+  const { source, receiver, root } = await fixture();
+  const dependency = path.join(root, "dependency");
+  await git(root, "clone", source, dependency);
+  await git(source, "-c", "protocol.file.allow=always", "submodule", "add", dependency, "vendor/dependency");
+  await git(source, "commit", "-m", "submodule fixture");
+  await git(source, "push");
+  if (state === "uninitialized") await git(source, "submodule", "deinit", "--all", "--force");
+  expect(await git(source, "status", "--porcelain=v1")).toBe("");
+  await expect(exportGitHandoff(source)).rejects.toThrow("submodules");
+  // Also defend against a package from a sender that lacks this check.
+  const snapshot = { head: (await git(source, "rev-parse", "HEAD")).trim(),
+    ref: "refs/heads/feature/handoff", origin: handoffRepositoryIdentity((await git(source, "remote", "get-url", "origin")).trim())! };
+  await expect(prepareGitHandoff(receiver, snapshot)).rejects.toThrow("submodules");
+  const worktree = path.join(root, "handoff");
+  await expect(importGitHandoff({ repository: receiver, worktree, snapshot })).rejects.toThrow("submodules");
+  expect(await git(receiver, "worktree", "list")).not.toContain(worktree);
+  expect(await git(receiver, "for-each-ref", "refs/pwragent/handoffs")).toBe("");
+});
+
 it.skipIf(process.platform === "win32")("lets Git restore tracked symlinks, including CLAUDE.md and dangling links", async () => {
   const { source, receiver, root } = await fixture();
   await writeFile(path.join(source, "AGENTS.md"), "fixture guidance\n");
