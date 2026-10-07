@@ -149,6 +149,38 @@ describe("machine memory policy", () => {
 });
 
 describe("resource command ownership", () => {
+  it.skipIf(process.platform !== "win32").each([0, 7])("drains Windows descendants after tool exit %i and releases the lane for the next command", async (exitCode) => {
+    const directory = await fixture();
+    const marker = path.join(directory, "descendant-pid");
+    const output = path.join(directory, "second");
+    const task = `const child = require('child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' }); require('fs').writeFileSync(${JSON.stringify(marker)}, String(child.pid)); child.unref(); process.exitCode = ${exitCode};`;
+    const first = await startFixture(directory, ["-e", task], { stdio: "inherit" });
+    const deadline = new AbortController();
+    let second;
+    try {
+      const descendant = Number(await waitForFile(marker));
+      expect(descendant).toBeGreaterThan(0);
+      // Both processes use the same private fixture lease and real native Job.
+      // The next command fails if the previous descendant is still alive.
+      const next = `try { process.kill(${descendant}, 0); process.exitCode = 99; } catch { require('fs').writeFileSync(${JSON.stringify(output)}, 'drained'); }`;
+      second = await startFixture(directory, ["-e", next], { stdio: "inherit" });
+      const [firstResult, secondResult] = await Promise.race([
+        Promise.all([first.exited, second.exited]),
+        delay(20_000, undefined, { signal: deadline.signal }).then(() => { throw new Error("Completed Windows tool retained its shared lease"); }),
+      ]);
+      expect(firstResult).toEqual({ code: exitCode, signal: null });
+      expect(secondResult).toEqual({ code: 0, signal: null });
+      expect(() => process.kill(descendant, 0)).toThrow();
+      expect(await readFile(output, "utf8")).toBe("drained");
+      await expect(readFile(path.join(directory, "lock.owner.json"))).rejects.toThrow();
+    } finally {
+      deadline.abort();
+      first.kill("SIGKILL"); second?.kill("SIGKILL");
+      await first.closed;
+      if (second) await second.closed;
+    }
+  }, 30_000);
+
   it("preserves CI startup options and environment through nested scripts without creating a lease", async () => {
     const directory = await fixture();
     // A constrained invocation would fail creating this lease's directory.

@@ -290,21 +290,29 @@ public static class PwrToolsWindowsJobRunner
                 ThrowLastWin32Error("AssignProcessToJobObject");
             }
             if (ResumeThread(processInformation.hThread) == UInt32.MaxValue) ThrowLastWin32Error("ResumeThread");
-            bool cancelled = false;
-            while (ReadActiveProcessCount(job) > 0)
+            uint exitCode = 130;
+            while (true)
             {
                 uint ownerWait = WaitForSingleObject(owner, 0);
                 if (ownerWait == WAIT_FAILED) ThrowLastWin32Error("WaitForSingleObject(owner)");
-                if (!cancelled && (ownerWait != WAIT_TIMEOUT || File.Exists(cancelFile)))
+                if (ownerWait != WAIT_TIMEOUT || File.Exists(cancelFile))
                 {
-                    cancelled = true;
                     if (!TerminateJobObject(job, 130)) ThrowLastWin32Error("TerminateJobObject");
+                    break;
                 }
-                Thread.Sleep(50);
+                uint bridgeWait = WaitForSingleObject(processInformation.hProcess, 50);
+                if (bridgeWait == WAIT_FAILED) ThrowLastWin32Error("WaitForSingleObject(bridge)");
+                if (bridgeWait != WAIT_TIMEOUT)
+                {
+                    // Unreferenced descendants can outlive the completed tool.
+                    // Preserve its result before terminating their Job, then
+                    // drain every member before the caller releases the lease.
+                    if (!GetExitCodeProcess(processInformation.hProcess, out exitCode)) ThrowLastWin32Error("GetExitCodeProcess");
+                    if (!TerminateJobObject(job, exitCode)) ThrowLastWin32Error("TerminateJobObject");
+                    break;
+                }
             }
-            if (cancelled) return 130;
-            uint exitCode;
-            if (!GetExitCodeProcess(processInformation.hProcess, out exitCode)) ThrowLastWin32Error("GetExitCodeProcess");
+            while (ReadActiveProcessCount(job) > 0) Thread.Sleep(50);
             return unchecked((int)exitCode);
         }
         finally
