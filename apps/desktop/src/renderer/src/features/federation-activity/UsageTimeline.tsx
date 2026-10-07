@@ -1,6 +1,9 @@
-import { useState } from "react";
+import { useId, useRef, useState, type KeyboardEvent } from "react";
 import { usageBucketLabel, usageMoney, type UsageBucket, type UsageDimension } from "./usage-activity-presentation";
 import type { LimitPoint, LimitReset } from "./usage-limits";
+import { UsageSliceCard, type UsageChartMember, type UsageSliceSegment } from "./UsageSliceCard";
+
+export type { UsageChartMember } from "./UsageSliceCard";
 
 export type UsageChartLimit = { label: string; points: LimitPoint[]; resets: LimitReset[] };
 /**
@@ -65,10 +68,12 @@ function limitSegments(limit: UsageChartLimit, from: number, to: number) {
   return segments.filter((segment) => segment.length > 0);
 }
 
-export function UsageTimeline({ buckets, series, limit, forecast, selected, onSelect, dimension, dimensions, onDimension }: {
+export function UsageTimeline({ buckets, series, member, limit, forecast, selected, onSelect, dimension, dimensions, onDimension }: {
   buckets: UsageBucket[];
   /** The stacked threads, in series order. */
   series: UsageChartSeries[];
+  /** Names a bucket member by its key, charted or Other, for the slice card. */
+  member: (key: string) => UsageChartMember;
   limit?: UsageChartLimit;
   forecast?: UsageChartForecast;
   selected?: number;
@@ -78,6 +83,12 @@ export function UsageTimeline({ buckets, series, limit, forecast, selected, onSe
   onDimension: (dimension: UsageDimension) => void;
 }) {
   const [hovered, setHovered] = useState<number>();
+  // The segment under the pointer, in the bar or in the card.
+  const [hot, setHot] = useState<{ index: number; segment: UsageSliceSegment }>();
+  // The bars are one Tab stop; the arrows move between them.
+  const [cursor, setCursor] = useState<number>();
+  const bars = useRef<Array<HTMLButtonElement | null>>([]);
+  const cardId = useId();
   const from = buckets[0].from;
   const to = buckets.at(-1)!.to;
   const max = Math.max(1, ...buckets.map((bucket) => bucket.cost));
@@ -106,7 +117,55 @@ export function UsageTimeline({ buckets, series, limit, forecast, selected, onSe
     ...ahead ? [{ at: to, text: "Now", edge: false }] : [],
     ...ahead && end === ahead.resetAt ? [{ at: end, text: `Resets ${moment(end)}`, edge: true }] : [],
   ];
-  return <figure className="usage-timeline">
+  // A pinned slice keeps its card. Otherwise the card follows the pointer or
+  // keyboard focus onto any bar with turns in it.
+  const shown = selected ?? (hovered !== undefined && buckets[hovered]?.rows ? hovered : undefined);
+  const shownBucket = shown === undefined ? undefined : buckets[shown];
+  const hotSegment = hot && hot.index === shown ? hot.segment : undefined;
+  const filled = buckets.flatMap((bucket, index) => bucket.rows ? [index] : []);
+  // A refresh can redraw the window with fewer bars than an index held.
+  const inRange = (index: number | undefined) => index !== undefined && index < buckets.length ? index : undefined;
+  const stop = inRange(selected) ?? inRange(cursor) ?? filled.at(-1) ?? buckets.length - 1;
+  const focusBar = (index: number) => bars.current[index]?.focus();
+  // Unpinning removes the card and the chip, so focus that was on either
+  // returns to the bar.
+  const unpin = (refocus: boolean) => {
+    const pinned = selected;
+    onSelect(undefined);
+    // A card row that unmounts under the pointer never reports leaving it.
+    setHot(undefined);
+    if (refocus && pinned !== undefined) focusBar(pinned);
+  };
+  const onBarKey = (event: KeyboardEvent, index: number) => {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    // Empty slices hold nothing to read, so the arrows pass over them.
+    const next = event.key === "ArrowRight" ? filled.find((item) => item > index)
+      : event.key === "ArrowLeft" ? [...filled].reverse().find((item) => item < index)
+      : event.key === "Home" ? filled[0] : filled.at(-1);
+    if (next === undefined || next === index) return;
+    if (selected !== undefined) onSelect(next);
+    focusBar(next);
+  };
+  const onChartKey = (event: KeyboardEvent) => {
+    if (event.key !== "Escape" || selected === undefined || event.defaultPrevented) return;
+    event.preventDefault();
+    event.stopPropagation();
+    unpin(event.target instanceof Element && event.target.closest(".usage-slice-card, .usage-chip") !== null);
+  };
+  // The card sits beside its bar, on whichever side has more room. A bar's
+  // edge is its span's share of the bars' width less their gaps, plus the
+  // gaps before it, so the card lines up with the bar flex actually drew.
+  const share = ahead ? x(to) / 100 : 1;
+  const edge = (index: number, at: number) => {
+    const before = (at - from) / (to - from);
+    return `${(share * before * 100).toFixed(3)}% + ${(index - (buckets.length - 1) * before).toFixed(3)} * var(--usage-bar-gap)`;
+  };
+  const cardStyle = shown === undefined || !shownBucket ? {}
+    : share * ((shownBucket.from + shownBucket.to) / 2 - from) / (to - from) <= 0.5
+      ? { left: `calc(${edge(shown, shownBucket.to)} + 8px)` }
+      : { right: `calc(100% - (${edge(shown, shownBucket.from)}) + 8px)` };
+  return <figure className="usage-timeline" onKeyDown={onChartKey}>
     <figcaption className="usage-timeline__head">
       <span className="usage-eyebrow">Spend by</span>
       <span className="usage-segmented usage-timeline__dimension" role="group" aria-label="Spend by">
@@ -114,27 +173,40 @@ export function UsageTimeline({ buckets, series, limit, forecast, selected, onSe
           onClick={() => onDimension(item)}>{DIMENSION_NAMES[item]}</button>)}</span>
       <span>API-equivalent, each turn placed at its completion</span>
       <span className="usage-timeline__spacer" />
+      {selected !== undefined && buckets[selected] ? <button type="button" className="usage-chip" aria-label={`Unpin ${usageBucketLabel(buckets[selected], to)}`}
+        onClick={() => unpin(true)}>{usageBucketLabel(buckets[selected], to)}<span aria-hidden="true">×</span></button> : null}
       {segments.length ? <span className="usage-timeline__key"><i className="usage-timeline__key-line" />{limit!.label} used, observed</span> : null}
       {ahead ? <span className="usage-timeline__key"><i className={`usage-timeline__key-line is-forecast${ahead.fullAt ? " is-short" : ""}`} />At this pace</span> : null}
     </figcaption>
     <div className="usage-timeline__frame">
       <div className="usage-timeline__axis-y" aria-hidden="true"><span>{usageMoney(max)}</span><span>{usageMoney(0)}</span></div>
       <div className="usage-timeline__plot">
-        <div className="usage-timeline__bars" role="group" aria-label="Filter threads by completion time"
+        <div className={`usage-timeline__bars${selected === undefined && shown !== undefined ? " is-dimmed" : ""}`}
+          role="group" aria-label="Filter threads by completion time"
           style={ahead ? { width: `${x(to)}%` } : undefined}>
           {buckets.map((bucket, index) => <button key={index} type="button" aria-pressed={selected === index}
+            ref={(element) => { bars.current[index] = element; }} tabIndex={index === stop ? 0 : -1}
             aria-label={`${usageBucketLabel(bucket, to)}: ${usageMoney(bucket.cost)}, ${bucket.rows} completed turns`}
-            className={`usage-timeline__bar${selected === index ? " is-selected" : ""}`} style={{ flexGrow: bucket.to - bucket.from }}
-            onMouseEnter={() => setHovered(index)} onMouseLeave={() => setHovered(undefined)}
-            onFocus={() => setHovered(index)} onBlur={() => setHovered(undefined)}
+            aria-describedby={shown === index ? cardId : undefined}
+            className={`usage-timeline__bar${selected === index ? " is-selected" : ""}${shown === index ? " is-shown" : ""}`}
+            style={{ flexGrow: bucket.to - bucket.from }}
+            onMouseEnter={() => setHovered(index)} onMouseLeave={() => { setHovered(undefined); setHot(undefined); }}
+            onFocus={() => { setHovered(index); setCursor(index); }} onBlur={() => setHovered(undefined)}
+            onKeyDown={(event) => onBarKey(event, index)}
             onClick={() => onSelect(selected === index ? undefined : index)}>
             <span className="usage-timeline__stack" style={{ height: `${bucket.cost / max * 100}%` }}>
-              {bucket.other > 0 ? <i className="usage-series--other" style={{ flexGrow: bucket.other }} /> : null}
+              {bucket.other > 0 ? <i className={`usage-series--other${shown === index && hotSegment === "other" ? " is-hot" : ""}`}
+                style={{ flexGrow: bucket.other }} onMouseEnter={() => setHot({ index, segment: "other" })} onMouseLeave={() => setHot(undefined)} /> : null}
               {bucket.series.map((cost, seriesIndex) => cost > 0
-                ? <i key={seriesIndex} className={`usage-series--${seriesIndex}`} style={{ flexGrow: cost }} /> : null)}
+                ? <i key={seriesIndex} className={`usage-series--${seriesIndex}${shown === index && hotSegment === seriesIndex ? " is-hot" : ""}`}
+                  style={{ flexGrow: cost }} onMouseEnter={() => setHot({ index, segment: seriesIndex })} onMouseLeave={() => setHot(undefined)} /> : null)}
             </span>
           </button>)}
         </div>
+        {shownBucket ? <UsageSliceCard id={cardId} bucket={shownBucket} label={usageBucketLabel(shownBucket, to)}
+          noun={DIMENSION_NAMES[dimension].toLocaleLowerCase()} pinned={selected !== undefined} hot={hotSegment}
+          onHot={(segment) => setHot(segment === undefined ? undefined : { index: shown!, segment })}
+          member={member} onUnpin={() => unpin(true)} style={cardStyle} /> : null}
         {ahead ? <div className="usage-timeline__future" style={{ left: `${x(to)}%` }} aria-hidden="true" /> : null}
         {segments.length || ahead ? <svg className="usage-timeline__line" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
           {segments.map((segment, index) => <polyline key={index} vectorEffect="non-scaling-stroke"
@@ -155,15 +227,15 @@ export function UsageTimeline({ buckets, series, limit, forecast, selected, onSe
     </div>
     <div className="usage-timeline__axis"><div className="usage-timeline__ticks">
       {ticks.map((tick) => <span key={tick.at} className={tick.edge ? "is-end" : undefined} style={{ left: `${x(tick.at)}%` }}>{tick.text}</span>)}</div></div>
-    <div className="usage-timeline__legend">
+    <div className="usage-timeline__legend" data-hot={hotSegment}>
       {series.map((item, index) => item.onFilter
-        ? <button type="button" key={index} className="usage-timeline__legend-item" aria-pressed={item.filtered ?? false}
-          title={item.filtered ? "Show every thread" : `Show only ${item.title}`} onClick={item.onFilter}>
+        ? <button type="button" key={index} className="usage-timeline__legend-item tooltip-target" aria-pressed={item.filtered ?? false}
+          data-tooltip={item.filtered ? "Show every thread" : `Show only ${item.title}`} onClick={item.onFilter}>
           <i className={`usage-series--${index}`} /><span>{item.title}</span> · {item.cost}</button>
         : item.onOpen
-        ? <button type="button" key={index} className="usage-timeline__legend-item" title={`Open ${item.title}`}
+        ? <button type="button" key={index} className="usage-timeline__legend-item tooltip-target" data-tooltip={`Open ${item.title}`}
           aria-label={`Open ${item.title}`} onClick={item.onOpen}><i className={`usage-series--${index}`} /><span>{item.title}</span> · {item.cost}</button>
-        : <span key={index} className="usage-timeline__legend-item" title={item.title}><i className={`usage-series--${index}`} /><span>{item.title}</span> · {item.cost}</span>)}
+        : <span key={index} className="usage-timeline__legend-item tooltip-target" data-tooltip={item.title}><i className={`usage-series--${index}`} /><span>{item.title}</span> · {item.cost}</span>)}
       {buckets.some((bucket) => bucket.other > 0) ? <span className="usage-timeline__legend-item"><i className="usage-series--other" />Other {dimension === "thread" ? "threads" : dimension === "model" ? "models" : dimension === "provider" ? "providers" : "instances"}</span> : null}
     </div>
     <p className="usage-timeline__readout">{active

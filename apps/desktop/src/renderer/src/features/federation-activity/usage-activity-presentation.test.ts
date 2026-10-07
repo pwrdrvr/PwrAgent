@@ -46,7 +46,8 @@ it("places a whole turn at completion rather than smearing its price across time
   ], from, from + 4 * HOUR);
   expect(buckets).toHaveLength(16);
   expect(buckets[0].cost).toBe(0);
-  expect(buckets[10]).toEqual({ from: from + 150 * MINUTE, to: from + 165 * MINUTE, cost: 900, rows: 2, series: [0, 0, 0, 0, 0], other: 900 });
+  expect(buckets[10]).toEqual({ from: from + 150 * MINUTE, to: from + 165 * MINUTE, cost: 900, rows: 2, series: [0, 0, 0, 0, 0], other: 900,
+    members: [{ key: JSON.stringify(["Local", "codex", "thread"]), cost: 900, rows: 2, threads: 1, owners: ["Local"] }] });
   expect(buckets[15].cost).toBe(100);
   expect(buckets.reduce((total, bucket) => total + bucket.cost, 0)).toBe(1000);
 });
@@ -61,4 +62,21 @@ it("stacks each bucket by the series a row belongs to", () => {
   const [first] = usageCompletionBuckets(rows, from, from + 4 * HOUR, (row) => ({ a: 0, b: 1 } as Record<string, number>)[row.line.threadId]);
   expect(first).toMatchObject({ cost: 550, series: [400, 100, 0, 0, 0], other: 50 });
   expect(usageSpendStrip(rows.slice(0, 1), from, from + 4 * HOUR).slice(0, 2)).toEqual([400, 0]);
+});
+
+it("names what each bucket stacks, with the turns and threads behind every segment", () => {
+  const from = at(28, 0);
+  const row = (threadId: string, model: string, totalCostMicros: number, owner = "Local") =>
+    ({ ...usageFixture({ threadId, usageLineId: `${threadId}-${model}-${totalCostMicros}`, model, completedAt: from + 5, totalCostMicros }), owner });
+  const rows = [row("a", "gpt", 400), row("a", "gpt", 100), row("b", "gpt", 50, "Peer"), row("c", "grok", 30), row("d", "kimi", 20)];
+  const [first] = usageCompletionBuckets(rows, from, from + 4 * HOUR, (item) => item.line.model === "gpt" ? 0 : undefined,
+    (item) => ({ key: item.line.model!, thread: item.line.threadId }));
+  // The bars and the card read the same rows: every member sums to the bar.
+  expect(first).toMatchObject({ cost: 600, rows: 5, series: [550, 0, 0, 0, 0], other: 50 });
+  expect(first.members).toEqual([
+    { key: "gpt", series: 0, cost: 550, rows: 3, threads: 2, owners: ["Local", "Peer"] },
+    { key: "grok", cost: 30, rows: 1, threads: 1, owners: ["Local"] },
+    { key: "kimi", cost: 20, rows: 1, threads: 1, owners: ["Local"] },
+  ]);
+  expect(first.members.reduce((total, member) => total + member.cost, 0)).toBe(first.cost);
 });
