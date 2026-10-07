@@ -8551,6 +8551,8 @@ export class DesktopBackendRegistry {
   private codexRateLimitBroadcastTimer?: ReturnType<typeof setTimeout>;
   private codexRateLimitLastBroadcastAt?: number;
   private codexRateLimitNotificationWork?: Promise<boolean>;
+  /** The last queued rate-limit update; each one applies after its predecessor. */
+  private codexRateLimitsUpdateTail: Promise<unknown> = Promise.resolve();
   private pendingCodexRateLimitBroadcast?: AgentEvent;
   private pendingCodexRateLimits?: {
     backendGeneration: number;
@@ -28796,9 +28798,30 @@ export class DesktopBackendRegistry {
     const notificationVersion = ++this.codexRateLimitsNotificationVersion;
     const backendGeneration = this.codexBackendGeneration;
     const observedAt = Date.now();
+    // The transport does not serialize notifications, and each update carries
+    // only some windows. A newer notification therefore does not supersede
+    // this one: queue it so updates merge in arrival order, each with the
+    // account read after it arrived.
+    const work = this.codexRateLimitsUpdateTail.then(() =>
+      this.applyCachedCodexRateLimits({
+        rateLimits,
+        notificationVersion,
+        backendGeneration,
+        observedAt,
+      }));
+    this.codexRateLimitsUpdateTail = work.catch(() => undefined);
+    return await work;
+  }
+
+  private async applyCachedCodexRateLimits(params: {
+    rateLimits: BackendRateLimitSummary[];
+    notificationVersion: number;
+    backendGeneration: number;
+    observedAt: number;
+  }): Promise<boolean> {
+    const { rateLimits, notificationVersion, backendGeneration, observedAt } = params;
     const accountKey = await this.captureUsageAccount("codex");
-    if (notificationVersion !== this.codexRateLimitsNotificationVersion
-      || backendGeneration !== this.codexBackendGeneration) return false;
+    if (backendGeneration !== this.codexBackendGeneration) return false;
     this.codexRateLimitsObservedAt = observedAt;
     this.codexRateLimitsAccountKey = accountKey;
     const currentSummary = this.codexBackendSummary;
@@ -28812,9 +28835,12 @@ export class DesktopBackendRegistry {
           || !currentKeys.has(rateLimitSummaryKey(limit)),
       )
     ) {
+      // A notification that arrived while this one waited is older than the
+      // snapshot requested now, and merges after it in the queue. Only one
+      // arriving during the read may reject the snapshot.
       return await this.refetchCodexRateLimits({
         backendGeneration,
-        notificationVersion,
+        notificationVersion: this.codexRateLimitsNotificationVersion,
         accountKey,
       });
     }
