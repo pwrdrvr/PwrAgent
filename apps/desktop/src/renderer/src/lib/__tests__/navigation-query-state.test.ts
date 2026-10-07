@@ -1,13 +1,15 @@
 import { describe, expect, it } from "vitest";
-import type { NavigationQueryPage, NavigationQueryRequest, NavigationSelectedDetailResponse } from "@pwragent/shared";
+import type { NavigationQueryEntry, NavigationQueryPage, NavigationQueryRequest, NavigationSelectedDetailResponse } from "@pwragent/shared";
 import {
   applyNavigationPage,
   applyNavigationSelectedDetail,
   beginNavigationPageRead,
   createNavigationPageState,
   failNavigationPageRead,
+  navigationFallbackAnchor,
   navigationIdentityKey,
   navigationIdentityFromThreadKey,
+  navigationPageErrorCopy,
   navigationSelectionAuthorizesComposer,
   selectNavigationIdentity,
 } from "../navigation-query-state";
@@ -211,5 +213,49 @@ describe("composer authorization outlives revalidation", () => {
     const moved = selectNavigationIdentity(authorized(), { backend: "codex", threadId: "other" });
     expect(moved.detail).toBeUndefined();
     expect(navigationSelectionAuthorizesComposer(moved)).toBe(false);
+  });
+});
+
+describe("missing navigation anchors", () => {
+  const entry = (threadId: string, ownerInstanceId?: string): NavigationQueryEntry => ({
+    row: { id: threadId, source: "codex", title: threadId, titleSource: "explicit",
+      ref: { backend: "codex", threadId, ...(ownerInstanceId ? { ownerInstanceId } : {}) },
+      rowRevision: "r", linkedDirectories: [], inbox: { inInbox: false }, ordinaryChildCount: 0,
+      nativeSubAgentGroupPresent: false, queueCount: 0, queueState: "unknown" },
+    placement: { kind: "root" }, orderKey: threadId,
+  });
+  const thread = (threadId: string, ownerInstanceId?: string) =>
+    ({ kind: "thread" as const, ref: { backend: "codex" as const, threadId, ...(ownerInstanceId ? { ownerInstanceId } : {}) } });
+
+  it("resumes a mid-list window at the nearest loaded survivor", () => {
+    const loaded = page({ rangeStart: 20, entries: ["a", "b", "c"].map((id) => entry(id)) });
+    expect(navigationFallbackAnchor(loaded, thread("a"))).toEqual(thread("b"));
+    expect(navigationFallbackAnchor(loaded, thread("c"))).toEqual(thread("b"));
+    // An off-page anchor, such as a revealed selection, keeps the window's first row.
+    expect(navigationFallbackAnchor(loaded, thread("elsewhere"))).toEqual(thread("a"));
+    // The same thread id from another owner is a different row.
+    expect(navigationFallbackAnchor(loaded, thread("a", "peer"))).toEqual(thread("a"));
+    expect(navigationFallbackAnchor(page({ rangeStart: 20, entries: [entry("a")] }), thread("a"))).toBeUndefined();
+  });
+
+  it("restarts a window that already begins at the top", () => {
+    expect(navigationFallbackAnchor(page({ entries: [entry("a"), entry("b")] }), thread("a"))).toBeUndefined();
+    expect(navigationFallbackAnchor(undefined, thread("a"))).toBeUndefined();
+  });
+
+  it("resumes directory windows by directory key", () => {
+    const directory = (key: string) => ({ key, label: key, kind: "directory" as const,
+      counts: { total: 0, active: 0, unread: 0, review: 0 }, pinnedRootCount: 0, unpinnedRootCount: 0, launchpadPresent: false });
+    const loaded = page({ rangeStart: 5, directories: [directory("x"), directory("y")] });
+    expect(navigationFallbackAnchor(loaded, { kind: "directory", key: "x" })).toEqual({ kind: "directory", key: "y" });
+  });
+
+  it("never shows the operator Electron's IPC wrapper or an owner error code", () => {
+    const raw = "Error invoking remote method 'navigation:get-query-page': NavigationQueryError: [navigation_anchor_missing] "
+      + "The visible navigation anchor is no longer in this query. Choose another item or restart this list explicitly.";
+    expect(navigationPageErrorCopy(raw)).toBe("Couldn't load these threads.");
+    expect(navigationPageErrorCopy("Federation peer peer-1 is not connected.")).toBe("This instance isn't connected.");
+    expect(navigationPageErrorCopy("Navigation retained-page budget reached. Collapse a directory or change lens to release pages."))
+      .toBe("Too many thread lists are open. Collapse a directory to load more.");
   });
 });

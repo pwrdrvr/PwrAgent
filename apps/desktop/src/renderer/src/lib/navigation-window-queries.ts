@@ -6,7 +6,8 @@ import type { DesktopApi } from "./desktop-api";
 import { federationTargetsEqual } from "./federated-thread-events";
 import {
   applyNavigationPage, beginNavigationPageRead, createNavigationPageState,
-  failNavigationPageRead, isNavigationCursorExpired, navigationIdentityKey, navigationRetainedRange, type NavigationPageState,
+  failNavigationPageRead, isNavigationAnchorMissing, isNavigationCursorExpired, navigationAnchorsEqual,
+  navigationFallbackAnchor, navigationIdentityKey, navigationRetainedRange, type NavigationPageState,
 } from "./navigation-query-state";
 
 const MAX_CONCURRENT_READS = 4;
@@ -318,7 +319,7 @@ export class NavigationWindowQueries {
     return this.read(resource, false, anchor);
   }
 
-  /** Returning to the start after a removed anchor is an explicit viewer action. */
+  /** The operator's explicit return to the start of a list, discarding its anchor and loaded range. */
   async restart(id: string): Promise<void> {
     const resource = this.resources.get(id);
     if (!resource) return;
@@ -420,6 +421,30 @@ export class NavigationWindowQueries {
             rows = Math.floor(rows / 2);
           }
         };
+        // An anchor is remembered for every later refresh of this resource,
+        // and the row it names can leave the owner's query first: archived,
+        // reparented, moved, or pinned between a selection's exact read and
+        // its directory's. Refusing the read stranded an error card and
+        // blocked every refresh until the operator clicked Reload. Resume at
+        // the nearest surviving row instead, then at the top.
+        const readAround = async (request: NavigationQueryRequest) => {
+          const missing = request.anchor;
+          if (!missing) return readPage(request);
+          for (const anchor of [missing, navigationFallbackAnchor(started.page, missing), undefined]) {
+            if (anchor !== missing && navigationAnchorsEqual(anchor, missing)) continue;
+            try {
+              const page = await readPage(anchor === missing ? request
+                : { ...request, anchor, retainedRange: undefined, completeBaselineRevision: undefined });
+              if (anchor !== missing && navigationAnchorsEqual(resource.anchor, missing)) resource.anchor = anchor;
+              return page;
+            } catch (error) {
+              if (!anchor || !isNavigationAnchorMissing(error)
+                || !this.isCurrent(resource) || resource.value.state.pendingSequence !== started.pendingSequence) throw error;
+              navigationListingDiagnostics.record({ ...this.diagnostic, phase: "retry", logical: diagnostic.logical, attempt: diagnostic.attempt, retry: "anchor-missing" });
+            }
+          }
+          throw new Error("Navigation anchor fallback did not reach the top of its list.");
+        };
         let page: NavigationQueryPage;
         let pageCursor = cursor;
         const restoring = explicitAnchor || fromStart ? 0 : size(started.page);
@@ -439,7 +464,7 @@ export class NavigationWindowQueries {
         // improvement on the button they still have.
         const extendUntil = Date.now() + MAX_LOAD_MORE_MS;
         try {
-          page = await readPage({ ...started.request, cursor, anchor,
+          page = await readAround({ ...started.request, cursor, anchor,
             ...(cursor ? { pageSize: cursorPageSize(size(started.page)) } : {}),
             completeBaselineRevision: !fromStart && !anchor && !cursor && !started.stale && started.page?.complete && (started.page.rangeStart ?? 0) === 0 ? started.page.countsRevision : undefined,
             retainedRange: !fromStart && !explicitAnchor && !cursor
@@ -459,7 +484,7 @@ export class NavigationWindowQueries {
           const recoveryAnchor = resource.anchor ?? ((previous?.rangeStart ?? 0) > 0
             ? firstDirectory ? { kind: "directory" as const, key: firstDirectory.key }
               : firstThread ? { kind: "thread" as const, ref: firstThread } : undefined : undefined);
-          page = await readPage({ ...started.request, anchor: recoveryAnchor });
+          page = await readAround({ ...started.request, anchor: recoveryAnchor });
         }
         if (!this.isCurrent(resource) || resource.value.state.pendingSequence !== started.pendingSequence) return;
         let next = applyNavigationPage({ state: resource.value.state, sequence: started.pendingSequence, page, cursor: pageCursor });
