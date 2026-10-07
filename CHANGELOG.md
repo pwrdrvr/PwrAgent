@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.2.0-prerelease.2 - 2026-10-07
+
+- Director Voice - Added optional camera cues for gestures, presence, and head nods or shakes, with conversation-aware filtering to avoid repeated interruptions. Requires a configured local decision model; disabled by default, and gestures never approve actions.
+- Managed Codex Builds - Choose Latest or Prerelease independently. Latest now installs only promoted builds, keeping experimental runtimes opt-in.
+- File Previews - Open JSON, YAML, TOML, CSV, and logs inside PwrAgent, with syntax coloring, table views, and linked-line navigation for local and federated threads.
+- Profiles and Menus - Reorder or hide profiles, use shortcuts for the first nine visible profiles, and access consistent PwrSuite menus across platforms.
+- Appearance - Added theme-matched light and dark Dock icons, including macOS 26 Liquid Glass rendering, and improved terminal colors and Nerd Font glyphs.
+- Accounts and Usage - Recover missing Codex account, plan, and quota information after interrupted startup, and prevent stale readings from appearing as current usage.
+- Federation and Navigation - Fixed incoming-file permission reporting, kept active child threads visible during discovery, and improved project navigation and Git refresh.
+- Updates and Reliability - Let Beta Prerelease users receive newer stable release candidates, reduced irrelevant Codex startup warnings, and improved clean shutdown.
+
 ## v1.2.0-prerelease.1 - 2026-10-06
 
 - Thread To-dos - Turn agent follow-ups into visible reminders with actions to start reviews, merge pull requests, or hand work to another thread or machine.
