@@ -1,7 +1,7 @@
 import { FederationShutdownNotices } from "./features/notifications/FederationShutdownNotices";
 import { CodexAuthProfileLoginDialog } from "./features/settings/CodexAuthProfileSelect";
 import { navigationIdentityFromThreadKey } from "./lib/navigation-query-state";
-import { classifyDirectory } from "@pwragent/shared";
+import { classifyDirectory, operatorTodoItemKey } from "@pwragent/shared";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "./lib/navigation-loaded-rows";
 import {
   Suspense,
@@ -151,6 +151,10 @@ import {
   useThreadTodos,
 } from "./features/thread-todos/useThreadTodos";
 import type { ThreadTodosView } from "./features/thread-todos/thread-todos-view";
+import {
+  OperatorWaitsContext,
+  useOperatorRequests,
+} from "./features/operator-requests/useOperatorRequests";
 import { copyTextAsCodeBlock } from "./lib/copy-text";
 import { resolveThreadWorkingStatePath } from "./lib/thread-working-state-path";
 import { CodexConfigWarningBanner } from "./features/codex-config/CodexConfigWarningBanner";
@@ -2355,6 +2359,16 @@ function DesktopAppShell(props: {
   });
   const unassignedThreadDraftCount = useUnassignedThreadDraftCount(composerDraftStore);
   const threadTodoController = useThreadTodos(desktopApi);
+  const operatorRequests = useOperatorRequests(desktopApi);
+  const operatorWaitsContext = useMemo(
+    () => readRendererFederationTarget()
+      ? undefined
+      : {
+          waitsByThreadKey: operatorRequests.waitsByThreadKey,
+          seenKeys: operatorRequests.seenKeys,
+        },
+    [operatorRequests.waitsByThreadKey, operatorRequests.seenKeys],
+  );
   const localThreadTitles = useMemo(() => {
     const titles = new Map<string, string>();
     for (const thread of navigation.threads) {
@@ -2364,7 +2378,47 @@ function DesktopAppShell(props: {
     }
     return titles;
   }, [navigation.threads]);
+  // The project each local thread files under, by its primary workspace, as
+  // the sidebar groups it.
+  const localThreadProjects = useMemo(() => {
+    const projects = new Map<string, { key: string; label: string }>();
+    for (const thread of navigation.threads) {
+      const linked = thread.linkedDirectories[0];
+      if (thread.federation || !linked) continue;
+      const descriptor = classifyDirectory(linked);
+      projects.set(buildThreadIdentityKey(thread.source, thread.id), {
+        key: descriptor.key,
+        label: descriptor.label,
+      });
+    }
+    return projects;
+  }, [navigation.threads]);
+  // What the selected thread shows is on screen: its cards in the stack and
+  // its waits in the transcript. Marked only while the window has focus, so
+  // a thread left selected behind another app still counts what arrives.
+  const markOperatorItemsSeen = operatorRequests.markSeen;
+  const selectedThreadKey = mainView === "thread" ? navigation.selectedThreadKey : undefined;
+  const selectedOpenTodos = selectedThreadKey
+    ? threadTodoController.openByThreadKey.get(selectedThreadKey)
+    : undefined;
+  const selectedWaits = selectedThreadKey
+    ? operatorRequests.waitsByThreadKey.get(selectedThreadKey)
+    : undefined;
+  useEffect(() => {
+    const keys = [
+      ...(selectedOpenTodos ?? []).map((todo) => operatorTodoItemKey(todo.id)),
+      ...(selectedWaits ?? []).map((wait) => wait.key),
+    ];
+    if (keys.length === 0) return;
+    const mark = (): void => {
+      if (document.hasFocus()) markOperatorItemsSeen(keys);
+    };
+    mark();
+    window.addEventListener("focus", mark);
+    return () => window.removeEventListener("focus", mark);
+  }, [markOperatorItemsSeen, selectedOpenTodos, selectedWaits]);
   const listThreadTodos = desktopApi?.listThreadTodos;
+  const submitServerRequest = desktopApi?.submitServerRequest;
   const configuredMergeMethod = props.settings.snapshot?.git?.defaultMergeMethod?.value;
   // Peers that can host a handoff thread, the same list the new-thread
   // machine chip offers.
@@ -2456,11 +2510,36 @@ function DesktopAppShell(props: {
           .sort((left, right) =>
             (right.resolvedAt ?? right.updatedAt) - (left.resolvedAt ?? left.updatedAt));
       },
+      waits: operatorRequests.waits,
+      waitsByThreadKey: operatorRequests.waitsByThreadKey,
+      seenKeys: operatorRequests.seenKeys,
+      markSeen: operatorRequests.markSeen,
+      respond: async (wait, response) => {
+        const request = wait.request;
+        if (!request || !submitServerRequest) {
+          throw new Error("This request can only be answered in its thread.");
+        }
+        await submitServerRequest({
+          backend: wait.backend,
+          threadId: wait.threadId,
+          turnId: typeof request.params.turnId === "string" ? request.params.turnId : undefined,
+          requestId: request.params.requestId,
+          response,
+        });
+      },
+      dismissQuestion: operatorRequests.dismissQuestion,
+      dismissedQuestionKeys: operatorRequests.dismissedQuestionKeys,
+      openWait: (wait) => showTodoThread(wait.backend, wait.threadId),
+      threadTitleForKey: (threadKey) => localThreadTitles.get(threadKey) ?? "Untitled thread",
+      threadProjectForKey: (threadKey) => localThreadProjects.get(threadKey),
     };
   }, [
     configuredMergeMethod,
     listThreadTodos,
+    localThreadProjects,
     localThreadTitles,
+    operatorRequests,
+    submitServerRequest,
     requestTodoExecutionMode,
     showThreadFromLink,
     threadTodoController,
@@ -3613,6 +3692,7 @@ function DesktopAppShell(props: {
   return (
     <FederationDisplayLabelsProvider health={liveFederationHealth}>
     <ThreadTodoCountsContext.Provider value={threadTodoController.openByThreadKey}>
+    <OperatorWaitsContext.Provider value={operatorWaitsContext}>
     <TranscriptLinkProvider
       localInstanceId={liveFederationHealth?.instanceId}
       activeThread={navigation.selectedThread}
@@ -4195,6 +4275,7 @@ function DesktopAppShell(props: {
 
       {todoFullAccessRiskDialog}
     </TranscriptLinkProvider>
+    </OperatorWaitsContext.Provider>
     </ThreadTodoCountsContext.Provider>
     </FederationDisplayLabelsProvider>
   );

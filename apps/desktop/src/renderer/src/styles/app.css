@@ -6740,6 +6740,21 @@ a.button {
   color: var(--accent-bright);
 }
 
+/* Something on the chip arrived since the operator last looked. */
+.thread-row__chip--todos.is-unread {
+  border-color: var(--accent-border);
+  color: var(--text-primary);
+}
+
+/* A question the thread asked without pausing: present, not a call to act
+   the way the approval and input chips are. */
+.thread-row__chip--question {
+  border: 1px solid var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+  font-weight: 700;
+}
+
 .path-copy-target {
   position: relative;
 }
@@ -22141,6 +22156,97 @@ button.thread-todos-panel__row-main:focus-visible {
   white-space: nowrap;
 }
 
+/* Waits: what a thread is paused on, or a question it asked. The kind
+   label carries the tone; the row itself stays neutral. */
+.thread-todos-panel__row {
+  position: relative;
+}
+
+.thread-todos-panel__row--wait[data-blocking="true"] .thread-todo-card__kind {
+  color: var(--status-warning-text);
+}
+
+.thread-todos-panel__wait-label {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.thread-todos-panel__row--wait[data-blocking="true"] .thread-todos-panel__wait-label {
+  color: var(--status-warning-text);
+}
+
+/* Unread rows carry the cookie in the gutter left of the kind glyph. */
+.thread-todos-panel__unread {
+  position: absolute;
+  z-index: 1;
+  top: 13px;
+  left: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent-shadow);
+  pointer-events: none;
+}
+
+.thread-todos-panel__row-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  padding: 2px 8px 0 30px;
+}
+
+.thread-todos-panel__row-link--quiet {
+  color: var(--text-secondary);
+}
+
+.thread-todos-panel__row-link--quiet:hover {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.thread-todos-panel__row-busy {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.thread-todos-panel__row-error {
+  margin: 2px 0 0;
+  padding: 0 8px 0 30px;
+  color: var(--danger-text);
+  font-size: 11.5px;
+  line-height: 16px;
+}
+
+.thread-todos-panel__group-paused {
+  flex: none;
+  margin-left: auto;
+  color: var(--status-warning-text);
+  font-weight: 600;
+}
+
+/* A lens's unread count, beside its open count. */
+.thread-todos-panel__unread-count {
+  display: inline-grid;
+  min-width: 14px;
+  height: 14px;
+  flex: none;
+  place-items: center;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--accent-fill);
+  color: var(--button-text);
+  font-size: 9.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
 .thread-todos-panel__controls {
   display: flex;
   align-items: center;
@@ -22199,6 +22305,14 @@ button.thread-todos-panel__row-main:focus-visible {
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   line-height: 1;
+}
+
+/* Nothing unread: this thread's open count, outlined so it reads as a
+   tally rather than news. */
+.context-rail__activity--todos.context-rail__activity--quiet {
+  border: 1px solid var(--border-strong);
+  background: var(--bg-panel-elevated);
+  color: var(--text-secondary);
 }
 
 .thread-find {

@@ -690,6 +690,13 @@
     "rowsChanged": 1,
     "statements": 1
   },
+  "operator-requests": {
+    "commits": 3,
+    "note": "one approval and one async question across 200 streamed events: the question's insert, one seen batch, and the reply's close; server requests and streamed events write nothing. ~0.03 MB WAL per question; ~1.5 MB/day at 50 questions",
+    "observedWalBytes": 28840,
+    "rowsChanged": 5,
+    "statements": 5
+  },
   "owner-pr-candidate-bootstrap": {
     "commits": 1,
     "note": "120 owner PR candidates reconciled at startup/provider completion: one commit when membership changes, never per-thread commits; no idle timer writes",

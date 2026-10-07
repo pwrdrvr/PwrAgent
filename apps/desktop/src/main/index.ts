@@ -34,6 +34,7 @@ import {
   registerScheduledActionIpcHandlers,
 } from "./ipc/scheduled-actions-ipc";
 import { registerThreadTodoIpcHandlers } from "./ipc/thread-todos-ipc";
+import { registerOperatorRequestIpcHandlers } from "./ipc/operator-requests-ipc";
 import {
   disposeScheduledThreadActionService,
 } from "./scheduled-actions/scheduled-thread-action-service";
@@ -1630,6 +1631,7 @@ export function bootstrapApp(): void {
     registerScheduledActionIpcHandlers();
     // A to-do's "Start thread on" runs through the same federation tools.
     registerThreadTodoIpcHandlers({ federation: federationAgentToolsHandler });
+    registerOperatorRequestIpcHandlers();
     registerApplicationIpcHandlers();
     registerAutomationIpcHandlers();
     registerAppMetadataIpcHandlers();

@@ -22,9 +22,9 @@ import {
   isAppServerBackendKind,
   isCodexAsyncQuestionAnswered,
   isMessagingBindingTargetKind,
-  normalizeCodexAsyncQuestions,
+  readCodexAsyncQuestionRepliesFromNotification,
+  readCodexAsyncQuestionsFromNotification,
   normalizeRenamedTitleSource,
-  parseCodexAsyncQuestionReply,
   parseCodexTurnErrorMessage,
   parseThreadIdentityKey,
   permissionForActionId,
@@ -22754,43 +22754,13 @@ function sleepUntil(
 function asyncQuestionsForBackendEvent(
   event: AgentEvent,
 ): { itemId: string; questions: CodexAsyncQuestion[] } | undefined {
-  if (event.notification.method !== "item/completed") {
-    return undefined;
-  }
-  const item = (event.notification.params as {
-    item?: { delivery?: unknown; questions?: unknown; type?: unknown };
-  }).item;
-  if (item?.type !== "agentMessage" || item.delivery !== "async") {
-    return undefined;
-  }
-  const itemId = assistantItemIdForBackendEvent(event);
-  const questions = normalizeCodexAsyncQuestions(item.questions);
-  return itemId && questions ? { itemId, questions } : undefined;
+  return readCodexAsyncQuestionsFromNotification(event.notification);
 }
 
-/**
- * Codex reads an async question reply only from a user message whose single
- * text input is the reply envelope; skill and mention inputs may accompany it.
- */
 function asyncQuestionRepliesForBackendEvent(
   event: AgentEvent,
 ): CodexAsyncQuestionReply[] | undefined {
-  if (event.notification.method !== "item/completed") {
-    return undefined;
-  }
-  const item = (event.notification.params as {
-    item?: { content?: unknown; type?: unknown };
-  }).item;
-  if (item?.type !== "userMessage" || !Array.isArray(item.content)) {
-    return undefined;
-  }
-  const inputs = (item.content as Array<{ text?: unknown; type?: unknown } | null>)
-    .filter((input) => input?.type !== "skill" && input?.type !== "mention");
-  const [input] = inputs;
-  if (inputs.length !== 1 || input?.type !== "text" || typeof input.text !== "string") {
-    return undefined;
-  }
-  return parseCodexAsyncQuestionReply(input.text);
+  return readCodexAsyncQuestionRepliesFromNotification(event.notification);
 }
 
 function assistantTextForBackendEvent(event: AgentEvent): string | undefined {

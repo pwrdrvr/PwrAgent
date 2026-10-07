@@ -12,6 +12,10 @@ import type {
   RunThreadTodoActionRequest,
   ThreadTodoMutationResponse,
   ThreadTodosChangedEvent,
+  DismissOperatorQuestionRequest,
+  ListOperatorRequestsResponse,
+  MarkOperatorItemsSeenRequest,
+  OperatorRequestsChangedEvent,
 } from "@pwragent/shared";
 import type { ReadUsageActivityRequest, ReadUsageActivityResponse, AnalyzeUsageActivityRequest, AnalyzeUsageActivityResponse } from "@pwragent/shared";
 import type { PrActivitySnapshot } from "@pwragent/shared";
@@ -986,6 +990,14 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   /** Marker event; refetch with `listThreadTodos`. Local windows only. */
   onThreadTodosChanged?: (
     callback: (event: ThreadTodosChangedEvent) => void,
+  ) => () => void;
+  /** Every local thread's pending requests and open async questions. */
+  listOperatorRequests?: () => Promise<ListOperatorRequestsResponse>;
+  markOperatorItemsSeen?: (request: MarkOperatorItemsSeenRequest) => Promise<void>;
+  dismissOperatorQuestion?: (request: DismissOperatorQuestionRequest) => Promise<void>;
+  /** Marker event; refetch with `listOperatorRequests`. Local windows only. */
+  onOperatorRequestsChanged?: (
+    callback: (event: OperatorRequestsChangedEvent) => void,
   ) => () => void;
   listScheduledThreadActions?: (
     request?: ListScheduledThreadActionsRequest,

@@ -9,6 +9,7 @@ import type { ThreadTodo, ThreadTodoKind } from "@pwragent/shared";
 import {
   THREAD_TODO_RESOLUTION_RESULTS,
   buildThreadIdentityKey,
+  operatorTodoItemKey,
 } from "@pwragent/shared";
 import {
   HandoffIcon,
@@ -16,6 +17,8 @@ import {
   ReviewIcon,
   type IconProps,
 } from "../../icons";
+import { OperatorWaitRow } from "../operator-requests/OperatorWaitRow";
+import { isBlockingWait, type OperatorWait } from "../operator-requests/operator-waits";
 import { ThreadTodoCard, formatTodoAge } from "./ThreadTodoCard";
 import type { ThreadTodosView } from "./thread-todos-view";
 
@@ -47,10 +50,17 @@ const RESOLUTION_RESULTS: ReadonlySet<string> = new Set(
  */
 let rememberedScope: ThreadTodoScope = "project";
 
+/** A row in the panel: something a thread waits on, or a to-do card. */
+type PanelItem =
+  | { type: "wait"; key: string; wait: OperatorWait }
+  | { type: "todo"; key: string; todo: ThreadTodo };
+
 type TodoGroup = {
   key: string;
   title: string;
-  todos: ThreadTodo[];
+  items: PanelItem[];
+  /** A wait in the group pauses a turn. */
+  paused: boolean;
 };
 
 export type ThreadTodosPanelProps = {
@@ -68,6 +78,12 @@ export type ThreadTodosPanelProps = {
  * A card for another project shows in both projects' lens. This thread's
  * open cards render whole, with their actions; every other card is a row
  * that opens its thread.
+ *
+ * What threads are waiting on (approvals, MCP input, questionnaires, async
+ * questions) lists first in each group, most urgent first. Each lens counts
+ * its open items and, in a filled pill, the ones not yet seen. Rows on screen
+ * in a focused window are marked seen; the cookie stays on a row for as long
+ * as the panel is open, so the operator can still tell what was new.
  */
 export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
   const { view, threadKey, projectKey } = props;
@@ -97,7 +113,8 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
     };
   }, [showResolved, listResolved, view.revision]);
 
-  const inScope = (todo: ThreadTodo, lens: ThreadTodoScope): boolean => {
+  const threadProjectForKey = view.threadProjectForKey;
+  const todoInScope = (todo: ThreadTodo, lens: ThreadTodoScope): boolean => {
     switch (lens) {
       case "thread":
         return buildThreadIdentityKey(todo.backend, todo.threadId) === threadKey;
@@ -109,9 +126,54 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
         return true;
     }
   };
-  const source = showResolved ? resolved : view.open;
-  const todos = source?.filter((todo) => inScope(todo, activeScope));
-  const groups = todos ? groupTodos(todos, activeScope, props) : undefined;
+  const waitInScope = (wait: OperatorWait, lens: ThreadTodoScope): boolean => {
+    switch (lens) {
+      case "thread":
+        return wait.threadKey === threadKey;
+      case "project":
+        return projectKey !== undefined
+          && threadProjectForKey(wait.threadKey)?.key === projectKey;
+      case "all":
+        return true;
+    }
+  };
+  const openItemsIn = (lens: ThreadTodoScope): PanelItem[] => [
+    ...view.waits
+      .filter((wait) => waitInScope(wait, lens))
+      .map((wait): PanelItem => ({ type: "wait", key: wait.key, wait })),
+    ...view.open
+      .filter((todo) => todoInScope(todo, lens))
+      .map((todo): PanelItem => ({ type: "todo", key: operatorTodoItemKey(todo.id), todo })),
+  ];
+  const items: PanelItem[] | undefined = showResolved
+    ? resolved
+      ?.filter((todo) => todoInScope(todo, activeScope))
+      .map((todo) => ({ type: "todo", key: operatorTodoItemKey(todo.id), todo }))
+    : openItemsIn(activeScope);
+  const groups = items ? groupItems(items, activeScope, props) : undefined;
+
+  // Rows on screen in a focused window are seen. The panel is mounted only
+  // while the rail shows it, so being rendered here is being on screen.
+  const unseenKeys = showResolved || !items
+    ? []
+    : items.filter((item) => !view.seenKeys.has(item.key)).map((item) => item.key);
+  const unseenSignature = unseenKeys.join("\n");
+  const [freshKeys, setFreshKeys] = useState<ReadonlySet<string>>(() => new Set());
+  const markSeen = view.markSeen;
+  useEffect(() => {
+    if (!unseenSignature) return;
+    const keys = unseenSignature.split("\n");
+    const mark = (): void => {
+      if (!document.hasFocus()) return;
+      setFreshKeys((current) =>
+        keys.every((key) => current.has(key)) ? current : new Set([...current, ...keys]));
+      markSeen(keys);
+    };
+    mark();
+    window.addEventListener("focus", mark);
+    return () => window.removeEventListener("focus", mark);
+  }, [unseenSignature, markSeen]);
+  const isUnread = (key: string): boolean => !view.seenKeys.has(key) || freshKeys.has(key);
 
   const handleScopeKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
@@ -122,6 +184,14 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
     setScope(next);
     document.getElementById(`${controlId}-${next}`)?.focus();
   };
+
+  const lensCounts = Object.fromEntries(SCOPES.map((entry) => {
+    const lensItems = openItemsIn(entry.id);
+    return [entry.id, {
+      open: lensItems.length,
+      unread: lensItems.filter((item) => !view.seenKeys.has(item.key)).length,
+    }];
+  })) as Record<ThreadTodoScope, { open: number; unread: number }>;
 
   const emptyText = showResolved
     ? "No resolved to-dos."
@@ -145,6 +215,9 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
           {scopes.map((entry) => (
             <button
               aria-controls={`${controlId}-panel`}
+              aria-label={`${entry.label}, ${lensCounts[entry.id].open} open${
+                lensCounts[entry.id].unread > 0 ? `, ${lensCounts[entry.id].unread} unread` : ""
+              }`}
               aria-selected={activeScope === entry.id}
               className="subagent-lens-switch__button"
               id={`${controlId}-${entry.id}`}
@@ -155,9 +228,12 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
               onClick={() => setScope(entry.id)}
             >
               <span>{entry.label}</span>
-              <span className="subagent-lens-switch__count">
-                {view.open.filter((todo) => inScope(todo, entry.id)).length}
-              </span>
+              <span className="subagent-lens-switch__count">{lensCounts[entry.id].open}</span>
+              {lensCounts[entry.id].unread > 0 ? (
+                <span className="thread-todos-panel__unread-count">
+                  {lensCounts[entry.id].unread}
+                </span>
+              ) : null}
             </button>
           ))}
         </div>
@@ -188,10 +264,36 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
             >
               <h4 className="thread-todos-panel__group-title">
                 <span className="thread-todos-panel__group-name">{group.title}</span>
-                <span className="thread-todos-panel__group-count">{group.todos.length}</span>
+                <span className="thread-todos-panel__group-count">{group.items.length}</span>
+                {group.paused ? (
+                  <span className="thread-todos-panel__group-paused">turn paused</span>
+                ) : null}
               </h4>
               <ul className="thread-todos-panel__list">
-                {group.todos.map((todo) => {
+                {group.items.map((item) => {
+                  if (item.type === "wait") {
+                    const { wait } = item;
+                    const mine = wait.threadKey === threadKey;
+                    return (
+                      <li key={item.key}>
+                        <OperatorWaitRow
+                          wait={wait}
+                          current={mine}
+                          unread={isUnread(item.key)}
+                          threadName={activeScope === "all" && !mine
+                            ? view.threadTitleForKey(wait.threadKey)
+                            : undefined}
+                          respond={view.respond}
+                          dismissQuestion={(target) => {
+                            const question = target.question;
+                            return question ? view.dismissQuestion(question) : Promise.resolve();
+                          }}
+                          openWait={view.openWait}
+                        />
+                      </li>
+                    );
+                  }
+                  const { todo } = item;
                   const mine = buildThreadIdentityKey(todo.backend, todo.threadId) === threadKey;
                   return (
                     <li key={todo.id}>
@@ -220,6 +322,7 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
                           current={mine}
                           scope={activeScope}
                           projectKey={projectKey}
+                          unread={todo.status === "open" && isUnread(item.key)}
                           view={view}
                         />
                       )}
@@ -240,6 +343,7 @@ function TodoRow(props: {
   current: boolean;
   scope: ThreadTodoScope;
   projectKey?: string;
+  unread?: boolean;
   view: ThreadTodosView;
 }) {
   const { todo, view } = props;
@@ -263,14 +367,21 @@ function TodoRow(props: {
   );
   const meta = [threadName, route].filter(Boolean).join(" · ");
   return (
-    <div className="thread-todos-panel__row" data-status={todo.status}>
+    <div
+      className="thread-todos-panel__row"
+      data-status={todo.status}
+      data-unread={props.unread ? "true" : undefined}
+    >
+      {props.unread ? <span className="thread-todos-panel__unread" aria-hidden="true" /> : null}
       {props.current ? (
         <div className="thread-todos-panel__row-main">{main}</div>
       ) : (
         <button
           type="button"
           className="thread-todos-panel__row-main"
-          aria-label={`Open thread: ${todo.title}, in ${view.threadTitle(todo)}`}
+          aria-label={`Open thread: ${todo.title}, in ${view.threadTitle(todo)}${
+            props.unread ? ", unread" : ""
+          }`}
           onClick={() => view.openThread(todo)}
         >
           {main}
@@ -331,24 +442,40 @@ function describeRoute(
   return source ? `${source.label} → ${target.label}` : `For ${target.label}`;
 }
 
-function groupTodos(
-  todos: ThreadTodo[],
+function groupItems(
+  items: PanelItem[],
   scope: ThreadTodoScope,
   props: ThreadTodosPanelProps,
 ): TodoGroup[] {
+  const { view } = props;
   const groups = new Map<string, TodoGroup>();
-  for (const todo of todos) {
-    // All groups by the project a card came from; the narrower lenses by
+  for (const item of items) {
+    // All groups by the project an item came from; the narrower lenses by
     // thread, since one project's threads are what the operator moves between.
-    const key = scope === "all"
-      ? todo.sourceProject?.key ?? NO_PROJECT_KEY
-      : buildThreadIdentityKey(todo.backend, todo.threadId);
-    const title = scope === "all"
-      ? todo.sourceProject?.label ?? "No project"
-      : props.view.threadTitle(todo);
+    let key: string;
+    let title: string;
+    if (item.type === "wait") {
+      const project = view.threadProjectForKey(item.wait.threadKey);
+      key = scope === "all" ? project?.key ?? NO_PROJECT_KEY : item.wait.threadKey;
+      title = scope === "all"
+        ? project?.label ?? "No project"
+        : view.threadTitleForKey(item.wait.threadKey);
+    } else {
+      key = scope === "all"
+        ? item.todo.sourceProject?.key ?? NO_PROJECT_KEY
+        : buildThreadIdentityKey(item.todo.backend, item.todo.threadId);
+      title = scope === "all"
+        ? item.todo.sourceProject?.label ?? "No project"
+        : view.threadTitle(item.todo);
+    }
+    const paused = item.type === "wait" && isBlockingWait(item.wait);
     const group = groups.get(key);
-    if (group) group.todos.push(todo);
-    else groups.set(key, { key, title, todos: [todo] });
+    if (group) {
+      group.items.push(item);
+      group.paused ||= paused;
+    } else {
+      groups.set(key, { key, title, items: [item], paused });
+    }
   }
   const first = scope === "all" ? props.projectKey : props.threadKey;
   const ordered = [...groups.values()];
