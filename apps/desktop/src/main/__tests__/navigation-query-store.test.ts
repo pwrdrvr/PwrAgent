@@ -877,6 +877,8 @@ it.each([
   ["other-owner", (threads: NavigationThreadSummary[]) => { threads[1] = { ...threads[1]!, federation: { instanceLabel: "Peer",
     ref: { backend: "codex", threadId: "1", target: { scope: "remote", instanceId: "peer" } } } }; }],
   ["other-directory", (_threads: NavigationThreadSummary[], keys: string[]) => { keys.splice(1, 1); }],
+  // An archived row still indexed and listed stays a member; what moved it is named instead.
+  ["pinned", (threads: NavigationThreadSummary[]) => { threads[1] = { ...threads[1]!, archivedAt: 5, pinnedRank: "1024" }; }],
 ] as const)("names why a directory anchor left its query: %s", async (reason, change) => {
   const threads = Array.from({ length: 3 }, (_, index) => thread(String(index)));
   const keys = threads.map((row) => `codex:${row.id}`);
@@ -899,4 +901,12 @@ it("names an archived anchor that a Star Map query filters out", async () => {
     anchor: { kind: "thread", ref: { backend: "codex", threadId: "1" } } });
   await expect(new NavigationQueryStore().readPage({ scopeKey: "window", loadIndex: async () => snapshot(threads), request: anchored }))
     .rejects.toThrow("(reason: archived)");
+});
+
+it("names a local anchor spelled with this owner's instance ID as a ref mismatch", async () => {
+  const threads = Array.from({ length: 3 }, (_, index) => thread(String(index)));
+  const anchored = request({ pageSize: 10, anchor: { kind: "thread", ref: { backend: "codex", threadId: "1", ownerInstanceId: "self" } } });
+  await expect(new NavigationQueryStore().readPage({ scopeKey: "window",
+    loadIndex: async () => ({ ...snapshot(threads), localInstanceId: "self" }), request: anchored }))
+    .rejects.toThrow("(reason: ref-mismatch)");
 });

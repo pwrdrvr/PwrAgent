@@ -773,11 +773,15 @@ export function explainMissingNavigationAnchor(params: {
   }
   const thread = params.index.threads.find((candidate) => threadKey(candidate) === identityKey(anchor.ref));
   if (!thread) {
-    return params.index.threads.some((candidate) => candidate.source === anchor.ref.backend && candidate.id === anchor.ref.threadId)
-      ? "other-owner" : "not-indexed";
+    const sameId = params.index.threads.filter((candidate) => candidate.source === anchor.ref.backend && candidate.id === anchor.ref.threadId);
+    // A local row named by this owner's own instance ID is one identity
+    // spelled two ways, not a row that belongs to another owner.
+    if (anchor.ref.ownerInstanceId && anchor.ref.ownerInstanceId === params.index.localInstanceId
+      && sameId.some((candidate) => !navigationIdentity(candidate).ownerInstanceId)) return "ref-mismatch";
+    return sameId.length ? "other-owner" : "not-indexed";
   }
-  if (thread.archivedAt !== undefined) return "archived";
-  if (query.kind !== "directory") return "filtered";
+  // Directory membership ignores archive state, so it names only filtered queries.
+  if (query.kind !== "directory") return thread.archivedAt !== undefined ? "archived" : "filtered";
   const directory = params.index.directories.find((candidate) => candidate.key === query.directoryKey);
   if (!directory) return "directory-not-indexed";
   const threadsByLegacyKey = buildThreadsByLegacyKey(params.index);

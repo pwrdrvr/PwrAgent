@@ -257,5 +257,7 @@ describe("missing navigation anchors", () => {
     expect(navigationPageErrorCopy("Federation peer peer-1 is not connected.")).toBe("This instance isn't connected.");
     expect(navigationPageErrorCopy("Navigation retained-page budget reached. Collapse a directory or change lens to release pages."))
       .toBe("Too many thread lists are open. Collapse a directory to load more.");
+    expect(navigationPageErrorCopy("Navigation query protocol 2 is required. Upgrade the owning instance."))
+      .toBe("Update the other instance to see these threads.");
   });
 });

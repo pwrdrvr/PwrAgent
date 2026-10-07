@@ -239,6 +239,8 @@ export function navigationFallbackAnchor(
 export function navigationPageErrorCopy(error: string): string {
   if (isNavigationPeerUnavailable(error)) return "This instance isn't connected.";
   if (error.includes("retained-page budget")) return "Too many thread lists are open. Collapse a directory to load more.";
+  if (error.includes("Upgrade the owning instance")) return "Update the other instance to see these threads.";
+  if (error.includes("Upgrade this instance")) return "Update PwrAgent to see these threads.";
   return "Couldn't load these threads.";
 }
 
