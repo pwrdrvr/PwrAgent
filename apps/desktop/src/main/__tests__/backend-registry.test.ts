@@ -3019,6 +3019,7 @@ function rememberCollapsedDirectoryWithPinnedThread(params: {
   directoryPath: string;
   registry: DesktopBackendRegistry;
   threadId?: string;
+  collapsed?: boolean;
 }): void {
   const threadId = params.threadId ?? "thread-pinned";
   params.registry.rememberCompleteNavigationSnapshot(buildNavigationSnapshot({
@@ -3028,7 +3029,7 @@ function rememberCollapsedDirectoryWithPinnedThread(params: {
     directoryOverlayByKey: {
       [params.directoryKey]: {
         directoryKey: params.directoryKey,
-        directoryThreadsCollapsed: true,
+        directoryThreadsCollapsed: params.collapsed ?? true,
       },
     },
     overlayByThreadKey: {
@@ -12657,6 +12658,45 @@ describe("DesktopBackendRegistry", () => {
       { id: expect.stringMatching(/^scheduled-action:/) },
     );
 
+    await registry.close();
+  });
+
+  it.each([true, false])("uses a directory disclosure changed after its navigation snapshot (collapsed: %s)", async (collapsed) => {
+    const directoryPath = expectedDir(
+      path.join(os.tmpdir(), "pwragent-auto-pin-disclosure-project"),
+    );
+    const directoryKey = `directory:${directoryPath}`;
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      overlayStore,
+    });
+    rememberCollapsedDirectoryWithPinnedThread({
+      directoryKey,
+      directoryPath,
+      registry,
+      collapsed: !collapsed,
+    });
+    // The disclosure mutation reaches the owner immediately, even if provider
+    // metadata cannot produce another complete navigation snapshot.
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "directory/threadsCollapsed/updated",
+        params: { directoryKey, collapsed },
+      },
+    });
+
+    const response = await registry.startThread({
+      backend: "codex",
+      cwd: directoryPath,
+    });
+
+    if (collapsed) {
+      expect(response).toMatchObject({ pinnedRank: "0" });
+    } else {
+      expect(response).not.toHaveProperty("pinnedRank");
+    }
     await registry.close();
   });
 
