@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { NavigationThreadSummary, PrSummary } from "../index";
 import {
+  parseThreadJumpQuery,
+  rankThreadJumpMatches,
   threadHasExactPrNumberMatch,
   threadMatchesQuery,
 } from "../thread-jump-match";
@@ -150,5 +152,77 @@ describe("threadMatchesQuery", () => {
     expect(threadMatchesQuery(thread({ title: "Housekeeping" }), "Agent")).toBe(
       false,
     );
+  });
+});
+
+describe("project mentions", () => {
+  const inProject = (id: string, title: string, label: string, updatedAt = 0) => thread({
+    id, title, updatedAt,
+    linkedDirectories: [{ id, kind: "local", label, path: `/repos/${label}` }],
+  });
+  const busy = inProject("busy", "MCP gateway", "media-services", 3);
+  const quiet = inProject("quiet", "MCP config", "pinecone-api", 1);
+
+  it("scopes a text match to the mentioned project, with or without in:", () => {
+    expect(threadMatchesQuery(quiet, "@pinecone-api mcp")).toBe(true);
+    expect(threadMatchesQuery(busy, "@pinecone-api mcp")).toBe(false);
+    expect(threadMatchesQuery(quiet, "mcp in:@Pinecone")).toBe(true);
+    expect(threadMatchesQuery(quiet, "@pinecone-api zzz")).toBe(false);
+  });
+
+  it("matches every thread in a mentioned project when there is no text", () => {
+    expect(threadMatchesQuery(quiet, "@pine")).toBe(true);
+    expect(threadMatchesQuery(busy, "@pine")).toBe(false);
+    expect(threadMatchesQuery(busy, "@pine @media")).toBe(true);
+  });
+
+  it("filters before ranking, so a busy project cannot crowd out the mentioned one", () => {
+    const threads = [busy, ...Array.from({ length: 10 }, (_, index) =>
+      inProject(`busy-${index}`, `MCP ${index}`, "media-services", 10 + index)), quiet];
+    expect(rankThreadJumpMatches(threads, "mcp @pinecone-api").map((t) => t.id)).toEqual(["quiet"]);
+  });
+
+  it("ranks an exact PR from the free text, not the whole query", () => {
+    const withPr = { ...quiet, prs: [pr(42)] };
+    expect(rankThreadJumpMatches([inProject("other", "PR 42 notes", "pinecone-api", 9), withPr],
+      "@pinecone 42").map((t) => t.id)).toEqual(["quiet", "other"]);
+  });
+
+  it("leaves a query without mentions exactly as typed", () => {
+    expect(parseThreadJumpQuery(' "mcp" ')).toEqual({ text: '"mcp"', projects: [], terms: ["mcp"] });
+    expect(parseThreadJumpQuery('@pine "mcp server"')).toEqual({ text: "mcp server", projects: ["pine"], terms: ["mcp server"] });
+    expect(threadMatchesQuery(thread({ title: "user@example" }), "user@example")).toBe(true);
+    expect(threadMatchesQuery(thread({ title: "@" }), "@")).toBe(true);
+  });
+
+  it("keeps a quoted @word literal, so titles that contain one stay reachable", () => {
+    const title = thread({ title: "Ping @release-bot about the freeze" });
+    expect(threadMatchesQuery(title, "@release-bot")).toBe(false);
+    expect(threadMatchesQuery(title, '"@release-bot"')).toBe(true);
+    expect(parseThreadJumpQuery('"@release-bot" freeze')).toEqual({ text: "@release-bot freeze", projects: [], terms: ["@release-bot", "freeze"] });
+  });
+});
+
+describe("multi-word queries", () => {
+  const warning = thread({
+    title: "pnpm install widget-mcp warning",
+    gitBranch: "fix/mcp-install-executable",
+    linkedDirectories: [{ id: "d", kind: "local", label: "Widgetry", path: "/repos/Widgetry" }],
+  });
+
+  it("matches words that are not adjacent, in any field and any order", () => {
+    expect(threadMatchesQuery(warning, "pnpm mcp")).toBe(true);
+    expect(threadMatchesQuery(warning, "mcp pnpm")).toBe(true);
+    expect(threadMatchesQuery(warning, "executable warning")).toBe(true);
+    expect(threadMatchesQuery(warning, "@widgetry pnpm mcp")).toBe(true);
+  });
+
+  it("requires every word and keeps a quoted phrase whole", () => {
+    expect(threadMatchesQuery(warning, "pnpm zzz")).toBe(false);
+    expect(threadMatchesQuery(warning, '"pnpm mcp"')).toBe(false);
+    expect(threadMatchesQuery(warning, '"pnpm install" mcp')).toBe(true);
+    expect(threadMatchesQuery(warning, '"pnpm install"')).toBe(true);
+    expect(threadMatchesQuery(warning, '"install pnpm"')).toBe(false);
+    expect(threadMatchesQuery(warning, '@widgetry "install pnpm"')).toBe(false);
   });
 });

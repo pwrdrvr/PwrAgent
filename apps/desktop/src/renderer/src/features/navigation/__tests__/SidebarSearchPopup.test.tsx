@@ -979,3 +979,75 @@ describe("project destinations", () => {
     expect(onJumpToThread).toHaveBeenCalledWith(thread);
   });
 });
+
+describe("project mentions", () => {
+  const inProject = (id: string, title: string, label: string, updatedAt: number) => localThread({
+    id, title, updatedAt, linkedDirectories: [{ id, kind: "local", label, path: `/repos/${label}` }],
+  });
+
+  it("scopes threads to an @project mention and offers no project rows", async () => {
+    const busy = Array.from({ length: 10 }, (_, index) =>
+      inProject(`busy-${index}`, `MCP gateway ${index}`, "media-services", 100 + index));
+    const quiet = inProject("quiet", "MCP config", "pinecone-api", 1);
+    const onJumpToThread = vi.fn();
+    render(<SidebarSearchPopup
+      projects={[{ key: "directory:/repos/pinecone-api", kind: "directory", label: "pinecone-api", path: "/repos/pinecone-api" }]}
+      threads={[...busy, quiet]}
+      onJumpToProject={vi.fn()} onJumpToThread={onJumpToThread} onClose={vi.fn()} />);
+    const input = screen.getByRole("textbox");
+    fireEvent.change(input, { target: { value: "@pinecone-api mcp" } });
+    await settleRemoteSearch();
+    expect(screen.getAllByRole("option")).toHaveLength(1);
+    expect(screen.getByRole("option")).toHaveTextContent("MCP config");
+    expect(getNavigationQueryPage).not.toHaveBeenCalledWith(
+      expect.objectContaining({ query: expect.objectContaining({ kind: "directory-index" }) }), expect.any(String));
+    expect(getNavigationQueryPage).toHaveBeenCalledWith(expect.objectContaining({
+      query: { kind: "search", text: "@pinecone-api mcp" } }), expect.any(String));
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onJumpToThread).toHaveBeenCalledWith(quiet);
+  });
+
+  it("lists a project's threads once a bare in:@project mention is complete", async () => {
+    render(<SidebarSearchPopup threads={[
+      inProject("a", "Alpha", "pinecone-api", 2), inProject("b", "Beta", "media-services", 3),
+    ]} onJumpToThread={vi.fn()} onClose={vi.fn()} />);
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "in:@pine " } });
+    await settleRemoteSearch();
+    expect(screen.getAllByRole("option").map((row) => row.textContent)).toEqual([expect.stringContaining("Alpha")]);
+  });
+
+  const directories = [
+    { key: "directory:/repos/pinecone-api", kind: "directory" as const, label: "pinecone-api", path: "/repos/pinecone-api" },
+    { key: "directory:/repos/media-services", kind: "directory" as const, label: "media-services", path: "/repos/media-services" },
+  ];
+
+  it.each([["Enter"], ["Tab"]])("suggests projects for a partial mention and %s completes it", async (key) => {
+    const onJumpToProject = vi.fn();
+    render(<SidebarSearchPopup projects={directories}
+      threads={[inProject("a", "MCP config", "pinecone-api", 2), inProject("b", "MCP gateway", "media-services", 3)]}
+      onJumpToProject={onJumpToProject} onJumpToThread={vi.fn()} onClose={vi.fn()} />);
+    const input = screen.getByRole("textbox") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "mcp in:@pin" } });
+    await settleRemoteSearch();
+    expect(screen.getByRole("listbox", { name: "Projects" })).toBeInTheDocument();
+    expect(screen.getAllByRole("option").map((row) => row.textContent)).toEqual([expect.stringContaining("pinecone-api")]);
+    expect(screen.getByText("↵ narrow to project")).toBeInTheDocument();
+    fireEvent.keyDown(input, { key });
+    expect(input.value).toBe("mcp in:@pinecone-api ");
+    expect(input.selectionStart).toBe(input.value.length);
+    expect(onJumpToProject).not.toHaveBeenCalled();
+    await settleRemoteSearch();
+    expect(screen.getAllByRole("option").map((row) => row.textContent)).toEqual([expect.stringContaining("MCP config")]);
+  });
+
+  it("lists every project for a bare @ and says when none match", async () => {
+    render(<SidebarSearchPopup projects={directories} threads={[]} onJumpToThread={vi.fn()} onClose={vi.fn()} />);
+    const input = screen.getByRole("textbox");
+    fireEvent.change(input, { target: { value: "@" } });
+    await settleRemoteSearch();
+    expect(screen.getAllByRole("option")).toHaveLength(2);
+    fireEvent.change(input, { target: { value: "@zzz" } });
+    await settleRemoteSearch();
+    expect(screen.getByText("No matching projects")).toBeInTheDocument();
+  });
+});
