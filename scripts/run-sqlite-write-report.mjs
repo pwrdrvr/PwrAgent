@@ -16,10 +16,10 @@ import { runResourceCommand } from "./resource-run.mjs";
 import { getToolResourcePolicy, resourceCommand } from "./tool-resource-policy.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-export function runSqliteWriteTests(args, { policy = getToolResourcePolicy(), ...options } = {}) {
+export function runSqliteWriteTests(args, { env = process.env, policy = getToolResourcePolicy({ env }), ...options } = {}) {
   const vitestArgs = ["run", "--config", "vitest.workspace.ts", ...args];
   return runResourceCommand("pnpm", ["exec", "vitest", ...resourceCommand("vitest", vitestArgs, policy)], {
-    policy, cwd: repoRoot, ...options,
+    policy, env, cwd: repoRoot, ...options,
   });
 }
 

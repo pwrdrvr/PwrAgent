@@ -8,6 +8,12 @@ selects a policy for the machine on every invocation. To inspect it:
 node scripts/resource-run.mjs --policy
 ```
 
+CI preserves its configured command arguments, environment and parallelism,
+including Node heap settings. When `CI` is nonempty (except `false` or `0`,
+case-insensitive), the runner applies no heap override, shared lease or worker
+limit, even below 16 GiB. CI workflows retain their existing test jobs and
+budgets. The capacity policy below applies to local development outside CI.
+
 Effective RAM is the minimum of the host's total usable physical RAM, Node's
 finite OS memory constraint and all finite limits in the visible Linux cgroup
 hierarchy (v1 or v2, including ancestors). It measures capacity, not current
@@ -15,7 +21,7 @@ free RAM, and does not add swap. Container limits greater than host capacity
 cannot increase effective RAM. Ancestors outside a container's cgroup
 namespace cannot be read from inside that namespace.
 
-Strictly below **16 GiB**, the runner:
+Outside CI, strictly below **16 GiB**, the runner:
 
 - Replaces inherited Node old-space and percentage settings with **2048 MiB**.
   The full desktop TypeScript check and typed ESLint use **4096 MiB**: the desktop
@@ -91,5 +97,6 @@ node scripts/resource-run.mjs <command> [arguments...]
 The policy applies to repository scripts, not arbitrary commands launched
 outside them or worktrees that have not received this change. Do not delete an
 active lock to start another command. A crashed owner's stale lease recovers
-automatically. Integration tests use private fixture leases and the same
-public runner API; there is no production lock-bypass environment variable.
+automatically. Integration tests use private fixture leases and explicit
+policies through the same public runner API, exercising constrained-machine
+ownership even under CI. There is no fixture-specific production bypass.

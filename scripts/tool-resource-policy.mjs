@@ -59,6 +59,7 @@ export function readCgroupMemoryLimits(readFile = readFileSync, platform = proce
 }
 
 export function getToolResourcePolicy({
+  env = process.env,
   hostMemory = totalmem(),
   constrainedMemory = process.constrainedMemory?.() ?? 0,
   cgroupLimits = readCgroupMemoryLimits(),
@@ -70,7 +71,11 @@ export function getToolResourcePolicy({
     ...cgroupLimits.filter((value) => Number.isFinite(value) && value >= 0),
   ];
   const effectiveMemory = Math.min(...finiteLimits);
-  return { hostMemory, effectiveMemory, constrained: effectiveMemory < LOW_MEMORY_THRESHOLD };
+  // CI retains its configured heap, command arguments and parallelism.
+  // The shared machine lane is for local development, not CI runners.
+  const ci = env.CI?.trim().toLowerCase();
+  const inCi = !!ci && ci !== "false" && ci !== "0";
+  return { hostMemory, effectiveMemory, constrained: !inCi && effectiveMemory < LOW_MEMORY_THRESHOLD };
 }
 
 const NODE_VALUE_OPTIONS = new Set([

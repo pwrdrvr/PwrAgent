@@ -101,8 +101,8 @@ async function finishGroup(pid, expectedStartedAt) {
 // A lease covers the entire enclosing script. Nested scripts share its process
 // group and verified token; separate commands queue even across repositories.
 export async function runResourceCommand(command, args, {
-  policy = getToolResourcePolicy(),
   env = process.env,
+  policy = getToolResourcePolicy({ env }),
   lockPath = MACHINE_TOOL_LOCK,
   cwd = process.cwd(),
   stdio = "inherit",

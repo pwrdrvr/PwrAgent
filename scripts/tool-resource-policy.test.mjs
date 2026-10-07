@@ -18,8 +18,8 @@ import {
 } from "./tool-resource-policy.mjs";
 
 const temporaryDirectories = [];
-const low = getToolResourcePolicy({ hostMemory: 12 * GIB, constrainedMemory: 0, cgroupLimits: [] });
-const high = getToolResourcePolicy({ hostMemory: 32 * GIB, constrainedMemory: 0, cgroupLimits: [] });
+const low = getToolResourcePolicy({ env: {}, hostMemory: 12 * GIB, constrainedMemory: 0, cgroupLimits: [] });
+const high = getToolResourcePolicy({ env: {}, hostMemory: 32 * GIB, constrainedMemory: 0, cgroupLimits: [] });
 
 // Call the public API from an independent process with a private fixture
 // lease. There is no production env override/bypass for the global lane.
@@ -60,19 +60,36 @@ afterEach(async () => {
 });
 
 describe("machine memory policy", () => {
+  it.each(["true", "1", "TRUE", "yes"])("preserves CI resources with CI=%s even inside a small container", (CI) => {
+    const policy = getToolResourcePolicy({ env: { CI }, hostMemory: 32 * GIB, constrainedMemory: 4 * GIB, cgroupLimits: [2 * GIB] });
+    expect(policy).toEqual({ hostMemory: 32 * GIB, effectiveMemory: 2 * GIB, constrained: false });
+    const env = { CI, NODE_OPTIONS: "--trace-warnings --max-old-space-size=6144 --max-old-space-size-percentage=90" };
+    expect(resourceEnvironment("node", [], env, policy)).toBe(env);
+    for (const [command, args] of [
+      ["node", ["--max-old-space-size=6144", "app.mjs"]],
+      ["pnpm", ["-r", "--parallel", "--workspace-concurrency=8", "test"]],
+      ["vitest", ["run", "--maxWorkers=8", "--maxConcurrency=7", "--fileParallelism=true"]],
+      ["playwright", ["test", "--workers=4"]],
+    ]) expect(resourceCommand(command, args, policy)).toBe(args);
+  });
+
+  it.each([undefined, "", "false", "FALSE", "0"])("retains local limits with CI=%s", (CI) => {
+    expect(getToolResourcePolicy({ env: CI === undefined ? {} : { CI }, hostMemory: 12 * GIB, constrainedMemory: 0, cgroupLimits: [] }).constrained).toBe(true);
+  });
+
   it.each([8, 12, 15])("limits a %i GiB host", (size) => {
-    expect(getToolResourcePolicy({ hostMemory: size * GIB, constrainedMemory: 0, cgroupLimits: [] }).constrained).toBe(true);
+    expect(getToolResourcePolicy({ env: {}, hostMemory: size * GIB, constrainedMemory: 0, cgroupLimits: [] }).constrained).toBe(true);
   });
 
   it.each([16, 24, 32])("preserves a %i GiB host", (size) => {
-    expect(getToolResourcePolicy({ hostMemory: size * GIB, constrainedMemory: 0, cgroupLimits: [] }).constrained).toBe(false);
+    expect(getToolResourcePolicy({ env: {}, hostMemory: size * GIB, constrainedMemory: 0, cgroupLimits: [] }).constrained).toBe(false);
   });
 
   it("uses the lesser of the host and all container limits", () => {
-    expect(getToolResourcePolicy({ hostMemory: 32 * GIB, constrainedMemory: 20 * GIB, cgroupLimits: [8 * GIB, 12 * GIB] })).toEqual({
+    expect(getToolResourcePolicy({ env: {}, hostMemory: 32 * GIB, constrainedMemory: 20 * GIB, cgroupLimits: [8 * GIB, 12 * GIB] })).toEqual({
       hostMemory: 32 * GIB, effectiveMemory: 8 * GIB, constrained: true,
     });
-    expect(getToolResourcePolicy({ hostMemory: 12 * GIB, constrainedMemory: 32 * GIB, cgroupLimits: [-1, Infinity] }).effectiveMemory).toBe(12 * GIB);
+    expect(getToolResourcePolicy({ env: {}, hostMemory: 12 * GIB, constrainedMemory: 32 * GIB, cgroupLimits: [-1, Infinity] }).effectiveMemory).toBe(12 * GIB);
   });
 
   it("reads parent cgroup v2 limits even when the leaf is unlimited", () => {
@@ -132,6 +149,33 @@ describe("machine memory policy", () => {
 });
 
 describe("resource command ownership", () => {
+  it("preserves CI startup options and environment through nested scripts without creating a lease", async () => {
+    const directory = await fixture();
+    // A constrained invocation would fail creating this lease's directory.
+    // CI must never touch it, even in a nested wrapper.
+    const blocked = path.join(directory, "not-a-directory");
+    await writeFile(blocked, "untouched");
+    const lockPath = path.join(blocked, "lock");
+    const outer = path.join(directory, "outer.json");
+    const inner = path.join(directory, "inner.json");
+    const entry = path.join(directory, "nested.mjs");
+    const env = { ...process.env, CI: "true", NODE_OPTIONS: "--trace-warnings --max-old-space-size=6144" };
+    const probe = `require('fs').writeFileSync(${JSON.stringify(inner)}, JSON.stringify({ env: process.env, args: process.execArgv.slice(0, 1) })); process.exitCode = 7`;
+    await writeFile(entry, `import { writeFileSync } from "node:fs";
+import { runResourceCommand } from ${JSON.stringify(new URL("./resource-run.mjs", import.meta.url).href)};
+writeFileSync(${JSON.stringify(outer)}, JSON.stringify({ env: process.env, args: process.execArgv }));
+const result = await runResourceCommand(process.execPath, ${JSON.stringify(["--max-old-space-size=6144", "-e", probe])}, {
+  lockPath: ${JSON.stringify(lockPath)}, stdio: "ignore", log: () => { throw new Error("CI must not apply a resource limit"); },
+});
+process.exitCode = result.code;`);
+    expect(await runResourceCommand(process.execPath, ["--max-old-space-size=3072", entry], {
+      env, lockPath, stdio: "ignore", log: () => { throw new Error("CI must not apply a resource limit"); },
+    })).toEqual({ code: 7, signal: null });
+    expect(JSON.parse(await readFile(outer, "utf8"))).toEqual({ env, args: ["--max-old-space-size=3072"] });
+    expect(JSON.parse(await readFile(inner, "utf8"))).toEqual({ env, args: ["--max-old-space-size=6144"] });
+    expect(await readFile(blocked, "utf8")).toBe("untouched");
+  });
+
   it("keeps the environment and exit status on a large machine", async () => {
     const directory = await fixture();
     const output = path.join(directory, "env.json");
@@ -216,8 +260,8 @@ process.exitCode = result.code ?? 1;`);
 
 describe("policy boundaries and overrides", () => {
   it.each([16 * GIB - 1, 16 * GIB, 16 * GIB + 1])("uses the strict byte boundary at %i bytes", (bytes) => {
-    expect(getToolResourcePolicy({ hostMemory: bytes, constrainedMemory: 0, cgroupLimits: [] }).constrained).toBe(bytes < 16 * GIB);
-    expect(getToolResourcePolicy({ hostMemory: 64 * GIB, constrainedMemory: bytes, cgroupLimits: [] }).constrained).toBe(bytes < 16 * GIB);
+    expect(getToolResourcePolicy({ env: {}, hostMemory: bytes, constrainedMemory: 0, cgroupLimits: [] }).constrained).toBe(bytes < 16 * GIB);
+    expect(getToolResourcePolicy({ env: {}, hostMemory: 64 * GIB, constrainedMemory: bytes, cgroupLimits: [] }).constrained).toBe(bytes < 16 * GIB);
   });
 
   it("reads all v1 ancestors and ignores unlimited/sentinel capacities above the host", () => {
@@ -229,8 +273,8 @@ describe("policy boundaries and overrides", () => {
       "/sys/fs/cgroup/memory/memory.limit_in_bytes": `${10 * GIB}`,
     };
     const limits = readCgroupMemoryLimits((file) => files[file] ?? "", "linux");
-    expect(getToolResourcePolicy({ hostMemory: 32 * GIB, constrainedMemory: 0, cgroupLimits: limits }).effectiveMemory).toBe(8 * GIB);
-    expect(getToolResourcePolicy({ hostMemory: 4 * GIB, constrainedMemory: 0, cgroupLimits: limits }).effectiveMemory).toBe(4 * GIB);
+    expect(getToolResourcePolicy({ env: {}, hostMemory: 32 * GIB, constrainedMemory: 0, cgroupLimits: limits }).effectiveMemory).toBe(8 * GIB);
+    expect(getToolResourcePolicy({ env: {}, hostMemory: 4 * GIB, constrainedMemory: 0, cgroupLimits: limits }).effectiveMemory).toBe(4 * GIB);
   });
 
   it("uses 4 GiB only for full TypeScript and typed ESLint; keeps other tools at 2 GiB", () => {
@@ -684,7 +728,7 @@ describe.skipIf(process.platform === "win32")("detached POSIX tool descendants",
 });
 
 describe("SQLite survey resource policy", () => {
-  it.each([low, high])("applies the capacity policy to the actual pnpm exec Vitest child ($constrained)", async (policy) => {
+  it.each([low, high, undefined])("applies the local or CI policy to the actual pnpm exec Vitest child (%j)", async (policy) => {
     const directory = await fixture();
     const bin = path.join(directory, "node_modules", ".bin");
     const output = path.join(directory, "invocation.json");
@@ -695,15 +739,15 @@ describe("SQLite survey resource policy", () => {
     await writeFile(probe, `#!${process.execPath}\nrequire('fs').writeFileSync(${JSON.stringify(output)}, JSON.stringify({ args: process.argv.slice(2), options: process.env.NODE_OPTIONS, metrics: process.env.PWRAGENT_DEV_SQLITE_WRITE_METRICS })); process.exit(7);`, { mode: 0o755 });
     await writeFile(`${probe}.cmd`, `@"${process.execPath}" "${probe}" %*\r\n`);
     const args = ["selected.test.ts", "--maxWorkers=8", "--maxConcurrency=7", "--fileParallelism", "true"];
-    const env = { ...process.env, NODE_OPTIONS: "--trace-warnings --max-old-space-size=6144", PWRAGENT_DEV_SQLITE_WRITE_METRICS: "1" };
+    const env = { ...process.env, ...(policy === undefined ? { CI: "true" } : {}), NODE_OPTIONS: "--trace-warnings --max-old-space-size=6144", PWRAGENT_DEV_SQLITE_WRITE_METRICS: "1" };
     expect(await runSqliteWriteTests(args, {
       policy, cwd: directory, env, lockPath: path.join(directory, "lock"), stdio: "ignore", log: () => {},
     })).toEqual({ code: 7, signal: null });
     const invocation = JSON.parse(await readFile(output, "utf8"));
-    expect(invocation.args).toEqual(policy.constrained
+    expect(invocation.args).toEqual(policy?.constrained
       ? ["run", "--config", "vitest.workspace.ts", "selected.test.ts", "--maxWorkers=1", "--maxConcurrency=1", "--no-file-parallelism"]
       : ["run", "--config", "vitest.workspace.ts", ...args]);
-    expect(invocation.options).toBe(policy.constrained ? "--trace-warnings --max-old-space-size=2048" : env.NODE_OPTIONS);
+    expect(invocation.options).toBe(policy?.constrained ? "--trace-warnings --max-old-space-size=2048" : env.NODE_OPTIONS);
     expect(invocation.metrics).toBe("1");
   }, 30_000);
 });
@@ -731,7 +775,7 @@ it("treats a literal zero cgroup limit as finite while OS API zero means unknown
     "/sys/fs/cgroup/memory.max": "0",
   };
   expect(readCgroupMemoryLimits((file) => files[file] ?? "", "linux")).toEqual([0]);
-  expect(getToolResourcePolicy({ hostMemory: 32 * GIB, constrainedMemory: 0, cgroupLimits: [0] }).effectiveMemory).toBe(0);
-  expect(getToolResourcePolicy({ hostMemory: 32 * GIB, constrainedMemory: 0, cgroupLimits: [0] }).constrained).toBe(true);
-  expect(getToolResourcePolicy({ hostMemory: 32 * GIB, constrainedMemory: 0, cgroupLimits: [] }).constrained).toBe(false);
+  expect(getToolResourcePolicy({ env: {}, hostMemory: 32 * GIB, constrainedMemory: 0, cgroupLimits: [0] }).effectiveMemory).toBe(0);
+  expect(getToolResourcePolicy({ env: {}, hostMemory: 32 * GIB, constrainedMemory: 0, cgroupLimits: [0] }).constrained).toBe(true);
+  expect(getToolResourcePolicy({ env: {}, hostMemory: 32 * GIB, constrainedMemory: 0, cgroupLimits: [] }).constrained).toBe(false);
 });
