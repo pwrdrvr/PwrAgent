@@ -11,6 +11,7 @@ import { buildLimitAccounts, fiveHourSeries, limitLabel, projectLimit, seriesSta
 import { Select } from "../../components/Select";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { summarizeUsageActivity, type OwnedUsageRow, type UsageGroup } from "./usage-activity-summary";
+import { buildUsageAccounts, limitUsageAccountKey, usageAccountKey, type UsageAccount } from "./usage-activity-accounts";
 import { USAGE_RESULTS_MAX_HEIGHT, USAGE_RESULTS_MIN_HEIGHT, clampUsageResultsHeight, readStoredUsageResultsHeight,
   writeStoredUsageResultsHeight } from "./usage-activity-layout";
 
@@ -64,7 +65,7 @@ function unavailableKind(error: string): "outdated" | "offline" | "failed" {
   return "failed";
 }
 
-const DIMENSION_LABELS: Record<UsageDimension, string> = { thread: "Thread", model: "Model", provider: "Provider", instance: "Instance" };
+const DIMENSION_LABELS: Record<UsageDimension, string> = { thread: "Thread", model: "Model", provider: "Provider", account: "Account", instance: "Instance" };
 
 /** One analysis per thread and turn; its answer stays with it while the operator looks elsewhere. */
 const analysisKey = (row: OwnedUsageRow, turnId: string | undefined) =>
@@ -108,6 +109,12 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
   const [to, setTo] = useState(() => localDate(new Date()));
   const [snapshot, setSnapshot] = useState<Snapshot>();
   const [focusKey, setFocusKey] = useState<string>();
+  const [accountFilter, setAccountFilter] = useState("");
+  const [rememberedAccount, setRememberedAccount] = useState<UsageAccount>();
+  // Operator names for accounts, kept in this profile's config and never sent to peers.
+  const [accountNames, setAccountNames] = useState<Record<string, string>>({});
+  const [renaming, setRenaming] = useState<string>();
+  const [savingName, setSavingName] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string>();
   const [selectedKey, setSelectedKey] = useState<string>();
@@ -142,17 +149,40 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
   }, [desktopApi]);
   useEffect(() => { discoverPeers(); }, [discoverPeers]);
   useEffect(() => {
-    const readHelperModels = () => void desktopApi?.readSettings?.({}).then((value) => {
-      if (mounted.current) setHelperModels(value.snapshot.models.helperModels);
-    }).catch(() => { /* Automatic stays the default. */ });
-    readHelperModels();
-    // Config writes are not broadcast. Coming back from Settings focuses this
-    // window, so a Helper model change moves the default then.
-    window.addEventListener("focus", readHelperModels);
-    return () => window.removeEventListener("focus", readHelperModels);
+    const readModelSettings = () => void desktopApi?.readSettings?.({}).then((value) => {
+      if (!mounted.current) return;
+      setHelperModels(value.snapshot.models.helperModels);
+      setAccountNames(value.snapshot.models.usageAccountNames ?? {});
+    }).catch(() => { /* Automatic stays the default, and accounts keep their derived names. */ });
+    readModelSettings();
+    // Config writes are not broadcast. Coming back from Settings or another
+    // window focuses this one, so a Helper model or account name change lands then.
+    window.addEventListener("focus", readModelSettings);
+    return () => window.removeEventListener("focus", readModelSettings);
   }, [desktopApi]);
 
-  const summary = useMemo(() => snapshot ? summarizeUsageActivity(snapshot.rows, snapshot.from, snapshot.to) : undefined, [snapshot]);
+  const allSummary = useMemo(() => snapshot ? summarizeUsageActivity(snapshot.rows, snapshot.from, snapshot.to) : undefined, [snapshot]);
+  const usageAccounts = useMemo(() => buildUsageAccounts(allSummary?.rows ?? [], snapshot?.accounts ?? [], accountNames),
+    [allSummary, snapshot, accountNames]);
+  const selectedAccount = usageAccounts.find((account) => account.key === accountFilter) ?? rememberedAccount;
+  // A selected historical account may have no usage in the next period. Keep
+  // its selection and show zero, rather than silently broadening to all accounts.
+  const accountChoices = rememberedAccount && !usageAccounts.some((account) => account.key === rememberedAccount.key)
+    ? [...usageAccounts, rememberedAccount] : usageAccounts;
+  const accountLabels = new Map(accountChoices.map((account) => [account.key, account.label]));
+  // Spend per account over the whole period, for the account menu.
+  const accountCosts = new Map<string, number>();
+  for (const row of allSummary?.groups.flatMap((group) => group.rows) ?? []) {
+    const key = usageAccountKey(row);
+    accountCosts.set(key, (accountCosts.get(key) ?? 0) + (row.line.priceStatus === "priced" && row.line.currency === "USD" ? row.line.totalCostMicros : 0));
+  }
+  // Spend by account, and the account on each thread row, only when there is more than one to tell apart.
+  const multipleAccounts = accountCosts.size > 1;
+  // Deduplicate before filtering: an unkeyed monitor copy must not become a
+  // second charge when its authoritative live turn belongs to a known account.
+  const summary = useMemo(() => snapshot && allSummary && accountFilter
+    ? summarizeUsageActivity(allSummary.rows.filter((row) => usageAccountKey(row) === accountFilter), snapshot.from, snapshot.to)
+    : allSummary, [snapshot, allSummary, accountFilter]);
   const selectedGroup = selectedKey ? summary?.groups.find((group) => group.key === selectedKey) : undefined;
   const inspected = selectedGroup?.rows[0] ?? selectedExcluded;
   const analysisTarget = scope === "turn" && turn?.line.turnId ? turn : inspected;
@@ -199,8 +229,10 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
   const offlineSources = sources.filter((source) => !isOnline(source));
   const limitPreset = preset === "reset" || preset === "five";
   const queryKey = JSON.stringify([enabledSources.map((source) => sourceId(source.target)), preset,
-    preset === "custom" ? [from, to] : null, limitPreset ? focusKey ?? null : null]);
+    preset === "custom" ? [from, to] : null, limitPreset ? [focusKey ?? null, accountFilter] : null]);
   const localLabel = sources[0].label;
+  const scopedLimits = (accounts: LimitAccount[]) => accountFilter
+    ? accounts.filter((account) => limitUsageAccountKey(account) === accountFilter) : accounts;
 
   const readAll = async (targets: Source[], start: number, end: number) => {
     const results: SourceResult[] = [];
@@ -225,7 +257,7 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
     const today = new Date(end); today.setHours(0, 0, 0, 0);
     // A limit preset starts where the account's window began. Until limits are
     // known, read the longest such window and narrow once they arrive.
-    const known = limitStart(preset, focusAccount(snapshot?.accounts ?? [], focusKey, localLabel));
+    const known = limitStart(preset, focusAccount(scopedLimits(snapshot?.accounts ?? []), focusKey, localLabel));
     let start = preset === "custom" ? new Date(from).getTime()
       : preset === "today" ? today.getTime()
       : preset === "day" ? end - DAY
@@ -245,7 +277,7 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
     let results = await readAll(enabledSources, start, end);
     if (!mounted.current || seq !== readSeq.current) return;
     let accounts = accountsOf(results);
-    const resolved = limitStart(preset, focusAccount(accounts, focusKey, localLabel));
+    const resolved = limitStart(preset, focusAccount(scopedLimits(accounts), focusKey, localLabel));
     if (resolved !== undefined && resolved < end) {
       const bounded = Math.max(resolved, end - MAX_WINDOW);
       if (Math.abs(bounded - start) > 60_000) {
@@ -293,7 +325,8 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
 
   const included = summary?.groups.flatMap((group) => group.rows) ?? [];
   const instances = (snapshot?.sources ?? []).filter((source) => source.data).length;
-  const shownDimension: UsageDimension = dimension === "instance" && instances < 2 ? "thread" : dimension;
+  const shownDimension: UsageDimension = (dimension === "instance" && instances < 2) || (dimension === "account" && !multipleAccounts)
+    ? "thread" : dimension;
   // The five most expensive threads (or models, providers, instances) get
   // chart colors; a thread keeps its color in every row, strip, and legend entry.
   const seriesIndex = new Map(shownDimension === "thread"
@@ -358,7 +391,8 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
     failed.length ? `${nameList(failed.map((source) => source.label))} could not be read` : "",
     capped.length ? `${nameList(capped)} returned only the newest 5,000 rows; choose a shorter period for the rest` : "",
   ].filter(Boolean);
-  const focus = snapshot ? focusAccount(snapshot.accounts, focusKey, localLabel) : undefined;
+  const limitAccounts = scopedLimits(snapshot?.accounts ?? []);
+  const focus = snapshot ? focusAccount(limitAccounts, focusKey, localLabel) : undefined;
   const lineSeries = snapshot?.preset === "five" ? fiveHourSeries(focus) : sinceResetSeries(focus);
   // Only a window anchored on the limit ends now and belongs beside its reset.
   const forecast = snapshot?.preset === "reset" || snapshot?.preset === "five" ? limitForecast(lineSeries) : undefined;
@@ -371,12 +405,18 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
     : undefined;
 
   // A thread opens in the main window; a model, provider or instance narrows
-  // the thread list to itself. The legend and the slice card both name members this way.
+  // the thread list to itself, and an account scopes the page. The legend and
+  // the slice card both name members this way.
   const groupsByKey = new Map((summary?.groups ?? []).map((group) => [group.key, group]));
   const chartMember = (key: string): UsageChartMember => {
     if (shownDimension === "thread") {
       const group = groupsByKey.get(key);
       return { title: group?.title ?? key, onOpen: group ? openThread(group.rows[0]) : undefined };
+    }
+    if (shownDimension === "account") {
+      const title = accountLabels.get(key) ?? key;
+      return { title, filtered: accountFilter === key, filterTitle: `Show only ${title}: limits, spend and threads`,
+        clearTitle: "Show all accounts", onFilter: () => selectAccount(accountFilter === key ? "" : key) };
     }
     return { title: key, filtered: activeFacet === key, onFilter: () => setFacet((current) => current === key ? undefined : key) };
   };
@@ -391,6 +431,33 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
     setSelectedKey(undefined); setSelectedExcluded(row); setTurn(undefined); setScope("recent"); setError(undefined);
   };
   const closeInspector = () => { setSelectedKey(undefined); setSelectedExcluded(undefined); setTurn(undefined); };
+  const selectAccount = (key: string) => {
+    setAccountFilter(key); closeInspector(); setBucket(undefined); setFacet(undefined); setRenaming(undefined);
+    const account = accountChoices.find((item) => item.key === key);
+    setRememberedAccount(account);
+    setFocusKey(account?.limitKey);
+  };
+  const saveAccountName = async (account: UsageAccount, value: string) => {
+    if (!account.nameKey || !desktopApi?.writeSettingsConfig || savingName) return;
+    const name = value.trim();
+    setSavingName(true);
+    try {
+      // Start from the stored names, so a rename in another window is not undone.
+      const stored = (await desktopApi.readSettings?.({}))?.snapshot.models.usageAccountNames ?? accountNames;
+      const next = { ...stored };
+      if (name) next[account.nameKey] = name;
+      else delete next[account.nameKey];
+      const result = await desktopApi.writeSettingsConfig({ patch: { models: { usageAccountNames: next } } });
+      if (!mounted.current) return;
+      setAccountNames(result.snapshot.models.usageAccountNames ?? next);
+      if (name) setRememberedAccount((current) => current?.key === account.key ? { ...current, label: name } : current);
+      setRenaming(undefined);
+    } catch (cause) {
+      if (mounted.current) setError(`Could not save the account name: ${plainError(cause)}`);
+    } finally {
+      if (mounted.current) setSavingName(false);
+    }
+  };
   const runAnalysis = () => {
     const target = analysisTarget;
     const key = currentAnalysisKey;
@@ -452,6 +519,11 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
             title={online ? source.label : `${source.label} is offline`}><i aria-hidden="true" />{source.label}</button>;
         })}
       </div>
+      <label className="usage-account-filter"><span className="usage-sr-only">Account</span><Select value={accountFilter} onChange={selectAccount} options={[
+        { value: "", label: "All accounts", description: `${usageAccounts.length} ${usageAccounts.length === 1 ? "account" : "accounts"}` },
+        ...accountChoices.map((account) => ({ value: account.key, label: account.label,
+          description: [account.detail, money(accountCosts.get(account.key) ?? 0)].filter(Boolean).join(" · ") })),
+      ]} /></label>
       <div className="usage-segmented" role="group" aria-label="Period">
         {PRESETS.map((item) => <button type="button" key={item.value} aria-pressed={preset === item.value} title={item.title}
           onClick={() => setPreset(item.value)}>{item.label}</button>)}
@@ -471,12 +543,33 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
         <ul>{failures.map((source) => <li key={sourceId(source.target)}><strong>{source.label}</strong> {source.error}</li>)}</ul></details> : null}
     </div> : null}
     {snapshot && summary ? <>
-      <UsageLimitsBand accounts={snapshot.accounts} focusKey={focus?.key} onFocus={setFocusKey} now={snapshot.to}
+      {selectedAccount ? <div className="usage-account-scope" role="group" aria-label="Account scope">
+        {renaming === selectedAccount.key ? <form className="usage-account-scope__rename" onSubmit={(event) => {
+          event.preventDefault();
+          void saveAccountName(selectedAccount, String(new FormData(event.currentTarget).get("name") ?? ""));
+        }}>
+          <label><span className="usage-sr-only">Account name</span><input name="name" autoFocus maxLength={60} disabled={savingName}
+            defaultValue={selectedAccount.nameKey ? accountNames[selectedAccount.nameKey] ?? "" : ""} placeholder={selectedAccount.label}
+            onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); setRenaming(undefined); } }} /></label>
+          <button type="submit" className="usage-button" disabled={savingName}>{savingName ? "Saving…" : "Save"}</button>
+          <button type="button" className="usage-link" onClick={() => setRenaming(undefined)}>Cancel</button>
+          <span className="usage-subtle">Only this profile shows this name. Leave blank for the default.</span>
+        </form> : <>
+          <span className="usage-account-scope__text">Showing <strong>{selectedAccount.label}</strong>{selectedAccount.unknown
+            ? ". No account was recorded for these turns: they ran before account tracking, or on a provider that reports none. Set an Account group in Settings → AI Providers to label new turns."
+            : `${selectedAccount.detail ? ` · ${selectedAccount.detail}` : ""}. Limits, spend, chart and threads are this account only.`}</span>
+          {selectedAccount.nameKey && desktopApi?.writeSettingsConfig
+            ? <button type="button" className="usage-link" onClick={() => setRenaming(selectedAccount.key)}>Rename</button> : null}
+        </>}
+        <button type="button" className="usage-link" onClick={() => selectAccount("")}>All accounts</button>
+      </div> : null}
+      <UsageLimitsBand accounts={limitAccounts} focusKey={focus?.key} onFocus={setFocusKey} now={snapshot.to}
+        accountLabel={(limit) => { const key = limitUsageAccountKey(limit); return key ? accountLabels.get(key) : undefined; }}
         cost={available ? total : undefined} threads={summary.groups.length} turns={summary.contained}
         cacheShare={cacheShare} uncached={totals.uncached} output={totals.output} />
       {buckets ? <UsageTimeline buckets={buckets} selected={bucket} onSelect={setBucket}
         dimension={shownDimension} onDimension={(next) => { setDimension(next); setFacet(undefined); }}
-        dimensions={instances > 1 ? ["thread", "model", "provider", "instance"] : ["thread", "model", "provider"]}
+        dimensions={["thread", "model", "provider", ...multipleAccounts ? ["account" as const] : [], ...instances > 1 ? ["instance" as const] : []]}
         series={shownDimension === "thread"
           ? summary.groups.slice(0, USAGE_SERIES).map((group) => ({ ...chartMember(group.key), cost: money(group.cost) }))
           : facets.slice(0, USAGE_SERIES).map((item) => ({ ...chartMember(item.value), cost: money(item.cost) }))}
@@ -510,10 +603,13 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
               const signals = groupSignals(group);
               const modelNames = [...new Set(group.rows.filter((item) => !group.helperRows.includes(item) && !item.rollup)
                 .map((item) => item.line.modelLabel ?? item.line.model ?? "Unknown model"))].join(", ");
+              const groupAccounts = multipleAccounts && !accountFilter ? [...new Set(group.rows.map(usageAccountKey))] : [];
+              const accountName = groupAccounts.length === 1 ? accountLabels.get(groupAccounts[0])
+                : groupAccounts.length > 1 ? `${groupAccounts.length} accounts` : undefined;
               return <button type="button" key={group.key} className={`usage-thread usage-thread--series-${series ?? "other"}`}
                 aria-label={`Inspect ${group.title}`} aria-pressed={selectedGroup?.key === group.key} onClick={() => inspectGroup(group)}>
                 <span className="usage-thread__identity"><i className={`usage-thread__swatch usage-series--${series ?? "other"}`} aria-hidden="true" />
-                  <span><strong>{group.title}</strong><small>{row.owner}{modelNames ? ` · ${modelNames}` : ""}{group.helperThreads ? ` · ${group.helperThreads} ${group.helperThreads === 1 ? "helper" : "helpers"}, ${money(group.helperCost)} included` : ""}</small></span></span>
+                  <span><strong>{group.title}</strong><small>{row.owner}{modelNames ? ` · ${modelNames}` : ""}{accountName ? ` · ${accountName}` : ""}{group.helperThreads ? ` · ${group.helperThreads} ${group.helperThreads === 1 ? "helper" : "helpers"}, ${money(group.helperCost)} included` : ""}</small></span></span>
                 <span className="usage-thread__strip" aria-hidden="true">{strip.map((cost, index) =>
                   <i key={index} style={cost > 0 ? { opacity: 0.3 + 0.7 * cost / stripMax } : undefined} className={cost > 0 ? `usage-series--${series ?? "other"}` : undefined} />)}</span>
                 <UsageSignals signals={signals} />

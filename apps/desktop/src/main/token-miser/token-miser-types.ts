@@ -108,6 +108,7 @@ export type TokenMiserGroupMemberSummary = {
 };
 
 export type TokenMiserHelperUsage = {
+  accountKey?: string;
   helperThreadId?: string;
   helperTurnId?: string;
   model?: string;

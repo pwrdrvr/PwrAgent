@@ -4,6 +4,22 @@ import { summarizeUsageActivity, type OwnedUsageRow } from "./usage-activity-sum
 import { usageFixture } from "./usage-activity-fixture";
 
 describe("usage activity aggregation", () => {
+  it.each([false, true])("counts account-split and legacy helper buckets once, keyed first: %s", (keyedFirst) => {
+    const keyed = ["a", "b"].map((accountKey) => ({ ...usageFixture({
+      scope: "monitor", source: "monitor", turnId: undefined, usageLineId: `bucket:${accountKey}`,
+    }), accountKey, rollup: { kind: "title-helper", count: 1, groupKey: "bucket" } }));
+    const legacy = { ...usageFixture({ scope: "monitor", source: "monitor", turnId: undefined,
+      usageLineId: "bucket", totalCostMicros: 600 }), rollup: { kind: "title-helper", count: 2 } };
+    const rows = keyedFirst ? [...keyed, legacy] : [legacy, ...keyed];
+    const result = summarizeUsageActivity(rows, 100, 300);
+    expect(result.groups[0].cost).toBe(600);
+    expect(result.rows.map((row) => row.accountKey).sort()).toEqual(["a", "b"]);
+    const newerLegacy = { ...legacy, updatedAt: 250, line: { ...legacy.line, totalCostMicros: 700 } };
+    const newer = summarizeUsageActivity([...keyed, newerLegacy], 100, 300);
+    expect(newer.groups[0].cost).toBe(700);
+    expect(newer.rows).toEqual([newerLegacy]);
+  });
+
   it("keeps reasoning/cache-write subsets and ignores cumulative counters and peer copies", () => {
     const original = usageFixture();
     const copy = { ...original, owner: "Peer", target: { scope: "remote" as const, instanceId: "peer" } };
@@ -35,6 +51,24 @@ describe("usage activity aggregation", () => {
     const old = usageFixture();
     const latest = { ...usageFixture({ priceStatus: "unpriced", outputTokens: 300 }), updatedAt: 250 };
     expect(summarizeUsageActivity([latest, old], 100, 300).groups[0]).toMatchObject({ cost: 0, unpriced: 1, output: 300 });
+  });
+
+  it.each([
+    { keyedFirst: false, unkeyedUpdatedAt: 200 },
+    { keyedFirst: true, unkeyedUpdatedAt: 200 },
+    { keyedFirst: false, unkeyedUpdatedAt: 250 },
+    { keyedFirst: true, unkeyedUpdatedAt: 250 },
+  ])("retains recorded account identity across mixed-version copies: %j", ({ keyedFirst, unkeyedUpdatedAt }) => {
+    const unkeyed = { ...usageFixture({ outputTokens: 500 }), owner: "Older peer", updatedAt: unkeyedUpdatedAt };
+    const keyed = { ...usageFixture(), accountKey: "recorded-account", owner: "Newer peer",
+      target: { scope: "remote" as const, instanceId: "newer-peer" } };
+    const result = summarizeUsageActivity(keyedFirst ? [keyed, unkeyed] : [unkeyed, keyed], 100, 300);
+    const winner = unkeyedUpdatedAt > keyed.updatedAt || !keyedFirst ? unkeyed : keyed;
+    expect(result).toMatchObject({ duplicates: 1, contained: 1 });
+    expect(result.rows).toHaveLength(1);
+    expect(result.rows[0]).toMatchObject({ accountKey: "recorded-account", owner: winner.owner, target: winner.target });
+    expect(result.groups[0]).toMatchObject({ cost: 300, output: winner.line.outputTokens });
+    expect(unkeyed).not.toHaveProperty("accountKey");
   });
 
   it("counts a helper recorded as both a monitor and its own live turn once", () => {

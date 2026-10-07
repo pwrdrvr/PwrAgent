@@ -1513,6 +1513,9 @@ function SettingsSectionBody(props: {
           models: { helperModels },
         });
       }}
+      onSaveUsageAccountGroups={async (usageAccountGroups) => {
+        return await props.settings.writeConfig({ models: { usageAccountGroups } });
+      }}
       onSaveDecisionModels={async (decisionModels) => {
         return await props.settings.writeConfig({
           models: { decisionModels },

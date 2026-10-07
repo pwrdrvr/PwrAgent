@@ -1,5 +1,5 @@
 import type { NavigationPresentationOrder } from "./navigation-presentation-order";
-import { isNavigationPeerUnavailable, navigationIdentityKey, navigationThreadSelectionKey } from "../../lib/navigation-query-state";
+import { isNavigationPeerUnavailable, navigationIdentityKey, navigationPageErrorCopy, navigationThreadSelectionKey } from "../../lib/navigation-query-state";
 import type { NavigationPresentedThread } from "../../lib/navigation-loaded-rows";
 import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationWindow";
 import { buildPagedDirectoryPresentation, type PagedDirectoryPresentation } from "./paged-directory-presentation";
@@ -2307,7 +2307,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                       || pinResource.state.rebaselineRequired || pinResource.state.page?.nextCursor
                       || (pinResource.state.page?.rangeStart ?? 0) > 0) ? (
                       <div role="listitem">
-                        {pinResource.state.error ? <p className="sidebar-error">{pinResource.state.error}</p> : null}
+                        {pinResource.state.error ? <p className="sidebar-error">{navigationPageErrorCopy(pinResource.state.error)}</p> : null}
                         {pinResource.loading && !pinResource.state.page ? <p className="sidebar-empty">Loading pinned threads…</p> : null}
                         {(pinResource.state.page?.rangeStart ?? 0) > 0 && !pinResource.state.rebaselineRequired ? (
                           <SidebarShowMore busy={pinResource.loading} label="Show pinned threads from beginning" onClick={() => void props.pagedNavigation?.restart(pinResourceId)} />
@@ -2377,7 +2377,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 ) : (
                   <p className="sidebar-empty directory-row__empty">{directory.counts ? "No threads in this directory yet." : "Loading directory counts…"}</p>
                 )}
-                {rootResource?.state.error ? <p className="sidebar-error">{rootResource.state.error}</p> : null}
+                {rootResource?.state.error ? <p className="sidebar-error">{navigationPageErrorCopy(rootResource.state.error)}</p> : null}
                 {/* `directory-row__empty` reads as "empty" but means "a status
                     line in a directory's lane" — the sibling above already
                     wears it for "Loading directory counts…". Without it this

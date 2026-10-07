@@ -36,6 +36,7 @@ import {
 } from "@pwragent/shared";
 import { useStarMapProjectPages, starMapProjectResource } from "./useStarMapProjectPages";
 import type { NavigationWindowResource } from "../../lib/navigation-window-queries";
+import { navigationPageErrorCopy } from "../../lib/navigation-query-state";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ComposerDraftStore } from "../composer/useComposerDraftStore";
 import { SearchIcon } from "../../icons";
@@ -1297,8 +1298,8 @@ export function StarMapScreen(props: StarMapScreenProps) {
     localInstanceId, descriptors: projectDescriptorsByInstance, filters: filterSelection,
   });
   useEffect(() => {
-    const error = projectPages.state.admissionError
-      ?? [...projectPages.state.resources.values()].find((resource) => resource.state.error)?.state.error;
+    const pageError = [...projectPages.state.resources.values()].find((resource) => resource.state.error)?.state.error;
+    const error = projectPages.state.admissionError ?? (pageError ? navigationPageErrorCopy(pageError) : undefined);
     if (error) setCardError(error);
   }, [projectPages.state]);
   const projectThreadsByInstance = useMemo(() => {

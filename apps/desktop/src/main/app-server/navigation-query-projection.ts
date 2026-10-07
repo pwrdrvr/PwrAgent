@@ -717,6 +717,85 @@ function buildModelInventory(threads: readonly NavigationThreadSummary[]): Navig
   return [...groups].sort(([left], [right]) => left.localeCompare(right)).map(([, group]) => group);
 }
 
+function buildThreadsByLegacyKey(index: NavigationQueryIndex): Map<string, NavigationThreadSummary> {
+  return new Map(
+    index.threads.map((thread) => [
+      thread.federation?.ref.target.scope === "remote" ? federatedThreadIdentityKey(thread.federation.ref) : buildThreadIdentityKey(thread.source, thread.id),
+      thread,
+    ]),
+  );
+}
+
+function buildParentCandidates(index: NavigationQueryIndex): Map<string, NavigationThreadSummary[]> {
+  const parentCandidates = new Map<string, NavigationThreadSummary[]>();
+  for (const thread of index.threads) {
+    const ref = navigationIdentity(thread);
+    const key = JSON.stringify([ref.ownerInstanceId ?? null, ref.threadId]);
+    const candidates = parentCandidates.get(key) ?? [];
+    candidates.push(thread);
+    parentCandidates.set(key, candidates);
+    // Federation relationships carry an absolute owner ID, including when
+    // that owner is this viewer. Alias only our known identity to local rows.
+    if (!ref.ownerInstanceId && index.localInstanceId) {
+      parentCandidates.set(JSON.stringify([index.localInstanceId, ref.threadId]), candidates);
+    }
+  }
+  return parentCandidates;
+}
+
+/** Code vocabulary only: a reason never carries a thread ID, title or path. */
+export type NavigationAnchorMissingReason =
+  | "not-indexed"
+  | "other-owner"
+  | "archived"
+  | "directory-not-indexed"
+  | "other-directory"
+  | "child"
+  | "pinned"
+  | "unpinned"
+  | "filtered"
+  | "ref-mismatch";
+
+/**
+ * Why an anchor is absent from the query it was resolved against, judged by
+ * the same index and membership rules the projection used. `ref-mismatch`
+ * means the row passes every directory membership rule and still did not
+ * match: an identity disagreement between viewer and owner, not a change.
+ */
+export function explainMissingNavigationAnchor(params: {
+  index: NavigationQueryIndex;
+  request: NavigationQueryRequest;
+}): NavigationAnchorMissingReason {
+  const { anchor, query } = params.request;
+  if (anchor?.kind !== "thread") {
+    return anchor && !params.index.directories.some((directory) => directory.key === anchor.key)
+      ? "directory-not-indexed" : "filtered";
+  }
+  const thread = params.index.threads.find((candidate) => threadKey(candidate) === identityKey(anchor.ref));
+  if (!thread) {
+    const sameId = params.index.threads.filter((candidate) => candidate.source === anchor.ref.backend && candidate.id === anchor.ref.threadId);
+    // A local row named by this owner's own instance ID is one identity
+    // spelled two ways, not a row that belongs to another owner.
+    if (anchor.ref.ownerInstanceId && anchor.ref.ownerInstanceId === params.index.localInstanceId
+      && sameId.some((candidate) => !navigationIdentity(candidate).ownerInstanceId)) return "ref-mismatch";
+    return sameId.length ? "other-owner" : "not-indexed";
+  }
+  // Directory membership ignores archive state, so it names only filtered queries.
+  if (query.kind !== "directory") return thread.archivedAt !== undefined ? "archived" : "filtered";
+  const directory = params.index.directories.find((candidate) => candidate.key === query.directoryKey);
+  if (!directory) return "directory-not-indexed";
+  const threadsByLegacyKey = buildThreadsByLegacyKey(params.index);
+  if (!directory.threadKeys.some((key) => threadsByLegacyKey.get(key) === thread)) return "other-directory";
+  const parent = availableParentIdentity(thread, buildParentCandidates(params.index), params.index.coverage);
+  if (parent) {
+    return query.disclosedParentThreadKeys?.includes(buildThreadIdentityKey(parent.backend, parent.threadId))
+      ? "ref-mismatch" : "child";
+  }
+  if (query.roots === "unpinned" && thread.pinnedRank !== undefined) return "pinned";
+  if (query.roots === "pinned" && thread.pinnedRank === undefined) return "unpinned";
+  return "ref-mismatch";
+}
+
 export function projectNavigationQuery(params: {
   index: NavigationQueryIndex;
   request: NavigationQueryRequest;
@@ -731,25 +810,8 @@ export function projectNavigationQuery(params: {
   const threadsByIdentity = new Map(
     params.index.threads.map((thread) => [threadKey(thread), thread]),
   );
-  const threadsByLegacyKey = new Map(
-    params.index.threads.map((thread) => [
-      thread.federation?.ref.target.scope === "remote" ? federatedThreadIdentityKey(thread.federation.ref) : buildThreadIdentityKey(thread.source, thread.id),
-      thread,
-    ]),
-  );
-  const parentCandidates = new Map<string, NavigationThreadSummary[]>();
-  for (const thread of params.index.threads) {
-    const ref = navigationIdentity(thread);
-    const key = JSON.stringify([ref.ownerInstanceId ?? null, ref.threadId]);
-    const candidates = parentCandidates.get(key) ?? [];
-    candidates.push(thread);
-    parentCandidates.set(key, candidates);
-    // Federation relationships carry an absolute owner ID, including when
-    // that owner is this viewer. Alias only our known identity to local rows.
-    if (!ref.ownerInstanceId && params.index.localInstanceId) {
-      parentCandidates.set(JSON.stringify([params.index.localInstanceId, ref.threadId]), candidates);
-    }
-  }
+  const threadsByLegacyKey = buildThreadsByLegacyKey(params.index);
+  const parentCandidates = buildParentCandidates(params.index);
   const childCountByParent = new Map<string, number>();
   const viewerChildCountByParent = new Map<string, number>();
   for (const thread of params.index.threads) {

@@ -2,6 +2,7 @@ import { parseThreadIdentityKey, buildThreadIdentityKey, federatedThreadIdentity
 import type {
   FederationTarget,
   NavigationIdentity,
+  NavigationQueryAnchor,
   NavigationQueryEntry,
   NavigationQueryPage,
   NavigationQueryRequest,
@@ -190,6 +191,57 @@ export function isNavigationCursorExpired(error: unknown): boolean {
   if (typeof error === "object" && error !== null && "code" in error && error.code === "navigation_cursor_expired") return true;
   const message = error instanceof Error ? error.message : String(error);
   return message.includes("navigation_cursor_expired") || message.includes("Navigation cursor expired");
+}
+
+/** Electron drops the typed code across IPC; the owner prefixes its message with it. */
+export function isNavigationAnchorMissing(error: unknown): boolean {
+  if (typeof error === "object" && error !== null && "code" in error && error.code === "navigation_anchor_missing") return true;
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("navigation_anchor_missing");
+}
+
+function navigationAnchorKey(anchor: NavigationQueryAnchor): string {
+  return anchor.kind === "directory" ? JSON.stringify(["directory", anchor.key]) : navigationIdentityKey(anchor.ref);
+}
+
+export function navigationAnchorsEqual(left: NavigationQueryAnchor | undefined, right: NavigationQueryAnchor | undefined): boolean {
+  return left === right || Boolean(left && right && navigationAnchorKey(left) === navigationAnchorKey(right));
+}
+
+/**
+ * Where a window resumes after its anchor left the owner's query.
+ *
+ * An anchor is a position this window saw, not a membership claim: a thread
+ * revealed at its anchor can be archived, reparented, pinned or moved before
+ * the owner resolves it. A loaded row after the missing one is the nearest
+ * survivor (an anchored page starts at its anchor), then one before it. An
+ * anchor outside the loaded rows, such as an off-page selection, keeps the
+ * window's own first row. A window already at the top restarts there.
+ */
+export function navigationFallbackAnchor(
+  page: NavigationQueryPage | undefined,
+  missing: NavigationQueryAnchor,
+): NavigationQueryAnchor | undefined {
+  if (!page || !(page.rangeStart ?? 0)) return undefined;
+  const rows: NavigationQueryAnchor[] = page.directories?.length
+    ? page.directories.map((directory) => ({ kind: "directory", key: directory.key }))
+    : page.entries.map((entry) => ({ kind: "thread", ref: entry.row.ref }));
+  const index = rows.findIndex((row) => navigationAnchorsEqual(row, missing));
+  const nearest = index < 0 ? rows[0] : rows[index + 1] ?? rows[index - 1];
+  return nearest && !navigationAnchorsEqual(nearest, missing) ? nearest : undefined;
+}
+
+/**
+ * Operator copy for a failed page read. The owner's own message is already in
+ * the main log ("Error occurred in handler for 'navigation:get-query-page'"),
+ * and Electron's IPC wrapper around it is not something an operator can act on.
+ */
+export function navigationPageErrorCopy(error: string): string {
+  if (isNavigationPeerUnavailable(error)) return "This instance isn't connected.";
+  if (error.includes("retained-page budget")) return "Too many thread lists are open. Collapse a directory to load more.";
+  if (error.includes("Upgrade the owning instance")) return "Update the other instance to see these threads.";
+  if (error.includes("Upgrade this instance")) return "Update PwrAgent to see these threads.";
+  return "Couldn't load these threads.";
 }
 
 export function failNavigationPageRead(

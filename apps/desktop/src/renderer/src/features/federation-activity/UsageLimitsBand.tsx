@@ -1,4 +1,5 @@
 import { limitLabel, type LimitAccount, type LimitSeries } from "./usage-limits";
+import { formatBackendPlanType } from "../../lib/backend-status-format";
 import { describeLimitPace, usageClock, usageCount, usageMoney, usagePercent as percent, usageWhen as when } from "./usage-activity-presentation";
 
 function LimitMeter({ series, now }: { series: LimitSeries; now: number }) {
@@ -26,8 +27,10 @@ function LimitMeter({ series, now }: { series: LimitSeries; now: number }) {
   </div>;
 }
 
-export function UsageLimitsBand({ accounts, focusKey, onFocus, cost, threads, turns, cacheShare, uncached, output, now }: {
+export function UsageLimitsBand({ accounts, accountLabel, focusKey, onFocus, cost, threads, turns, cacheShare, uncached, output, now }: {
   accounts: LimitAccount[];
+  /** The account's name as the rest of the screen gives it. */
+  accountLabel?: (account: LimitAccount) => string | undefined;
   focusKey?: string;
   onFocus: (key: string) => void;
   cost?: number;
@@ -46,7 +49,7 @@ export function UsageLimitsBand({ accounts, focusKey, onFocus, cost, threads, tu
       {accounts.map((account) => <div key={account.key} className={`usage-account${account.key === focusKey && accounts.length > 1 ? " is-focused" : ""}`}>
         {accounts.length > 1 ? <button type="button" className="usage-account__name" aria-pressed={account.key === focusKey}
           onClick={() => onFocus(account.key)} title="Chart this account's limit">
-          {account.planType ? `${account.planType} account` : "Account"}<span>{account.owners.join(", ")}</span></button> : null}
+          {accountLabel?.(account) ?? (account.planType ? `${formatBackendPlanType({ kind: "codex" }, account.planType)} account` : "Account")}<span>{account.owners.join(", ")}</span></button> : null}
         <div className="usage-account__limits">
           {account.series.map((series) => <LimitMeter key={series.key} series={series} now={now} />)}
           {account.credits ? <div className="usage-limit usage-limit--credits"><span className="usage-eyebrow">Credits</span>

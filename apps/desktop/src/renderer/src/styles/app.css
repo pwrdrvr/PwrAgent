@@ -44107,6 +44107,16 @@ details.launchpad-pending__output > summary .launchpad-pending__command-label {
 .usage-segmented button[aria-pressed="true"] { background: var(--bg-row-active); color: var(--text-primary); }
 .usage-date { display: flex; gap: 5px; align-items: center; color: var(--text-secondary); font-size: 11px; }
 .usage-date input { max-width: 178px; }
+.usage-account-filter { display: flex; min-width: 0; }
+.usage-account-filter .select-trigger { max-width: 230px; }
+.usage-account-scope { display: flex; flex: none; flex-wrap: wrap; gap: 4px 12px; align-items: center; min-height: 36px; box-sizing: border-box; padding: 4px 18px; border-bottom: 1px solid var(--border-subtle); background: var(--bg-panel); color: var(--text-secondary); font-size: 11px; }
+.usage-account-scope strong { color: var(--text-primary); font-weight: 600; }
+.usage-account-scope .usage-link { font-size: 11px; }
+.usage-account-scope__text { flex: 1; min-width: 0; }
+.usage-account-scope__rename { display: flex; flex: 1; margin: 0; flex-wrap: wrap; gap: 4px 10px; align-items: center; min-width: 0; }
+/* Renaming keeps the line's height: the field and its button fit inside it. */
+.usage-account-scope__rename input, .usage-account-scope__rename .usage-button { min-height: 24px; padding-block: 2px; font-size: 11px; }
+.usage-account-scope__rename input { width: 220px; }
 .usage-error { flex: none; max-height: 90px; overflow: auto; margin: 0; padding: 8px 18px; color: var(--text-primary); background: var(--accent-soft); border-bottom: 1px solid var(--accent-border); font-size: 11px; }
 .usage-coverage { display: flex; flex: none; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; padding: 7px 18px; border-bottom: 1px solid var(--border-subtle); background: var(--warning-surface-faint); color: var(--text-secondary); font-size: 11px; }
 .usage-coverage__text { flex: 1; min-width: 0; }
@@ -44124,7 +44134,7 @@ details.launchpad-pending__output > summary .launchpad-pending__command-label {
 .usage-band { display: grid; grid-template-columns: minmax(0, 1fr) minmax(220px, 280px); gap: 14px 28px; flex: none; padding: 16px 18px 12px; border-bottom: 1px solid var(--border-subtle); }
 .usage-band__accounts { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .usage-account { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
-.usage-account__name { align-self: flex-start; display: flex; gap: 8px; align-items: baseline; padding: 2px 6px; margin-left: -6px; border: 0; border-radius: 4px; background: transparent; color: var(--text-secondary); font-size: 11px; font-weight: 600; text-transform: capitalize; }
+.usage-account__name { align-self: flex-start; display: flex; gap: 8px; align-items: baseline; padding: 2px 6px; margin-left: -6px; border: 0; border-radius: 4px; background: transparent; color: var(--text-secondary); font-size: 11px; font-weight: 600; }
 .usage-account__name span { color: var(--text-muted); font-weight: 400; text-transform: none; }
 .usage-account__name:hover { background: var(--bg-panel-hover); }
 .usage-account.is-focused .usage-account__name { color: var(--text-primary); box-shadow: inset 2px 0 var(--accent); }
@@ -44217,7 +44227,7 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
 
 /* What is in a slice. It sits beside its bar on the side with room, measured
    like .context-usage-card; a click pins it, and only then does it take the pointer. */
-.usage-slice-card { position: absolute; top: -4px; z-index: 3; display: flex; flex-direction: column; gap: 6px; width: 264px; max-width: calc(100% - 16px); padding: 10px 10px 8px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--popover-bg); box-shadow: 0 12px 28px var(--shadow-tint-soft); color: var(--text-primary); font-size: 11px; pointer-events: none; text-align: left; }
+.usage-slice-card { position: absolute; top: -4px; z-index: 3; display: flex; flex-direction: column; gap: 6px; width: max-content; min-width: 264px; max-width: min(360px, calc(100% - 16px)); padding: 10px 10px 8px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--popover-bg); box-shadow: 0 12px 28px var(--shadow-tint-soft); color: var(--text-primary); font-size: 11px; pointer-events: none; text-align: left; }
 .usage-slice-card.is-pinned { pointer-events: auto; }
 .usage-slice-card__head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 0 4px; }
 .usage-slice-card__head span { color: var(--text-secondary); font: 10px var(--font-mono); }

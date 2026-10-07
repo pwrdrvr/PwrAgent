@@ -59,6 +59,29 @@ afterEach(() => {
 });
 
 describe("StateDb", () => {
+  it("adds account attribution to a v70 ledger without relabeling existing usage", () => {
+    const dbPath = useFileStateDb();
+    stateDb.raw.exec("ALTER TABLE thread_usage_lines DROP COLUMN account_key");
+    stateDb.raw.exec(`INSERT INTO thread_usage_lines (
+      usage_line_id, backend, thread_id, source, scope, status, created_at,
+      input_tokens, cached_input_tokens, uncached_input_tokens, output_tokens,
+      reasoning_output_tokens, total_tokens, price_status, currency,
+      uncached_input_cost_micros, cached_input_cost_micros, output_cost_micros,
+      total_cost_micros, updated_at
+    ) VALUES ('old-line', 'codex', 'old-thread', 'live', 'turn', 'finalized', 1,
+      100, 0, 100, 20, 0, 120, 'priced', 'USD', 1, 0, 1, 2, 2)`);
+    stateDb.raw.pragma("user_version = 70");
+    stateDb.close();
+    stateDb = StateDb.open(dbPath);
+    expect(columnNames("thread_usage_lines")).toContain("account_key");
+    expect(stateDb.raw.prepare("SELECT account_key, total_tokens, total_cost_micros FROM thread_usage_lines WHERE usage_line_id = 'old-line'").get())
+      .toEqual({ account_key: null, total_tokens: 120, total_cost_micros: 2 });
+    expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(CURRENT_STATE_DB_USER_VERSION);
+    stateDb.close();
+    stateDb = StateDb.open(dbPath);
+    expect(columnNames("thread_usage_lines").filter((column) => column === "account_key")).toHaveLength(1);
+  });
+
   it.each([false, true])("guards corrupt automation runs when upgrading with legacy index present: %s", (legacyIndexPresent) => {
     const dbPath = useFileStateDb();
     stateDb.raw.exec("DROP INDEX IF EXISTS idx_automation_runs_execution_thread");
