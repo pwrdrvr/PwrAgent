@@ -2784,9 +2784,16 @@ textarea,
   padding-right: 16px;
 }
 
+/* Controls and EVERYTHING inside them. `.thread-header *` above marks each
+   descendant a drag region, so an icon or span inside a button stayed one:
+   the pointer over the glyph belonged to the OS, which took the click and
+   ate the hover, and the control answered only at its edges. The `*` forms
+   outrank `.thread-header *` by specificity, wherever either rule sits. */
 .thread-header button,
+.thread-header button *,
 .thread-header input,
 .thread-header a,
+.thread-header a *,
 .thread-header select {
   -webkit-app-region: no-drag;
 }
@@ -7508,6 +7515,34 @@ a.button {
   opacity: 0.72;
 }
 
+/* Revealed from the thread header's project name: an outline that fades,
+   because the click can switch the lens and the eye needs somewhere to land.
+   The 1200ms matches PROJECT_REVEAL_FLASH_MS, which removes the class. Under
+   reduced motion the outline holds for that time and goes without a fade. */
+.directory-row__summary.is-revealed {
+  outline: 1px solid transparent;
+  outline-offset: -1px;
+  animation: directory-row-revealed 1200ms ease-out;
+}
+
+@keyframes directory-row-revealed {
+  0%,
+  40% {
+    outline-color: var(--accent);
+  }
+
+  100% {
+    outline-color: transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .directory-row__summary.is-revealed {
+    animation: none;
+    outline-color: var(--accent);
+  }
+}
+
 .directory-row__summary-main,
 .directory-row__summary-meta,
 .directory-row__title-wrap {
@@ -10325,11 +10360,15 @@ a.button {
   -webkit-app-region: drag;
 }
 
+/* Descendants too, for the reason given at `.thread-header button *`. */
 .settings-titlebar button,
+.settings-titlebar button *,
 .settings-titlebar input,
 .settings-titlebar a,
+.settings-titlebar a *,
 .settings-titlebar select,
-.settings-titlebar [role="button"] {
+.settings-titlebar [role="button"],
+.settings-titlebar [role="button"] * {
   -webkit-app-region: no-drag;
 }
 
@@ -21057,6 +21096,9 @@ a.button {
   white-space: nowrap;
 }
 
+/* The breadcrumb's two links, the project name and the thread title, share
+   one reset: each is a button inside a trimmed text span that ellipsizes. */
+.thread-header__project-button,
 .thread-header__title-button {
   display: inline-block;
   max-width: 100%;
@@ -21078,10 +21120,70 @@ a.button {
   color: var(--accent-bright);
 }
 
+.thread-header__project-button:focus-visible,
 .thread-header__title-button:focus-visible {
   border-radius: 4px;
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
+}
+
+/* The breadcrumb's project name, when it links to the project's section in
+   Directories. Built like the title: the eyebrow span keeps its trim and
+   baseline, and the shared reset button above carries the ellipsis. The span
+   clips with the same 4px margin as the title, so the ring survives.
+   `min-width: 0` because `clip`, unlike the plain eyebrow's `hidden`, does
+   not make a scroll container: the flex item's automatic minimum became the
+   button's whole unwrapped label, the name stopped shrinking, and a narrow
+   header squeezed the thread title to 0px instead. */
+.thread-header__eyebrow--link {
+  min-width: 0;
+  overflow: clip;
+  overflow-clip-margin: 4px;
+}
+
+/* Underlined where the title is not: the eyebrow is already accent-coloured,
+   and brightening it alone is too slight a change to read as a link. */
+.thread-header__project-button:hover {
+  color: var(--accent-bright);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+/* Opens the project's new-thread menu, like the chevron on the project's
+   sidebar row. Muted at rest so the breadcrumb still reads as one line.
+   24px square, the WCAG 2.2 minimum target (SC 2.5.8) and the history
+   buttons' height: at 18px it passed only on the spacing exception, by a
+   pixel. The block margins take the extra 6px back out of layout: at full
+   height the box grew the breadcrumb and lifted the name and title 3px. The
+   left margin narrows the breadcrumb's 6px gap, since the caret belongs to
+   the name before it, not to the chevron after it. Its focus ring is inset,
+   so at that gap the ring clears the name's last letter. */
+.thread-header__project-menu-button {
+  display: inline-grid;
+  flex: 0 0 auto;
+  align-self: center;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  margin: -3px 0 -3px -2px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.thread-header__project-menu-button:hover,
+.thread-header__project-menu-button.is-open {
+  background: var(--bg-panel-hover);
+  color: var(--accent-bright);
+}
+
+.thread-header__project-menu-button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -1px;
 }
 
 .thread-header__eyebrow-row > .thread-row__chip {

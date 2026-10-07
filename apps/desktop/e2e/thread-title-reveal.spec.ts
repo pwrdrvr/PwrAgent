@@ -438,3 +438,77 @@ test("quick jump reveals a hidden child before restoring a hidden sidebar", asyn
     await fixture.cleanup();
   }
 });
+
+test("the breadcrumb's project name reveals the project in Directories", async () => {
+  const { app, fixture } = await launchThreadTitleRevealApp();
+
+  try {
+    const threadBrowser = app.window.getByRole("region", {
+      name: "Thread browser",
+    });
+    // The Inbox lens; its tab is named for its sort.
+    await threadBrowser.getByRole("tab", { name: "Updated" }).click();
+    await threadBrowser
+      .getByRole("button", {
+        name: "Parent thread with child link",
+        exact: true,
+      })
+      .click();
+    await expect(
+      app.window.getByRole("heading", {
+        level: 2,
+        name: "Parent thread with child link",
+      }),
+    ).toBeVisible();
+    const directoriesTab = threadBrowser.getByRole("tab", { name: "Directories" });
+    await expect(directoriesTab).not.toHaveAttribute("aria-selected", "true");
+
+    await app.window
+      .getByRole("button", { name: "Show RevealFixture in Directories" })
+      .click();
+
+    // Only Directories lists projects, so the click switches the lens.
+    await expect(directoriesTab).toHaveAttribute("aria-selected", "true");
+    const directorySummary = threadBrowser
+      .locator(".directory-row__summary")
+      .filter({ hasText: "RevealFixture" });
+    await expect(directorySummary).toHaveAttribute("aria-expanded", "true");
+
+    // The thread the click came from stays in view below its project. Nine
+    // threads sort above it, so this needs a real scroll at this height.
+    const selectedRow = threadBrowser
+      .locator(".thread-row.is-selected:not(.directory-row__summary)")
+      .filter({ hasText: "Parent thread with child link" });
+    await expect(selectedRow).toBeInViewport({ ratio: 1 });
+    await expect(directorySummary).toBeInViewport({ ratio: 1 });
+    const scrollRegion = threadBrowser.locator(".sidebar__scroll-region");
+    const [rowBox, summaryBox, scrollBox] = await Promise.all([
+      selectedRow.boundingBox(),
+      directorySummary.boundingBox(),
+      scrollRegion.boundingBox(),
+    ]);
+    expect(rowBox).not.toBeNull();
+    expect(summaryBox).not.toBeNull();
+    expect(scrollBox).not.toBeNull();
+    expect(summaryBox!.y).toBeGreaterThanOrEqual(scrollBox!.y - GEOMETRY_TOLERANCE_PX);
+    expect(rowBox!.y + rowBox!.height).toBeLessThanOrEqual(
+      scrollBox!.y + scrollBox!.height + GEOMETRY_TOLERANCE_PX,
+    );
+
+    // The caret beside the name starts a thread in the project.
+    const caret = app.window.getByRole("button", {
+      name: "New thread in RevealFixture",
+    });
+    await caret.click();
+    const menu = app.window.getByRole("menu", { name: "New thread in RevealFixture" });
+    await expect(menu).toBeVisible();
+    await menu.getByRole("menuitem", { name: "New chat in RevealFixture" }).click();
+    await expect(menu).toBeHidden();
+    await expect(
+      app.window.getByRole("heading", { level: 2, name: "New thread" }),
+    ).toBeVisible();
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
