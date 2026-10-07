@@ -123,6 +123,17 @@ The artboard and
 are the same design twice — one is what a person reads, the other is what
 produces the pixels. Change both together.
 
+## Mirrored since the last import
+
+These files were copied down from the project one at a time, byte-identical to
+the project's copy, and are not hand edits. A wholesale re-import replaces them
+with the same content.
+
+- 2026-10-07, `project/Log Viewer Workflows UX Review.dc.html` and
+  `project/log-viewer-review.css`: the Help → Logs workflows review. It loads
+  `support.js`, `settings-command-tools.css`, and `assets/logo-pwragnt.svg`
+  from this directory, so it renders here unchanged.
+
 ## How to update this directory
 
 The upstream project is the source of truth. Replace this directory wholesale;
