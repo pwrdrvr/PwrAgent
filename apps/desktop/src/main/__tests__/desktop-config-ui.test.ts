@@ -217,6 +217,79 @@ describe("desktop config [ui] section", () => {
   });
 });
 
+describe("desktop config [ui.logs] section", () => {
+  it("round-trips the Logs window preferences", () => {
+    const edits = desktopSettingsPatchToEdits({
+      ui: {
+        logs: {
+          wrap: false,
+          searchMode: "highlight",
+          contextLines: 3,
+          includeDiagnostics: false,
+          levels: ["warn", "error"],
+        },
+      },
+    });
+    const written = applyTomlEdits("", edits);
+
+    expect(written).toContain("[ui.logs]");
+    expect(parseDesktopSettingsToml(written, "test.toml").ui).toEqual({
+      logs: {
+        wrap: false,
+        searchMode: "highlight",
+        contextLines: 3,
+        includeDiagnostics: false,
+        levels: ["error", "warn"],
+      },
+    });
+  });
+
+  it("ignores unknown values and keeps the valid ones", () => {
+    const config = parseDesktopSettingsToml(
+      [
+        "[ui.logs]",
+        'search_mode = "regex"',
+        "context_lines = 2",
+        'levels = ["error", "debug"]',
+        "wrap = false",
+        "",
+      ].join("\n"),
+      "test.toml",
+    );
+
+    expect(config.ui).toEqual({ logs: { wrap: false, levels: ["error"] } });
+  });
+
+  it("deletes default-valued keys, leaving no [ui] values", () => {
+    const existing = [
+      "[ui.logs]",
+      "wrap = false",
+      'search_mode = "highlight"',
+      "context_lines = 1",
+      "include_diagnostics = false",
+      'levels = ["error"]',
+      "",
+    ].join("\n");
+    const edits = desktopSettingsPatchToEdits(
+      {
+        ui: {
+          logs: {
+            wrap: true,
+            searchMode: "filter",
+            contextLines: 0,
+            includeDiagnostics: true,
+            levels: ["info", "warn", "error"],
+          },
+        },
+      },
+      parseTomlTables(existing, "test.toml"),
+    );
+    const written = applyTomlEdits(existing, edits);
+
+    expect(parseDesktopSettingsToml(written, "test.toml").ui).toBeUndefined();
+  });
+});
+
 describe("desktop config [integrated_terminal] section", () => {
   it("reads the Windows shell preference", () => {
     const config = parseDesktopSettingsToml(

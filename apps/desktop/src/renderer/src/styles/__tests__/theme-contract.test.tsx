@@ -646,6 +646,10 @@ describe("Tangerine Terminal theme contract", () => {
       // The bars and the slice card's inline position both read it, so the
       // card cannot drift off its bar. Geometry, not theme.
       "usage-bar-gap",
+      // The Logs window's line-number gutter, defined on `.log-window__lines`
+      // from the digit count of the newest sequence. The rows, the gap rows
+      // and the mark row all indent by it. Geometry, not theme.
+      "log-gutter-width",
     ]);
     const tokenReferences = [...css.matchAll(/var\(--([a-z0-9-]+)\)/g)].map(
       ([, token]) => token

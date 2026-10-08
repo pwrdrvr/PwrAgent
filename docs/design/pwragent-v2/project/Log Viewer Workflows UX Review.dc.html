@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="./support.js"></script>
+  </head>
+  <body>
+    <x-dc>
+      <helmet data-dc-atomics>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
+        <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=IBM+Plex+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet" />
+        <link rel="stylesheet" href="./settings-command-tools.css" />
+        <link rel="stylesheet" href="./log-viewer-review.css" />
+        <style>a{color:var(--accent)} a:hover{color:var(--accent-bright)} .ab__num--hidden{visibility:hidden}</style>
+      </helmet>
+
+      <div class="page" data-screen-label="Log viewer workflows review">
+        <p class="eyebrow">PwrAgent · Help → Logs · follow-up to As Built 2026-09-01 — Log viewer</p>
+        <h1>Logs: a window for finding lines and handing them to someone</h1>
+        <p class="lede">
+          People open Logs to find what went wrong, and then to send the evidence to someone else, often an Agent thread.
+          Today the window makes both jobs harder than they should be. Search highlights matches but does not hide anything.
+          Long lines are cut off at the edge, with no way to wrap them. Copying a line gives almost no feedback, and copying
+          more than one line depends on a text drag that is hard to find. The build and instance details that make a log excerpt useful
+          are a separate copy from another window. This review shows the window as built, the proposed window, and the five tasks
+          it has to support. All fixture data is contrived.
+        </p>
+
+        <hr class="rule" />
+        <div class="section-head"><span class="num">01</span><h2>As built</h2>
+          <p class="body">The window you reported, recreated with the shipped <code>.log-window__*</code> rules in the light theme. The search <b>fe</b> is active and the view is paused. The pointer has just clicked Copy on line 215.</p></div>
+        <div class="win ab" style="--h:520px" data-screen-label="As built">
+          <div class="win__title"><span class="lights"><i></i><i></i><i></i></span><span class="brand"><img src="./assets/logo-pwragnt.svg" alt="" />Pwr<em>Agent</em></span><span class="crumb"><span class="crumb__eyebrow">Help</span><span class="crumb__sep">›</span><span class="crumb__current">Logs</span></span></div>
+          <div class="win__body" style="padding-bottom:16px">
+            <div class="tb">
+              <div class="ab__search"><b>Search</b><span>fe</span></div>
+              <div class="ab__lvl"><span class="on">Error</span><span class="on">Warning</span><span class="on">Info</span><span>Debug</span></div>
+              <span class="ab__count">1 / 70</span>
+              <span class="ab__btn">Prev</span><span class="ab__btn">Next</span><span class="ab__btn">Follow</span>
+            </div>
+            <div class="ab__file"><b>File</b><code>/Users/riley/Library/Logs/PwrAgent/profile-default.main.log</code><span class="ab__fbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>Copy</span><span class="ab__fbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z"></path></svg>Reveal</span></div>
+            <div class="ab__status">Paused app log stream</div>
+            <div class="vp">
+              <div class="lines">
+                <sc-for list="{{ asBuilt }}" as="r"><sc-if value="{{ r.isLine }}"><div class="{{ r.cls }}"><span class="ln__n"><sc-if value="{{ r.copied }}"><span class="ab__copy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5L20 7"></path></svg></span></sc-if><span class="{{ r.ncls }}">{{ r.n }}</span></span><span class="ln__t"><sc-for list="{{ r.parts }}" as="p"><span class="{{ p.c }}">{{ p.t }}</span></sc-for></span></div></sc-if></sc-for>
+              </div>
+              <div class="fade"></div>
+            </div>
+          </div>
+        </div>
+
+        <hr class="rule" />
+        <div class="section-head"><span class="num">02</span><h2>Findings</h2></div>
+        <table class="tbl"><thead><tr><th>#</th><th>As built</th><th>Change</th></tr></thead><tbody>
+          <tr><td>1</td><td class="wrap"><b>Search only highlights.</b> Typing <b>fe</b> leaves all 1,204 lines in place and marks 70 fragments. You page through them with Prev and Next. To answer &ldquo;which lines mention this server&rdquo;, you read the whole log.</td><td class="wrap">Search <b>filters</b> by default: only matching lines stay, and gaps show how many lines are hidden. <b>Highlight</b> is the other mode, for reading a match in place. A <b>Context</b> setting keeps 1, 3 or 5 lines around each match. The count reports lines, not fragments: <b>4 lines</b>.</td></tr>
+          <tr><td>2</td><td class="wrap"><b>Long lines are cut off.</b> Lines use <code>white-space: pre</code> inside a <code>max-content</code> block, so every line is one row and the rest scrolls off to the right. There is no wrap setting, so there is nothing to keep turned on.</td><td class="wrap">A <b>Wrap</b> toggle in the toolbar, <b>on by default</b> and remembered in the profile. A wrapped line keeps its line number and indents its continuation rows so a new entry is easy to see.</td></tr>
+          <tr><td>3</td><td class="wrap"><b>Row copy gives almost no feedback.</b> The copy button appears only while the pointer is over the gutter. After a click, a 12&nbsp;px check replaces it for 1.4&nbsp;s and the pointer is usually covering it. The row does not change and nothing is announced.</td><td class="wrap">Every copy, one line or many, goes through the <b>selection bar</b>. The bar&rsquo;s button changes to <b>Copied</b>, the copied rows flash, and the status bar reports what went to the clipboard, which is also announced to screen readers.</td></tr>
+          <tr><td>4</td><td class="wrap"><b>Selecting several lines is hard to find.</b> The gutter has <code>user-select: none</code>, so a drag that starts on the line numbers selects nothing. A drag through the text selects parts of lines and also pauses the stream without saying so.</td><td class="wrap"><b>Line-number selection</b>, as in a code editor. Click a number to select its line, Shift-click to extend the selection, or drag down the numbers. <b>&#8984;A</b> selects every line shown and <b>&#8984;C</b> copies the selection. Selecting text in a line still works.</td></tr>
+          <tr><td>5</td><td class="wrap"><b>Diagnostics are a separate copy.</b> The build, profile, PIDs and instance are in Help → Copy Diagnostics Info, and that menu item copies from the main window, not from Logs.</td><td class="wrap">An <b>Include diagnostics</b> checkbox in the selection bar, remembered. When it is on, the clipboard starts with the same troubleshooting block that Copy Diagnostics Info writes, plus the instance reference and the line range.</td></tr>
+          <tr><td>6</td><td class="wrap"><b>Paused drops lines.</b> While paused, <code>onAppLogEntry</code> ignores new entries until you resume and the snapshot is read again. The only sign of the pause is the text <b>Paused app log stream</b>.</td><td class="wrap">Pausing keeps buffering. The <b>Live</b> button changes to <b>Paused</b>, and a <b>37 new lines</b> pill above the bottom edge jumps to the latest line and resumes.</td></tr>
+          <tr><td>7</td><td class="wrap"><b>The file row takes a full band.</b> The path, Copy and Reveal are used once per bug report, but they sit above the lines on every screen.</td><td class="wrap">The path, <b>Copy path</b> and <b>Reveal</b> move into a 34&nbsp;px status bar under the lines. The status bar also shows the line count and the copy confirmation.</td></tr>
+          <tr><td>8</td><td class="wrap"><b>Line numbers fail contrast</b> (As Built, 2026-09-01): <code>--text-subtle</code> measures 2.65:1 in light.</td><td class="wrap">Line numbers use <code>--text-muted</code>. They are now controls, so they also need a hover state.</td></tr>
+        </tbody></table>
+
+        <hr class="rule" />
+        <div class="section-head"><span class="num">03</span><h2>The proposed window</h2>
+          <p class="body">One toolbar row, the lines, and a status bar. Wrap is on, so the long <code>startThread</code> and MCP lines read in full at this width. Error and Warning show counts for the lines currently loaded, so a new error is visible before you scroll to it.</p></div>
+        <div class="win" style="--h:560px" data-screen-label="Proposed · live">
+          <div class="win__title"><span class="lights"><i></i><i></i><i></i></span><span class="brand"><img src="./assets/logo-pwragnt.svg" alt="" />Pwr<em>Agent</em></span><span class="crumb"><span class="crumb__eyebrow">Help</span><span class="crumb__sep">›</span><span class="crumb__current">Logs</span></span></div>
+          <div class="win__body">
+            <div class="tb">
+              <div class="sf"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg><span class="sf__ph">Search logs</span><span class="sf__count">&#8984;F</span></div>
+              <div class="seg"><span class="on">Filter</span><span>Highlight</span></div>
+              <div class="seg"><span class="on">Error <small>5</small></span><span class="on">Warning <small>9</small></span><span class="on">Info</span><span>Debug</span></div>
+              <span class="tb__gap"></span>
+              <span class="tbtn tbtn--on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"></path><path d="M3 12h15a3 3 0 1 1 0 6h-4"></path><path d="m16 16-2 2 2 2"></path><path d="M3 18h7"></path></svg>Wrap</span>
+              <span class="tbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"></path></svg>Mark</span>
+              <span class="tbtn tbtn--live"><span class="livedot"></span>Live</span>
+            </div>
+            <div class="vp">
+              <div class="lines lines--wrap">
+                <sc-for list="{{ anatomy }}" as="r"><sc-if value="{{ r.isLine }}"><div class="{{ r.cls }}"><span class="ln__n">{{ r.n }}</span><span class="ln__t"><sc-for list="{{ r.parts }}" as="p"><span class="{{ p.c }}">{{ p.t }}</span></sc-for></span></div></sc-if></sc-for>
+              </div>
+            </div>
+            <div class="foot"><span>1,204 lines</span><span class="foot__file">profile-default.main.log</span><span class="foot__sp"></span><span class="foot__act"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>Copy path</span><span class="foot__act"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z"></path></svg>Reveal</span></div>
+          </div>
+        </div>
+
+        <hr class="rule" />
+        <div class="section-head"><span class="num">04</span><h2>Workflow A — Find what just went wrong <span class="who">user · developer</span></h2>
+          <p class="body">Something failed a moment ago. Type part of the message. Filter mode keeps the matching lines, and Context keeps one line on each side so the cause is still visible. Here the cause is line 218, the app-server&rsquo;s own stderr. Enter and Shift-Enter step through the matches.</p></div>
+        <ol class="flow" style="--n:3"><li>Press <b>&#8984;F</b> and type <b>startup failed</b>. The view filters as you type and stops following.</li><li>Set <b>Context ±1</b> to keep a line around each match. <b>4 lines</b> match, and the gaps show what was hidden.</li><li>Clear the search with <b>Esc</b> and the window returns to the active match&rsquo;s position in the full log.</li></ol>
+        <div class="win" style="--h:420px" data-screen-label="Workflow A · filter">
+          <div class="win__title"><span class="lights"><i></i><i></i><i></i></span><span class="brand"><img src="./assets/logo-pwragnt.svg" alt="" />Pwr<em>Agent</em></span><span class="crumb"><span class="crumb__eyebrow">Help</span><span class="crumb__sep">›</span><span class="crumb__current">Logs</span></span></div>
+          <div class="win__body">
+            <div class="tb">
+              <div class="sf sf--focus"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg><span class="sf__q">startup failed</span><span class="sf__count">1 of 4 lines</span><span class="sf__step"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m18 15-6-6-6 6"></path></svg></span><span class="sf__step"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"></path></svg></span></div>
+              <div class="seg"><span class="on">Filter</span><span>Highlight</span></div>
+              <span class="tbtn">Context ±1<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"></path></svg></span>
+              <div class="seg"><span class="on">Error <small>5</small></span><span class="on">Warning <small>9</small></span><span class="on">Info</span><span>Debug</span></div>
+              <span class="tb__gap"></span>
+              <span class="tbtn tbtn--on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"></path><path d="M3 12h15a3 3 0 1 1 0 6h-4"></path><path d="m16 16-2 2 2 2"></path><path d="M3 18h7"></path></svg>Wrap</span>
+              <span class="tbtn tbtn--live"><span class="livedot livedot--paused"></span>Paused</span>
+            </div>
+            <div class="vp">
+              <div class="lines lines--wrap">
+                <sc-for list="{{ triage }}" as="r"><sc-if value="{{ r.isGap }}"><div class="gap">{{ r.text }}</div></sc-if><sc-if value="{{ r.isLine }}"><div class="{{ r.cls }}"><span class="ln__n">{{ r.n }}</span><span class="ln__t"><sc-for list="{{ r.parts }}" as="p"><span class="{{ p.c }}">{{ p.t }}</span></sc-for></span></div></sc-if></sc-for>
+              </div>
+            </div>
+            <div class="foot"><span>4 of 1,204 lines match</span><span class="foot__sp"></span><span>Enter next · Shift-Enter previous · Esc clear</span></div>
+          </div>
+        </div>
+
+        <hr class="rule" />
+        <div class="section-head"><span class="num">05</span><h2>Workflow B — Copy lines for a bug report <span class="who">user · developer</span></h2>
+          <p class="body">This is the task the window exists for. Select lines from the line numbers, leave <b>Include diagnostics</b> on, and copy. The clipboard then holds everything the reader needs in one paste. The checkbox keeps its setting between sessions.</p></div>
+        <ol class="flow" style="--n:4"><li><b>Click</b> line number 215. The line is selected and the bar appears.</li><li><b>Shift-click</b> 219, or drag down the numbers. The bar reports <b>5 lines</b>.</li><li>Click <b>Copy</b> or press <b>&#8984;C</b>. Esc or the <b>×</b> clears the selection.</li><li>The rows flash, the button reads <b>Copied</b> for 2&nbsp;s, and the status bar keeps the result until the next action.</li></ol>
+        <div class="win" style="--h:470px" data-screen-label="Workflow B · selected">
+          <div class="win__title"><span class="lights"><i></i><i></i><i></i></span><span class="brand"><img src="./assets/logo-pwragnt.svg" alt="" />Pwr<em>Agent</em></span><span class="crumb"><span class="crumb__eyebrow">Help</span><span class="crumb__sep">›</span><span class="crumb__current">Logs</span></span></div>
+          <div class="win__body">
+            <div class="tb">
+              <div class="sf"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg><span class="sf__ph">Search logs</span><span class="sf__count">&#8984;F</span></div>
+              <div class="seg"><span class="on">Filter</span><span>Highlight</span></div>
+              <div class="seg"><span class="on">Error <small>5</small></span><span class="on">Warning <small>9</small></span><span class="on">Info</span><span>Debug</span></div>
+              <span class="tb__gap"></span>
+              <span class="tbtn tbtn--on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"></path><path d="M3 12h15a3 3 0 1 1 0 6h-4"></path><path d="m16 16-2 2 2 2"></path><path d="M3 18h7"></path></svg>Wrap</span>
+              <span class="tbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"></path></svg>Mark</span>
+              <span class="tbtn tbtn--live"><span class="livedot livedot--paused"></span>Paused</span>
+            </div>
+            <div class="vp">
+              <div class="lines lines--wrap">
+                <sc-for list="{{ copySel }}" as="r"><sc-if value="{{ r.isLine }}"><div class="{{ r.cls }}"><span class="ln__n">{{ r.n }}</span><span class="ln__t"><sc-for list="{{ r.parts }}" as="p"><span class="{{ p.c }}">{{ p.t }}</span></sc-for></span></div></sc-if></sc-for>
+              </div>
+              <div class="float"><span class="float__n">5 lines selected<small>215–219</small></span><span class="float__sep"></span><span class="chk chk--on"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5L20 7"></path></svg></i>Include diagnostics</span><span class="fbtn fbtn--primary"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>Copy</span><span class="fbtn fbtn--icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg></span></div>
+            </div>
+            <div class="foot"><span>1,204 lines</span><span class="foot__file">profile-default.main.log</span><span class="foot__sp"></span><span class="foot__act">Copy path</span><span class="foot__act">Reveal</span></div>
+          </div>
+        </div>
+
+        <div class="split" style="margin-top:28px">
+          <div class="col">
+            <p class="col__cap col__cap--good">Just after Copy</p>
+            <div class="win" style="--h:470px;margin-top:0" data-screen-label="Workflow B · copied">
+              <div class="win__title"><span class="lights"><i></i><i></i><i></i></span><span class="crumb"><span class="crumb__eyebrow">Help</span><span class="crumb__sep">›</span><span class="crumb__current">Logs</span></span></div>
+              <div class="win__body">
+                <div class="vp">
+                  <div class="lines lines--wrap">
+                    <sc-for list="{{ copyDone }}" as="r"><sc-if value="{{ r.isLine }}"><div class="{{ r.cls }}"><span class="ln__n">{{ r.n }}</span><span class="ln__t"><sc-for list="{{ r.parts }}" as="p"><span class="{{ p.c }}">{{ p.t }}</span></sc-for></span></div></sc-if></sc-for>
+                  </div>
+                  <div class="float"><span class="float__n">5 lines selected</span><span class="float__sep"></span><span class="chk chk--on"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5L20 7"></path></svg></i>Diagnostics</span><span class="fbtn fbtn--done"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5L20 7"></path></svg>Copied</span></div>
+                </div>
+                <div class="foot"><span class="toast"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5L20 7"></path></svg>Copied 5 lines with diagnostics</span><span class="foot__sp"></span><span class="foot__act">Reveal</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="col">
+            <p class="col__cap">On the clipboard (plain text; rich targets get a code block)</p>
+<pre class="clip"><i>{{ clip.stamp }}</i>{{ clip.diag }}<b>{{ clip.added }}</b>{{ clip.lines }}</pre>
+            <div class="note note--good"><span class="note__k">Same block</span><span>The first seven lines are <code>buildTroubleshootingDiagnosticsInfo</code>, which Copy Diagnostics Info already writes. The two bold lines are new. The instance line is the composer&rsquo;s <code>@</code> instance reference, so pasting into a thread links the machine. The range line records which lines were copied and which filters were on. The lines are copied whole.</span></div>
+          </div>
+        </div>
+
+        <hr class="rule" />
+        <div class="section-head"><span class="num">06</span><h2>Workflow C — Reproduce, then capture only the new lines <span class="who">developer</span></h2>
+          <p class="body">When you are about to reproduce a bug, click <b>Mark</b>. A divider with the time goes into the view, but not into the file. After the bug happens, <b>Select since mark</b> selects every line after the divider, and the selection bar copies them in the usual way. You do not need to scroll back or guess where the bug started.</p></div>
+        <div class="win" style="--h:560px" data-screen-label="Workflow C · mark">
+          <div class="win__title"><span class="lights"><i></i><i></i><i></i></span><span class="brand"><img src="./assets/logo-pwragnt.svg" alt="" />Pwr<em>Agent</em></span><span class="crumb"><span class="crumb__eyebrow">Help</span><span class="crumb__sep">›</span><span class="crumb__current">Logs</span></span></div>
+          <div class="win__body">
+            <div class="tb">
+              <div class="sf"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg><span class="sf__ph">Search logs</span><span class="sf__count">&#8984;F</span></div>
+              <div class="seg"><span class="on">Filter</span><span>Highlight</span></div>
+              <div class="seg"><span class="on">Error <small>5</small></span><span class="on">Warning <small>9</small></span><span class="on">Info</span><span>Debug</span></div>
+              <span class="tb__gap"></span>
+              <span class="tbtn tbtn--on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"></path><path d="M3 12h15a3 3 0 1 1 0 6h-4"></path><path d="m16 16-2 2 2 2"></path><path d="M3 18h7"></path></svg>Wrap</span>
+              <span class="tbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"></path></svg>Mark</span>
+              <span class="tbtn tbtn--live"><span class="livedot"></span>Live</span>
+            </div>
+            <div class="vp">
+              <div class="lines lines--wrap">
+                <sc-for list="{{ repro }}" as="r"><sc-if value="{{ r.isMark }}"><div class="mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"></path></svg><span>{{ r.text }}</span><span class="mark__act">{{ r.act }}</span></div></sc-if><sc-if value="{{ r.isLine }}"><div class="{{ r.cls }}"><span class="ln__n">{{ r.n }}</span><span class="ln__t"><sc-for list="{{ r.parts }}" as="p"><span class="{{ p.c }}">{{ p.t }}</span></sc-for></span></div></sc-if></sc-for>
+              </div>
+              <div class="float"><span class="float__n">9 lines since mark<small>211–219</small></span><span class="float__sep"></span><span class="chk chk--on"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5L20 7"></path></svg></i>Include diagnostics</span><span class="fbtn fbtn--primary">Copy</span><span class="fbtn fbtn--icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg></span></div>
+            </div>
+            <div class="foot"><span>1,204 lines · 1 mark</span><span class="foot__sp"></span><span class="foot__act">Copy path</span><span class="foot__act">Reveal</span></div>
+          </div>
+        </div>
+        <div class="note"><span class="note__k">Live</span><span>The selection grows while the stream stays live, as long as you have not moved its end. A selection that ends on the newest line follows new lines, so <b>Copy</b> at the end of a repro includes them. Selecting with the line numbers no longer pauses the stream; only scrolling up does.</span></div>
+
+        <hr class="rule" />
+        <div class="section-head"><span class="num">07</span><h2>Workflow D — Follow one subsystem or one thread <span class="who">developer</span></h2>
+          <p class="body">Scopes and thread IDs in a line become links on hover. Clicking one adds a token to the search field, so the view shows only <b>codex-client</b>, or only one thread. Tokens combine with text and with each other. The gaps show where other subsystems wrote in between.</p></div>
+        <div class="win" style="--h:400px" data-screen-label="Workflow D · scope token">
+          <div class="win__title"><span class="lights"><i></i><i></i><i></i></span><span class="brand"><img src="./assets/logo-pwragnt.svg" alt="" />Pwr<em>Agent</em></span><span class="crumb"><span class="crumb__eyebrow">Help</span><span class="crumb__sep">›</span><span class="crumb__current">Logs</span></span></div>
+          <div class="win__body">
+            <div class="tb">
+              <div class="sf"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg><span class="tok">scope <b>codex-client</b><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg></span><span class="sf__ph"></span><span class="sf__count">7 lines</span></div>
+              <div class="seg"><span class="on">Filter</span><span>Highlight</span></div>
+              <div class="seg"><span class="on">Error <small>5</small></span><span class="on">Warning <small>9</small></span><span class="on">Info</span><span>Debug</span></div>
+              <span class="tb__gap"></span>
+              <span class="tbtn tbtn--on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"></path><path d="M3 12h15a3 3 0 1 1 0 6h-4"></path><path d="m16 16-2 2 2 2"></path><path d="M3 18h7"></path></svg>Wrap</span>
+              <span class="tbtn tbtn--live"><span class="livedot"></span>Live</span>
+            </div>
+            <div class="vp">
+              <div class="lines lines--wrap">
+                <sc-for list="{{ narrow }}" as="r"><sc-if value="{{ r.isGap }}"><div class="gap">{{ r.text }}</div></sc-if><sc-if value="{{ r.isLine }}"><div class="{{ r.cls }}"><span class="ln__n">{{ r.n }}</span><span class="ln__t"><sc-for list="{{ r.parts }}" as="p"><span class="{{ p.c }}">{{ p.t }}</span></sc-for></span></div></sc-if></sc-for>
+              </div>
+            </div>
+            <div class="foot"><span>7 of 1,204 lines match</span><span class="foot__sp"></span><span>Click a scope or thread ID to filter by it</span></div>
+          </div>
+        </div>
+
+        <hr class="rule" />
+        <div class="section-head"><span class="num">08</span><h2>Workflow E — Read back while the log keeps moving <span class="who">user · developer</span></h2>
+          <p class="body">Scrolling up pauses the view so the lines you are reading stay in place. New lines are buffered, not dropped. A pill counts them, and clicking it or <b>Paused</b> resumes at the bottom.</p></div>
+        <div class="win" style="--h:400px" data-screen-label="Workflow E · paused">
+          <div class="win__title"><span class="lights"><i></i><i></i><i></i></span><span class="brand"><img src="./assets/logo-pwragnt.svg" alt="" />Pwr<em>Agent</em></span><span class="crumb"><span class="crumb__eyebrow">Help</span><span class="crumb__sep">›</span><span class="crumb__current">Logs</span></span></div>
+          <div class="win__body">
+            <div class="tb">
+              <div class="sf"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg><span class="sf__ph">Search logs</span><span class="sf__count">&#8984;F</span></div>
+              <div class="seg"><span class="on">Filter</span><span>Highlight</span></div>
+              <div class="seg"><span class="on">Error <small>5</small></span><span class="on">Warning <small>9</small></span><span class="on">Info</span><span>Debug</span></div>
+              <span class="tb__gap"></span>
+              <span class="tbtn tbtn--on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"></path><path d="M3 12h15a3 3 0 1 1 0 6h-4"></path><path d="m16 16-2 2 2 2"></path><path d="M3 18h7"></path></svg>Wrap</span>
+              <span class="tbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"></path></svg>Mark</span>
+              <span class="tbtn tbtn--live"><span class="livedot livedot--paused"></span>Paused</span>
+            </div>
+            <div class="vp">
+              <div class="lines lines--wrap">
+                <sc-for list="{{ paused }}" as="r"><sc-if value="{{ r.isLine }}"><div class="{{ r.cls }}"><span class="ln__n">{{ r.n }}</span><span class="ln__t"><sc-for list="{{ r.parts }}" as="p"><span class="{{ p.c }}">{{ p.t }}</span></sc-for></span></div></sc-if></sc-for>
+              </div>
+              <span class="pill"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"></path></svg>37 new lines · 2 errors</span>
+            </div>
+            <div class="foot"><span>Paused · 37 new lines since 12:40:17</span><span class="foot__sp"></span><span class="foot__act">Copy path</span><span class="foot__act">Reveal</span></div>
+          </div>
+        </div>
+
+        <hr class="rule" />
+        <div class="section-head"><span class="num">09</span><h2>Rules</h2></div>
+        <table class="tbl"><thead><tr><th>Part</th><th>Rule</th></tr></thead><tbody>
+          <tr><td>Toolbar</td><td class="wrap">One row: search, Filter or Highlight, Context (Filter with a query only), levels, then Wrap, Mark, Live. Prev and Next move into the search field as chevrons beside the count. Below about 900&nbsp;px, Wrap and Mark drop their labels and keep tooltips.</td></tr>
+          <tr><td>Search</td><td class="wrap">Case-insensitive substring, as today. Filter keeps matching lines; Highlight keeps every line. Context 0, 1, 3 or 5 lines. A gap row says how many lines are hidden; click it to show them. The count reports matching <b>lines</b>, and the current one is <b>n of N</b>. Enter, Shift-Enter and Esc work while the field has focus.</td></tr>
+          <tr><td>Tokens</td><td class="wrap"><code>scope:</code> and <code>thread:</code>, created by clicking a scope or a <code>threadId=</code> value in a line, or by typing the prefix. Backspace in an empty field removes the last token.</td></tr>
+          <tr><td>Levels</td><td class="wrap">Unchanged behaviour, including Debug turning on debug collection. Error and Warning show the count of loaded lines at that level, in mono 10.5&nbsp;px.</td></tr>
+          <tr><td>Wrap</td><td class="wrap">On by default. Wrapped rows use <code>pre-wrap</code> and <code>overflow-wrap: anywhere</code>, with a 2ch hanging indent. Off restores today&rsquo;s horizontal scroll.</td></tr>
+          <tr><td>Selection</td><td class="wrap">Line numbers are the selection gutter: click, Shift-click, drag, &#8984;A for every shown line, Esc to clear. Selected rows tint with <code>--accent</code> at 10% and get a 3&nbsp;px accent edge on the number. The bar floats 14&nbsp;px above the bottom of the viewport. With one line selected it reads <b>Line 215</b>.</td></tr>
+          <tr><td>Copy</td><td class="wrap">The Copy button and &#8984;C both copy whole lines in order, joined with newlines, via <code>copyTextAsCodeBlock</code>. If a text selection lies inside a single line, &#8984;C copies that text as it does now. Feedback: the button changes to <b>Copied</b> for 2&nbsp;s, the rows tint with <code>--success-soft</code> and fade over 600&nbsp;ms, and an <code>aria-live</code> message in the status bar stays until the next action.</td></tr>
+          <tr><td>Diagnostics</td><td class="wrap"><b>Include diagnostics</b> starts on. When it is on, the copy begins with <code>buildTroubleshootingDiagnosticsInfo</code>, then the instance reference when federation is configured, then the line range and active filters, then a blank line.</td></tr>
+          <tr><td>Mark</td><td class="wrap">A mark exists only in the view, at the newest line when you click it, labelled with the time. A mark in the view offers <b>Select since mark</b>. A new mark replaces the old one. Marks are not written to the log file.</td></tr>
+          <tr><td>Live / Paused</td><td class="wrap">Scrolling up or pressing the button pauses the view. While paused, new entries are buffered, up to the 5,000-line cap. The pill shows the new line count and any new errors. Selecting lines does not pause the view.</td></tr>
+          <tr><td>Remembered</td><td class="wrap">Wrap, Filter or Highlight, Context, Include diagnostics, and the Error, Warning and Info levels are stored in the profile&rsquo;s <code>config.toml</code> under <code>[logs]</code>. Debug is not stored, because turning it on starts debug collection.</td></tr>
+          <tr><td>Status bar</td><td class="wrap">Line count, file name (full path in the tooltip), Copy path and Reveal, plus the copy and pause messages. It replaces the File row and the status line.</td></tr>
+        </tbody></table>
+
+        <hr class="rule" />
+        <div class="section-head"><span class="num">10</span><h2>Left alone on purpose</h2></div>
+        <ul class="checks">
+          <li><span class="n">a</span><span><b>No per-row copy button.</b> One button per row cannot copy a range or include diagnostics, and it is where the missing feedback came from. Click a line number and press Copy.</span></li>
+          <li><span class="n">b</span><span><b>No regex or query language.</b> Plain text and two token kinds cover the tasks above. Developers who need more can open the file with Reveal.</span></li>
+          <li><span class="n">c</span><span><b>No time-range picker.</b> The view holds at most 5,000 lines, and Mark covers the task a time range would serve.</span></li>
+          <li><span class="n">d</span><span><b>No structured field view.</b> Wrapped lines already show <code>key=value</code> pairs in full. Parsing them into columns would fail on the free-form lines that most errors produce.</span></li>
+        </ul>
+
+        <p class="footer">Review 2026-10-07 against <code>main</code> at <code>e5b4fb4f3</code>. The as-built frame uses rules copied from <code>app.css</code> (<code>.log-window__*</code>, light tokens). Fixture data is contrived (atlas, studio-mac, riley). New icons (Wrap, Mark) follow the renderer&rsquo;s 24&nbsp;px, 2&nbsp;px stroke icon family.</p>
+      </div>
+    </x-dc>
+    <script type="text/x-dc" data-dc-script data-props='{}'>
+      class Component extends DCLogic {
+        renderVals() {
+          var TID = "7f3c2a10-4b1e-4d7a-9e55-0c2b8a61f9d4";
+          var BASE = {
+            206: ["12:30:28.036", "info", "app-server", "pr status transition prKey=\"github.com/acme/atlas#412\" threadCount=2 from=checks_running to=checks_passed source=poller"],
+            207: ["12:30:28.036", "info", "app-server", "pr status transition prKey=\"github.com/acme/atlas#398\" threadCount=1 from=review_requested to=approved source=poller"],
+            208: ["12:32:58.697", "info", "app-server", "pr status transition prKey=\"github.com/acme/atlas#405\" threadCount=1 from=checks_running to=checks_failed source=poller"],
+            209: ["12:35:11.402", "info", "federation", "peer heartbeat ok peer=build-mini status=online rttMs=18"],
+            210: ["12:38:47.019", "info", "backend-registry", "thread read completed threadId=" + TID + " items=148 durationMs=42"],
+            211: ["12:39:03.712", "info", "image-upload", "normalized pasted image fileName=atlas-dashboard.png originalWidth=3072 originalHeight=2048 width=2048 height=1366 bytes=812331"],
+            212: ["12:39:36.324", "warn", "hot-cpu", "CPU profile started cpuPercent=54.4 pid=41872 windowMs=5000 reason=sustained-over-threshold"],
+            213: ["12:40:17.659", "info", "backend-registry", "attaching agent tool catalogs backend=codex catalogFingerprints=[agent-tools:9c1e,mcp-gateway:41ad] threadId=" + TID],
+            214: ["12:40:17.660", "info", "backend-registry", "startThread backend=codex cwd=/Users/riley/projects/atlas/worktrees/search-fix model=gpt-5.5-codex threadId=" + TID],
+            215: ["12:40:18.594", "error", "codex-client", "MCP server startup failed serverName=computer-use threadId=" + TID + " error=\"handshake timed out after 10000ms\""],
+            216: ["12:40:18.594", "error", "codex-client", "MCP server startup failed serverName=diskhound threadId=" + TID + " error=\"spawn diskhound-mcp ENOENT\""],
+            217: ["12:40:18.649", "error", "codex-client", "MCP server startup failed serverName=lab-control threadId=" + TID + " error=\"connect ECONNREFUSED 127.0.0.1:7410\""],
+            218: ["12:40:18.873", "error", "codex-transport", "app-server stderr line=\"2026-10-07T16:40:18.872987Z ERROR rmcp::transport::child_process: child exited status=127 command=metrics-mcp\""],
+            219: ["12:40:18.873", "error", "codex-client", "MCP server startup failed serverName=metrics_test threadId=" + TID + " error=\"child exited status=127\""],
+            220: ["12:40:19.895", "info", "backend-registry", "codex thread settings observed threadId=" + TID + " model=gpt-5.5-codex reasoningEffort=high approvalPolicy=on-request"],
+            221: ["12:40:19.921", "info", "backend-registry", "backend lifecycle notification backend=codex method=thread/status/changed threadId=" + TID + " status=active"],
+            222: ["12:40:20.687", "warn", "codex-client", "codex helper thread retained global instruction source threadId=" + TID + " source=~/.codex/AGENTS.md bytes=4210"],
+            223: ["12:40:28.171", "info", "backend-registry", "backend lifecycle notification backend=codex method=turn/started threadId=" + TID],
+            224: ["12:40:28.402", "warn", "codex-client", "codex helper thread retained global instruction source threadId=" + TID + " source=~/.codex/AGENTS.md bytes=4210"],
+            225: ["12:41:13.659", "info", "backend-registry", "backend lifecycle notification backend=codex method=item/completed threadId=" + TID + " itemType=commandExecution"],
+            226: ["12:41:23.604", "warn", "codex-client", "codex helper thread retained global instruction source threadId=" + TID + " source=~/.codex/AGENTS.md bytes=4210"]
+          };
+          var LV = { info: "[info ]", warn: "[warn ]", error: "[error]" };
+          var LC = { info: "l-info", warn: "l-warn", error: "l-err" };
+          var RC = { info: "ln", warn: "ln ln--warn", error: "ln ln--err" };
+
+          function marks(text, q, on) {
+            if (!q) return [{ c: "", t: text }];
+            var out = [];
+            var low = text.toLowerCase();
+            var at = 0;
+            var i = low.indexOf(q);
+            var first = true;
+            while (i !== -1) {
+              if (i > at) out.push({ c: "", t: text.slice(at, i) });
+              out.push({ c: on && first ? "m m--on" : "m", t: text.slice(i, i + q.length) });
+              first = false;
+              at = i + q.length;
+              i = low.indexOf(q, at);
+            }
+            if (at < text.length) out.push({ c: "", t: text.slice(at) });
+            return out;
+          }
+
+          function line(n, o) {
+            o = o || {};
+            var b = BASE[n];
+            var parts = [
+              { c: "ts", t: "[2026-10-07 " + b[0] + "]" },
+              { c: "", t: " " },
+              { c: LC[b[1]], t: LV[b[1]] },
+              { c: "", t: " " },
+              { c: o.link ? "sc sc--link" : "sc", t: "(pwragent:" + b[2] + ")" },
+              { c: "", t: " " }
+            ];
+            parts = parts.concat(marks(b[3], o.q, o.on));
+            var cls = o.ctx ? "ln ln--ctx" : RC[b[1]];
+            if (o.cls) cls += " " + o.cls;
+            return { isLine: true, isGap: false, isMark: false, copied: !!o.copied, ncls: "", n: n, cls: cls, parts: parts };
+          }
+          function gap(text) { return { isLine: false, isGap: true, isMark: false, text: text }; }
+          function mark(text, act) { return { isLine: false, isGap: false, isMark: true, text: text, act: act }; }
+          function range(a, z, o) { var r = []; for (var n = a; n <= z; n++) r.push(line(n, o)); return r; }
+
+          var asBuilt = range(206, 226, { q: "fe" }).map(function (r) {
+            if (r.n === 215) { r.copied = true; r.ncls = "ab__num--hidden"; r.cls += " ln--hover"; }
+            return r;
+          });
+          var anatomy = range(211, 222);
+          var triage = [
+            gap("214 lines hidden"),
+            line(214, { ctx: true }),
+            line(215, { q: "startup failed", on: true }),
+            line(216, { q: "startup failed" }),
+            line(217, { q: "startup failed" }),
+            line(218, { ctx: true }),
+            line(219, { q: "startup failed" }),
+            line(220, { ctx: true }),
+            gap("984 lines hidden")
+          ];
+          var copySel = range(212, 222).map(function (r) {
+            if (r.n >= 215 && r.n <= 219) r.cls += " ln--sel";
+            return r;
+          });
+          var copyDone = range(214, 220).map(function (r) {
+            if (r.n >= 215 && r.n <= 219) r.cls += " ln--flash";
+            return r;
+          });
+          var repro = range(206, 209)
+            .concat([mark("Mark · 12:39:00", "Select since mark")])
+            .concat(range(211, 222).map(function (r) {
+              if (r.n <= 219) r.cls += " ln--sel";
+              return r;
+            }));
+          var narrow = [
+            gap("214 lines hidden"),
+            line(215), line(216), line(217),
+            gap("1 line hidden"),
+            line(219),
+            gap("2 lines hidden"),
+            line(222, { link: true, cls: "ln--hover" }),
+            gap("1 line hidden"),
+            line(224),
+            gap("1 line hidden"),
+            line(226)
+          ];
+          var paused = range(206, 214);
+          function raw(n) { var b = BASE[n]; return "[2026-10-07 " + b[0] + "] " + LV[b[1]] + " (pwragent:" + b[2] + ") " + b[3]; }
+          var clip = {
+            stamp: "Collected at (UTC): 2026-10-07T16:43:02.118Z",
+            diag: "\n" + [
+              "PwrAgent version: 1.14.2",
+              "PwrAgent build: Packaged",
+              "PwrAgent profile: default",
+              "Main process PID: 41872",
+              "Renderer process PID: 41901",
+              "PwrAgent log path: /Users/riley/Library/Logs/PwrAgent/profile-default.main.log"
+            ].join("\n") + "\n",
+            added: "PwrAgent instance: [studio-mac](pwragent://instance/inst-4k2m9q)\nLog lines: 215–219 of 1,204 (Error, Warning, Info)",
+            lines: "\n\n" + [215, 216, 217, 218, 219].map(raw).join("\n")
+          };
+          return { asBuilt: asBuilt, anatomy: anatomy, triage: triage, copySel: copySel, copyDone: copyDone, repro: repro, narrow: narrow, paused: paused, clip: clip };
+        }
+      }
+    </script>
+  </body>
+</html>

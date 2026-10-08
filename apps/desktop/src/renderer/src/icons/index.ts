@@ -1,5 +1,6 @@
 export { ArrowUpIcon } from "./ArrowUpIcon";
 export { AutomationsIcon } from "./AutomationsIcon";
+export { BookmarkIcon } from "./BookmarkIcon";
 export { BranchIcon } from "./BranchIcon";
 export { CelestialBlackHoleIcon } from "./celestial/CelestialBlackHoleIcon";
 export { CelestialIcon } from "./celestial/CelestialIcon";
@@ -72,6 +73,7 @@ export { ThreadIcon } from "./ThreadIcon";
 export { UnlinkedDotIcon } from "./UnlinkedDotIcon";
 export { UserIcon } from "./UserIcon";
 export { WorktreeIcon } from "./WorktreeIcon";
+export { WrapIcon } from "./WrapIcon";
 export { ZoomInIcon } from "./ZoomInIcon";
 export { ZoomOutIcon } from "./ZoomOutIcon";
 export { useBrandTheme } from "./brand-theme";
