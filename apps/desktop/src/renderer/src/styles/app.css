@@ -32965,7 +32965,7 @@ div.composer-error-row__toggle {
 
 .thread-family-pricing__warning {
   margin-top: 6px;
-  color: var(--status-warning);
+  color: var(--status-warning-text);
   font-size: 11px;
 }
 

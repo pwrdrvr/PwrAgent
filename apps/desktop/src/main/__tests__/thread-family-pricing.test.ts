@@ -56,7 +56,7 @@ describe("readThreadFamilyPricing", () => {
   const loadIndex = async () => ({ directories: [], threads });
 
   it("totals the thread and every sub-thread beneath it, largest first", async () => {
-    const readSummaries = vi.fn(async () => [
+    const readSummaries = vi.fn(async (_threads: Array<{ backend: string; threadId: string }>) => [
       summary("parent", 1_840_000),
       summary("fork-a", 920_000),
       summary("fork-a-1", 120_000),
@@ -73,7 +73,7 @@ describe("readThreadFamilyPricing", () => {
       now: () => 42,
     });
 
-    expect(readSummaries.mock.calls[0]?.[0].map((member) => member.threadId).sort())
+    expect(readSummaries.mock.calls[0]?.[0]?.map((member) => member.threadId).sort())
       .toEqual(["fork-a", "fork-a-1", "fork-b", "parent"]);
     expect(family).toEqual({
       readAt: 42,
