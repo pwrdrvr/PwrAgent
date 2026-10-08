@@ -255,12 +255,18 @@ function mcpToolParamLines(request: AppServerMcpElicitationRequestNotification):
     const raw = typeof record.value === "string" ? record.value : JSON.stringify(record.value) ?? "";
     const value = SECRET_PARAM_NAME.test(name ?? label) || /^bearer\s+/i.test(raw.trim())
       ? "[redacted]"
-      : redactCommandText(raw);
+      : redactCommandText(raw.replace(JSON_SECRET_MEMBER, "$1\"[redacted]\""));
     return [`${label}: ${value.length > MCP_PARAM_VALUE_LIMIT ? `${value.slice(0, MCP_PARAM_VALUE_LIMIT)}…` : value}`];
   });
 }
 
-const SECRET_PARAM_NAME = /api[-_]?key|token|secret|password|authorization/i;
+// Anchored at the end of the name, so `access_token` is withheld and
+// `max_tokens` is not.
+const SECRET_PARAM_NAME = /(?:api[-_]?key|token|secret|password|authorization)$/i;
+// The same names as JSON members inside an object-valued argument, which
+// redactCommandText's `key=value` patterns never match.
+const JSON_SECRET_MEMBER =
+  /("[^"]*?(?:api[-_]?key|token|secret|password|authorization)"\s*:\s*)(?:"(?:[^"\\]|\\.)*"|[^,}\]\s]+)/gi;
 const MCP_PARAM_VALUE_LIMIT = 300;
 
 function mcpElicitationCanAcceptWithoutFormInput(

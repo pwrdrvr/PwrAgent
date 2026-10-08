@@ -162,6 +162,8 @@ describe("buildApprovalIntent", () => {
               { name: "rollup", value: "{\"fn\":\"avg\",\"seconds\":60}" },
               { name: "api_key", value: "fixture-key" },
               { name: "header", value: "Bearer fixture-token" },
+              { name: "headers", value: "{\"Authorization\":\"Bearer nested-token\",\"Accept\":\"json\"}" },
+              { name: "max_tokens", value: "500" },
             ],
           },
         },
@@ -174,7 +176,10 @@ describe("buildApprovalIntent", () => {
       "rollup: {\"fn\":\"avg\",\"seconds\":60}",
       "api_key: [redacted]",
       "header: [redacted]",
+      "headers: {\"Authorization\":\"[redacted]\",\"Accept\":\"json\"}",
+      "max_tokens: 500",
     ].join("\n"));
+    expect(intent.body).not.toContain("nested-token");
     expect(intent.body).not.toContain("fixture-key");
     expect(intent.body).not.toContain("fixture-token");
   });
