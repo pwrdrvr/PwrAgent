@@ -38,6 +38,26 @@ for (const filePath of javascriptFiles) {
   }
 }
 
+// Every preload runs sandboxed, where `require` resolves only Electron's own
+// modules. When two preload entries share code, Rollup splits it into
+// `out/preload/chunks/`, and each entry's `require("./chunks/...")` throws at
+// load. The main window then has no desktop API and the app cannot start.
+const preloadOutputDirectory = path.resolve(desktopRoot, "out", "preload");
+const preloadFiles = (await readdir(preloadOutputDirectory, { withFileTypes: true }))
+  .filter((entry) => entry.isFile() && /\.(?:c|m)?js$/.test(entry.name))
+  .map((entry) => path.join(preloadOutputDirectory, entry.name));
+for (const filePath of preloadFiles) {
+  const contents = await readFile(filePath, "utf8");
+  for (const [, specifier] of contents.matchAll(/\brequire\(["']([^"']+)["']\)/g)) {
+    if (specifier !== "electron") {
+      violations.push({
+        file: path.relative(desktopRoot, filePath),
+        label: `sandboxed preload requires "${specifier}"; keep each preload a single file`,
+      });
+    }
+  }
+}
+
 if (violations.length > 0) {
   console.error("Electron main bundle verification failed:");
   for (const violation of violations) {
@@ -47,5 +67,5 @@ if (violations.length > 0) {
 }
 
 console.log(
-  `main bundle boundary: OK (${javascriptFiles.length} files, no external bundled-dependency imports)`,
+  `main bundle boundary: OK (${javascriptFiles.length} files, no external bundled-dependency imports; ${preloadFiles.length} single-file preloads)`,
 );
