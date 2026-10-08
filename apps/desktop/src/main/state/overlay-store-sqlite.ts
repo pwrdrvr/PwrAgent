@@ -7102,9 +7102,13 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     const providerServersEnabled = params.providerServersEnabled === false
       ? false
       : undefined;
+    // Only a change to the connection set revokes gateway conversation
+    // grants. Reordering it, or toggling the backend's own servers, leaves
+    // every gateway tool exactly as reachable as before.
+    const connectionsChanged = !sameMcpConnectionSet(current.mcpConnectionIds ?? [], connectionIds);
     const nextState: ThreadOverlayState = {
       ...current,
-      mcpSelectionRevision: randomUUID(),
+      ...(connectionsChanged ? { mcpSelectionRevision: randomUUID() } : {}),
       ...(connectionIds.length > 0
         ? { mcpConnectionIds: connectionIds }
         : { mcpConnectionIds: undefined }),
@@ -9383,6 +9387,12 @@ function threadToolAnalysisFromRow(
     ...(row.scanned_through ? { scannedThrough: row.scanned_through } : {}),
     ...(row.explanation ? { explanation: row.explanation } : {}),
   };
+}
+
+function sameMcpConnectionSet(left: readonly string[], right: readonly string[]): boolean {
+  const leftSet = new Set(left);
+  const rightSet = new Set(right);
+  return leftSet.size === rightSet.size && [...leftSet].every((id) => rightSet.has(id));
 }
 
 function readStringArrayJson(value: string): string[] {

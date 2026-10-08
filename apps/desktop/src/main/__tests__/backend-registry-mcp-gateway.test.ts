@@ -658,6 +658,24 @@ describe("backend MCP gateway dispatch", () => {
     expect(events).toHaveLength(2);
   });
 
+  it.each([
+    { change: "toggling the backend's own servers", connectionIds: ["one"], providerServersEnabled: false },
+    { change: "re-saving the same connections", connectionIds: ["one", " one "], providerServersEnabled: undefined },
+  ])("keeps conversation approval when $change", async ({ connectionIds, providerServersEnabled }) => {
+    const events: AgentEvent[] = [];
+    registry.onEvent(async (event) => {
+      if (event.notification.method !== "mcpServer/elicitation/request") return;
+      events.push(event);
+      await registry.submitServerRequest({ backend: "codex", threadId: "thread-1", turnId: "turn-1", requestId: String(event.notification.params.requestId), response: { action: "accept", content: {}, _meta: { persist: "session" } } });
+    });
+    expect((await internals.handleServerRequest("codex", request("call_mcp_tool", args))).success).toBe(true);
+    const before = (await store.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }))?.mcpSelectionRevision;
+    await registry.setThreadMcpConnections({ backend: "codex", threadId: "thread-1", connectionIds, providerServersEnabled });
+    expect((await store.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }))?.mcpSelectionRevision).toBe(before);
+    expect((await internals.handleServerRequest("codex", request("call_mcp_tool", args, "call-2"))).success).toBe(true);
+    expect(events).toHaveLength(1);
+  });
+
   it("expires conversation approval when PwrAgent closes and reopens the same profile", async () => {
     registry.onEvent(async (event) => {
       if (event.notification.method !== "mcpServer/elicitation/request") return;

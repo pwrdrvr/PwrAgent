@@ -23041,8 +23041,7 @@ export class DesktopBackendRegistry {
   async setThreadMcpConnections(
     request: SetThreadMcpConnectionsRequest,
   ): Promise<SetThreadMcpConnectionsResponse> {
-    this.mcpGatewayTools?.cancel(request.backend, request.threadId);
-    this.mcpGatewaySessionApprovals.delete(JSON.stringify([request.backend, request.threadId]));
+    const previousRevision = (await this.overlayStore.getThreadOverlayState(request))?.mcpSelectionRevision;
     // A backend that cannot suppress its own servers must never be left
     // holding an "off" it will ignore. The flag is sticky and its control is
     // hidden for those backends, so a value stored once — by an older build,
@@ -23056,6 +23055,13 @@ export class DesktopBackendRegistry {
         ? request.providerServersEnabled
         : true,
     });
+    // The store mints a revision only when the connection set changes. Only
+    // then do running gateway calls and conversation grants end; toggling
+    // the backend's own servers leaves every gateway tool reachable.
+    if (state.mcpSelectionRevision !== previousRevision) {
+      this.mcpGatewayTools?.cancel(request.backend, request.threadId);
+      this.mcpGatewaySessionApprovals.delete(JSON.stringify([request.backend, request.threadId]));
+    }
     const connectionIds = state.mcpConnectionIds ?? [];
     const providerServersEnabled = state.mcpProviderServersEnabled !== false;
     await this.emit({
