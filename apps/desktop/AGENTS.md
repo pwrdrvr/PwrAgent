@@ -461,8 +461,14 @@ which closes Electron automatically after assertions pass.
 
 ## Capturing README Screenshots
 
-The PNGs and animated GIF the top-level README references under
-`docs/assets/screenshots/` are produced by an inspect-style Playwright
+> The top-level README now uses WebP captures,
+> `docs/assets/screenshots/*.webp` (hero, Star Map, backends, review,
+> terminal), taken from the built app at 1440×900 on a Retina display with
+> invented showcase data. They are ordinary Git blobs, not LFS: GitHub's
+> README renderer cannot resolve LFS pointers. The spec below still exists
+> and still writes the older PNG and GIF captures.
+
+The PNGs and animated GIF under `docs/assets/screenshots/` are produced by an inspect-style Playwright
 spec that drives five known UI surfaces and shells out to Swift for
 native macOS window capture (with stoplights, drop shadow, and retina
 resolution — Playwright's `Page.screenshot()` only grabs the renderer

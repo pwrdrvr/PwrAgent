@@ -1,9 +1,8 @@
 # Contributing to PwrAgent
 
 Thanks for taking the time to improve PwrAgent. The project is MIT-licensed
-and currently in beta — actively developed, but designed to be
-non-destructive between releases. The config and state systems migrate
-forward without invalidating older installs (see
+and actively developed, and releases are designed to be non-destructive:
+the config and state systems migrate forward without invalidating older installs (see
 [docs/config-file-evolution.md](docs/config-file-evolution.md)); keep
 that contract in mind when proposing changes to either. This document
 covers the development setup, repository conventions, testing workflow,
@@ -18,6 +17,53 @@ first. For the user-facing pitch, see [README.md](README.md).
 1. Install Node.js from `.nvmrc`.
 2. Run `pnpm install`.
 3. Run `pnpm dev` for the desktop app.
+
+```bash
+git clone https://github.com/pwrdrvr/PwrAgent.git
+cd PwrAgent
+pnpm install
+pnpm dev:no-messaging   # full UI, no live messaging adapters
+# or
+pnpm dev                # full UI + live messaging
+```
+
+A running app needs at least one agent CLI: Codex (the default backend), or an
+ACP agent such as Gemini CLI, Kimi Code, or Qwen Code. Release builds embed a
+downstream Grok Build; see [docs/bundled-grok-acp.md](docs/bundled-grok-acp.md)
+and [docs/acp-registry-backends.md](docs/acp-registry-backends.md).
+
+### Linux: Electron's sandbox helper
+
+On Linux, install and desktop dev/preview warn if Electron's setuid sandbox
+helper lacks root ownership and mode `4755`. If launch reports the SUID sandbox
+error, run these commands from the repository root:
+
+```bash
+pnpm fix:linux-sandbox
+pnpm dev
+```
+
+The fixer resolves this checkout's installed Electron helper, runs `sudo chown
+root:root` followed by `sudo chmod 4755`, and verifies the result. It is safe to
+repeat; reinstalling dependencies or replacing Electron may require another
+repair. Run the app as your normal user. Install and launch never request sudo
+automatically or disable sandboxing. Both sandbox commands safely do nothing
+on non-Linux platforms.
+
+`pnpm check:linux-sandbox` repeats the read-only advisory check. User namespaces
+may permit launch without the setuid helper; `nosuid` mounts or other security
+policy can still prevent startup even after its permissions are repaired. This
+is a development-checkout fix; it does not touch an installed package.
+
+### Worktrees
+
+Run a separate `pnpm install` in each worktree. Sharing root `node_modules` does
+not create package-local dependency links, and sharing package `node_modules`
+can bind workspace imports to the donor checkout's source. Installs and native
+staging would also mutate shared dependencies. A symlink to a repaired helper
+inherits its permissions, but sharing dependencies is not a complete setup fix.
+
+### Checks
 
 Useful checks (all run from the repo root):
 
@@ -39,10 +85,37 @@ makes Vitest run the full workspace suite.
 - `packages/shared` — internal contracts and types.
 - `packages/messaging/interface` — generic messaging types and helpers.
 - `packages/messaging/providers/*` — per-platform messaging adapters
-  (Telegram, Discord, Mattermost, Slack).
+  (Telegram, Discord, Mattermost, Slack, Feishu / Lark, LINE).
 
 See [ARCHITECTURE.md](ARCHITECTURE.md#workspace-map) for a table of
 what's in each path and the layered dependency story.
+
+## How it's built
+
+| Layer | Stack | Where it lives |
+|---|---|---|
+| Desktop shell | Electron + TypeScript + React + TipTap composer | `apps/desktop/` |
+| Codex protocol | Codex App Server protocol contracts | `@pwrdrvr/codex-app-server-protocol` |
+| ACP integration | Installed coding-agent CLIs, including Grok Build | `apps/desktop/src/main/acp/` |
+| Messaging interface | Capability-profile contract; one shape, six providers | `packages/messaging/interface/` |
+| Messaging providers | Telegram, Discord, Slack, Mattermost, Feishu / Lark, LINE | `packages/messaging/providers/*/` |
+| Shared types | Cross-package contracts and helpers | `packages/shared/` |
+| Local persistence | sqlite WAL via `better-sqlite3`, forward-compatible config TOML | `apps/desktop/src/main/state/` |
+
+The dependency graph is **strictly layered and enforced** by
+`dependency-cruiser`: leaf (`shared`) → mid-tier (`messaging/*`) → desktop.
+The renderer can only import `@pwragent/shared`; other package access crosses
+the IPC bridge. CI fails any boundary violation — see
+[Dependency Boundaries](#dependency-boundaries) below.
+
+PwrAgent grew out of
+[openclaw-codex-app-server](https://github.com/pwrdrvr/openclaw-codex-app-server),
+a project that aimed to be the best Codex-into-Telegram-and-Discord
+integration. PwrAgent supersedes it: a desktop-first, thread-centric
+coding-agent shell with first-class messenger integration, and a generic
+messaging protocol that lets one workflow layer drive six providers from the
+same code path. That protocol is stable today and is a candidate to submit
+upstream to OpenClaw.
 
 ## Pull Requests
 
@@ -79,8 +152,8 @@ violation.
 
 ## Messaging Integrations
 
-Telegram, Discord, Mattermost, and Slack adapters can be enabled from the
-desktop main process with PwrAgent-prefixed environment variables and
+Telegram, Discord, Mattermost, Slack, Feishu / Lark, and LINE adapters can be
+enabled from the desktop main process with PwrAgent-prefixed environment variables and
 allowlisted platform user IDs. Operator setup, command surface, security
 notes, and tunneling guidance for HTTP-callback providers live in
 [docs/messaging-platform-integration.md](docs/messaging-platform-integration.md).
@@ -302,6 +375,47 @@ Before making a backwards-incompatible TOML config shape change, read
 [docs/config-file-evolution.md](docs/config-file-evolution.md) and
 follow its read-fallback, lazy-conversion, legacy-comment, and
 dual-write rules.
+
+## Releases
+
+Releases are cut by pushing a `vX.Y.Z` tag that matches
+`apps/desktop/package.json` and a `CHANGELOG.md` section; `pnpm release:check`
+verifies the metadata. The tag suffix picks the update slot: none is Stable
+Latest, `-prerelease.N` Stable Prerelease, `-beta.N` Beta Latest, `-alpha.N`
+Beta Prerelease.
+
+The pipeline — Apple signing and notarization, Azure Artifact Signing for
+Windows, update metadata, Linux DEB/RPM/pacman/tar.gz packaging, and the
+stable-name download aliases the README links to — is documented in
+[docs/desktop-release-runbook.md](docs/desktop-release-runbook.md). CI labels
+and preview builds are in
+[.github/workflows/README.md](.github/workflows/README.md); Homebrew and Winget
+publication are in
+[docs/package-manager-distribution.md](docs/package-manager-distribution.md).
+
+The README's download chips come from
+`apps/desktop/scripts/generate-readme-chips.swift` (run from `apps/desktop`);
+edit its chip list rather than the PNGs in `docs/assets/buttons/`. README
+screenshots live in `docs/assets/screenshots/`; see "Capturing README
+Screenshots" in [apps/desktop/AGENTS.md](apps/desktop/AGENTS.md).
+
+## Further Reading
+
+| Doc | What it covers |
+|---|---|
+| [docs.pwragent.ai](https://docs.pwragent.ai) | Operator reference — per-platform setup, the streaming-responses tradeoff, the webhook security note, settings reference. |
+| [pwragent.ai](https://pwragent.ai) | Product site. |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Process model, storage layers, messaging layer summary, dependency boundaries, workspace map. |
+| [AGENTS.md](AGENTS.md) | Load-bearing architecture, runtime, testing, and release guidance. |
+| [SECURITY.md](SECURITY.md) | How to report vulnerabilities. |
+| [docs/messaging-architecture.md](docs/messaging-architecture.md) | Layered messaging architecture, capability profiles, callback delivery models. |
+| [docs/messaging-adapter-contract.md](docs/messaging-adapter-contract.md) | Formal per-adapter contract for the messaging interface. |
+| [docs/messaging-adding-a-provider.md](docs/messaging-adding-a-provider.md) | Hands-on walkthrough when adding a seventh provider. |
+| [docs/state-layout.md](docs/state-layout.md) | On-disk state layout, environment variables, profiles. |
+| [docs/config-file-evolution.md](docs/config-file-evolution.md) | Forward-compatible config migration rules. |
+| [docs/desktop-release-runbook.md](docs/desktop-release-runbook.md) | Signing, notarization, auto-update, release assets, and promotion. |
+| [docs/third-party-license-notices.md](docs/third-party-license-notices.md) | Dependency notices and the Electron / Chromium runtime notice policy. |
+| [CHANGELOG.md](CHANGELOG.md) | User-visible changes in each release. |
 
 ## Conduct
 

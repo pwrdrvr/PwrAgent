@@ -95,22 +95,18 @@ struct Chip {
   let subtitle: String
 }
 
-// Three download chips, not four. PwrAgent ships a fourth platform, and at the
-// 250px display width that keeps a download label readable, four chips need
-// 1000px against GitHub's ~836px content column — they would wrap. Debian and
-// Ubuntu are a link chip instead, and the reason is editorial before it is
-// geometric: Linux ships TWO architectures (PwrAgent-linux-x64.deb and
-// PwrAgent-linux-arm64.deb) and a `.deb` wants install instructions, neither
-// of which one chip can say. docs.pwragent.ai/linux/ says both.
+// Five download chips on two rows: three for macOS and Windows, then two for
+// Linux. At the 250px display width a row holds three chips in GitHub's ~836px
+// content column, so Linux takes its own row rather than wrapping a fourth.
 //
 // Universal is the primary rather than Apple Silicon, which is where PwrGit
-// puts it. No release carries an arm64 macOS DMG yet — #2074 built the stage,
-// and v1.0.6 was cut from the 1.0 line before it — so the loudest chip on the
-// page would point at a page with no matching asset. Universal runs natively
-// on Apple Silicon, so it is the correct answer for every Mac today.
-// When an arm64 DMG ships, one commit swaps these two styles, moves Apple
-// Silicon to the first slot, repoints its href, and drops the README's
-// hedge sentence.
+// puts it. PwrAgent supports macOS 12, which still runs on Intel, and Safari
+// does not say which CPU a Mac has, so the loudest chip has to be the build
+// that runs on every supported Mac. Apple Silicon links straight to
+// PwrAgent-arm64.dmg, the smaller download.
+//
+// link-linux.png is no longer in the README; the README Header artboard in
+// docs/design still shows it, so it stays in the inventory.
 let chips: [Chip] = [
   Chip(
     file: "download-mac-universal.png", family: .download, style: .primary,
@@ -123,6 +119,16 @@ let chips: [Chip] = [
   Chip(
     file: "download-windows.png", family: .download, style: .secondary,
     title: "Download for Windows", subtitle: "x64 installer"
+  ),
+  // Linux chips link to the .deb alias. The README lists RPM, pacman and
+  // tar.gz directly beneath them, so the subtitle names the format it hands out.
+  Chip(
+    file: "download-linux-x64.png", family: .download, style: .secondary,
+    title: "Download for Linux", subtitle: "x64 · .deb for Debian, Ubuntu"
+  ),
+  Chip(
+    file: "download-linux-arm64.png", family: .download, style: .secondary,
+    title: "Download for Linux", subtitle: "arm64 · .deb for Debian, Ubuntu"
   ),
   Chip(file: "link-linux.png", family: .link, style: .secondary, title: "Debian / Ubuntu", subtitle: ""),
   Chip(file: "link-docs.png", family: .link, style: .secondary, title: "Documentation", subtitle: ""),

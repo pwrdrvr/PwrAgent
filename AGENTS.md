@@ -114,6 +114,7 @@
 - Close the application to end the command.
 - For README screenshots, run `pnpm --filter @pwragent/desktop screenshot:readme`.
 - The README screenshot command writes files under `docs/assets/screenshots/`.
+- The README itself now uses WebP captures, `docs/assets/screenshots/*.webp`, taken from the built app at 1440×900 on a Retina display with invented showcase data.
 - Read "Capturing README Screenshots" in [apps/desktop/AGENTS.md](apps/desktop/AGENTS.md) for the complete procedure.
 - That procedure identifies the specification, fixtures, state helpers, and native capture tools.
 - The terminal or IDE that runs the screenshot test needs macOS Screen Recording permission.
