@@ -3259,6 +3259,12 @@ function DesktopAppShell(props: {
   // draft's composer it runs the discard itself, exactly as Cancel does.
   const [launchpadCancelRequest, setLaunchpadCancelRequest] =
     useState<{ directoryKey: string; id: number }>();
+  // A mouse click on a sidebar row hands focus to that thread's composer.
+  // Every other selection replaces the request with none, so a request that
+  // never landed cannot fire later for a thread opened some other way.
+  const [composerFocusRequest, setComposerFocusRequest] =
+    useState<{ threadKey: string; id: number }>();
+  const composerFocusRequestIdRef = useRef(0);
   const handleDiscardSubthreadDraft = useEventCallback((draft: SubthreadLaunchpadDraft) => {
     const composerOwnsDraft =
       navigation.selectedItemKey === draft.selectionKey
@@ -3568,6 +3574,7 @@ function DesktopAppShell(props: {
     onLiveTranscriptEntry: session.upsertLiveTranscriptEntry,
     onCancelLaunchpad: handleCancelLaunchpad,
     launchpadCancelRequest,
+    composerFocusRequest,
     onDetachLaunchpadParent: handleDetachLaunchpadParent,
     onSelectLaunchpadParent: handleSelectLaunchpadParent,
     // The composer's 5th argument is `extraDirectoryPaths` (draft
@@ -3848,8 +3855,14 @@ function DesktopAppShell(props: {
           onOpenUsageActivity={desktopApi?.openUsageActivity
             ? () => void desktopApi.openUsageActivity?.()
             : undefined}
-          onSelectThread={(thread) => {
+          onSelectThread={(thread, options) => {
             setMainView("thread");
+            setComposerFocusRequest(options?.focusComposer
+              ? {
+                threadKey: threadSummaryIdentityKey(thread),
+                id: ++composerFocusRequestIdRef.current,
+              }
+              : undefined);
             navigation.selectThread(thread);
           }}
           threadJumpOpen={threadJump.open}

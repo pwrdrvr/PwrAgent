@@ -2155,6 +2155,68 @@ describe("Composer", () => {
     expect(onCancelLaunchpad).toHaveBeenCalledTimes(1);
   });
 
+  it("focuses the reply input for a focus request once it shows that thread", async () => {
+    const thread = (id: string) => ({
+      id, source: "codex" as const, title: id, titleSource: "explicit" as const,
+      linkedDirectories: [], inbox: { inInbox: false },
+    });
+    const props = {
+      backends: [backendSummary("codex")],
+      draftStore: createComposerDraftStore(),
+      skills: [],
+    };
+    const request = { threadKey: "codex:thread-b", id: 1 };
+    const view = render(
+      <Composer {...props} thread={thread("thread-a")} focusRequest={request} />,
+    );
+    const reply = screen.getByLabelText("Reply");
+    // Still showing the previous thread: the request waits.
+    expect(reply).not.toHaveFocus();
+
+    view.rerender(
+      <Composer {...props} thread={thread("thread-b")} disabled focusRequest={request} />,
+    );
+    expect(screen.getByLabelText("Reply")).not.toHaveFocus();
+
+    view.rerender(
+      <Composer {...props} thread={thread("thread-b")} focusRequest={request} />,
+    );
+    await waitFor(() => expect(screen.getByLabelText("Reply")).toHaveFocus());
+
+    // Each id focuses once.
+    act(() => (document.activeElement as HTMLElement).blur());
+    view.rerender(
+      <Composer {...props} thread={{ ...thread("thread-b"), title: "renamed" }} focusRequest={request} />,
+    );
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+    expect(screen.getByLabelText("Reply")).not.toHaveFocus();
+  });
+
+  it("leaves focus where the operator moved it before the thread loaded", async () => {
+    const thread = { id: "thread-b", source: "codex" as const, title: "B", titleSource: "explicit" as const,
+      linkedDirectories: [], inbox: { inInbox: false } };
+    const props = {
+      backends: [backendSummary("codex")],
+      draftStore: createComposerDraftStore(),
+      skills: [],
+    };
+    const elsewhere = document.createElement("input");
+    document.body.append(elsewhere);
+    try {
+      const view = render(<Composer {...props} thread={thread} disabled focusRequest={{ threadKey: "codex:thread-b", id: 1 }} />);
+      elsewhere.focus();
+      view.rerender(<Composer {...props} thread={thread} focusRequest={{ threadKey: "codex:thread-b", id: 1 }} />);
+      await act(async () => {
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+      });
+      expect(elsewhere).toHaveFocus();
+    } finally {
+      elsewhere.remove();
+    }
+  });
+
   it("renders unavailable reason when provided", async () => {
     const unavailableReason = "Codex profile not logged in. Please check your settings.";
     render(

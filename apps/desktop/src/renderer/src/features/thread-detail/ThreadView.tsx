@@ -967,6 +967,8 @@ export type ThreadViewProps = {
   onCancelLaunchpad?: (directoryKey: string) => void;
   /** See `Composer`'s prop of the same name. */
   launchpadCancelRequest?: { directoryKey: string; id: number };
+  /** Focus the composer once it shows this thread (a mouse click on its sidebar row). */
+  composerFocusRequest?: { threadKey: string; id: number };
   onDetachLaunchpadParent?: (directoryKey: string) => void;
   onSelectLaunchpadParent?: (launchpad: NavigationLaunchpadDraft) => void;
   onPendingStatusChange?: (status?: string) => void;
@@ -3758,6 +3760,7 @@ export function ThreadView(props: ThreadViewProps) {
           replySubmission: asyncQuestionReply,
           onReplySubmissionSettled: handleReplySubmissionSettled,
           reviewRequest: todoReviewRequest,
+          focusRequest: props.composerFocusRequest,
           onReviewStarted: handleReviewStarted,
           workspaceActionsBlocked: props.workspaceActionsBlocked,
           contextWindow: props.contextWindow,

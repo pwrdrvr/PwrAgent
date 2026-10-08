@@ -4801,6 +4801,56 @@ describe("Sidebar", () => {
     expect(onArchiveThread).toHaveBeenCalledWith(sharedThread);
   });
 
+  it("asks for composer focus only after a real mouse press on the row", () => {
+    const onSelectThread = vi.fn();
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        loading={false}
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={onSelectThread}
+      />,
+    );
+    const row = screen.getByRole("button", { name: sharedThread.title });
+
+    fireEvent.pointerDown(row, { pointerType: "mouse" });
+    fireEvent.click(row, { detail: 1 });
+    expect(onSelectThread).toHaveBeenLastCalledWith(sharedThread, {
+      focusComposer: true,
+    });
+
+    // Enter or Space on the focused row: a click with no pointerdown.
+    fireEvent.click(row, { detail: 0 });
+    expect(onSelectThread).toHaveBeenLastCalledWith(sharedThread, {
+      focusComposer: false,
+    });
+
+    // Assistive technology that synthesizes a mouse click sends no
+    // pointerdown either, even when it reports a click count.
+    fireEvent.click(row, { detail: 1 });
+    expect(onSelectThread).toHaveBeenLastCalledWith(sharedThread, {
+      focusComposer: false,
+    });
+
+    fireEvent.pointerDown(row, { pointerType: "pen" });
+    fireEvent.click(row, { detail: 1 });
+    expect(onSelectThread).toHaveBeenLastCalledWith(sharedThread, {
+      focusComposer: false,
+    });
+
+    fireEvent.pointerDown(row, { pointerType: "touch" });
+    fireEvent.click(row, { detail: 1 });
+    expect(onSelectThread).toHaveBeenLastCalledWith(sharedThread, {
+      focusComposer: false,
+    });
+  });
+
   it("supports Cmd, Shift, and Cmd+Shift thread selections for batch actions", () => {
     const copyText = vi.fn(async () => undefined);
     const onArchiveThread = vi.fn(async () => undefined);
@@ -4887,7 +4937,9 @@ describe("Sidebar", () => {
     expect(secondButton).toHaveAttribute("aria-pressed", "true");
     expect(thirdButton).toHaveAttribute("aria-pressed", "true");
     expect(onSelectThread).toHaveBeenCalledTimes(1);
-    expect(onSelectThread).toHaveBeenCalledWith(firstThread);
+    expect(onSelectThread).toHaveBeenCalledWith(firstThread, {
+      focusComposer: false,
+    });
 
     fireEvent.contextMenu(secondButton, { clientX: 48, clientY: 64 });
     const menu = screen.getByRole("menu", {

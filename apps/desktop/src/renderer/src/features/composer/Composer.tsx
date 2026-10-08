@@ -118,7 +118,10 @@ import type { DesktopApi } from "../../lib/desktop-api";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
 import { resolveReviewRunMode } from "../../lib/review-run-mode";
 import { readRendererFederationTarget } from "../../lib/federation-window";
-import { agentEventMatchesThread } from "../../lib/federated-thread-events";
+import {
+  agentEventMatchesThread,
+  threadSummaryIdentityKey,
+} from "../../lib/federated-thread-events";
 import {
   acpRuntimeModeRequiresFullAccess,
   formatExecutionModeLabel,
@@ -324,6 +327,12 @@ export type ComposerProps = {
   };
   /** A review this composer submitted was accepted by the backend. */
   onReviewStarted?: () => void;
+  /**
+   * Focus the input once this composer shows the named thread and can take
+   * input. Sent for a mouse click on the thread's sidebar row only; each id
+   * focuses once.
+   */
+  focusRequest?: { threadKey: string; id: number };
   launchpad?: NavigationLaunchpadDraft;
   /** Which machine the launchpad starts its thread on, and how to move it. */
   launchpadMachine?: LaunchpadMachineControl;
@@ -4003,6 +4012,29 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     // submitReplyText is recreated each render; the id guard sends once.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.replySubmission, props.disabled, props.thread?.id, props.thread?.source]);
+  // A mouse click on a sidebar row. The request can arrive before this
+  // composer shows the clicked thread, or while it is still disabled, so it
+  // waits for both. It yields when focus has moved on from the row, so a
+  // slow load never pulls the operator out of a field they went to since.
+  const handledFocusRequestIdRef = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    const request = props.focusRequest;
+    if (
+      !request
+      || handledFocusRequestIdRef.current === request.id
+      || !props.thread
+      || threadSummaryIdentityKey(props.thread) !== request.threadKey
+      || props.disabled
+    ) {
+      return;
+    }
+    handledFocusRequestIdRef.current = request.id;
+    const active = document.activeElement;
+    if (active && active !== document.body && !active.closest(".thread-row-shell")) {
+      return;
+    }
+    inputRef.current?.focus();
+  }, [props.focusRequest, props.thread, props.disabled]);
   const appliedReviewRequestId = useRef<number | undefined>(undefined);
   useEffect(() => {
     const request = props.reviewRequest;
