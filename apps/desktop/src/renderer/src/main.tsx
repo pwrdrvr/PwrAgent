@@ -10,6 +10,7 @@ import type {
 import { App } from "./App";
 import { RendererErrorBoundary } from "./features/diagnostics/RendererErrorBoundary";
 import { DataTooltipLayer } from "./lib/DataTooltipLayer";
+import { ImageGalleryLayer } from "./features/thread-detail/ImageGalleryLayer";
 import { RendererRecoveryStateProvider } from "./lib/RendererRecoveryState";
 import { applyAppearanceAttributes, resolveTheme } from "./lib/appearance";
 import { installDevPerformancePruning } from "./lib/dev-performance-pruning";
@@ -265,6 +266,10 @@ mountRendererRoot(
           the recovery fallback, and the boundary's only child stays the
           Suspense the renderer-recovery E2E injects its fault into. */}
       <DataTooltipLayer />
+      {/* The lightbox a queued message's thumbnails open. Window-level for
+          the same reason: it must outlive the row that opened it, which
+          leaves the moment the message is sent. */}
+      <ImageGalleryLayer />
     </RendererRecoveryStateProvider>
   </React.StrictMode>,
   (container) => ReactDOM.createRoot(container),

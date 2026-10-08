@@ -111,6 +111,7 @@ import { AppIcon } from "../../components/AppIcon";
 import { InstanceChip, InstanceGlyph } from "../federation/InstanceGlyph";
 import { filterAtReferenceCandidates } from "../../lib/instance-references";
 import { ImageLightbox } from "../thread-detail/ImageLightbox";
+import { openImageGallery } from "../thread-detail/ImageGalleryLayer";
 import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
 import { formatBackendLabel } from "../../lib/backend-label";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -1464,50 +1465,71 @@ function formatDraftPreview(draft: QueuedTurnDraft): string {
   }`;
 }
 
+/**
+ * A queued message's images as thumbnail buttons: the first three, then a +N
+ * for the rest. Each opens the window's image lightbox on that image, paging
+ * through all of them. The lightbox gets its own copy of the list, so the
+ * message can be sent while it is open.
+ */
 function QueuedImageAttachments(props: {
   attachments: ComposerImageAttachment[];
-  /** One thumbnail and a count, for a row that must stay one line tall. */
-  chip?: boolean;
+  /** 30px thumbnails, for the pending steer card. Otherwise 22px, for a row
+   *  that must stay one line tall. */
+  large?: boolean;
+  /** Focus target on close, once the row that opened the lightbox is gone. */
+  onFallbackFocus?: () => void;
 }): ReactNode {
   if (props.attachments.length === 0) {
     return null;
   }
 
-  if (props.chip) {
-    const first = props.attachments[0]!;
-    return (
-      <span
-        className="composer__queued-image-chip"
-        aria-label={`Queued image attachments: ${props.attachments.length}`}
-      >
-        <img src={first.url} alt={formatPastedImageAlt(first, 0)} />
-        {props.attachments.length > 1 ? props.attachments.length : null}
-      </span>
-    );
-  }
-
+  const total = props.attachments.length;
   const visibleAttachments = props.attachments.slice(0, 3);
-  const overflowCount = props.attachments.length - visibleAttachments.length;
+  const overflowCount = total - visibleAttachments.length;
+  const open = (index: number) => openImageGallery({
+    items: props.attachments.map((attachment, attachmentIndex) => ({
+      alt: formatPastedImageAlt(attachment, attachmentIndex),
+      dialogLabel: "Queued image",
+      src: attachment.url,
+    })),
+    index,
+    ...(props.onFallbackFocus ? { onFallbackFocus: props.onFallbackFocus } : {}),
+  });
+  const openLabel = (index: number) => `Open image ${index + 1} of ${total}`;
 
   return (
-    <div
-      className="composer__queued-images"
-      aria-label={`Queued image attachments: ${props.attachments.length}`}
+    <span
+      className={[
+        "composer__queued-thumbs",
+        props.large ? "composer__queued-thumbs--large" : "",
+      ].filter(Boolean).join(" ")}
+      aria-label={`Queued image attachments: ${total}`}
+      role="group"
     >
       {visibleAttachments.map((attachment, index) => (
-        <img
-          className="composer__queued-image"
+        <button
+          aria-label={openLabel(index)}
+          className="composer__queued-thumb tooltip-target"
+          data-tooltip={openLabel(index)}
           key={attachment.id}
-          src={attachment.url}
-          alt={formatPastedImageAlt(attachment, index)}
-        />
+          type="button"
+          onClick={() => open(index)}
+        >
+          <img src={attachment.url} alt="" />
+        </button>
       ))}
       {overflowCount > 0 ? (
-        <span className="composer__queued-image-count">
+        <button
+          aria-label={openLabel(3)}
+          className="composer__queued-thumb composer__queued-thumb--count tooltip-target"
+          data-tooltip={openLabel(3)}
+          type="button"
+          onClick={() => open(3)}
+        >
           +{overflowCount}
-        </span>
+        </button>
       ) : null}
-    </div>
+    </span>
   );
 }
 
@@ -2909,6 +2931,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const recentFileAuthorityKeyRef = useRef(filesystemAuthorityKey);
   recentFileAuthorityKeyRef.current = filesystemAuthorityKey;
   const inputRef = useRef<ComposerInputHandle>(null);
+  // A queued thumbnail's lightbox can close after its row has gone (the
+  // message was sent); focus then comes back to the input.
+  const focusComposerInput = (): void => inputRef.current?.focus();
   const inputWrapRef = useRef<HTMLDivElement>(null);
   const autocompleteListRef = useRef<HTMLDivElement>(null);
   const activeTurnIdRef = useRef<string | undefined>(props.activeTurnId);
@@ -11607,7 +11632,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               {formatDraftPreview(pendingSteer)}
             </span>
           </div>
-          <QueuedImageAttachments attachments={pendingSteer.imageAttachments} />
+          <QueuedImageAttachments
+            attachments={pendingSteer.imageAttachments}
+            large
+            onFallbackFocus={focusComposerInput}
+          />
           <div className="composer__queued-actions">
             {pendingSteer.status === "pending" ? (
               <>
@@ -11967,6 +11996,13 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               <span className="composer__queued-label" role="status">
                 {queuedLabel}
               </span>
+              {/* Ahead of the title, not after it: the row's actions cover the
+                  end of the line on hover, and stay over it on scheduled,
+                  held and failed rows. Only the title truncates under them. */}
+              <QueuedImageAttachments
+                attachments={queued.imageAttachments}
+                onFallbackFocus={focusComposerInput}
+              />
               <span
                 className={[
                   "composer__queued-text",
@@ -11975,7 +12011,6 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               >
                 {queued.title ?? formatDraftPreview(queued)}
               </span>
-              <QueuedImageAttachments attachments={queued.imageAttachments} chip />
             </QueuedMessageInspector>
           </div>
         );

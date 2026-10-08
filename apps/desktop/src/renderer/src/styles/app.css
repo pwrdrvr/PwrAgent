@@ -35492,6 +35492,18 @@ button.pricing-token-miser__folded:focus-visible {
   color: var(--status-error);
 }
 
+/* A queued row's tint is translucent (the soft tokens carry alpha), and the
+   actions' fade takes the row's color to hide the end of the title. So both
+   paint the tint over the opaque elevated panel: on the tint alone a
+   scheduled row's Send now sat on a 68%-opaque fade with the title showing
+   through it. */
+.composer__queued--message,
+.composer__queued--message.composer__queued--scheduled {
+  background:
+    linear-gradient(var(--queued-row-bg), var(--queued-row-bg)),
+    var(--bg-panel-elevated);
+}
+
 .composer__queued-copy {
   display: flex;
   min-width: 0;
@@ -35528,33 +35540,76 @@ button.pricing-token-miser__folded:focus-visible {
   white-space: nowrap;
 }
 
-.composer__queued-images {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.composer__queued-image,
-.composer__queued-image-count {
-  width: 30px;
-  height: 30px;
+/* A queued message's images: up to three thumbnail buttons and a +N, each
+   opening the lightbox. In a one-line row they lead the title, so the actions
+   that cover the line's end never cover them. Positioned above the chevron's
+   line-wide hit area (`.composer__queued-disclosure::after`), which would
+   otherwise take their clicks. */
+.composer__queued-thumbs {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
   flex: 0 0 auto;
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  background: var(--bg-panel-hover);
+  align-items: center;
+  gap: 3px;
 }
 
-.composer__queued-image {
+.composer__queued-thumb {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  min-width: 22px;
+  height: 22px;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: 5px;
+  background: var(--bg-panel-hover);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 10.5px;
+  font-weight: 700;
+  cursor: zoom-in;
+}
+
+.composer__queued-thumb img {
+  width: 100%;
+  height: 100%;
   object-fit: cover;
 }
 
-.composer__queued-image-count {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-secondary);
+.composer__queued-thumb--count {
+  width: auto;
+  padding: 0 4px;
+}
+
+.composer__queued-thumb:hover {
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+
+.composer__queued-thumb:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+/* The pending steer card is two lines tall, so its thumbnails can be. */
+.composer__queued-thumbs--large {
+  gap: 4px;
+}
+
+.composer__queued-thumbs--large .composer__queued-thumb {
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  border-radius: 6px;
   font-size: 11px;
-  font-weight: 700;
+}
+
+.composer__queued-thumbs--large .composer__queued-thumb--count {
+  width: auto;
 }
 
 .composer__queued-actions {
@@ -35725,7 +35780,9 @@ button.composer__subthread-source-parent:hover {
   height: 30px;
   padding: 0 6px 0 36px;
   border-radius: 0 8px 8px 0;
-  background: linear-gradient(to right, transparent, var(--queued-row-bg) 30px);
+  background:
+    linear-gradient(to right, transparent, var(--queued-row-bg) 30px),
+    linear-gradient(to right, transparent, var(--bg-panel-elevated) 30px);
   opacity: 0;
   transition: opacity 120ms ease;
 }
@@ -35775,26 +35832,6 @@ button.composer__subthread-source-parent:hover {
 .composer__queued-icon-action:disabled {
   cursor: default;
   opacity: 0.55;
-}
-
-.composer__queued-image-chip {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 4px;
-  height: 20px;
-  padding: 0 6px 0 2px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 5px;
-  color: var(--text-muted);
-  font-size: 11px;
-}
-
-.composer__queued-image-chip img {
-  width: 16px;
-  height: 16px;
-  border-radius: 3px;
-  object-fit: cover;
 }
 
 /* The Star Map card's row: a size down to match the compact composer below

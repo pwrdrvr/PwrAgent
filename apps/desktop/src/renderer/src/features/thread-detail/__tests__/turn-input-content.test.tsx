@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { ThreadLinkProvider } from "../../../lib/thread-links";
 import { TurnInputContent } from "../TurnInputContent";
+import { ImageGalleryLayer } from "../ImageGalleryLayer";
 import { TranscriptMessage } from "../TranscriptMessage";
 
 const sender = "019f5d79-a595-73f2-84d9-a0976762c303";
@@ -48,11 +49,14 @@ describe("correspondence navigation", () => {
 
 describe("queued message images", () => {
   it("pages between the message's images in one lightbox", () => {
-    render(<TurnInputContent input={[
-      { type: "text", text: "Two screenshots" },
-      { type: "image", url: "data:image/png;base64,QQ==", name: "first.png" },
-      { type: "image", url: "data:image/png;base64,Qg==", name: "second.png" },
-    ]} />);
+    render(<>
+      <TurnInputContent input={[
+        { type: "text", text: "Two screenshots" },
+        { type: "image", url: "data:image/png;base64,QQ==", name: "first.png" },
+        { type: "image", url: "data:image/png;base64,Qg==", name: "second.png" },
+      ]} />
+      <ImageGalleryLayer />
+    </>);
 
     fireEvent.click(screen.getByRole("button", { name: /Expand transcript image 3/ }));
     const dialog = screen.getByRole("dialog", { name: "Expanded image" });
@@ -62,5 +66,28 @@ describe("queued message images", () => {
 
     fireEvent.keyDown(window, { key: "ArrowLeft" });
     expect(within(dialog).getByText("Image 1 of 2")).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("keeps the lightbox open and paging after the message leaves", () => {
+    const view = render(<>
+      <TurnInputContent input={[
+        { type: "image", url: "data:image/png;base64,QQ==", name: "first.png" },
+        { type: "image", url: "data:image/png;base64,Qg==", name: "second.png" },
+      ]} />
+      <ImageGalleryLayer />
+    </>);
+
+    fireEvent.click(screen.getByRole("button", { name: /Expand transcript image 1/ }));
+    // The message is sent: the view that opened the lightbox unmounts.
+    view.rerender(<ImageGalleryLayer />);
+
+    const dialog = screen.getByRole("dialog", { name: "Expanded image" });
+    expect(within(dialog).getByText("Image 1 of 2")).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    expect(within(dialog).getByText("Image 2 of 2")).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 });

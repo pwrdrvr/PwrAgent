@@ -1,4 +1,3 @@
-import { useState } from "react";
 import type {
   AppServerThreadImagePart,
   AppServerThreadMessageOrigin,
@@ -9,7 +8,7 @@ import { useThreadLinks } from "../../lib/thread-links";
 import { ThreadChip } from "./ThreadChip";
 import { ThreadMarkdown } from "./ThreadMarkdown";
 import { TranscriptImageTile } from "./TranscriptMessage";
-import { ImageLightbox } from "./ImageLightbox";
+import { openImageGallery } from "./ImageGalleryLayer";
 
 /** Rich input inspection uses the same Markdown, image and navigation primitives as history. */
 export function TurnInputContent(props: {
@@ -19,13 +18,17 @@ export function TurnInputContent(props: {
   desktopApi?: DesktopApi;
 }) {
   // One gallery over every image the message shows, in the order it shows
-  // them, as a sent message's images page in the transcript.
+  // them, as a sent message's images page in the transcript. The window's
+  // gallery holds its own copy, so sending the message (which removes this
+  // view) leaves an open lightbox where it is.
   const images: AppServerThreadImagePart[] = props.imageParts
     ?? props.input.flatMap((item) => item.type === "image"
       ? [{ type: "image" as const, url: item.url, alt: item.name ?? "Attached image" }]
       : []);
-  const [expandedIndex, setExpandedIndex] = useState<number>();
-  const expandedImage = expandedIndex === undefined ? undefined : images[expandedIndex];
+  const openImage = (index: number) => openImageGallery({
+    items: images.map((image) => ({ src: image.url, alt: image.alt ?? "Attached image" })),
+    index,
+  });
   const links = useThreadLinks();
   const source = props.origin?.sourceThread;
   const link = source
@@ -51,7 +54,7 @@ export function TurnInputContent(props: {
             key={index}
             imagePart={images[imageIndex]!}
             imageNumber={index + 1}
-            onOpenImage={() => setExpandedIndex(imageIndex)}
+            onOpenImage={() => openImage(imageIndex)}
             desktopApi={props.desktopApi}
           />;
         }
@@ -62,25 +65,10 @@ export function TurnInputContent(props: {
           key={`image:${index}`}
           imagePart={image}
           imageNumber={index + 1}
-          onOpenImage={() => setExpandedIndex(index)}
+          onOpenImage={() => openImage(index)}
           desktopApi={props.desktopApi}
         />
       ))}
-      {expandedImage && expandedIndex !== undefined ? (
-        <ImageLightbox
-          src={expandedImage.url}
-          alt={expandedImage.alt ?? "Attached image"}
-          position={expandedIndex + 1}
-          total={images.length}
-          onClose={() => setExpandedIndex(undefined)}
-          onPrevious={expandedIndex > 0
-            ? () => setExpandedIndex(expandedIndex - 1)
-            : undefined}
-          onNext={expandedIndex < images.length - 1
-            ? () => setExpandedIndex(expandedIndex + 1)
-            : undefined}
-        />
-      ) : null}
     </div>
   );
 }

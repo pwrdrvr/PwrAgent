@@ -39,6 +39,7 @@ import { FEDERATED_THREAD_SEARCH_DEBOUNCE_MS } from "../../../lib/useFederatedTh
 import { PullRequestLinkProvider } from "../../../lib/pull-request-links";
 import { ThreadLinkProvider } from "../../../lib/thread-links";
 import { Composer as ProductionComposer } from "../Composer";
+import { ImageGalleryLayer } from "../../thread-detail/ImageGalleryLayer";
 import { navigationQueryFixture } from "../../../test/navigation-query-fixture";
 import { pressEscape, tabEscapes } from "../../../test/tab-walk";
 import { REMOTE_NATIVE_PICKER_TOOLTIP } from "../native-picker-boundary";
@@ -9160,9 +9161,9 @@ describe("Composer", () => {
       .mockResolvedValue({ queueEntryId: "owner-entry", contentHash: "content-hash", input });
     const cancelQueuedTurn = vi.fn().mockResolvedValue({ queueEntryId: "owner-entry", cancelled: true, disposition: "cancelled" });
     const startTurn = vi.fn().mockResolvedValue({ backend: "codex", threadId: "thread-1", turnId: "new-queue", queueStatus: "queued", queueEntryId: "new-queue" });
-    render(<Composer activeTurnId="active" backends={[backendSummary("codex")]} draftStore={draftStore}
+    render(<><Composer activeTurnId="active" backends={[backendSummary("codex")]} draftStore={draftStore}
       desktopApi={{ readQueuedTurn, cancelQueuedTurn, startTurn, onAgentEvent: () => () => undefined }} disabled={false} skills={[]}
-      thread={{ id: "thread-1", title: "Recipient", titleSource: "explicit", source: "codex", linkedDirectories: [], inbox: { inInbox: false } }} />);
+      thread={{ id: "thread-1", title: "Recipient", titleSource: "explicit", source: "codex", linkedDirectories: [], inbox: { inInbox: false } }} /><ImageGalleryLayer /></>);
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     await screen.findByText("Owner unavailable");
     expect(cancelQueuedTurn).not.toHaveBeenCalled();
@@ -9734,7 +9735,7 @@ describe("Composer", () => {
     expect(screen.queryByLabelText("Queued message")).not.toBeInTheDocument();
   });
 
-  it("shows queued image thumbnails while a turn is active", async () => {
+  it("opens a queued image in a lightbox that outlives its row", async () => {
     const startTurn = vi.fn(async (request: StartTurnRequest) => ({
       backend: request.backend,
       threadId: request.threadId,
@@ -9746,7 +9747,7 @@ describe("Composer", () => {
       type: "image/png",
     });
 
-    render(
+    const composer = (
       <Composer
         activeTurnId="turn-1"
         desktopApi={{
@@ -9766,6 +9767,7 @@ describe("Composer", () => {
         }}
       />
     );
+    const view = render(<>{composer}<ImageGalleryLayer /></>);
 
     fireEvent.paste(screen.getByLabelText("Reply"), {
       clipboardData: {
@@ -9790,8 +9792,26 @@ describe("Composer", () => {
       expect(
         screen.getByLabelText("Queued image attachments: 1"),
       ).toBeInTheDocument();
-      expect(screen.getByAltText("queued.png")).toBeInTheDocument();
     });
+
+    // The thumbnail leads the title, clear of the actions over the line's end.
+    const row = screen.getByLabelText("Queued message");
+    const thumbnail = within(row).getByRole("button", { name: "Open image 1 of 1" });
+    expect(
+      thumbnail.compareDocumentPosition(within(row).getByText("1 image"))
+      & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    fireEvent.click(thumbnail);
+    expect(screen.getByRole("dialog", { name: "Queued image" })).toBeInTheDocument();
+
+    // The message leaves the queue (here, the whole composer goes): the
+    // lightbox holds its own copy of the images and stays.
+    view.rerender(<><ImageGalleryLayer /></>);
+    const dialog = screen.getByRole("dialog", { name: "Queued image" });
+    expect(within(dialog).getByAltText("queued.png")).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   it("submits a busy-thread queued reply to the backend before navigation", async () => {
