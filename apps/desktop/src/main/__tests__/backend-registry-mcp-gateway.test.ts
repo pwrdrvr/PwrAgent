@@ -565,6 +565,36 @@ describe("backend MCP gateway dispatch", () => {
     expect(operation.mock.calls.filter(([entry]) => entry.operation === "gateway/tools/call")).toHaveLength(1);
   });
 
+  it.each([
+    { toolApproval: "approve", annotations: { destructiveHint: true }, prompts: 0, lookupFails: false },
+    { toolApproval: "prompt", annotations: { readOnlyHint: true }, prompts: 1, lookupFails: false },
+    { toolApproval: "auto", annotations: { readOnlyHint: true }, prompts: 0, lookupFails: false },
+    // A failed lookup reads as the default, never as Allow all tools.
+    { toolApproval: "approve", annotations: { destructiveHint: true }, prompts: 1, lookupFails: true },
+  ] as const)("follows the connection's $toolApproval tool approval (lookup fails: $lookupFails)", async ({ toolApproval, annotations, prompts, lookupFails }) => {
+    operation.mockImplementation(async (params) => params.operation === "gateway/tools/list"
+      ? [{ connectionId: "one", serverName: "Fixture", toolName: "lookup", schemaRevision: "r1", definition: {
+          name: "lookup", annotations, inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+        } }]
+      : { content: [{ type: "text", text: "fixture result" }] });
+    await registry.close();
+    createRegistry({
+      registerBridge, requestGatewayToolOperation: operation,
+      listConnections: async () => {
+        if (lookupFails) throw new Error("owner unavailable");
+        return [{ id: "one", toolApproval }];
+      },
+    } as never);
+    const events: AgentEvent[] = [];
+    registry.onEvent(async (event) => {
+      if (event.notification.method !== "mcpServer/elicitation/request") return;
+      events.push(event);
+      await registry.submitServerRequest({ backend: "codex", threadId: "thread-1", turnId: "turn-1", requestId: String(event.notification.params.requestId), response: { action: "accept", content: {}, _meta: null } });
+    });
+    expect((await internals.handleServerRequest("codex", request("call_mcp_tool", args))).success).toBe(true);
+    expect(events).toHaveLength(prompts);
+  });
+
   it("requires source-specific approval and deduplicates the same dynamic call", async () => {
     const pending = approval();
     const call = internals.handleServerRequest("codex", request("call_mcp_tool", args));

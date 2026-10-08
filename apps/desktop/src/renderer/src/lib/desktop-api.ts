@@ -343,6 +343,7 @@ import type {
   RemoveMcpConnectionRequest,
   SetMcpConnectionEnabledRequest,
   SetMcpConnectionSelectForNewThreadsRequest,
+  SetMcpConnectionToolApprovalRequest,
   ReadThreadMcpConnectionsRequest,
   SetThreadMcpConnectionsRequest,
   SetThreadMcpConnectionsResponse,
@@ -604,6 +605,9 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   ) => Promise<MutateMcpConnectionResponse>;
   setMcpConnectionSelectForNewThreads?: (
     request: SetMcpConnectionSelectForNewThreadsRequest,
+  ) => Promise<MutateMcpConnectionResponse>;
+  setMcpConnectionToolApproval?: (
+    request: SetMcpConnectionToolApprovalRequest,
   ) => Promise<MutateMcpConnectionResponse>;
   listMcpConnectionTools?: (
     request: ListMcpConnectionToolsRequest,

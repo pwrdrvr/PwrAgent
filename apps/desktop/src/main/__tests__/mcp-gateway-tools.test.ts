@@ -137,8 +137,6 @@ describe("fixed MCP gateway tools", () => {
     { mode: "auto", annotations: { destructiveHint: false, openWorldHint: false }, asks: false },
     { mode: "auto", annotations: { openWorldHint: false }, asks: true },
     { mode: "prompt", annotations: { readOnlyHint: true }, asks: true },
-    { mode: "writes", annotations: { readOnlyHint: true }, asks: false },
-    { mode: "writes", annotations: { destructiveHint: false, openWorldHint: false }, asks: true },
     { mode: "approve", annotations: { destructiveHint: true }, asks: false },
   ] as const)("asks for approval in $mode mode for $annotations: $asks", ({ mode, annotations, asks }) => {
     expect(gatewayToolRequiresApproval(annotations, mode)).toBe(asks);

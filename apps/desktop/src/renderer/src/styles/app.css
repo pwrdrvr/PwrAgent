@@ -15753,6 +15753,18 @@ a.button {
   line-height: 1.4;
 }
 
+/* Tool approval is a field, not a switch: its label sits above the chip and
+   its line under it, and it takes a row of its own so the two switches above
+   keep their pairing. */
+.settings-mcp-row__policy-item--choice {
+  flex-basis: 100%;
+}
+
+.settings-mcp-row__policy-item--choice .settings-mcp-row__policy-text {
+  align-items: flex-start;
+  gap: 5px;
+}
+
 .settings-mcp-row__remove {
   color: var(--danger-text);
 }

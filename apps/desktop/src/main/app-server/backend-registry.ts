@@ -5,6 +5,7 @@ import {
   classifyDirectory,
   type DesktopThreadArchivePolicy,
   type DesktopThreadArchiveSweepStatus,
+  type McpConnectionToolApproval,
 } from "@pwragent/shared";
 import type {
   ListBackgroundTerminalsRequest,
@@ -36687,16 +36688,20 @@ export class DesktopBackendRegistry {
     // calls. Keep scoped confirmation until that integration is available.
     if (automation) return false;
     signal.throwIfAborted();
-    // Codex asks for none of a server's read-only tools, so neither does the
-    // gateway: listing and inspecting run, and a restart still asks.
-    if (!gatewayToolRequiresApproval(annotations)) {
-      backendRegistryLog.info("running MCP gateway tool its server marks safe without approval", {
+    // The connection's Tool approval setting, read now so the next call
+    // follows a change. By default Codex's rule applies: listing and
+    // inspecting run, and a restart still asks.
+    const toolApproval = await this.readMcpConnectionToolApproval(invocation.connectionId);
+    signal.throwIfAborted();
+    if (!gatewayToolRequiresApproval(annotations, toolApproval)) {
+      backendRegistryLog.info("running MCP gateway tool without approval", {
         backend: context.backend,
         threadId: context.threadId,
         turnId: context.turnId,
         connectionId: invocation.connectionId,
         serverName: invocation.serverName,
         toolName: invocation.toolName,
+        toolApproval,
       });
       return true;
     }
@@ -36746,6 +36751,18 @@ export class DesktopBackendRegistry {
       if (signal.aborted) { aborted(); return; }
       void this.emit({ backend: context.backend, notification }).catch((error) => finish(false, error));
     });
+  }
+
+  // A lookup that fails reads as the default, which still asks for anything
+  // the server does not mark safe; it never reads as Allow all tools.
+  private async readMcpConnectionToolApproval(connectionId: string): Promise<McpConnectionToolApproval> {
+    try {
+      const connections = await this.mcpConnectionService?.listConnections?.();
+      return connections?.find((connection) => connection.id === connectionId)?.toolApproval ?? "auto";
+    } catch (error) {
+      backendRegistryLog.warn("could not read MCP connection tool approval", { connectionId, error: String(error) });
+      return "auto";
+    }
   }
 
   private async isMcpGatewayFullAccess(

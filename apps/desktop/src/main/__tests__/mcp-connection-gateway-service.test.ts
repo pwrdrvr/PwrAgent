@@ -827,4 +827,42 @@ describe("McpConnectionGatewayService", () => {
       service.setConnectionSelectForNewThreads("ghost", true),
     ).rejects.toThrow("Unknown MCP connection");
   });
+
+  it("sets a connection's tool approval through the owner broker and rejects an unknown mode", async () => {
+    const registry = temporaryRegistry();
+    const connection = registry.create({
+      displayName: "Datadog",
+      serverUrl: "https://mcp.datadoghq.com/mcp",
+    });
+    const service = new McpConnectionGatewayService({
+      registry,
+      settings: createSettings(),
+      leaseManager: null,
+    });
+    services.push(service);
+    const closeConnectionSessions = vi.fn(async () => undefined);
+    Object.assign(service, { closeConnectionSessions });
+    const broker = service as unknown as {
+      dispatchBrokerOperation: (op: unknown, params: unknown) => Promise<unknown>;
+    };
+
+    await expect(
+      service.setConnectionToolApproval(connection.id, "approve"),
+    ).resolves.toMatchObject({ id: connection.id, toolApproval: "approve" });
+    await expect(
+      broker.dispatchBrokerOperation("broker/set-tool-approval", {
+        connectionId: connection.id,
+        toolApproval: "prompt",
+      }),
+    ).resolves.toMatchObject({ toolApproval: "prompt" });
+    // A peer cannot write a mode this build does not know.
+    await expect(
+      broker.dispatchBrokerOperation("broker/set-tool-approval", {
+        connectionId: connection.id,
+        toolApproval: "always",
+      }),
+    ).rejects.toThrow("Invalid MCP connection tool approval request.");
+    expect(registry.get(connection.id)?.toolApproval).toBe("prompt");
+    expect(closeConnectionSessions).not.toHaveBeenCalled();
+  });
 });

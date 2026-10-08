@@ -278,6 +278,8 @@ export const MCP_CONNECTION_SET_ENABLED_CHANNEL =
   "mcp-connection:set-enabled";
 export const MCP_CONNECTION_SET_SELECT_FOR_NEW_THREADS_CHANNEL =
   "mcp-connection:set-select-for-new-threads";
+export const MCP_CONNECTION_SET_TOOL_APPROVAL_CHANNEL =
+  "mcp-connection:set-tool-approval";
 export const MCP_CONNECTION_LIST_TOOLS_CHANNEL = "mcp-connection:list-tools";
 export const MCP_CONNECTION_SET_THREAD_CHANNEL =
   "mcp-connection:set-thread";

@@ -3,6 +3,7 @@ import Ajv from "ajv";
 import Ajv2019 from "ajv/dist/2019.js";
 import Ajv2020 from "ajv/dist/2020.js";
 import { ErrorCode, McpError, type Tool } from "@modelcontextprotocol/sdk/types.js";
+import type { McpConnectionToolApproval } from "@pwragent/shared";
 
 export type McpGatewaySource = {
   connectionId: string;
@@ -19,26 +20,23 @@ export type McpGatewayInvocation = McpGatewaySource & {
   arguments: Record<string, unknown>;
 };
 
-/** Codex's MCP tool approval modes (`AppToolApproval`), same names. */
-export type McpGatewayToolApprovalMode = "auto" | "prompt" | "writes" | "approve";
-
 /**
  * Codex's `requires_mcp_tool_approval_for_mode`, so a tool asks for approval
- * through the gateway exactly when it would through Codex. The annotations are
- * the server's own hints; an unannotated tool counts as destructive and open
- * world, so it still asks.
+ * through the gateway exactly when it would through Codex. The modes are
+ * Codex's own names; its `writes` mode is left out because it differs from
+ * `auto` only for a tool marked non-destructive and closed-world. The
+ * annotations are the server's own hints; an unannotated tool counts as
+ * destructive and open world, so it still asks.
  */
 export function gatewayToolRequiresApproval(
   annotations: Tool["annotations"],
-  mode: McpGatewayToolApprovalMode = "auto",
+  mode: McpConnectionToolApproval = "auto",
 ): boolean {
   switch (mode) {
     case "prompt":
       return true;
     case "approve":
       return false;
-    case "writes":
-      return annotations?.readOnlyHint !== true;
     case "auto":
       if (annotations?.destructiveHint === true) return true;
       if (annotations?.readOnlyHint === true) return false;

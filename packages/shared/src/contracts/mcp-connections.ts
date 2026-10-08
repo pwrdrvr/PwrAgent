@@ -50,9 +50,31 @@ export type McpConnectionRecord = {
    * absent reads as `false`.
    */
   selectForNewThreads?: boolean;
+  /**
+   * When a gateway call to this connection asks the operator first, in
+   * Default and Auto threads. Full Access never asks, and an automation's
+   * allowlist decides its own calls.
+   *
+   * - `auto`: Codex's own rule. A tool the server marks read-only, or
+   *   non-destructive and closed-world, runs; anything else asks.
+   * - `prompt`: every tool asks, read-only ones included.
+   * - `approve`: no tool asks.
+   *
+   * Optional because an owner broker from an older build answers without it;
+   * absent reads as `auto`.
+   */
+  toolApproval?: McpConnectionToolApproval;
   createdAt: number;
   updatedAt: number;
 };
+
+export const MCP_CONNECTION_TOOL_APPROVALS = ["auto", "prompt", "approve"] as const;
+
+export type McpConnectionToolApproval = (typeof MCP_CONNECTION_TOOL_APPROVALS)[number];
+
+export function isMcpConnectionToolApproval(value: unknown): value is McpConnectionToolApproval {
+  return MCP_CONNECTION_TOOL_APPROVALS.some((mode) => mode === value);
+}
 
 export type McpConnectionRuntimeState =
   | "disconnected"
@@ -124,6 +146,12 @@ export type SetMcpConnectionEnabledRequest = {
 export type SetMcpConnectionSelectForNewThreadsRequest = {
   connectionId: McpConnectionId;
   selectForNewThreads: boolean;
+};
+
+/** See `McpConnectionRecord.toolApproval`. */
+export type SetMcpConnectionToolApprovalRequest = {
+  connectionId: McpConnectionId;
+  toolApproval: McpConnectionToolApproval;
 };
 
 /**
