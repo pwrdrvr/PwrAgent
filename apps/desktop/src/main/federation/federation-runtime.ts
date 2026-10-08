@@ -466,7 +466,11 @@ const CELESTIAL_TOMBSTONE_TTL_MS = 7 * 24 * 60 * 60_000;
 const DUPLICATE_IDENTITY_NOTE_TTL_MS = 5 * 60_000;
 /** A session must last this long before it counts as stable enough to reset backoff. */
 const FEDERATION_STABLE_SESSION_MS = 60_000;
-/** How long before a Cloudflare grant ends that its sign-in prompt appears. */
+/**
+ * How long before a Cloudflare grant ends that its sign-in prompt appears: a
+ * day, or the grant's last quarter when that is shorter, so a short grant is
+ * not inside its warning the moment a sign-in completes.
+ */
 const CLOUDFLARE_SIGN_IN_EXPIRY_WARNING_MS = 24 * 60 * 60_000;
 const SIGN_IN_EXPIRY_RECHECK_MS = 60 * 60_000;
 
@@ -3792,11 +3796,16 @@ export class DesktopFederationRuntime {
     if (cloudflareSignIn) {
       this.scheduleAccessRefresh(cloudflareSignIn, gatewayUrl, client, connectionGeneration);
       this.scheduleSignInExpiry(cloudflareSignIn, gatewayUrl, client, connectionGeneration);
+    } else {
+      // A connection that does not use the grant has nothing expiring.
+      clearTimeout(this.signInExpiryTimer);
+      this.signInExpiryTimer = undefined;
+      this.setCloudflareSignInExpiring(undefined);
     }
   }
 
   /**
-   * Ask for a new sign-in a day before a connection's Cloudflare grant ends.
+   * Ask for a new sign-in shortly before a connection's Cloudflare grant ends.
    *
    * A refresh does not extend the grant, so without this Federation runs until
    * the grant lapses mid-session and only then asks. Known only when the
@@ -3816,15 +3825,17 @@ export class DesktopFederationRuntime {
       && this.client === client
       && connectionGeneration === this.connectionGeneration;
     void Promise.resolve()
-      .then(() => signIn.signInExpiresAt(gatewayUrl))
+      .then(() => signIn.signInGrant(gatewayUrl))
       .catch(() => undefined)
-      .then((expiresAt) => {
+      .then((grant) => {
         if (!current()) return;
-        if (expiresAt === undefined) {
+        if (grant === undefined) {
           this.setCloudflareSignInExpiring(undefined);
           return;
         }
-        const untilWarning = expiresAt - CLOUDFLARE_SIGN_IN_EXPIRY_WARNING_MS - Date.now();
+        const { signedInAt, expiresAt } = grant;
+        const lead = Math.min(CLOUDFLARE_SIGN_IN_EXPIRY_WARNING_MS, (expiresAt - signedInAt) / 4);
+        const untilWarning = expiresAt - lead - Date.now();
         if (untilWarning <= 0) {
           this.setCloudflareSignInExpiring({ endpoint: gatewayUrl, expiresAt });
           return;

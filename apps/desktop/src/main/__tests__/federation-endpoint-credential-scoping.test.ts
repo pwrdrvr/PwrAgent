@@ -53,14 +53,14 @@ const signIn = vi.hoisted(() => ({
   accessToken: vi.fn(async (_endpoint: string): Promise<string> => "oauth:access-token"),
   // Due now: the refresh timer then waits its one-minute floor.
   refreshDueAt: vi.fn(async (_endpoint: string): Promise<number | undefined> => Date.now()),
-  signInExpiresAt: vi.fn(async (_endpoint: string): Promise<number | undefined> => undefined),
+  signInGrant: vi.fn(async (_endpoint: string): Promise<{ signedInAt: number; expiresAt: number } | undefined> => undefined),
 }));
 
 vi.mock("../federation/cloudflare-access-sign-in", () => ({
   getCloudflareAccessSignIn: () => ({
     accessToken: signIn.accessToken,
     refreshDueAt: signIn.refreshDueAt,
-    signInExpiresAt: signIn.signInExpiresAt,
+    signInGrant: signIn.signInGrant,
     invalidateAccessToken: async () => undefined,
   }),
 }));
@@ -355,7 +355,7 @@ describe("federation endpoint credential scoping", () => {
       cloudflareEndpoint.value = "wss://federation.example.com";
       // The day-ahead prompt falls due 90 minutes after connecting.
       const expiresAt = Date.now() + 24 * 60 * 60_000 + 90 * 60_000;
-      signIn.signInExpiresAt.mockResolvedValue(expiresAt);
+      signIn.signInGrant.mockResolvedValue({ signedInAt: expiresAt - 336 * 60 * 60_000, expiresAt });
       const runtime = createHarness([cloudflareEndpoint.value]) as CredentialHarness & {
         handleClientConnectionFailure: (error: unknown) => void;
         disconnectAdvertisedPeers: () => void;
@@ -382,7 +382,7 @@ describe("federation endpoint credential scoping", () => {
       expect((await runtime.health()).cloudflareSignInExpiring).toBeUndefined();
       // A sleeping Mac pauses timers, so the wait is checked again within the hour.
       await vi.advanceTimersByTimeAsync(60 * 60_000);
-      expect(signIn.signInExpiresAt).toHaveBeenCalledTimes(2);
+      expect(signIn.signInGrant).toHaveBeenCalledTimes(2);
       expect((await runtime.health()).cloudflareSignInExpiring).toBeUndefined();
       expect(healthChanges()).toBe(0);
       await vi.advanceTimersByTimeAsync(30 * 60_000);
@@ -400,9 +400,53 @@ describe("federation endpoint credential scoping", () => {
       expect(health.cloudflareSignInRequired).toEqual({ endpoint: cloudflareEndpoint.value });
       expect(health.cloudflareSignInExpiring).toBeUndefined();
     } finally {
-      signIn.signInExpiresAt.mockReset();
-      signIn.signInExpiresAt.mockResolvedValue(undefined);
+      signIn.signInGrant.mockReset();
+      signIn.signInGrant.mockResolvedValue(undefined);
       vi.useRealTimers();
+    }
+  });
+
+  it("warns in a short grant's last quarter, not the moment its sign-in completes", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      signIn.enabled = true;
+      cloudflareEndpoint.value = "wss://federation.example.com";
+      const signedInAt = Date.now();
+      const expiresAt = signedInAt + 12 * 60 * 60_000;
+      signIn.signInGrant.mockResolvedValue({ signedInAt, expiresAt });
+      const runtime = createHarness([cloudflareEndpoint.value]) as CredentialHarness & {
+        cloudflareSignInExpiring?: { endpoint: string; expiresAt: number };
+      };
+      await runtime.connectClient(cloudflareEndpoint.value);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(runtime.cloudflareSignInExpiring).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(9 * 60 * 60_000 - 1);
+      expect(runtime.cloudflareSignInExpiring).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(runtime.cloudflareSignInExpiring).toEqual({ endpoint: cloudflareEndpoint.value, expiresAt });
+    } finally {
+      signIn.signInGrant.mockReset();
+      signIn.signInGrant.mockResolvedValue(undefined);
+      vi.useRealTimers();
+    }
+  });
+
+  it("drops the expiry warning when Federation reconnects through an endpoint without the grant", async () => {
+    signIn.enabled = true;
+    cloudflareEndpoint.value = "wss://federation.example.com";
+    const expiresAt = Date.now() + 60 * 60_000;
+    signIn.signInGrant.mockResolvedValue({ signedInAt: expiresAt - 336 * 60 * 60_000, expiresAt });
+    try {
+      const runtime = createHarness([cloudflareEndpoint.value, "wss://lan.example"]) as CredentialHarness & {
+        cloudflareSignInExpiring?: { endpoint: string; expiresAt: number };
+      };
+      await runtime.connectClient(cloudflareEndpoint.value);
+      await vi.waitFor(() => expect(runtime.cloudflareSignInExpiring).toEqual({ endpoint: cloudflareEndpoint.value, expiresAt }));
+      await runtime.connectClient("wss://lan.example");
+      expect(runtime.cloudflareSignInExpiring).toBeUndefined();
+    } finally {
+      signIn.signInGrant.mockReset();
+      signIn.signInGrant.mockResolvedValue(undefined);
     }
   });
 

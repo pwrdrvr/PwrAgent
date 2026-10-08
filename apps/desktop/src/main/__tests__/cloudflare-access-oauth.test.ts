@@ -306,9 +306,9 @@ describe("Cloudflare Access grant lifetime", () => {
     const h = harness({ now: () => now });
     await h.oauth.signIn(ENDPOINT, { lifetimeMs: lifetime });
     expect(h.stored()).toMatchObject({ signedInAt: now, signInLifetimeMs: lifetime });
-    await expect(h.oauth.signInExpiresAt(ENDPOINT)).resolves.toBe(now + lifetime);
+    await expect(h.oauth.signInGrant(ENDPOINT)).resolves.toEqual({ signedInAt: now, expiresAt: now + lifetime });
     expect((await h.oauth.status(ENDPOINT))?.signInExpiresAt).toBe(new Date(now + lifetime).toISOString());
-    await expect(h.oauth.signInExpiresAt("wss://other.example.com")).resolves.toBeUndefined();
+    await expect(h.oauth.signInGrant("wss://other.example.com")).resolves.toBeUndefined();
     // A sign-in from the toast or Settings carries no file.
     // A fresh callback port: the keep-alive agent still holds a socket to the last one.
     const again = harness({ now: () => now + 1000, session: { ...h.stored()!, redirectUri: undefined } });
@@ -318,15 +318,28 @@ describe("Cloudflare Access grant lifetime", () => {
     const refused = harness({ now: () => now, session: { ...h.stored()!, accessToken: undefined, refreshToken: "revoked" } });
     await expect(refused.oauth.accessToken(ENDPOINT)).rejects.toBeInstanceOf(CloudflareSignInRequiredError);
     expect(refused.stored()?.signInLifetimeMs).toBe(lifetime);
-    await expect(refused.oauth.signInExpiresAt(ENDPOINT)).resolves.toBeUndefined();
+    await expect(refused.oauth.signInGrant(ENDPOINT)).resolves.toBeUndefined();
     expect((await refused.oauth.status(ENDPOINT))?.signInExpiresAt).toBeUndefined();
   });
 
   it("reports no expiry for a grant whose lifetime no setup file stated", async () => {
     const h = harness({ now: () => now });
     await h.oauth.signIn(ENDPOINT);
-    await expect(h.oauth.signInExpiresAt(ENDPOINT)).resolves.toBeUndefined();
+    await expect(h.oauth.signInGrant(ENDPOINT)).resolves.toBeUndefined();
     expect((await h.oauth.status(ENDPOINT))?.signInExpiresAt).toBeUndefined();
+  });
+
+  it("keeps the setup file's lifetime through a sign-out, for the next sign-in", async () => {
+    const h = harness({ now: () => now });
+    await h.oauth.signIn(ENDPOINT, { lifetimeMs: lifetime });
+    await h.oauth.signOut();
+    expect(h.stored()).toEqual({ version: 1, endpoint: ENDPOINT, signInLifetimeMs: lifetime });
+    expect((await h.oauth.status(ENDPOINT))?.state).toBe("signed-out");
+    await expect(h.oauth.accessToken(ENDPOINT)).rejects.toBeInstanceOf(CloudflareSignInRequiredError);
+    await expect(h.oauth.signInGrant(ENDPOINT)).resolves.toBeUndefined();
+    const again = harness({ now: () => now + 1000, session: h.stored() });
+    await again.oauth.signIn(ENDPOINT);
+    await expect(again.oauth.signInGrant(ENDPOINT)).resolves.toEqual({ signedInAt: now + 1000, expiresAt: now + 1000 + lifetime });
   });
 });
 

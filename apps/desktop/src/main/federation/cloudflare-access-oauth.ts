@@ -132,13 +132,17 @@ export class CloudflareAccessOAuth {
     };
   }
 
-  /** When `endpoint`'s grant ends, or undefined when its lifetime is unknown or it has already ended. */
-  async signInExpiresAt(endpoint: string): Promise<number | undefined> {
+  /**
+   * When `endpoint`'s grant began and ends, or undefined when its lifetime is
+   * unknown or it has already ended.
+   */
+  async signInGrant(endpoint: string): Promise<{ signedInAt: number; expiresAt: number } | undefined> {
     const session = await this.deps.load().catch(() => undefined);
     if (!session || !sameEndpoint(session.endpoint, endpoint) || session.signInRequired || !session.refreshToken) {
       return undefined;
     }
-    return grantEndsAt(session);
+    const expiresAt = grantEndsAt(session);
+    return session.signedInAt && expiresAt ? { signedInAt: session.signedInAt, expiresAt } : undefined;
   }
 
   /**
@@ -181,7 +185,11 @@ export class CloudflareAccessOAuth {
 
   async signOut(): Promise<void> {
     const session = await this.deps.load().catch(() => undefined);
-    await this.deps.save(undefined);
+    // Only the setup file's grant lifetime outlives a sign-out: no file comes
+    // with the next sign-in to state it again.
+    await this.deps.save(session?.signInLifetimeMs
+      ? { version: 1, endpoint: session.endpoint, signInLifetimeMs: session.signInLifetimeMs }
+      : undefined);
     // Best effort: revoke the grant server-side when Cloudflare advertises a
     // revocation endpoint. The local copy is already gone either way.
     if (!session?.refreshToken || !session.clientId) return;

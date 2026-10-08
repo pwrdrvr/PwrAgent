@@ -311,11 +311,16 @@ export function registerCloudflareSetupIpc(): void {
           if (importGate === "oauth") {
             // Sign in before changing any setting: if the person cannot sign
             // in, this profile's federation config is left as it was.
+            const runtime = getDesktopFederationRuntime();
+            // A sign-in prompt in any window must show this one waiting.
+            runtime.setCloudflareSignInPending(true);
             try {
               await getCloudflareAccessSignIn().signIn(bundle.endpoint, { lifetimeMs: bundle.signInLifetimeMs });
             } catch (error) {
               if (error instanceof CloudflareSignInCancelledError) return describe("Sign-in cancelled. Nothing on this profile changed.");
               throw error;
+            } finally {
+              runtime.setCloudflareSignInPending(false);
             }
           } else {
             const previous = await settings.resolveFederationCloudflareCredentials();

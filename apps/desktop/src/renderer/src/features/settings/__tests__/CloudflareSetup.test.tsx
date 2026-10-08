@@ -400,7 +400,7 @@ describe("Cloudflare setup flow", () => {
     const view = render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
       listenPort="47830" onWriteConfig={async () => true} onSettingsChanged={async () => {}} />);
     fireEvent.click(await screen.findByRole("button", { name: "Connect this client" }));
-    expect(await screen.findByText(new RegExp(`Access refreshes automatically until ${new Date(signInExpiresAt).toLocaleString()}\\. PwrAgent asks you to sign in again the day before`)))
+    expect(await screen.findByText(new RegExp(`Access refreshes automatically until ${new Date(signInExpiresAt).toLocaleString()}\\. PwrAgent asks you to sign in again before then`)))
       .toBeInTheDocument();
     view.unmount();
     call.mockImplementation(async () => ({ ...connected, signIn: { ...signIn, signInExpiresAt: undefined } }));
