@@ -276,6 +276,32 @@ describe("Cloudflare setup flow", () => {
     expect(statement).not.toHaveTextContent("moves from");
   });
 
+  it.each(["oauth", "service-token", "mtls"] as const)(
+    "requires an administration token for credential exports only (%s)", async (gate) => {
+      const published: CloudflareSetupStatus = {
+        ...connected, connected: false, gate, tunnelId: "t", hostname: "federation.example.com", phase: "Published",
+      };
+      const call = vi.fn(async (_request: CloudflareSetupRequest) => published);
+      render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
+        listenPort="47830" onWriteConfig={async () => true} onSettingsChanged={async () => {}} />);
+      await screen.findByLabelText("Cloudflare client name");
+      fireEvent.change(screen.getByLabelText("Cloudflare client name"), { target: { value: "Travel laptop" } });
+      fireEvent.change(screen.getByLabelText("Cloudflare client transfer password"), { target: { value: "long-enough-password" } });
+      const button = screen.getByRole("button", { name: gate === "oauth" ? "Save client setup file" : "Issue & save client setup" });
+      if (gate === "oauth") {
+        expect(button).toBeEnabled();
+        expect(screen.queryByText(/Still needed: a connected Cloudflare account \(step 2\)/)).not.toBeInTheDocument();
+        fireEvent.click(button);
+        await waitFor(() => expect(call).toHaveBeenCalledWith({
+          action: "export-client", label: "Travel laptop", password: "long-enough-password", inviteTtlHours: 1,
+        }));
+      } else {
+        expect(button).toBeDisabled();
+        expect(screen.getByText(/Still needed: a connected Cloudflare account \(step 2\)/)).toBeInTheDocument();
+      }
+    },
+  );
+
   it("passes the chosen invite lifetime when issuing a client", async () => {
     const events: CloudflareSetupRequest[] = [];
     const published = { ...connected, gate: "service-token" as const, tunnelId: "t", hostname: "federation.example.com", phase: "Published" };

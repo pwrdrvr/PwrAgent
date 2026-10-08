@@ -346,7 +346,7 @@ export function CloudflareSetup(props: Props) {
     !listenerReachable && "a listener on 127.0.0.1 or 0.0.0.0",
   ]);
   const shareMissing = present([
-    !connected && "a connected Cloudflare account (step 2)",
+    !oauth && !connected && "a connected Cloudflare account (step 2)",
     !label.trim() && "a client name",
     password.length < 12 && "a transfer password of 12+ characters",
   ]);
@@ -595,7 +595,7 @@ export function CloudflareSetup(props: Props) {
               <span>Connected · {status?.zoneName}</span>
               {action("Disconnect API token", { action: "disconnect" }, "Disconnecting…")}
             </div> : <>
-              {created ? <p>The API token is held only in memory, so it is needed again after PwrAgent restarts — to audit, validate, or issue clients. The published endpoint keeps working without it.</p>
+              {created ? <p>The API token is held only in memory, so it is needed again after PwrAgent restarts — to audit, validate, or change Cloudflare settings{oauth ? ". Saving sign-in client setup files does not need it" : ", or issue client credentials"}. The published endpoint keeps working without it.</p>
                 : <p>Use a domain already active on Cloudflare. The API token is held in memory until you disconnect or quit PwrAgent; the account and zone IDs can be saved as a draft.</p>}
               <div className="settings-button-row">
                 {action("Create API token in Cloudflare", { action: "token-link", accountId: accountId.trim(), zoneId: zoneId.trim() }, "Opening Cloudflare…")}
@@ -734,7 +734,7 @@ export function CloudflareSetup(props: Props) {
           <AutomationStage verb="Share" title="Clients" progress={progress("share", false, "Ready")}>
             {published ? <>
               <p>{oauth
-                ? "The setup file holds this endpoint and a one-time enrollment invite — no credential. The person opens it on their machine and signs in with an allowed email."
+                ? "The setup file holds this endpoint and a one-time enrollment invite — no credential. The person opens it on their machine and signs in with an allowed email. Saving this file does not need a Cloudflare API token."
                 : `The setup file holds this endpoint, a one-time enrollment invite, and a new 90-day ${mtls ? "client certificate" : "service token"} for that client alone. Move it any way you like; it is encrypted with the transfer password.`}</p>
               <SettingsField label="Client name" sub="Shown in this list and in Federation." control={field("Cloudflare client name", label, setLabel, "Travel laptop")} />
               <SettingsField label="Transfer password" sub="At least 12 characters. Send it separately from the file."
