@@ -214,11 +214,11 @@ export class NavigationQueryPool {
     this.wake();
   }
 
-  invalidateExactOwner(target?: FederationTarget, ref?: NavigationIdentity): void {
+  invalidateExactOwner(target?: FederationTarget, ref?: NavigationIdentity, kind?: keyof ExactResources): void {
     const owner = ownerKey(target);
     const thread = ref ? JSON.stringify([ref.backend, ref.threadId]) : undefined;
     for (const query of this.queries.values()) {
-      if (query.kind === "query" || query.ownerKey !== owner) continue;
+      if (query.kind === "query" || query.ownerKey !== owner || (kind && query.kind !== kind)) continue;
       if (thread && query.threadKey !== thread) continue;
       // Canonical changes invalidate the result, not the consumer's demand.
       // Finish the physical read and replace it under its existing deadline;
