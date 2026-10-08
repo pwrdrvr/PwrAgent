@@ -1,10 +1,25 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { stat } from "node:fs/promises";
 import type { AgentEvent, AppServerThreadSummary, ThreadOverlayState } from "@pwragent/shared";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { CountingBackendClient, codexThread, publishNotification } from "./fixtures/thread-read-harness";
 import budgets from "./fixtures/archive-cleanup-budgets.json";
 
 vi.mock("../log", () => ({ getMainLogger: () => ({ debug() {}, info() {}, warn() {}, error() {} }) }));
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    // The worktree service is contrived, so its post-removal sentinel must be
+    // contrived too. Advancing fake timers cannot complete host filesystem I/O.
+    stat: vi.fn(async (filePath: Parameters<typeof actual.stat>[0], options?: Parameters<typeof actual.stat>[1]) => {
+      if (typeof filePath === "string" && filePath.startsWith("/contrived/")) {
+        throw Object.assign(new Error("Contrived worktree was removed."), { code: "ENOENT" });
+      }
+      return await actual.stat(filePath, options);
+    }),
+  };
+});
 
 async function drivePacer<T>(promise: Promise<T>): Promise<T> {
   let settled = false;
@@ -17,6 +32,7 @@ async function drivePacer<T>(promise: Promise<T>): Promise<T> {
 const registries: DesktopBackendRegistry[] = [];
 afterEach(async () => {
   await Promise.all(registries.splice(0).map((registry) => registry.close()));
+  vi.mocked(stat).mockReset();
   vi.useRealTimers();
 });
 
@@ -143,6 +159,45 @@ describe("archive cleanup pipeline", () => {
       expect.objectContaining({ removedWorktree: true, worktreePath: "/contrived/target" }),
       expect.objectContaining({ removedWorktree: true, worktreePath: "/contrived/second" }),
     ]);
+    expect(stat).toHaveBeenCalledWith("/contrived/target");
+    expect(stat).toHaveBeenCalledWith("/contrived/second");
+  });
+
+  it("waits for the removal sentinel before admitting the next queued cleanup", async () => {
+    vi.useFakeTimers();
+    const target = codexThread({ id: "target", linkedDirectories: [{
+      id: "directory", kind: "worktree", label: "repo", path: "/contrived/repo", worktreePath: "/contrived/worktree",
+    }] });
+    const fixture = build([], target);
+    let release!: () => void;
+    const sentinelGate = new Promise<void>((resolve) => { release = resolve; });
+    let entered!: () => void;
+    const sentinelStarted = new Promise<void>((resolve) => { entered = resolve; });
+    const defaultStat = vi.mocked(stat).getMockImplementation()!;
+    vi.mocked(stat).mockImplementation(async (filePath, options) => {
+      if (filePath !== "/contrived/worktree") return await defaultStat(filePath, options);
+      entered();
+      await sentinelGate;
+      throw Object.assign(new Error("Contrived worktree was removed."), { code: "ENOENT" });
+    });
+    fixture.client.listArchiveCleanupThreadsPage.mockImplementation(async ({ archived }) => {
+      fixture.counts.providerPages += 1;
+      return { threads: archived ? [target, codexThread({ id: "second" })] : [], nextCursor: undefined };
+    });
+    const first = fixture.registry.archiveThread({ backend: "codex", threadId: "target" });
+    const second = fixture.registry.archiveThread({ backend: "codex", threadId: "second" });
+    let settled = false;
+    const results = Promise.all([first, second]).then((responses) => { settled = true; return responses; });
+    try {
+      await drivePacer(sentinelStarted);
+      expect(stat).toHaveBeenCalledWith("/contrived/worktree");
+      expect(settled).toBe(false);
+      // Only the first job's initial and final admission inventories ran.
+      expect(fixture.counts.providerPages).toBe(4);
+    } finally { release(); }
+    const responses = await drivePacer(results);
+    expect(responses[0].cleanup[0]?.removedWorktree).toBe(true);
+    expect(fixture.counts.providerPages).toBe(6);
   });
 
   it("keeps rejecting active target metadata without confirmed missing-rollout recovery", async () => {
