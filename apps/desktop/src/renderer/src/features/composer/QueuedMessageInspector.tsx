@@ -19,6 +19,8 @@ export function QueuedMessageInspector(props: {
   actions?: ReactNode;
   detail?: ReactNode;
   children?: ReactNode;
+  /** Focus target when an image opened from the message outlives the row. */
+  onFallbackFocus?: () => void;
 }) {
   const regionId = useId();
   const [content, setContent] = useState<ReadQueuedTurnResponse>();
@@ -81,6 +83,7 @@ export function QueuedMessageInspector(props: {
               imageParts={content.imageParts}
               origin={content.messageOrigin}
               desktopApi={props.desktopApi}
+              onFallbackFocus={props.onFallbackFocus}
             />
           ) : null}
         </div>

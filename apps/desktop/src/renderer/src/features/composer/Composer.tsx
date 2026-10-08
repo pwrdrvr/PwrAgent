@@ -11820,6 +11820,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             <QueuedMessageInspector
               load={() => readQueuedMessage(queued)}
               desktopApi={props.desktopApi}
+              onFallbackFocus={focusComposerInput}
               detail={
                 queued.errorMessage || queued.holdReason ? (
                   <div className="composer__queued-detail">

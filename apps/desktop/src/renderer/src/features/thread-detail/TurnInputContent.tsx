@@ -16,6 +16,8 @@ export function TurnInputContent(props: {
   imageParts?: AppServerThreadImagePart[];
   origin?: AppServerThreadMessageOrigin;
   desktopApi?: DesktopApi;
+  /** Focus target when the lightbox closes after this view has gone. */
+  onFallbackFocus?: () => void;
 }) {
   // One gallery over every image the message shows, in the order it shows
   // them, as a sent message's images page in the transcript. The window's
@@ -28,6 +30,7 @@ export function TurnInputContent(props: {
   const openImage = (index: number) => openImageGallery({
     items: images.map((image) => ({ src: image.url, alt: image.alt ?? "Attached image" })),
     index,
+    ...(props.onFallbackFocus ? { onFallbackFocus: props.onFallbackFocus } : {}),
   });
   const links = useThreadLinks();
   const source = props.origin?.sourceThread;

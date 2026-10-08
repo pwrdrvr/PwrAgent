@@ -35448,7 +35448,6 @@ button.pricing-token-miser__folded:focus-visible {
   gap: 0;
   min-height: 32px;
   padding: 0 8px 0 4px;
-  background: var(--queued-row-bg);
 }
 
 .composer__queued--message:hover {
