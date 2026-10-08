@@ -36,6 +36,7 @@ import {
 } from "../../chrome/ChipContextMenu";
 import { MoreVerticalIcon } from "../../../icons";
 import { formatBackendLabel } from "../../../lib/backend-label";
+import { readRendererFederationTarget } from "../../../lib/federation-window";
 import { useViewportTooltip } from "../../../lib/useViewportTooltip";
 import {
   formatTokenCount,
@@ -305,9 +306,12 @@ export const PricingPanel = memo(function PricingPanel(props: PricingPanelProps)
       ) : null}
 
       {/* Stored totals live on the owning machine, so a peer's thread has no
-          family read here. */}
-      {id !== undefined && source !== undefined && federation?.ref.target.scope !== "remote" ? (
+          family read here, whether the thread or the whole window fronts the
+          peer. Keyed by thread so nothing read for one shows on the next. */}
+      {id !== undefined && source !== undefined
+        && (federation?.ref.target ?? readRendererFederationTarget())?.scope !== "remote" ? (
         <ThreadFamilyPricingCard
+          key={JSON.stringify([source, id])}
           desktopApi={props.desktopApi}
           backend={source}
           threadId={id}

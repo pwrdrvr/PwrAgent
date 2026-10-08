@@ -22,13 +22,17 @@ const NAMED_SUB_THREADS = 4;
 type FamilyRead =
   | { state: "loading" }
   | { state: "failed" }
-  | { state: "ready"; threadKey: string; family: ReadThreadFamilyPricingResponse };
+  | { state: "ready"; family: ReadThreadFamilyPricingResponse };
 
 /**
  * What a thread and every sub-thread under it cost, from each thread's stored
- * running total. It is read when the Pricing tab opens and on Refresh, never
- * per streamed event: a running sub-thread keeps spending after the read, and
- * the card says so rather than re-reading underneath the operator.
+ * running total. It is read when the Pricing tab opens, when the sub-thread
+ * count changes, and on Refresh, never per streamed event: a running
+ * sub-thread keeps spending after the read, and the card says so rather than
+ * re-reading underneath the operator.
+ *
+ * Render it keyed by thread identity: every piece of state here belongs to
+ * one thread.
  */
 export const ThreadFamilyPricingCard = memo(function ThreadFamilyPricingCard(props: ThreadFamilyPricingCardProps) {
   const read = props.desktopApi?.readThreadFamilyPricing;
@@ -38,25 +42,21 @@ export const ThreadFamilyPricingCard = memo(function ThreadFamilyPricingCard(pro
   const [expanded, setExpanded] = useState(false);
   const threadLinks = useThreadLinks();
 
-  const threadKey = JSON.stringify([props.backend, props.threadId]);
   useEffect(() => {
     if (!enabled || !read) return;
     let current = true;
-    // Refresh keeps this thread's last totals on screen until the new read lands.
-    setResult((previous) => previous.state === "ready" && previous.threadKey === threadKey
-      ? previous : { state: "loading" });
+    // A re-read keeps the last totals on screen until the new ones land.
+    setResult((previous) => previous.state === "ready" ? previous : { state: "loading" });
     read({ backend: props.backend, threadId: props.threadId }).then(
-      (family) => { if (current) setResult({ state: "ready", threadKey, family }); },
+      (family) => { if (current) setResult({ state: "ready", family }); },
       () => { if (current) setResult({ state: "failed" }); },
     );
     return () => { current = false; };
-  }, [enabled, read, props.backend, props.threadId, threadKey, refreshes]);
-
-  useEffect(() => { setExpanded(false); }, [threadKey]);
+  }, [enabled, read, props.backend, props.threadId, props.subThreadCount, refreshes]);
 
   if (!enabled) return null;
 
-  if (result.state === "loading" || (result.state === "ready" && result.threadKey !== threadKey)) {
+  if (result.state === "loading") {
     return (
       <div className="rail-summary-card thread-family-pricing" aria-busy="true">
         <div className="rail-summary-card__header">

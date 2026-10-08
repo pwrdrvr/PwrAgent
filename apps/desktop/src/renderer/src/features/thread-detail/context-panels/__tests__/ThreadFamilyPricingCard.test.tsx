@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   ReadThreadFamilyPricingResponse,
@@ -118,6 +118,15 @@ describe("ThreadFamilyPricingCard", () => {
       next.resolve({ ...family, members: [family.members[0]!, member("csv", 2_160_000)] });
     });
     expect(screen.getByText("$4.00")).toBeInTheDocument();
+  });
+
+  it("reads again when a sub-thread is added", async () => {
+    const readThreadFamilyPricing = vi.fn(async () => family);
+    const view = render(<ThreadFamilyPricingCard desktopApi={{ readThreadFamilyPricing }} backend="codex" threadId="parent" subThreadCount={4} />);
+    await screen.findByText("$3.86");
+    view.rerender(<ThreadFamilyPricingCard desktopApi={{ readThreadFamilyPricing }} backend="codex" threadId="parent" subThreadCount={5} />);
+    await waitFor(() => expect(readThreadFamilyPricing).toHaveBeenCalledTimes(2));
+    expect(screen.getByText("$3.86")).toBeInTheDocument();
   });
 
   it("opens a sub-thread from its row", async () => {
