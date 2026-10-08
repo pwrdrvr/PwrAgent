@@ -962,6 +962,7 @@ MIT
 - gopd@1.2.0 | https://github.com/ljharb/gopd
 - grammy@1.46.0 | https://github.com/grammyjs/grammY
 - hachure-fill@0.5.2 | https://github.com/pshihn/hachure-fill
+- has-flag@4.0.0 | sindresorhus/has-flag
 - has-symbols@1.1.0 | https://github.com/inspect-js/has-symbols
 - has-tostringtag@1.0.2 | https://github.com/inspect-js/has-tostringtag
 - hasown@2.0.4 | https://github.com/inspect-js/hasOwn
@@ -1162,6 +1163,7 @@ MIT
 - style-to-js@1.1.21 | https://github.com/remarkablemark/style-to-js
 - style-to-object@1.0.14 | https://github.com/remarkablemark/style-to-object
 - stylis@4.4.0 | https://github.com/thysultan/stylis.js
+- supports-color@7.2.0 | chalk/supports-color
 - tar-stream@3.2.1 | https://github.com/mafintosh/tar-stream
 - teex@1.0.1 | https://github.com/mafintosh/teex
 - tiny-typed-emitter@2.1.0 | https://github.com/binier/tiny-typed-emitter
@@ -4952,11 +4954,13 @@ aggregate-error@3.1.0 (MIT)
 Applies to:
 - aggregate-error@3.1.0 (MIT)
 - clean-stack@2.2.0 (MIT)
+- has-flag@4.0.0 (MIT)
 - indent-string@4.0.0 (MIT)
 - p-retry@4.6.2 (MIT)
 - p-timeout@3.2.0 (MIT)
 - path-key@3.1.1 (MIT)
 - shebang-regex@3.0.0 (MIT)
+- supports-color@7.2.0 (MIT)
 
 Representative file: aggregate-error@3.1.0/license
 

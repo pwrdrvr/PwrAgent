@@ -516,7 +516,7 @@ describe("TranscriptReview copy affordances", () => {
     await waitFor(() => {
       expect(copyRichText).toHaveBeenCalledTimes(1);
     });
-    const { html, text } = copyRichText.mock.calls[0]?.[0] as {
+    const { html, text } = copyRichText.mock.calls[0]![0] as {
       html: string;
       text: string;
     };
@@ -551,7 +551,7 @@ describe("TranscriptReview copy affordances", () => {
     await waitFor(() => {
       expect(copyRichText).toHaveBeenCalledTimes(1);
     });
-    const { text } = copyRichText.mock.calls[0]?.[0] as { text: string };
+    const { text } = copyRichText.mock.calls[0]![0] as { text: string };
     expect(text).toContain("### [P2] Keep the legacy icns out of the bundle");
     expect(text).toContain("`apps/desktop/electron-builder.yml:41`");
     expect(text).toContain(

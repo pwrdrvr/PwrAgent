@@ -5,7 +5,7 @@
   "description": "Thread-centric coding agent desktop app",
   "author": "PwrDrvr LLC",
   "license": "MIT",
-  "copyright": "Copyright © 2026 PwrDrvr LLC.",
+  "copyright": "Copyright \u00a9 2026 PwrDrvr LLC.",
   "packageManager": "pnpm@12.9.1+sha512.06b055fff5cd20dc12781de173ced3310ce0951bf2ec620211a16045d5444d5c93a663210764ef29a653a610459ba0368f0e74f84d80c54723cf95aae7bc0d6d",
   "scripts": {
     "fix:linux-sandbox": "node ./scripts/linux-sandbox.mjs --fix",
@@ -20,12 +20,12 @@
     "licenses:allowlist": "node ./scripts/check-third-party-license-allowlist.mjs",
     "licenses:check": "node ./scripts/check-package-licenses.mjs && node ./scripts/check-third-party-license-allowlist.mjs && node ./scripts/generate-third-party-licenses.mjs --check",
     "licenses:generate": "node ./scripts/generate-third-party-licenses.mjs",
-    "lint": "pnpm lint:sql && pnpm lint:codex-storage && pnpm lint:colors && pnpm lint:electron-version && pnpm licenses:check && pnpm lint:eslint && pnpm typecheck && pnpm lint:boundaries",
-    "lint:boundaries": "depcruise --config .dependency-cruiser.cjs packages/ apps/desktop/src/",
+    "lint": "pnpm lint:sql && pnpm lint:codex-storage && pnpm lint:colors && pnpm lint:electron-version && pnpm licenses:check && pnpm lint:oxlint && pnpm lint:oxlint:typed && pnpm typecheck && pnpm lint:boundaries",
+    "lint:boundaries": "depcruise --config .dependency-cruiser.cjs --cache .local/depcruise-cache --cache-strategy content packages/ apps/desktop/src/",
     "lint:codex-storage": "node ./scripts/check-codex-storage-boundary.mjs",
     "lint:colors": "node ./scripts/lint-renderer-colors.mjs",
     "lint:electron-version": "node ./scripts/check-electron-version-policy.mjs",
-    "lint:eslint": "pnpm lint:eslint:cached && pnpm lint:eslint:typed",
+    "lint:eslint": "pnpm lint:oxlint && pnpm lint:oxlint:typed",
     "lint:eslint:cached": "eslint \"packages/**/*.{ts,tsx}\" \"apps/*/**/*.{ts,tsx}\" \"*.ts\" --cache --cache-strategy content --cache-location .eslintcache-untyped",
     "lint:eslint:typed": "eslint \"packages/**/*.{ts,tsx}\" \"apps/*/src/**/*.{ts,tsx}\" --config eslint.typed.config.mjs --no-inline-config --report-unused-disable-directives-severity off",
     "lint:sql": "node ./scripts/lint-sql-templates.mjs",
@@ -43,7 +43,9 @@
     "test:sqlite-writes": "node ./scripts/run-sqlite-write-report.mjs",
     "test:nice": "node ./scripts/nice-run.mjs pnpm test",
     "test:watch": "vitest --config vitest.workspace.ts",
-    "typecheck": "pnpm -r --if-present typecheck"
+    "typecheck": "pnpm -r --if-present typecheck",
+    "lint:oxlint": "node ./scripts/lint-syntax.mjs",
+    "lint:oxlint:typed": "node ./scripts/lint-typed.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -53,8 +55,12 @@
     "eslint-plugin-react-hooks": "^7.1.1",
     "globals": "^17.7.0",
     "jsdom": "^30.0.1",
+    "oxc-parser": "0.153.0",
+    "oxlint": "1.87.0",
+    "oxlint-tsgolint": "7.0.2003",
     "typescript": "^6.0.2",
     "typescript-eslint": "^8.62.0",
+    "typescript-native": "npm:typescript@7.0.2",
     "vite": "^7.3.6",
     "vitest": "^5.0.1"
   }

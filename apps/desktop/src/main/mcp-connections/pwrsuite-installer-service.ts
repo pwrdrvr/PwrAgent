@@ -315,7 +315,9 @@ export class PwrSuiteInstallerService {
       this.update(app, { phase: "idle", fileName: undefined });
       return { opened: false, error: "The installer is no longer in Downloads." };
     }
-    const error = await (this.options.openPath ?? shell.openPath)(path);
+    const error = this.options.openPath
+      ? await this.options.openPath(path)
+      : await shell.openPath(path);
     return error ? { opened: false, error } : { opened: true };
   }
 
@@ -324,7 +326,8 @@ export class PwrSuiteInstallerService {
     if (!path || !existsSync(path)) {
       return { opened: false, error: "The installer is no longer in Downloads." };
     }
-    (this.options.showItemInFolder ?? shell.showItemInFolder)(path);
+    if (this.options.showItemInFolder) this.options.showItemInFolder(path);
+    else shell.showItemInFolder(path);
     return { opened: true };
   }
 

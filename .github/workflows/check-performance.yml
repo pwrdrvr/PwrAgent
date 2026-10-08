@@ -1,0 +1,65 @@
+name: Development Check Performance
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+  workflow_dispatch:
+    inputs:
+      baseline:
+        description: Baseline revision in this repository
+        required: true
+        default: main
+      candidate:
+        description: Candidate revision in this repository
+        required: true
+        default: main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-performance-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compare:
+    name: Compare checks on one macOS runner
+    # Never execute public-fork code on the restricted self-hosted group.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+       contains(github.event.pull_request.labels.*.name, 'ci:benchmark-checks') &&
+       (github.event.action != 'labeled' || github.event.label.name == 'ci:benchmark-checks'))
+    runs-on: [self-hosted, macOS, ARM64, pwrdrvr-macos]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha || inputs.baseline }}
+          path: baseline
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || inputs.candidate }}
+          path: candidate
+      - name: Install baseline dependencies
+        uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
+        with:
+          node-version: "24.21.0"
+          working-directory: baseline
+          cache-electron: "true"
+      - name: Install candidate dependencies
+        uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
+        with:
+          node-version: "24.21.0"
+          working-directory: candidate
+          cache-electron: "true"
+      - name: Measure identical check slices on this runner
+        run: node candidate/scripts/ci/benchmark-dev-checks.mjs baseline candidate .local/check-performance
+      - name: Upload timings, load samples and logs
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: check-performance-${{ runner.name }}-${{ github.run_attempt }}
+          path: .local/check-performance/
+          include-hidden-files: true
+          if-no-files-found: warn

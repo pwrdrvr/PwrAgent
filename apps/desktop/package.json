@@ -54,7 +54,7 @@
     "inspect:e2e:live-work-rail-sticky-gap": "node scripts/ensure-electron-runtime.mjs && pnpm build && PWRAGENT_RAIL_INSPECT=1 playwright test -c playwright.inspect.config.ts e2e/live-work-rail-sticky-gap.inspect.spec.ts --headed",
     "screenshot:readme": "node scripts/ensure-electron-runtime.mjs && pnpm build && PWRAGENT_SCREENSHOT_CAPTURE=1 playwright test -c playwright.inspect.config.ts e2e/readme-screenshots.inspect.spec.ts --headed && node scripts/filter-noise-screenshots.mjs",
     "screenshot:docs-site": "node scripts/ensure-electron-runtime.mjs && pnpm build && PWRAGENT_DOCS_SITE_SCREENSHOT_CAPTURE=1 playwright test -c playwright.inspect.config.ts e2e/docs-site-screenshots.inspect.spec.ts --headed && node scripts/filter-noise-screenshots.mjs --root \"${PWRAGENT_DOCS_SITE_REPO:-$HOME/github/docs.pwragent.ai}\"",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "node ../../node_modules/typescript-native/bin/tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
     "@fontsource/geist-mono": "^5.3.0",

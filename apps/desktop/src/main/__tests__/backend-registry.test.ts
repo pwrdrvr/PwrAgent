@@ -15886,7 +15886,7 @@ script = "echo setup"
     expect(registerBridge).toHaveBeenCalledWith("pwrsnap", undefined);
     expect(bindThread).toHaveBeenCalledWith("thread-1");
     const mcpServers = (
-      codexClient.lastStartThreadParams?.config as {
+      codexClient.lastStartThreadParams!.config as {
         mcp_servers?: Record<string, unknown>;
       }
     )?.mcp_servers;
@@ -15952,7 +15952,7 @@ script = "echo setup"
       cwd: "/tmp/pwragent-scratch",
     });
     const mcpServers = (
-      codexClient.lastStartThreadParams?.config as {
+      codexClient.lastStartThreadParams!.config as {
         mcp_servers?: Record<string, unknown>;
       }
     )?.mcp_servers;
@@ -16149,7 +16149,7 @@ script = "echo setup"
     });
 
     expect(registerBridge).toHaveBeenCalledWith("pwrgit", undefined);
-    const servers = (codexClient.lastStartThreadParams?.config as { mcp_servers: Record<string, unknown> }).mcp_servers;
+    const servers = (codexClient.lastStartThreadParams!.config as { mcp_servers: Record<string, unknown> }).mcp_servers;
     expect(Object.keys(servers)[0]).toMatch(/^pwragent_pwrgit_/u);
     expect(Object.values(servers)).toMatchObject([{ command: process.execPath }]);
     await registry.close();
@@ -29560,7 +29560,7 @@ command = "pnpm dev"
         { kind: "thread-spend", spendMicros: 30_000_000 },
       ],
     });
-    const pendingAlert = (pricingEvents[1]?.notification.params as {
+    const pendingAlert = (pricingEvents[1]!.notification.params as {
       triggeredSpendAlerts?: ThreadSpendAlert[];
     }).triggeredSpendAlerts?.[0];
     expect(pendingAlert?.kind).toBe("thread-spend");
@@ -60931,7 +60931,7 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
         totalCount: 5,
       });
       expect(
-        (update?.notification.params as { threadIds: string[] }).threadIds.sort(),
+        (update!.notification.params as { threadIds: string[] }).threadIds.sort(),
       ).toEqual(["thread-missing-1", "thread-missing-2"]);
 
       await registry.close();
