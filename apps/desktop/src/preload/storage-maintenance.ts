@@ -1,18 +1,22 @@
 import { contextBridge, ipcRenderer } from "electron";
-import { DESKTOP_DARK_THEME_DEFAULT, DESKTOP_LIGHT_THEME_DEFAULT, isDesktopDarkTheme, isDesktopLightTheme, type DesktopDarkTheme, type DesktopLightTheme } from "@pwragent/shared";
 import { STORAGE_MAINTENANCE_CHANNEL, STORAGE_MAINTENANCE_EVENT, type StorageMaintenanceCommand, type StorageMaintenanceStatus } from "../shared/storage-maintenance";
 
 // The scheme alone is not the theme: the color theme (Light Blue, Solarized,
 // ...) recolors the tokens on top of it, as index.html applies for the shell.
+// Main already resolved these from config. Do not import `@pwragent/shared`
+// to re-validate them: code shared with preload/index.ts is split into a
+// sibling chunk, and a sandboxed preload cannot require one, which breaks the
+// main window's preload too. A well-formed unknown id is inert in CSS.
+const colorThemeId = (value: unknown) => typeof value === "string" && /^[a-z][a-z0-9-]*$/.test(value) ? value : undefined;
 let theme: "dark" | "light" | "system" = "system";
-let darkTheme: DesktopDarkTheme = DESKTOP_DARK_THEME_DEFAULT;
-let lightTheme: DesktopLightTheme = DESKTOP_LIGHT_THEME_DEFAULT;
+let darkTheme: string | undefined;
+let lightTheme: string | undefined;
 try {
   const argument = process.argv.find((value) => value.startsWith("--pwragent-appearance="));
   const value = argument ? JSON.parse(argument.slice("--pwragent-appearance=".length)) as { theme?: unknown; darkTheme?: unknown; lightTheme?: unknown } : undefined;
   if (value?.theme === "dark" || value?.theme === "light") theme = value.theme;
-  if (typeof value?.darkTheme === "string" && isDesktopDarkTheme(value.darkTheme)) darkTheme = value.darkTheme;
-  if (typeof value?.lightTheme === "string" && isDesktopLightTheme(value.lightTheme)) lightTheme = value.lightTheme;
+  darkTheme = colorThemeId(value?.darkTheme);
+  lightTheme = colorThemeId(value?.lightTheme);
 } catch { /* Use the system theme if the startup hint is unavailable. */ }
 contextBridge.exposeInMainWorld("storageMaintenance", {
   theme, darkTheme, lightTheme,
