@@ -6,6 +6,7 @@ import { readStorageMaintenance, setStorageHistoryPreference, storageHistoryPoli
 import { STORAGE_MAINTENANCE_CHANNEL, STORAGE_MAINTENANCE_EVENT, type StorageMaintenanceCommand, type StorageMaintenanceStatus } from "../shared/storage-maintenance";
 import { readBootstrapAppearance, themedWindowAdditionalArguments } from "./settings/appearance-bootstrap";
 import { themedWindowBackgroundColor } from "./native-appearance";
+import { auxiliaryWindowChromeOptions } from "./auxiliary-window-chrome";
 
 let interruptMaintenance: (() => Promise<void>) | undefined;
 export async function interruptStartupStorageMaintenance(): Promise<void> {
@@ -34,7 +35,10 @@ export async function runStartupStorageMaintenance(options: {
   if (otherInstances()) return;
   const appearance = readBootstrapAppearance();
   const window = new BrowserWindow({
-    width: 540, height: 460, title: "PwrAgent storage", show: false, resizable: false,
+    width: 540, height: 460, title: "PwrAgent storage", show: false,
+    // The Pwr-family title strip, as every auxiliary window draws it; the
+    // window is fixed-size, so there is nothing for the green button to zoom.
+    ...auxiliaryWindowChromeOptions(), resizable: false, maximizable: false,
     backgroundColor: themedWindowBackgroundColor(appearance),
     webPreferences: {
       preload: join(__dirname, "../preload/storage-maintenance.cjs"),
