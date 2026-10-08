@@ -55,6 +55,7 @@ import { useThreadDisplayResource } from "../../../lib/useThreadDisplayResource"
 import { RailCardTiming, useNowWhileActive } from "./RailCardTiming";
 import { TokenMiserSavingsBreakdown } from "./TokenMiserSavingsBreakdown";
 import { TokenMiserSummaryCard } from "./TokenMiserSummaryCard";
+import { ThreadFamilyPricingCard } from "./ThreadFamilyPricingCard";
 import { UsagePaceCard } from "./UsagePaceCard";
 import {
   exactSummaryMoneyTitle,
@@ -99,6 +100,8 @@ type PricingPanelProps = {
    * Supplies each sub-agent row's name and its live/terminal status.
    */
   subAgents?: ThreadSubAgentSummary[];
+  /** Ordinary sub-threads directly under this thread, from its navigation row. */
+  subThreadCount?: number;
   tokenMiserAccounting?: ThreadTokenMiserAccounting;
   threadReasoningEffort?: string;
   turnFailures?: readonly ThreadTurnFailure[];
@@ -299,6 +302,17 @@ export const PricingPanel = memo(function PricingPanel(props: PricingPanelProps)
         </>
       ) : model.totalRows === 0 && !fallbackEstimate ? (
         <p className="context-empty">No usage pricing recorded yet.</p>
+      ) : null}
+
+      {/* Stored totals live on the owning machine, so a peer's thread has no
+          family read here. */}
+      {id !== undefined && source !== undefined && federation?.ref.target.scope !== "remote" ? (
+        <ThreadFamilyPricingCard
+          desktopApi={props.desktopApi}
+          backend={source}
+          threadId={id}
+          subThreadCount={props.subThreadCount ?? 0}
+        />
       ) : null}
 
       {/* This thread's bill; the account's limit and its pace are the card,

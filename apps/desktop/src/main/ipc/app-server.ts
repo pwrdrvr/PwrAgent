@@ -2,12 +2,15 @@ import { publishedPrCommitShas } from "../../shared/pull-request-publication";
 import { USAGE_ACTIVITY_ANALYZE_CHANNEL } from "../../shared/ipc";
 import { archiveCandidateProtectionReason } from "../app-server/thread-archive-sweeper";
 import { USAGE_ACTIVITY_READ_CHANNEL } from "../../shared/ipc";
+import { THREAD_FAMILY_PRICING_READ_CHANNEL } from "../../shared/ipc";
+import { readThreadFamilyPricing } from "../app-server/thread-family-pricing";
 import { USAGE_ACTIVITY_OPEN_THREAD_CHANNEL, USAGE_ACTIVITY_OPEN_WINDOW_CHANNEL } from "../../shared/ipc";
 import type { WindowShowThreadRequest } from "../../shared/window-show-thread";
 import { showUsageActivityWindow } from "../usage-activity-window";
 import { primaryMainWindowWebContents } from "../primary-main-window";
 import { requestShowThread } from "../window-show-thread";
 import type { ReadUsageActivityRequest, ReadUsageActivityResponse, AnalyzeUsageActivityRequest, AnalyzeUsageActivityResponse } from "@pwragent/shared";
+import type { ReadThreadFamilyPricingRequest, ReadThreadFamilyPricingResponse } from "@pwragent/shared";
 import { navigationDiagnosticCause, navigationDiagnosticTrigger } from "../../shared/navigation-diagnostic-cause";
 import { listingDiagnostics, listingRequestFields } from "../diagnostics/listing-diagnostics";
 import { summarizeThreadAgentChange, type PrActivitySnapshot } from "@pwragent/shared";
@@ -1792,6 +1795,14 @@ class DesktopAppServerService {
       return await getDesktopFederationRuntime().remoteBackend(federationTarget).readUsageActivity(remoteRequest);
     }
     return await getDesktopBackendRegistry().readUsageActivity(request);
+  }
+
+  async readThreadFamilyPricing(request: ReadThreadFamilyPricingRequest): Promise<ReadThreadFamilyPricingResponse> {
+    return await readThreadFamilyPricing({
+      request,
+      loadIndex: () => loadLocalNavigationQueryIndex({ callerReason: "thread-family-pricing" }),
+      readSummaries: (threads) => getDesktopOverlayStore().readThreadPricingSummaries(threads),
+    });
   }
 
   async analyzeUsageActivity(request: AnalyzeUsageActivityRequest): Promise<AnalyzeUsageActivityResponse> {
@@ -8487,6 +8498,13 @@ export function registerAppServerIpcHandlers(): void {
   ipcMain.removeHandler(USAGE_ACTIVITY_READ_CHANNEL);
   ipcMain.handle(USAGE_ACTIVITY_READ_CHANNEL, async (_event, request: ReadUsageActivityRequest): Promise<ReadUsageActivityResponse> =>
     await appServerService.readUsageActivity(request));
+  ipcMain.removeHandler(THREAD_FAMILY_PRICING_READ_CHANNEL);
+  ipcMain.handle(THREAD_FAMILY_PRICING_READ_CHANNEL, async (_event, request: ReadThreadFamilyPricingRequest): Promise<ReadThreadFamilyPricingResponse> => {
+    if (typeof request?.backend !== "string" || typeof request?.threadId !== "string") {
+      throw new Error("Thread family pricing needs a backend and thread id.");
+    }
+    return await appServerService.readThreadFamilyPricing({ backend: request.backend, threadId: request.threadId });
+  });
   ipcMain.removeHandler(USAGE_ACTIVITY_ANALYZE_CHANNEL);
   ipcMain.handle(USAGE_ACTIVITY_ANALYZE_CHANNEL, async (_event, request: AnalyzeUsageActivityRequest): Promise<AnalyzeUsageActivityResponse> =>
     await appServerService.analyzeUsageActivity(request));
