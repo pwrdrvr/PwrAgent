@@ -262,7 +262,7 @@ export const noLocalAcpAgentDiscovery: LocalAcpDiscovery = async () => [];
 
 export type AcpSessionStoreLike =
   Pick<AcpSessionStoreContract, "getSession" | "listSessions"> &
-  Partial<Pick<AcpSessionStoreContract, "upsertSession" | "deleteSession">>;
+  Partial<Pick<AcpSessionStoreContract, "upsertSession" | "deleteSession" | "listArchiveCleanupSessionsPage">>;
 
 type AcpClientEntry = {
   client: AcpRuntimeClient;
@@ -1429,6 +1429,20 @@ export class AcpBackendAdapter {
     options?: { archived?: boolean },
   ): AcpSessionMetadata[] {
     return this.acpSessionStore?.listSessions(backendId, options) ?? [];
+  }
+
+  listArchiveCleanupSessionsPage(backendId: AcpBackendId, params: {
+    archived: boolean; after?: string; limit: number;
+  }): { sessions: AcpSessionMetadata[]; nextCursor?: string } {
+    if (this.acpSessionStore?.listArchiveCleanupSessionsPage) {
+      return this.acpSessionStore.listArchiveCleanupSessionsPage(backendId, params);
+    }
+    // Alternate in-memory stores retain their contract; the shipped SQLite
+    // store always uses bounded identity pages above.
+    const sessions = this.listSessions(backendId, { archived: params.archived })
+      .filter((session) => !params.after || session.sessionId > params.after)
+      .sort((left, right) => left.sessionId.localeCompare(right.sessionId)).slice(0, params.limit);
+    return { sessions, nextCursor: sessions.length === params.limit ? sessions.at(-1)?.sessionId : undefined };
   }
 
   getSession(

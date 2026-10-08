@@ -2669,12 +2669,14 @@ describe("useThreadNavigation", () => {
       threadId: "thread-archived",
       archivedAt: 3_000,
       cleanup: [],
+      cleanupPending: true,
     }));
+    let listener: ((event: AgentEvent) => unknown) | undefined;
 
     const desktopApi: DesktopApi = {
       archiveThread,
       readPopulation,
-      onAgentEvent: () => () => undefined,
+      onAgentEvent: (onEvent) => { listener = onEvent; return () => undefined; },
     };
 
     const { result } = renderHook(() => useThreadNavigation(desktopApi));
@@ -2693,6 +2695,7 @@ describe("useThreadNavigation", () => {
     expect(archiveThread).toHaveBeenCalledWith({
       backend: "codex",
       threadId: "thread-archived",
+      backgroundCleanup: true,
     });
     await waitFor(() => {
       expect(readPopulation).toHaveBeenCalledTimes(2);
@@ -2705,6 +2708,18 @@ describe("useThreadNavigation", () => {
     ]);
     expect(result.current.directories[0]?.counts?.total).toBe(0);
     expect(result.current.directories[0]?.counts?.unread).toBe(0);
+    await act(async () => {
+      listener?.({ backend: "codex", notification: {
+        method: "thread/archiveCleanup/completed",
+        params: { threadId: "thread-archived", archivedAt: 3000, cleanup: [{
+          removedWorktree: false, deletedBranch: false,
+          skippedReason: "Worktree is still used by another active thread: sibling.",
+        }] },
+      } });
+    });
+    expect(result.current.archiveThreadNotice?.title).toBe("Worktree kept");
+    expect(result.current.archiveThreadNotice?.message).toContain("another active thread");
+    expect(readPopulation).toHaveBeenCalledTimes(2);
   });
 
   it("archives a remote thread through its owning federation target", async () => {

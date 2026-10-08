@@ -27,6 +27,8 @@ type ArchiveWorktreeParams = {
   worktreePath: string;
   repositoryPath?: string;
   now?: number;
+  /** Returns a synchronous admission check for the actual removal dispatch. */
+  beforeRemove?: () => Promise<() => void>;
 };
 
 type RestoreWorktreeParams = {
@@ -67,6 +69,7 @@ async function runGit(
   options: {
     env?: NodeJS.ProcessEnv;
     ownProcessTree?: boolean;
+    beforeSpawn?: () => void;
   } = {},
 ): Promise<GitResult> {
   const env = buildPwrAgentChildProcessEnv(process.env, options.env);
@@ -194,13 +197,15 @@ export class WorktreeArchiveService {
     });
     const snapshotRef = snapshotRefForBackend(params.backend, worktreePath);
     await this.runGit(repositoryPath, ["update-ref", snapshotRef, snapshotCommit]);
+    const assertRemoval = await params.beforeRemove?.();
+    assertRemoval?.();
     await this.runGit(
       repositoryPath,
       ["worktree", "remove", "--force", worktreePath],
       // Git for Windows can hand work to another git.exe after the launcher
       // exits. Own that complete process tree atomically and do not report the
       // archive complete until the Job's active-process count reaches zero.
-      { ownProcessTree: true },
+      { ownProcessTree: true, beforeSpawn: assertRemoval },
     );
 
     const archivedAt = params.now ?? Date.now();
@@ -462,6 +467,7 @@ export class WorktreeArchiveService {
     options: {
       env?: NodeJS.ProcessEnv;
       ownProcessTree?: boolean;
+      beforeSpawn?: () => void;
     } = {},
   ): Promise<GitResult> {
     return await runGit(cwd, args, {
@@ -470,6 +476,7 @@ export class WorktreeArchiveService {
         ...options.env,
       },
       ownProcessTree: options.ownProcessTree,
+      beforeSpawn: options.beforeSpawn,
     });
   }
 }

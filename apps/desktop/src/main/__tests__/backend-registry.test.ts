@@ -53120,7 +53120,7 @@ script = "printf setup"
     } finally { await registry.close(); }
   });
 
-  it.each(["pin", "view", "provider activity"])("cancels automatic archive after %s during cleanup discovery", async (protection) => {
+  it.each(["pin", "view", "provider activity"])("cancels automatic archive after %s during final provider admission", async (protection) => {
     const thread: AppServerThreadSummary = {
       id: "stale-thread", title: "Old thread", titleSource: "explicit", source: "codex",
       threadStatus: "notLoaded", linkedDirectories: [], updatedAt: Date.now() - 31 * 24 * 60 * 60_000,
@@ -53134,13 +53134,12 @@ script = "printf setup"
     let started!: () => void;
     const cleanupBlocked = new Promise<void>((resolve) => { release = resolve; });
     const cleanupStarted = new Promise<void>((resolve) => { started = resolve; });
-    const listThreads = registry.listThreads.bind(registry);
-    vi.spyOn(registry, "listThreads").mockImplementation(async (params) => {
-      if (params?.callerReason === "archive-cleanup" && params.archived) {
+    client.readThreadSummary.mockImplementation(async () => {
+      if (client.readThreadSummary.mock.calls.length === 3) {
         started();
         await cleanupBlocked;
       }
-      return await listThreads(params);
+      return thread;
     });
     const archive = vi.spyOn(client, "archiveThread");
     let mutation: Promise<void> | undefined;
@@ -53185,20 +53184,18 @@ script = "printf setup"
     } finally { await registry.close(); }
   });
 
-  it("rechecks ACP activity after archive cleanup discovery", async () => {
+  it("rechecks ACP activity at final archive admission", async () => {
     const staleAt = Date.now() - 31 * 24 * 60 * 60_000;
     const sessions: AcpSessionMetadata[] = [
       { backendId: "acp:kimi", sessionId: "old-idle", title: "Old idle", createdAt: staleAt, updatedAt: staleAt, executionMode: "default", status: "idle" },
     ];
     const { registry } = createKimiAcpRegistry({ sessions });
-    const listThreads = registry.listThreads.bind(registry);
-    vi.spyOn(registry, "listThreads").mockImplementation(async (params) => {
-      const result = await listThreads(params);
-      if (params?.callerReason === "archive-cleanup") {
-        sessions[0]!.status = "active";
-        sessions[0]!.updatedAt = Date.now();
-      }
-      return result;
+    const internals = registry as unknown as { autoArchiveCandidatesAreEligible: (...args: unknown[]) => Promise<boolean> };
+    const admission = internals.autoArchiveCandidatesAreEligible.bind(internals);
+    vi.spyOn(internals, "autoArchiveCandidatesAreEligible").mockImplementation(async (...args) => {
+      sessions[0]!.status = "active";
+      sessions[0]!.updatedAt = Date.now();
+      return await admission(...args);
     });
     try {
       await registry.sweepInactiveThreads();
@@ -53473,6 +53470,7 @@ script = "printf setup"
       backend: "codex",
       threadId: "thread-child",
       parentThreadId: undefined,
+      expectedParent: { threadId: "thread-parent", backend: "codex", instanceId: undefined },
     });
 
     await registry.close();
@@ -53527,6 +53525,7 @@ script = "printf setup"
       backend: "acp:kimi",
       threadId: "kimi-child",
       parentThreadId: undefined,
+      expectedParent: { threadId: "codex-parent", backend: "acp:kimi", instanceId: undefined },
     });
 
     await registry.close();
@@ -53582,6 +53581,7 @@ script = "printf setup"
       backend: "codex",
       threadId: "codex-child",
       parentThreadId: undefined,
+      expectedParent: { threadId: "kimi-parent", backend: "acp:kimi", instanceId: undefined },
     });
 
     await registry.close();
@@ -55280,6 +55280,7 @@ script = "printf setup"
       backend: "codex",
       threadId: "thread-child",
       parentThreadId: undefined,
+      expectedParent: { threadId: "thread-missing-rollout", backend: "codex", instanceId: undefined },
     });
     expect(archiveWorktree).toHaveBeenCalledTimes(1);
     await expect(
@@ -60667,6 +60668,14 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
    * The pump this replaces (50 ticks of 100ms) satisfied the second by budget
    * — the audit settled by tick 20 — and the first only by luck of ordering.
    */
+  async function withArchivePacing<T>(promise: Promise<T>): Promise<T> {
+    let settled = false;
+    void promise.then(() => { settled = true; }, () => { settled = true; });
+    for (let slice = 0; slice < 200 && !settled; slice += 1) await vi.advanceTimersByTimeAsync(25);
+    expect(settled).toBe(true);
+    return await promise;
+  }
+
   async function settleMissingCodexThreadAudit(
     registry: DesktopBackendRegistry,
   ): Promise<void> {
@@ -60780,7 +60789,7 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
     const events: AgentEvent[] = [];
     registry.onEvent((event) => { events.push(event); });
     try {
-      await registry.archiveThread({ backend: "codex", threadId: "archive-target" });
+      await withArchivePacing(registry.archiveThread({ backend: "codex", threadId: "archive-target" }));
       await settleMissingCodexThreadAudit(registry);
       expect(codexClient.updateThreadWorkspaceCallCount).toBe(0);
       expect(codexClient.archivedThreadIds).toEqual(["archive-target"]);
@@ -60813,10 +60822,10 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
       await registry.listThreads({ backend: "codex", forceRefresh: true });
       await settleMissingCodexThreadAudit(registry);
       expect(codexClient.archivedThreadIds).toEqual([]);
-      const result = await registry.resolveMissingCodexThreads({
+      const result = await withArchivePacing(registry.resolveMissingCodexThreads({
         action: "archive",
         threadIds: ["thread-missing"],
-      });
+      }));
       expect(result.failedThreadIds).toEqual(["thread-missing"]);
     } finally {
       await registry.close();
@@ -60969,10 +60978,10 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
       await settleMissingCodexThreadAudit(registry);
 
       const threadIds = ["thread-missing-1", "thread-missing-2"];
-      const first = await registry.resolveMissingCodexThreads({
+      const first = await withArchivePacing(registry.resolveMissingCodexThreads({
         action: "archive",
         threadIds,
-      });
+      }));
       const second = await registry.resolveMissingCodexThreads({
         action: "archive",
         threadIds,
