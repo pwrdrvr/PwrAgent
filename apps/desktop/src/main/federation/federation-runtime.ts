@@ -466,6 +466,9 @@ const CELESTIAL_TOMBSTONE_TTL_MS = 7 * 24 * 60 * 60_000;
 const DUPLICATE_IDENTITY_NOTE_TTL_MS = 5 * 60_000;
 /** A session must last this long before it counts as stable enough to reset backoff. */
 const FEDERATION_STABLE_SESSION_MS = 60_000;
+/** How long before a Cloudflare grant ends that its sign-in prompt appears. */
+const CLOUDFLARE_SIGN_IN_EXPIRY_WARNING_MS = 24 * 60 * 60_000;
+const SIGN_IN_EXPIRY_RECHECK_MS = 60 * 60_000;
 
 function rewriteLiveTranscriptImagesForFederation(
   event: AgentEvent,
@@ -1086,6 +1089,7 @@ export class DesktopFederationRuntime {
   private remoteThreadSummaryCache: RemoteThreadSummaryCache | undefined;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
   private accessRefreshTimer?: ReturnType<typeof setTimeout>;
+  private signInExpiryTimer?: ReturnType<typeof setTimeout>;
   /**
    * Dialing stopped on a failure no retry can fix: a lapsed Cloudflare sign-in
    * or a credential Cloudflare refused, on the only configured endpoint.
@@ -1105,6 +1109,7 @@ export class DesktopFederationRuntime {
   private lastConnectionFailureKind?: "auth" | "replaced" | "transport";
   private cloudflareSignInRequiredEndpoint?: string;
   private cloudflareSignInPending = false;
+  private cloudflareSignInExpiring?: { endpoint: string; expiresAt: number };
   /** Peer ids the gateway recently flagged for duplicate-identity churn. */
   private readonly duplicateIdentitySuspectedAt = new Map<
     FederationInstanceId,
@@ -1436,6 +1441,8 @@ export class DesktopFederationRuntime {
     }
     clearTimeout(this.accessRefreshTimer);
     this.accessRefreshTimer = undefined;
+    clearTimeout(this.signInExpiryTimer);
+    this.signInExpiryTimer = undefined;
     this.unsubscribeLocalBackendEvents?.();
     this.unsubscribeLocalBackendEvents = undefined;
     this.remoteThreadSummaryCache?.dispose();
@@ -1482,6 +1489,7 @@ export class DesktopFederationRuntime {
     this.lastConnectionFailureKind = undefined;
     this.gatewayListenerError = undefined;
     this.setCloudflareSignInRequired(undefined);
+    this.setCloudflareSignInExpiring(undefined);
   }
 
   async setDetailedTrafficCapture(enabled: boolean): Promise<ReadFederationActivityResponse> {
@@ -1607,6 +1615,12 @@ export class DesktopFederationRuntime {
     if (config.cloudflareAccessOAuthEnabled && this.cloudflareSignInRequiredEndpoint) {
       health.cloudflareSignInRequired = {
         endpoint: this.cloudflareSignInRequiredEndpoint,
+        ...(this.cloudflareSignInPending ? { pending: true } : {}),
+      };
+    } else if (config.cloudflareAccessOAuthEnabled && this.cloudflareSignInExpiring) {
+      health.cloudflareSignInExpiring = {
+        endpoint: this.cloudflareSignInExpiring.endpoint,
+        expiresAt: new Date(this.cloudflareSignInExpiring.expiresAt).toISOString(),
         ...(this.cloudflareSignInPending ? { pending: true } : {}),
       };
     }
@@ -3777,7 +3791,51 @@ export class DesktopFederationRuntime {
     log.info("federation client connected", { gatewayUrl });
     if (cloudflareSignIn) {
       this.scheduleAccessRefresh(cloudflareSignIn, gatewayUrl, client, connectionGeneration);
+      this.scheduleSignInExpiry(cloudflareSignIn, gatewayUrl, client, connectionGeneration);
     }
+  }
+
+  /**
+   * Ask for a new sign-in a day before a connection's Cloudflare grant ends.
+   *
+   * A refresh does not extend the grant, so without this Federation runs until
+   * the grant lapses mid-session and only then asks. Known only when the
+   * gateway's setup file carried its grant lifetime. The timer re-checks at
+   * least hourly, because a sleeping Mac pauses it while the deadline moves.
+   */
+  private scheduleSignInExpiry(
+    signIn: ReturnType<typeof getCloudflareAccessSignIn>,
+    gatewayUrl: string,
+    client: FederationClientWebSocketClient,
+    connectionGeneration: number,
+  ): void {
+    clearTimeout(this.signInExpiryTimer);
+    this.signInExpiryTimer = undefined;
+    const current = () =>
+      !this.stopping
+      && this.client === client
+      && connectionGeneration === this.connectionGeneration;
+    void Promise.resolve()
+      .then(() => signIn.signInExpiresAt(gatewayUrl))
+      .catch(() => undefined)
+      .then((expiresAt) => {
+        if (!current()) return;
+        if (expiresAt === undefined) {
+          this.setCloudflareSignInExpiring(undefined);
+          return;
+        }
+        const untilWarning = expiresAt - CLOUDFLARE_SIGN_IN_EXPIRY_WARNING_MS - Date.now();
+        if (untilWarning <= 0) {
+          this.setCloudflareSignInExpiring({ endpoint: gatewayUrl, expiresAt });
+          return;
+        }
+        this.setCloudflareSignInExpiring(undefined);
+        this.signInExpiryTimer = setTimeout(() => {
+          this.signInExpiryTimer = undefined;
+          if (current()) this.scheduleSignInExpiry(signIn, gatewayUrl, client, connectionGeneration);
+        }, Math.min(untilWarning, SIGN_IN_EXPIRY_RECHECK_MS));
+        this.signInExpiryTimer.unref?.();
+      });
   }
 
   /**
@@ -3885,6 +3943,13 @@ export class DesktopFederationRuntime {
     this.publishHealthChanged();
   }
 
+  private setCloudflareSignInExpiring(expiring: { endpoint: string; expiresAt: number } | undefined): void {
+    if (this.cloudflareSignInExpiring?.endpoint === expiring?.endpoint
+      && this.cloudflareSignInExpiring?.expiresAt === expiring?.expiresAt) return;
+    this.cloudflareSignInExpiring = expiring;
+    this.publishHealthChanged();
+  }
+
   /**
    * A browser sign-in is running in main. Each window draws its sign-in
    * notice from health, so a window that did not start the sign-in shows it
@@ -3893,7 +3958,7 @@ export class DesktopFederationRuntime {
   setCloudflareSignInPending(pending: boolean): void {
     if (this.cloudflareSignInPending === pending) return;
     this.cloudflareSignInPending = pending;
-    if (this.cloudflareSignInRequiredEndpoint) this.publishHealthChanged();
+    if (this.cloudflareSignInRequiredEndpoint || this.cloudflareSignInExpiring) this.publishHealthChanged();
   }
 
   private publishHealthChanged(): void {

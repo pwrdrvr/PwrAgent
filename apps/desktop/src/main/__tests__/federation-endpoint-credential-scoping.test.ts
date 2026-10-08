@@ -53,12 +53,14 @@ const signIn = vi.hoisted(() => ({
   accessToken: vi.fn(async (_endpoint: string): Promise<string> => "oauth:access-token"),
   // Due now: the refresh timer then waits its one-minute floor.
   refreshDueAt: vi.fn(async (_endpoint: string): Promise<number | undefined> => Date.now()),
+  signInExpiresAt: vi.fn(async (_endpoint: string): Promise<number | undefined> => undefined),
 }));
 
 vi.mock("../federation/cloudflare-access-sign-in", () => ({
   getCloudflareAccessSignIn: () => ({
     accessToken: signIn.accessToken,
     refreshDueAt: signIn.refreshDueAt,
+    signInExpiresAt: signIn.signInExpiresAt,
     invalidateAccessToken: async () => undefined,
   }),
 }));
@@ -344,6 +346,64 @@ describe("federation endpoint credential scoping", () => {
     expect(publish).toHaveBeenLastCalledWith({
       backend: "codex", notification: { method: FEDERATION_HEALTH_CHANGED_METHOD, params: {} },
     });
+  });
+
+  it("asks for a new sign-in a day before the grant ends, rechecking at least hourly", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      signIn.enabled = true;
+      cloudflareEndpoint.value = "wss://federation.example.com";
+      // The day-ahead prompt falls due 90 minutes after connecting.
+      const expiresAt = Date.now() + 24 * 60 * 60_000 + 90 * 60_000;
+      signIn.signInExpiresAt.mockResolvedValue(expiresAt);
+      const runtime = createHarness([cloudflareEndpoint.value]) as CredentialHarness & {
+        handleClientConnectionFailure: (error: unknown) => void;
+        disconnectAdvertisedPeers: () => void;
+        setAgentEventPublisher: DesktopFederationRuntime["setAgentEventPublisher"];
+        health: DesktopFederationRuntime["health"];
+        setCloudflareSignInPending: DesktopFederationRuntime["setCloudflareSignInPending"];
+        readRuntimeConfig: () => FederationRuntimeConfig;
+        visiblePeers: () => [];
+        readClientEnrollment: () => undefined;
+        activeCelestialAssignments: () => [];
+      };
+      runtime.disconnectAdvertisedPeers = () => undefined;
+      const config = runtime.readRuntimeConfig();
+      runtime.readRuntimeConfig = () => ({ ...config, mode: "client", gatewayEndpoints: [cloudflareEndpoint.value] });
+      runtime.visiblePeers = () => [];
+      runtime.readClientEnrollment = () => undefined;
+      runtime.activeCelestialAssignments = () => [];
+      const publish = vi.fn();
+      runtime.setAgentEventPublisher(publish);
+      const healthChanges = () => publish.mock.calls
+        .filter(([event]) => event.notification.method === FEDERATION_HEALTH_CHANGED_METHOD).length;
+      await runtime.connectClient(cloudflareEndpoint.value);
+      await vi.advanceTimersByTimeAsync(0);
+      expect((await runtime.health()).cloudflareSignInExpiring).toBeUndefined();
+      // A sleeping Mac pauses timers, so the wait is checked again within the hour.
+      await vi.advanceTimersByTimeAsync(60 * 60_000);
+      expect(signIn.signInExpiresAt).toHaveBeenCalledTimes(2);
+      expect((await runtime.health()).cloudflareSignInExpiring).toBeUndefined();
+      expect(healthChanges()).toBe(0);
+      await vi.advanceTimersByTimeAsync(30 * 60_000);
+      expect((await runtime.health()).cloudflareSignInExpiring).toEqual({
+        endpoint: cloudflareEndpoint.value, expiresAt: new Date(expiresAt).toISOString(),
+      });
+      expect(healthChanges()).toBe(1);
+      runtime.setCloudflareSignInPending(true);
+      expect((await runtime.health()).cloudflareSignInExpiring?.pending).toBe(true);
+      expect(healthChanges()).toBe(2);
+      runtime.setCloudflareSignInPending(false);
+      // Once the grant has ended, the requirement replaces the warning.
+      runtime.handleClientConnectionFailure(new CloudflareSignInRequiredError());
+      const health = await runtime.health();
+      expect(health.cloudflareSignInRequired).toEqual({ endpoint: cloudflareEndpoint.value });
+      expect(health.cloudflareSignInExpiring).toBeUndefined();
+    } finally {
+      signIn.signInExpiresAt.mockReset();
+      signIn.signInExpiresAt.mockResolvedValue(undefined);
+      vi.useRealTimers();
+    }
   });
 
   it("does not offer OAuth sign-in when Cloudflare refuses a service credential", () => {

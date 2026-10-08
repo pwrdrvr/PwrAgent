@@ -490,6 +490,11 @@ export type FederationHealthStatus = {
    * `pending` is main's one browser sign-in, so every window can show it.
    */
   cloudflareSignInRequired?: { endpoint: string; pending?: boolean };
+  /**
+   * This client's Cloudflare grant ends soon (`expiresAt`, ISO). Signing in
+   * again before then starts a new grant without a disconnected gap.
+   */
+  cloudflareSignInExpiring?: { endpoint: string; expiresAt: string; pending?: boolean };
   enabled: boolean;
   role: FederationInstanceRole;
   status: FederationConnectionState;

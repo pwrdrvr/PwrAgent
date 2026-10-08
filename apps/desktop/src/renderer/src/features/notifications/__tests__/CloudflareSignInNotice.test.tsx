@@ -108,6 +108,46 @@ describe("Cloudflare sign-in recovery notice", () => {
     expect(screen.getByRole("button", { name: "Sign in" })).toBeInTheDocument();
   });
 
+  it("asks for a sign-in before the grant ends, and a dismissed warning does not hide the expiry", async () => {
+    const expiresAt = "2026-10-09T15:30:00.000Z";
+    const expiring: FederationHealthStatus = {
+      enabled: true, role: "client", status: "connected", peers: [],
+      cloudflareSignInExpiring: { endpoint, expiresAt },
+    };
+    const configure = vi.fn(async () => signedIn);
+    const desktopApi = { configureFederationCloudflare: configure };
+    const view = render(<NoticeHarness health={expiring} desktopApi={desktopApi} />);
+    expect(document.querySelector(".app-notice-toast__title")).toHaveTextContent("Cloudflare sign-in expires soon");
+    expect(screen.getByRole("status")).toHaveTextContent("Sign in again now to keep Federation connected");
+    const facts = [...document.querySelectorAll(".app-notice-toast__fact dt")].map((term) => term.textContent);
+    expect(facts).toEqual(["Expires", "Endpoint"]);
+    expect(document.querySelector(".app-notice-toast__timer")).not.toBeInTheDocument();
+    view.rerender(<NoticeHarness health={{ ...expiring, cloudflareSignInExpiring: { endpoint, expiresAt, pending: true } }} desktopApi={desktopApi} />);
+    expect(screen.getByRole("status")).toHaveTextContent("Waiting for browser sign-in");
+    view.rerender(<NoticeHarness health={expiring} desktopApi={desktopApi} />);
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Sign in" })));
+    expect(configure).toHaveBeenCalledExactlyOnceWith({ action: "sign-in" });
+    view.rerender(<NoticeHarness health={{ ...expiring }} desktopApi={desktopApi} />);
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    // Dismissing the warning is not dismissing the expiry it warned about.
+    view.rerender(<NoticeHarness health={required} desktopApi={desktopApi} />);
+    expect(document.querySelector(".app-notice-toast__title")).toHaveTextContent("Cloudflare Access needs sign-in");
+  });
+
+  it("dismisses an early warning without hiding the expiry that follows", () => {
+    const expiring: FederationHealthStatus = {
+      enabled: true, role: "client", status: "connected", peers: [],
+      cloudflareSignInExpiring: { endpoint, expiresAt: "2026-10-09T15:30:00.000Z" },
+    };
+    const desktopApi = { configureFederationCloudflare: vi.fn(async () => signedIn) };
+    const view = render(<NoticeHarness health={expiring} desktopApi={desktopApi} />);
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss notice" }));
+    view.rerender(<NoticeHarness health={{ ...expiring }} desktopApi={desktopApi} />);
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    view.rerender(<NoticeHarness health={required} desktopApi={desktopApi} />);
+    expect(screen.getByRole("button", { name: "Sign in" })).toBeInTheDocument();
+  });
+
   it("keeps a dismissal through repeated health updates and prompts for a later incident", () => {
     const desktopApi = { configureFederationCloudflare: vi.fn(async () => signedIn) };
     const view = render(<NoticeHarness health={required} desktopApi={desktopApi} />);

@@ -14,9 +14,15 @@ export function CloudflareSignInNotice(props: {
   const required = props.health?.enabled
     ? props.health.cloudflareSignInRequired
     : undefined;
-  const endpoint = required?.endpoint;
+  // Before the grant ends, the same card asks for a sign-in ahead of time.
+  const expiring = props.health?.enabled && !required
+    ? props.health.cloudflareSignInExpiring
+    : undefined;
+  const prompt = required ?? expiring;
+  const endpoint = prompt?.endpoint;
+  const expiresAt = expiring?.expiresAt;
   // Main runs one sign-in. Another window, or Settings, may have started it.
-  const signInRunning = required?.pending === true;
+  const signInRunning = prompt?.pending === true;
   const configure = props.desktopApi?.configureFederationCloudflare;
   const { onNoticeChanged, onRefreshHealth } = props;
   const [dismissed, setDismissed] = useState(false);
@@ -27,7 +33,8 @@ export function CloudflareSignInNotice(props: {
   const controlling = useRef(false);
 
   // One notice per incident: fresh health objects must not resurrect a
-  // dismissal. A cleared requirement arms the next sign-in prompt.
+  // dismissal. A cleared requirement arms the next sign-in prompt, and a
+  // dismissed early warning does not hide the expiry that follows it.
   useEffect(() => {
     generation.current += 1;
     signingIn.current = false;
@@ -36,7 +43,7 @@ export function CloudflareSignInNotice(props: {
     setPending(false);
     setError(undefined);
     return () => { generation.current += 1; };
-  }, [endpoint, configure]);
+  }, [endpoint, expiresAt, configure]);
 
   // A sign-in another window started supersedes this window's last failure.
   useEffect(() => {
@@ -90,15 +97,21 @@ export function CloudflareSignInNotice(props: {
     const failed = !waiting && error !== undefined;
     return {
       id: CLOUDFLARE_SIGN_IN_NOTICE_ID,
-      title: failed ? "Cloudflare sign-in failed" : "Cloudflare Access needs sign-in",
+      title: failed
+        ? "Cloudflare sign-in failed"
+        : expiresAt ? "Cloudflare sign-in expires soon" : "Cloudflare Access needs sign-in",
       message: waiting
         ? "Federation reconnects when you finish signing in."
         : failed
           ? error
-          : "Federation is disconnected. Sign in again to reconnect to your other machines.",
+          : expiresAt
+            ? "Sign in again now to keep Federation connected to your other machines."
+            : "Federation is disconnected. Sign in again to reconnect to your other machines.",
       // Reopen and Cancel can fail while the sign-in still waits.
       detail: waiting ? error : undefined,
-      facts: [{ label: "Endpoint", value: endpoint }],
+      facts: expiresAt
+        ? [{ label: "Expires", value: formatExpiry(expiresAt) }, { label: "Endpoint", value: endpoint }]
+        : [{ label: "Endpoint", value: endpoint }],
       autoDismiss: false,
       tone: failed ? "error" : "warning",
       status: waiting ? { label: "Waiting for browser sign-in", state: "progress" } : undefined,
@@ -110,11 +123,21 @@ export function CloudflareSignInNotice(props: {
       ],
       onDismiss: () => setDismissed(true),
     };
-  }, [endpoint, configure, dismissed, pending, signInRunning, error, signIn, controlSignIn]);
+  }, [endpoint, expiresAt, configure, dismissed, pending, signInRunning, error, signIn, controlSignIn]);
 
   useEffect(() => {
     onNoticeChanged(notice);
   }, [notice, onNoticeChanged]);
 
   return null;
+}
+
+function formatExpiry(iso: string): string {
+  return new Date(iso).toLocaleString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }

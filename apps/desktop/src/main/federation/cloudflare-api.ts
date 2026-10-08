@@ -270,6 +270,19 @@ export function isExpectedOAuthConfiguration(value: unknown): boolean {
       || (Array.isArray(registration.allowed_uris) && registration.allowed_uris.length === 0));
 }
 
+/**
+ * How long a Managed OAuth grant lasts before Access asks for a new sign-in,
+ * from an application's live `oauth_configuration`; the operator may have
+ * tuned it in the dashboard. Undefined when Cloudflare reports none.
+ */
+export function oauthGrantLifetimeMs(value: unknown): number | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const grant = (value as { grant?: unknown }).grant;
+  if (!grant || typeof grant !== "object") return undefined;
+  const lifetime = parseCloudflareDuration((grant as { session_duration?: unknown }).session_duration);
+  return lifetime && lifetime > 0 ? lifetime : undefined;
+}
+
 /** The people an `oauth` endpoint admits, by the email their login method verified. */
 export function cloudflareIdentityPolicy(emails: string[]) {
   return {

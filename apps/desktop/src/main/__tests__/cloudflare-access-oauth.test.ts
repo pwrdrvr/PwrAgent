@@ -298,6 +298,38 @@ describe("Cloudflare Access sign-in", () => {
   });
 });
 
+describe("Cloudflare Access grant lifetime", () => {
+  const now = 1_000_000_000_000;
+  const lifetime = 336 * 3_600_000;
+
+  it("dates the grant from a setup file's lifetime and keeps it through later sign-ins and a refusal", async () => {
+    const h = harness({ now: () => now });
+    await h.oauth.signIn(ENDPOINT, { lifetimeMs: lifetime });
+    expect(h.stored()).toMatchObject({ signedInAt: now, signInLifetimeMs: lifetime });
+    await expect(h.oauth.signInExpiresAt(ENDPOINT)).resolves.toBe(now + lifetime);
+    expect((await h.oauth.status(ENDPOINT))?.signInExpiresAt).toBe(new Date(now + lifetime).toISOString());
+    await expect(h.oauth.signInExpiresAt("wss://other.example.com")).resolves.toBeUndefined();
+    // A sign-in from the toast or Settings carries no file.
+    // A fresh callback port: the keep-alive agent still holds a socket to the last one.
+    const again = harness({ now: () => now + 1000, session: { ...h.stored()!, redirectUri: undefined } });
+    await again.oauth.signIn(ENDPOINT);
+    expect(again.stored()).toMatchObject({ signedInAt: now + 1000, signInLifetimeMs: lifetime });
+    // A refused refresh drops the grant but not what the file said about it.
+    const refused = harness({ now: () => now, session: { ...h.stored()!, accessToken: undefined, refreshToken: "revoked" } });
+    await expect(refused.oauth.accessToken(ENDPOINT)).rejects.toBeInstanceOf(CloudflareSignInRequiredError);
+    expect(refused.stored()?.signInLifetimeMs).toBe(lifetime);
+    await expect(refused.oauth.signInExpiresAt(ENDPOINT)).resolves.toBeUndefined();
+    expect((await refused.oauth.status(ENDPOINT))?.signInExpiresAt).toBeUndefined();
+  });
+
+  it("reports no expiry for a grant whose lifetime no setup file stated", async () => {
+    const h = harness({ now: () => now });
+    await h.oauth.signIn(ENDPOINT);
+    await expect(h.oauth.signInExpiresAt(ENDPOINT)).resolves.toBeUndefined();
+    expect((await h.oauth.status(ENDPOINT))?.signInExpiresAt).toBeUndefined();
+  });
+});
+
 describe("Cloudflare Access tokens", () => {
   const now = 1_000_000_000_000;
   const session = (overrides: Partial<CloudflareAccessSession> = {}): CloudflareAccessSession => ({

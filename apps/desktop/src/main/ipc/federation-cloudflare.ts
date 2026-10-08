@@ -266,6 +266,9 @@ export function registerCloudflareSetupIpc(): void {
           // endpoint and invite, and the person signs in as themselves.
           const client = gate === "oauth" ? undefined : await setup.issue(request.label);
           if (gate === "oauth") await setup.assertShareable();
+          // Advisory: without it the client signs in the same, but cannot
+          // ask for a new sign-in before its grant ends.
+          const signInLifetimeMs = gate === "oauth" ? await setup.signInLifetimeMs().catch(() => undefined) : undefined;
           const state = await loadCloudflareSetup();
           if (!state) throw new Error("Cloudflare setup is unavailable.");
           const generated = await getDesktopFederationRuntime().generateInvite({ label: request.label, ttlMs: hours * 3_600_000 });
@@ -277,6 +280,7 @@ export function registerCloudflareSetupIpc(): void {
             ...(gate === "service-token"
               ? { accessClientId: client?.clientId, accessClientSecret: client?.clientSecret }
               : gate === "mtls" ? { certificate: client?.certificate, privateKey: client?.privateKey } : {}),
+            ...(signInLifetimeMs ? { signInLifetimeMs } : {}),
           }, request.password), { mode: 0o600 });
           const expiry = hours === 1 ? "one hour" : `${hours} hours`;
           return describe(gate === "oauth"
@@ -308,7 +312,7 @@ export function registerCloudflareSetupIpc(): void {
             // Sign in before changing any setting: if the person cannot sign
             // in, this profile's federation config is left as it was.
             try {
-              await getCloudflareAccessSignIn().signIn(bundle.endpoint);
+              await getCloudflareAccessSignIn().signIn(bundle.endpoint, { lifetimeMs: bundle.signInLifetimeMs });
             } catch (error) {
               if (error instanceof CloudflareSignInCancelledError) return describe("Sign-in cancelled. Nothing on this profile changed.");
               throw error;

@@ -455,6 +455,27 @@ describe("Cloudflare sign-in (oauth) admission", () => {
     }
   });
 
+  it("reads the sign-in lifetime a setup file states from the live grant", async () => {
+    const h = harness("oauth");
+    await h.connect();
+    await h.provision();
+    // Provisioned at Cloudflare's recommended two weeks.
+    await expect(h.service.signInLifetimeMs()).resolves.toBe(336 * 3_600_000);
+    // The operator may tune it in the dashboard; the file follows the live value.
+    const tuned = { ...(h.resources.get(app(h))!.oauth_configuration as object), grant: { access_token_lifetime: "15m", session_duration: "168h" } };
+    h.resources.set(app(h), { ...h.resources.get(app(h)), oauth_configuration: tuned });
+    await expect(h.service.signInLifetimeMs()).resolves.toBe(168 * 3_600_000);
+    h.resources.set(app(h), { ...h.resources.get(app(h)), oauth_configuration: { ...tuned, grant: {} } });
+    await expect(h.service.signInLifetimeMs()).resolves.toBeUndefined();
+  });
+
+  it("states no sign-in lifetime for a credential gate", async () => {
+    const h = harness("service-token");
+    await h.connect();
+    await h.provision();
+    await expect(h.service.signInLifetimeMs()).resolves.toBeUndefined();
+  });
+
   it("fails the audit when a browser session outlasts a sign-in", async () => {
     for (const duration of ["24h", undefined, "not a duration"]) {
       const h = harness("oauth");

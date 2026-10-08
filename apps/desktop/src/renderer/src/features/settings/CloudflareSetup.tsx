@@ -774,7 +774,9 @@ export function CloudflareSetup(props: Props) {
             <AutomationStage verb="Sign in" title="Cloudflare Access sign-in">
               <p className="cloudflare-setup__state" role="status">
                 {status.signIn.state === "signed-in"
-                  ? <><strong>Signed in</strong>{status.signIn.signedInAt ? ` since ${new Date(status.signIn.signedInAt).toLocaleString()}` : ""}. Access refreshes automatically. When this sign-in expires or Access revokes it, PwrAgent asks you to sign in again.</>
+                  ? <><strong>Signed in</strong>{status.signIn.signedInAt ? ` since ${new Date(status.signIn.signedInAt).toLocaleString()}` : ""}. {status.signIn.signInExpiresAt
+                    ? `Access refreshes automatically until ${new Date(status.signIn.signInExpiresAt).toLocaleString()}. PwrAgent asks you to sign in again the day before, or sooner if Access revokes this sign-in.`
+                    : "Access refreshes automatically. When this sign-in expires or Access revokes it, PwrAgent asks you to sign in again."}</>
                   : status.signIn.state === "sign-in-required"
                     ? <><strong>Sign-in required.</strong> {status.signIn.lastError ?? "Your Cloudflare sign-in expired."} Federation reconnects once you sign in.</>
                     : <><strong>Signed out.</strong> Sign in to connect to <code>{status.signIn.endpoint}</code>.</>}
