@@ -154,12 +154,17 @@ describe("SendThreadToMachineDialog", () => {
       .toBeInTheDocument();
   });
 
-  it("sends a Workspaces thread as history only, with no repository field", async () => {
+  it("discloses non-Git workspace copying before sending, with no repository field", async () => {
     const { onSend } = renderDialog({
       source: { title: "Sketch the release checklist" },
     });
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
     expect(screen.getByText(/This thread has no Git project/)).toBeInTheDocument();
+    expect(screen.getByText(/including hidden files/)).toBeInTheDocument();
+    expect(screen.getByText(/Remove sensitive files before sending/)).toBeInTheDocument();
+    expect(screen.getByText(/Symlinks pointing outside the workspace/)).toBeInTheDocument();
+    expect(screen.queryByText(/Files in this workspace are not copied/)).not.toBeInTheDocument();
+    expect(onSend).not.toHaveBeenCalled();
     await act(async () => {
       screen.getByRole("button", { name: "Copy to build-linux" }).click();
     });

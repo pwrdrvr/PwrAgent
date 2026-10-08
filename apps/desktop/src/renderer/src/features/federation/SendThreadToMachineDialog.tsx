@@ -33,7 +33,7 @@ export type SendThreadToMachineRequest = {
 
 export type SendThreadToMachineSource = {
   title: string;
-  /** The thread's Git project. Absent for a Workspaces thread: history only. */
+  /** The thread's Git project. Non-Git workspaces travel as an archive. */
   project?: ProjectIdentity;
   gitBranch?: string;
   gitWorkingState?: ThreadGitWorkingState;
@@ -307,8 +307,10 @@ export function SendThreadToMachineDialog(props: {
             {!project ? (
               <p className="workspace-handoff-dialog__note">
                 This thread has no Git project. Its history starts in a new workspace
-                {target ? ` on ${target.label}` : ""}. Files in this workspace are not
-                copied.
+                {target ? ` on ${target.label}` : ""}. Any available workspace is also
+                copied, including hidden files. Remove sensitive files before sending.
+                Symlinks pointing outside the workspace are omitted; all symlinks are
+                omitted when Windows is involved.
               </p>
             ) : null}
             <div

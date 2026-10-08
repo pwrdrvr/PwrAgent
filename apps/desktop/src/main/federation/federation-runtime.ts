@@ -9,7 +9,6 @@ import { FederationFilePullReader, FILE_PULL_MARKDOWN_METHOD, resolveFilePullThr
 import type { HandoffInstanceThreadRequest, HandoffInstanceThreadResult } from "@pwragent/shared";
 import { resolveActiveProfileDir } from "../profile";
 import { ThreadInstanceHandoffService, THREAD_HANDOFF_METHODS, type ImportInstanceThreadRequest } from "./thread-instance-handoff-service";
-import { runGitCommand } from "../app-server/git-executable";
 import { app } from "electron";
 import {
   FederationFilePushReceiver,
@@ -3168,8 +3167,8 @@ export class DesktopFederationRuntime {
         const scheduled = await localBackendOperations().listScheduledThreadActions({ backend: "codex", threadId });
         if (scheduled.actions.length) throw new Error("Cancel the source thread's scheduled actions before Move, or use Copy.");
       },
-      prepareTarget: async (instanceId, repository) => await this.rpcFor({ scope: "remote", instanceId }).request<string[]>({
-        method: THREAD_HANDOFF_METHODS.prepare, params: { repository }, timeoutMs: 30_000,
+      prepareTarget: async (instanceId, request) => await this.rpcFor({ scope: "remote", instanceId }).request({
+        method: THREAD_HANDOFF_METHODS.prepare, params: request, timeoutMs: null,
       }),
       receipt: (sourceInstanceId, file) => {
         const receipt = this.handoffFileReceipts.get(file.path);
@@ -3182,11 +3181,10 @@ export class DesktopFederationRuntime {
     router.registerHandler(THREAD_HANDOFF_METHODS.import, (envelope) =>
       this.threadHandoffService!.receive(envelope.sourceInstanceId, envelope.params as ImportInstanceThreadRequest));
     router.registerHandler(THREAD_HANDOFF_METHODS.prepare, async (envelope) => {
-      const repository = (envelope.params as { repository?: unknown })?.repository;
-      if (!this.receiverPermissions().filePush || typeof repository !== "string" || !path.isAbsolute(repository)) {
-        throw new Error("Thread handoff requires incoming files to be enabled and an absolute receiver repository path.");
+      if (!this.receiverPermissions().filePush) {
+        throw new Error("Enable incoming files on the receiving machine before handing off a thread.");
       }
-      return (await runGitCommand(repository, ["rev-list", "--max-count=256", "HEAD"], { maxBuffer: 64 * 1024 })).stdout.trim().split("\n");
+      return await this.threadHandoffService!.prepare(envelope.params as Parameters<ThreadInstanceHandoffService["prepare"]>[0]);
     });
     const filePullReader = new FederationFilePullReader({
       permissions: () => this.receiverPermissions(),
