@@ -575,6 +575,15 @@ describe("thread row to-do chip", () => {
     expect(chip.className).toContain("thread-row__chip--question");
   });
 
+  it("keeps the session's flags while the wait list names nothing for the thread", () => {
+    render(
+      <OperatorWaitsContext.Provider value={{ waitsByThreadKey: new Map(), seenKeys: new Set() }}>
+        <ThreadMetaChips thread={thread} hasApprovalRequest />
+      </OperatorWaitsContext.Provider>,
+    );
+    expect(screen.getByText("Waiting for approval")).toBeTruthy();
+  });
+
   it("falls back to the session's flags without a wait list", () => {
     render(<ThreadMetaChips thread={thread} hasApprovalRequest />);
     expect(screen.getByText("Waiting for approval")).toBeTruthy();

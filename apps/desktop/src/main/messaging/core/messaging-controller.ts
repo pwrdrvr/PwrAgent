@@ -1561,7 +1561,7 @@ export class MessagingController {
       // semantics that it must never inherit.
       return;
     }
-    const asyncQuestionReplies = asyncQuestionRepliesForBackendEvent(event);
+    const asyncQuestionReplies = readCodexAsyncQuestionRepliesFromNotification(event.notification);
     if (asyncQuestionReplies) {
       await this.retireAnsweredAsyncQuestionnaires(
         event,
@@ -2086,7 +2086,7 @@ export class MessagingController {
             event,
             binding,
           );
-          const asyncQuestions = asyncQuestionsForBackendEvent(event);
+          const asyncQuestions = readCodexAsyncQuestionsFromNotification(event.notification);
           if (!assistantMessageClaimed) {
             await this.deliverAssistantImages(assistantImages, event, binding);
           } else if (asyncQuestions) {
@@ -22751,18 +22751,6 @@ function sleepUntil(
  * names each question by this item id, so a message without one cannot be
  * answered and stays ordinary assistant text.
  */
-function asyncQuestionsForBackendEvent(
-  event: AgentEvent,
-): { itemId: string; questions: CodexAsyncQuestion[] } | undefined {
-  return readCodexAsyncQuestionsFromNotification(event.notification);
-}
-
-function asyncQuestionRepliesForBackendEvent(
-  event: AgentEvent,
-): CodexAsyncQuestionReply[] | undefined {
-  return readCodexAsyncQuestionRepliesFromNotification(event.notification);
-}
-
 function assistantTextForBackendEvent(event: AgentEvent): string | undefined {
   if (event.notification.method === "item/completed") {
     const params = event.notification.params as {

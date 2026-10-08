@@ -80,10 +80,18 @@ export function useOperatorRequests(
         try {
           const response = await list();
           const next = buildOperatorWaits(response);
-          setWaits(next.length > 0 ? next : EMPTY_WAITS);
+          // A reload that changed no wait keeps the same array, so the
+          // sidebar's rows, which read it through context, do not re-render.
+          setWaits((current) => sameWaits(current, next)
+            ? current
+            : next.length > 0 ? next : EMPTY_WAITS);
           storedSeenRef.current = new Set(response.seenKeys);
           // A mark sent but not yet stored stays seen here.
-          setSeenKeys(new Set([...response.seenKeys, ...pendingSeenRef.current]));
+          const seen = new Set([...response.seenKeys, ...pendingSeenRef.current]);
+          setSeenKeys((current) =>
+            current.size === seen.size && [...seen].every((key) => current.has(key))
+              ? current
+              : seen);
         } catch (error) {
           console.warn("Loading operator requests failed.", error);
         }
@@ -137,11 +145,22 @@ export function useOperatorRequests(
     const key = operatorQuestionItemKey(target.backend, target.threadId, target.messageId);
     setDismissedQuestionKeys((current) =>
       current.has(key) ? current : new Set([...current, key]));
-    await api.dismissOperatorQuestion({
-      backend: target.backend,
-      threadId: target.threadId,
-      messageId: target.messageId,
-    });
+    try {
+      await api.dismissOperatorQuestion({
+        backend: target.backend,
+        threadId: target.threadId,
+        messageId: target.messageId,
+      });
+    } catch (error) {
+      // The question is still open, so its transcript card must not fold.
+      setDismissedQuestionKeys((current) => {
+        if (!current.has(key)) return current;
+        const next = new Set(current);
+        next.delete(key);
+        return next;
+      });
+      throw error;
+    }
   }, [api]);
 
   const waitsByThreadKey = useMemo(() => {
@@ -166,6 +185,12 @@ export function useOperatorRequests(
     }),
     [waits, waitsByThreadKey, seenKeys, markSeen, dismissQuestion, dismissedQuestionKeys],
   );
+}
+
+/** Same waits, in the same order. A key names one immutable request or question. */
+function sameWaits(left: readonly OperatorWait[], right: readonly OperatorWait[]): boolean {
+  return left.length === right.length
+    && left.every((wait, index) => wait.key === right[index]!.key);
 }
 
 export type OperatorWaitsContextValue = {

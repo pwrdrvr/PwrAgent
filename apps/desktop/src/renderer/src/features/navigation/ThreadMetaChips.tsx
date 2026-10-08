@@ -108,8 +108,9 @@ export function ThreadMetaChips({
   const openTodos = useThreadTodosForKey(itemThreadKey);
   const waitTooltip = useViewportTooltip({ className: "viewport-tooltip" });
   // This window's list of what threads wait on. A peer's window has none, and
-  // a peer's thread is answered on the peer: both fall back to the session's
-  // own approval and input flags.
+  // a peer's thread is answered on the peer. Whenever the list names nothing
+  // for a thread (a peer's, or before the first list arrives), the session's
+  // own approval and input flags still show.
   const waitsContext = useOperatorWaitsContext();
   const waitsKnown = Boolean(waitsContext) && !thread.federation;
   const waits = waitsKnown
@@ -383,7 +384,7 @@ export function ThreadMetaChips({
       ) : null}
       {todoTooltip.tooltipNode}
 
-      {!waitsKnown && hasApprovalRequest ? (
+      {!leadWait && hasApprovalRequest ? (
         <span
           aria-label="Waiting for approval"
           className="thread-row__chip thread-row__chip--approval"
@@ -393,7 +394,7 @@ export function ThreadMetaChips({
         </span>
       ) : null}
 
-      {!waitsKnown && hasInputRequest ? (
+      {!leadWait && hasInputRequest ? (
         <span
           aria-label="Input needed"
           className="thread-row__chip thread-row__chip--input"

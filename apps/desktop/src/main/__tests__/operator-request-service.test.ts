@@ -254,12 +254,14 @@ describe("OperatorRequestService", () => {
     registry.emit(askedEvent("thread-a", "msg-1"));
     registry.emit(askedEvent("thread-a", "msg-2"));
     service.dismissQuestion({ backend: "codex", threadId: "thread-a", messageId: "msg-1" });
-    service.markSeen(["todo:old"]);
+    service.markSeen(["todo:old", operatorQuestionItemKey("codex", "thread-a", "msg-2")]);
     service.stop();
 
     setNow(1_000 + OPERATOR_REQUEST_RETENTION_MS + 1);
     service.start();
-    expect(store.listSeenKeys()).toEqual([]);
+    // A mark for an item still open is kept however old, or it would read
+    // as new again.
+    expect(store.listSeenKeys()).toEqual([operatorQuestionItemKey("codex", "thread-a", "msg-2")]);
     // An open question is never pruned, however old.
     expect(service.list().questions.map((question) => question.messageId)).toEqual(["msg-2"]);
   });

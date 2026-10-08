@@ -42,8 +42,8 @@ export type OperatorRequestServiceOptions = {
  *
  * The change event is a marker. It fires when the set of pending requests
  * changes, a question opens or closes, or a seen mark lands; never per
- * streamed event, because the request signature is compared before anything
- * is sent.
+ * streamed event: deltas are skipped, and the request signature is compared
+ * before anything is sent.
  */
 export class OperatorRequestService {
   private readonly registry: OperatorRequestRegistry;
@@ -114,8 +114,11 @@ export class OperatorRequestService {
   private handleEvent(event: AgentEvent): void {
     // A peer's threads are answered on the peer.
     if (event.federationTarget?.scope === "remote") return;
-    this.syncRequests();
     const { notification } = event;
+    // Streamed deltas arrive hundreds a second and never add or answer a
+    // request; every change to the pending set rides some other event.
+    if (STREAMED_DELTA_METHOD.test(notification.method)) return;
+    this.syncRequests();
     if (notification.method === "thread/archived") {
       const changed = this.store.dismissQuestionsForThread({
         backend: event.backend,
@@ -197,6 +200,9 @@ export class OperatorRequestService {
       .sort((left, right) => right.createdAt - left.createdAt);
   }
 }
+
+/** `item/agentMessage/delta`, `item/commandExecution/outputDelta`, and kin. */
+const STREAMED_DELTA_METHOD = /delta$/i;
 
 function readThreadId(params: unknown): string | undefined {
   const threadId = params && typeof params === "object"

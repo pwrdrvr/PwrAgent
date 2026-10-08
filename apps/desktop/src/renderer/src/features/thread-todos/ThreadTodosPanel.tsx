@@ -471,7 +471,8 @@ function groupItems(
         ? item.todo.sourceProject?.label ?? "No project"
         : view.threadTitle(item.todo);
     }
-    const paused = item.type === "wait" && isBlockingWait(item.wait);
+    // All groups by project, where one paused thread is not the group's turn.
+    const paused = scope !== "all" && item.type === "wait" && isBlockingWait(item.wait);
     const group = groups.get(key);
     if (group) {
       group.items.push(item);

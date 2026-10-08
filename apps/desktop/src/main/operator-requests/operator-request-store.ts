@@ -141,16 +141,28 @@ export class OperatorRequestStore {
   /**
    * Drops resolved questions and seen marks past retention. A seen mark
    * outlives its item by design: the item list never names closed items, so
-   * an old mark for a closed one is harmless until it ages out.
+   * an old mark for a closed one is harmless until it ages out. A mark for an
+   * item still open is kept however old, or a month-old card would read as
+   * new. Server requests do not outlive the process, so theirs always go.
    */
   prune(now: number): void {
     const cutoff = now - OPERATOR_REQUEST_RETENTION_MS;
+    // The keys built here are operatorQuestionItemKey and operatorTodoItemKey.
+    const staleSeen = `FROM operator_seen_items
+      WHERE seen_at < ?
+        AND item_key NOT IN (
+          SELECT 'question:' || backend || ':' || thread_id || ':' || message_id
+            FROM operator_async_questions WHERE status = 'open'
+        )
+        AND item_key NOT IN (
+          SELECT 'todo:' || todo_id FROM thread_todos WHERE status = 'open'
+        )`;
     const stale = this.stateDb.raw
       .prepare(
         `SELECT
           (SELECT COUNT(*) FROM operator_async_questions
             WHERE status != 'open' AND resolved_at < ?) AS questions,
-          (SELECT COUNT(*) FROM operator_seen_items WHERE seen_at < ?) AS seen`,
+          (SELECT COUNT(*) ${staleSeen}) AS seen`,
       )
       .get(cutoff, cutoff) as { questions: number; seen: number };
     // A clean start writes nothing.
@@ -162,7 +174,7 @@ export class OperatorRequestStore {
         )
         .run(cutoff);
       this.stateDb.raw
-        .prepare("DELETE FROM operator_seen_items WHERE seen_at < ?")
+        .prepare(`DELETE ${staleSeen}`)
         .run(cutoff);
     })();
   }
