@@ -7,7 +7,6 @@ import {
 import { memo, useEffect, useState } from "react";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { useThreadLinks } from "../../../lib/thread-links";
-import { formatTimestamp } from "./context-rail-shared";
 
 type ThreadFamilyPricingCardProps = {
   desktopApi?: Pick<DesktopApi, "readThreadFamilyPricing">;
@@ -114,7 +113,7 @@ export const ThreadFamilyPricingCard = memo(function ThreadFamilyPricingCard(pro
     <div className="rail-summary-card thread-family-pricing">
       <div className="rail-summary-card__header">
         <span className="rail-summary-card__eyebrow">Thread + sub-threads</span>
-        <span className="rail-summary-card__meta">as of {formatTimestamp(result.family.readAt)}</span>
+        <span className="rail-summary-card__meta">as of {formatReadTime(result.family.readAt)}</span>
       </div>
       <div className="rail-summary-card__headline">
         <span className="rail-summary-card__primary">{formatTokenUsageMicrosAsUsd(totalMicros)}</span>
@@ -219,6 +218,15 @@ function swatchClass(memberIndex: number): string {
   return memberIndex <= NAMED_SUB_THREADS
     ? `thread-family-pricing__series-${memberIndex + 1}`
     : "thread-family-pricing__series-other";
+}
+
+/**
+ * The read happens when the tab opens, so the time alone says how fresh it
+ * is. A date beside it squeezed the eyebrow onto three lines at the rail's
+ * minimum width.
+ */
+function formatReadTime(timestamp: number): string {
+  return new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(timestamp);
 }
 
 function formatPercent(value: number): string {
