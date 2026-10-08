@@ -140,6 +140,45 @@ describe("buildApprovalIntent", () => {
     );
   });
 
+  it("lists MCP tool parameters with secrets withheld", () => {
+    const intent = buildApprovalIntent({
+      id: "mcp-tool-1",
+      createdAt: 1000,
+      request: {
+        method: "mcpServer/elicitation/request",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          requestId: "mcp-gateway:fixture",
+          serverName: "DataDog",
+          mode: "form",
+          message: "Allow the DataDog MCP server to run tool \"query_metrics\"?",
+          requestedSchema: { type: "object", properties: {} },
+          _meta: {
+            pwragent_approval_kind: "mcp_tool_call",
+            persist: ["session"],
+            tool_params_display: [
+              { name: "query", value: "avg:system.cpu.user{service:checkout-api}" },
+              { name: "rollup", value: "{\"fn\":\"avg\",\"seconds\":60}" },
+              { name: "api_key", value: "fixture-key" },
+              { name: "header", value: "Bearer fixture-token" },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(intent.body).toContain([
+      "MCP server: DataDog",
+      "query: avg:system.cpu.user{service:checkout-api}",
+      "rollup: {\"fn\":\"avg\",\"seconds\":60}",
+      "api_key: [redacted]",
+      "header: [redacted]",
+    ].join("\n"));
+    expect(intent.body).not.toContain("fixture-key");
+    expect(intent.body).not.toContain("fixture-token");
+  });
+
   it("renders command approvals with prompt, command code block, and conservative choices", () => {
     const intent = buildApprovalIntent({
       id: "approval-1",

@@ -29172,8 +29172,9 @@ div.composer-error-row__toggle {
   flex-wrap: wrap;
 }
 
-/* Always allow on the left, alone; the refusals and the primary grant on the
-   right. `margin-left: auto` holds the group right when Always allow is not
+/* The secondary grant (Always allow, or the gateway's Allow once) on the
+   left, alone; the refusals and the primary grant on the right.
+   `margin-left: auto` holds the group right when no secondary grant is
    offered. */
 .transcript-mcp__actions {
   justify-content: space-between;

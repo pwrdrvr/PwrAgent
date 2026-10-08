@@ -551,7 +551,12 @@ describe("backend MCP gateway dispatch", () => {
     const duplicate = internals.handleServerRequest("codex", request("call_mcp_tool", args));
     const event = await pending;
     if (event.notification.method !== "mcpServer/elicitation/request") throw new Error("Expected MCP approval");
-    expect(event.notification.params).toMatchObject({ serverName: "Fixture", mode: "form", message: expect.stringContaining("lookup") });
+    // The card draws the message as its title and the arguments as rows.
+    expect(event.notification.params).toMatchObject({
+      serverName: "Fixture", mode: "form",
+      message: "Allow the Fixture MCP server to run tool \"lookup\"?",
+      _meta: { tool_params_display: [{ name: "id", value: "fixture" }] },
+    });
     expect(operation.mock.calls.filter(([entry]) => entry.operation === "gateway/tools/call")).toHaveLength(0);
     await registry.submitServerRequest({ backend: "codex", threadId: "thread-1", turnId: "turn-1", requestId: String(event.notification.params.requestId), response: { action: "accept", content: {}, _meta: null } });
     expect((await call).success).toBe(true);

@@ -36635,12 +36635,20 @@ export class DesktopBackendRegistry {
         requestId,
         serverName: invocation.serverName,
         mode: "form",
-        message: `Allow ${invocation.serverName} / ${invocation.toolName}?\nConnection: ${invocation.connectionId}\nArguments:\n${JSON.stringify(invocation.arguments, null, 2)}`,
+        // One line, as Codex phrases its own MCP approvals: the card draws the
+        // message as its title. serverName is the connection's display name.
+        message: `Allow the ${invocation.serverName} MCP server to run tool "${invocation.toolName}"?`,
         requestedSchema: { type: "object", properties: {} },
         _meta: {
           pwragent_approval_kind: "mcp_tool_call",
           persist: ["session"],
-          subtitle: "Allows this tool with any arguments in this conversation. Expires when PwrAgent restarts, MCP access changes, or the tool changes.",
+          subtitle: "Allow this conversation approves this tool with any arguments. The approval ends when PwrAgent restarts, MCP access changes, or the tool changes.",
+          // The same rows Codex sends, so desktop and messaging draw and
+          // redact the arguments one way.
+          tool_params_display: Object.entries(invocation.arguments).map(([name, value]) => ({
+            name,
+            value: typeof value === "string" ? value : JSON.stringify(value),
+          })),
         },
       },
     };

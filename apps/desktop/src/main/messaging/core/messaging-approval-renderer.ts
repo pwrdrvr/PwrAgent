@@ -13,6 +13,7 @@ import {
   applyActionCapabilityLimits,
   type MessagingCapabilityProfile,
 } from "@pwragent/messaging-interface";
+import { redactCommandText } from "../../util/redact-command-text";
 
 export function buildApprovalIntent(params: {
   capabilityProfile?: MessagingCapabilityProfile;
@@ -229,10 +230,38 @@ function mcpElicitationContext(
   if (request.params.mode === "url") {
     return `Open login: ${request.params.url}`;
   }
-  return request.params.serverName
-    ? `MCP server: ${request.params.serverName}`
-    : undefined;
+  const lines = [
+    request.params.serverName ? `MCP server: ${request.params.serverName}` : undefined,
+    ...mcpToolParamLines(request),
+  ].filter((line): line is string => Boolean(line));
+  return lines.length > 0 ? lines.join("\n") : undefined;
 }
+
+// The rows the desktop card draws from `tool_params_display`, so a remote
+// approver sees the same arguments. A value under a secret-looking name is
+// withheld whole; others pass the command-text redaction and a length cap.
+function mcpToolParamLines(request: AppServerMcpElicitationRequestNotification): string[] {
+  const rows = objectField(request.params._meta)?.tool_params_display;
+  if (!Array.isArray(rows)) {
+    return [];
+  }
+  return rows.flatMap((row) => {
+    const record = objectField(row);
+    const name = stringField(record?.name) ?? stringField(record?.key);
+    const label = stringField(record?.label) ?? stringField(record?.display_name) ?? name;
+    if (!record || !label) {
+      return [];
+    }
+    const raw = typeof record.value === "string" ? record.value : JSON.stringify(record.value) ?? "";
+    const value = SECRET_PARAM_NAME.test(name ?? label) || /^bearer\s+/i.test(raw.trim())
+      ? "[redacted]"
+      : redactCommandText(raw);
+    return [`${label}: ${value.length > MCP_PARAM_VALUE_LIMIT ? `${value.slice(0, MCP_PARAM_VALUE_LIMIT)}…` : value}`];
+  });
+}
+
+const SECRET_PARAM_NAME = /api[-_]?key|token|secret|password|authorization/i;
+const MCP_PARAM_VALUE_LIMIT = 300;
 
 function mcpElicitationCanAcceptWithoutFormInput(
   request: AppServerMcpElicitationRequestNotification,
