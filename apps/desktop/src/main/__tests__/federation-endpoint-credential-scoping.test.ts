@@ -308,6 +308,7 @@ describe("federation endpoint credential scoping", () => {
       disconnectAdvertisedPeers: () => void;
       setAgentEventPublisher: DesktopFederationRuntime["setAgentEventPublisher"];
       health: DesktopFederationRuntime["health"];
+      setCloudflareSignInPending: DesktopFederationRuntime["setCloudflareSignInPending"];
       readRuntimeConfig: () => FederationRuntimeConfig;
       visiblePeers: () => [];
       readClientEnrollment: () => undefined;
@@ -329,6 +330,14 @@ describe("federation endpoint credential scoping", () => {
     });
     runtime.handleClientConnectionFailure(new CloudflareSignInRequiredError());
     expect(publish).toHaveBeenCalledOnce();
+    // Every window reads the running sign-in from health, not its own state.
+    runtime.setCloudflareSignInPending(true);
+    runtime.setCloudflareSignInPending(true);
+    expect((await runtime.health()).cloudflareSignInRequired).toEqual({ endpoint: cloudflareEndpoint.value, pending: true });
+    expect(publish).toHaveBeenCalledTimes(2);
+    runtime.setCloudflareSignInPending(false);
+    expect((await runtime.health()).cloudflareSignInRequired).toEqual({ endpoint: cloudflareEndpoint.value });
+    expect(publish).toHaveBeenCalledTimes(3);
     await runtime.connectClient(cloudflareEndpoint.value);
     expect(runtime.cloudflareSignInRequiredEndpoint).toBeUndefined();
     expect((await runtime.health()).cloudflareSignInRequired).toBeUndefined();
@@ -344,11 +353,14 @@ describe("federation endpoint credential scoping", () => {
       handleClientConnectionFailure: (error: unknown) => void;
       disconnectAdvertisedPeers: () => void;
       setAgentEventPublisher: DesktopFederationRuntime["setAgentEventPublisher"];
+      setCloudflareSignInPending: DesktopFederationRuntime["setCloudflareSignInPending"];
     };
     runtime.disconnectAdvertisedPeers = () => undefined;
     const publish = vi.fn();
     runtime.setAgentEventPublisher(publish);
     runtime.handleClientConnectionFailure(new CloudflareAccessRefusedError("federation.example.com"));
+    // A sign-in with no requirement to recover (a setup file) changes no notice.
+    runtime.setCloudflareSignInPending(true);
     expect(runtime.cloudflareSignInRequiredEndpoint).toBeUndefined();
     expect(publish).not.toHaveBeenCalled();
   });

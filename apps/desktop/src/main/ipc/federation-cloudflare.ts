@@ -232,14 +232,22 @@ export function registerCloudflareSetupIpc(): void {
             ? "Client revoked. Cloudflare no longer admits its credential, and the federation peer its setup file enrolled was revoked, which ends its session."
             : "Client revoked. Cloudflare no longer admits its credential. PwrAgent has no record of the peer its setup file enrolled, so a session already open continues until you revoke that peer under Federation Instances.");
         case "sign-in": {
+          const runtime = getDesktopFederationRuntime();
+          // Through the restart: it clears the requirement, so no window
+          // offers Sign in again between the browser returning and reconnecting.
+          runtime.setCloudflareSignInPending(true);
           try {
-            await getCloudflareAccessSignIn().signIn(signInEndpoint());
-          } catch (error) {
-            // Cancelling is an outcome, not a failure: nothing was saved.
-            if (error instanceof CloudflareSignInCancelledError) return describe("Sign-in cancelled. Your previous sign-in is unchanged.");
-            throw error;
+            try {
+              await getCloudflareAccessSignIn().signIn(signInEndpoint());
+            } catch (error) {
+              // Cancelling is an outcome, not a failure: nothing was saved.
+              if (error instanceof CloudflareSignInCancelledError) return describe("Sign-in cancelled. Your previous sign-in is unchanged.");
+              throw error;
+            }
+            await runtime.restart();
+          } finally {
+            runtime.setCloudflareSignInPending(false);
           }
-          await getDesktopFederationRuntime().restart();
           return describe("Signed in. Federation is reconnecting.");
         }
         case "sign-out":

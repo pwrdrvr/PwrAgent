@@ -485,8 +485,11 @@ export type FederationActiveConnection = {
 
 export type FederationHealthStatus = {
   shutdownNotices?: FederationPeerShutdown[];
-  /** This client's Cloudflare OAuth grant needs an interactive sign-in. */
-  cloudflareSignInRequired?: { endpoint: string };
+  /**
+   * This client's Cloudflare OAuth grant needs an interactive sign-in.
+   * `pending` is main's one browser sign-in, so every window can show it.
+   */
+  cloudflareSignInRequired?: { endpoint: string; pending?: boolean };
   enabled: boolean;
   role: FederationInstanceRole;
   status: FederationConnectionState;

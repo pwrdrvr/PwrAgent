@@ -11,9 +11,12 @@ export function CloudflareSignInNotice(props: {
   onNoticeChanged: (notice: AppNoticeToastNotice | undefined) => void;
   onRefreshHealth: () => void;
 }) {
-  const endpoint = props.health?.enabled
-    ? props.health.cloudflareSignInRequired?.endpoint
+  const required = props.health?.enabled
+    ? props.health.cloudflareSignInRequired
     : undefined;
+  const endpoint = required?.endpoint;
+  // Main runs one sign-in. Another window, or Settings, may have started it.
+  const signInRunning = required?.pending === true;
   const configure = props.desktopApi?.configureFederationCloudflare;
   const { onNoticeChanged, onRefreshHealth } = props;
   const [dismissed, setDismissed] = useState(false);
@@ -34,6 +37,11 @@ export function CloudflareSignInNotice(props: {
     setError(undefined);
     return () => { generation.current += 1; };
   }, [endpoint, configure]);
+
+  // A sign-in another window started supersedes this window's last failure.
+  useEffect(() => {
+    if (signInRunning) setError(undefined);
+  }, [signInRunning]);
 
   const signIn = useCallback(async () => {
     if (!endpoint || !configure || signingIn.current) return;
@@ -60,7 +68,7 @@ export function CloudflareSignInNotice(props: {
   }, [endpoint, configure, onRefreshHealth]);
 
   const controlSignIn = useCallback(async (action: "reopen-sign-in" | "cancel-sign-in") => {
-    if (!configure || !signingIn.current || controlling.current) return;
+    if (!configure || controlling.current) return;
     const current = generation.current;
     controlling.current = true;
     try {
@@ -76,26 +84,33 @@ export function CloudflareSignInNotice(props: {
 
   const notice = useMemo<AppNoticeToastNotice | undefined>(() => {
     if (!endpoint || !configure || dismissed) return undefined;
+    const waiting = pending || signInRunning;
+    // A failure is the news, so it takes the message; the generic prompt
+    // beside it would only repeat what Retry already says.
+    const failed = !waiting && error !== undefined;
     return {
       id: CLOUDFLARE_SIGN_IN_NOTICE_ID,
-      title: "Cloudflare Access needs sign-in",
-      message: pending
-        ? "Finish signing in in your browser. Federation reconnects when sign-in completes."
-        : "Federation is disconnected. Sign in again to reconnect to your other machines.",
-      detail: error,
+      title: failed ? "Cloudflare sign-in failed" : "Cloudflare Access needs sign-in",
+      message: waiting
+        ? "Federation reconnects when you finish signing in."
+        : failed
+          ? error
+          : "Federation is disconnected. Sign in again to reconnect to your other machines.",
+      // Reopen and Cancel can fail while the sign-in still waits.
+      detail: waiting ? error : undefined,
       facts: [{ label: "Endpoint", value: endpoint }],
       autoDismiss: false,
-      tone: error ? "error" : "warning",
-      status: pending ? { label: "Waiting for browser sign-in", state: "progress" } : undefined,
-      actions: pending ? [
+      tone: failed ? "error" : "warning",
+      status: waiting ? { label: "Waiting for browser sign-in", state: "progress" } : undefined,
+      actions: waiting ? [
         { label: "Open browser again", onClick: () => { void controlSignIn("reopen-sign-in"); } },
         { label: "Cancel sign-in", onClick: () => { void controlSignIn("cancel-sign-in"); } },
       ] : [
-        { label: error ? "Retry sign-in" : "Sign in", tone: "primary", onClick: () => { void signIn(); } },
+        { label: failed ? "Retry sign-in" : "Sign in", tone: "primary", onClick: () => { void signIn(); } },
       ],
       onDismiss: () => setDismissed(true),
     };
-  }, [endpoint, configure, dismissed, pending, error, signIn, controlSignIn]);
+  }, [endpoint, configure, dismissed, pending, signInRunning, error, signIn, controlSignIn]);
 
   useEffect(() => {
     onNoticeChanged(notice);

@@ -56,18 +56,20 @@ describe("Cloudflare sign-in recovery notice", () => {
     const start = screen.getByRole("button", { name: "Sign in" });
     act(() => { start.click(); start.click(); });
     expect(configure).toHaveBeenCalledExactlyOnceWith({ action: "sign-in" });
-    expect(screen.getByRole("status")).toHaveTextContent("Finish signing in in your browser");
+    expect(screen.getByRole("status")).toHaveTextContent("Federation reconnects when you finish signing in.");
     await act(async () => result.resolve(signedIn));
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
     expect(refresh).toHaveBeenCalledOnce();
   });
 
-  it("shows failed sign-in details and lets the user retry", async () => {
+  it("names a failed sign-in, makes its reason the message, and lets the user retry", async () => {
     const configure = vi.fn().mockRejectedValueOnce(new Error("Browser sign-in timed out."))
       .mockResolvedValueOnce(signedIn);
     render(<NoticeHarness health={required} desktopApi={{ configureFederationCloudflare: configure }} />);
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Sign in" })));
-    expect(screen.getByRole("status")).toHaveTextContent("Browser sign-in timed out.");
+    expect(document.querySelector(".app-notice-toast__title")).toHaveTextContent("Cloudflare sign-in failed");
+    expect(document.querySelector(".app-notice-toast__message")).toHaveTextContent("Browser sign-in timed out.");
+    expect(screen.getByRole("status")).not.toHaveTextContent("Federation is disconnected");
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Retry sign-in" })));
     expect(configure).toHaveBeenCalledTimes(2);
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
@@ -87,6 +89,22 @@ describe("Cloudflare sign-in recovery notice", () => {
     expect(configure).toHaveBeenLastCalledWith({ action: "reopen-sign-in" });
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Cancel sign-in" })));
     expect(configure).toHaveBeenLastCalledWith({ action: "cancel-sign-in" });
+    expect(screen.getByRole("button", { name: "Sign in" })).toBeInTheDocument();
+  });
+
+  it("shows a sign-in another window started as waiting, with working controls", async () => {
+    const configure = vi.fn().mockRejectedValueOnce(new Error("Browser sign-in timed out."))
+      .mockResolvedValue(signedIn);
+    const desktopApi = { configureFederationCloudflare: configure };
+    const view = render(<NoticeHarness health={required} desktopApi={desktopApi} />);
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Sign in" })));
+    view.rerender(<NoticeHarness health={{ ...required, cloudflareSignInRequired: { endpoint, pending: true } }} desktopApi={desktopApi} />);
+    expect(screen.getByRole("status")).toHaveTextContent("Waiting for browser sign-in");
+    expect(screen.getByRole("status")).not.toHaveTextContent("Browser sign-in timed out.");
+    expect(screen.queryByRole("button", { name: /Sign in$/ })).not.toBeInTheDocument();
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Cancel sign-in" })));
+    expect(configure).toHaveBeenLastCalledWith({ action: "cancel-sign-in" });
+    view.rerender(<NoticeHarness health={required} desktopApi={desktopApi} />);
     expect(screen.getByRole("button", { name: "Sign in" })).toBeInTheDocument();
   });
 

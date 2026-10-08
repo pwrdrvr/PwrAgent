@@ -1104,6 +1104,7 @@ export class DesktopFederationRuntime {
   private lastConnectionError?: string;
   private lastConnectionFailureKind?: "auth" | "replaced" | "transport";
   private cloudflareSignInRequiredEndpoint?: string;
+  private cloudflareSignInPending = false;
   /** Peer ids the gateway recently flagged for duplicate-identity churn. */
   private readonly duplicateIdentitySuspectedAt = new Map<
     FederationInstanceId,
@@ -1604,7 +1605,10 @@ export class DesktopFederationRuntime {
     });
     health.shutdownNotices = this.shutdown.snapshot();
     if (config.cloudflareAccessOAuthEnabled && this.cloudflareSignInRequiredEndpoint) {
-      health.cloudflareSignInRequired = { endpoint: this.cloudflareSignInRequiredEndpoint };
+      health.cloudflareSignInRequired = {
+        endpoint: this.cloudflareSignInRequiredEndpoint,
+        ...(this.cloudflareSignInPending ? { pending: true } : {}),
+      };
     }
     if (
       config.mode === "client" ||
@@ -3878,6 +3882,21 @@ export class DesktopFederationRuntime {
   private setCloudflareSignInRequired(endpoint: string | undefined): void {
     if (this.cloudflareSignInRequiredEndpoint === endpoint) return;
     this.cloudflareSignInRequiredEndpoint = endpoint;
+    this.publishHealthChanged();
+  }
+
+  /**
+   * A browser sign-in is running in main. Each window draws its sign-in
+   * notice from health, so a window that did not start the sign-in shows it
+   * waiting instead of offering a second one the setup latch refuses.
+   */
+  setCloudflareSignInPending(pending: boolean): void {
+    if (this.cloudflareSignInPending === pending) return;
+    this.cloudflareSignInPending = pending;
+    if (this.cloudflareSignInRequiredEndpoint) this.publishHealthChanged();
+  }
+
+  private publishHealthChanged(): void {
     this.publishAgentEvent?.({
       backend: "codex",
       notification: { method: FEDERATION_HEALTH_CHANGED_METHOD, params: {} },
