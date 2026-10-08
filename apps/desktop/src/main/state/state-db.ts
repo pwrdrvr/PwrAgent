@@ -17,7 +17,7 @@ import {
   isSqliteWriteMetricsEnabled,
 } from "./sqlite-write-metrics.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 71;
+export const CURRENT_STATE_DB_USER_VERSION = 72;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -610,6 +610,33 @@ function ensureThreadTodoProjectColumns(db: BetterSqlite3.Database): void {
   }
   db.exec(THREAD_TODO_PROJECT_PREFS_SCHEMA);
 }
+
+// What threads are waiting on the operator for, beyond the registry's live
+// server requests. An async question is an assistant message, so nothing
+// else records that it is still open; a row is written when it arrives and
+// once more when a reply answers it or the operator dismisses it. The text is
+// kept only while the question is open (a pending request, like a pending
+// approval); closing it blanks `questions_json`. Seen marks
+// are written once per item, the first time it is on screen. Neither table
+// is written per streamed event or on a timer.
+const OPERATOR_REQUEST_SCHEMA = `
+CREATE TABLE IF NOT EXISTS operator_async_questions (
+  backend        TEXT NOT NULL,
+  thread_id      TEXT NOT NULL,
+  message_id     TEXT NOT NULL,
+  questions_json TEXT NOT NULL,
+  status         TEXT NOT NULL,
+  created_at     INTEGER NOT NULL,
+  resolved_at    INTEGER,
+  PRIMARY KEY (backend, thread_id, message_id)
+);
+CREATE INDEX IF NOT EXISTS idx_operator_async_questions_status
+  ON operator_async_questions(status, created_at);
+CREATE TABLE IF NOT EXISTS operator_seen_items (
+  item_key TEXT PRIMARY KEY,
+  seen_at  INTEGER NOT NULL
+);
+`;
 
 const MESSAGING_ACTIVITY_SUMMARY_SCHEMA = `
 CREATE TABLE IF NOT EXISTS messaging_activity_summary (
@@ -1957,6 +1984,12 @@ export class StateDb {
             db.exec("ALTER TABLE thread_usage_lines ADD COLUMN account_key TEXT");
           }
           db.pragma("user_version = 71");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 72) {
+        db.transaction(() => {
+          db.exec(OPERATOR_REQUEST_SCHEMA);
+          db.pragma("user_version = 72");
         })();
       }
       // Keep current-version databases converged without asking pre-v36 profiles

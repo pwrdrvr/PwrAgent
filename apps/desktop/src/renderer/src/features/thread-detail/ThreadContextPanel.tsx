@@ -28,6 +28,7 @@ import type {
   ThreadUsageLineRecord,
   ToolOutputIncidentExplorerLens,
 } from "@pwragent/shared";
+import { operatorTodoItemKey } from "@pwragent/shared";
 import type { WindowPointerSnapshot } from "../../../../shared/window-pointer";
 import {
   AutomationsIcon,
@@ -678,14 +679,16 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
     const isActive = tab.id === activeTab;
     const TabIcon = tab.Icon;
     const commandCount = tab.id === "actions" ? props.backgroundTerminals?.terminals?.length ?? 0 : 0;
-    const todoCount = tab.id === "todos" && props.todos
-      ? props.todos.view.openByThreadKey.get(props.todos.threadKey)?.length ?? 0
-      : 0;
+    const todoBadge = tab.id === "todos" && props.todos
+      ? readTodoTabBadge(props.todos.view, props.todos.threadKey)
+      : undefined;
     const label = commandCount
       ? `${tab.label} · ${commandCount} agent command${commandCount === 1 ? "" : "s"} running`
-      : todoCount
-        ? `${tab.label} · ${todoCount} open for this thread`
-        : tab.label;
+      : todoBadge?.unread
+        ? `${tab.label} · ${todoBadge.count} unread`
+        : todoBadge
+          ? `${tab.label} · ${todoBadge.count} open for this thread`
+          : tab.label;
     return (
       <button
         key={tab.id}
@@ -702,7 +705,16 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
       >
         <TabIcon size={18} aria-hidden="true" />
         {commandCount > 0 ? <span className="context-rail__activity status-dot status-dot--active" aria-hidden="true" /> : null}
-        {todoCount > 0 ? <span className="context-rail__activity context-rail__activity--todos" aria-hidden="true">{todoCount > 9 ? "9+" : todoCount}</span> : null}
+        {todoBadge ? (
+          <span
+            className={`context-rail__activity context-rail__activity--todos${
+              todoBadge.unread ? "" : " context-rail__activity--quiet"
+            }`}
+            aria-hidden="true"
+          >
+            {todoBadge.count > 9 ? "9+" : todoBadge.count}
+          </span>
+        ) : null}
       </button>
     );
   }
@@ -921,4 +933,27 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   }
 
 
+}
+
+/**
+ * The To-dos tab's badge. Filled, it counts what the operator has not seen
+ * in any thread, since a question raised elsewhere is the case it exists
+ * for. With nothing unread it falls back to this thread's open items,
+ * outlined.
+ */
+function readTodoTabBadge(
+  view: ThreadTodosView,
+  threadKey: string,
+): { count: number; unread: boolean } | undefined {
+  let unread = 0;
+  for (const wait of view.waits) {
+    if (!view.seenKeys.has(wait.key)) unread += 1;
+  }
+  for (const todo of view.open) {
+    if (!view.seenKeys.has(operatorTodoItemKey(todo.id))) unread += 1;
+  }
+  if (unread > 0) return { count: unread, unread: true };
+  const open = (view.openByThreadKey.get(threadKey)?.length ?? 0)
+    + (view.waitsByThreadKey.get(threadKey)?.length ?? 0);
+  return open > 0 ? { count: open, unread: false } : undefined;
 }

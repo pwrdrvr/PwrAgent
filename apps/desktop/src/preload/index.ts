@@ -31,6 +31,10 @@ import type {
   RunThreadTodoActionRequest,
   ThreadTodoMutationResponse,
   ThreadTodosChangedEvent,
+  DismissOperatorQuestionRequest,
+  ListOperatorRequestsResponse,
+  MarkOperatorItemsSeenRequest,
+  OperatorRequestsChangedEvent,
 } from "@pwragent/shared";
 import type { ReadUsageActivityRequest, ReadUsageActivityResponse, AnalyzeUsageActivityRequest, AnalyzeUsageActivityResponse } from "@pwragent/shared";
 import type { PrActivitySnapshot } from "@pwragent/shared";
@@ -606,6 +610,10 @@ import {
   THREAD_TODOS_LIST_CHANNEL,
   THREAD_TODOS_RESOLVE_CHANNEL,
   THREAD_TODOS_RUN_ACTION_CHANNEL,
+  OPERATOR_REQUESTS_CHANGED_EVENT_CHANNEL,
+  OPERATOR_REQUESTS_DISMISS_QUESTION_CHANNEL,
+  OPERATOR_REQUESTS_LIST_CHANNEL,
+  OPERATOR_REQUESTS_MARK_SEEN_CHANNEL,
   AGENT_CANCEL_THREAD_EXECUTION_MODE_QUEUE_CHANNEL,
   AGENT_APPLY_THREAD_MODEL_MIGRATION_CHANNEL,
   AGENT_EVENT_CHANNEL,
@@ -2111,6 +2119,28 @@ const desktopApi = Object.freeze({
     ipcRenderer.on(THREAD_TODOS_CHANGED_EVENT_CHANNEL, listener);
     return () => {
       ipcRenderer.off(THREAD_TODOS_CHANGED_EVENT_CHANNEL, listener);
+    };
+  },
+  listOperatorRequests: async (): Promise<ListOperatorRequestsResponse> =>
+    await ipcRenderer.invoke(OPERATOR_REQUESTS_LIST_CHANNEL),
+  markOperatorItemsSeen: async (
+    request: MarkOperatorItemsSeenRequest,
+  ): Promise<void> =>
+    await ipcRenderer.invoke(OPERATOR_REQUESTS_MARK_SEEN_CHANNEL, request),
+  dismissOperatorQuestion: async (
+    request: DismissOperatorQuestionRequest,
+  ): Promise<void> =>
+    await ipcRenderer.invoke(OPERATOR_REQUESTS_DISMISS_QUESTION_CHANNEL, request),
+  onOperatorRequestsChanged: (
+    callback: (event: OperatorRequestsChangedEvent) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      payload: OperatorRequestsChangedEvent,
+    ) => callback(payload);
+    ipcRenderer.on(OPERATOR_REQUESTS_CHANGED_EVENT_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(OPERATOR_REQUESTS_CHANGED_EVENT_CHANNEL, listener);
     };
   },
   listScheduledThreadActions: async (

@@ -1,10 +1,13 @@
 import type {
   RunThreadTodoActionRequest,
+  SubmitServerRequestRequest,
   ThreadTodo,
   ThreadTodoMergeMethodPreferences,
   ThreadTodoResolution,
   ThreadTodoStatus,
 } from "@pwragent/shared";
+import type { OperatorWait } from "../operator-requests/operator-waits";
+import type { OperatorQuestionTarget } from "../operator-requests/useOperatorRequests";
 
 /** A connected federation peer that can host a handoff thread. */
 export type ThreadTodoInstance = {
@@ -48,4 +51,24 @@ export type ThreadTodosView = {
   openStartedThread: (todo: ThreadTodo) => void;
   /** Resolved cards, newest first. */
   listResolved?: () => Promise<ThreadTodo[]>;
+  /** What threads are waiting on the operator for, most urgent first. */
+  waits: OperatorWait[];
+  waitsByThreadKey: ReadonlyMap<string, OperatorWait[]>;
+  /** Item keys the operator has had on screen: waits and cards. */
+  seenKeys: ReadonlySet<string>;
+  markSeen: (keys: readonly string[]) => void;
+  /** Answers a wait's server request from its row. */
+  respond: (
+    wait: OperatorWait,
+    response: SubmitServerRequestRequest["response"],
+  ) => Promise<void>;
+  dismissQuestion: (target: OperatorQuestionTarget) => Promise<void>;
+  /** Question item keys this window dismissed, so open cards fold too. */
+  dismissedQuestionKeys: ReadonlySet<string>;
+  /** Shows the wait's thread, where its card takes the answer. */
+  openWait: (wait: OperatorWait) => void;
+  /** Name of a thread, by `backend:threadId`. */
+  threadTitleForKey: (threadKey: string) => string;
+  /** The project a thread belongs to, by `backend:threadId`. */
+  threadProjectForKey: (threadKey: string) => { key: string; label: string } | undefined;
 };

@@ -23832,6 +23832,17 @@ export class DesktopBackendRegistry {
     return keys;
   }
 
+  /** Every pending server request, for the operator's request list. */
+  listPendingServerRequests(): Array<{
+    backend: AppServerBackendKind;
+    notification: AppServerPendingRequestNotification;
+  }> {
+    return [...this.pendingServerRequests.values()].map((pending) => ({
+      backend: pending.backend,
+      notification: pending.notification,
+    }));
+  }
+
   getPendingRequestForThread(params: {
     backend: AppServerBackendKind;
     threadId: string;

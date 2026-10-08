@@ -2585,10 +2585,40 @@ export function ThreadView(props: ThreadViewProps) {
     // A Composer mounted later, as after the launchpad, must not send it again.
     setAsyncQuestionReply((current) => (current?.id === id ? undefined : current));
   });
+  // A question dismissed from the To-dos panel folds here too. Copied in
+  // once per key, so the card can still be reopened in the transcript.
+  const panelDismissedQuestionKeys = props.threadTodos?.dismissedQuestionKeys;
+  const foldedPanelQuestionKeysRef = useRef(new Set<string>());
+  useEffect(() => {
+    if (!panelDismissedQuestionKeys || !selectedThread || selectedThread.federation) return;
+    const prefix = `question:${selectedThread.source}:${selectedThread.id}:`;
+    const fresh = [...panelDismissedQuestionKeys].filter((key) =>
+      key.startsWith(prefix) && !foldedPanelQuestionKeysRef.current.has(key));
+    if (fresh.length === 0) return;
+    for (const key of fresh) foldedPanelQuestionKeysRef.current.add(key);
+    setDismissedAsyncQuestions((current) => {
+      const next = new Set(current);
+      for (const key of fresh) {
+        next.add(`${selectedThread.source}:${selectedThread.id}\0${key.slice(prefix.length)}`);
+      }
+      return next;
+    });
+  }, [panelDismissedQuestionKeys, selectedThread]);
   const handleAsyncQuestionsDismissedChange = useEventCallback(
     (messageId: string, dismissed: boolean) => {
       if (!asyncQuestionThreadKey) return;
       const key = `${asyncQuestionThreadKey}\0${messageId}`;
+      // Closes the question in the To-dos panel as well. A peer's thread is
+      // listed on the peer, which this window cannot reach.
+      if (dismissed && selectedThread && !selectedThread.federation) {
+        void props.threadTodos?.dismissQuestion({
+          backend: selectedThread.source,
+          threadId: selectedThread.id,
+          messageId,
+        }).catch((error: unknown) => {
+          console.warn("Closing the question in the To-dos panel failed.", error);
+        });
+      }
       setDismissedAsyncQuestions((current) => {
         if (current.has(key) === dismissed) return current;
         const next = new Set(current);

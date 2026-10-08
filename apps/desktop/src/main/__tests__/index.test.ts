@@ -396,6 +396,10 @@ vi.mock("../ipc/thread-todos-ipc", () => ({
   registerThreadTodoIpcHandlers: vi.fn(),
 }));
 
+vi.mock("../ipc/operator-requests-ipc", () => ({
+  registerOperatorRequestIpcHandlers: vi.fn(),
+}));
+
 vi.mock("../ipc/scheduled-actions-ipc", () => ({
   registerScheduledActionIpcHandlers: registerScheduledActionIpcHandlersMock,
   disposeScheduledActionIpcHandlers: disposeScheduledActionIpcHandlersMock,

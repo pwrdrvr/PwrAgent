@@ -1,12 +1,16 @@
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NavigationThreadSummary, ThreadTodo, ThreadTodoProject } from "@pwragent/shared";
+import type { AppServerPendingRequestNotification } from "@pwragent/shared";
+import { operatorTodoItemKey } from "@pwragent/shared";
 import { copyText } from "../../../lib/copy-text";
 import { ThreadMetaChips } from "../../navigation/ThreadMetaChips";
 import { ThreadTodoStack } from "../ThreadTodoStack";
 import { ThreadTodosPanel } from "../ThreadTodosPanel";
 import { ThreadTodoCountsContext } from "../useThreadTodos";
 import type { ThreadTodosView } from "../thread-todos-view";
+import { buildOperatorWaits, type OperatorWait } from "../../operator-requests/operator-waits";
+import { OperatorWaitsContext } from "../../operator-requests/useOperatorRequests";
 
 vi.mock("../../../lib/copy-text", () => ({
   copyText: vi.fn(async () => undefined),
@@ -52,6 +56,17 @@ function createView(open: ThreadTodo[], overrides: Partial<ThreadTodosView> = {}
     run: vi.fn(async (entry) => entry),
     openThread: vi.fn(),
     openStartedThread: vi.fn(),
+    waits: [],
+    waitsByThreadKey: new Map(),
+    // Cards start seen; the unread tests below pass their own set.
+    seenKeys: new Set(open.map((entry) => operatorTodoItemKey(entry.id))),
+    markSeen: vi.fn(),
+    respond: vi.fn(async () => undefined),
+    dismissQuestion: vi.fn(async () => undefined),
+    dismissedQuestionKeys: new Set(),
+    openWait: vi.fn(),
+    threadTitleForKey: (threadKey) => (threadKey === "codex:thread-a" ? "Alpha" : "Beta"),
+    threadProjectForKey: () => undefined,
     ...overrides,
   };
 }
@@ -409,6 +424,98 @@ describe("ThreadTodosPanel", () => {
   });
 });
 
+function sampleWaits(): OperatorWait[] {
+  return buildOperatorWaits({
+    serverRequests: [{
+      backend: "codex",
+      createdAt: Date.now(),
+      notification: {
+        method: "item/commandExecution/requestApproval",
+        params: { threadId: "thread-a", turnId: "turn-1", requestId: "req-1", command: "pnpm test" },
+      } as unknown as AppServerPendingRequestNotification,
+    }],
+    questions: [{
+      backend: "codex",
+      threadId: "thread-b",
+      messageId: "msg-1",
+      questions: [{ title: "Which environment?", options: ["Staging", "Production"] }],
+      createdAt: Date.now(),
+    }],
+    seenKeys: [],
+  });
+}
+
+function waitsView(waits: OperatorWait[], overrides: Partial<ThreadTodosView> = {}): ThreadTodosView {
+  const waitsByThreadKey = new Map<string, OperatorWait[]>();
+  for (const wait of waits) {
+    waitsByThreadKey.set(wait.threadKey, [...(waitsByThreadKey.get(wait.threadKey) ?? []), wait]);
+  }
+  return createView([], { waits, waitsByThreadKey, ...overrides });
+}
+
+describe("ThreadTodosPanel waits", () => {
+  it("answers an approval in its row and opens a question's thread", async () => {
+    const waits = sampleWaits();
+    const view = waitsView(waits, { seenKeys: new Set(waits.map((wait) => wait.key)) });
+    render(<ThreadTodosPanel view={view} threadKey="codex:thread-a" onStartReview={vi.fn()} />);
+    // The panel remembers its lens across mounts.
+    fireEvent.click(screen.getByRole("tab", { name: /^Thread/ }));
+
+    expect(screen.getByText("Run pnpm test")).toBeTruthy();
+    expect(screen.getByText("Approval")).toBeTruthy();
+    expect(screen.queryByText("Which environment?")).toBeNull();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^Decline/ }));
+    });
+    expect(view.respond).toHaveBeenCalledWith(waits[0], { decision: "decline" });
+
+    fireEvent.click(screen.getByRole("tab", { name: /All/ }));
+    expect(screen.getByText("Which environment?")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Answer" }));
+    expect(view.openWait).toHaveBeenCalledWith(waits[1]);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    });
+    expect(view.dismissQuestion).toHaveBeenCalledWith(expect.objectContaining({
+      backend: "codex",
+      threadId: "thread-b",
+      messageId: "msg-1",
+    }));
+  });
+
+  it("counts unread items per lens and marks what is on screen seen while focused", () => {
+    const focus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    try {
+      const waits = sampleWaits();
+      const card = todo({ id: "c1", title: "Mine" });
+      const view = waitsView(waits, {
+        open: [card],
+        openByThreadKey: new Map([["codex:thread-a", [card]]]),
+        seenKeys: new Set(),
+      });
+      render(<ThreadTodosPanel view={view} threadKey="codex:thread-a" onStartReview={vi.fn()} />);
+      fireEvent.click(screen.getByRole("tab", { name: /^Thread/ }));
+
+      expect(screen.getByRole("tab", { name: /^Thread/ }).getAttribute("aria-label"))
+        .toMatch(/2 open, 2 unread/);
+      expect(screen.getByRole("tab", { name: /^All/ }).getAttribute("aria-label"))
+        .toMatch(/3 open, 3 unread/);
+      expect(view.markSeen).not.toHaveBeenCalled();
+
+      focus.mockReturnValue(true);
+      act(() => {
+        window.dispatchEvent(new Event("focus"));
+      });
+      expect(view.markSeen).toHaveBeenCalledWith(
+        expect.arrayContaining([waits[0]!.key, operatorTodoItemKey("c1")]),
+      );
+      expect(vi.mocked(view.markSeen).mock.calls[0]![0]).not.toContain(waits[1]!.key);
+    } finally {
+      focus.mockRestore();
+    }
+  });
+});
+
 describe("thread row to-do chip", () => {
   const thread = {
     id: "thread-a",
@@ -432,5 +539,53 @@ describe("thread row to-do chip", () => {
       </ThreadTodoCountsContext.Provider>,
     );
     expect(screen.queryByRole("img", { name: /open to-do/ })).toBeNull();
+  });
+
+  it("names what a thread waits on, and counts its waits with its cards", () => {
+    const waits = sampleWaits().filter((wait) => wait.threadId === "thread-a");
+    const counts = new Map([["codex:thread-a", [todo({ id: "1" })]]]);
+    render(
+      <ThreadTodoCountsContext.Provider value={counts}>
+        <OperatorWaitsContext.Provider
+          value={{
+            waitsByThreadKey: new Map([["codex:thread-a", waits]]),
+            seenKeys: new Set([operatorTodoItemKey("1")]),
+          }}
+        >
+          <ThreadMetaChips thread={thread} hasApprovalRequest />
+        </OperatorWaitsContext.Provider>
+      </ThreadTodoCountsContext.Provider>,
+    );
+    expect(screen.getByRole("img", { name: "Approval: Run pnpm test" })).toBeTruthy();
+    expect(screen.getByRole("img", { name: "2 open items, 1 unread" })).toBeTruthy();
+    // The wait chip replaces the session's own approval flag.
+    expect(screen.queryByText("Waiting for approval")).toBeNull();
+  });
+
+  it("names a question a thread asked", () => {
+    const waits = sampleWaits().filter((wait) => wait.threadId === "thread-b");
+    render(
+      <OperatorWaitsContext.Provider
+        value={{ waitsByThreadKey: new Map([["codex:thread-b", waits]]), seenKeys: new Set() }}
+      >
+        <ThreadMetaChips thread={{ ...thread, id: "thread-b" }} />
+      </OperatorWaitsContext.Provider>,
+    );
+    const chip = screen.getByRole("img", { name: "Question: Which environment?" });
+    expect(chip.className).toContain("thread-row__chip--question");
+  });
+
+  it("keeps the session's flags while the wait list names nothing for the thread", () => {
+    render(
+      <OperatorWaitsContext.Provider value={{ waitsByThreadKey: new Map(), seenKeys: new Set() }}>
+        <ThreadMetaChips thread={thread} hasApprovalRequest />
+      </OperatorWaitsContext.Provider>,
+    );
+    expect(screen.getByText("Waiting for approval")).toBeTruthy();
+  });
+
+  it("falls back to the session's flags without a wait list", () => {
+    render(<ThreadMetaChips thread={thread} hasApprovalRequest />);
+    expect(screen.getByText("Waiting for approval")).toBeTruthy();
   });
 });

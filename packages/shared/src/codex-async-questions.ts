@@ -144,6 +144,90 @@ export function parseCodexAsyncQuestionReply(
   return replies.length > 0 ? replies : undefined;
 }
 
+type CodexItemNotification = {
+  method: string;
+  params: unknown;
+};
+
+/**
+ * The async questions an `item/completed` notification carries: an assistant
+ * message with `delivery: "async"` and well-formed `questions`.
+ */
+export function readCodexAsyncQuestionsFromNotification(
+  notification: CodexItemNotification,
+): { itemId: string; questions: CodexAsyncQuestion[] } | undefined {
+  const item = completedItem(notification);
+  if (item?.type !== "agentMessage" || item.delivery !== "async") {
+    return undefined;
+  }
+  const itemId = completedItemId(item);
+  const questions = normalizeCodexAsyncQuestions(item.questions);
+  return itemId && questions ? { itemId, questions } : undefined;
+}
+
+/**
+ * The replies an `item/completed` user message carries. Codex reads a reply
+ * only from a user message whose single text input is the reply envelope;
+ * skill and mention inputs may accompany it.
+ */
+export function readCodexAsyncQuestionRepliesFromNotification(
+  notification: CodexItemNotification,
+): CodexAsyncQuestionReply[] | undefined {
+  const item = completedItem(notification);
+  if (item?.type !== "userMessage" || !Array.isArray(item.content)) {
+    return undefined;
+  }
+  const inputs = (item.content as Array<{ text?: unknown; type?: unknown } | null>)
+    .filter((input) => input?.type !== "skill" && input?.type !== "mention");
+  const [input] = inputs;
+  if (inputs.length !== 1 || input?.type !== "text" || typeof input.text !== "string") {
+    return undefined;
+  }
+  return parseCodexAsyncQuestionReply(input.text);
+}
+
+/**
+ * The message a reply answers. A question identity is the JSON array
+ * `[tool name, message id, index]`; an older reply names the message itself.
+ */
+export function codexAsyncQuestionReplyMessageId(questionItemId: string): string {
+  try {
+    const parsed: unknown = JSON.parse(questionItemId);
+    if (
+      Array.isArray(parsed)
+      && parsed[0] === CODEX_ASYNC_QUESTION_TOOL_NAME
+      && typeof parsed[1] === "string"
+    ) {
+      return parsed[1];
+    }
+  } catch {
+    // Not an identity array: the older form, which is the message id.
+  }
+  return questionItemId;
+}
+
+function completedItem(
+  notification: CodexItemNotification,
+): Record<string, unknown> | undefined {
+  if (notification.method !== "item/completed") {
+    return undefined;
+  }
+  const params = notification.params;
+  const item = params && typeof params === "object"
+    ? (params as { item?: unknown }).item
+    : undefined;
+  return item && typeof item === "object" ? item as Record<string, unknown> : undefined;
+}
+
+function completedItemId(item: Record<string, unknown>): string | undefined {
+  for (const value of [item.id, item.itemId, item.item_id]) {
+    if (typeof value === "string" && value) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
 /** One line for surfaces that preview a reply, such as a queued message. */
 export function summarizeCodexAsyncQuestionReply(
   replies: readonly Pick<CodexAsyncQuestionReply, "answer">[],

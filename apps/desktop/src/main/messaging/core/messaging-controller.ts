@@ -22,9 +22,9 @@ import {
   isAppServerBackendKind,
   isCodexAsyncQuestionAnswered,
   isMessagingBindingTargetKind,
-  normalizeCodexAsyncQuestions,
+  readCodexAsyncQuestionRepliesFromNotification,
+  readCodexAsyncQuestionsFromNotification,
   normalizeRenamedTitleSource,
-  parseCodexAsyncQuestionReply,
   parseCodexTurnErrorMessage,
   parseThreadIdentityKey,
   permissionForActionId,
@@ -1561,7 +1561,7 @@ export class MessagingController {
       // semantics that it must never inherit.
       return;
     }
-    const asyncQuestionReplies = asyncQuestionRepliesForBackendEvent(event);
+    const asyncQuestionReplies = readCodexAsyncQuestionRepliesFromNotification(event.notification);
     if (asyncQuestionReplies) {
       await this.retireAnsweredAsyncQuestionnaires(
         event,
@@ -2086,7 +2086,7 @@ export class MessagingController {
             event,
             binding,
           );
-          const asyncQuestions = asyncQuestionsForBackendEvent(event);
+          const asyncQuestions = readCodexAsyncQuestionsFromNotification(event.notification);
           if (!assistantMessageClaimed) {
             await this.deliverAssistantImages(assistantImages, event, binding);
           } else if (asyncQuestions) {
@@ -22751,48 +22751,6 @@ function sleepUntil(
  * names each question by this item id, so a message without one cannot be
  * answered and stays ordinary assistant text.
  */
-function asyncQuestionsForBackendEvent(
-  event: AgentEvent,
-): { itemId: string; questions: CodexAsyncQuestion[] } | undefined {
-  if (event.notification.method !== "item/completed") {
-    return undefined;
-  }
-  const item = (event.notification.params as {
-    item?: { delivery?: unknown; questions?: unknown; type?: unknown };
-  }).item;
-  if (item?.type !== "agentMessage" || item.delivery !== "async") {
-    return undefined;
-  }
-  const itemId = assistantItemIdForBackendEvent(event);
-  const questions = normalizeCodexAsyncQuestions(item.questions);
-  return itemId && questions ? { itemId, questions } : undefined;
-}
-
-/**
- * Codex reads an async question reply only from a user message whose single
- * text input is the reply envelope; skill and mention inputs may accompany it.
- */
-function asyncQuestionRepliesForBackendEvent(
-  event: AgentEvent,
-): CodexAsyncQuestionReply[] | undefined {
-  if (event.notification.method !== "item/completed") {
-    return undefined;
-  }
-  const item = (event.notification.params as {
-    item?: { content?: unknown; type?: unknown };
-  }).item;
-  if (item?.type !== "userMessage" || !Array.isArray(item.content)) {
-    return undefined;
-  }
-  const inputs = (item.content as Array<{ text?: unknown; type?: unknown } | null>)
-    .filter((input) => input?.type !== "skill" && input?.type !== "mention");
-  const [input] = inputs;
-  if (inputs.length !== 1 || input?.type !== "text" || typeof input.text !== "string") {
-    return undefined;
-  }
-  return parseCodexAsyncQuestionReply(input.text);
-}
-
 function assistantTextForBackendEvent(event: AgentEvent): string | undefined {
   if (event.notification.method === "item/completed") {
     const params = event.notification.params as {
