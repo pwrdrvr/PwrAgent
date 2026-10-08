@@ -545,6 +545,26 @@ describe("backend MCP gateway dispatch", () => {
     expect(internals.pendingServerRequests.size).toBe(0);
   });
 
+  it.each([
+    { label: "read-only", annotations: { readOnlyHint: true }, prompts: 0 },
+    { label: "read-only but destructive", annotations: { readOnlyHint: true, destructiveHint: true }, prompts: 1 },
+  ])("follows Codex's annotation rule for a $label tool", async ({ annotations, prompts }) => {
+    operation.mockImplementation(async (params) => params.operation === "gateway/tools/list"
+      ? [{ connectionId: "one", serverName: "Fixture", toolName: "lookup", schemaRevision: "r1", definition: {
+          name: "lookup", annotations, inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+        } }]
+      : { content: [{ type: "text", text: "fixture result" }] });
+    const events: AgentEvent[] = [];
+    registry.onEvent(async (event) => {
+      if (event.notification.method !== "mcpServer/elicitation/request") return;
+      events.push(event);
+      await registry.submitServerRequest({ backend: "codex", threadId: "thread-1", turnId: "turn-1", requestId: String(event.notification.params.requestId), response: { action: "accept", content: {}, _meta: null } });
+    });
+    expect((await internals.handleServerRequest("codex", request("call_mcp_tool", args))).success).toBe(true);
+    expect(events).toHaveLength(prompts);
+    expect(operation.mock.calls.filter(([entry]) => entry.operation === "gateway/tools/call")).toHaveLength(1);
+  });
+
   it("requires source-specific approval and deduplicates the same dynamic call", async () => {
     const pending = approval();
     const call = internals.handleServerRequest("codex", request("call_mcp_tool", args));

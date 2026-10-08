@@ -578,7 +578,7 @@ import {
 import { buildMcpGatewayToolDefinitions } from "../agent-tools/pwragent-mcp-gateway-tools";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import { McpGatewayToolService, type McpGatewayApproval } from "../mcp-connections/mcp-gateway-tool-service";
-import type { McpGatewayInvocation } from "../mcp-connections/mcp-gateway-catalog";
+import { gatewayToolRequiresApproval, type McpGatewayInvocation, type McpGatewayTool } from "../mcp-connections/mcp-gateway-catalog";
 import {
   getTokenMiserBridgeDescriptorPath,
   TOKEN_MISER_BRIDGE_DESCRIPTOR_ENV,
@@ -10028,7 +10028,7 @@ export class DesktopBackendRegistry {
           }
           return (await this.readThreadMcpConnections(context)).connectionIds;
         },
-        approve: (invocation, context, signal) => this.approveGatewayInvocation(invocation, context, signal),
+        approve: (invocation, context, signal, annotations) => this.approveGatewayInvocation(invocation, context, signal, annotations),
       });
     }
     if (this.tokenMiserStore) {
@@ -36615,6 +36615,7 @@ export class DesktopBackendRegistry {
     invocation: McpGatewayInvocation,
     context: AgentToolCallContext,
     signal: AbortSignal,
+    annotations?: McpGatewayTool["definition"]["annotations"],
   ): Promise<McpGatewayApproval> {
     signal.throwIfAborted();
     const requestId = `mcp-gateway:${randomUUID()}`;
@@ -36686,6 +36687,19 @@ export class DesktopBackendRegistry {
     // calls. Keep scoped confirmation until that integration is available.
     if (automation) return false;
     signal.throwIfAborted();
+    // Codex asks for none of a server's read-only tools, so neither does the
+    // gateway: listing and inspecting run, and a restart still asks.
+    if (!gatewayToolRequiresApproval(annotations)) {
+      backendRegistryLog.info("running MCP gateway tool its server marks safe without approval", {
+        backend: context.backend,
+        threadId: context.threadId,
+        turnId: context.turnId,
+        connectionId: invocation.connectionId,
+        serverName: invocation.serverName,
+        toolName: invocation.toolName,
+      });
+      return true;
+    }
     if (consent.approved) return true;
     const key = buildPendingRequestKey({ ...context, requestId });
     return await new Promise<McpGatewayApproval>((resolve, reject) => {

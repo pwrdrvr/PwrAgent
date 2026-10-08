@@ -4,7 +4,7 @@ import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition"
 import { AgentToolRouter } from "../agent-tools/agent-tool-router";
 import { buildMcpGatewayToolDefinitions } from "../agent-tools/pwragent-mcp-gateway-tools";
 import { McpGatewayToolService } from "../mcp-connections/mcp-gateway-tool-service";
-import { gatewayToolRevision, validateGatewayArguments, type McpGatewayTool } from "../mcp-connections/mcp-gateway-catalog";
+import { gatewayToolRequiresApproval, gatewayToolRevision, validateGatewayArguments, type McpGatewayTool } from "../mcp-connections/mcp-gateway-catalog";
 import { gatewayInvocationName } from "../mcp-connections/mcp-gateway-attribution";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -60,7 +60,7 @@ describe("fixed MCP gateway tools", () => {
         connectionId: entry.connectionId, toolName: entry.toolName, schemaRevision: entry.schemaRevision, arguments: { id: "x" },
       } });
       expect(called._meta?.["pwragent/source"]).toMatchObject({ connectionId: "one", toolName: "late_tool" });
-      expect(f.approve).toHaveBeenCalledWith(expect.objectContaining({ toolName: "late_tool" }), expect.objectContaining({ backend: "acp:fixture", threadId: "thread-a", turnId: "turn-a" }), expect.any(AbortSignal));
+      expect(f.approve).toHaveBeenCalledWith(expect.objectContaining({ toolName: "late_tool" }), expect.objectContaining({ backend: "acp:fixture", threadId: "thread-a", turnId: "turn-a" }), expect.any(AbortSignal), undefined);
     } finally {
       await client.close();
       await server.close();
@@ -126,6 +126,22 @@ describe("fixed MCP gateway tools", () => {
     expect(() => validateGatewayArguments(b.definition, { id: 4 })).not.toThrow();
     b.definition.inputSchema.$async = true;
     expect(() => validateGatewayArguments(b.definition, { id: "invalid" })).toThrow("Asynchronous schemas");
+  });
+
+  // Codex's requires_mcp_tool_approval_for_mode, case for case.
+  it.each([
+    { mode: "auto", annotations: undefined, asks: true },
+    { mode: "auto", annotations: { readOnlyHint: true }, asks: false },
+    { mode: "auto", annotations: { readOnlyHint: true, destructiveHint: true }, asks: true },
+    { mode: "auto", annotations: { destructiveHint: false }, asks: true },
+    { mode: "auto", annotations: { destructiveHint: false, openWorldHint: false }, asks: false },
+    { mode: "auto", annotations: { openWorldHint: false }, asks: true },
+    { mode: "prompt", annotations: { readOnlyHint: true }, asks: true },
+    { mode: "writes", annotations: { readOnlyHint: true }, asks: false },
+    { mode: "writes", annotations: { destructiveHint: false, openWorldHint: false }, asks: true },
+    { mode: "approve", annotations: { destructiveHint: true }, asks: false },
+  ] as const)("asks for approval in $mode mode for $annotations: $asks", ({ mode, annotations, asks }) => {
+    expect(gatewayToolRequiresApproval(annotations, mode)).toBe(asks);
   });
 
   it("cancels a pending approval on thread changes", async () => {
