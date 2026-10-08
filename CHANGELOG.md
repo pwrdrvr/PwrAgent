@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.2.0-prerelease.3 - 2026-10-08
+
+- Waiting on You - The To-dos panel now gathers approvals, forms, and questions across threads and projects, with unread counts and inline approval actions. Sidebar labels show exactly what each thread needs.
+- Usage and Cost - Filter usage by provider account across machines and profiles. Inspect and pin chart time slices to see which threads and models contributed to spending.
+- Logs - Rebuilt the Logs window with filtering, surrounding context, line selection, bookmarks, and copying selected lines together with troubleshooting diagnostics.
+- Cloudflare Federation - Added browser sign-in prompts and renewal reminders. Sign-in setup invites can now be exported without re-entering the Cloudflare API token.
+- Thread Handoff - Git transfers now fetch published references instead of copying repository history, fixing tracked-symlink failures. Git handoffs require a clean, published workspace; non-Git workspaces retain archive-based transfer.
+- Project Navigation - Scope the quick-jump palette with @project mentions and combine search terms without busy projects crowding out results.
+- Performance and Reliability - Moved archive cleanup into a paced background queue, improved navigation-list recovery, and corrected overlapping Codex quota updates and repeated-warning dismissal.
+
 ## v1.2.0-prerelease.2 - 2026-10-07
 
 - Director Voice - Added optional camera cues for gestures, presence, and head nods or shakes, with conversation-aware filtering to avoid repeated interruptions. Requires a configured local decision model; disabled by default, and gestures never approve actions.
