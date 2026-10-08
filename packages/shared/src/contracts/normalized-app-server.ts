@@ -2491,6 +2491,7 @@ export type AppServerNotification =
       };
     }
   | { method: "federation/shutdown/changed"; params: { notices: FederationPeerShutdown[] } }
+  | { method: "federation/health/changed"; params: Record<string, never> }
   | FederationPeerStatusChangedNotification
   | FederationEventStreamChangedNotification
   | FederationCelestialIconsChangedNotification

@@ -232,14 +232,22 @@ export function registerCloudflareSetupIpc(): void {
             ? "Client revoked. Cloudflare no longer admits its credential, and the federation peer its setup file enrolled was revoked, which ends its session."
             : "Client revoked. Cloudflare no longer admits its credential. PwrAgent has no record of the peer its setup file enrolled, so a session already open continues until you revoke that peer under Federation Instances.");
         case "sign-in": {
+          const runtime = getDesktopFederationRuntime();
+          // Through the restart: it clears the requirement, so no window
+          // offers Sign in again between the browser returning and reconnecting.
+          runtime.setCloudflareSignInPending(true);
           try {
-            await getCloudflareAccessSignIn().signIn(signInEndpoint());
-          } catch (error) {
-            // Cancelling is an outcome, not a failure: nothing was saved.
-            if (error instanceof CloudflareSignInCancelledError) return describe("Sign-in cancelled. Your previous sign-in is unchanged.");
-            throw error;
+            try {
+              await getCloudflareAccessSignIn().signIn(signInEndpoint());
+            } catch (error) {
+              // Cancelling is an outcome, not a failure: nothing was saved.
+              if (error instanceof CloudflareSignInCancelledError) return describe("Sign-in cancelled. Your previous sign-in is unchanged.");
+              throw error;
+            }
+            await runtime.restart();
+          } finally {
+            runtime.setCloudflareSignInPending(false);
           }
-          await getDesktopFederationRuntime().restart();
           return describe("Signed in. Federation is reconnecting.");
         }
         case "sign-out":
@@ -258,6 +266,9 @@ export function registerCloudflareSetupIpc(): void {
           // endpoint and invite, and the person signs in as themselves.
           const client = gate === "oauth" ? undefined : await setup.issue(request.label);
           if (gate === "oauth") await setup.assertShareable();
+          // Advisory: without it the client signs in the same, but cannot
+          // ask for a new sign-in before its grant ends.
+          const signInLifetimeMs = gate === "oauth" ? await setup.signInLifetimeMs().catch(() => undefined) : undefined;
           const state = await loadCloudflareSetup();
           if (!state) throw new Error("Cloudflare setup is unavailable.");
           const generated = await getDesktopFederationRuntime().generateInvite({ label: request.label, ttlMs: hours * 3_600_000 });
@@ -269,6 +280,7 @@ export function registerCloudflareSetupIpc(): void {
             ...(gate === "service-token"
               ? { accessClientId: client?.clientId, accessClientSecret: client?.clientSecret }
               : gate === "mtls" ? { certificate: client?.certificate, privateKey: client?.privateKey } : {}),
+            ...(signInLifetimeMs ? { signInLifetimeMs } : {}),
           }, request.password), { mode: 0o600 });
           const expiry = hours === 1 ? "one hour" : `${hours} hours`;
           return describe(gate === "oauth"
@@ -299,11 +311,16 @@ export function registerCloudflareSetupIpc(): void {
           if (importGate === "oauth") {
             // Sign in before changing any setting: if the person cannot sign
             // in, this profile's federation config is left as it was.
+            const runtime = getDesktopFederationRuntime();
+            // A sign-in prompt in any window must show this one waiting.
+            runtime.setCloudflareSignInPending(true);
             try {
-              await getCloudflareAccessSignIn().signIn(bundle.endpoint);
+              await getCloudflareAccessSignIn().signIn(bundle.endpoint, { lifetimeMs: bundle.signInLifetimeMs });
             } catch (error) {
               if (error instanceof CloudflareSignInCancelledError) return describe("Sign-in cancelled. Nothing on this profile changed.");
               throw error;
+            } finally {
+              runtime.setCloudflareSignInPending(false);
             }
           } else {
             const previous = await settings.resolveFederationCloudflareCredentials();

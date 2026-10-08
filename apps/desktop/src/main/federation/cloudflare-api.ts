@@ -212,7 +212,7 @@ export function cloudflareAdmissionPolicy(gate: CloudflareGate, ids: string[]) {
  * authorization code on 127.0.0.1, and no https redirect is allowed that a
  * third-party site could use to collect a grant. The 15-minute access token and
  * two-week grant are Cloudflare's recommendation for CLI and agent clients —
- * a person signs in again only after two weeks without PwrAgent refreshing.
+ * the grant limits how long refresh tokens remain valid before a new sign-in.
  */
 export const CLOUDFLARE_OAUTH_CONFIGURATION = {
   enabled: true,
@@ -268,6 +268,19 @@ export function isExpectedOAuthConfiguration(value: unknown): boolean {
     && registration.allow_any_on_loopback === true
     && (registration.allowed_uris === undefined
       || (Array.isArray(registration.allowed_uris) && registration.allowed_uris.length === 0));
+}
+
+/**
+ * How long a Managed OAuth grant lasts before Access asks for a new sign-in,
+ * from an application's live `oauth_configuration`; the operator may have
+ * tuned it in the dashboard. Undefined when Cloudflare reports none.
+ */
+export function oauthGrantLifetimeMs(value: unknown): number | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const grant = (value as { grant?: unknown }).grant;
+  if (!grant || typeof grant !== "object") return undefined;
+  const lifetime = parseCloudflareDuration((grant as { session_duration?: unknown }).session_duration);
+  return lifetime && lifetime > 0 ? lifetime : undefined;
 }
 
 /** The people an `oauth` endpoint admits, by the email their login method verified. */

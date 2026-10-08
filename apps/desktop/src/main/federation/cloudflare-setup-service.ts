@@ -16,6 +16,7 @@ import {
   isExactIdentityPolicy,
   isDedicatedApplication,
   isExpectedOAuthConfiguration,
+  oauthGrantLifetimeMs,
   parseCloudflareDuration,
   type AccessApplication,
   type CloudflareGate,
@@ -648,6 +649,17 @@ export class CloudflareSetupService {
     this.deps.verifyListener(state.listenPort);
     if ((await this.audit()).some((check) => !check.passed)) throw new Error("Resolve the policy audit before sharing a client setup.");
     return state;
+  }
+
+  /**
+   * How long a sign-in to this `oauth` endpoint lasts, read live from its
+   * Access application, so a setup file states the grant the client will get.
+   */
+  async signInLifetimeMs(): Promise<number | undefined> {
+    const state = await this.state();
+    if (cloudflareSetupGate(state) !== "oauth" || !state.applicationId) return undefined;
+    const app = await this.apiClient().request<AccessApplication>(`/accounts/${state.accountId}/access/apps/${state.applicationId}`);
+    return oauthGrantLifetimeMs(app.oauth_configuration);
   }
 
   async issue(label: string): Promise<Client> {

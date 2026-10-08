@@ -426,7 +426,9 @@ export function broadcastAgentEvent(event: AgentEvent): void {
       ) {
         continue;
       }
-    } else if (windowTarget && hydratedEvent.notification.method !== "federation/shutdown/changed") {
+    } else if (windowTarget
+      && hydratedEvent.notification.method !== "federation/shutdown/changed"
+      && hydratedEvent.notification.method !== "federation/health/changed") {
       continue;
     }
     webContents.send(AGENT_EVENT_CHANNEL, rendererEvent);
