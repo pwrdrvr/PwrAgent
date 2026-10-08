@@ -1,5 +1,5 @@
 import { buildLegacyEncodedThreadIdentityKey, parseUsageLimitObservation, validateUsageActivityWindow, type ReadUsageActivityRequest, type UsageActivityRollup, type UsageActivityRow, type UsageLimitObservation, usageRollupStep } from "@pwragent/shared";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { READ_NAVIGATION_BACKEND_METADATA } from "./navigation-backend-metadata";
 import { sqliteBackendChangeVersion } from "./sqlite-backend-change-version";
 import { sqliteThreadChangeVersion } from "./sqlite-thread-change-version";
@@ -7104,6 +7104,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       : undefined;
     const nextState: ThreadOverlayState = {
       ...current,
+      mcpSelectionRevision: randomUUID(),
       ...(connectionIds.length > 0
         ? { mcpConnectionIds: connectionIds }
         : { mcpConnectionIds: undefined }),

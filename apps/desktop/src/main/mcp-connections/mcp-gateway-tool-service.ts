@@ -6,6 +6,10 @@ import { MCP_CONNECTION_TOOL_LIST_TIMEOUT_MS, MCP_CONNECTION_TOOL_TIMEOUT_MS } f
 
 export type McpGatewayCallArgs = Omit<McpGatewayInvocation, "serverName">;
 export type McpGatewaySearch = { query: string; connectionId?: string; limit?: number };
+export type McpGatewayApproval = boolean | {
+  /** Record conversation consent only after the owner's validation and call succeed. */
+  onInvoked: () => Promise<void>;
+};
 export type McpGatewaySearchResult = {
   tools: Array<McpGatewayTool & { invocation: { name: "call_mcp_tool"; codeModeName: "pwragent__call_mcp_tool" } }>;
   unavailable: Array<{ connectionId: string; message: string }>;
@@ -15,7 +19,7 @@ export type McpGatewayToolServiceOptions = {
   connections: Pick<McpConnectionGatewayService, "requestGatewayToolOperation">;
   /** Must check active turn, actor permissions and the latest saved selection. */
   selectedConnections: (context: AgentToolCallContext) => Promise<string[]>;
-  approve: (invocation: McpGatewayInvocation, context: AgentToolCallContext, signal: AbortSignal) => Promise<boolean>;
+  approve: (invocation: McpGatewayInvocation, context: AgentToolCallContext, signal: AbortSignal) => Promise<McpGatewayApproval>;
 };
 
 /** No disk catalog or connection-wide permissions. Every invocation revalidates
@@ -107,7 +111,8 @@ export class McpGatewayToolService {
         toolName: tool.toolName, schemaRevision: tool.schemaRevision,
       };
       const invocation = { ...source, arguments: args.arguments };
-      if (!await this.options.approve(invocation, context, signal)) throw new Error("The MCP tool invocation was not approved.");
+      const approval = await this.options.approve(invocation, context, signal);
+      if (!approval) throw new Error("The MCP tool invocation was not approved.");
       await this.requireSelected(args.connectionId, context, signal);
       // The owner lists and validates again, preventing schema/auth changes while
       // approval was pending from executing a different operation under that grant.
@@ -115,6 +120,7 @@ export class McpGatewayToolService {
         connectionId: args.connectionId, scopeKey: this.scopeKey(context),
         operation: "gateway/tools/call", invocation, signal,
       }) as CallToolResult;
+      if (typeof approval === "object") await approval.onInvoked();
       return { source, result };
     });
   }

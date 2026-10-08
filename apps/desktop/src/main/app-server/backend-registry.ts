@@ -577,7 +577,7 @@ import {
 } from "../agent-tools/pwragent-tool-search";
 import { buildMcpGatewayToolDefinitions } from "../agent-tools/pwragent-mcp-gateway-tools";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
-import { McpGatewayToolService } from "../mcp-connections/mcp-gateway-tool-service";
+import { McpGatewayToolService, type McpGatewayApproval } from "../mcp-connections/mcp-gateway-tool-service";
 import type { McpGatewayInvocation } from "../mcp-connections/mcp-gateway-catalog";
 import {
   getTokenMiserBridgeDescriptorPath,
@@ -6125,6 +6125,12 @@ type StartupProviderThreadRefresh = Readonly<{
   threads: readonly AppServerThreadSummary[];
 }>;
 
+type McpGatewayConversationConsent = {
+  schemaRevision: string;
+  selectionRevision?: string;
+  approved: boolean;
+};
+
 type ThreadListCacheState = {
   expiresAt?: number;
   promise?: Promise<AppServerThreadSummary[]>;
@@ -8685,7 +8691,7 @@ export class DesktopBackendRegistry {
   private readonly pendingServerRequests = new Map<string, PendingServerRequest>();
   // Process-local conversation grants. A source's revision also includes the
   // broker's authorization generation, so reauthorization needs fresh consent.
-  private readonly mcpGatewaySessionApprovals = new Map<string, Map<string, string>>();
+  private readonly mcpGatewaySessionApprovals = new Map<string, Map<string, McpGatewayConversationConsent>>();
   private readonly fileChangeApprovalContexts = new Map<
     string,
     PendingRequestApprovalContext
@@ -36603,9 +36609,24 @@ export class DesktopBackendRegistry {
     invocation: McpGatewayInvocation,
     context: AgentToolCallContext,
     signal: AbortSignal,
-  ): Promise<boolean> {
+  ): Promise<McpGatewayApproval> {
     signal.throwIfAborted();
     const requestId = `mcp-gateway:${randomUUID()}`;
+    const sessionKey = JSON.stringify([context.backend, context.threadId]);
+    const sourceKey = JSON.stringify([invocation.connectionId, invocation.serverName, invocation.toolName]);
+    const selectionRevision = (await this.overlayStore.getThreadOverlayState(context))?.mcpSelectionRevision;
+    signal.throwIfAborted();
+    const approvals = this.mcpGatewaySessionApprovals.get(sessionKey) ?? new Map<string, McpGatewayConversationConsent>();
+    let current = approvals.get(sourceKey);
+    // Observe revocation before automatic approval as well. Identity changes
+    // supersede pending responses, even when a catalog later restores R1.
+    if (!current || current.schemaRevision !== invocation.schemaRevision
+      || current.selectionRevision !== selectionRevision) {
+      current = { schemaRevision: invocation.schemaRevision, selectionRevision, approved: false };
+      approvals.set(sourceKey, current);
+      this.mcpGatewaySessionApprovals.set(sessionKey, approvals);
+    }
+    const consent = current;
     const notification: AppServerPendingRequestNotification = {
       method: "mcpServer/elicitation/request",
       params: {
@@ -36651,16 +36672,10 @@ export class DesktopBackendRegistry {
     // calls. Keep scoped confirmation until that integration is available.
     if (automation) return false;
     signal.throwIfAborted();
-    const sessionKey = JSON.stringify([context.backend, context.threadId]);
-    const sourceKey = JSON.stringify([invocation.connectionId, invocation.serverName, invocation.toolName]);
-    const approvals = this.mcpGatewaySessionApprovals.get(sessionKey);
-    if (approvals?.get(sourceKey) === invocation.schemaRevision) return true;
-    // Once a changed schema/auth generation is observed, the old grant cannot
-    // come back even if the catalog later returns to the previous revision.
-    approvals?.delete(sourceKey);
+    if (consent.approved) return true;
     const key = buildPendingRequestKey({ ...context, requestId });
-    return await new Promise<boolean>((resolve, reject) => {
-      const finish = (approved: boolean, error?: unknown): void => {
+    return await new Promise<McpGatewayApproval>((resolve, reject) => {
+      const finish = (approved: McpGatewayApproval, error?: unknown): void => {
         signal.removeEventListener("abort", aborted);
         this.pendingServerRequests.delete(key);
         if (error) reject(error);
@@ -36678,9 +36693,22 @@ export class DesktopBackendRegistry {
           if (signal.aborted) { aborted(); return; }
           const approved = Boolean(response && "action" in response && response.action === "accept");
           if (approved && "_meta" in response && readRecord(response._meta)?.persist === "session") {
-            const grants = this.mcpGatewaySessionApprovals.get(sessionKey) ?? new Map<string, string>();
-            grants.set(sourceKey, invocation.schemaRevision);
-            this.mcpGatewaySessionApprovals.set(sessionKey, grants);
+            finish({ onInvoked: async () => {
+              // A late response is provisional until the owner accepts its
+              // exact schema/auth revision. Peer-instance edits also revoke it.
+              if (signal.aborted || this.closed) return;
+              try {
+                const latest = await this.overlayStore.getThreadOverlayState(context);
+                if (!signal.aborted && !this.closed
+                  && latest?.mcpSelectionRevision === selectionRevision
+                  && this.mcpGatewaySessionApprovals.get(sessionKey)?.get(sourceKey) === consent) {
+                  consent.approved = true;
+                }
+              } catch (error) {
+                backendRegistryLog.warn("could not record MCP conversation approval", { error: String(error) });
+              }
+            } });
+            return;
           }
           finish(approved);
         },

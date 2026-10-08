@@ -2779,6 +2779,8 @@ export type ThreadOverlayState = {
   fastMode?: boolean;
   /** MCP connections supplied to this thread's harness. */
   mcpConnectionIds?: string[];
+  /** Shared revocation revision, replaced on each explicit MCP selection edit. */
+  mcpSelectionRevision?: string;
   /**
    * Whether the backend's own configured MCP servers stay available to the
    * thread. Undefined means yes. Only Codex can honor `false`; see

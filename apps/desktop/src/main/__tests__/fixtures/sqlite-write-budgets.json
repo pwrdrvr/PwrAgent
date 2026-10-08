@@ -445,6 +445,7 @@
     "rowsChanged": 0,
     "statements": 0
   },
+  "mcp-selection-revocation": {"commits": 1, "note": "Selection revocation shares the existing operator selection commit. No per-call or grant writes are added.", "observedWalBytes": 16480, "rowsChanged": 1, "statements": 1},
   "mcp-token-rotation": {
     "commits": 1,
     "note": "persist one encrypted rotated MCP credential generation",

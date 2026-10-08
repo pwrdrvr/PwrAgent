@@ -8,11 +8,15 @@ import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 import { attachSqliteWriteMetrics, isSqliteWriteMetricsEnabled, measureSqliteWrites } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
-import type { McpConnectionGatewayService } from "../mcp-connections/mcp-connection-gateway-service";
+import { McpConnectionGatewayService } from "../mcp-connections/mcp-connection-gateway-service";
+import { McpConnectionRegistry } from "../mcp-connections/mcp-connection-registry";
 import type { AcpBackendAdapter } from "../app-server/acp-backend-adapter";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
-import type { McpGatewayInvocation } from "../mcp-connections/mcp-gateway-catalog";
+import type { McpGatewayInvocation, McpGatewayTool } from "../mcp-connections/mcp-gateway-catalog";
+import type { McpGatewayApproval } from "../mcp-connections/mcp-gateway-tool-service";
 import { buildMcpElicitationResponse, createMcpElicitationState, readMcpApprovalPersistence } from "../../renderer/src/features/thread-detail/mcp-elicitation";
+
+type McpApprovalEvent = Pick<AgentEvent, "backend"> & { notification: AppServerMcpElicitationRequestNotification };
 
 describe("backend MCP gateway dispatch", () => {
   let directory: string;
@@ -22,11 +26,12 @@ describe("backend MCP gateway dispatch", () => {
   let operation: ReturnType<typeof vi.fn<McpConnectionGatewayService["requestGatewayToolOperation"]>>;
   let startTurn: ReturnType<typeof vi.fn<() => Promise<{ threadId: string; turnId: string }>>>;
   let registerBridge: ReturnType<typeof vi.fn<McpConnectionGatewayService["registerBridge"]>>;
+  const brokers: McpConnectionGatewayService[] = [];
   let internals: {
     activeTurnKeys: Set<string>;
     activeCodexTurnModes: Map<string, ThreadExecutionMode>;
     acpBackend: AcpBackendAdapter;
-    approveGatewayInvocation(invocation: McpGatewayInvocation, context: AgentToolCallContext, signal: AbortSignal): Promise<boolean>;
+    approveGatewayInvocation(invocation: McpGatewayInvocation, context: AgentToolCallContext, signal: AbortSignal): Promise<McpGatewayApproval>;
     headlessAutomationTurns: Map<string, {
       agentThreadId: string;
       backend: "codex";
@@ -64,32 +69,48 @@ describe("backend MCP gateway dispatch", () => {
     createRegistry();
   });
 
-  function createRegistry() {
-    registry = new DesktopBackendRegistry({
+  function buildRegistry(overlayStore = store, service?: McpConnectionGatewayService) {
+    return new DesktopBackendRegistry({
       codexClient: {
         close: async () => {}, getInitializeResult: async () => ({ methods: [] }), listThreads: async () => [],
         onNotification: () => () => {}, onPendingRequest: () => () => {},
         readConfiguredMcpServerNames: async () => [], startThread: async () => ({ threadId: "headless-1" }),
         startTurn,
       } as never,
-      overlayStore: store, isBootstrapMode: () => false,
-      mcpConnectionService: { registerBridge, requestGatewayToolOperation: operation },
+      overlayStore, isBootstrapMode: () => false,
+      mcpConnectionService: service ?? { registerBridge, requestGatewayToolOperation: operation },
     });
+  }
+
+  function createRegistry(service?: McpConnectionGatewayService) {
+    registry = buildRegistry(store, service);
     internals = registry as unknown as typeof internals;
     internals.activeTurnKeys.add("codex:thread-1:turn-1");
   }
 
   afterEach(async () => {
     await registry.close();
+    await Promise.all(brokers.splice(0).map((broker) => broker.close()));
     db.close();
     rmSync(directory, { recursive: true, force: true });
   });
 
-  function approval() {
-    let resolve!: (event: AgentEvent) => void;
-    const event = new Promise<AgentEvent>((done) => { resolve = done; });
-    registry.onEvent((value) => { if (value.notification.method === "mcpServer/elicitation/request") resolve(value); });
+  function approval(excludeRequestId?: string) {
+    let resolve!: (event: McpApprovalEvent) => void;
+    const event = new Promise<McpApprovalEvent>((done) => { resolve = done; });
+    registry.onEvent((value) => {
+      if (value.notification.method === "mcpServer/elicitation/request"
+        && value.notification.params.requestId !== excludeRequestId) resolve({ backend: value.backend, notification: value.notification as AppServerMcpElicitationRequestNotification });
+    });
     return event;
+  }
+
+  async function approveAndInvoke(invocation: McpGatewayInvocation, context: AgentToolCallContext, signal: AbortSignal) {
+    const response = await internals.approveGatewayInvocation(invocation, context, signal);
+    // These approval-policy tests simulate a successful owner invocation.
+    // The broker-backed regressions exercise the actual validation boundary.
+    if (typeof response === "object") await response.onInvoked();
+    return Boolean(response);
   }
 
   function declineUnexpectedApproval() {
@@ -105,6 +126,155 @@ describe("backend MCP gateway dispatch", () => {
     });
     return events;
   }
+
+  async function brokerFixture() {
+    await registry.close();
+    await store.setThreadMcpConnectionIds({ backend: "codex", threadId: "thread-1", connectionIds: ["pwrsnap"] });
+    let credentials: string | undefined;
+    const broker = new McpConnectionGatewayService({
+      registry: new McpConnectionRegistry({ configPath: path.join(directory, "config.toml") }),
+      leaseManager: null,
+      readGatewaySelection: async (context) => (await store.getThreadOverlayState(context))?.mcpConnectionIds ?? [],
+      settings: {
+        resolvePwrSnapMcpCredential: async () => JSON.stringify({
+          clientInformation: { client_id: "fixture" },
+          tokens: { access_token: "fixture", token_type: "bearer" },
+        }),
+        resolveMcpConnectionCredentials: async () => credentials,
+        saveMcpConnectionCredentials: async (value: string) => { credentials = value; },
+        clearMcpConnectionCredentials: async () => { credentials = undefined; },
+        clearPwrSnapMcpCredential: async () => {},
+        resolvePwrGitMcpCredential: async () => undefined,
+      } as never,
+    });
+    brokers.push(broker);
+    let idType = "string";
+    const callTool = vi.fn(async () => ({ content: [{ type: "text", text: "fixture result" }] }));
+    Object.assign(broker, { connectUpstreamClient: async () => ({
+      client: { listTools: async () => ({ tools: [{ name: "lookup", inputSchema: {
+        type: "object", properties: { id: { type: idType } }, required: ["id"],
+      } }] }), callTool, close: async () => {} },
+      transport: { close: async () => {} },
+    }) });
+    createRegistry(broker);
+    const readArgs = async () => {
+      const [tool] = await broker.requestGatewayToolOperation({
+        connectionId: "pwrsnap", scopeKey: JSON.stringify(["gateway", "codex", "thread-1"]),
+        operation: "gateway/tools/list", signal: new AbortController().signal,
+      }) as McpGatewayTool[];
+      return { connectionId: tool.connectionId, toolName: tool.toolName, schemaRevision: tool.schemaRevision,
+        arguments: { id: idType === "string" ? "fixture" : 1 } };
+    };
+    return { broker, readArgs, callTool, changeSchema: (type: string) => { idType = type; } };
+  }
+
+  function acceptFirstConversationApproval() {
+    const events: AgentEvent[] = [];
+    registry.onEvent(async (event) => {
+      if (event.notification.method !== "mcpServer/elicitation/request") return;
+      events.push(event);
+      await registry.submitServerRequest({
+        backend: "codex", threadId: "thread-1", turnId: "turn-1", requestId: String(event.notification.params.requestId),
+        response: { action: events.length === 1 ? "accept" : "decline", content: {}, _meta: { persist: "session" } },
+      });
+    });
+    return events;
+  }
+
+  it("revokes a broker-backed grant after another profile instance deselects and reselects", async () => {
+    const f = await brokerFixture();
+    const events = acceptFirstConversationApproval();
+    const first = await f.readArgs();
+    expect((await internals.handleServerRequest("codex", request("call_mcp_tool", first))).success).toBe(true);
+    const peerDb = StateDb.open(path.join(directory, "state.db"));
+    const peer = buildRegistry(new SqliteOverlayStore(peerDb), f.broker);
+    try {
+      await peer.setThreadMcpConnections({ backend: "codex", threadId: "thread-1", connectionIds: [] });
+      await peer.setThreadMcpConnections({ backend: "codex", threadId: "thread-1", connectionIds: ["pwrsnap"] });
+      expect((await f.readArgs()).schemaRevision).toBe(first.schemaRevision);
+      expect((await internals.handleServerRequest("codex", request("call_mcp_tool", first, "call-2"))).success).toBe(false);
+      expect(events).toHaveLength(2);
+      expect(f.callTool).toHaveBeenCalledOnce();
+    } finally {
+      await peer.close();
+      peerDb.close();
+    }
+  });
+
+  it("stores shared MCP selection revocation in the existing selection write", async () => {
+    const before = (await store.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }))?.mcpSelectionRevision;
+    if (!isSqliteWriteMetricsEnabled()) attachSqliteWriteMetrics({ db: db.raw, dbPath: db.raw.name });
+    const { writes } = await measureSqliteWrites(async () => {
+      await registry.setThreadMcpConnections({ backend: "codex", threadId: "thread-1", connectionIds: [] });
+    });
+    const after = (await store.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }))?.mcpSelectionRevision;
+    expect(after).toEqual(expect.any(String));
+    expect(after).not.toBe(before);
+    expectSqliteWriteBudget({ scenario: "mcp-selection-revocation", note: "Selection revocation shares the existing operator selection commit. No per-call or grant writes are added.", writes });
+  });
+
+  it.each(["full-access", "automation"])("invalidates a changed broker revision during %s before returning to Default", async (mode) => {
+    const f = await brokerFixture();
+    const events = acceptFirstConversationApproval();
+    const first = await f.readArgs();
+    expect((await internals.handleServerRequest("codex", request("call_mcp_tool", first))).success).toBe(true);
+    f.changeSchema("number");
+    if (mode === "full-access") {
+      internals.activeCodexTurnModes.set("thread-1:turn-1", "full-access");
+    } else {
+      internals.headlessAutomationTurns.set("codex:thread-1:turn-1", {
+        agentThreadId: "thread-1", backend: "codex", automationRunId: "run-1", executionMode: "default",
+        executionThreadId: "thread-1", queueEntryId: "queue-1", startedAt: 1,
+        mcpConnectionIds: ["pwrsnap"], toolAllowlist: ["lookup"],
+      });
+    }
+    expect((await internals.handleServerRequest("codex", request("call_mcp_tool", await f.readArgs(), "call-2"))).success).toBe(true);
+    f.changeSchema("string");
+    internals.headlessAutomationTurns.delete("codex:thread-1:turn-1");
+    internals.activeCodexTurnModes.set("thread-1:turn-1", "default");
+    expect((await f.readArgs()).schemaRevision).toBe(first.schemaRevision);
+    expect((await internals.handleServerRequest("codex", request("call_mcp_tool", first, "call-3"))).success).toBe(false);
+    expect(events).toHaveLength(2);
+    expect(f.callTool).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    { newerPrompt: false, restoreBeforeResponse: false },
+    { newerPrompt: true, restoreBeforeResponse: false },
+    { newerPrompt: true, restoreBeforeResponse: true },
+  ])("does not remember obsolete broker consent (newer prompt: $newerPrompt, restored before response: $restoreBeforeResponse)", async ({ newerPrompt, restoreBeforeResponse }) => {
+    const f = await brokerFixture();
+    const first = await f.readArgs();
+    const pending = approval();
+    const oldCall = internals.handleServerRequest("codex", request("call_mcp_tool", first));
+    const oldEvent = await pending;
+    f.changeSchema("number");
+    if (newerPrompt) {
+      // A listener added during emit's fan-out may still see the older event.
+      const newerPending = approval(String(oldEvent.notification.params.requestId));
+      const newerCall = internals.handleServerRequest("codex", request("call_mcp_tool", await f.readArgs(), "call-2"));
+      const newerEvent = await Promise.race([newerPending, newerCall.then((result) => {
+        throw new Error(`Newer invocation ended before approval: ${JSON.stringify(result)}`);
+      })]);
+      await registry.submitServerRequest({
+        backend: "codex", threadId: "thread-1", turnId: "turn-1", requestId: String(newerEvent.notification.params.requestId),
+        response: { action: "decline", content: null, _meta: null },
+      });
+      expect((await newerCall).success).toBe(false);
+    }
+    if (restoreBeforeResponse) f.changeSchema("string");
+    await registry.submitServerRequest({
+      backend: "codex", threadId: "thread-1", turnId: "turn-1", requestId: String(oldEvent.notification.params.requestId),
+      response: { action: "accept", content: {}, _meta: { persist: "session" } },
+    });
+    expect((await oldCall).success).toBe(restoreBeforeResponse);
+    f.changeSchema("string");
+    expect((await f.readArgs()).schemaRevision).toBe(first.schemaRevision);
+    const unexpected = declineUnexpectedApproval();
+    expect((await internals.handleServerRequest("codex", request("call_mcp_tool", first, "call-3"))).success).toBe(false);
+    expect(unexpected).toHaveLength(1);
+    expect(f.callTool).toHaveBeenCalledTimes(restoreBeforeResponse ? 1 : 0);
+  });
 
   it("invokes a selected MCP tool without a prompt in Full Access", async () => {
     await store.setThreadExecutionMode({ backend: "codex", threadId: "thread-1", executionMode: "full-access" });
@@ -366,7 +536,7 @@ describe("backend MCP gateway dispatch", () => {
       events.push(event);
       await registry.submitServerRequest({ backend, threadId: "thread-1", turnId: "turn-1", requestId: String(event.notification.params.requestId), response: { action: "decline", content: null, _meta: null } });
     });
-    expect(await internals.approveGatewayInvocation(
+    expect(await approveAndInvoke(
       { ...args, serverName: "Fixture" },
       { backend, threadId: "thread-1", turnId: "turn-1", transport: "mcp" },
       new AbortController().signal,
@@ -429,7 +599,7 @@ describe("backend MCP gateway dispatch", () => {
       });
       const context: AgentToolCallContext = { backend: "codex", threadId: "thread-1", turnId: "turn-1", transport: "codex_dynamic_tool" };
       const invocation = { ...args, serverName: "Fixture" };
-      expect(await internals.approveGatewayInvocation(invocation, context, new AbortController().signal)).toBe(true);
+      expect(await approveAndInvoke(invocation, context, new AbortController().signal)).toBe(true);
       const nextInvocation = {
         ...invocation, arguments: { id: "another record" },
         ...(scenario === "other-tool" ? { toolName: "write" } : {}),
@@ -441,7 +611,7 @@ describe("backend MCP gateway dispatch", () => {
         ...(scenario === "other-thread" ? { threadId: "thread-2" } : {}),
         ...(scenario === "other-backend" ? { backend: "acp:fixture" as const } : {}),
       };
-      expect(await internals.approveGatewayInvocation(nextInvocation, nextContext, new AbortController().signal)).toBe(true);
+      expect(await approveAndInvoke(nextInvocation, nextContext, new AbortController().signal)).toBe(true);
       expect(events).toHaveLength(scenario === "same-tool" ? 1 : 2);
     },
   );
@@ -463,7 +633,7 @@ describe("backend MCP gateway dispatch", () => {
     });
     const context: AgentToolCallContext = { backend: "codex", threadId: "thread-1", turnId: "turn-1", transport: "codex_dynamic_tool" };
     for (let i = 0; i < 2; i++) {
-      expect(await internals.approveGatewayInvocation({ ...args, serverName: "Fixture" }, context, new AbortController().signal)).toBe(action === "accept");
+      expect(await approveAndInvoke({ ...args, serverName: "Fixture" }, context, new AbortController().signal)).toBe(action === "accept");
     }
     expect(events).toHaveLength(2);
   });
@@ -524,9 +694,9 @@ describe("backend MCP gateway dispatch", () => {
     });
     const context: AgentToolCallContext = { backend: "codex", threadId: "thread-1", turnId: "turn-1", transport: "codex_dynamic_tool" };
     const invocation = { ...args, serverName: "Fixture" };
-    expect(await internals.approveGatewayInvocation(invocation, context, new AbortController().signal)).toBe(true);
-    expect(await internals.approveGatewayInvocation({ ...invocation, schemaRevision: "r2" }, context, new AbortController().signal)).toBe(false);
-    expect(await internals.approveGatewayInvocation(invocation, context, new AbortController().signal)).toBe(false);
+    expect(await approveAndInvoke(invocation, context, new AbortController().signal)).toBe(true);
+    expect(await approveAndInvoke({ ...invocation, schemaRevision: "r2" }, context, new AbortController().signal)).toBe(false);
+    expect(await approveAndInvoke(invocation, context, new AbortController().signal)).toBe(false);
     expect(prompts).toBe(3);
   });
 
