@@ -22176,17 +22176,102 @@ a.button {
   opacity: 0.4;
 }
 
-/* The project a card's work is for, when that is not this thread's. */
+/* The project a card's action runs in. The thread's own project reads
+   muted, as a fact; another project takes the accent ("For PwrSnap"). */
 .thread-todo-card__project {
   display: flex;
   min-width: 0;
   align-items: center;
   gap: 5px;
   margin: 0 8px 4px 22px;
-  color: var(--accent-bright);
+  color: var(--text-muted);
   font-size: 11.5px;
   font-weight: 600;
   line-height: 16px;
+}
+
+.thread-todo-card__project.is-target {
+  color: var(--accent-bright);
+}
+
+/* As a menu button, the label keeps the static line's left edge: the
+   6px of border and padding come out of the indent. */
+.thread-todo-project {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  align-self: flex-start;
+  max-width: calc(100% - 24px);
+  margin: 0 8px 4px 16px;
+}
+
+.thread-todo-card__project--button {
+  max-width: 100%;
+  margin: 0;
+  padding: 1px 5px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.thread-todo-card__project--button.is-empty {
+  border-style: dashed;
+  border-color: var(--border-strong);
+  font-weight: 500;
+}
+
+.thread-todo-card__project--button:hover:not(:disabled),
+.thread-todo-project[data-state="open"] .thread-todo-card__project--button {
+  border-color: var(--accent-border);
+  background: var(--bg-panel-hover);
+}
+
+.thread-todo-card__project--button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.thread-todo-card__project--button:disabled {
+  cursor: default;
+}
+
+/* The composer project picker's popover, dropped below the line and sized
+   to the card rather than the composer. Two classes, because the composer's
+   own `.project-picker__pop` size comes later in this file. */
+.thread-todo-project .thread-todo-project__pop {
+  top: calc(100% + 4px);
+  bottom: auto;
+  left: 0;
+  width: 312px;
+  max-width: calc(100vw - 32px);
+  height: auto;
+  gap: 2px;
+}
+
+.thread-todo-project__pop .project-picker__list {
+  flex: 0 1 auto;
+  max-height: 240px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.thread-todo-project__pop .project-picker__row {
+  min-height: 32px;
+  padding: 5px 10px;
+  font-size: 13px;
+}
+
+.thread-todo-project__tag {
+  flex: none;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .thread-todo-card__project svg {

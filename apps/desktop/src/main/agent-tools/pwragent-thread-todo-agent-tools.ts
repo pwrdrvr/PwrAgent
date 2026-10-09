@@ -4,6 +4,7 @@ import type {
   ThreadExecutionMode,
   ThreadTodo,
   ThreadTodoAction,
+  ThreadTodoProject,
   ThreadTodoStatus,
 } from "@pwragent/shared";
 import {
@@ -69,6 +70,11 @@ export type PwrAgentThreadTodoHandler = {
     context: ThreadTodoToolContext,
     target: { id?: string; key?: string; status: Exclude<ThreadTodoStatus, "open"> },
   ) => ThreadTodo | Promise<ThreadTodo>;
+  /** The projects `project` is matched against, and this thread's own. */
+  listProjects: (context: ThreadTodoToolContext) => Promise<{
+    thisThread?: ThreadTodoProject;
+    projects: ThreadTodoProject[];
+  }>;
 };
 
 export function buildPwrAgentThreadTodoToolRouter(
@@ -182,7 +188,18 @@ async function dispatchOperation(
       });
       return agentToolSuccess({ todo: summarizeTodo(todo) });
     }
+    case "list_projects": {
+      const { thisThread, projects } = await handler.listProjects(context);
+      return agentToolSuccess({
+        ...(thisThread ? { thisThread: summarizeProject(thisThread) } : {}),
+        projects: projects.map(summarizeProject),
+      });
+    }
   }
+}
+
+function summarizeProject(project: ThreadTodoProject): { label: string; path: string } {
+  return { label: project.label, path: project.path };
 }
 
 export function normalizeAddTodoArgs(
@@ -491,6 +508,7 @@ function descriptionForOperation(operation: PwrAgentThreadTodoOperationName): st
         "Pass a stable key to update one card instead of adding another each turn.",
         "Use update_todo to change some fields of a card you already raised.",
         "Pass project when the work is for another project, and raise one card per project.",
+        "Call list_projects first when you are not sure of the project's name.",
       ].join(" ");
     case "update_todo":
       return [
@@ -505,6 +523,11 @@ function descriptionForOperation(operation: PwrAgentThreadTodoOperationName): st
       return "List this thread's to-do cards. Defaults to open cards.";
     case "resolve_todo":
       return "Mark one of this thread's to-do cards done or dismissed, by id or key. Use it when a card no longer applies.";
+    case "list_projects":
+      return [
+        "List the projects a to-do card can be for, with this thread's own project.",
+        "Pass a label or path from this list as add_todo or update_todo project.",
+      ].join(" ");
   }
 }
 
@@ -534,7 +557,7 @@ function inputSchemaForOperation(
           project: {
             type: "string",
             description:
-              "The project the work is for, by name or path, such as PwrSnap. Omit for this thread's own project.",
+              "The project the work is for, such as PwrSnap: a name or path from list_projects, or any path inside the project or one of its worktrees. Omit for this thread's own project.",
           },
           action: {
             type: "object",
@@ -646,6 +669,12 @@ function inputSchemaForOperation(
             description: "Defaults to done.",
           },
         },
+      };
+    case "list_projects":
+      return {
+        type: "object",
+        additionalProperties: false,
+        properties: {},
       };
   }
 }

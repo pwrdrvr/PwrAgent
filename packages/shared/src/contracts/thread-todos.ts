@@ -20,6 +20,7 @@ export const PWRAGENT_THREAD_TODO_OPERATION_NAMES = [
   "update_todo",
   "list_todos",
   "resolve_todo",
+  "list_projects",
 ] as const;
 
 export type PwrAgentThreadTodoOperationName =
@@ -214,6 +215,23 @@ export type RunThreadTodoActionRequest = {
 
 export type ThreadTodoMutationResponse = {
   todo: ThreadTodo;
+};
+
+/**
+ * The projects a card can be for: the local Directories lens, directories
+ * only, as the agent's `project` argument is matched against them.
+ */
+export type ListThreadTodoProjectsResponse = {
+  projects: ThreadTodoProject[];
+};
+
+/**
+ * The operator's pick from a card's project menu. `null`, or the key of the
+ * card's own project, returns the card to the thread's project.
+ */
+export type SetThreadTodoProjectRequest = {
+  id: string;
+  projectKey: string | null;
 };
 
 export type ThreadTodosChangedEvent = {

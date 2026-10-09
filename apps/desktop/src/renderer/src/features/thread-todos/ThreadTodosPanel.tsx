@@ -306,6 +306,7 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
                           running={view.runningIds.has(todo.id)}
                           mergeMethods={view.mergeMethods}
                           instances={view.instances}
+                          projectMenu={view.projectMenu}
                           onResolve={(target, status, resolution) => {
                             void view.resolve(target, status, resolution).catch((error: unknown) => {
                               console.warn("Resolving a to-do failed.", error);
