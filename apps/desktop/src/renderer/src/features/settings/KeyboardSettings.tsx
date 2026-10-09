@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import {
   FIXED_KEYBINDINGS,
   KEYBINDING_ACTIONS,
@@ -8,9 +8,12 @@ import {
   defaultChordsFor,
   findActionUsingChord,
   formatChordLabel,
+  formatModifiersLabel,
   getKeybindingAction,
   isActionChanged,
+  isModifierKey,
   isTextEditingChord,
+  parseChord,
   refuseChord,
   type KeybindingActionDefinition,
   type KeybindingActionId,
@@ -19,6 +22,7 @@ import {
 import { SearchIcon } from "../../icons";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { useKeybindings, writeKeybindings } from "../../lib/keybindings-store";
+import { useModalDialog } from "../../lib/useModalDialog";
 import { SettingsCopyValue } from "./SettingsCopyValue";
 import {
   SegmentedControl,
@@ -39,9 +43,15 @@ type Recording = {
   actionId: KeybindingActionId;
   /** Change replaces every chord; Add keeps the current one beside it. */
   mode: "replace" | "add";
-  /** The last chord pressed that could not be saved as it stands. */
+  /**
+   * What is held right now: modifiers alone, or a whole chord that saves when
+   * its key (or a modifier) is let go.
+   */
+  live?: { label: string; chord?: string; code: string; key: string };
+  saving?: boolean;
+  /** The last thing pressed that could not be saved as it stands. */
   pressed?: {
-    chord: string;
+    chord?: string;
     refusal?: { title: string; reason: string };
     clashWith?: KeybindingActionId;
   };
@@ -62,6 +72,9 @@ export function KeyboardSettings(props: { desktopApi?: DesktopApi }) {
   const [rowErrors, setRowErrors] = useState<Partial<Record<KeybindingActionId, string>>>({});
   const [rowNotes, setRowNotes] = useState<Partial<Record<KeybindingActionId, string>>>({});
   const [resetAllError, setResetAllError] = useState<string>();
+  const [confirmingReset, setConfirmingReset] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const resetAllRef = useRef<HTMLButtonElement>(null);
   const overrides = snapshot?.overrides ?? {};
   const label = (chord: string) => formatChordLabel(chord, platform);
 
@@ -86,13 +99,21 @@ export function KeyboardSettings(props: { desktopApi?: DesktopApi }) {
   const commitChord = async (target: Recording, chord: string, takeFrom?: KeybindingActionId) => {
     const current = chordsOf(target.actionId);
     const next = target.mode === "add" ? [...current, chord] : [chord];
+    const failed = () => setRecording((current) =>
+      current?.actionId === target.actionId ? { ...current, live: undefined, saving: false } : current);
     if (takeFrom !== undefined) {
       // Unbind it from the other action first, so the file never holds the
       // chord twice.
       const remaining = chordsOf(takeFrom).filter((existing) => !sameChord(existing, chord));
-      if (!(await save(takeFrom, { kind: "set", actionId: takeFrom, chords: remaining }))) return;
+      if (!(await save(takeFrom, { kind: "set", actionId: takeFrom, chords: remaining }))) {
+        failed();
+        return;
+      }
     }
-    if (!(await save(target.actionId, { kind: "set", actionId: target.actionId, chords: next }))) return;
+    if (!(await save(target.actionId, { kind: "set", actionId: target.actionId, chords: next }))) {
+      failed();
+      return;
+    }
     setRecording(undefined);
     const action = getKeybindingAction(target.actionId);
     setRowNotes((current) => ({
@@ -103,38 +124,38 @@ export function KeyboardSettings(props: { desktopApi?: DesktopApi }) {
     }));
   };
 
-  const recordKey = (event: KeyboardEvent<HTMLElement>, target: Recording) => {
-    const plain = !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey;
-    // Tab leaves the recorder like any field; the blur cancels.
-    if (plain && event.key === "Tab") return;
-    // The recorder swallows every other key, including the chord it would
-    // otherwise fire.
-    event.preventDefault();
-    event.stopPropagation();
-    if (plain && event.key === "Escape") {
-      setRecording(undefined);
-      return;
-    }
-    const chord = chordFromEvent(event, platform);
-    if (chord === null) return;
+  /** A recorder that has only this action and mode: nothing held, nothing refused. */
+  const fresh = (target: Recording): Recording => ({ actionId: target.actionId, mode: target.mode });
+
+  const refusalFor = (chord: string, key: string): Recording["pressed"] => {
     const refusal = refuseChord(chord, platform);
-    if (refusal !== null) {
-      setRecording({
-        ...target,
-        pressed: {
-          chord,
-          refusal: refusal.kind === "reserved"
-            ? { title: "Reserved", reason: refusal.reason }
-            : refusal.kind === "needs_modifier"
-              ? {
-                  title: "Needs a modifier",
-                  reason: `A plain key would type into the reply. Add ${mac ? "⌘, ⌃ or ⌥" : "Ctrl or Alt"}. Function keys are the exception.`,
-                }
-              : { title: "Not a shortcut", reason: "That key cannot be a shortcut." },
-        },
-      });
-      return;
+    if (refusal === null) return undefined;
+    if (refusal.kind === "reserved") {
+      return { chord, refusal: { title: "Reserved", reason: refusal.reason } };
     }
+    if (refusal.kind === "needs_modifier" && (key === "Backspace" || key === "Delete")) {
+      return {
+        chord,
+        refusal: {
+          title: "Does not clear",
+          reason: `${key} does not clear a shortcut. Use the × beside a shortcut to remove it.`,
+        },
+      };
+    }
+    if (refusal.kind === "needs_modifier") {
+      return {
+        chord,
+        refusal: {
+          title: "Needs a modifier",
+          reason: `A plain key would type into the reply. Add ${mac ? "⌘, ⌃ or ⌥" : "Ctrl or Alt"}. Function keys are the exception.`,
+        },
+      };
+    }
+    return { chord, refusal: { title: "Not a shortcut", reason: "That key cannot be a shortcut." } };
+  };
+
+  /** The chord was let go: save it, or say why it cannot be saved. */
+  const finishChord = (target: Recording, chord: string) => {
     if (chordsOf(target.actionId).some((existing) => sameChord(existing, chord))) {
       // Already this action's chord: nothing to change.
       setRecording(undefined);
@@ -142,10 +163,87 @@ export function KeyboardSettings(props: { desktopApi?: DesktopApi }) {
     }
     const clashWith = findActionUsingChord(bindings, chord, platform, target.actionId);
     if (clashWith !== null) {
-      setRecording({ ...target, pressed: { chord, clashWith } });
+      setRecording({ ...fresh(target), pressed: { chord, clashWith } });
       return;
     }
+    setRecording({ ...fresh(target), live: target.live, saving: true });
     void commitChord(target, chord);
+  };
+
+  const recordKeyDown = (event: KeyboardEvent<HTMLElement>, target: Recording) => {
+    const plain = !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey;
+    // Tab leaves the recorder like any field; the blur cancels.
+    if (plain && event.key === "Tab") return;
+    // The recorder swallows every other key, including the chord it would
+    // otherwise fire.
+    event.preventDefault();
+    event.stopPropagation();
+    if (target.saving || event.repeat) return;
+    if (event.key === "Escape") {
+      setRecording(undefined);
+      return;
+    }
+    if (event.nativeEvent.isComposing || event.key === "Process") {
+      setRecording({
+        ...fresh(target),
+        pressed: {
+          refusal: {
+            title: "Composing",
+            reason: "Finish typing in the input method, then press a shortcut.",
+          },
+        },
+      });
+      return;
+    }
+    if (isModifierKey(event.key)) {
+      const held = formatModifiersLabel(event, platform);
+      setRecording({
+        ...fresh(target),
+        live: held === "" ? undefined : { label: held, code: event.code, key: event.key },
+      });
+      return;
+    }
+    const chord = chordFromEvent(event, platform);
+    if (chord === null) {
+      setRecording({
+        ...fresh(target),
+        pressed: { refusal: { title: "Not a shortcut", reason: "That key cannot be a shortcut." } },
+      });
+      return;
+    }
+    const refused = refusalFor(chord, parseChord(chord)?.key ?? "");
+    if (refused !== undefined) {
+      setRecording({ ...fresh(target), pressed: refused });
+      return;
+    }
+    setRecording({
+      ...fresh(target),
+      live: { label: label(chord), chord, code: event.code, key: event.key },
+    });
+  };
+
+  const recordKeyUp = (event: KeyboardEvent<HTMLElement>, target: Recording) => {
+    if (event.key === "Tab") return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (target.saving) return;
+    const live = target.live;
+    if (live?.chord !== undefined) {
+      const sameKey = live.code !== "" && event.code !== ""
+        ? live.code === event.code
+        : live.key === event.key;
+      // A modifier counts too: macOS can drop the key's own keyup while ⌘ is
+      // held, and letting go of ⌘ still ends the chord.
+      if (sameKey || isModifierKey(event.key)) finishChord(target, live.chord);
+      return;
+    }
+    if (isModifierKey(event.key)) {
+      const held = formatModifiersLabel(event, platform);
+      setRecording({
+        ...fresh(target),
+        live: held === "" ? undefined : { label: held, code: event.code, key: event.key },
+      });
+    }
   };
 
   const query = filter.trim().toLowerCase();
@@ -216,23 +314,48 @@ export function KeyboardSettings(props: { desktopApi?: DesktopApi }) {
           onChange={setShow}
         />
         <button
+          ref={resetAllRef}
           className="button button--secondary"
           disabled={changedCount === 0}
           type="button"
           onClick={() => {
             setResetAllError(undefined);
             setRecording(undefined);
-            setRowNotes({});
-            void writeKeybindings({ kind: "reset_all" }).catch((error: unknown) => {
-              setResetAllError(error instanceof Error ? error.message : String(error));
-            });
+            setConfirmingReset(true);
           }}
         >
           Reset All
         </button>
       </div>
-      {resetAllError ? (
-        <p className="settings-row__error settings-keyboard__error" role="alert">{resetAllError}</p>
+      {confirmingReset ? (
+        <ResetAllDialog
+          busy={resetting}
+          changes={KEYBINDING_ACTIONS
+            .filter((action) => isActionChanged(action, overrides, platform))
+            .map((action) => ({
+              id: action.id,
+              label: action.label,
+              current: chordsOf(action.id).map(label),
+              defaults: defaultChordsFor(action, platform).map(label),
+            }))}
+          error={resetAllError}
+          returnFocus={resetAllRef}
+          onCancel={() => setConfirmingReset(false)}
+          onConfirm={() => {
+            setResetAllError(undefined);
+            setResetting(true);
+            writeKeybindings({ kind: "reset_all" })
+              .then(() => {
+                setRowNotes({});
+                setConfirmingReset(false);
+              })
+              .catch((error: unknown) => {
+                const detail = error instanceof Error ? error.message : String(error);
+                setResetAllError(`${detail} Your shortcuts were not changed.`);
+              })
+              .finally(() => setResetting(false));
+          }}
+        />
       ) : null}
 
       {groups.map((group) =>
@@ -255,12 +378,14 @@ export function KeyboardSettings(props: { desktopApi?: DesktopApi }) {
                   error={rowErrors[action.id]}
                   label={label}
                   note={rowNotes[action.id]}
+                  platform={platform}
                   recording={recording?.actionId === action.id ? recording : undefined}
                   onAdd={() => setRecording({ actionId: action.id, mode: "add" })}
                   onCancel={() => setRecording(undefined)}
                   onChange={() => setRecording({ actionId: action.id, mode: "replace" })}
                   onMoveHere={(target, chord, from) => void commitChord(target, chord, from)}
-                  onRecordKey={recordKey}
+                  onRecordKeyDown={recordKeyDown}
+                  onRecordKeyUp={recordKeyUp}
                   onRemove={(chord) => {
                     void save(action.id, {
                       kind: "set",
@@ -352,11 +477,14 @@ function KeybindingRow(props: {
   onCancel: () => void;
   onChange: () => void;
   onMoveHere: (target: Recording, chord: string, from: KeybindingActionId) => void;
-  onRecordKey: (event: KeyboardEvent<HTMLElement>, target: Recording) => void;
+  onRecordKeyDown: (event: KeyboardEvent<HTMLElement>, target: Recording) => void;
+  onRecordKeyUp: (event: KeyboardEvent<HTMLElement>, target: Recording) => void;
+  platform: string | undefined;
   onRemove: (chord: string) => void;
   onReset: () => void;
 }) {
   const { action, recording } = props;
+  const hintId = useId();
   const rowRef = useRef<HTMLLIElement>(null);
   const recorderRef = useRef<HTMLSpanElement>(null);
   const recordingActive = recording !== undefined;
@@ -364,6 +492,8 @@ function KeybindingRow(props: {
   const clashAction = pressed?.clashWith === undefined
     ? undefined
     : getKeybindingAction(pressed.clashWith);
+  // A refusal or a clash takes the hint's place under the row.
+  const showHint = recording !== undefined && !pressed?.refusal && !clashAction;
 
   useLayoutEffect(() => {
     if (recordingActive) recorderRef.current?.focus();
@@ -392,6 +522,7 @@ function KeybindingRow(props: {
         {recording ? (
           <span
             ref={recorderRef}
+            aria-describedby={showHint ? hintId : undefined}
             aria-label={`Record a shortcut for ${action.label}`}
             className="settings-keyboard__recorder"
             role="textbox"
@@ -403,15 +534,20 @@ function KeybindingRow(props: {
                 props.onCancel();
               }
             }}
-            onKeyDown={(event) => props.onRecordKey(event, recording)}
+            onKeyDown={(event) => props.onRecordKeyDown(event, recording)}
+            onKeyUp={(event) => props.onRecordKeyUp(event, recording)}
           >
-            {pressed ? (
+            <span className="settings-keyboard__rec-dot" aria-hidden="true" />
+            {recording.live ? (
+              <kbd
+                className={`settings-keyboard__cap${recording.live.chord === undefined ? " is-partial" : ""}`}
+              >
+                {recording.live.label}
+              </kbd>
+            ) : pressed?.chord !== undefined ? (
               <kbd className="settings-keyboard__cap">{props.label(pressed.chord)}</kbd>
             ) : (
-              <>
-                <span className="settings-keyboard__rec-dot" aria-hidden="true" />
-                Type a shortcut…
-              </>
+              <ExampleChord platform={props.platform} />
             )}
           </span>
         ) : props.chords.length === 0 ? (
@@ -478,7 +614,7 @@ function KeybindingRow(props: {
           <span>{pressed.refusal.reason}</span>
         </p>
       ) : null}
-      {pressed && clashAction && recording ? (
+      {pressed?.chord !== undefined && clashAction && recording ? (
         <p className="settings-keyboard__notice-row" role="alert">
           <span className="settings-keyboard__tag">In use</span>
           <span>
@@ -489,11 +625,16 @@ function KeybindingRow(props: {
             <button
               className="button button--primary"
               type="button"
-              onClick={() => props.onMoveHere(recording, pressed.chord, clashAction.id)}
+              onClick={() => props.onMoveHere(recording, pressed.chord!, clashAction.id)}
             >
               Move It Here
             </button>
           </span>
+        </p>
+      ) : null}
+      {showHint && recording ? (
+        <p id={hintId} className="settings-keyboard__hint" aria-live="polite">
+          {recordingHint(recording)}
         </p>
       ) : null}
       {props.note ? <p className="settings-keyboard__note">{props.note}</p> : null}
@@ -501,5 +642,88 @@ function KeybindingRow(props: {
         <p className="settings-row__error settings-keyboard__row-error" role="alert">{props.error}</p>
       ) : null}
     </li>
+  );
+}
+
+/** What to do next, for the line under a recording row. */
+function recordingHint(recording: Recording): string {
+  if (recording.saving) return "Saving…";
+  if (recording.live?.chord !== undefined) return `Let go to save ${recording.live.label}.`;
+  if (recording.live) return "Keep holding, and press another key.";
+  return "Press the keys together, then let go. Escape cancels.";
+}
+
+/** The idle recorder's example: a chord whose keys light in turn. */
+function ExampleChord(props: { platform: string | undefined }) {
+  const parts = props.platform === "darwin" ? ["⇧", "⌘", "K"] : ["Ctrl", "+", "Shift", "+", "K"];
+  return (
+    <kbd aria-hidden="true" className="settings-keyboard__cap is-example">
+      {parts.map((part, index) => <span key={index}>{part}</span>)}
+    </kbd>
+  );
+}
+
+/** Reset All, confirmed: every changed action, what it is now and what it goes back to. */
+function ResetAllDialog(props: {
+  busy: boolean;
+  changes: Array<{ id: string; label: string; current: string[]; defaults: string[] }>;
+  error?: string;
+  returnFocus: RefObject<HTMLButtonElement | null>;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const count = props.changes.length;
+  const noun = count === 1 ? "shortcut" : "shortcuts";
+  const dialogRef = useModalDialog({
+    onClose: () => {
+      if (!props.busy) props.onCancel();
+    },
+    returnFocus: props.returnFocus,
+  });
+  const keys = (labels: string[]) => labels.length === 0
+    ? <span className="settings-keyboard__unset">Not set</span>
+    : labels.map((text) => <kbd key={text} className="settings-keyboard__cap">{text}</kbd>);
+  return (
+    <div className="settings-confirm-modal" role="presentation">
+      <div
+        ref={dialogRef}
+        aria-labelledby="keyboard-reset-heading"
+        aria-modal="true"
+        className="settings-confirm-dialog"
+        role="dialog"
+      >
+        <h2 id="keyboard-reset-heading">Reset {count} {noun} to {count === 1 ? "its default" : "their defaults"}?</h2>
+        <p>Every profile on this machine picks up the change. You can set any of them again here.</p>
+        <ul className="settings-keyboard__reset-list" aria-label="Shortcuts to reset">
+          {props.changes.map((change) => (
+            <li key={change.id} className="settings-keyboard__reset-item">
+              <span>{change.label}</span>
+              <span className="settings-keyboard__reset-keys">{keys(change.current)}</span>
+              <span className="settings-keyboard__reset-arrow" aria-label="becomes">→</span>
+              <span className="settings-keyboard__reset-keys">{keys(change.defaults)}</span>
+            </li>
+          ))}
+        </ul>
+        {props.error ? <p className="settings-row__error" role="alert">{props.error}</p> : null}
+        <div className="settings-confirm-dialog__actions">
+          <button
+            className="button button--secondary"
+            disabled={props.busy}
+            type="button"
+            onClick={props.onCancel}
+          >
+            Cancel
+          </button>
+          <button
+            className="button button--primary"
+            disabled={props.busy}
+            type="button"
+            onClick={props.onConfirm}
+          >
+            {props.busy ? "Resetting…" : `Reset ${count} ${count === 1 ? "Shortcut" : "Shortcuts"}`}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
