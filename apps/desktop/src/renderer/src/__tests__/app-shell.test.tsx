@@ -6781,6 +6781,14 @@ describe("App", () => {
       level: 2,
       name: "Second project thread",
     });
+    // The heading and the history cursor commit separately. Wait for history
+    // to record the destination before consuming its Back entry.
+    await waitFor(() => {
+      expect(screen.getByTestId("history-nav-back")).toHaveAttribute(
+        "aria-description",
+        "New thread in PwrAgent",
+      );
+    });
     await clickButton("Back");
 
     await screen.findByRole("heading", { level: 2, name: "New thread" });
@@ -6790,6 +6798,12 @@ describe("App", () => {
     expect(screen.getAllByText("Full Access").length).toBeGreaterThan(0);
     expect(ensureDirectoryLaunchpad).toHaveBeenCalledTimes(1);
 
+    await waitFor(() => {
+      expect(screen.getByTestId("history-nav-back")).toHaveAttribute(
+        "aria-description",
+        "First project thread",
+      );
+    });
     await clickButton("Cancel");
     await screen.findByRole("heading", {
       level: 2,
