@@ -125,6 +125,33 @@ function isOrdinaryThread(thread: NavigationThreadSummary): boolean {
   return thread.codexNativeSubAgent === undefined;
 }
 
+/**
+ * The top-level row a lens renders a thread under: its oldest ancestor in the
+ * complete inventory. A parent that is absent leaves the thread its own root,
+ * and the walk stops at the same 32 levels the group budget allows.
+ */
+function lensRootResolver(params: {
+  threadsByIdentity: ReadonlyMap<string, NavigationThreadSummary>;
+  parentCandidates: ReadonlyMap<string, readonly NavigationThreadSummary[]>;
+}): (thread: NavigationThreadSummary) => NavigationThreadSummary {
+  const roots = new Map<NavigationThreadSummary, NavigationThreadSummary>();
+  return (thread) => {
+    const known = roots.get(thread);
+    if (known) return known;
+    let root = thread;
+    const visited = new Set<NavigationThreadSummary>([thread]);
+    for (let depth = 0; depth < 32; depth += 1) {
+      const parent = parentIdentity(root, params.parentCandidates);
+      const parentThread = parent ? params.threadsByIdentity.get(identityKey(parent)) : undefined;
+      if (!parentThread || visited.has(parentThread)) break;
+      visited.add(parentThread);
+      root = parentThread;
+    }
+    roots.set(thread, root);
+    return root;
+  };
+}
+
 /** Resolve reachability against the complete inventory, never a loaded page.
  * A local child can outlive a viewer mount of its remote parent. Keep the
  * relationship on its row, but give directory/selection queries a root to
@@ -611,17 +638,32 @@ function selectQueryThreads(params: {
   }
   if (query.kind === "lens") {
     const filter = query.filter?.trim().toLowerCase();
-    return ordinaryThreads
+    const rootOf = query.roots ? lensRootResolver(params) : undefined;
+    const threads = ordinaryThreads
       .filter((thread) => {
         if (query.lens === "attention") {
           if (!isActive(thread) && !thread.inbox.inInbox) return false;
         }
+        // A subtree follows its root, so a pinned thread's children render
+        // in its tray in the Pinned group and never orphaned in the list.
+        if (rootOf && (rootOf(thread).pinnedRank !== undefined) !== (query.roots === "pinned")) return false;
         if (!filter) return true;
         return thread.title.toLowerCase().includes(filter)
           || thread.linkedDirectories.some((directory) =>
             directory.path.toLowerCase().includes(filter));
-      })
-      .sort(query.lens === "recents" ? compareCreated : compareUpdated);
+      });
+    if (rootOf && query.roots === "pinned") {
+      // One global pin order, the same rank Directories edits. A root's
+      // descendants sort directly behind it, in creation order.
+      return threads.sort((left, right) => {
+        const leftRoot = rootOf(left);
+        const rightRoot = rootOf(right);
+        if (leftRoot !== rightRoot) return comparePinnedThreads(leftRoot, rightRoot);
+        if ((left === leftRoot) !== (right === rightRoot)) return left === leftRoot ? -1 : 1;
+        return compareCreated(left, right);
+      });
+    }
+    return threads.sort(query.lens === "recents" ? compareCreated : compareUpdated);
   }
   if (query.kind === "directory") {
     const directory = params.index.directories.find(
@@ -912,8 +954,13 @@ export function projectNavigationQuery(params: {
       || query.kind === "messaging-threads"
       || query.kind === "children"
       || query.kind === "group-members"
+      // A split lens counts its own bucket: the Pinned group's collapsed
+      // header reports running and unread work inside it alone.
+      || (query.kind === "lens" && query.roots !== undefined)
       ? selectedThreads
       : params.index.threads;
+  const lensRootOf = query.kind === "lens" && query.roots
+    ? lensRootResolver({ threadsByIdentity, parentCandidates }) : undefined;
   return {
     coverage: params.index.coverage ?? { state: "complete" },
     counts: countsForThreads(countsThreads),
@@ -924,6 +971,10 @@ export function projectNavigationQuery(params: {
         directories: params.index.directories.filter((directory) => directory.threadKeys.some((key) =>
           selectedThreads[0] === threadsByLegacyKey.get(key))) }, threadsByLegacyKey, parentCandidates })[0],
     } : {}),
+    // The split's acknowledgment as well as its size: an owner that predates
+    // `roots` sets no collection size on a lens page, so the viewer knows to
+    // filter that page itself.
+    ...(lensRootOf ? { collectionSize: selectedThreads.filter((thread) => lensRootOf(thread) === thread).length } : {}),
     ...(query.kind === "messaging-threads" ? { collectionSize: entries.length,
       ...(query.directoryKey ? { selectionDirectory: buildDirectoryRows({ snapshot: { ...params.index, directories: params.index.directories.filter((directory) =>
           directory.key === query.directoryKey || directory.path === query.directoryKey) }, threadsByLegacyKey, parentCandidates })

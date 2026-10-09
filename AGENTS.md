@@ -584,7 +584,7 @@ Render a brand through `BrandLockup`
 ### Attention order
 
 - Order Attention by turn, not by activity.
-- All other lenses use a pure `updatedAt` or `createdAt` sort.
+- Inbox uses a pure `updatedAt` sort. Recents lists by `createdAt` below its Pinned group.
 - Do not use `updatedAt` to order Attention.
 - `updatedAt` changes for each streamed item, subagent call, and tool result.
 - Activity ordering would move queue items while the operator uses the queue.
@@ -632,14 +632,31 @@ Render a brand through `BrandLockup`
 - Use Inbox as the default browsing lens.
 - Sort Inbox by recent activity.
 - Show all threads in Inbox.
-- Sort Recents by thread creation time.
 - Show all threads in Recents.
-- This creation-time order prevents active threads from moving.
-- Keep Inbox and Recents as pure sort orders.
-- Do not create a pinned section in those lenses.
+- Keep Inbox a pure sort order. Do not create a pinned section in Inbox.
 - In Inbox, show each pinned thread at its normal `updatedAt` position.
-- In Recents, show each pinned thread at its normal `createdAt` position.
-- Offer visible pin ordering only in Directories.
+- Recents has one collapsible **Pinned** group above a creation-time list.
+  - The group holds every pinned root from every project, including
+    threads with no directory and pinned peer threads. A root's
+    sub-threads stay in its tray.
+  - Order the group by the global pin rank (`comparePinnedThreads`).
+    Reordering there and in a Directories project changes the same rank.
+  - A thread renders once. A pinned root is never in the list. Unpinning
+    returns it to its `createdAt` slot, and no other list row moves.
+  - The collapsed header shows the pin, **Pinned**, the count, and the
+    Attention tab's two indicators scoped to the group. Both stay visible
+    and grey at zero, so collapsing never hides a live turn or unread work.
+  - Persist the collapsed state per profile in the state DB, beside the
+    selected lens. Never in `config.toml`. One commit per toggle.
+  - Revealing a pinned thread from search or the jump palette opens a
+    closed group. Pinning a thread in Recents opens it too.
+  - The group pages separately (`lens-pins`, 100 rows) from the list
+    (`lens`, 10 rows). An owner that predates the split ignores `roots`,
+    so the renderer also filters each page by each root's own pin.
+  - Draw no group when no pin exists or none matches the lens filter.
+  - The list below the group keeps no pin-order controls.
+- Offer visible pin ordering in Directories and in the Recents Pinned group.
+  Both use `useThreadPinOrdering`; do not fork it.
 - The pin-order controls are:
   - Drag.
   - The `⌘⇧↑` and `⌘⇧↓` shortcuts.

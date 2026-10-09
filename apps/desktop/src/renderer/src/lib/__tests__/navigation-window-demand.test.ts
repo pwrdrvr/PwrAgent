@@ -119,3 +119,31 @@ it("resolves only visible mounted rows from each explicit owner and keeps select
   expect(selected.get("selected-viewer-mount")?.query).toEqual({ kind: "exact", identities: [remote], includeAncestry: true });
   expect(selected.get("selected-viewer-mount")?.pageSize).toBe(100);
 });
+
+it("splits Recents like a project: a 100-row Pinned group beside the creation-time list", () => {
+  const recents = buildNavigationWindowDemand({ ...base, browseMode: "recents", expandedByKey: { "directory:42": true } });
+  expect([...recents.keys()]).toEqual(["directory-index", "lens-pins", "lens"]);
+  expect(recents.get("lens-pins")).toMatchObject({ pageSize: 100, query: { kind: "lens", lens: "recents", roots: "pinned" } });
+  expect(recents.get("lens")).toMatchObject({ pageSize: 10, query: { kind: "lens", lens: "recents", roots: "unpinned" } });
+  // Inbox stays one pure sort order.
+  const inbox = buildNavigationWindowDemand({ ...base, browseMode: "inbox" });
+  expect([...inbox.keys()]).toEqual(["directory-index", "lens"]);
+  expect(inbox.get("lens")?.query).toEqual({ kind: "lens", lens: "inbox" });
+});
+
+it("treats the Pinned group as a visible collection for children and mounted owners", () => {
+  const ref = (threadId: string, ownerInstanceId?: string): NavigationIdentity => ({ backend: "codex", threadId,
+    ...(ownerInstanceId ? { ownerInstanceId } : {}) });
+  const page = (...refs: NavigationIdentity[]): NavigationQueryPage => ({ protocol: 2, queryKey: "q", generation: "g", ownerEpoch: "o",
+    countsRevision: "c", coverage: { state: "complete" }, counts: { total: 1, active: 0, unread: 0, review: 0 }, complete: true,
+    entries: refs.map((item) => ({ row: { ref: item, rowRevision: "r", id: item.threadId, source: "codex", title: item.threadId,
+      titleSource: "explicit", linkedDirectories: [], inbox: { inInbox: false }, ordinaryChildCount: 1,
+      nativeSubAgentGroupPresent: false, queueCount: 0, queueState: "unknown" }, placement: { kind: "root" }, orderKey: item.threadId })),
+  });
+  const pages = new Map([["lens-pins", page(ref("pinned"), ref("mounted", "peer"))], ["lens", page(ref("listed"))]]);
+  expect(visibleDisclosedNavigationParents({ collectionIds: ["lens-pins", "lens"], pages,
+    disclosedParents: [ref("pinned"), ref("listed")] })).toEqual([ref("listed"), ref("pinned")]);
+  const demand = buildNavigationWindowDemand({ ...base, browseMode: "recents" });
+  addVisibleMountedOwnerDemand({ demand, pages });
+  expect(demand.get('visible-owner:"peer":0')?.query).toEqual({ kind: "exact", identities: [ref("mounted", "peer")] });
+});

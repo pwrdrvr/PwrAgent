@@ -1,7 +1,11 @@
 import type {
   FederationTarget, NavigationDirectoryRow, NavigationIdentity, NavigationQueryRequest,
 } from "@pwragent/shared";
+import { NAVIGATION_QUERY_MAX_PAGE_ROWS } from "@pwragent/shared";
 import { navigationIdentityKey } from "./navigation-query-state";
+
+/** Recents' Pinned group: its own collection beside the creation-time `lens`. */
+export const RECENTS_PINNED_RESOURCE_ID = "lens-pins";
 
 /** Demand is explicit window state; a missing page never implies a missing item. */
 export function buildNavigationWindowDemand(params: {
@@ -77,6 +81,13 @@ export function buildNavigationWindowDemand(params: {
         });
       }
     }
+  } else if (params.browseMode === "recents") {
+    // Split like a project: the Pinned group pages on its own, so a pin never
+    // waits behind ten newer threads, and the creation-time list below it
+    // keeps its ordinary first page. The group stays demanded while
+    // collapsed: its header counts running and unread work inside it.
+    demand.set(RECENTS_PINNED_RESOURCE_ID, request({ kind: "lens", lens: "recents", roots: "pinned" }, NAVIGATION_QUERY_MAX_PAGE_ROWS));
+    demand.set("lens", request({ kind: "lens", lens: "recents", roots: "unpinned" }));
   } else {
     demand.set("lens", request({ kind: "lens", lens: params.browseMode }));
   }
@@ -94,6 +105,11 @@ export function buildNavigationWindowDemand(params: {
   return demand;
 }
 
+/** The lens collections: Recents adds its Pinned group's page beside the list. */
+export function isLensCollectionId(id: string): boolean {
+  return id === "lens" || id === RECENTS_PINNED_RESOURCE_ID;
+}
+
 /** Child pages are useful only while their disclosed parent is reachable from a visible collection. */
 export function visibleDisclosedNavigationParents(params: {
   collectionIds: Iterable<string>;
@@ -102,7 +118,7 @@ export function visibleDisclosedNavigationParents(params: {
 }): NavigationIdentity[] {
   const candidates = new Map(params.disclosedParents.map((ref) => [navigationIdentityKey(ref), ref]));
   const visible = new Map<string, NavigationIdentity>();
-  const pending = [...params.collectionIds].filter((id) => id === "lens" || (id.startsWith("directory:") || id.startsWith("directory-pins:")) || id.startsWith("drafts:"));
+  const pending = [...params.collectionIds].filter((id) => isLensCollectionId(id) || (id.startsWith("directory:") || id.startsWith("directory-pins:")) || id.startsWith("drafts:"));
   // Directory presentation admits an exact selected pin outside its page,
   // and retains an unpinned selected root while Directory threads is closed.
   // Both roots need child demand even though no collection page contains them.
@@ -147,7 +163,7 @@ export function addVisibleMountedOwnerDemand(params: {
   const owners = new Map<string, Map<string, NavigationIdentity>>();
   for (const [id, request] of params.demand) {
     if (request.federationTarget?.scope === "remote"
-      || !(id === "lens" || (id.startsWith("directory:") || id.startsWith("directory-pins:")) || id.startsWith("children:"))) continue;
+      || !(isLensCollectionId(id) || (id.startsWith("directory:") || id.startsWith("directory-pins:")) || id.startsWith("children:"))) continue;
     for (const { row } of params.pages.get(id)?.entries ?? []) {
       const owner = row.ref.ownerInstanceId;
       // Selected context already reads this identity from its owner.

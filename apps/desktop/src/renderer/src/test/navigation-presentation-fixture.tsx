@@ -38,7 +38,7 @@ function usePresentationOwner(props: FixtureProps) {
   const resources = new Map<string, NavigationWindowResource>();
   const add = (id: string, query: NavigationQueryRequest["query"], threads = ownerThreads) => {
     const request: NavigationQueryRequest = { protocol: 2, consumer: "main-sidebar", query,
-      pageSize: limits[id] ?? (query.kind === "directory-index" ? 100 : 10) };
+      pageSize: limits[id] ?? (query.kind === "directory-index" || id === "lens-pins" ? 100 : 10) };
     let page = navigationQueryFixture(request, { directories: props.directories, threads }, { ownerLensOrder: true });
     if (query.kind === "directory" && selectedThread && !selectedThread.parentThreadId
       && selectedThreadDirectoryKeys.includes(query.directoryKey)
@@ -64,8 +64,11 @@ function usePresentationOwner(props: FixtureProps) {
   if (mode === "drafts") add('drafts:"":0', { kind: "exact", identities: ownerThreads
     .filter((thread) => props.draftThreadKeys?.[threadSummaryIdentityKey(thread)])
     .map((thread) => ({ backend: thread.source, threadId: thread.id })), includeAncestry: true });
-  else if (mode !== "directories") add("lens", { kind: "lens", lens: mode }, mode === "attention" ? attention.threads
-    : mode === "recents" ? props.recentThreads ?? ownerThreads : ownerThreads);
+  else if (mode === "recents") {
+    // Split like the real demand: the Pinned group's page beside the list.
+    add("lens-pins", { kind: "lens", lens: "recents", roots: "pinned" }, props.recentThreads ?? ownerThreads);
+    add("lens", { kind: "lens", lens: "recents", roots: "unpinned" }, props.recentThreads ?? ownerThreads);
+  } else if (mode !== "directories") add("lens", { kind: "lens", lens: mode }, mode === "attention" ? attention.threads : ownerThreads);
   for (const directory of props.directories) {
     add(`directory-pins:${directory.key}`, { kind: "directory", directoryKey: directory.key, roots: "pinned" });
     if (!directory.directoryThreadsCollapsed) add(`directory:${directory.key}`, { kind: "directory", directoryKey: directory.key, roots: "unpinned" });

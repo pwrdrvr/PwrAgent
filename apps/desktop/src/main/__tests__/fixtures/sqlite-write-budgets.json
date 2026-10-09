@@ -777,6 +777,13 @@
     "rowsChanged": 1,
     "statements": 1
   },
+  "recents-pinned-group-collapse": {
+    "commits": 3,
+    "note": "three header clicks and three repeated writes of the same value: one commit per change, none per repeat; a few clicks a day is well under 1 MB/day of WAL",
+    "observedWalBytes": 24720,
+    "rowsChanged": 3,
+    "statements": 3
+  },
   "registered-project-launchpad-submit": {
     "commits": 1,
     "note": "One registered project draft reset per new thread: one replacement commit, no delete/insert pair; at 100 starts/day the measured WAL is approximately 0.8 MB/day; no idle writes",

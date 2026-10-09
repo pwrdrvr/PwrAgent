@@ -297,6 +297,8 @@ export const NAVIGATION_QUEUE_PROJECTION_CHANNEL =
   "navigation:get-queue-projection";
 export const NAVIGATION_SET_BROWSE_MODE_CHANNEL =
   "navigation:set-browse-mode";
+export const NAVIGATION_SET_RECENTS_PINNED_COLLAPSED_CHANNEL =
+  "navigation:set-recents-pinned-collapsed";
 export const NAVIGATION_MARK_THREAD_SEEN_CHANNEL = "navigation:mark-thread-seen";
 export const NAVIGATION_SET_THREAD_REACTION_CHANNEL =
   "navigation:set-thread-reaction";
