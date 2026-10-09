@@ -10,9 +10,10 @@ const POST_DRAG_CLICK_SUPPRESS_MS = 150;
 const POINTER_DRAG_ACTIVATION_PX = 4;
 
 /**
- * One place a pin section renders: a project in Directories, or the Recents
- * Pinned group. Pin order is one global rank, so every scope edits the same
- * order; a scope only decides which rows can be dragged or anchored on.
+ * One place a pin section renders: a project in Directories, or the Pinned
+ * group in Updated and Created. Pin order is one global rank, so every scope
+ * edits the same order; a scope only decides which rows can be dragged or
+ * anchored on.
  *
  * The scope's element carries `data-thread-pin-scope` and holds its pinned
  * rows, its Keep at top slot (`.directory-row__keep-top-slot`) and, where it
@@ -208,7 +209,7 @@ function resolveThreadPinPointerDropTarget(
 /**
  * Pin ordering for every pin section: the pointer drag (with its Keep at top
  * slot), the drops it resolves to, and the ⌘⇧↑/↓ keyboard move. Directories
- * and the Recents Pinned group both run it, so the two can never disagree
+ * and the Pinned group both run it, so the two can never disagree
  * about what a gesture does to the one global order.
  */
 export function useThreadPinOrdering(params: {

@@ -15,6 +15,10 @@ function fixture() {
     // An owner serves the rows a request asks for: a paced first page, then
     // the block an explicit continuation asks for.
     const size = request.pageSize ?? 10;
+    // No row here is pinned: the Pinned group's page is empty and complete.
+    const pinnedSplit = request.query.kind === "lens" && request.query.roots === "pinned";
+    if (pinnedSplit) return { protocol: 2, queryKey: JSON.stringify(request.query), generation: "g", ownerEpoch: "owner",
+      countsRevision: "r", coverage: { state: "complete" }, counts, entries: [], directories: [], complete: true, collectionSize: 0 };
     const entries = request.query.kind === "lens" ? Array.from({ length: size }, (_, i) => row(`thread-${offset + i}`))
       : request.query.kind === "exact" ? request.query.identities.map((ref) => row(ref.threadId)) : [];
     return { protocol: 2, queryKey: JSON.stringify(request.query), generation: "g", ownerEpoch: "owner", countsRevision: "r",
@@ -184,7 +188,9 @@ it("loads one owner lens page and exact selection, preserving complete counts in
   expect(f.legacy).not.toHaveBeenCalled();
   expect(result.current.pagedNavigation.resources.get("lens")?.state.page?.entries).toHaveLength(10);
   expect(result.current.pagedNavigation.resources.get("directory-index")?.state.page?.counts).toEqual(counts);
-  expect(f.read.mock.calls.filter(([r]) => r.query.kind === "lens")).toHaveLength(1);
+  // One list page, and the Pinned group's own page beside it.
+  expect(f.read.mock.calls.flatMap(([r]) => r.query.kind === "lens" ? [r.query.roots] : []).sort())
+    .toEqual(["pinned", "unpinned"]);
   await act(() => result.current.pagedNavigation.loadMore("lens"));
   expect(result.current.pagedNavigation.resources.get("lens")?.state.page?.entries).toHaveLength(110);
   unmount();
@@ -294,7 +300,8 @@ it("reconciles visible pages every five minutes without a sixty-second poll, and
   const { result, unmount } = renderHook(() => useThreadNavigation(f.api));
   await act(async () => { await vi.advanceTimersByTimeAsync(0); });
   expect(result.current.selectedThreadConfigurationReady).toBe(true);
-  const lensReads = () => f.read.mock.calls.filter(([request]) => request.query.kind === "lens").length;
+  const lensReads = (roots: "pinned" | "unpinned" = "unpinned") => f.read.mock.calls
+    .filter(([request]) => request.query.kind === "lens" && request.query.roots === roots).length;
   expect(lensReads()).toBe(1);
   try {
     await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
@@ -305,6 +312,8 @@ it("reconciles visible pages every five minutes without a sixty-second poll, and
     act(() => { window.dispatchEvent(new Event("blur")); });
     await act(async () => { await vi.advanceTimersByTimeAsync(300_000); });
     expect(lensReads()).toBe(3);
+    // The Pinned group reconciles on the same cadence as the list.
+    expect(lensReads("pinned")).toBe(3);
     expect(result.current.selectedThreadConfigurationReady).toBe(true);
     vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
     act(() => { document.dispatchEvent(new Event("visibilitychange")); });
@@ -332,7 +341,9 @@ it("publishes the initial visible rows together with their fallback selection", 
   await waitFor(() => expect(result.current.selectedThreadConfigurationReady).toBe(true));
   expect(frames.some((frame) => frame.count > 0)).toBe(true);
   expect(frames.filter((frame) => frame.count > 0).every((frame) => frame.selected === "thread-0")).toBe(true);
-  expect(f.read.mock.calls.filter(([request]) => request.query.kind === "lens")).toHaveLength(1);
+  // Read once each: the list page and the Pinned group's page.
+  expect(f.read.mock.calls.flatMap(([request]) => request.query.kind === "lens" ? [request.query.roots] : []).sort())
+    .toEqual(["pinned", "unpinned"]);
   unmount();
 });
 

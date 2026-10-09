@@ -173,13 +173,22 @@ function readBridgedBrowseMode(): BrowseMode {
   return normalizeBrowseMode(bridged?.browseMode);
 }
 
-function readBridgedRecentsPinnedCollapsed(): boolean {
+function readBridgedPinnedThreadsOnTop(): boolean {
+  if (typeof window === "undefined") {
+    return true;
+  }
+  return (window as unknown as {
+    __pwragentNavigationPreferences?: { pinnedThreadsOnTop?: unknown };
+  }).__pwragentNavigationPreferences?.pinnedThreadsOnTop !== false;
+}
+
+function readBridgedPinnedGroupCollapsed(): boolean {
   if (typeof window === "undefined") {
     return false;
   }
   return (window as unknown as {
-    __pwragentNavigationPreferences?: { recentsPinnedCollapsed?: unknown };
-  }).__pwragentNavigationPreferences?.recentsPinnedCollapsed === true;
+    __pwragentNavigationPreferences?: { pinnedGroupCollapsed?: unknown };
+  }).__pwragentNavigationPreferences?.pinnedGroupCollapsed === true;
 }
 
 function isRendererViewVisible(): boolean {
@@ -2847,6 +2856,11 @@ type UseThreadNavigationOptions = {
   localFederationInstanceId?: FederationInstanceId;
   composerDraftStore?: ComposerDraftStore;
   attentionPromoteOnTurnEnd?: boolean;
+  /**
+   * `general.pinned_threads_on_top` from the settings snapshot. Undefined
+   * until the snapshot loads; the window's bootstrap hint answers until then.
+   */
+  pinnedThreadsOnTop?: boolean;
   progressiveInitialRefresh?: boolean;
   threadViewVisible?: boolean;
   /**
@@ -2870,9 +2884,11 @@ export function useThreadNavigation(
 ): {
   /** The lens the sidebar shows: the saved lens, or Directories while `threadLensesEmpty`. */
   browseMode: BrowseMode;
-  /** Whether the Recents Pinned group is closed; persisted per profile. */
-  recentsPinnedCollapsed: boolean;
-  setRecentsPinnedCollapsed: (collapsed: boolean) => void;
+  /** Whether Updated and Created gather their pins into a Pinned group. */
+  pinnedThreadsOnTop: boolean;
+  /** Whether the Pinned group is closed; persisted per profile, shared by both lenses. */
+  pinnedGroupCollapsed: boolean;
+  setPinnedGroupCollapsed: (collapsed: boolean) => void;
   /** The owner index has settled on zero threads, so every thread lens would be empty. */
   threadLensesEmpty: boolean;
   directoryDisclosure: NavigationDirectoryDisclosure;
@@ -3202,14 +3218,16 @@ export function useThreadNavigation(
   const sendThreadPrAutoDispatchNowRequest =
     desktopApi?.sendThreadPrAutoDispatchNow;
   const setNavigationBrowseModeRequest = desktopApi?.setNavigationBrowseMode;
-  const setRecentsPinnedCollapsedRequest = desktopApi?.setRecentsPinnedCollapsed;
+  const setPinnedGroupCollapsedRequest = desktopApi?.setPinnedGroupCollapsed;
   const enabled = options.enabled ?? true;
   const rendererFederationTarget = useMemo(readRendererFederationTarget, []);
   const isRendererFederationWindow = Boolean(rendererFederationTarget);
   const threadViewVisible = options.threadViewVisible ?? true;
   const [browseMode, setBrowseMode] = useRecoverableState<BrowseMode>("navigation.browseMode", readBridgedBrowseMode);
-  const [recentsPinnedCollapsed, setRecentsPinnedCollapsedState] = useRecoverableState<boolean>(
-    "navigation.recentsPinnedCollapsed", readBridgedRecentsPinnedCollapsed);
+  const [pinnedGroupCollapsed, setPinnedGroupCollapsedState] = useRecoverableState<boolean>(
+    "navigation.pinnedGroupCollapsed", readBridgedPinnedGroupCollapsed);
+  const [bridgedPinnedThreadsOnTop] = useState(readBridgedPinnedThreadsOnTop);
+  const pinnedThreadsOnTop = options.pinnedThreadsOnTop ?? bridgedPinnedThreadsOnTop;
   const [selectedItemKey, setSelectedItemKey] = useRecoverableState<string | undefined>(
     "navigation.selection", undefined,
     // Materialization remains main-owned, but its old hook's pending row and
@@ -3484,14 +3502,14 @@ export function useThreadNavigation(
 
   // One write per change: a reveal that finds the group already open, or a
   // repeated toggle to the same value, must not commit.
-  const recentsPinnedCollapsedRef = useRef(recentsPinnedCollapsed);
-  recentsPinnedCollapsedRef.current = recentsPinnedCollapsed;
-  const setRecentsPinnedCollapsed = useCallback((collapsed: boolean): void => {
-    if (recentsPinnedCollapsedRef.current === collapsed) return;
-    recentsPinnedCollapsedRef.current = collapsed;
-    setRecentsPinnedCollapsedState(collapsed);
-    void setRecentsPinnedCollapsedRequest?.({ collapsed }).catch(() => undefined);
-  }, [setRecentsPinnedCollapsedRequest, setRecentsPinnedCollapsedState]);
+  const pinnedGroupCollapsedRef = useRef(pinnedGroupCollapsed);
+  pinnedGroupCollapsedRef.current = pinnedGroupCollapsed;
+  const setPinnedGroupCollapsed = useCallback((collapsed: boolean): void => {
+    if (pinnedGroupCollapsedRef.current === collapsed) return;
+    pinnedGroupCollapsedRef.current = collapsed;
+    setPinnedGroupCollapsedState(collapsed);
+    void setPinnedGroupCollapsedRequest?.({ collapsed }).catch(() => undefined);
+  }, [setPinnedGroupCollapsedRequest, setPinnedGroupCollapsedState]);
 
   const releaseRetainedUnreadThread = useCallback((nextSelectionKey?: string): void => {
     const retainedThread = retainedUnreadThreadRef.current;
@@ -3554,6 +3572,7 @@ export function useThreadNavigation(
     : (getLaunchpadSelectionDirectoryKey(selectedItemKey) ? [getLaunchpadSelectionDirectoryKey(selectedItemKey)!] : []);
   const boundedNavigation = useBoundedNavigationWindow({ desktopApi, enabled, visible: viewVisible, observeEvents: false,
     browseMode, target: rendererFederationTarget, attentionView: { id: attentionViewId, promoteOnTurnEnd: options.attentionPromoteOnTurnEnd ?? true },
+    pinnedThreadsOnTop,
     expandedByKey: directoryDisclosure.expandedByKey, unpinnedExpandedByKey: directoryDisclosure.unpinnedExpandedByKey,
     selectedRef: selectedIdentity, selectedDirectoryKeys, removedDirectoryKeys: [...removedDirectoryKeysRef.current],
     disclosedParents: loadedThreadRows(state.rows).filter((thread) => !thread.subthreadsCollapsed && Boolean(thread.ordinaryChildCount))
@@ -9251,8 +9270,9 @@ export function useThreadNavigation(
 
   return {
     browseMode: shownBrowseMode,
-    recentsPinnedCollapsed,
-    setRecentsPinnedCollapsed,
+    pinnedThreadsOnTop,
+    pinnedGroupCollapsed,
+    setPinnedGroupCollapsed,
     threadLensesEmpty,
     directoryDisclosure,
     composerSourceThreadKey,

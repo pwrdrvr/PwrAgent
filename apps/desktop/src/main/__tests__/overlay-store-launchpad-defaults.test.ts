@@ -171,7 +171,7 @@ describe("SqliteOverlayStore - launchpad defaults", () => {
     }
   });
 
-  it("persists the Recents Pinned group's collapse with one commit per change", async () => {
+  it("persists the Pinned group's collapse with one commit per change", async () => {
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     const { dbPath, tempDir } = createTempStateDb(
       "pwragent-recents-pinned-collapse-test-",
@@ -181,27 +181,27 @@ describe("SqliteOverlayStore - launchpad defaults", () => {
     store = new SqliteOverlayStore(stateDb);
 
     try {
-      expect(store.getRecentsPinnedCollapsedSync()).toBe(false);
+      expect(store.getPinnedGroupCollapsedSync()).toBe(false);
       const { writes } = await measureSqliteWrites(async () => {
-        await expect(store.setRecentsPinnedCollapsed(true)).resolves.toBe(true);
+        await expect(store.setPinnedGroupCollapsed(true)).resolves.toBe(true);
         // A repeat, such as a reveal that finds the group already in the
         // state it wants, commits nothing.
-        await store.setRecentsPinnedCollapsed(true);
-        await store.setRecentsPinnedCollapsed(true);
-        await store.setRecentsPinnedCollapsed(false);
-        await store.setRecentsPinnedCollapsed(false);
-        await store.setRecentsPinnedCollapsed(true);
+        await store.setPinnedGroupCollapsed(true);
+        await store.setPinnedGroupCollapsed(true);
+        await store.setPinnedGroupCollapsed(false);
+        await store.setPinnedGroupCollapsed(false);
+        await store.setPinnedGroupCollapsed(true);
       });
       expectSqliteWriteBudget({
         note: "three header clicks and three repeated writes of the same value: one commit per change, none per repeat; a few clicks a day is well under 1 MB/day of WAL",
-        scenario: "recents-pinned-group-collapse",
+        scenario: "pinned-group-collapse",
         writes,
       });
       stateDb.close();
 
       const reopenedDb = StateDb.open(dbPath);
       try {
-        expect(new SqliteOverlayStore(reopenedDb).getRecentsPinnedCollapsedSync()).toBe(true);
+        expect(new SqliteOverlayStore(reopenedDb).getPinnedGroupCollapsedSync()).toBe(true);
       } finally {
         reopenedDb.close();
       }

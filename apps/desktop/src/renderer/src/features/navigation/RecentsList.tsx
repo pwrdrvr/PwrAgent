@@ -56,8 +56,9 @@ type RecentsListProps = {
   pagedNavigation?: ReturnType<typeof useBoundedNavigationWindow>;
   resourceIds?: string[];
   /**
-   * Recents only: the Pinned group's own page. Its roots render once, in one
-   * collapsible group above the creation-time list, and never in the list.
+   * The Pinned group's own page, while pinned threads sit on top in Updated
+   * and Created. Its roots render once, in one collapsible group above the
+   * time-sorted list, and never in the list.
    */
   pinnedResourceId?: string;
   pinnedGroupCollapsed?: boolean;
@@ -145,13 +146,14 @@ type RecentsListProps = {
  * The flat lenses. Inbox is a pure sort order: every top-level thread renders
  * in the order the caller supplies, pinned or not.
  *
- * Recents adds one collapsible Pinned group above its creation-time list
- * (`pinnedResourceId`). The group holds every pinned root, from every project
- * and peer, in the one global pin order; the list holds every other root. A
- * thread renders in exactly one of them, so pinning moves it into the group
- * and unpinning returns it to its creation-time slot, and nothing else in the
- * list moves. Pin ordering in the group is Directories' own machinery
- * (`useThreadPinOrdering`), so both lenses edit the same rank the same way.
+ * With `general.pinned_threads_on_top`, Updated and Created add one
+ * collapsible Pinned group above their time-sorted list (`pinnedResourceId`).
+ * The group holds every pinned root, from every project and peer, in the one
+ * global pin order; the list holds every other root. A thread renders in
+ * exactly one of them, so pinning moves it into the group and unpinning
+ * returns it to its slot in the list's own order. Pin ordering in the group
+ * is Directories' own machinery (`useThreadPinOrdering`), so every lens edits
+ * the same rank the same way.
  */
 export function RecentsList(props: RecentsListProps) {
   const dropIndicator = useDropIndicatorController();
@@ -184,9 +186,14 @@ export function RecentsList(props: RecentsListProps) {
       const thread = threadByKey.get(entry.key);
       return thread ? [[entry.key, thread] as const] : [];
     })).values()];
+  // The group takes pinned roots from the list only once its own page is
+  // demanded. Before that, as when the setting turns on mid-session, a pin
+  // stays in the list rather than vanishing from both.
+  const groupActive = Boolean(props.pinnedResourceId)
+    && (!props.pagedNavigation || props.pagedNavigation.resources.has(props.pinnedResourceId!));
   // Each root's own pin decides its side, not only the page that carried it:
   // an owner that predates the split answers both queries with every thread.
-  const pinnedRoots = props.pinnedResourceId
+  const pinnedRoots = groupActive
     ? (entries ? rootThreads(pinnedEntries) : props.threads.filter((thread) => !thread.parentThreadId))
       .filter(isPinnedThread).sort(comparePinnedThreads)
     : [];
@@ -194,7 +201,7 @@ export function RecentsList(props: RecentsListProps) {
   const topLevelThreads: NavigationThreadSummary[] = (entries
     ? rootThreads(entries)
     : props.threads.filter((thread) => !thread.parentThreadId))
-    .filter((thread) => !props.pinnedResourceId
+    .filter((thread) => !groupActive
       || (!isPinnedThread(thread) && !pinnedRootKeys.has(threadSummaryIdentityKey(thread))));
   const topLevelKeys = new Set([...pinnedRootKeys, ...topLevelThreads.map(threadSummaryIdentityKey)]);
   const childrenByParentKey = new Map<string, NavigationThreadSummary[]>();
@@ -530,7 +537,7 @@ export function RecentsList(props: RecentsListProps) {
   const pinnedResource = props.pinnedResourceId
     ? props.pagedNavigation?.resources.get(props.pinnedResourceId) : undefined;
   const pinnedGroup = pinnedRoots.length > 0 ? (
-    <RecentsPinnedGroup
+    <PinnedGroup
       collapsed={pinnedGroupCollapsed}
       counts={readPinnedGroupCounts({
         page: pinnedResource?.state.page,
@@ -581,7 +588,7 @@ export function RecentsList(props: RecentsListProps) {
           ) : null}
         </div>
       ) : null}
-    </RecentsPinnedGroup>
+    </PinnedGroup>
   ) : null;
 
   return (
@@ -664,7 +671,7 @@ function formatUnreadThreadCount(count: number): string {
 }
 
 /**
- * The Recents lens's one Pinned group: a project header's primitives (the
+ * The Pinned group of Updated and Created: a project header's primitives (the
  * disclosure caret, the label, the right-aligned meta), so the group reads
  * as the same kind of thing a Directories project is.
  *
@@ -673,7 +680,7 @@ function formatUnreadThreadCount(count: number): string {
  * hide a running turn or an unread thread. Open, the rows show their own
  * state and the header shows only the count.
  */
-function RecentsPinnedGroup(props: {
+function PinnedGroup(props: {
   collapsed: boolean;
   counts: PinnedGroupCounts;
   onToggle?: () => void;
@@ -687,14 +694,14 @@ function RecentsPinnedGroup(props: {
   ].join(", ");
   return (
     <section
-      className="recents-pinned-group"
+      className="pinned-group"
       data-thread-pin-scope="recents"
     >
       <div className="directory-row__header">
         <button
           aria-expanded={!props.collapsed}
           aria-label={label}
-          className="thread-row thread-row--compact directory-row__summary recents-pinned-group__summary"
+          className="thread-row thread-row--compact directory-row__summary pinned-group__summary"
           data-hover-stable-release="pinned-group"
           type="button"
           onClick={props.onToggle}
@@ -704,7 +711,7 @@ function RecentsPinnedGroup(props: {
               aria-hidden="true"
               className={`directory-row__chevron${props.collapsed ? "" : " is-open"}`}
             />
-            <span aria-hidden="true" className="directory-row__icon recents-pinned-group__icon">
+            <span aria-hidden="true" className="directory-row__icon pinned-group__icon">
               <PinIcon size={12} />
             </span>
             <span className="directory-row__title-wrap">
@@ -721,14 +728,14 @@ function RecentsPinnedGroup(props: {
                 <AttentionReviewReadout count={counts.review} />
               </>
             ) : null}
-            <span aria-hidden="true" className="recents-pinned-group__count">
+            <span aria-hidden="true" className="pinned-group__count">
               {counts.total}
             </span>
           </span>
         </button>
       </div>
       {props.collapsed ? null : (
-        <div className="directory-row__details recents-pinned-group__details">
+        <div className="directory-row__details pinned-group__details">
           <div className="sidebar-list sidebar-list--compact" role="list" aria-label="Pinned threads">
             {props.children}
           </div>

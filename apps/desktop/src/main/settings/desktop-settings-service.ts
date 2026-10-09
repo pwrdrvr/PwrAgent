@@ -948,6 +948,12 @@ export class DesktopSettingsService {
           config.general?.attentionPromoteOnTurnEnd,
           true,
         ),
+        // Default on: a pin means "not done with this", and a pin that sinks
+        // below newer threads in Updated or Created is easy to forget.
+        pinnedThreadsOnTop: this.resolveConfigBoolean(
+          config.general?.pinnedThreadsOnTop,
+          true,
+        ),
         // Default off for both: an SVG's scripts are untrusted code, so the
         // lightbox shows the static preview and asks before running them
         // until the operator says otherwise.

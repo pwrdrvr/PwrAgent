@@ -120,15 +120,23 @@ it("resolves only visible mounted rows from each explicit owner and keeps select
   expect(selected.get("selected-viewer-mount")?.pageSize).toBe(100);
 });
 
-it("splits Recents like a project: a 100-row Pinned group beside the creation-time list", () => {
-  const recents = buildNavigationWindowDemand({ ...base, browseMode: "recents", expandedByKey: { "directory:42": true } });
-  expect([...recents.keys()]).toEqual(["directory-index", "lens-pins", "lens"]);
-  expect(recents.get("lens-pins")).toMatchObject({ pageSize: 100, query: { kind: "lens", lens: "recents", roots: "pinned" } });
-  expect(recents.get("lens")).toMatchObject({ pageSize: 10, query: { kind: "lens", lens: "recents", roots: "unpinned" } });
-  // Inbox stays one pure sort order.
-  const inbox = buildNavigationWindowDemand({ ...base, browseMode: "inbox" });
-  expect([...inbox.keys()]).toEqual(["directory-index", "lens"]);
-  expect(inbox.get("lens")?.query).toEqual({ kind: "lens", lens: "inbox" });
+it.each(["recents", "inbox"] as const)("splits %s like a project: a 100-row Pinned group beside the time-sorted list", (lens) => {
+  const demand = buildNavigationWindowDemand({ ...base, browseMode: lens, expandedByKey: { "directory:42": true } });
+  expect([...demand.keys()]).toEqual(["directory-index", "lens-pins", "lens"]);
+  expect(demand.get("lens-pins")).toMatchObject({ pageSize: 100, query: { kind: "lens", lens, roots: "pinned" } });
+  expect(demand.get("lens")).toMatchObject({ pageSize: 10, query: { kind: "lens", lens, roots: "unpinned" } });
+});
+
+it.each(["recents", "inbox"] as const)("keeps %s one pure time sort with pinned threads in place", (lens) => {
+  const demand = buildNavigationWindowDemand({ ...base, browseMode: lens, pinnedThreadsOnTop: false });
+  expect([...demand.keys()]).toEqual(["directory-index", "lens"]);
+  expect(demand.get("lens")?.query).toEqual({ kind: "lens", lens });
+});
+
+it("never splits Attention, whatever the pin setting", () => {
+  const demand = buildNavigationWindowDemand({ ...base, browseMode: "attention", pinnedThreadsOnTop: true });
+  expect([...demand.keys()]).toEqual(["directory-index", "lens"]);
+  expect(demand.get("lens")?.query).toEqual({ kind: "lens", lens: "attention" });
 });
 
 it("treats the Pinned group as a visible collection for children and mounted owners", () => {

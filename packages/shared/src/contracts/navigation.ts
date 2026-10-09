@@ -1909,8 +1909,9 @@ export type NavigationQuery =
       lens: "attention" | "inbox" | "recents";
       filter?: string;
       /**
-       * Recents only: split the lens by its root's pin, so the Pinned group
-       * and the creation-time list page independently. A thread's whole
+       * Updated and Created (`inbox`, `recents`) with pinned threads on top:
+       * split the lens by its root's pin, so the Pinned group and the
+       * time-sorted list page independently. A thread's whole
        * subtree goes with its root. An owner that honors the split answers
        * with `collectionSize` (the pinned bucket's root count); an older
        * owner ignores the field and answers with every thread, which the
@@ -2153,11 +2154,11 @@ export type SetNavigationBrowseModeResponse = {
   browseMode: NavigationBrowseMode;
 };
 
-export type SetRecentsPinnedCollapsedRequest = {
+export type SetPinnedGroupCollapsedRequest = {
   collapsed: boolean;
 };
 
-export type SetRecentsPinnedCollapsedResponse = {
+export type SetPinnedGroupCollapsedResponse = {
   collapsed: boolean;
 };
 

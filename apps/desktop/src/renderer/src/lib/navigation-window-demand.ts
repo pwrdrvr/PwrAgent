@@ -4,8 +4,13 @@ import type {
 import { NAVIGATION_QUERY_MAX_PAGE_ROWS } from "@pwragent/shared";
 import { navigationIdentityKey } from "./navigation-query-state";
 
-/** Recents' Pinned group: its own collection beside the creation-time `lens`. */
-export const RECENTS_PINNED_RESOURCE_ID = "lens-pins";
+/** The Updated and Created lenses' Pinned group: its own collection beside `lens`. */
+export const PINNED_GROUP_RESOURCE_ID = "lens-pins";
+
+/** Updated and Created draw a Pinned group while `general.pinned_threads_on_top` is on. */
+export function lensHasPinnedGroup(browseMode: string, pinnedThreadsOnTop: boolean): boolean {
+  return pinnedThreadsOnTop && (browseMode === "inbox" || browseMode === "recents");
+}
 
 /** Demand is explicit window state; a missing page never implies a missing item. */
 export function buildNavigationWindowDemand(params: {
@@ -26,6 +31,8 @@ export function buildNavigationWindowDemand(params: {
   disclosedParents?: readonly NavigationIdentity[];
   /** Viewer-owned draft identities only. Grouped and bounded per owner below; no draft text. */
   draftRefs?: readonly NavigationIdentity[];
+  /** `general.pinned_threads_on_top`; defaults on, as the setting does. */
+  pinnedThreadsOnTop?: boolean;
 }): Map<string, NavigationQueryRequest> {
   const demand = new Map<string, NavigationQueryRequest>();
   const request = (query: NavigationQueryRequest["query"], pageSize = 10): NavigationQueryRequest => ({
@@ -81,13 +88,14 @@ export function buildNavigationWindowDemand(params: {
         });
       }
     }
-  } else if (params.browseMode === "recents") {
+  } else if ((params.browseMode === "inbox" || params.browseMode === "recents") && params.pinnedThreadsOnTop !== false) {
     // Split like a project: the Pinned group pages on its own, so a pin never
-    // waits behind ten newer threads, and the creation-time list below it
+    // waits behind ten newer threads, and the time-sorted list below it
     // keeps its ordinary first page. The group stays demanded while
     // collapsed: its header counts running and unread work inside it.
-    demand.set(RECENTS_PINNED_RESOURCE_ID, request({ kind: "lens", lens: "recents", roots: "pinned" }, NAVIGATION_QUERY_MAX_PAGE_ROWS));
-    demand.set("lens", request({ kind: "lens", lens: "recents", roots: "unpinned" }));
+    const lens = params.browseMode;
+    demand.set(PINNED_GROUP_RESOURCE_ID, request({ kind: "lens", lens, roots: "pinned" }, NAVIGATION_QUERY_MAX_PAGE_ROWS));
+    demand.set("lens", request({ kind: "lens", lens, roots: "unpinned" }));
   } else {
     demand.set("lens", request({ kind: "lens", lens: params.browseMode }));
   }
@@ -105,9 +113,9 @@ export function buildNavigationWindowDemand(params: {
   return demand;
 }
 
-/** The lens collections: Recents adds its Pinned group's page beside the list. */
+/** The lens collections: Updated and Created add their Pinned group's page beside the list. */
 export function isLensCollectionId(id: string): boolean {
-  return id === "lens" || id === RECENTS_PINNED_RESOURCE_ID;
+  return id === "lens" || id === PINNED_GROUP_RESOURCE_ID;
 }
 
 /** Child pages are useful only while their disclosed parent is reachable from a visible collection. */

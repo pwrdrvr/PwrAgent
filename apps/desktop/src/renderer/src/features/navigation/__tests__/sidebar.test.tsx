@@ -2011,7 +2011,7 @@ describe("Sidebar", () => {
     expect(onCreateSubthread).toHaveBeenCalledWith(sharedThread, "same-worktree");
   });
 
-  it("offers viewer-owned pin, pin removal, and copy actions for a remote-pinned row", () => {
+  it("offers viewer-owned pin, pin removal, and copy actions for a remote-pinned row", async () => {
     const onRemoveRemoteThreadPin = vi.fn(async () => undefined);
     const onSetThreadPin = vi.fn(async () => undefined);
     const remotePinnedThread: NavigationThreadSummary = {
@@ -2064,8 +2064,11 @@ describe("Sidebar", () => {
     ).toBeNull();
 
     // …the VIEWER-owned pin is offered (rank lives on the pin row, never
-    // the owner's list)…
-    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "Pinned" }));
+    // the owner's list). Inbox gathers pins into its Pinned group, so the pin
+    // settles through the group's reveal.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "Pinned" }));
+    });
     expect(onSetThreadPin).toHaveBeenCalledWith(remotePinnedThread, true);
 
     // …and the viewer-side removal dispatches even while disconnected.
@@ -5419,7 +5422,7 @@ describe("Sidebar", () => {
     });
   });
 
-  it("pins from the row menu and leaves pinned threads in sort order in Inbox", () => {
+  it("pins from the row menu and leaves pinned threads in sort order in Inbox when pins stay in place", () => {
     const onSetThreadPin = vi.fn(async () => undefined);
     const pinnedThread = {
       ...updatedSinceSeenThread,
@@ -5434,6 +5437,7 @@ describe("Sidebar", () => {
         inboxThreads={[sharedThread]}
         loading={false}
         creatingThread={undefined}
+        pinnedThreadsOnTop={false}
         selectedItemKey={undefined}
         threads={[sharedThread, pinnedThread]}
         onBrowseModeChange={() => undefined}
@@ -5448,8 +5452,8 @@ describe("Sidebar", () => {
     const rows = within(browseSection as HTMLElement).getAllByRole("button", {
       name: /Cross-project cleanup|Updated thread/i,
     });
-    // Inbox is a pure sort order: the pinned thread keeps the position the
-    // owner's ordering gave it instead of floating to a pinned section.
+    // With pinned threads kept in place, Inbox is a pure sort order: the
+    // pinned thread keeps the position the owner's ordering gave it.
     expect(rows.map((row) => threadCard(row).textContent)).toEqual([
       expect.stringContaining("Cross-project cleanup"),
       expect.stringContaining("Updated thread"),
@@ -6680,8 +6684,8 @@ describe("Sidebar", () => {
 
   it("shows directory drop targets for pinned row edges and the append slot", async () => {
     // Pin reorder-by-drag lives only where a pinned section is rendered: each
-    // project in Directories, and the Recents Pinned group
-    // (recents-pinned-group.test.tsx).
+    // project in Directories, and the Pinned group of Updated and Created
+    // (pinned-group.test.tsx).
     const firstPinnedThread = {
       ...sharedThread,
       pinnedRank: "1024",
@@ -6776,7 +6780,7 @@ describe("Sidebar", () => {
     });
   });
 
-  it("renders no pinned section or drag affordance in the Inbox lens", () => {
+  it("renders no pinned section or drag affordance in the Inbox lens when pins stay in place", () => {
     const pinnedThread = {
       ...updatedSinceSeenThread,
       pinnedRank: "1024",
@@ -6790,6 +6794,7 @@ describe("Sidebar", () => {
         inboxThreads={[sharedThread]}
         loading={false}
         creatingThread={undefined}
+        pinnedThreadsOnTop={false}
         selectedItemKey="codex:thread-1"
         threads={[sharedThread, pinnedThread]}
         onBrowseModeChange={() => undefined}
@@ -8969,8 +8974,8 @@ describe("Sidebar directory pinning", () => {
 
 describe("Sidebar thread pinning Move items", () => {
   // Move Up / Move Down only surface where a pinned section renders, so a
-  // reorder visibly moves the row: Directories, and the Recents Pinned group
-  // (recents-pinned-group.test.tsx). Inbox is a pure sort order.
+  // reorder visibly moves the row: Directories, and the Pinned group of
+  // Updated and Created (pinned-group.test.tsx).
   const pinnedThreadsDirectory = (
     threadKeys: string[],
   ): NavigationDirectorySummary => ({
@@ -9284,7 +9289,7 @@ describe("Sidebar menus from the keyboard", () => {
     expect(pin).toHaveFocus();
 
     // A checkable item toggles in place, so both checks can be set. A pin
-    // moves a Recents row into the Pinned group, so the list reveals the
+    // moves a Created row into the Pinned group, so the list reveals the
     // write's result once it settles.
     await act(async () => pin.click());
     expect(onSetThreadPin).toHaveBeenCalledWith(

@@ -413,7 +413,13 @@ describe("useThreadNavigation", () => {
       onAgentEvent: () => () => undefined,
       reorderThreadPins,
     };
-    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+    // One lens page. This owner serves every read after the move from its
+    // cached pre-move population, which never learns the accepted rank. With
+    // the Pinned group's second page, the fence's post-move re-read lands
+    // before the final assertion and reports that stale owner state; a real
+    // owner answers it with the rank. The guard under test, rejecting the
+    // pre-move page during the drag, does not depend on the lens shape.
+    const { result } = renderHook(() => useThreadNavigation(desktopApi, { pinnedThreadsOnTop: false }));
 
     await waitFor(() => {
       expect(result.current.threads[0]?.title).toBe("Initial");
@@ -13035,10 +13041,10 @@ describe("useThreadNavigation", () => {
     });
   });
 
-  it("starts the Recents Pinned group from its bridged state and writes only changes", async () => {
+  it("starts the Pinned group from its bridged state and writes only changes", async () => {
     Object.defineProperty(window, "__pwragentNavigationPreferences", {
       configurable: true,
-      value: { browseMode: "recents", recentsPinnedCollapsed: true },
+      value: { browseMode: "recents", pinnedGroupCollapsed: true },
     });
     const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
@@ -13052,25 +13058,61 @@ describe("useThreadNavigation", () => {
         executionMode: "default" as const,
       },
     }));
-    const setRecentsPinnedCollapsed = vi.fn(async (request: { collapsed: boolean }) => request);
+    const setPinnedGroupCollapsed = vi.fn(async (request: { collapsed: boolean }) => request);
     const desktopApi: DesktopApi = {
       readPopulation,
       onAgentEvent: () => () => undefined,
-      setRecentsPinnedCollapsed,
+      setPinnedGroupCollapsed,
     };
 
     const { result } = renderHook(() => useThreadNavigation(desktopApi));
     // Closed on the first render: the group never paints open and then shuts.
-    expect(result.current.recentsPinnedCollapsed).toBe(true);
+    expect(result.current.pinnedGroupCollapsed).toBe(true);
     await waitFor(() => expect(result.current.loaded).toBe(true));
 
     // The state it already has is not a change, so nothing is written.
-    act(() => result.current.setRecentsPinnedCollapsed(true));
-    expect(setRecentsPinnedCollapsed).not.toHaveBeenCalled();
-    act(() => result.current.setRecentsPinnedCollapsed(false));
-    act(() => result.current.setRecentsPinnedCollapsed(false));
-    expect(result.current.recentsPinnedCollapsed).toBe(false);
-    expect(setRecentsPinnedCollapsed).toHaveBeenCalledExactlyOnceWith({ collapsed: false });
+    act(() => result.current.setPinnedGroupCollapsed(true));
+    expect(setPinnedGroupCollapsed).not.toHaveBeenCalled();
+    act(() => result.current.setPinnedGroupCollapsed(false));
+    act(() => result.current.setPinnedGroupCollapsed(false));
+    expect(result.current.pinnedGroupCollapsed).toBe(false);
+    expect(setPinnedGroupCollapsed).toHaveBeenCalledExactlyOnceWith({ collapsed: false });
+  });
+
+  it("asks for the Pinned group from the bridged pin setting until the settings snapshot answers", async () => {
+    Object.defineProperty(window, "__pwragentNavigationPreferences", {
+      configurable: true,
+      value: { browseMode: "inbox", pinnedThreadsOnTop: false },
+    });
+    const desktopApi: DesktopApi = {
+      readPopulation: vi.fn(async () => ({
+        backend: "all" as const,
+        fetchedAt: Date.now(),
+        unchanged: false,
+        inboxThreadKeys: [],
+        threads: [],
+        directories: [],
+        launchpadDefaults: {
+          backend: "codex" as const,
+          executionMode: "default" as const,
+        },
+      })),
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result, rerender } = renderHook(
+      ({ pinnedThreadsOnTop }: { pinnedThreadsOnTop?: boolean }) =>
+        useThreadNavigation(desktopApi, { pinnedThreadsOnTop }),
+      { initialProps: {} },
+    );
+    // Before the snapshot, the window's hint decides: one plain Inbox page.
+    expect(result.current.pinnedThreadsOnTop).toBe(false);
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    expect(result.current.pagedNavigation.resources.has("lens-pins")).toBe(false);
+
+    rerender({ pinnedThreadsOnTop: true });
+    expect(result.current.pinnedThreadsOnTop).toBe(true);
+    await waitFor(() => expect(result.current.pagedNavigation.resources.has("lens-pins")).toBe(true));
   });
 
   describe("when the owner index holds no threads", () => {

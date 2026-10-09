@@ -445,8 +445,8 @@ export function DirectoriesList(props: DirectoriesListProps) {
   // pinning a thread never also minimizes the section.
   const lastDirectoryThreadDropAtRef = useRef(0);
 
-  // Drag, the Keep at top slot, and ⌘⇧↑/↓, shared with the Recents Pinned
-  // group so both edit the one global pin order the same way.
+  // Drag, the Keep at top slot, and ⌘⇧↑/↓, shared with the Pinned group in
+  // Updated and Created so all of them edit the one global pin order the same way.
   const pinOrdering = useThreadPinOrdering({
     threads: props.threads,
     dropIndicator,
