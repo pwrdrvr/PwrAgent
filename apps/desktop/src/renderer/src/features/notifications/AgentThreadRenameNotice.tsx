@@ -10,10 +10,15 @@ type PendingRename = {
   undoing: boolean;
 };
 
-/** The failure without the "Error invoking remote method …" wrapper Electron adds. */
+/**
+ * The failure without Electron's "Error invoking remote method …" wrapper,
+ * or the "handler_failed: " code a peer's refusal carries for a remote thread.
+ */
 function undoFailureMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
-  return message.replace(/^Error invoking remote method '[^']*': (?:Error: )?/, "");
+  return message
+    .replace(/^Error invoking remote method '[^']*': (?:Error: )?/, "")
+    .replace(/^handler_failed:\s*/, "");
 }
 
 function renameKey(event: AgentEvent, threadId: string): string {

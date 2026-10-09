@@ -129,6 +129,17 @@ describe("AgentThreadRenameNotice", () => {
     expect(screen.getByRole("button", { name: "Open thread Investigate rename feedback" })).toBeInTheDocument();
   });
 
+  it("recognizes a peer's title-changed refusal for a remote thread", async () => {
+    const renameThread = vi.fn(async () => {
+      throw new Error(`Error invoking remote method 'app-server:renameThread': Error: handler_failed: ${RENAME_THREAD_EXPECTED_NAME_MISMATCH}`);
+    });
+    const { emit } = setup(renameThread);
+    act(() => emit(renameEvent({}, "peer-one")));
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Undo" })));
+    expect(screen.getByText("The title was changed again after the agent renamed it, so PwrAgent left it as it is.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Undo" })).not.toBeInTheDocument();
+  });
+
   it("does not replace a newer notice with an older Undo failure", async () => {
     let fail!: (error: Error) => void;
     const { emit } = setup(vi.fn(() => new Promise((_resolve, reject) => { fail = reject; })));
