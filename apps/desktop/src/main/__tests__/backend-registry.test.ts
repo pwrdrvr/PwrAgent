@@ -61030,22 +61030,22 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
       await settleMissingCodexThreadAudit(registry);
 
       const threadIds = ["thread-missing-1", "thread-missing-2"];
-      // Fake time is only needed for the audit debounce. Archive cleanup also
-      // awaits filesystem I/O, which fake timer ticks cannot complete. Await
-      // the owned operation with real pacing instead of racing an I/O budget.
-      vi.useRealTimers();
-      const first = await registry.resolveMissingCodexThreads({
+      vi.mocked(stat).mockClear();
+      const first = await withArchivePacing(registry.resolveMissingCodexThreads({
         action: "archive",
         threadIds,
-      });
-      const second = await registry.resolveMissingCodexThreads({
+      }));
+      const second = await withArchivePacing(registry.resolveMissingCodexThreads({
         action: "archive",
         threadIds,
-      });
+      }));
 
       expect(first.archivedThreadIds.sort()).toEqual(threadIds);
       expect(second.archivedThreadIds).toEqual([]);
       expect(codexClient.archivedThreadIds.sort()).toEqual(threadIds);
+      for (const directory of fixture.environmentDirectories) {
+        expect(stat).toHaveBeenCalledWith(directory);
+      }
 
       await registry.close();
     } finally {
