@@ -4034,10 +4034,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       return;
     }
     handledFocusRequestIdRef.current = request.id;
-    props.onFocusRequestHandled?.(request.id);
     if (document.activeElement === request.origin) {
-      inputRef.current?.focus();
+      inputRef.current.focus({ synchronous: true });
     }
+    props.onFocusRequestHandled?.(request.id);
   }, [props.focusRequest, props.onFocusRequestHandled, props.thread, props.disabled, editorScope.scopeKey, composerScopeKey]);
   const appliedReviewRequestId = useRef<number | undefined>(undefined);
   useEffect(() => {

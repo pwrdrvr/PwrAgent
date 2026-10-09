@@ -2274,6 +2274,49 @@ describe("Composer", () => {
     expect(screen.getByLabelText("Reply")).not.toHaveFocus();
   });
 
+  it("preserves a user focus change after acknowledging the handoff and before the next frame", () => {
+    const thread: NavigationThreadSummary = {
+      id: "thread-b", source: "codex", title: "B", titleSource: "explicit",
+      linkedDirectories: [], inbox: { inInbox: false },
+    };
+    const props = {
+      backends: [backendSummary("codex")],
+      draftStore: createComposerDraftStore(),
+      skills: [],
+      onFocusRequestHandled: vi.fn(),
+    };
+    const content = (focusRequest?: ComponentProps<typeof Composer>["focusRequest"]) => (
+      <>
+        <button type="button">Clicked row</button>
+        <input aria-label="Another field" />
+        <Composer {...props} thread={thread} focusRequest={focusRequest} />
+      </>
+    );
+    const view = render(content());
+    const origin = screen.getByRole("button", { name: "Clicked row" });
+    const elsewhere = screen.getByRole("textbox", { name: "Another field" });
+    act(() => origin.focus());
+    const frames: FrameRequestCallback[] = [];
+    const animationFrame = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    try {
+      view.rerender(content({ threadKey: "codex:thread-b", id: 1, origin }));
+      expect(props.onFocusRequestHandled).toHaveBeenCalledExactlyOnceWith(1);
+      // The shell clears the acknowledged request, removing its cancellation
+      // listener. A later focus change must survive any already queued frames.
+      view.rerender(content());
+      act(() => elsewhere.focus());
+      act(() => {
+        for (const callback of frames.splice(0)) callback(performance.now());
+      });
+      expect(elsewhere).toHaveFocus();
+    } finally {
+      animationFrame.mockRestore();
+    }
+  });
+
   it.each(["Another field", "Other row", "Row action"])("leaves focus on %s when the thread becomes ready", async (label) => {
     const thread = { id: "thread-b", source: "codex" as const, title: "B", titleSource: "explicit" as const,
       linkedDirectories: [], inbox: { inInbox: false } };
