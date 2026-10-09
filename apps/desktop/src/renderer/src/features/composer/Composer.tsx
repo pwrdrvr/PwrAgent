@@ -118,7 +118,10 @@ import type { DesktopApi } from "../../lib/desktop-api";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
 import { resolveReviewRunMode } from "../../lib/review-run-mode";
 import { readRendererFederationTarget } from "../../lib/federation-window";
-import { agentEventMatchesThread } from "../../lib/federated-thread-events";
+import {
+  agentEventMatchesThread,
+  threadSummaryIdentityKey,
+} from "../../lib/federated-thread-events";
 import {
   acpRuntimeModeRequiresFullAccess,
   formatExecutionModeLabel,
@@ -324,6 +327,13 @@ export type ComposerProps = {
   };
   /** A review this composer submitted was accepted by the backend. */
   onReviewStarted?: () => void;
+  /**
+   * Focus the input once this composer shows the named thread and can take
+   * input. Sent for a mouse click on the thread's sidebar row only; each id
+   * focuses once.
+   */
+  focusRequest?: { threadKey: string; id: number; origin: HTMLElement };
+  onFocusRequestHandled?: (id: number) => void;
   launchpad?: NavigationLaunchpadDraft;
   /** Which machine the launchpad starts its thread on, and how to move it. */
   launchpadMachine?: LaunchpadMachineControl;
@@ -3004,7 +3014,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           pullRequestLinks,
         );
   const activeComposerScopeKeyRef = useRef(composerScopeKey);
-  const [editorScopeKey, setEditorScopeKey] = useState(composerScopeKey);
+  const [editorScope, setEditorScope] = useState({ key: composerScopeKey, scopeKey: composerScopeKey });
+  const editorScopeKey = editorScope.key;
   useLaunchpadComposerFocusHandoff(draftStore, composerScopeKey, editorScopeKey, inputRef, inputWrapRef);
   const editorRemountSequenceRef = useRef(0);
   const pasteScopeRef = useRef({ key: composerScopeKey, version: 0 });
@@ -4003,6 +4014,31 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     // submitReplyText is recreated each render; the id guard sends once.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.replySubmission, props.disabled, props.thread?.id, props.thread?.source]);
+  // A mouse click on a sidebar row. The request can arrive before this
+  // composer shows the clicked thread, or while it is still disabled, so it
+  // waits for readiness and the editor's scope transition to commit. It yields
+  // when focus has moved on from the row, so a slow load never pulls the
+  // operator out of a field they went to since.
+  const handledFocusRequestIdRef = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    const request = props.focusRequest;
+    if (
+      !request
+      || handledFocusRequestIdRef.current === request.id
+      || !props.thread
+      || threadSummaryIdentityKey(props.thread) !== request.threadKey
+      || props.disabled
+      || editorScope.scopeKey !== composerScopeKey
+      || !inputRef.current
+    ) {
+      return;
+    }
+    handledFocusRequestIdRef.current = request.id;
+    if (document.activeElement === request.origin) {
+      inputRef.current.focus({ synchronous: true });
+    }
+    props.onFocusRequestHandled?.(request.id);
+  }, [props.focusRequest, props.onFocusRequestHandled, props.thread, props.disabled, editorScope.scopeKey, composerScopeKey]);
   const appliedReviewRequestId = useRef<number | undefined>(undefined);
   useEffect(() => {
     const request = props.reviewRequest;
@@ -5431,13 +5467,17 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       Boolean(props.thread)
       && resolveLaunchpadComposerScope(draftStore, previousScopeKey)
         === composerScopeKey;
-    if (!followsSubmission && !followsMaterialization) {
-      setEditorScopeKey((mounted) =>
-        mounted === composerScopeKey
+    // Track the committed owner separately from the React key: an ordinary
+    // switch replaces the editor, while the two handoffs above reuse it.
+    // Focus requests must wait for this commit in either case.
+    setEditorScope((mounted) => ({
+      key: followsSubmission || followsMaterialization
+        ? mounted.key
+        : mounted.key === composerScopeKey
           ? `${composerScopeKey}#${++editorRemountSequenceRef.current}`
           : composerScopeKey,
-      );
-    }
+      scopeKey: composerScopeKey,
+    }));
     const current = pasteScopeRef.current;
     if (retargetingDraft && current.key === previousScopeKey) {
       current.key = composerScopeKey;

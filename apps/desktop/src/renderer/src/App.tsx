@@ -3259,6 +3259,34 @@ function DesktopAppShell(props: {
   // draft's composer it runs the discard itself, exactly as Cancel does.
   const [launchpadCancelRequest, setLaunchpadCancelRequest] =
     useState<{ directoryKey: string; id: number }>();
+  // A mouse click on a sidebar row hands focus to that thread's composer.
+  // The shell owns its lifetime across composer unmounts and delayed loads.
+  const [composerFocusRequest, setComposerFocusRequest] =
+    useState<ThreadViewProps["composerFocusRequest"]>();
+  const composerFocusRequestIdRef = useRef(0);
+  const handleComposerFocusRequestHandled = useEventCallback((id: number) => {
+    setComposerFocusRequest((current) => current?.id === id ? undefined : current);
+  });
+  useEffect(() => {
+    if (!composerFocusRequest) {
+      return;
+    }
+    const request = composerFocusRequest;
+    if (mainView !== "thread" || navigation.selectedItemKey !== request.threadKey
+      || document.activeElement !== request.origin) {
+      handleComposerFocusRequestHandled(request.id);
+      return;
+    }
+    // Moving to another row, a row action, or another field cancels the
+    // handoff permanently, even if focus returns before the thread is ready.
+    const handleFocusIn = (event: FocusEvent): void => {
+      if (event.target !== request.origin) {
+        handleComposerFocusRequestHandled(request.id);
+      }
+    };
+    document.addEventListener("focusin", handleFocusIn, true);
+    return () => document.removeEventListener("focusin", handleFocusIn, true);
+  }, [composerFocusRequest, mainView, navigation.selectedItemKey, handleComposerFocusRequestHandled]);
   const handleDiscardSubthreadDraft = useEventCallback((draft: SubthreadLaunchpadDraft) => {
     const composerOwnsDraft =
       navigation.selectedItemKey === draft.selectionKey
@@ -3568,6 +3596,8 @@ function DesktopAppShell(props: {
     onLiveTranscriptEntry: session.upsertLiveTranscriptEntry,
     onCancelLaunchpad: handleCancelLaunchpad,
     launchpadCancelRequest,
+    composerFocusRequest,
+    onComposerFocusRequestHandled: handleComposerFocusRequestHandled,
     onDetachLaunchpadParent: handleDetachLaunchpadParent,
     onSelectLaunchpadParent: handleSelectLaunchpadParent,
     // The composer's 5th argument is `extraDirectoryPaths` (draft
@@ -3848,8 +3878,15 @@ function DesktopAppShell(props: {
           onOpenUsageActivity={desktopApi?.openUsageActivity
             ? () => void desktopApi.openUsageActivity?.()
             : undefined}
-          onSelectThread={(thread) => {
+          onSelectThread={(thread, options) => {
             setMainView("thread");
+            setComposerFocusRequest(options?.focusComposer && options.focusOrigin
+              ? {
+                threadKey: threadSummaryIdentityKey(thread),
+                id: ++composerFocusRequestIdRef.current,
+                origin: options.focusOrigin,
+              }
+              : undefined);
             navigation.selectThread(thread);
           }}
           threadJumpOpen={threadJump.open}

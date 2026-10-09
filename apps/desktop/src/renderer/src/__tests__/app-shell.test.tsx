@@ -6317,7 +6317,9 @@ describe("App", () => {
     expect(readThread).toHaveBeenCalledTimes(2);
   });
 
-  it("walks back and forward across threads and search from the title bar", async () => {
+  it.each(["title button", "row padding"])("walks back and forward across threads and search after %s clicks", async (clickSurface) => {
+    const secondThreadReady = createDeferred<void>();
+    const deliveredSecondThread = vi.fn();
     const searchThreads = vi.fn(async () => ({
       backend: "all" as const,
       contentMode: "available" as const,
@@ -6395,6 +6397,7 @@ describe("App", () => {
           fetchedAt: Date.now(),
           unchanged: false,
           inboxThreadKeys: ["codex:thread-1"],
+          directories: [],
           threads: [
             {
               id: "thread-1",
@@ -6463,6 +6466,18 @@ describe("App", () => {
       }),
     });
 
+    const api = (window as Window & { pwragent?: DesktopApi }).pwragent!;
+    const readSelectedDetail = api.getNavigationSelectedDetail!;
+    api.getNavigationSelectedDetail = async (...args) => {
+      if (args[0].ref.threadId === "thread-2") {
+        await secondThreadReady.promise;
+      }
+      const response = await readSelectedDetail(...args);
+      if (args[0].ref.threadId === "thread-2") {
+        deliveredSecondThread();
+      }
+      return response;
+    };
     render(<App />);
 
     await screen.findByRole("heading", {
@@ -6474,12 +6489,59 @@ describe("App", () => {
     expect(screen.getByRole("button", { name: "Back" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Forward" })).toBeDisabled();
 
-    await clickButton(/Second cached thread/i);
+    const secondRow = screen.getByRole("button", { name: /Second cached thread/i });
+    act(() => {
+      secondRow.focus();
+      fireEvent.pointerDown(secondRow, { pointerType: "mouse", button: 0 });
+      fireEvent.pointerUp(secondRow, { pointerType: "mouse", button: 0 });
+      fireEvent.click(secondRow, { detail: 1 });
+    });
     await screen.findByRole("heading", {
       level: 2,
       name: "Second cached thread",
     });
+    // Moving away cancels the pending request even when the operator returns
+    // to its originating row before configuration becomes ready.
+    act(() => {
+      screen.getByRole("button", { name: /First cached thread/i }).focus();
+      secondRow.focus();
+      secondThreadReady.resolve();
+    });
+    await waitFor(() => expect(deliveredSecondThread).toHaveBeenCalled());
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+    expect(secondRow).toHaveFocus();
+
+    // A new mouse click on the ready thread still hands off focus.
+    act(() => {
+      const target = clickSurface === "title button" ? secondRow : secondRow.closest(".thread-row")!;
+      fireEvent.pointerDown(target, { pointerType: "mouse", button: 0 });
+      // jsdom does not perform the browser's default pointer focus action.
+      // Clicking non-focusable row padding drops focus from the old control.
+      if (target !== secondRow) secondRow.blur();
+      fireEvent.pointerUp(target, { pointerType: "mouse", button: 0 });
+      fireEvent.click(target, { detail: 1 });
+    });
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Reply" })).toHaveFocus());
     expect(screen.getByRole("button", { name: "Back" })).toBeEnabled();
+
+    // Search unmounts Composer. Keyboard history must not replay the handled
+    // mouse request when it mounts again, even with a sidebar row focused.
+    await clickButton("Search threads");
+    await screen.findByRole("heading", { level: 2, name: "Search" });
+    act(() => {
+      secondRow.focus();
+      fireEvent.keyDown(window, { metaKey: true, code: "BracketLeft", key: "[" });
+    });
+    await screen.findByRole("heading", { level: 2, name: "Second cached thread" });
+    await screen.findByRole("textbox", { name: "Reply" });
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+    expect(secondRow).toHaveFocus();
 
     // Search, then open the result (thread 1).
     await clickButton("Search threads");
