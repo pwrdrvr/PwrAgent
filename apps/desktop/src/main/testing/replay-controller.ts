@@ -18,24 +18,56 @@ const REUSABLE_RESPONSE_METHODS = new Set<ReplayResponseMethod>([
   "skills/list",
 ]);
 
+export type ReplayResponseSelector = {
+  /** Select a `thread/list` step that answers archived listings. */
+  archived?: boolean;
+};
+
 export class ReplayController {
   private readonly steps: ReplayStep[];
   private index = 0;
   private pendingRequest?: ReplayRequestStep;
   private readonly completedResponses = new Set<string>();
-  private readonly reusableResponses = new Map<
-    ReplayResponseMethod,
-    ReplayResponseStep
-  >();
+  private readonly reusableResponses = new Map<string, ReplayResponseStep>();
 
   constructor(private readonly fixture: ReplayFixture) {
     validateReplayFixture(fixture);
     this.steps = [...fixture.steps];
   }
 
-  consumeResponse(method: ReplayResponseMethod): ReplayResponseStep {
+  consumeResponse(
+    method: ReplayResponseMethod,
+    selector: ReplayResponseSelector = {}
+  ): ReplayResponseStep {
+    const response = this.tryConsumeResponse(method, selector);
+    if (response) {
+      return response;
+    }
+
     const nextStep = this.steps[this.index];
-    const matchIndex = this.findResponseIndex(method);
+    if (!nextStep) {
+      throw new Error(`Replay fixture exhausted before ${method}`);
+    }
+
+    if (nextStep.kind !== "response") {
+      throw new Error(
+        `Replay fixture expected live step ${nextStep.id} before response ${method}`
+      );
+    }
+
+    throw new Error(
+      `Replay fixture expected ${nextStep.method} before ${method}`
+    );
+  }
+
+  /** Like `consumeResponse`, but answers `undefined` when nothing is servable. */
+  tryConsumeResponse(
+    method: ReplayResponseMethod,
+    selector: ReplayResponseSelector = {}
+  ): ReplayResponseStep | undefined {
+    const archived = selector.archived === true;
+    const reuseKey = archived ? `${method}#archived` : method;
+    const matchIndex = this.findResponseIndex(method, archived);
     if (matchIndex !== -1) {
       const [matchedStep] = this.steps.splice(matchIndex, 1);
       if (!matchedStep || matchedStep.kind !== "response") {
@@ -43,7 +75,7 @@ export class ReplayController {
       }
 
       if (REUSABLE_RESPONSE_METHODS.has(method)) {
-        this.reusableResponses.set(method, matchedStep);
+        this.reusableResponses.set(reuseKey, matchedStep);
       }
 
       if (matchedStep.error) {
@@ -58,24 +90,7 @@ export class ReplayController {
       return matchedStep;
     }
 
-    const cachedResponse = this.reusableResponses.get(method);
-    if (cachedResponse) {
-      return cachedResponse;
-    }
-
-    if (!nextStep) {
-      throw new Error(`Replay fixture exhausted before ${method}`);
-    }
-
-    if (nextStep.kind !== "response") {
-      throw new Error(
-        `Replay fixture expected live step ${nextStep.id} before response ${method}`
-      );
-    }
-
-    throw new Error(
-      `Replay fixture expected ${nextStep.method} before ${method}`
-    );
+    return this.reusableResponses.get(reuseKey);
   }
 
   advance(params: {
@@ -125,13 +140,13 @@ export class ReplayController {
     return current;
   }
 
-  private findResponseIndex(method: ReplayResponseMethod): number {
+  private findResponseIndex(method: ReplayResponseMethod, archived: boolean): number {
     for (let candidateIndex = this.index; candidateIndex < this.steps.length; candidateIndex += 1) {
       const step = this.steps[candidateIndex];
       if (step.kind !== "response") {
         break;
       }
-      if (step.method === method) {
+      if (step.method === method && (step.archived === true) === archived) {
         if (step.afterResponseId && !this.completedResponses.has(step.afterResponseId)) return -1;
         return candidateIndex;
       }

@@ -120,7 +120,10 @@ export class ReplayClient {
   }): Promise<AppServerThreadSummary[]> {
     await this.ensureInitialized();
     if (_params?.archived) {
-      return [];
+      const archivedList = this.controller.tryConsumeResponse("thread/list", {
+        archived: true,
+      });
+      return archivedList ? asThreadList(archivedList.result) : [];
     }
     return asThreadList(this.controller.consumeResponse("thread/list").result);
   }
