@@ -20,7 +20,6 @@ export const PWRAGENT_THREAD_TODO_OPERATION_NAMES = [
   "update_todo",
   "list_todos",
   "resolve_todo",
-  "list_projects",
 ] as const;
 
 export type PwrAgentThreadTodoOperationName =

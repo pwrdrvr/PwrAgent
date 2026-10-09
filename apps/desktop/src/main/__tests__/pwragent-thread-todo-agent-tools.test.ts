@@ -28,7 +28,7 @@ const TODO: ThreadTodo = {
 };
 
 function tool(
-  name: "add_todo" | "update_todo" | "list_todos" | "resolve_todo" | "list_projects",
+  name: "add_todo" | "update_todo" | "list_todos" | "resolve_todo",
   handler: PwrAgentThreadTodoHandler | undefined,
 ) {
   const definition = buildPwrAgentThreadTodoToolDefinitions(handler)
@@ -43,13 +43,6 @@ function createHandler(): PwrAgentThreadTodoHandler {
     update: vi.fn(async () => TODO),
     list: vi.fn(() => [TODO]),
     resolve: vi.fn(() => ({ ...TODO, status: "done" as const })),
-    listProjects: vi.fn(async () => ({
-      thisThread: { key: "directory:/src/pwragent", label: "PwrAgent", path: "/src/pwragent" },
-      projects: [
-        { key: "directory:/src/pwragent", label: "PwrAgent", path: "/src/pwragent" },
-        { key: "directory:/src/pwrsnap", label: "PwrSnap", path: "/src/pwrsnap" },
-      ],
-    })),
   };
 }
 
@@ -234,27 +227,15 @@ describe("thread to-do tool dispatch", () => {
     );
   });
 
-  it("lists the projects a card can name, by label and path only", async () => {
-    const handler = createHandler();
-    const result = await tool("list_projects", handler).dispatch({}, CONTEXT);
-    expect(handler.listProjects).toHaveBeenCalledWith({ backend: "codex", threadId: "thread-a" });
-    expect(result).toEqual({
-      ok: true,
-      data: {
-        thisThread: { label: "PwrAgent", path: "/src/pwragent" },
-        projects: [
-          { label: "PwrAgent", path: "/src/pwragent" },
-          { label: "PwrSnap", path: "/src/pwrsnap" },
-        ],
-      },
-    });
-  });
-
-  it("points add_todo's project at list_projects", () => {
+  it("points a card's project at list_instance_projects", () => {
     const add = tool("add_todo", undefined);
-    expect(add.description).toContain("list_projects");
-    const schema = add.inputSchema as { properties: { project: { description: string } } };
-    expect(schema.properties.project.description).toContain("list_projects");
+    expect(add.description).toContain("list_instance_projects");
+    for (const name of ["add_todo", "update_todo"] as const) {
+      const schema = tool(name, undefined).inputSchema as {
+        properties: { project: { description: string } };
+      };
+      expect(schema.properties.project.description).toContain("list_instance_projects");
+    }
   });
 
   it("refuses to reopen through the tool", async () => {

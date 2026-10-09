@@ -38,7 +38,7 @@ describe("matchThreadTodoProject", () => {
   it("names the known projects when nothing matches, and never a workspace", () => {
     expect(matchThreadTodoProject("Notes", CANDIDATES)).toEqual({
       ok: false,
-      message: 'No project named "Notes". Known projects: PwrAgent, PwrSnap, pwrgit, pwrgit (fork). Call list_projects for their paths.',
+      message: 'No project named "Notes". Known projects: PwrAgent, PwrSnap, pwrgit, pwrgit (fork). list_instance_projects gives each one\'s projectKey.',
     });
   });
 

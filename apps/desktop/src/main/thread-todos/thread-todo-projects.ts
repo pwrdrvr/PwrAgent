@@ -89,7 +89,7 @@ export function matchThreadTodoProject(
   return {
     ok: false,
     message: known.length > 0
-      ? `No project named "${trimmed}". Known projects: ${known.join(", ")}. Call list_projects for their paths.`
+      ? `No project named "${trimmed}". Known projects: ${known.join(", ")}. list_instance_projects gives each one's projectKey.`
       : `No project named "${trimmed}", and PwrAgent lists no projects yet.`,
   };
 }

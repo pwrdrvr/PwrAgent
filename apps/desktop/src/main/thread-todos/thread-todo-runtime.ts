@@ -243,18 +243,6 @@ export function installThreadTodoRuntime(params: {
       });
     },
     list: (context, status) => todos.list({ ...context, status }),
-    listProjects: async (context) => {
-      const [primaryDirectory, candidates] = await Promise.all([
-        registry.resolveThreadPrimaryDirectory(context.backend, context.threadId)
-          .catch(() => undefined),
-        listProjectsForTodo(),
-      ]);
-      const thisThread = threadTodoProjectForDirectory(primaryDirectory, candidates);
-      return {
-        ...(thisThread ? { thisThread } : {}),
-        projects: threadTodoProjectChoices(candidates),
-      };
-    },
     resolve: (context, target) =>
       todos.resolveFromThread({ ...context, ...target }),
   });

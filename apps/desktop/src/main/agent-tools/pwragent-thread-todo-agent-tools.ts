@@ -4,7 +4,6 @@ import type {
   ThreadExecutionMode,
   ThreadTodo,
   ThreadTodoAction,
-  ThreadTodoProject,
   ThreadTodoStatus,
 } from "@pwragent/shared";
 import {
@@ -70,11 +69,6 @@ export type PwrAgentThreadTodoHandler = {
     context: ThreadTodoToolContext,
     target: { id?: string; key?: string; status: Exclude<ThreadTodoStatus, "open"> },
   ) => ThreadTodo | Promise<ThreadTodo>;
-  /** The projects `project` is matched against, and this thread's own. */
-  listProjects: (context: ThreadTodoToolContext) => Promise<{
-    thisThread?: ThreadTodoProject;
-    projects: ThreadTodoProject[];
-  }>;
 };
 
 export function buildPwrAgentThreadTodoToolRouter(
@@ -188,18 +182,7 @@ async function dispatchOperation(
       });
       return agentToolSuccess({ todo: summarizeTodo(todo) });
     }
-    case "list_projects": {
-      const { thisThread, projects } = await handler.listProjects(context);
-      return agentToolSuccess({
-        ...(thisThread ? { thisThread: summarizeProject(thisThread) } : {}),
-        projects: projects.map(summarizeProject),
-      });
-    }
   }
-}
-
-function summarizeProject(project: ThreadTodoProject): { label: string; path: string } {
-  return { label: project.label, path: project.path };
 }
 
 export function normalizeAddTodoArgs(
@@ -508,7 +491,7 @@ function descriptionForOperation(operation: PwrAgentThreadTodoOperationName): st
         "Pass a stable key to update one card instead of adding another each turn.",
         "Use update_todo to change some fields of a card you already raised.",
         "Pass project when the work is for another project, and raise one card per project.",
-        "Call list_projects first when you are not sure of the project's name.",
+        "For the exact project, pass a projectKey from list_instance_projects for this machine.",
       ].join(" ");
     case "update_todo":
       return [
@@ -523,11 +506,6 @@ function descriptionForOperation(operation: PwrAgentThreadTodoOperationName): st
       return "List this thread's to-do cards. Defaults to open cards.";
     case "resolve_todo":
       return "Mark one of this thread's to-do cards done or dismissed, by id or key. Use it when a card no longer applies.";
-    case "list_projects":
-      return [
-        "List the projects a to-do card can be for, with this thread's own project.",
-        "Pass a label or path from this list as add_todo or update_todo project.",
-      ].join(" ");
   }
 }
 
@@ -557,7 +535,7 @@ function inputSchemaForOperation(
           project: {
             type: "string",
             description:
-              "The project the work is for, such as PwrSnap: a name or path from list_projects, or any path inside the project or one of its worktrees. Omit for this thread's own project.",
+              "The project the work is for: a projectKey from list_instance_projects for this machine, the project's name such as PwrSnap, or any path inside the project or one of its worktrees. Omit for this thread's own project.",
           },
           action: {
             type: "object",
@@ -617,7 +595,7 @@ function inputSchemaForOperation(
           detail: { type: "string", description: "Empty clears it." },
           project: {
             type: "string",
-            description: "The project the work is for, by name or path. Empty returns the card to this thread's project.",
+            description: "The project the work is for: a projectKey from list_instance_projects, a name, or a path. Empty returns the card to this thread's project.",
           },
           prompt: { type: "string", description: "Handoff cards: the new thread's complete first message." },
           threadTitle: { type: "string", description: "Handoff cards: the new thread's name. Empty clears it." },
@@ -669,12 +647,6 @@ function inputSchemaForOperation(
             description: "Defaults to done.",
           },
         },
-      };
-    case "list_projects":
-      return {
-        type: "object",
-        additionalProperties: false,
-        properties: {},
       };
   }
 }
