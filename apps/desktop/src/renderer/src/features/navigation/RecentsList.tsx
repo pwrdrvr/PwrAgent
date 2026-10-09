@@ -101,6 +101,7 @@ type RecentsListProps = {
     parent: NavigationThreadSummary,
     collapsed: boolean,
   ) => Promise<void>;
+  onRequestRenameThread?: (thread: NavigationThreadSummary) => void;
   onSelectThread: (
     thread: NavigationThreadSummary,
     event: MouseEvent<HTMLElement>,
@@ -338,6 +339,7 @@ export function RecentsList(props: RecentsListProps) {
               onRevealSelectedThreadComplete={
                 props.onRevealSelectedThreadComplete
               }
+              onRequestRenameThread={props.onRequestRenameThread}
               onSelectThread={selectThread}
               onSetReaction={props.onSetReaction}
               onSetThreadPin={props.onSetThreadPin}
@@ -442,6 +444,7 @@ export function RecentsList(props: RecentsListProps) {
           onPrefetchPullRequests={props.onPrefetchPullRequests}
           onPrefetchGitWorkingState={props.onPrefetchGitWorkingState}
           onRevealSelectedThreadComplete={props.onRevealSelectedThreadComplete}
+          onRequestRenameThread={props.onRequestRenameThread}
           onSelectThread={selectThread}
           onSetReaction={props.onSetReaction}
           onSetThreadPin={props.onSetThreadPin}

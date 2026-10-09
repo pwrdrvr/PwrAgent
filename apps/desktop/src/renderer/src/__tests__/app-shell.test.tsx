@@ -6317,6 +6317,121 @@ describe("App", () => {
     expect(readThread).toHaveBeenCalledTimes(2);
   });
 
+  it.each([false, true])("keeps rename focused after a native double-click with deferred thread detail=%s", async (deferDetail) => {
+    const detailReady = createDeferred<void>();
+    const deliveredDetail = vi.fn();
+    const threads = ["First thread", "Double-click thread"].map((title, index) => ({
+      id: `thread-${index + 1}`,
+      title,
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      linkedDirectories: [],
+      inbox: { inInbox: true, reason: "new-thread" as const },
+      updatedAt: 3_000 - index,
+    }));
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: ownerApi({
+        ping: () => "pong",
+        listSkills: async () => ({ backend: "codex", fetchedAt: Date.now(), data: [] }),
+        listBackends: async () => ({
+          fetchedAt: Date.now(),
+          backends: [{
+            kind: "codex",
+            label: "Codex app server",
+            available: true,
+            methods: ["thread/list", "thread/read", "turn/start"],
+            capabilities: {
+              listThreads: true,
+              createThread: false,
+              resumeThread: true,
+              renameThread: true,
+              readThread: true,
+              startTurn: true,
+              interruptTurn: true,
+              steerTurn: false,
+              transcriptPagination: true,
+              toolUse: false,
+              approvalRequests: false,
+              multiDirectoryThreads: true,
+            },
+            executionModes: [{ mode: "default", label: "Default Access", available: true, isDefault: true }],
+          }],
+        }),
+        getNavigationSnapshot: async () => ({
+          backend: "all",
+          fetchedAt: Date.now(),
+          unchanged: false,
+          inboxThreadKeys: threads.map((thread) => `codex:${thread.id}`),
+          directories: [],
+          threads,
+        }),
+        markThreadSeen: async ({ backend, threadId }: { backend: AppServerBackendKind; threadId: string }) => ({
+          backend, threadId, seenAt: Date.now(),
+        }),
+        onAgentEvent: () => () => undefined,
+        onWindowFocus: () => () => undefined,
+        platform: "darwin",
+        readThread: async ({ backend, threadId }: { backend: AppServerBackendKind; threadId: string }) => ({
+          backend,
+          fetchedAt: Date.now(),
+          threadId,
+          replay: { entries: [], messages: [], pagination: { supportsPagination: false, hasPreviousPage: false } },
+        }),
+      }),
+    });
+    const api = (window as Window & { pwragent?: DesktopApi }).pwragent!;
+    const readSelectedDetail = api.getNavigationSelectedDetail!;
+    api.getNavigationSelectedDetail = async (...args) => {
+      if (args[0].ref.threadId === "thread-2" && deferDetail) {
+        await detailReady.promise;
+      }
+      const response = await readSelectedDetail(...args);
+      if (args[0].ref.threadId === "thread-2") {
+        deliveredDetail();
+      }
+      return response;
+    };
+    render(<App />);
+    await screen.findByRole("heading", { level: 2, name: "First thread" });
+    const row = screen.getByRole("button", { name: "Double-click thread" });
+    const click = (detail: number) => act(() => {
+      fireEvent.pointerDown(row, { pointerType: "mouse", button: 0 });
+      fireEvent.mouseDown(row, { button: 0, detail });
+      row.focus(); // jsdom does not apply mousedown's focus default.
+      fireEvent.pointerUp(row, { pointerType: "mouse", button: 0 });
+      fireEvent.mouseUp(row, { button: 0, detail });
+      fireEvent.click(row, { button: 0, detail });
+    });
+    click(1);
+    await screen.findByRole("heading", { level: 2, name: "Double-click thread" });
+    if (!deferDetail) {
+      await waitFor(() => expect(screen.getByRole("textbox", { name: "Reply" })).toHaveFocus());
+    }
+    expect(screen.queryByRole("dialog", { name: "Rename Thread" })).toBeNull();
+    click(2);
+    fireEvent.doubleClick(row, { button: 0, detail: 2 });
+    const dialog = screen.getByRole("dialog", { name: "Rename Thread" });
+    const input = within(dialog).getByRole("textbox", { name: "Name" });
+    expect(input).toHaveFocus();
+    act(() => detailReady.resolve());
+    await waitFor(() => expect(deliveredDetail).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Reply" })).toBeEnabled());
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+    expect(input).toHaveFocus();
+
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Rename Thread" })).toBeNull();
+    // Returning to the origin after closing must not revive the canceled request.
+    act(() => row.focus());
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+    expect(row).toHaveFocus();
+  });
+
   it.each(["title button", "row padding"])("walks back and forward across threads and search after %s clicks", async (clickSurface) => {
     const secondThreadReady = createDeferred<void>();
     const deliveredSecondThread = vi.fn();

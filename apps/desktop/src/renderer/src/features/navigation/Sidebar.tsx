@@ -937,6 +937,10 @@ export function Sidebar(props: SidebarProps) {
     row?: ThreadRowRef,
   ): void => {
     const mousePress = isMousePress(event);
+    // A native double-click sends a second click before dblclick. Tiptap
+    // defers focus to a frame, so that click must not schedule a handoff
+    // which would pull focus out of the rename dialog opened by dblclick.
+    const focusComposer = mousePress && event.detail < 2;
     const threadKey = threadSummaryIdentityKey(thread);
     const occurrences = selectionOrder.map((entry) => typeof entry === "string"
       ? { threadKey: entry, directoryKey: undefined } : entry);
@@ -945,7 +949,7 @@ export function Sidebar(props: SidebarProps) {
       // Padding, chip gaps, and status indicators select through the row's
       // non-focusable div. Anchor every real mouse selection to its accessible
       // open button so the pending handoff has one concrete focus owner.
-      const focusOrigin = mousePress
+      const focusOrigin = focusComposer
         ? event.currentTarget.closest(".thread-row")?.querySelector<HTMLButtonElement>(".thread-row__open") ?? undefined
         : undefined;
       focusOrigin?.focus({ preventScroll: true });
@@ -1513,12 +1517,15 @@ export function Sidebar(props: SidebarProps) {
     });
   });
 
-  const requestRenameFromContextMenu = (thread: NavigationThreadSummary): void => {
+  const requestRenameThread = useEventCallback((thread: NavigationThreadSummary): void => {
+    if (!canRenameThread(thread)) {
+      return;
+    }
     setContextMenu(undefined);
     setRenameThread(thread);
     setRenameDraft(thread.title);
     setRenameValidationError(undefined);
-  };
+  });
 
   const requestLockFromContextMenu = (
     thread: NavigationThreadSummary,
@@ -2769,6 +2776,7 @@ export function Sidebar(props: SidebarProps) {
               }
               onOpenPullRequestContextMenu={openPullRequestContextMenu}
               onSelectDirectory={selectDirectoryFromList}
+              onRequestRenameThread={requestRenameThread}
               onSelectThread={selectThreadFromList}
               onSetReaction={forwardedSetThreadReaction}
               onSetThreadPin={hoverReleasedListHandlers.setThreadPin}
@@ -2829,6 +2837,7 @@ export function Sidebar(props: SidebarProps) {
                 onSetSubthreadsCollapsed={
                   hoverReleasedListHandlers.setSubthreadsCollapsed
                 }
+                onRequestRenameThread={requestRenameThread}
                 onSelectThread={selectThreadFromList}
                 onSetReaction={forwardedSetThreadReaction}
                 onSetThreadPin={hoverReleasedListHandlers.setThreadPin}
@@ -3178,7 +3187,7 @@ export function Sidebar(props: SidebarProps) {
                       role="menuitem"
                       type="button"
                       onClick={() =>
-                        requestRenameFromContextMenu(contextMenu.thread)
+                        requestRenameThread(contextMenu.thread)
                       }
                     >
                       Rename Thread

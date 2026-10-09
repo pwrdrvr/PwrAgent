@@ -161,6 +161,7 @@ type ThreadRowProps = {
     event: MouseEvent<HTMLElement>,
     row: ThreadRowRef,
   ) => void;
+  onRequestRenameThread?: (thread: NavigationThreadSummary) => void;
   onRevealSelectedThreadComplete?: (request: number) => void;
   /**
    * Fired by the row's disclosure control. The list decides what state to
@@ -242,6 +243,12 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const rowRef = useRef<HTMLDivElement>(null);
   const openButtonRef = useRef<HTMLButtonElement>(null);
+  const requestRename = (event: MouseEvent<HTMLElement>): void => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+      return;
+    }
+    props.onRequestRenameThread?.(props.thread);
+  };
   const completedRevealRequestRef = useRef(0);
   const revealSelectedThreadRequest = props.revealSelectedThreadRequest ?? 0;
   const onRevealSelectedThreadComplete =
@@ -443,6 +450,13 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
           }
           props.onSelectThread(props.thread, event, rowIdentity);
         }}
+        onDoubleClick={(event) => {
+          const target = event.target as HTMLElement;
+          if (target.closest("button, [role='button'], a")) {
+            return;
+          }
+          requestRename(event);
+        }}
       >
         {/* The card's primary action: an EMPTY button absolutely
             stretched over the TITLE BAND only (see `.thread-row__open`
@@ -495,6 +509,7 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
           onClick={(event) =>
             props.onSelectThread(props.thread, event, rowIdentity)
           }
+          onDoubleClick={requestRename}
         />
 
         {/* Title line — a SIBLING of the open-thread overlay (pointer
