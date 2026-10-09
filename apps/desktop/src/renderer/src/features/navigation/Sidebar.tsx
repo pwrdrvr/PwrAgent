@@ -349,7 +349,7 @@ type SidebarProps = {
    */
   onSelectThread: (
     thread: NavigationThreadSummary,
-    options?: { focusComposer?: boolean },
+    options?: { focusComposer?: boolean; focusOrigin?: HTMLElement },
   ) => void;
   onMarkThreadsSeen?: (threads: NavigationThreadSummary[]) => Promise<void>;
   onMarkDirectoriesSeen?: (directoryKeys: string[]) => Promise<void>;
@@ -936,6 +936,7 @@ export function Sidebar(props: SidebarProps) {
     selectionOrder: (string | Pick<ThreadRowRef, "directoryKey" | "threadKey">)[],
     row?: ThreadRowRef,
   ): void => {
+    const mousePress = isMousePress(event);
     const threadKey = threadSummaryIdentityKey(thread);
     const occurrences = selectionOrder.map((entry) => typeof entry === "string"
       ? { threadKey: entry, directoryKey: undefined } : entry);
@@ -944,7 +945,10 @@ export function Sidebar(props: SidebarProps) {
       selectionAnchorKeyRef.current = threadKey;
       selectionAnchorDirectoryKeyRef.current = row?.directoryKey;
       setSelectedThreadKeys(new Set([threadKey]));
-      props.onSelectThread(thread, { focusComposer: isMousePress(event) });
+      props.onSelectThread(thread, {
+        focusComposer: mousePress,
+        ...(mousePress ? { focusOrigin: event.currentTarget } : {}),
+      });
       return;
     }
 

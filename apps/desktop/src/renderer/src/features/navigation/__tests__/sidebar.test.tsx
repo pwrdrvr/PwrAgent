@@ -4819,10 +4819,12 @@ describe("Sidebar", () => {
     );
     const row = screen.getByRole("button", { name: sharedThread.title });
 
-    fireEvent.pointerDown(row, { pointerType: "mouse" });
+    fireEvent.pointerDown(row, { pointerType: "mouse", button: 0 });
+    fireEvent.pointerUp(row, { pointerType: "mouse", button: 0 });
     fireEvent.click(row, { detail: 1 });
     expect(onSelectThread).toHaveBeenLastCalledWith(sharedThread, {
       focusComposer: true,
+      focusOrigin: row,
     });
 
     // Enter or Space on the focused row: a click with no pointerdown.
@@ -4845,6 +4847,21 @@ describe("Sidebar", () => {
     });
 
     fireEvent.pointerDown(row, { pointerType: "touch" });
+    fireEvent.click(row, { detail: 1 });
+    expect(onSelectThread).toHaveBeenLastCalledWith(sharedThread, {
+      focusComposer: false,
+    });
+
+    // A context-menu press is never a primary selection, even if an
+    // assistive-technology click later targets the same row.
+    fireEvent.pointerDown(row, { pointerType: "mouse", button: 2 });
+    fireEvent.click(row, { detail: 1 });
+    expect(onSelectThread).toHaveBeenLastCalledWith(sharedThread, {
+      focusComposer: false,
+    });
+
+    fireEvent.pointerDown(row, { pointerType: "mouse", button: 0 });
+    fireEvent.click(row, { detail: 1, metaKey: true });
     fireEvent.click(row, { detail: 1 });
     expect(onSelectThread).toHaveBeenLastCalledWith(sharedThread, {
       focusComposer: false,

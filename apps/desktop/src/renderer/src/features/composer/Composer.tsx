@@ -332,7 +332,8 @@ export type ComposerProps = {
    * input. Sent for a mouse click on the thread's sidebar row only; each id
    * focuses once.
    */
-  focusRequest?: { threadKey: string; id: number };
+  focusRequest?: { threadKey: string; id: number; origin: HTMLElement };
+  onFocusRequestHandled?: (id: number) => void;
   launchpad?: NavigationLaunchpadDraft;
   /** Which machine the launchpad starts its thread on, and how to move it. */
   launchpadMachine?: LaunchpadMachineControl;
@@ -4029,12 +4030,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       return;
     }
     handledFocusRequestIdRef.current = request.id;
-    const active = document.activeElement;
-    if (active && active !== document.body && !active.closest(".thread-row-shell")) {
-      return;
+    props.onFocusRequestHandled?.(request.id);
+    if (document.activeElement === request.origin) {
+      inputRef.current?.focus();
     }
-    inputRef.current?.focus();
-  }, [props.focusRequest, props.thread, props.disabled]);
+  }, [props.focusRequest, props.onFocusRequestHandled, props.thread, props.disabled]);
   const appliedReviewRequestId = useRef<number | undefined>(undefined);
   useEffect(() => {
     const request = props.reviewRequest;
