@@ -329,6 +329,9 @@ describe("action → permission lookup tables", () => {
     expect(permissionForDynamicTool("thread_inspection", "search_threads")).toBe(
       "tools.thread_inspection",
     );
+    expect(permissionForDynamicTool("thread_inspection", "rename_current_thread")).toBe(
+      "thread.settings.name",
+    );
     expect(permissionForDynamicTool("thread_inspection", "read_thread")).toBe(
       "tools.thread_inspection",
     );

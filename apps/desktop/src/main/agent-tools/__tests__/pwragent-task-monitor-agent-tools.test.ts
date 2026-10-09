@@ -41,7 +41,8 @@ describe("PwrAgent task monitor agent tools", () => {
     // 43 with search_mcp_tools and call_mcp_tool, 44 with handoff_instance_thread,
     // 45 with read_operator_focus, 46 with list_attention_threads,
     // 47 with mark_project_read, 50 with the three thread to-do tools.
-    expect(dynamicTools).toHaveLength(51);
+    // 52 with rename_current_thread.
+    expect(dynamicTools).toHaveLength(52);
     expect(mcpTools).toEqual(expect.arrayContaining(
       dynamicTools.filter((tool) => !dynamicOnlyToolNames.has(tool.name)),
     ));

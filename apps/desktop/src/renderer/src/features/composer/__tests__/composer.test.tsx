@@ -2155,6 +2155,203 @@ describe("Composer", () => {
     expect(onCancelLaunchpad).toHaveBeenCalledTimes(1);
   });
 
+  it.each(["empty", "thread-a"])("focuses the replacement editor when opening a ready thread from %s", async (previous) => {
+    const thread = (id: string): NavigationThreadSummary => ({
+      id, source: "codex", title: id, titleSource: "explicit",
+      linkedDirectories: [], inbox: { inInbox: false },
+    });
+    const props = {
+      backends: [backendSummary("codex")],
+      draftStore: createComposerDraftStore(),
+      skills: [],
+      onFocusRequestHandled: vi.fn(),
+    };
+    const content = (selected?: NavigationThreadSummary, focusRequest?: ComponentProps<typeof Composer>["focusRequest"]) => (
+      <>
+        <button type="button">Clicked row</button>
+        <Composer {...props} thread={selected} focusRequest={focusRequest} />
+      </>
+    );
+    const view = render(content(previous === "empty" ? undefined : thread(previous)));
+    const previousInput = screen.getByLabelText("Reply");
+    const origin = screen.getByRole("button", { name: "Clicked row" });
+    act(() => origin.focus());
+
+    view.rerender(content(thread("thread-b"), { threadKey: "codex:thread-b", id: 1, origin }));
+    const replacementInput = screen.getByLabelText("Reply");
+    expect(replacementInput).not.toBe(previousInput);
+    await waitFor(() => expect(replacementInput).toHaveFocus());
+    expect(props.onFocusRequestHandled).toHaveBeenCalledExactlyOnceWith(1);
+
+    // The configuration may already be cached when returning to a thread:
+    // every ready-to-ready switch still replaces the keyed editor.
+    act(() => origin.focus());
+    view.rerender(content(thread("thread-c"), { threadKey: "codex:thread-c", id: 2, origin }));
+    await waitFor(() => expect(screen.getByLabelText("Reply")).toHaveFocus());
+    act(() => origin.focus());
+    view.rerender(content(thread("thread-b"), { threadKey: "codex:thread-b", id: 3, origin }));
+    await waitFor(() => expect(screen.getByLabelText("Reply")).toHaveFocus());
+    expect(props.onFocusRequestHandled.mock.calls).toEqual([[1], [2], [3]]);
+  });
+
+  it("focuses a materialized thread whose editor was kept from its launchpad", async () => {
+    const store = createComposerDraftStore();
+    const launchpad = createRetargetingLaunchpad(retargetingPwrSnap, "First message");
+    const props = { backends: [backendSummary("codex")], draftStore: store, skills: [] };
+    const view = render(
+      <>
+        <button type="button">Clicked row</button>
+        <Composer {...props} directory={retargetingPwrSnap} launchpad={launchpad} launchpadMaterializing />
+      </>,
+    );
+    const input = screen.getByLabelText("New thread");
+    const thread: NavigationThreadSummary = {
+      id: "materialized", source: "codex", title: "First message", titleSource: "explicit",
+      linkedDirectories: [], inbox: { inInbox: false },
+    };
+    act(() => handoffLaunchpadComposer(store, `launchpad:${launchpad.directoryKey}`, thread));
+    const origin = screen.getByRole("button", { name: "Clicked row" });
+    act(() => origin.focus());
+    const onFocusRequestHandled = vi.fn();
+    view.rerender(
+      <>
+        <button type="button">Clicked row</button>
+        <Composer {...props} thread={thread} focusRequest={{ threadKey: "codex:materialized", id: 1, origin }}
+          onFocusRequestHandled={onFocusRequestHandled} />
+      </>,
+    );
+    const reply = screen.getByLabelText("Reply");
+    expect(reply).toBe(input);
+    await waitFor(() => expect(reply).toHaveFocus());
+    expect(onFocusRequestHandled).toHaveBeenCalledExactlyOnceWith(1);
+  });
+
+  it("focuses the reply input for a focus request once it shows that thread", async () => {
+    const thread = (id: string) => ({
+      id, source: "codex" as const, title: id, titleSource: "explicit" as const,
+      linkedDirectories: [], inbox: { inInbox: false },
+    });
+    const props = {
+      backends: [backendSummary("codex")],
+      draftStore: createComposerDraftStore(),
+      skills: [],
+      onFocusRequestHandled: vi.fn(),
+    };
+    const content = (id: string, disabled = false, focusRequest?: ComponentProps<typeof Composer>["focusRequest"]) => (
+      <>
+        <button type="button">Clicked row</button>
+        <Composer {...props} thread={thread(id)} disabled={disabled} focusRequest={focusRequest} />
+      </>
+    );
+    const view = render(content("thread-a"));
+    const origin = screen.getByRole("button", { name: "Clicked row" });
+    act(() => origin.focus());
+    const request = { threadKey: "codex:thread-b", id: 1, origin };
+    view.rerender(content("thread-a", false, request));
+    const reply = screen.getByLabelText("Reply");
+    // Still showing the previous thread: the request waits.
+    expect(reply).not.toHaveFocus();
+
+    view.rerender(content("thread-b", true, request));
+    expect(screen.getByLabelText("Reply")).not.toHaveFocus();
+    expect(props.onFocusRequestHandled).not.toHaveBeenCalled();
+
+    view.rerender(content("thread-b", false, request));
+    await waitFor(() => expect(screen.getByLabelText("Reply")).toHaveFocus());
+    expect(props.onFocusRequestHandled).toHaveBeenCalledExactlyOnceWith(request.id);
+
+    // Each id focuses once.
+    act(() => (document.activeElement as HTMLElement).blur());
+    view.rerender(
+      <>
+        <button type="button">Clicked row</button>
+        <Composer {...props} thread={{ ...thread("thread-b"), title: "renamed" }} focusRequest={request} />
+      </>,
+    );
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+    expect(screen.getByLabelText("Reply")).not.toHaveFocus();
+  });
+
+  it("preserves a user focus change after acknowledging the handoff and before the next frame", () => {
+    const thread: NavigationThreadSummary = {
+      id: "thread-b", source: "codex", title: "B", titleSource: "explicit",
+      linkedDirectories: [], inbox: { inInbox: false },
+    };
+    const props = {
+      backends: [backendSummary("codex")],
+      draftStore: createComposerDraftStore(),
+      skills: [],
+      onFocusRequestHandled: vi.fn(),
+    };
+    const content = (focusRequest?: ComponentProps<typeof Composer>["focusRequest"]) => (
+      <>
+        <button type="button">Clicked row</button>
+        <input aria-label="Another field" />
+        <Composer {...props} thread={thread} focusRequest={focusRequest} />
+      </>
+    );
+    const view = render(content());
+    const origin = screen.getByRole("button", { name: "Clicked row" });
+    const elsewhere = screen.getByRole("textbox", { name: "Another field" });
+    act(() => origin.focus());
+    const frames: FrameRequestCallback[] = [];
+    const animationFrame = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    try {
+      view.rerender(content({ threadKey: "codex:thread-b", id: 1, origin }));
+      expect(props.onFocusRequestHandled).toHaveBeenCalledExactlyOnceWith(1);
+      // The shell clears the acknowledged request, removing its cancellation
+      // listener. A later focus change must survive any already queued frames.
+      view.rerender(content());
+      act(() => elsewhere.focus());
+      act(() => {
+        for (const callback of frames.splice(0)) callback(performance.now());
+      });
+      expect(elsewhere).toHaveFocus();
+    } finally {
+      animationFrame.mockRestore();
+    }
+  });
+
+  it.each(["Another field", "Other row", "Row action"])("leaves focus on %s when the thread becomes ready", async (label) => {
+    const thread = { id: "thread-b", source: "codex" as const, title: "B", titleSource: "explicit" as const,
+      linkedDirectories: [], inbox: { inInbox: false } };
+    const props = {
+      backends: [backendSummary("codex")],
+      draftStore: createComposerDraftStore(),
+      skills: [],
+    };
+    const content = (disabled: boolean, focusRequest?: ComponentProps<typeof Composer>["focusRequest"]) => (
+      <>
+        <div className="thread-row-shell">
+          <button type="button">Clicked row</button>
+          <button type="button">Row action</button>
+        </div>
+        <div className="thread-row-shell"><button type="button">Other row</button></div>
+        <input aria-label="Another field" />
+        <Composer {...props} thread={thread} disabled={disabled} focusRequest={focusRequest} />
+      </>
+    );
+    const view = render(content(true));
+    const origin = screen.getByRole("button", { name: "Clicked row" });
+    act(() => origin.focus());
+    const request = { threadKey: "codex:thread-b", id: 1, origin };
+    view.rerender(content(true, request));
+    const elsewhere = label === "Another field"
+      ? screen.getByRole("textbox", { name: label })
+      : screen.getByRole("button", { name: label });
+    act(() => elsewhere.focus());
+    view.rerender(content(false, request));
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+    expect(elsewhere).toHaveFocus();
+  });
+
   it("renders unavailable reason when provided", async () => {
     const unavailableReason = "Codex profile not logged in. Please check your settings.";
     render(

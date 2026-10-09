@@ -55,6 +55,7 @@ export const PWRAGENT_THREAD_INSPECTION_OPERATION_NAMES = [
   "attach_thread_pull_request",
   "check_thread_pull_request_status",
   "watch_thread_pull_request",
+  "rename_current_thread",
   "mutate_thread",
   "mark_project_read",
 ] as const;
@@ -243,6 +244,11 @@ export type MutateThreadToolArgs = {
    * Validate and report the requested mutations without applying them.
    */
   dryRun?: boolean;
+};
+
+export type RenameCurrentThreadToolArgs = {
+  /** Rename only the invoking PwrAgent thread, using its trusted identity. */
+  title: string;
 };
 
 export type AttachThreadPullRequestToolArgs = {
@@ -653,6 +659,7 @@ export type PwrAgentThreadInspectionToolArgsByOperation = {
   attach_thread_pull_request: AttachThreadPullRequestToolArgs;
   check_thread_pull_request_status: CheckThreadPullRequestStatusToolArgs;
   watch_thread_pull_request: WatchThreadPullRequestToolArgs;
+  rename_current_thread: RenameCurrentThreadToolArgs;
   mutate_thread: MutateThreadToolArgs;
   mark_project_read: MarkProjectReadToolArgs;
 };

@@ -282,6 +282,7 @@ describe("Sidebar hover-stable thread ordering", () => {
     fireEvent.click(within(firstRow).getByRole("button", { name: /^Alpha thread/ }));
     expect(onSelectThread).toHaveBeenCalledWith(
       expect.objectContaining({ id: "alpha" }),
+      { focusComposer: false },
     );
 
     leaveThreadBrowser();
