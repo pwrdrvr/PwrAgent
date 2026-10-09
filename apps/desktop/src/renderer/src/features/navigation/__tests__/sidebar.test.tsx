@@ -7473,8 +7473,8 @@ describe("Sidebar", () => {
         fireEvent.click(row, { button: 0, detail });
         expect(screen.queryByRole("dialog", { name: "Rename Thread" })).toBeNull();
         expect(onSelectThread).toHaveBeenLastCalledWith(sharedThread, {
-          focusComposer: detail === 1,
-          ...(detail === 1 ? { focusOrigin: row } : {}),
+          focusComposer: true,
+          focusOrigin: row,
         });
       }
       fireEvent.doubleClick(row, { button: 0, detail: 2 });

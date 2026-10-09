@@ -6317,7 +6317,11 @@ describe("App", () => {
     expect(readThread).toHaveBeenCalledTimes(2);
   });
 
-  it.each([false, true])("keeps rename focused after a native double-click with deferred thread detail=%s", async (deferDetail) => {
+  it.each([
+    { deferDetail: false, rapid: false },
+    { deferDetail: true, rapid: false },
+    { deferDetail: false, rapid: true },
+  ])("keeps rename focused after a native double-click with deferred detail=$deferDetail, rapid=$rapid", async ({ deferDetail, rapid }) => {
     const detailReady = createDeferred<void>();
     const deliveredDetail = vi.fn();
     const threads = ["First thread", "Double-click thread"].map((title, index) => ({
@@ -6387,14 +6391,15 @@ describe("App", () => {
         await detailReady.promise;
       }
       const response = await readSelectedDetail(...args);
-      if (args[0].ref.threadId === "thread-2") {
+      if (args[0].ref.threadId === (rapid ? "thread-1" : "thread-2")) {
         deliveredDetail();
       }
       return response;
     };
     render(<App />);
     await screen.findByRole("heading", { level: 2, name: "First thread" });
-    const row = screen.getByRole("button", { name: "Double-click thread" });
+    const row = screen.getByRole("button", { name: rapid ? "First thread" : "Double-click thread" });
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Reply" })).toBeEnabled());
     const click = (detail: number) => act(() => {
       fireEvent.pointerDown(row, { pointerType: "mouse", button: 0 });
       fireEvent.mouseDown(row, { button: 0, detail });
@@ -6404,8 +6409,10 @@ describe("App", () => {
       fireEvent.click(row, { button: 0, detail });
     });
     click(1);
-    await screen.findByRole("heading", { level: 2, name: "Double-click thread" });
-    if (!deferDetail) {
+    if (!rapid) {
+      await screen.findByRole("heading", { level: 2, name: "Double-click thread" });
+    }
+    if (!deferDetail && !rapid) {
       await waitFor(() => expect(screen.getByRole("textbox", { name: "Reply" })).toHaveFocus());
     }
     expect(screen.queryByRole("dialog", { name: "Rename Thread" })).toBeNull();
