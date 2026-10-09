@@ -2155,6 +2155,77 @@ describe("Composer", () => {
     expect(onCancelLaunchpad).toHaveBeenCalledTimes(1);
   });
 
+  it.each(["empty", "thread-a"])("focuses the replacement editor when opening a ready thread from %s", async (previous) => {
+    const thread = (id: string): NavigationThreadSummary => ({
+      id, source: "codex", title: id, titleSource: "explicit",
+      linkedDirectories: [], inbox: { inInbox: false },
+    });
+    const props = {
+      backends: [backendSummary("codex")],
+      draftStore: createComposerDraftStore(),
+      skills: [],
+      onFocusRequestHandled: vi.fn(),
+    };
+    const content = (selected?: NavigationThreadSummary, focusRequest?: ComponentProps<typeof Composer>["focusRequest"]) => (
+      <>
+        <button type="button">Clicked row</button>
+        <Composer {...props} thread={selected} focusRequest={focusRequest} />
+      </>
+    );
+    const view = render(content(previous === "empty" ? undefined : thread(previous)));
+    const previousInput = screen.getByLabelText("Reply");
+    const origin = screen.getByRole("button", { name: "Clicked row" });
+    act(() => origin.focus());
+
+    view.rerender(content(thread("thread-b"), { threadKey: "codex:thread-b", id: 1, origin }));
+    const replacementInput = screen.getByLabelText("Reply");
+    expect(replacementInput).not.toBe(previousInput);
+    await waitFor(() => expect(replacementInput).toHaveFocus());
+    expect(props.onFocusRequestHandled).toHaveBeenCalledExactlyOnceWith(1);
+
+    // The configuration may already be cached when returning to a thread:
+    // every ready-to-ready switch still replaces the keyed editor.
+    act(() => origin.focus());
+    view.rerender(content(thread("thread-c"), { threadKey: "codex:thread-c", id: 2, origin }));
+    await waitFor(() => expect(screen.getByLabelText("Reply")).toHaveFocus());
+    act(() => origin.focus());
+    view.rerender(content(thread("thread-b"), { threadKey: "codex:thread-b", id: 3, origin }));
+    await waitFor(() => expect(screen.getByLabelText("Reply")).toHaveFocus());
+    expect(props.onFocusRequestHandled.mock.calls).toEqual([[1], [2], [3]]);
+  });
+
+  it("focuses a materialized thread whose editor was kept from its launchpad", async () => {
+    const store = createComposerDraftStore();
+    const launchpad = createRetargetingLaunchpad(retargetingPwrSnap, "First message");
+    const props = { backends: [backendSummary("codex")], draftStore: store, skills: [] };
+    const view = render(
+      <>
+        <button type="button">Clicked row</button>
+        <Composer {...props} directory={retargetingPwrSnap} launchpad={launchpad} launchpadMaterializing />
+      </>,
+    );
+    const input = screen.getByLabelText("New thread");
+    const thread: NavigationThreadSummary = {
+      id: "materialized", source: "codex", title: "First message", titleSource: "explicit",
+      linkedDirectories: [], inbox: { inInbox: false },
+    };
+    act(() => handoffLaunchpadComposer(store, `launchpad:${launchpad.directoryKey}`, thread));
+    const origin = screen.getByRole("button", { name: "Clicked row" });
+    act(() => origin.focus());
+    const onFocusRequestHandled = vi.fn();
+    view.rerender(
+      <>
+        <button type="button">Clicked row</button>
+        <Composer {...props} thread={thread} focusRequest={{ threadKey: "codex:materialized", id: 1, origin }}
+          onFocusRequestHandled={onFocusRequestHandled} />
+      </>,
+    );
+    const reply = screen.getByLabelText("Reply");
+    expect(reply).toBe(input);
+    await waitFor(() => expect(reply).toHaveFocus());
+    expect(onFocusRequestHandled).toHaveBeenCalledExactlyOnceWith(1);
+  });
+
   it("focuses the reply input for a focus request once it shows that thread", async () => {
     const thread = (id: string) => ({
       id, source: "codex" as const, title: id, titleSource: "explicit" as const,
