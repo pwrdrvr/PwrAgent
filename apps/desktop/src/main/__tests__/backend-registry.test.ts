@@ -61002,10 +61002,14 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
       await settleMissingCodexThreadAudit(registry);
 
       const threadIds = ["thread-missing-1", "thread-missing-2"];
-      const first = await withArchivePacing(registry.resolveMissingCodexThreads({
+      // Fake time is only needed for the audit debounce. Archive cleanup also
+      // awaits filesystem I/O, which fake timer ticks cannot complete. Await
+      // the owned operation with real pacing instead of racing an I/O budget.
+      vi.useRealTimers();
+      const first = await registry.resolveMissingCodexThreads({
         action: "archive",
         threadIds,
-      }));
+      });
       const second = await registry.resolveMissingCodexThreads({
         action: "archive",
         threadIds,
