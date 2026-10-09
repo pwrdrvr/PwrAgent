@@ -25,6 +25,7 @@ export function PendingMcpInteraction(props: PendingMcpInteractionProps) {
   const toolParams = readToolParamsDisplay(props.state._meta);
   const persistModes = readMcpApprovalPersistence(props.state);
   const sessionApproval = persistModes.includes("session");
+  const gatewayApproval = props.state._meta?.pwragent_approval_kind === "mcp_tool_call";
   const connectorName = readStringMeta(props.state._meta, "connector_name");
   const subtitle = readStringMeta(props.state._meta, "subtitle");
   const highRisk = readStringMeta(props.state._meta, "riskLevel") === "high";
@@ -97,10 +98,22 @@ export function PendingMcpInteraction(props: PendingMcpInteractionProps) {
         </div>
       ) : null}
 
-      {/* The persistent grant stands apart on the left; the refusals and the
+      {/* The secondary grant stands apart on the left; the refusals and the
           primary grant sit together on the right, primary last. DOM order is
           the visual order, so Tab walks the row left to right. */}
       <div className="transcript-mcp__actions">
+        {gatewayApproval && sessionApproval ? (
+          <button
+            className="button button--ghost"
+            disabled={props.busy || !canAccept}
+            type="button"
+            onClick={() => {
+              void props.onSubmit(props.state, "accept");
+            }}
+          >
+            Allow once
+          </button>
+        ) : null}
         {persistModes.includes("always") ? (
           <button
             className="button button--ghost"

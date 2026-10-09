@@ -18,6 +18,7 @@ import type {
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { PluginsSettings as PluginsSettingsComponent } from "../PluginsSettings";
 import { pressEscape, tabEscapes } from "../../../test/tab-walk";
+import { chooseSelectOption, selectOptionLabels } from "../../../test/select";
 
 afterEach(() => {
   cleanup();
@@ -1020,6 +1021,7 @@ describe("PluginsSettings", () => {
       }));
       api.setMcpConnectionEnabled = vi.fn();
       api.setMcpConnectionSelectForNewThreads = vi.fn();
+      api.setMcpConnectionToolApproval = vi.fn();
       return api;
     }
 
@@ -1129,6 +1131,36 @@ describe("PluginsSettings", () => {
         ),
       ).toBeInTheDocument();
       expect(api.setMcpConnectionEnabled).not.toHaveBeenCalled();
+    });
+
+    it("chooses when a connection's tools ask first", async () => {
+      const api = managedApi([managed()]);
+      render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
+
+      const row = within(await findRow("Datadog"));
+      const field = row.getByRole("combobox", { name: "Tool approval" });
+      // Absent reads as Codex's own rule, and its line says what that means.
+      expect(field).toHaveTextContent("Ask before changes");
+      expect(field).toHaveAccessibleDescription(
+        "Read-only tools run without asking. Full Access threads never ask.",
+      );
+      expect(selectOptionLabels(field)).toEqual([
+        "Ask before changes",
+        "Ask for every tool",
+        "Allow all tools",
+      ]);
+
+      chooseSelectOption(field, "Allow all tools");
+      await waitFor(() => {
+        expect(api.setMcpConnectionToolApproval).toHaveBeenCalledWith({
+          connectionId: "datadog",
+          toolApproval: "approve",
+        });
+      });
+      expect(
+        await screen.findByText("Datadog runs every tool without asking."),
+      ).toBeInTheDocument();
+      expect(api.setMcpConnectionSelectForNewThreads).not.toHaveBeenCalled();
     });
 
     /**

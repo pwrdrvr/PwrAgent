@@ -5,7 +5,7 @@ import { launchElectronApp } from "./fixtures/electron-app";
 
 const mcpElicitationSpecDir = path.dirname(fileURLToPath(import.meta.url));
 
-async function openMcpElicitationReplay() {
+async function openMcpElicitationReplay(gatewayApproval = false) {
   const app = await launchElectronApp({
     fixturePath: path.resolve(
       mcpElicitationSpecDir,
@@ -34,7 +34,12 @@ async function openMcpElicitationReplay() {
   await app.advance({ stepId: "turn-started-1" });
   await app.advance({ stepId: "mcp-startup-1" });
   await app.advance({ stepId: "mcp-tool-started-1" });
-  await app.advance({ stepId: "mcp-elicitation-1" });
+  await app.advance({
+    stepId: "mcp-elicitation-1",
+    ...(gatewayApproval ? { override: { request: { params: {
+      _meta: { pwragent_approval_kind: "mcp_tool_call", persist: ["session"] },
+    } } } } : {}),
+  });
 
   const pendingMcp = app.window.getByRole("group", {
     name: "Pending MCP interaction"
@@ -70,6 +75,42 @@ test("accepts MCP elicitations and resumes MCP progress", async () => {
     await expect(
       app.window.getByText(/Used MCP playwright\/browser_tabs/)
     ).toBeVisible();
+  } finally {
+    await app.close();
+  }
+});
+
+test("accepts a gateway conversation approval through the thread UI", async () => {
+  const app = await openMcpElicitationReplay(true);
+
+  try {
+    const pendingMcp = app.window.getByRole("group", {
+      name: "Pending MCP interaction",
+    });
+    await expect(pendingMcp.getByRole("button", { name: "Always allow" })).toHaveCount(0);
+    await expect(pendingMcp.getByRole("button", { name: "Allow once" })).toBeVisible();
+    await pendingMcp.getByRole("button", { name: "Allow this conversation" }).click();
+    await expect(pendingMcp).toHaveCount(0);
+    await expect(app.window.getByRole("status")).toContainText("Thinking");
+    await expect.poll(async () => await app.getPendingRequest()).toBeUndefined();
+
+    await app.advance({ stepId: "mcp-progress-1" });
+    await app.advance({ stepId: "mcp-tool-completed-1" });
+    await expect(app.window.getByText(/Used MCP playwright\/browser_tabs/)).toBeVisible();
+  } finally {
+    await app.close();
+  }
+});
+
+test("preserves one-time gateway approval through the thread UI", async () => {
+  const app = await openMcpElicitationReplay(true);
+
+  try {
+    const pendingMcp = app.window.getByRole("group", { name: "Pending MCP interaction" });
+    await expect(pendingMcp.getByRole("button", { name: "Allow this conversation" })).toBeVisible();
+    await pendingMcp.getByRole("button", { name: "Allow once" }).click();
+    await expect(pendingMcp).toHaveCount(0);
+    await expect.poll(async () => await app.getPendingRequest()).toBeUndefined();
   } finally {
     await app.close();
   }

@@ -21,6 +21,7 @@ import {
   PWRGIT_MCP_CONNECTION_ID,
   PWRSNAP_SESSION_REVOKED_DETAIL,
   isAcpBackendId,
+  isMcpConnectionToolApproval,
   type AppServerBackendKind,
   type CreateMcpConnectionRequest,
   type ListMcpConnectionToolsRequest,
@@ -30,6 +31,7 @@ import {
   type UpdateMcpConnectionRequest,
   type McpConnectionRecord,
   type McpConnectionStatus,
+  type McpConnectionToolApproval,
   type ConnectPwrSnapResponse,
   type OpenPwrSnapResponse,
   type PwrSnapConnectionStatus,
@@ -887,6 +889,29 @@ export class McpConnectionGatewayService {
       connectionId,
       selectForNewThreads,
     );
+    return await this.connectionStatus(connection);
+  }
+
+  /**
+   * Choose when a gateway call to this connection asks first.
+   *
+   * Nothing live changes. The gateway reads the mode as each call reaches
+   * approval, so the next call follows it and a running one is not touched.
+   */
+  async setConnectionToolApproval(
+    connectionId: string,
+    toolApproval: McpConnectionToolApproval,
+  ): Promise<McpConnectionStatus> {
+    const ownership = await this.ensureOwnerBroker();
+    if (!ownership.owned) {
+      return await this.requestOwnerBroker<McpConnectionStatus>(
+        ownership.holder,
+        "broker/set-tool-approval",
+        { connectionId, toolApproval },
+      );
+    }
+    this.requireConnection(connectionId);
+    const connection = this.registry.setToolApproval(connectionId, toolApproval);
     return await this.connectionStatus(connection);
   }
 
@@ -2057,6 +2082,18 @@ export class McpConnectionGatewayService {
       return await this.setConnectionSelectForNewThreads(
         values.connectionId,
         values.selectForNewThreads,
+      );
+    }
+    if (operation === "broker/set-tool-approval") {
+      if (
+        typeof values.connectionId !== "string"
+        || !isMcpConnectionToolApproval(values.toolApproval)
+      ) {
+        throw new Error("Invalid MCP connection tool approval request.");
+      }
+      return await this.setConnectionToolApproval(
+        values.connectionId,
+        values.toolApproval,
       );
     }
     if (operation === "broker/list-tools") {

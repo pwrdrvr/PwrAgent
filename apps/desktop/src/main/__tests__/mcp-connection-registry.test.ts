@@ -317,6 +317,54 @@ describe("McpConnectionRegistry", () => {
     );
   });
 
+  it("stores a connection's tool approval and writes the default as no key", () => {
+    const target = configPath();
+    const registry = new McpConnectionRegistry({ configPath: target, now: () => 3 });
+    const datadog = registry.create({ displayName: "Datadog", serverUrl: "https://mcp.datadoghq.com/mcp" });
+    const acme = registry.create({ displayName: "Acme", serverUrl: "https://mcp.acme.example/mcp" });
+    expect(datadog.toolApproval).toBe("auto");
+    expect(fs.readFileSync(target, "utf8")).not.toContain("tool_approval");
+
+    registry.setToolApproval(acme.id, "approve");
+    expect(new McpConnectionRegistry({ configPath: target }).get(acme.id)?.toolApproval).toBe("approve");
+    // One row's mode is not stamped onto the rows the rewrite passes through.
+    expect(fs.readFileSync(target, "utf8").match(/tool_approval/g)).toHaveLength(1);
+    expect(registry.get(datadog.id)?.toolApproval).toBe("auto");
+
+    registry.setToolApproval(acme.id, "auto");
+    expect(registry.get(acme.id)?.toolApproval).toBe("auto");
+    expect(fs.readFileSync(target, "utf8")).not.toContain("tool_approval");
+  });
+
+  it("sets a built-in's tool approval through its own key", () => {
+    const target = configPath();
+    const registry = new McpConnectionRegistry({ configPath: target });
+    expect(registry.setToolApproval("pwrgit", "prompt").toolApproval).toBe("prompt");
+    expect(fs.readFileSync(target, "utf8")).toContain('pwrgit_tool_approval = "prompt"');
+    expect(registry.get("pwrsnap")?.toolApproval).toBe("auto");
+    registry.setToolApproval("pwrgit", "auto");
+    expect(fs.readFileSync(target, "utf8")).not.toContain("pwrgit_tool_approval");
+  });
+
+  it("reads a hand-edited unknown tool approval as the default, never as allow all", () => {
+    const target = configPath();
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, [
+      "[mcp_connections]",
+      'pwrsnap_tool_approval = "Approve"',
+      "",
+      "[[mcp_connections.connections]]",
+      'id = "datadog"',
+      'display_name = "Datadog"',
+      'server_url = "https://mcp.datadoghq.com/mcp"',
+      'tool_approval = "always"',
+      "",
+    ].join("\n"));
+    const registry = new McpConnectionRegistry({ configPath: target });
+    expect(registry.get("pwrsnap")?.toolApproval).toBe("auto");
+    expect(registry.get("datadog")?.toolApproval).toBe("auto");
+  });
+
   it("keeps the new-thread key off rows that never set it", () => {
     const target = configPath();
     const registry = new McpConnectionRegistry({

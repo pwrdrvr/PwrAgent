@@ -5,6 +5,7 @@ import {
   classifyDirectory,
   type DesktopThreadArchivePolicy,
   type DesktopThreadArchiveSweepStatus,
+  type McpConnectionToolApproval,
 } from "@pwragent/shared";
 import type {
   ListBackgroundTerminalsRequest,
@@ -577,8 +578,8 @@ import {
 } from "../agent-tools/pwragent-tool-search";
 import { buildMcpGatewayToolDefinitions } from "../agent-tools/pwragent-mcp-gateway-tools";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
-import { McpGatewayToolService } from "../mcp-connections/mcp-gateway-tool-service";
-import type { McpGatewayInvocation } from "../mcp-connections/mcp-gateway-catalog";
+import { McpGatewayToolService, type McpGatewayApproval } from "../mcp-connections/mcp-gateway-tool-service";
+import { gatewayToolRequiresApproval, type McpGatewayInvocation, type McpGatewayTool } from "../mcp-connections/mcp-gateway-catalog";
 import {
   getTokenMiserBridgeDescriptorPath,
   TOKEN_MISER_BRIDGE_DESCRIPTOR_ENV,
@@ -6125,6 +6126,12 @@ type StartupProviderThreadRefresh = Readonly<{
   threads: readonly AppServerThreadSummary[];
 }>;
 
+type McpGatewayConversationConsent = {
+  schemaRevision: string;
+  selectionRevision?: string;
+  approved: boolean;
+};
+
 type ThreadListCacheState = {
   expiresAt?: number;
   promise?: Promise<AppServerThreadSummary[]>;
@@ -8683,6 +8690,9 @@ export class DesktopBackendRegistry {
   private latestCodexConfigWarning?: AgentEvent;
   private readonly unsubscribers: Array<() => void> = [];
   private readonly pendingServerRequests = new Map<string, PendingServerRequest>();
+  // Process-local conversation grants. A source's revision also includes the
+  // broker's authorization generation, so reauthorization needs fresh consent.
+  private readonly mcpGatewaySessionApprovals = new Map<string, Map<string, McpGatewayConversationConsent>>();
   private readonly fileChangeApprovalContexts = new Map<
     string,
     PendingRequestApprovalContext
@@ -10019,7 +10029,7 @@ export class DesktopBackendRegistry {
           }
           return (await this.readThreadMcpConnections(context)).connectionIds;
         },
-        approve: (invocation, context, signal) => this.approveGatewayInvocation(invocation, context, signal),
+        approve: (invocation, context, signal, annotations) => this.approveGatewayInvocation(invocation, context, signal, annotations),
       });
     }
     if (this.tokenMiserStore) {
@@ -23032,7 +23042,7 @@ export class DesktopBackendRegistry {
   async setThreadMcpConnections(
     request: SetThreadMcpConnectionsRequest,
   ): Promise<SetThreadMcpConnectionsResponse> {
-    this.mcpGatewayTools?.cancel(request.backend, request.threadId);
+    const previousRevision = (await this.overlayStore.getThreadOverlayState(request))?.mcpSelectionRevision;
     // A backend that cannot suppress its own servers must never be left
     // holding an "off" it will ignore. The flag is sticky and its control is
     // hidden for those backends, so a value stored once — by an older build,
@@ -23046,6 +23056,13 @@ export class DesktopBackendRegistry {
         ? request.providerServersEnabled
         : true,
     });
+    // The store mints a revision only when the connection set changes. Only
+    // then do running gateway calls and conversation grants end; toggling
+    // the backend's own servers leaves every gateway tool reachable.
+    if (state.mcpSelectionRevision !== previousRevision) {
+      this.mcpGatewayTools?.cancel(request.backend, request.threadId);
+      this.mcpGatewaySessionApprovals.delete(JSON.stringify([request.backend, request.threadId]));
+    }
     const connectionIds = state.mcpConnectionIds ?? [];
     const providerServersEnabled = state.mcpProviderServersEnabled !== false;
     await this.emit({
@@ -25492,6 +25509,7 @@ export class DesktopBackendRegistry {
       await this.stopRunningTurnsForShutdown();
     }
     this.mcpGatewayTools?.cancel();
+    this.mcpGatewaySessionApprovals.clear();
     for (const run of this.headlessAutomationTurns.values()) {
       for (const registration of run.mcpRegistrations ?? []) registration.revoke();
     }
@@ -36598,9 +36616,25 @@ export class DesktopBackendRegistry {
     invocation: McpGatewayInvocation,
     context: AgentToolCallContext,
     signal: AbortSignal,
-  ): Promise<boolean> {
+    annotations?: McpGatewayTool["definition"]["annotations"],
+  ): Promise<McpGatewayApproval> {
     signal.throwIfAborted();
     const requestId = `mcp-gateway:${randomUUID()}`;
+    const sessionKey = JSON.stringify([context.backend, context.threadId]);
+    const sourceKey = JSON.stringify([invocation.connectionId, invocation.serverName, invocation.toolName]);
+    const selectionRevision = (await this.overlayStore.getThreadOverlayState(context))?.mcpSelectionRevision;
+    signal.throwIfAborted();
+    const approvals = this.mcpGatewaySessionApprovals.get(sessionKey) ?? new Map<string, McpGatewayConversationConsent>();
+    let current = approvals.get(sourceKey);
+    // Observe revocation before automatic approval as well. Identity changes
+    // supersede pending responses, even when a catalog later restores R1.
+    if (!current || current.schemaRevision !== invocation.schemaRevision
+      || current.selectionRevision !== selectionRevision) {
+      current = { schemaRevision: invocation.schemaRevision, selectionRevision, approved: false };
+      approvals.set(sourceKey, current);
+      this.mcpGatewaySessionApprovals.set(sessionKey, approvals);
+    }
+    const consent = current;
     const notification: AppServerPendingRequestNotification = {
       method: "mcpServer/elicitation/request",
       params: {
@@ -36609,9 +36643,21 @@ export class DesktopBackendRegistry {
         requestId,
         serverName: invocation.serverName,
         mode: "form",
-        message: `Allow ${invocation.serverName} / ${invocation.toolName} for this call?\nConnection: ${invocation.connectionId}\nArguments:\n${JSON.stringify(invocation.arguments, null, 2)}`,
+        // One line, as Codex phrases its own MCP approvals: the card draws the
+        // message as its title. serverName is the connection's display name.
+        message: `Allow the ${invocation.serverName} MCP server to run tool "${invocation.toolName}"?`,
         requestedSchema: { type: "object", properties: {} },
-        _meta: null,
+        _meta: {
+          pwragent_approval_kind: "mcp_tool_call",
+          persist: ["session"],
+          subtitle: "Allow this conversation approves this tool with any arguments. The approval ends when PwrAgent restarts, MCP access changes, or the tool changes.",
+          // The same rows Codex sends, so desktop and messaging draw and
+          // redact the arguments one way.
+          tool_params_display: Object.entries(invocation.arguments).map(([name, value]) => ({
+            name,
+            value: typeof value === "string" ? value : JSON.stringify(value),
+          })),
+        },
       },
     };
     // This is a host-owned invocation approval, not upstream MCP elicitation.
@@ -36641,9 +36687,28 @@ export class DesktopBackendRegistry {
     // Codex auto_review has no client API for reviewing host-owned dynamic
     // calls. Keep scoped confirmation until that integration is available.
     if (automation) return false;
+    signal.throwIfAborted();
+    // The connection's Tool approval setting, read now so the next call
+    // follows a change. By default Codex's rule applies: listing and
+    // inspecting run, and a restart still asks.
+    const toolApproval = await this.readMcpConnectionToolApproval(invocation.connectionId);
+    signal.throwIfAborted();
+    if (!gatewayToolRequiresApproval(annotations, toolApproval)) {
+      backendRegistryLog.info("running MCP gateway tool without approval", {
+        backend: context.backend,
+        threadId: context.threadId,
+        turnId: context.turnId,
+        connectionId: invocation.connectionId,
+        serverName: invocation.serverName,
+        toolName: invocation.toolName,
+        toolApproval,
+      });
+      return true;
+    }
+    if (consent.approved) return true;
     const key = buildPendingRequestKey({ ...context, requestId });
-    return await new Promise<boolean>((resolve, reject) => {
-      const finish = (approved: boolean, error?: unknown): void => {
+    return await new Promise<McpGatewayApproval>((resolve, reject) => {
+      const finish = (approved: McpGatewayApproval, error?: unknown): void => {
         signal.removeEventListener("abort", aborted);
         this.pendingServerRequests.delete(key);
         if (error) reject(error);
@@ -36657,13 +36722,47 @@ export class DesktopBackendRegistry {
       };
       this.pendingServerRequests.set(key, {
         backend: context.backend, notification,
-        resolve: (response) => finish(Boolean(response && "action" in response && response.action === "accept")),
+        resolve: (response) => {
+          if (signal.aborted) { aborted(); return; }
+          const approved = Boolean(response && "action" in response && response.action === "accept");
+          if (approved && "_meta" in response && readRecord(response._meta)?.persist === "session") {
+            finish({ onInvoked: async () => {
+              // A late response is provisional until the owner accepts its
+              // exact schema/auth revision. Peer-instance edits also revoke it.
+              if (signal.aborted || this.closed) return;
+              try {
+                const latest = await this.overlayStore.getThreadOverlayState(context);
+                if (!signal.aborted && !this.closed
+                  && latest?.mcpSelectionRevision === selectionRevision
+                  && this.mcpGatewaySessionApprovals.get(sessionKey)?.get(sourceKey) === consent) {
+                  consent.approved = true;
+                }
+              } catch (error) {
+                backendRegistryLog.warn("could not record MCP conversation approval", { error: String(error) });
+              }
+            } });
+            return;
+          }
+          finish(approved);
+        },
         reject: (error) => finish(false, error),
       });
       signal.addEventListener("abort", aborted, { once: true });
       if (signal.aborted) { aborted(); return; }
       void this.emit({ backend: context.backend, notification }).catch((error) => finish(false, error));
     });
+  }
+
+  // A lookup that fails reads as the default, which still asks for anything
+  // the server does not mark safe; it never reads as Allow all tools.
+  private async readMcpConnectionToolApproval(connectionId: string): Promise<McpConnectionToolApproval> {
+    try {
+      const connections = await this.mcpConnectionService?.listConnections?.();
+      return connections?.find((connection) => connection.id === connectionId)?.toolApproval ?? "auto";
+    } catch (error) {
+      backendRegistryLog.warn("could not read MCP connection tool approval", { connectionId, error: String(error) });
+      return "auto";
+    }
   }
 
   private async isMcpGatewayFullAccess(

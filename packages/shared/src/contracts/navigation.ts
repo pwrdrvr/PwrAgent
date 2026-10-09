@@ -2780,6 +2780,11 @@ export type ThreadOverlayState = {
   /** MCP connections supplied to this thread's harness. */
   mcpConnectionIds?: string[];
   /**
+   * Shared revocation revision, replaced when an edit changes the set of
+   * MCP connections. A reorder or a provider-servers toggle keeps it.
+   */
+  mcpSelectionRevision?: string;
+  /**
    * Whether the backend's own configured MCP servers stay available to the
    * thread. Undefined means yes. Only Codex can honor `false`; see
    * `SetThreadMcpConnectionsRequest`.
