@@ -37,6 +37,8 @@ async function createFixture() {
   await mkdir(repo);
   const git = async (cwd: string, args: string[]) => (await execute("git", ["-C", cwd, ...args])).stdout;
   await git(repo, ["init", "-b", "main"]);
+  await git(repo, ["config", "core.autocrlf", "false"]);
+  await git(repo, ["config", "core.eol", "lf"]);
   await writeFile(path.join(repo, "file.txt"), "original\n");
   await git(repo, ["add", "file.txt"]);
   await git(repo, ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "-c", "commit.gpgsign=false", "commit", "-m", "fixture"]);
