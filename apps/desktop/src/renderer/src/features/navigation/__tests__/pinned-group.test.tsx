@@ -414,3 +414,71 @@ describe("Pinned group against an owner without the split", () => {
     })).toEqual({ total: 7, activeLocal: 4, review: 4 });
   });
 });
+
+describe("Pinned group before its pages are read again", () => {
+  // A pin or unpin patches the row first. Its pages stay as the owner last
+  // served them until an owner event re-reads them, which an owner may send
+  // late or never.
+  const renderBetween = (lens: "inbox" | "recents", served: NavigationThreadSummary[], threads: NavigationThreadSummary[]) => {
+    const resource = (id: string, roots: "pinned" | "unpinned", pageSize: number): NavigationWindowResource => {
+      const request = { protocol: 2 as const, consumer: "main-sidebar" as const,
+        query: { kind: "lens" as const, lens, roots }, pageSize };
+      const page = navigationQueryFixture(request, { threads: served }, { ownerLensOrder: true });
+      return { id, loading: false, state: { ...createNavigationPageState(request), page, stale: true } };
+    };
+    const resources = new Map([
+      ["lens-pins", resource("lens-pins", "pinned", 100)],
+      ["lens", resource("lens", "unpinned", 10)],
+    ]);
+    render(
+      <RecentsList
+        pagedNavigation={{ resources } as unknown as ComponentProps<typeof RecentsList>["pagedNavigation"]}
+        pinnedResourceId="lens-pins"
+        resourceIds={["lens"]}
+        threads={threads}
+        onOpenThreadContextMenu={() => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+  };
+
+  it("moves a just-pinned row into the group at once", () => {
+    const pinned = { ...glossary, pinnedRank: "4096" };
+    renderBetween("recents", population, population.map((entry) => entry === glossary ? pinned : entry));
+
+    expect(titlesIn(pinnedGroup()!)).toEqual([
+      "Release manager",
+      "Docs IA migration",
+      "Rate limiter rewrite",
+      "Glossary search index",
+    ]);
+    expect(listTitles()).toEqual(["Dark-mode chart tokens", "Flaky auth fixture"]);
+  });
+
+  it("returns a just-unpinned row to its creation-time slot at once", () => {
+    const { pinnedRank: _rank, ...unpinned } = docsMigration;
+    renderBetween("recents", population, population.map((entry) => entry === docsMigration ? unpinned : entry));
+
+    expect(titlesIn(pinnedGroup()!)).toEqual(["Release manager", "Rate limiter rewrite"]);
+    expect(listTitles()).toEqual([
+      "Dark-mode chart tokens",
+      "Docs IA migration",
+      "Glossary search index",
+      "Flaky auth fixture",
+    ]);
+  });
+
+  it("returns a just-unpinned row to its last-update slot in Updated", () => {
+    const touched = { ...docsMigration, updatedAt: 10, inbox: { inInbox: true } };
+    const served = population.map((entry) => entry === docsMigration ? touched : entry);
+    const { pinnedRank: _rank, ...unpinned } = touched;
+    renderBetween("inbox", served, served.map((entry) => entry === touched ? unpinned : entry));
+
+    expect(listTitles()).toEqual([
+      "Docs IA migration",
+      "Dark-mode chart tokens",
+      "Glossary search index",
+      "Flaky auth fixture",
+    ]);
+  });
+});
