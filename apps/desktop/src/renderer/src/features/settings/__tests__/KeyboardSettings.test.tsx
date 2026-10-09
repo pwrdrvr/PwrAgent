@@ -95,7 +95,9 @@ describe("KeyboardSettings", () => {
     await waitFor(() => expect(writes).toEqual([
       { kind: "set", actionId: "threads.toggle_pin", chords: ["CmdOrCtrl+Alt+P"] },
     ]));
-    expect(within(row("Pin / Unpin")).getByText("⌥⌘P")).toBeInTheDocument();
+    // The write is logged when it starts; the row leaves recording once it
+    // resolves, which a slow runner can see later.
+    expect(await within(row("Pin / Unpin")).findByText("⌥⌘P")).toBeInTheDocument();
     expect(within(row("Pin / Unpin")).getByRole("img", { name: "Changed" })).toBeInTheDocument();
   });
 
@@ -117,6 +119,7 @@ describe("KeyboardSettings", () => {
       { kind: "set", actionId: "threads.toggle_pin", chords: ["CmdOrCtrl+Shift+F"] },
     ]));
     // The loss is visible: Search Threads reads Not set, with Reset.
+    expect(await within(row("Pin / Unpin")).findByText("⇧⌘F")).toBeInTheDocument();
     expect(within(row("Search Threads")).getByText("Not set")).toBeInTheDocument();
     expect(within(row("Search Threads")).getByRole("button", { name: "Reset Search Threads" }))
       .toBeInTheDocument();
@@ -177,7 +180,7 @@ describe("KeyboardSettings", () => {
     await waitFor(() => expect(writes).toEqual([
       { kind: "reset", actionId: "threads.copy_link" },
     ]));
-    expect(screen.getByText("Every shortcut has its default.")).toBeInTheDocument();
+    expect(await screen.findByText("Every shortcut has its default.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Reset All" })).toBeDisabled();
   });
 
