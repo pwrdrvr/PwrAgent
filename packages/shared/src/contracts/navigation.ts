@@ -2779,7 +2779,10 @@ export type ThreadOverlayState = {
   fastMode?: boolean;
   /** MCP connections supplied to this thread's harness. */
   mcpConnectionIds?: string[];
-  /** Shared revocation revision, replaced on each explicit MCP selection edit. */
+  /**
+   * Shared revocation revision, replaced when an edit changes the set of
+   * MCP connections. A reorder or a provider-servers toggle keeps it.
+   */
   mcpSelectionRevision?: string;
   /**
    * Whether the backend's own configured MCP servers stay available to the
