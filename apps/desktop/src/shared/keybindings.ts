@@ -423,6 +423,8 @@ export type KeyEventLike = {
   ctrlKey: boolean;
   altKey: boolean;
   shiftKey: boolean;
+  /** An input method is composing text; the key belongs to it. */
+  isComposing?: boolean;
 };
 
 const CODE_KEYS: Record<string, string> = {
@@ -475,26 +477,51 @@ const KEY_VALUES: Record<string, string> = {
 
 const MODIFIER_KEY_VALUES = new Set(["Meta", "Control", "Alt", "Shift", "AltGraph", "CapsLock", "OS", "Fn"]);
 
+/** Whether `key` is a modifier on its own (Shift, ⌘, …), not a chord's key. */
+export function isModifierKey(key: string): boolean {
+  return MODIFIER_KEY_VALUES.has(key);
+}
+
 /**
  * The canonical key an event pressed, or `null` for a lone modifier.
  *
- * `code` comes first: holding Option on macOS rewrites `key` into the
- * character it composes (⌥R → "®"), so a chord with Alt can only be matched
- * on the physical key. `key` is the fallback for environments without `code`.
+ * The key printed on the keycap comes first, as Electron's menu accelerators
+ * read it, so a French or German layout saves and matches the letter the
+ * operator sees: ⌘A on AZERTY is A, not the Q its position has on QWERTY.
+ * The physical key (`code`) is the fallback wherever `key` is not that
+ * printed character:
+ *   - Option on macOS composes a character (⌥R → "®").
+ *   - Dead keys report "Dead", and non-Latin layouts report their own script.
+ *   - Shift turns a digit or punctuation into another symbol (⇧1 → "!"); the
+ *     chord keeps the key, as Electron writes "Shift+1".
  */
 export function eventKeyName(event: KeyEventLike): string | null {
   if (MODIFIER_KEY_VALUES.has(event.key)) return null;
   const code = event.code ?? "";
+  if (KEY_VALUES[event.key] !== undefined) return KEY_VALUES[event.key];
+  if (/^F([1-9]|1[0-9]|2[0-4])$/.test(event.key)) return event.key;
+  const numpad = /^Numpad([0-9])$/.exec(code);
+  if (numpad) return numpad[1];
+  const printed = printedKeyName(event);
+  if (printed !== null) return printed;
   const letter = /^Key([A-Z])$/.exec(code);
   if (letter) return letter[1];
-  const digit = /^(?:Digit|Numpad)([0-9])$/.exec(code);
+  const digit = /^Digit([0-9])$/.exec(code);
   if (digit) return digit[1];
   if (/^F([1-9]|1[0-9]|2[0-4])$/.test(code)) return code;
   if (CODE_KEYS[code] !== undefined) return CODE_KEYS[code];
-  if (KEY_VALUES[event.key] !== undefined) return KEY_VALUES[event.key];
-  if (/^F([1-9]|1[0-9]|2[0-4])$/.test(event.key)) return event.key;
   if (event.key.length === 1) return canonicalKeyName(event.key);
   return null;
+}
+
+/** The keycap's own character, when `key` is one a chord can name. */
+function printedKeyName(event: KeyEventLike): string | null {
+  const key = event.key;
+  if (key.length !== 1 || key < "!" || key > "~") return null;
+  if (/^[a-z]$/i.test(key)) return key.toUpperCase();
+  // A shifted symbol names the key under it, not the key itself.
+  if (event.shiftKey) return null;
+  return canonicalKeyName(key);
 }
 
 /** The chord an event pressed, written the way this platform would store it. */
@@ -621,6 +648,7 @@ export function eventMatchesAction(
 ): boolean {
   const action = ACTIONS_BY_ID.get(actionId);
   if (action === undefined) return false;
+  if (event.isComposing) return false;
   if (inTextField && !action.firesInTextFields) return false;
   const chords = bindings.get(actionId) ?? [];
   return chords.some((chord) =>
@@ -797,6 +825,22 @@ export function formatChordLabel(accelerator: string, platform: KeybindingPlatfo
   if (mods.shift) parts.push("Shift");
   if (mods.meta) parts.push(platform === "win32" ? "Win" : "Super");
   parts.push(OTHER_KEY_NAMES[chord.key] ?? chord.key);
+  return parts.join("+");
+}
+
+/**
+ * The modifiers an event holds, in the order `formatChordLabel` writes them,
+ * for a recorder showing a chord as it is pressed. Empty when none are held.
+ */
+export function formatModifiersLabel(event: KeyEventLike, platform: KeybindingPlatform): string {
+  if (isMacPlatform(platform)) {
+    return `${event.ctrlKey ? "⌃" : ""}${event.altKey ? "⌥" : ""}${event.shiftKey ? "⇧" : ""}${event.metaKey ? "⌘" : ""}`;
+  }
+  const parts: string[] = [];
+  if (event.ctrlKey) parts.push("Ctrl");
+  if (event.altKey) parts.push("Alt");
+  if (event.shiftKey) parts.push("Shift");
+  if (event.metaKey) parts.push(platform === "win32" ? "Win" : "Super");
   return parts.join("+");
 }
 

@@ -65,9 +65,29 @@ describe("chordIdentity", () => {
 });
 
 describe("matchesChord", () => {
-  it("matches letters on the physical key, so Option-compose cannot hide them", () => {
+  it("falls back to the physical key, so Option-compose cannot hide a letter", () => {
     const event = keyEvent({ key: "®", code: "KeyR", metaKey: true, altKey: true });
     expect(matchesChord(event, "CmdOrCtrl+Alt+R", "darwin")).toBe(true);
+    const dead = keyEvent({ key: "Dead", code: "KeyE", metaKey: true, altKey: true });
+    expect(matchesChord(dead, "CmdOrCtrl+Alt+E", "darwin")).toBe(true);
+  });
+
+  it("matches the letter printed on the key, as the menu bar does", () => {
+    // AZERTY: the key printed A sits where QWERTY has Q.
+    const azertyA = keyEvent({ key: "a", code: "KeyQ", metaKey: true });
+    expect(matchesChord(azertyA, "CmdOrCtrl+A", "darwin")).toBe(true);
+    expect(matchesChord(azertyA, "CmdOrCtrl+Q", "darwin")).toBe(false);
+    // A non-Latin layout has no Latin letter to print; the position decides.
+    const cyrillic = keyEvent({ key: "ф", code: "KeyA", metaKey: true });
+    expect(matchesChord(cyrillic, "CmdOrCtrl+A", "darwin")).toBe(true);
+  });
+
+  it("keeps the key under a shifted symbol, and a symbol with its own key", () => {
+    const bang = keyEvent({ key: "!", code: "Digit1", ctrlKey: true, shiftKey: true });
+    expect(matchesChord(bang, "CmdOrCtrl+Shift+1", "linux")).toBe(true);
+    // German layouts print + on an unshifted key.
+    const plus = keyEvent({ key: "+", code: "BracketRight", ctrlKey: true });
+    expect(matchesChord(plus, "CmdOrCtrl+Plus", "linux")).toBe(true);
   });
 
   it("resolves CmdOrCtrl per platform", () => {

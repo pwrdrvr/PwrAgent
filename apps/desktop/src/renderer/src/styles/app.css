@@ -16166,6 +16166,65 @@ a.button {
   background: var(--accent);
 }
 
+/* The empty recorder shows an example chord whose keys light in turn, so it
+   says what to do without a sentence. Held modifiers without a key yet show
+   as a dashed cap. */
+.settings-keyboard__cap.is-example,
+.settings-keyboard__cap.is-partial {
+  border-style: dashed;
+}
+
+.settings-keyboard__cap.is-example {
+  color: var(--text-muted);
+}
+
+.settings-keyboard__cap.is-example > span {
+  animation: settings-keyboard-example 2.4s ease-in-out infinite;
+}
+
+.settings-keyboard__cap.is-example > span:nth-child(2) {
+  animation-delay: 0.25s;
+}
+
+.settings-keyboard__cap.is-example > span:nth-child(3) {
+  animation-delay: 0.5s;
+}
+
+.settings-keyboard__cap.is-example > span:nth-child(4) {
+  animation-delay: 0.75s;
+}
+
+.settings-keyboard__cap.is-example > span:nth-child(5) {
+  animation-delay: 1s;
+}
+
+@keyframes settings-keyboard-example {
+  0%,
+  45%,
+  100% {
+    color: var(--text-muted);
+  }
+
+  15% {
+    color: var(--accent-bright);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-keyboard__cap.is-example > span {
+    animation: none;
+  }
+}
+
+/* What to do next while recording, under the row. */
+.settings-keyboard__hint {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 /* A clash or a refusal under its row: neutral frame, tone on the label. */
 .settings-keyboard__notice-row {
   display: grid;
@@ -16216,6 +16275,36 @@ a.button {
 .settings-keyboard__file {
   color: var(--text-muted);
   font-size: 12px;
+}
+
+/* Reset All's confirmation: each changed action, now → default. */
+.settings-keyboard__reset-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 280px;
+  margin: 8px 0 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+
+.settings-keyboard__reset-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+}
+
+.settings-keyboard__reset-keys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.settings-keyboard__reset-arrow {
+  color: var(--text-muted);
 }
 
 .settings-archive-toolbar {
