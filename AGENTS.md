@@ -179,8 +179,8 @@
 - Run `pnpm typecheck` to use TypeScript 7's native compiler. The
   `typescript-native` alias is pinned separately; TypeScript 6 remains for
   JavaScript API consumers such as ESLint and dependency-cruiser.
-- Dependency-boundary caching uses `.local/depcruise-cache` and content hashes.
-  Source edits invalidate its result; it is not a changed-file graph checker.
+- Dependency-boundary checks run uncached so resolution configuration changes
+  always rebuild the graph.
 
 ### Unused imports and locals fail CI
 
