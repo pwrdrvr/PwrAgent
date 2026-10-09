@@ -484,10 +484,8 @@ function KeybindingRow(props: {
           <span>
             <b>{props.label(pressed.chord)}</b> runs <b>{clashAction.label}</b>.
           </span>
+          {/* The row's own Cancel (and Escape) already back out. */}
           <span className="settings-keyboard__notice-actions">
-            <button className="button button--ghost" type="button" onClick={props.onCancel}>
-              Cancel
-            </button>
             <button
               className="button button--primary"
               type="button"
