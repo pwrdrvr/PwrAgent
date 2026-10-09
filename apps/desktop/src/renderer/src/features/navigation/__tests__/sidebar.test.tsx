@@ -7439,9 +7439,11 @@ describe("Sidebar", () => {
     expect(onRenameThread).toHaveBeenCalledWith(sharedThread, "Renamed cleanup");
   });
 
-  it.each(["attention", "drafts", "inbox", "recents", "directories"] as const)(
-    "renames a thread after the native double-click sequence in %s",
-    (browseMode) => {
+  it.each((["attention", "drafts", "inbox", "recents", "directories"] as const).flatMap((browseMode) =>
+    [".thread-row__open", ".thread-row", ".thread-row__chips", ".thread-row__status-indicator"].map((clickSurface) => ({ browseMode, clickSurface })),
+  ))(
+    "renames a thread after the native double-click sequence in $browseMode from $clickSurface",
+    ({ browseMode, clickSurface }) => {
       const onRenameThread = vi.fn(async () => undefined);
       const onSelectThread = vi.fn();
       render(
@@ -7464,20 +7466,27 @@ describe("Sidebar", () => {
         fireEvent.click(screen.getByRole("button", { name: "PwrAgent, 1 thread to review" }));
       }
       const row = screen.getByRole("button", { name: sharedThread.title });
+      const card = row.closest(".thread-row")!;
+      const target = clickSurface === ".thread-row" ? card : card.querySelector<HTMLElement>(clickSurface)!;
+      expect(target).toBeInTheDocument();
       for (const detail of [1, 2]) {
-        fireEvent.pointerDown(row, { pointerType: "mouse", button: 0 });
-        fireEvent.mouseDown(row, { button: 0, detail });
-        act(() => row.focus()); // jsdom does not apply mousedown's focus default.
-        fireEvent.pointerUp(row, { pointerType: "mouse", button: 0 });
-        fireEvent.mouseUp(row, { button: 0, detail });
-        fireEvent.click(row, { button: 0, detail });
+        fireEvent.pointerDown(target, { pointerType: "mouse", button: 0 });
+        fireEvent.mouseDown(target, { button: 0, detail });
+        act(() => {
+          if (target === row) row.focus();
+          else (document.activeElement as HTMLElement).blur();
+        }); // jsdom does not apply mousedown's focus default.
+        fireEvent.pointerUp(target, { pointerType: "mouse", button: 0 });
+        fireEvent.mouseUp(target, { button: 0, detail });
+        fireEvent.click(target, { button: 0, detail });
         expect(screen.queryByRole("dialog", { name: "Rename Thread" })).toBeNull();
+        expect(row).toHaveFocus();
         expect(onSelectThread).toHaveBeenLastCalledWith(sharedThread, {
           focusComposer: true,
           focusOrigin: row,
         });
       }
-      fireEvent.doubleClick(row, { button: 0, detail: 2 });
+      fireEvent.doubleClick(target, { button: 0, detail: 2 });
       expect(onSelectThread).toHaveBeenCalledTimes(2);
       const dialog = screen.getByRole("dialog", { name: "Rename Thread" });
       const input = within(dialog).getByRole("textbox", { name: "Name" });

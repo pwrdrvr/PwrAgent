@@ -6317,11 +6317,11 @@ describe("App", () => {
     expect(readThread).toHaveBeenCalledTimes(2);
   });
 
-  it.each([
-    { deferDetail: false, rapid: false },
-    { deferDetail: true, rapid: false },
-    { deferDetail: false, rapid: true },
-  ])("keeps rename focused after a native double-click with deferred detail=$deferDetail, rapid=$rapid", async ({ deferDetail, rapid }) => {
+  it.each([".thread-row__open", ".thread-row", ".thread-row__chips", ".thread-row__status-indicator"].flatMap((clickSurface) => [
+    { clickSurface, deferDetail: false, rapid: false },
+    { clickSurface, deferDetail: true, rapid: false },
+    { clickSurface, deferDetail: false, rapid: true },
+  ]))("keeps rename focused after a native double-click from $clickSurface with deferred detail=$deferDetail, rapid=$rapid", async ({ clickSurface, deferDetail, rapid }) => {
     const detailReady = createDeferred<void>();
     const deliveredDetail = vi.fn();
     const threads = ["First thread", "Double-click thread"].map((title, index) => ({
@@ -6329,6 +6329,7 @@ describe("App", () => {
       title,
       titleSource: "explicit" as const,
       source: "codex" as const,
+      threadStatus: "active" as const,
       linkedDirectories: [],
       inbox: { inInbox: true, reason: "new-thread" as const },
       updatedAt: 3_000 - index,
@@ -6399,15 +6400,25 @@ describe("App", () => {
     render(<App />);
     await screen.findByRole("heading", { level: 2, name: "First thread" });
     const row = screen.getByRole("button", { name: rapid ? "First thread" : "Double-click thread" });
+    const card = row.closest(".thread-row")!;
     await waitFor(() => expect(screen.getByRole("textbox", { name: "Reply" })).toBeEnabled());
-    const click = (detail: number) => act(() => {
-      fireEvent.pointerDown(row, { pointerType: "mouse", button: 0 });
-      fireEvent.mouseDown(row, { button: 0, detail });
-      row.focus(); // jsdom does not apply mousedown's focus default.
-      fireEvent.pointerUp(row, { pointerType: "mouse", button: 0 });
-      fireEvent.mouseUp(row, { button: 0, detail });
-      fireEvent.click(row, { button: 0, detail });
-    });
+    const click = (detail: number) => {
+      // Resolve the current surface for each press as navigation publishes.
+      const target = clickSurface === ".thread-row" ? card : card.querySelector<HTMLElement>(clickSurface)!;
+      expect(target).toBeInTheDocument();
+      act(() => {
+        fireEvent.pointerDown(target, { pointerType: "mouse", button: 0 });
+        fireEvent.mouseDown(target, { button: 0, detail });
+        // jsdom does not apply the native mouse focus default. Lower row
+        // surfaces blur the previous control; Sidebar focuses the open button.
+        if (target === row) row.focus();
+        else (document.activeElement as HTMLElement).blur();
+        fireEvent.pointerUp(target, { pointerType: "mouse", button: 0 });
+        fireEvent.mouseUp(target, { button: 0, detail });
+        fireEvent.click(target, { button: 0, detail });
+      });
+      return target;
+    };
     click(1);
     if (!rapid) {
       await screen.findByRole("heading", { level: 2, name: "Double-click thread" });
@@ -6416,8 +6427,8 @@ describe("App", () => {
       await waitFor(() => expect(screen.getByRole("textbox", { name: "Reply" })).toHaveFocus());
     }
     expect(screen.queryByRole("dialog", { name: "Rename Thread" })).toBeNull();
-    click(2);
-    fireEvent.doubleClick(row, { button: 0, detail: 2 });
+    const target = click(2);
+    fireEvent.doubleClick(target, { button: 0, detail: 2 });
     const dialog = screen.getByRole("dialog", { name: "Rename Thread" });
     const input = within(dialog).getByRole("textbox", { name: "Name" });
     expect(input).toHaveFocus();
