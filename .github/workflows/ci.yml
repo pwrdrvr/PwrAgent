@@ -435,18 +435,32 @@ jobs:
           retention-days: 7
 
   desktop-e2e:
-    name: Linux Desktop E2E (lane ${{ matrix.lane }} of 2)
+    name: Linux Desktop E2E (lane ${{ matrix.lane }} of 4)
     runs-on: ubuntu-latest
     needs: [changes, install-deps]
     if: needs.changes.outputs.code_impacting == 'true'
     strategy:
-      # GitHub-hosted Linux capacity can run both halves concurrently. Keep
-      # the other shard running after a failure so its artifacts still show
-      # whether the failure is isolated or suite-wide.
+      # Playwright shards by test COUNT, in file order, without regard to
+      # duration. `a11y.spec.ts` sorts first and is 66 tests (six surfaces in
+      # each of eleven color themes) at ~4.2s apiece against ~2.5s for the
+      # rest of the suite, so whichever lane holds it runs long. With two
+      # lanes that lane spent 495-519s of its 600s test step on main, and one
+      # PR run that was ~19% slower across every file timed it out.
+      #
+      # Four lanes leave the a11y lane at ~340s (~57% of the step budget) and
+      # the others near ~220s. Splitting a11y into more files or running it
+      # in `parallel` mode would not help: its tests stay contiguous at the
+      # front of the count-based split, so it moves only once it outgrows a
+      # whole lane. Four also matches the macOS and Windows matrices, so a
+      # lane number names the same tests on every platform.
+      #
+      # GitHub-hosted Linux capacity can run every lane concurrently. Keep
+      # the other shards running after a failure so their artifacts still
+      # show whether the failure is isolated or suite-wide.
       fail-fast: false
-      max-parallel: 2
+      max-parallel: 4
       matrix:
-        lane: [1, 2]
+        lane: [1, 2, 3, 4]
     timeout-minutes: 20
     steps:
       - name: Checkout repository
@@ -478,7 +492,7 @@ jobs:
           xvfb-run --auto-servernum
           --server-args="-screen 0 1920x1080x24"
           bash .github/scripts/run-linux-desktop-e2e.sh
-          --shard=${{ matrix.lane }}/2
+          --shard=${{ matrix.lane }}/4
 
       - name: Upload desktop Playwright artifacts
         uses: actions/upload-artifact@v7
