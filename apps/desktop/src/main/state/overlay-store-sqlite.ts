@@ -5397,9 +5397,15 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       FROM json_each(?) AS requested
       LEFT JOIN threads ON threads.thread_id = json_extract(requested.value, '$.key')
     `).all(JSON.stringify(requested)) as Array<{ id: string; payload: string | null }>;
-    return Object.fromEntries(rows.map((row) => [
-      row.id, row.payload === null ? undefined : normalizeThreadOverlayState(JSON.parse(row.payload)),
-    ]));
+    return Object.fromEntries(rows.map((row) => {
+      // json_object materializes absent optional fields as JSON null. The
+      // overlay contract uses absence, especially for archive tombstones;
+      // null must not turn every persisted thread into a tombstoned thread.
+      const state = row.payload === null ? undefined : Object.fromEntries(
+        Object.entries(JSON.parse(row.payload) as Record<string, unknown>).filter(([, value]) => value !== null),
+      ) as ThreadOverlayState;
+      return [row.id, state ? normalizeThreadOverlayState(state) : undefined];
+    }));
   }
 
   async getThreadOverlayStates(params: {

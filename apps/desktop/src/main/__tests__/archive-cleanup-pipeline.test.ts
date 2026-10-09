@@ -304,6 +304,123 @@ describe("archive cleanup pipeline", () => {
     expect(fixture.store.setThreadArchiveTombstone).not.toHaveBeenCalled();
   });
 
+  it.each(["active", "archived"] as const)("does not treat the target's delayed archive notification as a new workspace mutation during the final %s inventory", async (phase) => {
+    vi.useFakeTimers();
+    const target = codexThread({ id: "target", linkedDirectories: [{
+      id: "directory", kind: "worktree", label: "repo", path: "/contrived/repo", worktreePath: "/contrived/worktree",
+    }] });
+    const fixture = build([], target);
+    const listPage = fixture.client.listArchiveCleanupThreadsPage.getMockImplementation()!;
+    let reads = 0;
+    fixture.client.listArchiveCleanupThreadsPage.mockImplementation(async (params) => {
+      if (++reads === (phase === "active" ? 3 : 4)) {
+        await publishNotification(fixture.registry, { method: "thread/archived", params: { threadId: "target" } });
+      }
+      return await listPage(params);
+    });
+
+    const result = await drivePacer(fixture.registry.archiveThread({ backend: "codex", threadId: "target" }));
+
+    expect(result.cleanup).toEqual([expect.objectContaining({ removedWorktree: true })]);
+    expect(fixture.counts.providerPages).toBe(4);
+  });
+
+  it.each([
+    { active: false, archived: true, removes: true },
+    { active: true, archived: true, removes: false },
+    { active: true, archived: false, removes: false },
+    { active: false, archived: false, removes: false },
+  ])("requires unambiguous archived membership (active: $active, archived: $archived)", async (inventory) => {
+    vi.useFakeTimers();
+    const target = codexThread({ id: "target", linkedDirectories: [{
+      id: "directory", kind: "worktree", label: "repo", path: "/contrived/repo", worktreePath: "/contrived/worktree",
+    }] });
+    const fixture = build([], target);
+    Object.assign(fixture.client, { readArchiveCleanupThreadSummary: vi.fn(async () => target) });
+    fixture.client.listArchiveCleanupThreadsPage.mockImplementation(async ({ archived }) => ({
+      threads: (archived ? inventory.archived : inventory.active) ? [target] : [], nextCursor: undefined,
+    }));
+
+    const result = await drivePacer(fixture.registry.archiveThread({ backend: "codex", threadId: "target" }));
+
+    expect(result.cleanup[0]?.removedWorktree).toBe(inventory.removes);
+    if (!inventory.removes) {
+      expect(result.cleanup[0]?.skippedReason).toContain("metadata was not found or the thread is active again");
+      expect(fixture.archiveWorktree).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each([1, 2, 3, 4].flatMap((boundary) => [
+    { boundary, notification: { method: "thread/unarchived" as const, params: { threadId: "target" } } },
+    { boundary, notification: { method: "thread/deleted" as const, params: { threadId: "target" } } },
+  ]))("cancels removal on $notification.method at inventory boundary $boundary", async ({ boundary, notification }) => {
+    vi.useFakeTimers();
+    const target = codexThread({ id: "target", linkedDirectories: [{
+      id: "directory", kind: "worktree", label: "repo", path: "/contrived/repo", worktreePath: "/contrived/worktree",
+    }] });
+    const fixture = build([], target);
+    const listPage = fixture.client.listArchiveCleanupThreadsPage.getMockImplementation()!;
+    let reads = 0;
+    fixture.client.listArchiveCleanupThreadsPage.mockImplementation(async (params) => {
+      if (++reads === boundary) await publishNotification(fixture.registry, notification);
+      return await listPage(params);
+    });
+
+    const result = await drivePacer(fixture.registry.archiveThread({ backend: "codex", threadId: "target" }));
+
+    expect(result.cleanup[0]?.removedWorktree).toBe(false);
+    expect(result.cleanup[0]?.skippedReason ?? result.cleanup[0]?.error).toContain("cancelled");
+  });
+
+  it("still rejects a different thread's archive notification during removal admission", async () => {
+    vi.useFakeTimers();
+    const target = codexThread({ id: "target", linkedDirectories: [{
+      id: "directory", kind: "worktree", label: "repo", path: "/contrived/repo", worktreePath: "/contrived/worktree",
+    }] });
+    const fixture = build([], target);
+    const listPage = fixture.client.listArchiveCleanupThreadsPage.getMockImplementation()!;
+    let reads = 0;
+    fixture.client.listArchiveCleanupThreadsPage.mockImplementation(async (params) => {
+      if (++reads === 3) await publishNotification(fixture.registry, { method: "thread/archived", params: { threadId: "other" } });
+      return await listPage(params);
+    });
+
+    const result = await drivePacer(fixture.registry.archiveThread({ backend: "codex", threadId: "target" }));
+
+    expect(result.cleanup[0]?.removedWorktree).toBe(false);
+    expect(result.cleanup[0]?.error).toContain("workspace state changed");
+  });
+
+  it.each([false, true])("keeps the worktree when provider discovery fails during archived: %s", async (failedArchived) => {
+    vi.useFakeTimers();
+    const target = codexThread({ id: "target", linkedDirectories: [{
+      id: "directory", kind: "worktree", label: "repo", path: "/contrived/repo", worktreePath: "/contrived/worktree",
+    }] });
+    const fixture = build([], target);
+    const listPage = fixture.client.listArchiveCleanupThreadsPage.getMockImplementation()!;
+    fixture.client.listArchiveCleanupThreadsPage.mockImplementation(async (params) => {
+      if (params.archived === failedArchived) throw new Error("Inventory unavailable.");
+      return await listPage(params);
+    });
+
+    const result = await drivePacer(fixture.registry.archiveThread({ backend: "codex", threadId: "target" }));
+
+    expect(result.cleanup[0]?.skippedReason).toContain("Inventory unavailable");
+    expect(fixture.archiveWorktree).not.toHaveBeenCalled();
+  });
+
+  it("rejects a non-advancing provider cursor instead of using a partial safety inventory", async () => {
+    vi.useFakeTimers();
+    const fixture = build([]);
+    fixture.client.listArchiveCleanupThreadsPage.mockResolvedValue({ threads: [], nextCursor: "repeat" });
+
+    const result = await drivePacer(fixture.registry.archiveThread({ backend: "codex", threadId: "target" }));
+
+    expect(result.cleanup[0]?.skippedReason).toContain("repeated cursor");
+    expect(fixture.archiveWorktree).not.toHaveBeenCalled();
+    expect(fixture.client.listArchiveCleanupThreadsPage).toHaveBeenCalledTimes(2);
+  });
+
   it("preserves shared-checkout protection during missing-rollout recovery", async () => {
     vi.useFakeTimers();
     const directory = { id: "directory", kind: "worktree" as const, label: "repo", path: "/contrived/repo", worktreePath: "/contrived/worktree" };
