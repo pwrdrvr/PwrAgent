@@ -2602,3 +2602,29 @@ async function seedUnpricedGrokUsageLines(params: {
     });
   }
 }
+
+describe("SqliteOverlayStore thread pricing summaries", () => {
+  it("reads each thread's stored totals, with sub-agent spend already inside its parent", async () => {
+    await store.upsertThreadUsageLine({ line: buildUsageLine({ usageLineId: "parent-turn" }) });
+    await store.upsertThreadUsageLine({ line: buildUsageLine({
+      usageLineId: "parent-agent", scope: "monitor", sourceItemId: "agent-1",
+      threadId: "agent-thread", turnId: "agent-turn", parentThreadId: "thread-1",
+    }) });
+    await store.upsertThreadUsageLine({ line: buildUsageLine({
+      usageLineId: "child-turn", threadId: "thread-2", turnId: "child-turn",
+    }) });
+
+    const summaries = await store.readThreadPricingSummaries([
+      { backend: "codex", threadId: "thread-1" },
+      { backend: "codex", threadId: "thread-2" },
+      { backend: "codex", threadId: "never-priced" },
+    ]);
+
+    expect(summaries.map((summary) => [summary.threadId, summary.usageLineCount, summary.totalCostMicros])).toEqual([
+      ["thread-1", 2, 32_200],
+      ["thread-2", 1, 16_100],
+    ]);
+    // The same rows the thread's own Pricing summary shows.
+    expect(summaries[0]).toEqual((await store.readThreadPricing({ backend: "codex", threadId: "thread-1" })).summaries[0]);
+  });
+});

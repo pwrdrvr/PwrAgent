@@ -46,6 +46,7 @@ import {
   type IconProps,
 } from "../../icons";
 import type { DesktopApi } from "../../lib/desktop-api";
+import type { NavigationPresentedThread } from "../../lib/navigation-loaded-rows";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import { resolveThreadWorkingStatePath } from "../../lib/thread-working-state-path";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
@@ -151,7 +152,7 @@ type ThreadContextPanelProps = {
   threadPricingSummaryEnabled?: boolean;
   threadToolAccountingEnabled?: boolean;
   /** Absent on the new-thread launchpad, where only provider context applies. */
-  thread?: NavigationThreadSummary;
+  thread?: NavigationPresentedThread;
   worktreeArchiveError?: string;
   onRestoreWorktree?: (
     thread: NavigationThreadSummary,
@@ -815,6 +816,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             desktopApi={props.desktopApi}
             backends={props.backends}
             thread={{ id: props.thread.id, source: props.thread.source, federation: props.thread.federation, updatedAt: props.thread.updatedAt }}
+            subThreadCount={props.thread.ordinaryChildCount}
             activeTurnId={props.activeTurnId}
             pricing={props.pricing}
             display={displayResource.data?.pricingPage}

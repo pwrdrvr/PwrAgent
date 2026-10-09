@@ -2632,6 +2632,24 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     };
   }
 
+  /**
+   * Stored running totals only: no usage rows, no repricing repair. A thread
+   * family's card adds these up, so it must stay a cheap read-only pass.
+   */
+  async readThreadPricingSummaries(threads: ReadonlyArray<{
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+  }>): Promise<ThreadPricingSummary[]> {
+    const statement = this.stateDb.raw.prepare(
+      `SELECT * FROM thread_pricing_summaries
+       WHERE backend = ? AND thread_id = ?
+       ORDER BY provider ASC, currency ASC`,
+    );
+    return threads.flatMap((thread) =>
+      (statement.all(thread.backend, thread.threadId) as ThreadPricingSummaryRow[])
+        .map(threadPricingSummaryFromRow));
+  }
+
   private persistThreadUsagePricingRepairsSync(
     repairs: Array<{
       existing: ThreadUsageLineRow;
