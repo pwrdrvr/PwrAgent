@@ -8,7 +8,7 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "node ../../scripts/resource-run.mjs tsc --noEmit -p tsconfig.json"
   },
   "license": "MIT"
 }
