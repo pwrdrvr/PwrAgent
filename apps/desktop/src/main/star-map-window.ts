@@ -12,6 +12,7 @@ import {
 import {
   AGENT_EVENT_CHANNEL,
   APPEARANCE_CHANGED_EVENT_CHANNEL,
+  KEYBINDINGS_CHANGED_CHANNEL,
   NAVIGATION_MENTION_SOURCES_CHANGED_EVENT_CHANNEL,
   WINDOW_COPY_LOCAL_DIAGNOSTICS_INFO_CHANNEL,
 } from "../shared/ipc";
@@ -147,6 +148,8 @@ export function showStarMapWindow(source: WindowPlacementSource = {}): void {
   registerWindowChannels(window, WINDOW_KIND_STAR_MAP, [
     AGENT_EVENT_CHANNEL,
     APPEARANCE_CHANGED_EVENT_CHANNEL,
+    // The map's Find chip and its jump chord follow keybindings.toml.
+    KEYBINDINGS_CHANGED_CHANNEL,
     NAVIGATION_MENTION_SOURCES_CHANGED_EVENT_CHANNEL,
     WINDOW_COPY_LOCAL_DIAGNOSTICS_INFO_CHANNEL,
   ]);

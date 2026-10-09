@@ -7,6 +7,7 @@ import {
   findActionUsingChord,
   formatAriaKeyShortcut,
   formatChordLabel,
+  formatModifiersLabel,
   isActionChanged,
   isTextEditingChord,
   matchesChord,
@@ -271,6 +272,13 @@ describe("formatChordLabel", () => {
     expect(formatChordLabel("CmdOrCtrl+Shift+P", "win32")).toBe("Ctrl+Shift+P");
     expect(formatChordLabel("CmdOrCtrl+Shift+Up", "linux")).toBe("Ctrl+Shift+↑");
     expect(formatChordLabel("F2", "linux")).toBe("F2");
+    // The Windows/Super key leads, as Microsoft and PwrSnap write it.
+    expect(formatChordLabel("Super+Shift+K", "win32")).toBe("Win+Shift+K");
+    expect(formatChordLabel("CmdOrCtrl+Super+K", "linux")).toBe("Super+Ctrl+K");
+    expect(formatModifiersLabel(
+      { key: "Shift", metaKey: true, ctrlKey: true, altKey: false, shiftKey: true },
+      "win32",
+    )).toBe("Win+Ctrl+Shift");
   });
 });
 

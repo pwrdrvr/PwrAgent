@@ -126,6 +126,34 @@ describe("keybindings store", () => {
     expect(writeKeybindingsFile(filePath, { kind: "reset_all" }).overrides).toEqual({});
   });
 
+  it("moves a chord between actions in one save, or not at all", async () => {
+    const { readKeybindingsFile, writeKeybindingsFile } = await import(
+      "../keybindings/keybindings-store"
+    );
+    writeKeybindingsFile(filePath, { kind: "set", actionId: "threads.lock", chords: ["CmdOrCtrl+Alt+L"] });
+
+    expect(() =>
+      writeKeybindingsFile(filePath, {
+        kind: "set_many",
+        changes: [
+          { actionId: "threads.lock", chords: [] },
+          { actionId: "threads.rename", chords: ["Nope+"] },
+        ],
+      }),
+    ).toThrow(/not a keyboard shortcut/);
+    // The bad half wrote nothing, so Lock keeps its chord.
+    expect(readKeybindingsFile(filePath).overrides).toEqual({ "threads.lock": ["CmdOrCtrl+Alt+L"] });
+    expect(
+      writeKeybindingsFile(filePath, {
+        kind: "set_many",
+        changes: [
+          { actionId: "threads.lock", chords: [] },
+          { actionId: "threads.rename", chords: ["CmdOrCtrl+Alt+L"] },
+        ],
+      }).overrides,
+    ).toEqual({ "threads.lock": [], "threads.rename": ["CmdOrCtrl+Alt+L"] });
+  });
+
   it("drops a chord that does not parse and keeps the rest", async () => {
     const { readKeybindingsFile } = await import("../keybindings/keybindings-store");
     fs.writeFileSync(filePath, '[threads]\nrename = ["Banana+Q", "F2", "f2"]\n');
@@ -220,6 +248,11 @@ describe("keybindings ipc", () => {
     expect(() => write({}, { kind: "set", actionId: "threads.nope", chords: [] })).toThrow();
     expect(() => write({}, { kind: "set", actionId: "threads.rename", chords: [1] })).toThrow();
     expect(() => write({}, { kind: "move", actionId: "threads.rename" })).toThrow();
+    expect(() => write({}, { kind: "set_many", changes: [] })).toThrow();
+    expect(() => write({}, {
+      kind: "set_many",
+      changes: [{ actionId: "threads.nope", chords: [] }],
+    })).toThrow();
     expect(sent).toEqual([]);
   });
 });

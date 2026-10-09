@@ -676,6 +676,11 @@ export function Sidebar(props: SidebarProps) {
     | undefined
   >();
   const [renamingRow, setRenamingRow] = useState<RenamingThreadRow>();
+  // Another lens unmounts the field without a commit; forget the edit, or it
+  // would reopen and take focus when the operator comes back to this lens.
+  useEffect(() => {
+    setRenamingRow(undefined);
+  }, [props.browseMode]);
   const [lockDialog, setLockDialog] = useState<{
     thread: NavigationThreadSummary;
     mode: "lock" | "edit";
@@ -2026,11 +2031,16 @@ export function Sidebar(props: SidebarProps) {
         if (targets?.source === "rows") {
           // Focus moves to the row that takes this one's place, so a run of
           // archives needs no mouse.
+          // Measured from the focused row, not the selection's last pick:
+          // the selection is in click order, the list in display order.
           const archivingKeys = new Set(archivable.map(threadSummaryIdentityKey));
+          const focusedKey = focusedThreadRowKey(event);
           const focusKey = nextThreadAfterArchive(
             readVisibleThreadRowKeys(sidebarRef.current),
             archivingKeys,
-            threadSummaryIdentityKey(archivable[archivable.length - 1]!),
+            focusedKey !== undefined && archivingKeys.has(focusedKey)
+              ? focusedKey
+              : threadSummaryIdentityKey(archivable[archivable.length - 1]!),
           );
           window.requestAnimationFrame(() => {
             if (focusKey === undefined) return;
@@ -3385,8 +3395,8 @@ export function Sidebar(props: SidebarProps) {
                         requestRenameFromContextMenu(contextMenu.thread)
                       }
                     >
-                        <span>Rename Thread</span>
-                        {menuShortcut("threads.rename")}
+                      <span>Rename Thread</span>
+                      {menuShortcut("threads.rename")}
                     </button>
                   ) : null}
                   {contextMenuCanLock && contextMenu.thread.lock ? (
@@ -3397,8 +3407,8 @@ export function Sidebar(props: SidebarProps) {
                         aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.lock")}
                         onClick={() => unlockFromContextMenu(contextMenu.thread)}
                       >
-                          <span>Unlock Thread</span>
-                          {menuShortcut("threads.lock")}
+                        <span>Unlock Thread</span>
+                        {menuShortcut("threads.lock")}
                       </button>
                       <button
                         role="menuitem"
@@ -3419,8 +3429,8 @@ export function Sidebar(props: SidebarProps) {
                         requestLockFromContextMenu(contextMenu.thread, "lock")
                       }
                     >
-                        <span>Lock Thread…</span>
-                        {menuShortcut("threads.lock")}
+                      <span>Lock Thread…</span>
+                      {menuShortcut("threads.lock")}
                     </button>
                   ) : null}
                   {contextMenuCanMarkUnread ? (
@@ -3432,8 +3442,8 @@ export function Sidebar(props: SidebarProps) {
                         markUnreadFromContextMenu(contextMenu.thread)
                       }
                     >
-                        <span>Mark Unread</span>
-                        {menuShortcut("threads.toggle_unread")}
+                      <span>Mark Unread</span>
+                      {menuShortcut("threads.toggle_unread")}
                     </button>
                   ) : null}
                   {contextMenuCanMarkRead ? (
@@ -3445,8 +3455,8 @@ export function Sidebar(props: SidebarProps) {
                         markReadFromContextMenu(contextMenu.thread)
                       }
                     >
-                        <span>Mark Read</span>
-                        {menuShortcut("threads.toggle_unread")}
+                      <span>Mark Read</span>
+                      {menuShortcut("threads.toggle_unread")}
                     </button>
                   ) : null}
                   {contextMenuCanSendToMachine ? (
@@ -3513,8 +3523,8 @@ export function Sidebar(props: SidebarProps) {
                       aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.archive")}
                       onClick={() => archiveFromContextMenu(contextMenu.thread)}
                     >
-                        <span>Archive Thread</span>
-                        {menuShortcut("threads.archive")}
+                      <span>Archive Thread</span>
+                      {menuShortcut("threads.archive")}
                     </button>
                   ) : null}
                 </div>

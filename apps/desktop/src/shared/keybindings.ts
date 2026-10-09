@@ -809,7 +809,8 @@ const OTHER_KEY_NAMES: Record<string, string> = {
 /**
  * The label for a chord in this platform's notation: macOS glyphs in Apple's
  * modifier order (⌃⌥⇧⌘), as the native menu draws them, and "Ctrl+Shift+P"
- * elsewhere. An unknown platform renders the Windows/Linux form.
+ * elsewhere, with Win/Super first ("Win+Shift+K") as PwrSnap writes it. An
+ * unknown platform renders the Windows/Linux form.
  */
 export function formatChordLabel(accelerator: string, platform: KeybindingPlatform): string {
   const chord = parseChord(accelerator);
@@ -819,11 +820,12 @@ export function formatChordLabel(accelerator: string, platform: KeybindingPlatfo
     return `${mods.ctrl ? "⌃" : ""}${mods.alt ? "⌥" : ""}${mods.shift ? "⇧" : ""}${mods.meta ? "⌘" : ""}${MAC_KEY_GLYPHS[chord.key] ?? chord.key}`;
   }
   const mods = resolveModifiers(chord, "linux");
+  // The Windows/Super key leads, as Microsoft writes Win+Shift+S.
   const parts: string[] = [];
+  if (mods.meta) parts.push(platform === "win32" ? "Win" : "Super");
   if (mods.ctrl) parts.push("Ctrl");
   if (mods.alt) parts.push("Alt");
   if (mods.shift) parts.push("Shift");
-  if (mods.meta) parts.push(platform === "win32" ? "Win" : "Super");
   parts.push(OTHER_KEY_NAMES[chord.key] ?? chord.key);
   return parts.join("+");
 }
@@ -837,10 +839,10 @@ export function formatModifiersLabel(event: KeyEventLike, platform: KeybindingPl
     return `${event.ctrlKey ? "⌃" : ""}${event.altKey ? "⌥" : ""}${event.shiftKey ? "⇧" : ""}${event.metaKey ? "⌘" : ""}`;
   }
   const parts: string[] = [];
+  if (event.metaKey) parts.push(platform === "win32" ? "Win" : "Super");
   if (event.ctrlKey) parts.push("Ctrl");
   if (event.altKey) parts.push("Alt");
   if (event.shiftKey) parts.push("Shift");
-  if (event.metaKey) parts.push(platform === "win32" ? "Win" : "Super");
   return parts.join("+");
 }
 
@@ -891,5 +893,10 @@ export type KeybindingsSnapshot = {
 
 export type KeybindingWriteRequest =
   | { kind: "set"; actionId: KeybindingActionId; chords: readonly string[] }
+  /**
+   * Several actions in one save, such as Move It Here taking a chord from
+   * one action and giving it to another, so a failure changes neither.
+   */
+  | { kind: "set_many"; changes: readonly { actionId: KeybindingActionId; chords: readonly string[] }[] }
   | { kind: "reset"; actionId: KeybindingActionId }
   | { kind: "reset_all" };
