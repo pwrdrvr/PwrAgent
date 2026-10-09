@@ -1120,7 +1120,16 @@ export type RenameThreadRequest = {
   federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   name: string;
+  /** Refuse an Undo if the owning thread no longer has this title. */
+  expectedName?: string;
 };
+
+/**
+ * The refusal for a stale `expectedName`. The renderer matches it to tell a
+ * permanent refusal, which no retry can fix, from a transient failure.
+ */
+export const RENAME_THREAD_EXPECTED_NAME_MISMATCH =
+  "The thread title has changed. Undo was not applied.";
 
 export type RenameThreadResponse = {
   backend: AppServerBackendKind;
@@ -2125,6 +2134,10 @@ export type AppServerNotification =
          * and a federated payload is another instance's JSON.
          */
         titleSource?: AppServerRenamedTitleSource;
+        /** Host-attributed Agent tool rename, shown in the notification rail. */
+        renameOrigin?: "agent_tool";
+        /** Previous title, when known, for an in-window Undo action. */
+        previousThreadName?: string;
       };
     }
   | {

@@ -1,4 +1,5 @@
 import { FederationShutdownNotices } from "./features/notifications/FederationShutdownNotices";
+import { AgentThreadRenameNotice } from "./features/notifications/AgentThreadRenameNotice";
 import { CloudflareSignInNotice, CLOUDFLARE_SIGN_IN_NOTICE_ID } from "./features/notifications/CloudflareSignInNotice";
 import { CodexAuthProfileLoginDialog } from "./features/settings/CodexAuthProfileSelect";
 import { navigationIdentityFromThreadKey } from "./lib/navigation-query-state";
@@ -4305,6 +4306,7 @@ function DesktopAppShell(props: {
           ]}
         >
           <QuitBlockerQueueToast desktopApi={desktopApi} />
+          <AgentThreadRenameNotice desktopApi={desktopApi} onOpenThread={showThreadFromLink} />
           <AppUpdateBanner
             desktopApi={desktopApi}
             showNotice={showAppNotice}

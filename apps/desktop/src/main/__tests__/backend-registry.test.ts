@@ -48404,6 +48404,133 @@ script = "printf setup"
     });
   });
 
+  describe("rename_current_thread", () => {
+    async function setup() {
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["thread/list"] },
+        threads: [{ id: "ordinary-thread", title: "Original title", titleSource: "explicit", source: "codex", linkedDirectories: [] }],
+      });
+      Object.assign(codexClient, { readThreadName: async () => "Original title" });
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        overlayStore: createOverlayStoreMock(),
+      });
+      onTestFinished(async () => { await registry.close(); });
+      await registry.publishLocalEvent({ backend: "codex", notification: {
+        method: "turn/started", params: { threadId: "ordinary-thread", turnId: "turn-rename", turn: { id: "turn-rename" } },
+      } });
+      const call = (args: Record<string, unknown>, turnId = "turn-rename") => codexClient.emitRequest({
+        method: "item/tool/call", params: {
+          threadId: "ordinary-thread", turnId, callId: "call-rename", requestId: "call-rename",
+          namespace: "pwragent", tool: "rename_current_thread", arguments: args,
+        },
+      } as AppServerPendingRequestNotification);
+      return { codexClient, registry, call };
+    }
+
+    it("renames an ordinary calling thread and emits a notice with its prior title", async () => {
+      const { call, codexClient, registry } = await setup();
+      const events: AgentEvent[] = [];
+      registry.onEvent((event) => { events.push(event); });
+      const response = await call({ title: "  Investigate rename feedback  " });
+      expect(response).toMatchObject({ success: true });
+      expect(codexClient.lastRenameThreadParams).toEqual({ threadId: "ordinary-thread", name: "Investigate rename feedback" });
+      expect(events).toContainEqual({ backend: "codex", notification: {
+        method: "thread/name/updated", params: {
+          threadId: "ordinary-thread", threadName: "Investigate rename feedback",
+          renameOrigin: "agent_tool", previousThreadName: "Original title",
+        },
+      } });
+    });
+
+    it("still renames when optional notice metadata is unavailable", async () => {
+      const { call, codexClient } = await setup();
+      Object.assign(codexClient, { readThreadName: async () => { throw new Error("Metadata unavailable"); } });
+      expect(await call({ title: "New title" })).toMatchObject({ success: true });
+      expect(codexClient.lastRenameThreadParams).toEqual({ threadId: "ordinary-thread", name: "New title" });
+    });
+
+    it("allows Undo when the persisted name differs from the normalized display title", async () => {
+      const { registry, codexClient } = await setup();
+      Object.assign(codexClient, {
+        readThreadName: async () => "Please fix the parser",
+        readThreadSummary: async () => ({ id: "ordinary-thread", title: "Fix the parser", titleSource: "derived", source: "codex", linkedDirectories: [] }),
+      });
+      await expect(registry.renameThread({ backend: "codex", threadId: "ordinary-thread",
+        name: "Original title", expectedName: "Please fix the parser" })).resolves.toMatchObject({ threadId: "ordinary-thread" });
+      expect(codexClient.lastRenameThreadParams).toEqual({ threadId: "ordinary-thread", name: "Original title" });
+    });
+
+    it("captures the persisted prior name for Undo instead of its normalized display title", async () => {
+      const { call, codexClient, registry } = await setup();
+      Object.assign(codexClient, {
+        readThreadName: async () => "Please fix the parser",
+        readThreadSummary: async () => ({ id: "ordinary-thread", title: "Fix the parser", titleSource: "derived", source: "codex", linkedDirectories: [] }),
+      });
+      const events: AgentEvent[] = [];
+      registry.onEvent((event) => { events.push(event); });
+      expect(await call({ title: "Investigate rename feedback" })).toMatchObject({ success: true });
+      expect(events).toContainEqual({ backend: "codex", notification: {
+        method: "thread/name/updated", params: {
+          threadId: "ordinary-thread", threadName: "Investigate rename feedback",
+          renameOrigin: "agent_tool", previousThreadName: "Please fix the parser",
+        },
+      } });
+    });
+
+    it.each(["Please fix the parser", undefined])("rejects Undo when only the normalized display title matches: %s", async (name) => {
+      const { registry, codexClient } = await setup();
+      Object.assign(codexClient, {
+        readThreadName: async () => name,
+        readThreadSummary: async () => ({ id: "ordinary-thread", title: "Fix the parser", titleSource: "derived", source: "codex", linkedDirectories: [] }),
+      });
+      await expect(registry.renameThread({ backend: "codex", threadId: "ordinary-thread",
+        name: "Original title", expectedName: "Fix the parser" })).rejects.toThrow("The thread title has changed. Undo was not applied.");
+      expect(codexClient.lastRenameThreadParams).toBeUndefined();
+    });
+
+    it.each([
+      { title: " " }, { title: "x".repeat(201) }, { title: 123 },
+      { title: "New title", threadId: "someone-else" },
+      { title: "New title", backend: "acp:kimi" },
+      { title: "New title", instanceId: "peer" },
+    ])("rejects invalid or caller-supplied targeting arguments: %j", async (args) => {
+      const { call, codexClient } = await setup();
+      expect(await call(args)).toMatchObject({ success: false });
+      expect(codexClient.lastRenameThreadParams).toBeUndefined();
+    });
+
+    it("rejects a call from a different turn", async () => {
+      const { call, codexClient } = await setup();
+      expect(await call({ title: "New title" }, "stale-turn")).toMatchObject({ success: false });
+      expect(codexClient.lastRenameThreadParams).toBeUndefined();
+    });
+
+    it("checks Undo against owner metadata after earlier renames settle", async () => {
+      const { registry, codexClient } = await setup();
+      let title = "Original title";
+      let finish!: () => void;
+      const rename = vi.spyOn(codexClient, "renameThread").mockImplementation(async ({ threadId, name }) => {
+        await new Promise<void>((resolve) => { finish = resolve; });
+        title = name;
+        return { threadId };
+      });
+      const readName = vi.fn(async () => title);
+      Object.assign(codexClient, { readThreadName: readName });
+      const first = registry.renameThread({ backend: "codex", threadId: "ordinary-thread", name: "User's later title" });
+      await waitForCondition(() => rename.mock.calls.length === 1);
+      const undo = registry.renameThread({ backend: "codex", threadId: "ordinary-thread",
+        name: "Before agent rename", expectedName: "Original title" });
+      const refused = expect(undo).rejects.toThrow("The thread title has changed. Undo was not applied.");
+      finish();
+      await first;
+      await refused;
+      expect(rename).toHaveBeenCalledTimes(1);
+      expect(readName).toHaveBeenCalledTimes(1);
+      expect(title).toBe("User's later title");
+    });
+  });
+
   it("mutates PwrAgent thread settings from active turns", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/list"] },
