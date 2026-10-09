@@ -5631,7 +5631,7 @@ export function useThreadNavigation(
   const createThread = useCallback(
     async (
       backend?: AppServerBackendKind,
-      executionMode: ThreadExecutionMode = "default",
+      executionMode?: ThreadExecutionMode,
       options?: { forceWorkspace?: boolean }
     ): Promise<void> => {
       if (!desktopApi?.ensureDirectoryLaunchpad) {
@@ -5639,7 +5639,7 @@ export function useThreadNavigation(
         return;
       }
 
-      setCreatingThread({ backend: backend ?? "codex", executionMode });
+      setCreatingThread({ backend: backend ?? "codex", executionMode: executionMode ?? "default" });
       setCreateThreadError(undefined);
       setLaunchpadError(undefined);
       setArchiveThreadError(undefined);
@@ -5679,6 +5679,7 @@ export function useThreadNavigation(
         let launchpad = response.launchpad;
         let defaults: NavigationLaunchpadDefaults = response.defaults;
         if (
+          executionMode !== undefined &&
           executionMode !== response.launchpad.executionMode &&
           desktopApi.updateDirectoryLaunchpad
         ) {
