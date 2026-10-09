@@ -191,10 +191,12 @@ export function RecentsList(props: RecentsListProps) {
   // stays in the list rather than vanishing from both.
   const groupActive = Boolean(props.pinnedResourceId)
     && (!props.pagedNavigation || props.pagedNavigation.resources.has(props.pinnedResourceId!));
-  // Each root's own pin decides its side, not only the page that carried it:
-  // an owner that predates the split answers both queries with every thread.
+  // Each root's own pin decides its side, not only the page that carried it,
+  // as in Directories. An owner that predates the split answers both queries
+  // with every thread, and a pin or unpin patches the row before the stale
+  // pages are read again: it moves at once rather than vanishing from both.
   const pinnedRoots = groupActive
-    ? (entries ? rootThreads(pinnedEntries) : props.threads.filter((thread) => !thread.parentThreadId))
+    ? (entries ? rootThreads([...pinnedEntries, ...entries]) : props.threads.filter((thread) => !thread.parentThreadId))
       .filter(isPinnedThread).sort(comparePinnedThreads)
     : [];
   const pinnedRootKeys = new Set(pinnedRoots.map(threadSummaryIdentityKey));
@@ -203,6 +205,19 @@ export function RecentsList(props: RecentsListProps) {
     : props.threads.filter((thread) => !thread.parentThreadId))
     .filter((thread) => !groupActive
       || (!isPinnedThread(thread) && !pinnedRootKeys.has(threadSummaryIdentityKey(thread))));
+  if (groupActive && entries) {
+    // A just-unpinned root is still on the group's page. Return it to its
+    // slot in the list's own order until the list's page is read again.
+    const listedKeys = new Set(topLevelThreads.map(threadSummaryIdentityKey));
+    const groupQuery = props.pagedNavigation?.resources.get(props.pinnedResourceId!)?.state.request.query;
+    const sortTime = (thread: NavigationThreadSummary) =>
+      (groupQuery?.kind === "lens" && groupQuery.lens === "recents" ? thread.createdAt : thread.updatedAt) ?? 0;
+    for (const thread of rootThreads(pinnedEntries)) {
+      if (isPinnedThread(thread) || listedKeys.has(threadSummaryIdentityKey(thread))) continue;
+      const before = topLevelThreads.findIndex((listed) => sortTime(listed) < sortTime(thread));
+      topLevelThreads.splice(before < 0 ? topLevelThreads.length : before, 0, thread);
+    }
+  }
   const topLevelKeys = new Set([...pinnedRootKeys, ...topLevelThreads.map(threadSummaryIdentityKey)]);
   const childrenByParentKey = new Map<string, NavigationThreadSummary[]>();
   const childEntries = [...entries ?? [], ...pinnedEntries, ...[...props.pagedNavigation?.resources.values() ?? []]
