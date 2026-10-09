@@ -159,74 +159,48 @@
 
 ## Code Formatting & Linting
 
-- Use ESLint only as a correctness linter.
-- Run `pnpm lint:eslint`.
-- The CI `Lint` job also runs these checks:
-  - `lint:sql`.
-  - `lint:codex-storage`.
-  - `lint:colors`.
-  - `licenses:check`.
-  - `typecheck`.
-  - `lint:boundaries`.
-- [`eslint.config.mjs`](eslint.config.mjs) enables the recommended TypeScript ESLint rules.
-- The renderer also uses the classic React Hooks rules.
-- The ESLint configuration has no style rules.
-- Fix all ESLint errors.
-- ESLint sets existing `no-explicit-any`, `exhaustive-deps`, and intentional patterns to `warn`.
-- CI blocks errors. CI does not block warnings.
-- Do not add style or whitespace rules to ESLint.
-- Do not use `eslint --fix` to format code.
+- Use Oxlint only as a correctness linter. Run `pnpm lint:oxlint` after edits.
+- Run `pnpm lint:oxlint:typed` for the production unbound-method check.
+  - CI always runs both passes; routine local syntax lint avoids loading types.
+  - Typed lint is uncached: imported declarations can change its results.
+  - `scripts/lint-typed.mjs` rejects typed-rule suppression comments, including
+    file-wide disables, before invoking the native typed backend. This preserves
+    the former ESLint `--no-inline-config` protection.
+- `pnpm lint:eslint` is a compatibility alias for both Oxlint passes.
+- The former ESLint configs and `lint:eslint:cached` / `lint:eslint:typed`
+  commands remain available for migration comparisons.
+- The CI `Lint` job also runs SQL, Codex-storage, colors, Electron-version,
+  license, typecheck and dependency-boundary checks.
+- `.oxlintrc.json` preserves the recommended correctness rules and classic
+  renderer React Hooks checks. `oxlint.typed.json` scopes the typed rule.
+- Fix all lint errors. Existing `no-explicit-any`, `exhaustive-deps` and
+  intentional patterns remain warnings. CI blocks errors, not warnings.
+- Do not add style or whitespace rules or use linter fixes to format code.
+- Run `pnpm typecheck` to use TypeScript 7's native compiler. The
+  `typescript-native` alias is pinned separately; TypeScript 6 remains for
+  JavaScript API consumers such as ESLint and dependency-cruiser.
+- Dependency-boundary checks run uncached so resolution configuration changes
+  always rebuild the graph.
 
 ### Unused imports and locals fail CI
 
-- `@typescript-eslint/no-unused-vars` is `"error"`, not `"warn"`.
-- `pnpm lint:eslint` is the command that fails.
-- CI runs it as the `ESLint` step of the `Lint` job in
-  [`ci.yml`](.github/workflows/ci.yml).
-- `pnpm build` does not catch this. It is `electron-vite build`, which
-  strips types through Vite and Rollup without checking them.
-- The rule exists for one defect: a refactor moves code out of a file and
-  leaves its imports behind.
-- As a warning the rule printed a line nobody had to act on. Neither ESLint
-  invocation passes `--max-warnings 0`.
-- The escape hatch is an underscore prefix.
-- Under this configuration `_x` silences an unused import, local, type alias,
-  interface, enum, class, parameter, and caught error.
-- Before you delete an unused binding, ask what it was for.
-- An unused binding is sometimes a missing call or a missing assertion.
-- The rule does not see three things. Check each by hand:
-  - A leading unused parameter. `args` defaults to `after-used`, so the rule
-    reports only a trailing one.
-  - An unused class member, including a `private readonly` constructor
-    parameter property.
-  - An export whose last importer you just removed. Grep for the symbol.
+- `typescript/no-unused-vars` is an error in the syntax pass.
+- `pnpm build` strips types and does not replace lint or typecheck.
+- An underscore prefix silences intentionally unused bindings.
+- Before deleting an unused binding, determine whether it represents a missing
+  call or assertion.
+- Check leading unused parameters, unused class members and orphaned exports
+  by hand; the syntax rule does not cover every one of these cases.
 
-#### What the ESLint globs reach
+### Lint scope
 
-- `lint:eslint:cached` runs over `packages/**/*.{ts,tsx}`,
-  `apps/*/**/*.{ts,tsx}`, and root-level `*.ts`.
-- That reaches `apps/desktop/e2e/`, `apps/desktop/scripts/`,
-  `apps/desktop/eval/`, the `apps/desktop/*.config.ts` files, and
-  `vitest.workspace.ts`.
-- No `.mjs` file is linted anywhere, including the build and CI scripts under
-  `scripts/`.
-- `lint:eslint:typed` stays on `apps/*/src/**` and `packages/**`.
-- Its own configuration matches no other path, so widening its globs would
-  lint files against no rules.
-
-#### Why this gate is not `noUnusedLocals`
-
-- `tsconfig.base.json` sets neither `noUnusedLocals` nor `noUnusedParameters`.
-- TypeScript's underscore exemption is narrower than ESLint's.
-- Measured against this repository: `_x` silences an unused import and an
-  unused parameter, and does **not** silence an unused local or an unused type
-  alias.
-- Enabling both flags would reject the existing `_`-prefixed intentionally
-  unused locals and would cost 27 fixes, measured on the current tree.
-- Fifteen of those 27 are parameter renames in the Star Map cluster tests.
-- The flags would add the first two hand checks listed above: a leading
-  unused parameter, and an unused class member.
-- They would not add the third. No tool here reports an unused export.
+- Syntax lint covers `packages/**/*.{ts,tsx}`, `apps/*/**/*.{ts,tsx}` and
+  root-level `*.ts`, including desktop E2E helpers, scripts and configs.
+- JavaScript and `.mjs` files remain outside this correctness gate.
+- Typed lint covers `apps/*/src/**` and `packages/**`, excluding tests, fixtures
+  and generated files. Its guard reads the same patterns from the typed config.
+- Keep both Oxlint configs at the repository root: relative override patterns
+  are resolved against the config location.
 
 ### Formatting
 

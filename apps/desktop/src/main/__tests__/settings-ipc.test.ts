@@ -2774,7 +2774,7 @@ describe("settings ipc", () => {
       });
       registerSettingsIpcHandlers(service);
       const readState = async () =>
-        ((await handlers.get(PROVIDER_CATALOG_REFRESH_READ_CHANNEL)?.({})) as
+        ((await handlers.get(PROVIDER_CATALOG_REFRESH_READ_CHANNEL)!({})) as
           ReadProviderCatalogRefreshResponse).state;
 
       const started = (await handlers

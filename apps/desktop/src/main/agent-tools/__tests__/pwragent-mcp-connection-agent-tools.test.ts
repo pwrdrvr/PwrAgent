@@ -64,7 +64,7 @@ describe("manage_mcp_connections", () => {
       ? namespace.tools.find((entry) => entry.name === "manage_mcp_connections")
       : undefined;
     expect(tool).toBeDefined();
-    const actions = (tool?.inputSchema as {
+    const actions = (tool!.inputSchema as {
       properties: { action: { enum: string[] } };
     }).properties.action.enum;
     expect(actions).toEqual(["list", "create", "describe_thread"]);

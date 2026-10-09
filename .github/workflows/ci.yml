@@ -167,18 +167,13 @@ jobs:
         timeout-minutes: 10
         run: pnpm lint:electron-version
 
-      - name: Cache ESLint results
-        uses: actions/cache@v6
+      - name: Oxlint
         timeout-minutes: 10
-        with:
-          path: .eslintcache-untyped
-          key: eslint-untyped-v1-${{ runner.os }}-node24-${{ hashFiles('package.json', 'pnpm-lock.yaml', 'eslint.config.mjs') }}-${{ github.sha }}
-          restore-keys: |
-            eslint-untyped-v1-${{ runner.os }}-node24-${{ hashFiles('package.json', 'pnpm-lock.yaml', 'eslint.config.mjs') }}-
+        run: pnpm lint:oxlint
 
-      - name: ESLint
+      - name: Typed lint
         timeout-minutes: 10
-        run: pnpm lint:eslint
+        run: pnpm lint:oxlint:typed
 
       - name: Type check
         timeout-minutes: 10

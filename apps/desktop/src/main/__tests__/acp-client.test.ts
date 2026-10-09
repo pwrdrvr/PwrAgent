@@ -4015,7 +4015,7 @@ describe("AcpAgentClient", () => {
     });
     const errorMessage =
       "Kimi Code CLI ended the turn without a response. Kimi Code CLI 1.46.0 may be out of date or incompatible with the selected model. Update Kimi, refresh the model catalog, and try again.";
-    expect((errors[0]?.error as Error).message).toBe(errorMessage);
+    expect((errors[0]!.error as Error).message).toBe(errorMessage);
     expect(store.getSession("acp:kimi", session.sessionId)).toMatchObject({
       lastError: errorMessage,
       status: "idle",
@@ -4275,7 +4275,7 @@ describe("AcpAgentClient", () => {
       turnId: "pending:session-1",
     });
     expect(errors[0]?.error).toBeInstanceOf(Error);
-    expect((errors[0]?.error as Error).message).toBe(quotaError);
+    expect((errors[0]!.error as Error).message).toBe(quotaError);
     expect(sessionUpdateKinds).not.toContain("turn_finished");
     expect(store.getSession("acp:codex-acp", "session-1")).toMatchObject({
       hasConversationHistory: true,

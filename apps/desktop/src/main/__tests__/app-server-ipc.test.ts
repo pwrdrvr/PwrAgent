@@ -9538,7 +9538,7 @@ describe("app server ipc", () => {
 
     expect(readDirectoryStatusEntries.mock.calls[0]?.[0]).toHaveLength(4);
     expect(
-      (readDirectoryStatusEntries.mock.calls[0]?.[0] as Array<{ key: string }>)
+      (readDirectoryStatusEntries.mock.calls[0]![0] as Array<{ key: string }>)
         .map((directory) => directory.key),
     ).toEqual([
       "directory:/repo/app-5",

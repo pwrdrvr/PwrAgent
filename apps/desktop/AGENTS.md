@@ -26,15 +26,12 @@ The desktop style guide defines:
 
 ## Code Formatting & Linting
 
-ESLint is the correctness linter — run `pnpm lint:eslint` (CI runs it too) and
-fix its errors; **don't run `eslint --fix` to reformat**. There is no
-autoformatter by design: **never run Prettier (`npx prettier` /
-`prettier --write`)** on a renderer or main-process file — no config is
-committed, so `npx` applies tool defaults that fight the hand-maintained house
-style (notably leading binary operators) and reformat untouched code. Match the
-surrounding file by hand. See "Code Formatting & Linting" in the
-[repo-root `AGENTS.md`](../../AGENTS.md) for the full rule and the house-style
-summary.
+Oxlint is the correctness linter. Run `pnpm lint:oxlint` after edits and
+`pnpm lint:oxlint:typed` for production receiver safety; CI runs both. Do not
+use linter fixes to reformat. There is no autoformatter by design: never run
+Prettier on a renderer or main-process file. Match adjacent code by hand,
+including leading binary operators. See the repo-root `AGENTS.md` for the
+complete scope, native typecheck command and formatting policy.
 
 ## Non-Negotiables
 
