@@ -133,7 +133,11 @@ import {
   type InteractiveSvgPreferences,
 } from "./lib/interactive-svg-preferences";
 import { TerminalPreferencesProvider } from "./lib/terminal-preferences";
-import { useThreadNavigation, type SubthreadLaunchpadDraft } from "./lib/useThreadNavigation";
+import {
+  useThreadNavigation,
+  type ArchivedThreadRef,
+  type SubthreadLaunchpadDraft,
+} from "./lib/useThreadNavigation";
 import { usePwrAgentProfiles } from "./lib/usePwrAgentProfiles";
 import { usePullRequestRefresh } from "./features/pr-status/usePullRequestRefresh";
 import { useThreadGitWorkingStateRefresh } from "./features/navigation/useThreadGitWorkingStateRefresh";
@@ -421,6 +425,8 @@ function DesktopAppShell(props: {
   );
   const [revealSelectedThreadRequest, setRevealSelectedThreadRequest] =
     useState(0);
+  // The open thread whose title strip holds a rename field.
+  const [titleRenameKey, setTitleRenameKey] = useState<string>();
   const [projectRevealRequest, setProjectRevealRequest] =
     useState<ProjectRevealRequest>();
   const [contextRailPinned, setContextRailPinned] = useState(
@@ -3001,6 +3007,40 @@ function DesktopAppShell(props: {
   // (and so `navigation.selectedDirectory`) has loaded.
   const selectedItemKey = navigation.selectedItemKey;
   const browseMode = navigation.browseMode;
+  const renameThread = navigation.renameThread;
+  const titleRename = useMemo(() => ({
+    active: titleRenameKey !== undefined && titleRenameKey === selectedItemKey,
+    onStart: () => setTitleRenameKey(selectedItemKey),
+    onEnd: (thread: NavigationThreadSummary, name: string | null) => {
+      setTitleRenameKey(undefined);
+      if (name !== null) void renameThread(thread, name);
+    },
+  }), [renameThread, selectedItemKey, titleRenameKey]);
+  const requestTitleRename = useCallback((thread: NavigationThreadSummary) => {
+    setTitleRenameKey(threadSummaryIdentityKey(thread));
+  }, []);
+  const restoreArchivedThreads = navigation.restoreArchivedThreads;
+  // Archive is one keystroke away now, so it can be taken back from the toast.
+  const offerArchiveUndo = useCallback((
+    archived: ArchivedThreadRef[],
+    details: { title?: string; reopenKey?: string },
+  ) => {
+    const restorable = archived.filter((thread) => !thread.remote);
+    if (restorable.length === 0) return;
+    const id = `thread-archived:${restorable.map((thread) => `${thread.backend}:${thread.threadId}`).join(",")}`;
+    showAppNotice({
+      id,
+      title: archived.length === 1 ? "Thread archived" : `${archived.length} threads archived`,
+      message: details.title ?? "Undo brings them all back.",
+      actions: [{
+        label: "Undo",
+        onClick: () => {
+          dismissAppNotice(id);
+          void restoreArchivedThreads(restorable, details.reopenKey);
+        },
+      }],
+    });
+  }, [dismissAppNotice, restoreArchivedThreads, showAppNotice]);
   const setBrowseMode = navigation.setBrowseMode;
   const revealSelectedProjectInList = useCallback((directory: NavigationDirectorySummary) => {
     if (!selectedItemKey) return;
@@ -3350,6 +3390,7 @@ function DesktopAppShell(props: {
   });
 
   const threadViewProps = {
+    titleRename,
     onForkThread: navigation.forkThread,
     onCreateSubthread: navigation.createSubthread,
     readThreadWorktreeAvailability: navigation.readThreadWorktreeAvailability,
@@ -3930,6 +3971,8 @@ function DesktopAppShell(props: {
             desktopApi?.markThreadSeen ? navigation.markThreadUnread : undefined
           }
           onRenameThread={navigation.renameThread}
+          onRequestTitleRename={requestTitleRename}
+          onThreadsArchived={offerArchiveUndo}
           onSetThreadReaction={navigation.setThreadReaction}
           onSetThreadLock={navigation.setThreadLock}
           onSetThreadPin={navigation.setThreadPin}

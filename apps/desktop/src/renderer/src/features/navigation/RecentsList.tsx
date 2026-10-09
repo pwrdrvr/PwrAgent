@@ -30,7 +30,8 @@ import {
   NativeSubAgentsDisclosure,
 } from "./NativeSubAgentsDisclosure";
 import { SubthreadPagination } from "./SubthreadPagination";
-import { ThreadRow } from "./ThreadRow";
+import { ThreadRow, type ThreadRowRef } from "./ThreadRow";
+import { isRenamingRow, type RenamingThreadRow } from "./thread-action-hotkeys";
 import {
   interleaveStartingSubthreads,
   isSubthreadLaunchpadDraft,
@@ -54,6 +55,10 @@ type RecentsListProps = {
   composerSourceThreadKey?: string;
   /** The thread whose ⋮ actions menu is open, for that button's `aria-expanded`. */
   actionsMenuThreadKey?: string;
+  /** The row whose title is a rename field. */
+  renamingRow?: RenamingThreadRow;
+  onRequestRenameThread?: (thread: NavigationThreadSummary, row: ThreadRowRef) => void;
+  onCommitRenameThread?: (thread: NavigationThreadSummary, name: string | null) => void;
   revealSelectedThreadRequest?: number;
   selectedThreadKey?: string;
   selectedThreadKeys?: ReadonlySet<string>;
@@ -256,6 +261,9 @@ export function RecentsList(props: RecentsListProps) {
               draftThreadKeys={props.draftThreadKeys}
               composerSourceThreadKey={props.composerSourceThreadKey}
               actionsMenuOpen={childKey === props.actionsMenuThreadKey}
+              renaming={isRenamingRow(props.renamingRow, childKey, undefined)}
+              onRequestRename={props.onRequestRenameThread}
+              onCommitRename={props.onCommitRenameThread}
               draggable={
                 canManageSubthreads
                 && directChildKeys.length > 1
@@ -420,6 +428,9 @@ export function RecentsList(props: RecentsListProps) {
           draftThreadKeys={props.draftThreadKeys}
           composerSourceThreadKey={props.composerSourceThreadKey}
           actionsMenuOpen={key === props.actionsMenuThreadKey}
+          renaming={isRenamingRow(props.renamingRow, key, undefined)}
+          onRequestRename={props.onRequestRenameThread}
+          onCommitRename={props.onCommitRenameThread}
           includeLinkedDirectories
           revealSelectedThreadRequest={props.revealSelectedThreadRequest}
           selectedThreadKey={props.selectedThreadKey}

@@ -1,5 +1,9 @@
 import { ChevronLeftIcon, ChevronRightIcon } from "../../icons";
-import { formatPrimaryAccel } from "../../lib/keyboard-accel";
+import {
+  chordLabelFor,
+  useKeybindings,
+  withChordHint,
+} from "../../lib/keybindings-store";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 
 export type HistoryNavControls = {
@@ -25,12 +29,17 @@ export function HistoryNavButtons(props: HistoryNavControls) {
   // time. Custom (not native `title`) so it triggers instantly over the whole
   // button, clamps to the window edge, and reads like the rest of the chrome.
   const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
-  const backTip = props.canGoBack && props.backLabel
-    ? `Back to ${props.backLabel}  (${formatPrimaryAccel("[")})`
-    : `Back  (${formatPrimaryAccel("[")})`;
-  const forwardTip = props.canGoForward && props.forwardLabel
-    ? `Forward to ${props.forwardLabel}  (${formatPrimaryAccel("]")})`
-    : `Forward  (${formatPrimaryAccel("]")})`;
+  const keybindings = useKeybindings();
+  const backTip = withChordHint(
+    props.canGoBack && props.backLabel ? `Back to ${props.backLabel}` : "Back",
+    chordLabelFor(keybindings, "navigation.back"),
+  );
+  const forwardTip = withChordHint(
+    props.canGoForward && props.forwardLabel
+      ? `Forward to ${props.forwardLabel}`
+      : "Forward",
+    chordLabelFor(keybindings, "navigation.forward"),
+  );
   return (
     <div className="history-nav" role="group" aria-label="History navigation">
       <button

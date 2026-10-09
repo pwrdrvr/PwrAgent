@@ -44,6 +44,11 @@ import {
 } from "../../icons";
 import { useEventCallback } from "../../lib/useEventCallback";
 import {
+  isRenamingRow,
+  matchMoveHotkey,
+  type RenamingThreadRow,
+} from "./thread-action-hotkeys";
+import {
   didDragLeaveCurrentTarget,
   getDropIndicatorPosition,
   useDropIndicatorController,
@@ -151,6 +156,10 @@ type DirectoriesListProps = {
   composerSourceThreadKey?: string;
   /** The thread whose ⋮ actions menu is open, for that button's `aria-expanded`. */
   actionsMenuThreadKey?: string;
+  /** The row whose title is a rename field. */
+  renamingRow?: RenamingThreadRow;
+  onRequestRenameThread?: (thread: NavigationThreadSummary, row: ThreadRowRef) => void;
+  onCommitRenameThread?: (thread: NavigationThreadSummary, name: string | null) => void;
   directories: NavigationDirectorySummary[];
   /** Expand and scroll to a project. Focus stays where it is: the launchpad's composer takes it. */
   projectReveal?: ProjectRevealRequest;
@@ -1560,6 +1569,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 draftThreadKeys={props.draftThreadKeys}
                 composerSourceThreadKey={props.composerSourceThreadKey}
                 actionsMenuOpen={childKey === props.actionsMenuThreadKey}
+                renaming={isRenamingRow(props.renamingRow, childKey, directory.key)}
+                onRequestRename={props.onRequestRenameThread}
+                onCommitRename={props.onCommitRenameThread}
                 compact
                 directoryKey={directory.key}
                 draggable={reorderable && directChildKeySet.has(childKey)}
@@ -1776,6 +1788,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
             draftThreadKeys={props.draftThreadKeys}
             composerSourceThreadKey={props.composerSourceThreadKey}
             actionsMenuOpen={threadKey === props.actionsMenuThreadKey}
+            renaming={isRenamingRow(props.renamingRow, threadKey, directory.key)}
+            onRequestRename={props.onRequestRenameThread}
+            onCommitRename={props.onCommitRenameThread}
             compact
             directoryKey={directory.key}
             pointerDraggable={Boolean(props.onReorderThreadPins)}
@@ -1974,14 +1989,10 @@ export function DirectoriesList(props: DirectoriesListProps) {
           onKeyDown={
             directoryDragEnabled && directoryPinned
               ? (event) => {
-                  if (!event.metaKey || !event.shiftKey) return;
-                  if (event.key === "ArrowUp") {
-                    event.preventDefault();
-                    movePinnedDirectoryByKeyboard(directory, "up");
-                  } else if (event.key === "ArrowDown") {
-                    event.preventDefault();
-                    movePinnedDirectoryByKeyboard(directory, "down");
-                  }
+                  const direction = matchMoveHotkey(event);
+                  if (direction === null) return;
+                  event.preventDefault();
+                  movePinnedDirectoryByKeyboard(directory, direction);
                 }
               : undefined
           }
@@ -2233,6 +2244,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
                           draftThreadKeys={props.draftThreadKeys}
                           composerSourceThreadKey={props.composerSourceThreadKey}
                           actionsMenuOpen={threadKey === props.actionsMenuThreadKey}
+                          renaming={isRenamingRow(props.renamingRow, threadKey, directory.key)}
+                          onRequestRename={props.onRequestRenameThread}
+                          onCommitRename={props.onCommitRenameThread}
                           compact
                           directoryKey={directory.key}
                           pointerDraggable={Boolean(props.onReorderThreadPins)}

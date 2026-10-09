@@ -37,6 +37,8 @@ import {
   ThreadRowStatus,
 } from "./ThreadRowStatus";
 import { setThreadRowNativeDragPreview } from "./thread-row-drag-preview";
+import { InlineRenameInput } from "./InlineRenameInput";
+import { matchMoveHotkey } from "./thread-action-hotkeys";
 
 const HOVER_PREFETCH_DELAY_MS = 750;
 const absoluteDateFormatter = new Intl.DateTimeFormat(undefined, {
@@ -193,6 +195,12 @@ type ThreadRowProps = {
     pinned: boolean,
   ) => Promise<void>;
   onOpenPullRequest?: (url: string) => void;
+  /** The title is an input: the operator is renaming this row. */
+  renaming?: boolean;
+  /** Double-click on the title line. */
+  onRequestRename?: (thread: NavigationThreadSummary, row: ThreadRowRef) => void;
+  /** The rename ended: the new name, or `null` when nothing changed. */
+  onCommitRename?: (thread: NavigationThreadSummary, name: string | null) => void;
 };
 
 export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
@@ -366,7 +374,8 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
       }${props.nested ? " thread-row-shell--nested" : ""}${
         props.subthreadCount ? " has-subthreads" : ""
       }`}
-      draggable={props.draggable}
+      // Chromium will not drag-select text in a field inside a draggable.
+      draggable={props.draggable && !props.renaming}
       style={
         props.nested && (props.nestedDepth ?? 1) > 1
           ? ({
@@ -375,6 +384,8 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
           : undefined
       }
       data-hover-stable-row="thread"
+      data-thread-key={threadKey}
+      data-thread-directory-key={props.directoryKey}
       data-thread-pin-key={props.threadPinState ? threadKey : undefined}
       data-thread-pin-state={props.threadPinState}
       role="listitem"
@@ -470,30 +481,24 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
           type="button"
           onKeyDown={(event) => {
             // Reorder a pinned thread within its backend's pinned
-            // slice. Unified with the directory-pin shortcut
-            // (Cmd+Shift+Arrow) so users learn one keybind. Plain
-            // Cmd+Arrow used to drive this — that collided with
-            // macOS Finder's "go to parent folder" mental model and
-            // diverged from the directory shortcut.
-            if (
-              props.onMovePinnedThread &&
-              props.thread.pinnedRank &&
-              event.metaKey &&
-              event.shiftKey &&
-              !event.altKey &&
-              !event.ctrlKey &&
-              (event.key === "ArrowUp" || event.key === "ArrowDown")
-            ) {
+            // slice. Shares Move Up / Move Down with the directory
+            // headers (⇧⌘↑/↓ by default) so users learn one keybind.
+            if (!props.onMovePinnedThread || !props.thread.pinnedRank) {
+              return;
+            }
+            const direction = matchMoveHotkey(event);
+            if (direction !== null) {
               event.preventDefault();
-              props.onMovePinnedThread(
-                props.thread,
-                event.key === "ArrowUp" ? "up" : "down",
-                rowIdentity,
-              );
+              props.onMovePinnedThread(props.thread, direction, rowIdentity);
             }
           }}
           onClick={(event) =>
             props.onSelectThread(props.thread, event, rowIdentity)
+          }
+          onDoubleClick={
+            props.onRequestRename
+              ? () => props.onRequestRename?.(props.thread, rowIdentity)
+              : undefined
           }
         />
 
@@ -511,7 +516,24 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
               remoteWork={isThreadRemoteWorkHere(props.thread)}
               status={status}
             />
-            <span className="thread-row__title">{props.thread.title}</span>
+            {props.renaming && props.onCommitRename ? (
+              <InlineRenameInput
+                ariaLabel="Thread name"
+                className="thread-row__rename-input"
+                initialValue={props.thread.title}
+                onCommit={(name) => {
+                  // Return or Escape ends the edit with focus still in the
+                  // field, which is about to unmount: keep it on the row.
+                  // A blur commit leaves focus wherever the operator put it.
+                  if (document.activeElement?.classList.contains("thread-row__rename-input")) {
+                    openButtonRef.current?.focus();
+                  }
+                  props.onCommitRename?.(props.thread, name);
+                }}
+              />
+            ) : (
+              <span className="thread-row__title">{props.thread.title}</span>
+            )}
             {agentCommandRunning ? (
               <span
                 aria-label="Agent command running"

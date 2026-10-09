@@ -11,7 +11,6 @@ import { navigationPageErrorCopy, navigationThreadSelectionKey } from "../../lib
 import { useEventCallback } from "../../lib/useEventCallback";
 import { useLensScrollRestoration } from "../../lib/useLensScrollRestoration";
 import { useMenuNavigation } from "../../lib/useMenuNavigation";
-import { useModalDialog } from "../../lib/useModalDialog";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import type {
   PendingLaunchpadCreation,
@@ -87,6 +86,7 @@ import {
 import { NewThreadButton } from "../chrome/NewThreadButton";
 import { SidebarShowMore } from "./SidebarShowMore";
 import type {
+  ArchivedThreadRef,
   ArchiveThreadOptions,
   BrowseMode,
   ThreadWorkspaceMode,
@@ -99,7 +99,13 @@ import {
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { useNativeDragInteractionGuard } from "../../lib/native-drag-interaction";
 import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
-import { formatPrimaryAccel } from "../../lib/keyboard-accel";
+import {
+  ariaKeyShortcutsFor,
+  chordLabelFor,
+  useKeybindings,
+  withChordHint,
+} from "../../lib/keybindings-store";
+import type { KeybindingActionId } from "../../../../shared/keybindings";
 import {
   DetachPullRequestWarning,
   shouldShowDetachPullRequestWarning,
@@ -111,6 +117,16 @@ import {
 } from "../../lib/backend-status-format";
 import { DirectoriesList, type ProjectRevealRequest } from "./DirectoriesList";
 import type { ThreadRowRef } from "./ThreadRow";
+import {
+  findThreadRowElement,
+  focusedThreadRowKey,
+  matchThreadHotkey,
+  nextThreadAfterArchive,
+  readVisibleThreadRowKeys,
+  resolveThreadHotkeyTargets,
+  threadSupportsRename,
+  type RenamingThreadRow,
+} from "./thread-action-hotkeys";
 import { RecentsList } from "./RecentsList";
 import { createHoverStableSidebarHydrator } from "./hover-stable-sidebar-snapshot";
 import { useHoverStableSnapshot } from "./useHoverStableSnapshot";
@@ -349,8 +365,21 @@ type SidebarProps = {
   onArchiveThread?: (
     thread: NavigationThreadSummary,
     options?: ArchiveThreadOptions,
-  ) => Promise<void>;
+  ) => Promise<ArchivedThreadRef[] | void>;
+  /**
+   * Threads left the list through Archive. `reopenKey` is the thread that
+   * was open, so an Undo can bring the operator back to it.
+   */
+  onThreadsArchived?: (
+    archived: ArchivedThreadRef[],
+    details: { title?: string; reopenKey?: string },
+  ) => void;
   onRenameThread?: (thread: NavigationThreadSummary, name: string) => Promise<void>;
+  /**
+   * Rename the open thread in the title strip: the sidebar is hidden, or the
+   * open thread has no row in the current lens.
+   */
+  onRequestTitleRename?: (thread: NavigationThreadSummary) => void;
   onSetThreadReaction?: (
     thread: NavigationThreadSummary,
     emoji: string,
@@ -538,7 +567,17 @@ export function Sidebar(props: SidebarProps) {
   const profileMenuRef = useRef<HTMLDivElement>(null);
   const profileMenuTriggerRef = useRef<HTMLButtonElement | null>(null);
   const federationThreadTargets = props.newThreadFederationTargets ?? [];
-  const renameInputRef = useRef<HTMLInputElement>(null);
+  const keybindings = useKeybindings();
+  // A menu row's chord, drawn the way the native menu draws its own.
+  const menuShortcut = (actionId: KeybindingActionId) => {
+    const label = chordLabelFor(keybindings, actionId);
+    return label === undefined ? null : (
+      <span className="thread-context-menu__shortcut" aria-hidden="true">
+        {label}
+      </span>
+    );
+  };
+  const sidebarRef = useRef<HTMLElement>(null);
   const handledRevealRequestRef = useRef(0);
   const selectionAnchorKeyRef = useRef<string | undefined>(
     props.selectedItemKey,
@@ -627,19 +666,11 @@ export function Sidebar(props: SidebarProps) {
       }
     | undefined
   >();
-  const [renameThread, setRenameThread] = useState<NavigationThreadSummary>();
+  const [renamingRow, setRenamingRow] = useState<RenamingThreadRow>();
   const [lockDialog, setLockDialog] = useState<{
     thread: NavigationThreadSummary;
     mode: "lock" | "edit";
   }>();
-  const [renameDraft, setRenameDraft] = useState("");
-  const [renameValidationError, setRenameValidationError] = useState<string>();
-  const renameDialogRef = useModalDialog<HTMLElement>({
-    open: Boolean(renameThread),
-    onClose: () => setRenameThread(undefined),
-    initialFocus: renameInputRef,
-    returnFocus: contextMenuOpenerRef,
-  });
   const onArchiveThread = props.onArchiveThread ?? (async () => undefined);
   const onRenameThread = props.onRenameThread ?? (async () => undefined);
   const [copiedRuntimeValue, setCopiedRuntimeValue] = useState<"branch" | "cwd">();
@@ -1391,16 +1422,6 @@ export function Sidebar(props: SidebarProps) {
     });
   }, [directoryTargetMenu]);
 
-  useLayoutEffect(() => {
-    if (!renameThread) {
-      return;
-    }
-
-    const input = renameInputRef.current;
-    input?.focus();
-    input?.select();
-  }, [renameThread]);
-
   const resolveContextMenuThreads = (
     thread: NavigationThreadSummary,
   ): NavigationThreadSummary[] => {
@@ -1455,7 +1476,6 @@ export function Sidebar(props: SidebarProps) {
     position: ThreadContextMenuPosition
   ): void => {
     rememberMenuOpener(contextMenuOpenerRef, contextMenuRef);
-    setRenameThread(undefined);
     // Symmetric with `openDirectoryContextMenu`'s
     // `setContextMenu(undefined)` — a `contextmenu` event doesn't
     // trigger the document-level `click` listener that normally
@@ -1479,7 +1499,6 @@ export function Sidebar(props: SidebarProps) {
     position: ThreadContextMenuPosition,
   ): void => {
     rememberMenuOpener(contextMenuOpenerRef, contextMenuRef);
-    setRenameThread(undefined);
     setDirectoryContextMenu(undefined);
     setDirectoryTargetMenu(undefined);
     setProfileMenuOpen(false);
@@ -1493,9 +1512,7 @@ export function Sidebar(props: SidebarProps) {
 
   const requestRenameFromContextMenu = (thread: NavigationThreadSummary): void => {
     setContextMenu(undefined);
-    setRenameThread(thread);
-    setRenameDraft(thread.title);
-    setRenameValidationError(undefined);
+    startRename(thread);
   };
 
   const requestLockFromContextMenu = (
@@ -1513,17 +1530,59 @@ export function Sidebar(props: SidebarProps) {
     void props.onSetThreadLock?.(thread, false).catch(() => undefined);
   };
 
+  /**
+   * Archive, then open the row after the open thread as the list shows it
+   * (the one before, when it was last) rather than jumping to the top.
+   */
+  const archiveThreads = async (
+    threads: NavigationThreadSummary[],
+    options?: ArchiveThreadOptions,
+  ): Promise<void> => {
+    const openKey = props.selectedItemKey;
+    const archivingKeys = new Set(threads.map(threadSummaryIdentityKey));
+    if (options?.includeSubthreads) {
+      // The group goes too, so the next row cannot be one of its children.
+      let grew = true;
+      while (grew) {
+        grew = false;
+        for (const candidate of props.threads) {
+          const key = threadSummaryIdentityKey(candidate);
+          const parentKey = resolveThreadParentKey(candidate, navigationThreadByKey);
+          if (!archivingKeys.has(key) && parentKey !== undefined && archivingKeys.has(parentKey)) {
+            archivingKeys.add(key);
+            grew = true;
+          }
+        }
+      }
+    }
+    const reopenKey = openKey !== undefined && archivingKeys.has(openKey) ? openKey : undefined;
+    const nextSelectionKey = reopenKey === undefined
+      ? undefined
+      : nextThreadAfterArchive(
+          readVisibleThreadRowKeys(sidebarRef.current),
+          archivingKeys,
+          reopenKey,
+        );
+    const archiveOptions: ArchiveThreadOptions | undefined =
+      nextSelectionKey === undefined ? options : { ...options, nextSelectionKey };
+    const results = await Promise.all(threads.map((thread) =>
+      archiveOptions ? onArchiveThread(thread, archiveOptions) : onArchiveThread(thread)));
+    const archived = results.flatMap((result) => result ?? []);
+    if (archived.length > 0) {
+      props.onThreadsArchived?.(archived, {
+        title: threads.length === 1 ? threads[0]!.title : undefined,
+        reopenKey,
+      });
+    }
+  };
+
   const archiveFromContextMenu = (
     thread: NavigationThreadSummary,
     options?: ArchiveThreadOptions,
   ): void => {
     setContextMenu(undefined);
     hoverStableSnapshot.release();
-    if (options) {
-      void onArchiveThread(thread, options);
-      return;
-    }
-    void onArchiveThread(thread);
+    void archiveThreads([thread], options);
   };
 
   const createSubthreadFromContextMenu = (
@@ -1609,7 +1668,6 @@ export function Sidebar(props: SidebarProps) {
     setContextMenu(undefined);
     setDirectoryTargetMenu(undefined);
     setProfileMenuOpen(false);
-    setRenameThread(undefined);
     setDirectoryContextMenu({
       requestedPosition: position,
       directory,
@@ -1626,7 +1684,6 @@ export function Sidebar(props: SidebarProps) {
     setDirectoryContextMenu(undefined);
     setDirectoryTargetMenu(undefined);
     setProfileMenuOpen(false);
-    setRenameThread(undefined);
     setSubthreadDraftMenu({ requestedPosition: position, draft });
   };
 
@@ -1638,7 +1695,6 @@ export function Sidebar(props: SidebarProps) {
     setContextMenu(undefined);
     setDirectoryContextMenu(undefined);
     setProfileMenuOpen(false);
-    setRenameThread(undefined);
     setDirectoryTargetMenu({
       requestedPosition: position,
       directoryKey: directory.key,
@@ -1792,7 +1848,7 @@ export function Sidebar(props: SidebarProps) {
   ): void => {
     setContextMenu(undefined);
     hoverStableSnapshot.release();
-    void Promise.all(threads.map((thread) => onArchiveThread(thread)));
+    void archiveThreads(threads);
   };
 
   const unlinkThreadsFromContextMenu = (
@@ -1857,22 +1913,153 @@ export function Sidebar(props: SidebarProps) {
     void props.onDetachPullRequest(thread, pr);
   });
 
-  const submitRename = (): void => {
-    if (!renameThread) {
+  // Per-thread versions of the context menu's gates, for the keyboard
+  // shortcuts, which act without a menu open.
+  const threadCanRouteRemoteCapability = (
+    thread: NavigationThreadSummary,
+    capability: "thread_navigation" | "turn_control",
+  ): boolean =>
+    !(thread.federation && !federationTarget)
+    || Boolean(
+      thread.federation.peerStatus === "connected"
+      && thread.federation.capabilities?.includes(capability),
+    );
+  const threadCanRename = (thread: NavigationThreadSummary): boolean =>
+    Boolean(props.onRenameThread)
+    && threadSupportsRename(thread, props.backends, Boolean(federationTarget));
+
+  /**
+   * Rename in place: in the thread's sidebar row when the list shows one,
+   * else in the title strip. `origin` picks the row when the thread shows
+   * more than once (the Directories lens lists it under each directory).
+   */
+  const startRename = (thread: NavigationThreadSummary, origin?: Element | null): void => {
+    if (!threadCanRename(thread)) return;
+    const threadKey = threadSummaryIdentityKey(thread);
+    const sidebar = sidebarRef.current;
+    // Hidden by the layout toggle, unless a reveal is peeking it open.
+    const sidebarShown = sidebar !== null
+      && (!sidebar.closest("[data-sidebar-hidden='true']") || sidebar.getClientRects().length > 0);
+    const row = sidebarShown ? findThreadRowElement(sidebar, threadKey, origin) : null;
+    if (row === null) {
+      props.onRequestTitleRename?.(thread);
       return;
     }
-
-    const nextName = renameDraft.trim();
-    if (!nextName) {
-      setRenameValidationError("Thread name cannot be blank.");
-      return;
-    }
-
-    const thread = renameThread;
-    setRenameThread(undefined);
-    setRenameValidationError(undefined);
-    void onRenameThread(thread, nextName);
+    setRenamingRow({
+      threadKey,
+      directoryKey: row.getAttribute("data-thread-directory-key") ?? undefined,
+    });
   };
+
+  const requestRenameFromRow = useEventCallback((
+    thread: NavigationThreadSummary,
+    row: ThreadRowRef,
+  ): void => {
+    if (!threadCanRename(thread)) return;
+    setRenamingRow({ threadKey: row.threadKey, directoryKey: row.directoryKey });
+  });
+
+  const commitRenameFromRow = useEventCallback((
+    thread: NavigationThreadSummary,
+    name: string | null,
+  ): void => {
+    setRenamingRow(undefined);
+    if (name !== null) {
+      void onRenameThread(thread, name);
+    }
+  });
+
+  const runThreadHotkey = useEventCallback((event: KeyboardEvent): void => {
+    // Settings or Automations covers the window: the open thread is not what
+    // the operator is looking at.
+    if (props.inert) return;
+    const action = matchThreadHotkey(event);
+    if (action === null) return;
+    const targets = resolveThreadHotkeyTargets({
+      focusedRowKey: focusedThreadRowKey(event),
+      selectedKeys: selectedThreadKeys,
+      openThreadKey: props.selectedItemKey,
+    });
+    const threads = (targets?.keys ?? [])
+      .map((key) => navigationThreadByKey.get(key))
+      .filter((thread): thread is NavigationThreadSummary => thread !== undefined);
+    const thread = threads[0];
+    if (thread === undefined) return;
+    const single = threads.length === 1;
+    const origin = event.target instanceof Element ? event.target : null;
+    let handled = true;
+    switch (action) {
+      case "threads.rename":
+        // One name cannot apply to several threads.
+        handled = single && threadCanRename(thread);
+        if (handled) startRename(thread, origin);
+        break;
+      case "threads.archive": {
+        const archivable = threads.filter((candidate) =>
+          canArchiveThread(candidate)
+          && threadCanRouteRemoteCapability(candidate, "turn_control"));
+        handled = archivable.length > 0;
+        if (handled) {
+          hoverStableSnapshot.release();
+          void archiveThreads(archivable);
+        }
+        break;
+      }
+      case "threads.toggle_pin": {
+        const pinnable = threads.filter((candidate) => !candidate.parentThreadId);
+        handled = pinnable.length > 0 && Boolean(props.onSetThreadPin);
+        if (!handled) break;
+        // Any unpinned thread in the set pins them all, as Finder tags do.
+        if (pinnable.some((candidate) => !candidate.pinnedRank)) {
+          pinThreadsFromContextMenu(pinnable.filter((candidate) => !candidate.pinnedRank));
+        } else {
+          unpinThreadsFromContextMenu(pinnable);
+        }
+        break;
+      }
+      case "threads.toggle_keep_at_top":
+        handled = single
+          && !thread.parentThreadId
+          && browseMode === "directories"
+          && Boolean(props.onReorderThreadPins && props.onSetThreadPin);
+        if (handled) toggleKeepAtTopFromContextMenu(navigationThreadByKey.get(threadSummaryIdentityKey(thread)) ?? thread);
+        break;
+      case "threads.toggle_unread":
+        if (single && thread.inbox.inInbox) {
+          handled = Boolean(props.onMarkThreadsSeen) && !(thread.federation && !federationTarget);
+          if (handled) void props.onMarkThreadsSeen?.([thread]);
+        } else if (single) {
+          handled = Boolean(props.onMarkThreadUnread)
+            && thread.updatedAt !== undefined
+            && threadCanRouteRemoteCapability(thread, "thread_navigation");
+          if (handled) void props.onMarkThreadUnread?.(thread);
+        } else {
+          handled = false;
+        }
+        break;
+      case "threads.lock":
+        handled = single
+          && Boolean(props.onSetThreadLock)
+          && threadCanRouteRemoteCapability(thread, "turn_control");
+        if (!handled) break;
+        if (thread.lock) {
+          unlockFromContextMenu(thread);
+        } else {
+          setLockDialog({ thread, mode: "lock" });
+        }
+        break;
+      case "threads.copy_link":
+        void copyText(uniqueContextMenuValues(threads.map((candidate) =>
+          buildThreadUrl({ backend: candidate.source, threadId: candidate.id }))).join("\n"));
+        break;
+    }
+    if (handled) event.preventDefault();
+  });
+
+  useEffect(() => {
+    window.addEventListener("keydown", runThreadHotkey);
+    return () => window.removeEventListener("keydown", runThreadHotkey);
+  }, [runThreadHotkey]);
 
   const contextMenuThreads = contextMenu?.threads ?? [];
   const contextMenuIsBulk = contextMenuThreads.length > 1;
@@ -2255,7 +2442,7 @@ export function Sidebar(props: SidebarProps) {
    * renders a pinned section. Updated and Created are pure sort
    * orders, so a reorder there would move a thread within a list whose
    * order is invisible — the row would not budge and the menu's
-   * ⌘⇧↑/↓ hint would advertise a shortcut those rows don't carry.
+   * Move Up / Move Down hint would advertise a shortcut those rows don't carry.
    * Each item is then disabled when the thread is at the top / bottom
    * of the global pinned section. We render the items even when
    * disabled so the menu layout doesn't jump as the user walks the
@@ -2398,6 +2585,7 @@ export function Sidebar(props: SidebarProps) {
 
   return (
     <aside
+      ref={sidebarRef}
       className="sidebar"
       aria-label="Threads"
       inert={props.inert ? true : undefined}
@@ -2436,9 +2624,9 @@ export function Sidebar(props: SidebarProps) {
             // ⌘K leads: it's the one an operator reaches for by reflex, and
             // the palette it opens is the surface this button most resembles.
             tooltipText={[
-              `Quick Thread List Search  (${formatPrimaryAccel("K")})`,
-              `Open Search All  (${formatPrimaryAccel("F", { shift: true })})`,
-              `Context Search  (${formatPrimaryAccel("F")}) — Thread List in sidebar, Thread Chat elsewhere`,
+              withChordHint("Quick Thread List Search", chordLabelFor(keybindings, "navigation.jump_to_thread")),
+              withChordHint("Open Search All", chordLabelFor(keybindings, "navigation.search_threads")),
+              `${withChordHint("Context Search", chordLabelFor(keybindings, "navigation.find"))} — Thread List in sidebar, Thread Chat elsewhere`,
             ].join("\n")}
             ariaPressed={props.threadSearchActive}
             className={`sidebar__icon-button${props.threadSearchActive ? " is-active" : ""}`}
@@ -2700,6 +2888,9 @@ export function Sidebar(props: SidebarProps) {
               draftThreadKeys={props.draftThreadKeys}
               composerSourceThreadKey={props.composerSourceThreadKey}
               actionsMenuThreadKey={actionsMenuThreadKey}
+              renamingRow={renamingRow}
+              onRequestRenameThread={requestRenameFromRow}
+              onCommitRenameThread={commitRenameFromRow}
               directories={renderedDirectories}
               revealSelectedThreadRequest={directoryRevealRequest}
               selectedItemKey={props.selectedItemKey}
@@ -2787,6 +2978,9 @@ export function Sidebar(props: SidebarProps) {
                 draftThreadKeys={props.draftThreadKeys}
                 composerSourceThreadKey={props.composerSourceThreadKey}
                 actionsMenuThreadKey={actionsMenuThreadKey}
+                renamingRow={renamingRow}
+                onRequestRenameThread={requestRenameFromRow}
+                onCommitRenameThread={commitRenameFromRow}
                 revealSelectedThreadRequest={revealSelectedThreadRequest}
                 selectedThreadKey={props.selectedItemKey}
                 selectedThreadKeys={selectedThreadKeys}
@@ -2978,6 +3172,7 @@ export function Sidebar(props: SidebarProps) {
                   <button
                     role="menuitemcheckbox"
                     aria-checked={Boolean(contextMenuPinThread!.pinnedRank)}
+                    aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.toggle_pin")}
                     type="button"
                     onClick={() => togglePinFromContextMenu(contextMenuPinThread!)}
                     onKeyDown={closeContextMenuOnEnter}
@@ -2985,12 +3180,14 @@ export function Sidebar(props: SidebarProps) {
                     <span className="thread-context-menu__check" aria-hidden="true">
                       <CheckIcon size={12} strokeWidth={3} />
                     </span>
-                    Pinned
+                    <span>Pinned</span>
+                    {menuShortcut("threads.toggle_pin")}
                   </button>
                   {contextMenuCanKeepAtTop ? (
                     <button
                       role="menuitemcheckbox"
                       aria-checked={isKeptAtTopThread(contextMenuPinThread!)}
+                      aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.toggle_keep_at_top")}
                       type="button"
                       onClick={() => toggleKeepAtTopFromContextMenu(contextMenuPinThread!)}
                       onKeyDown={closeContextMenuOnEnter}
@@ -2998,7 +3195,8 @@ export function Sidebar(props: SidebarProps) {
                       <span className="thread-context-menu__check" aria-hidden="true">
                         <CheckIcon size={12} strokeWidth={3} />
                       </span>
-                      Keep at Top
+                      <span>Keep at Top</span>
+                      {menuShortcut("threads.toggle_keep_at_top")}
                     </button>
                   ) : null}
                 </div>
@@ -3118,36 +3316,26 @@ export function Sidebar(props: SidebarProps) {
                       <button
                         role="menuitem"
                         type="button"
-                        aria-keyshortcuts="Meta+Shift+ArrowUp"
+                        aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.move_up")}
                         disabled={!contextMenuCanMoveUp}
                         onClick={() =>
                           moveThreadFromContextMenu(contextMenu.thread, "up")
                         }
                       >
                         <span>Move Up</span>
-                        <span
-                          className="thread-context-menu__shortcut"
-                          aria-hidden="true"
-                        >
-                          {"⌘⇧↑"}
-                        </span>
+                        {menuShortcut("threads.move_up")}
                       </button>
                       <button
                         role="menuitem"
                         type="button"
-                        aria-keyshortcuts="Meta+Shift+ArrowDown"
+                        aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.move_down")}
                         disabled={!contextMenuCanMoveDown}
                         onClick={() =>
                           moveThreadFromContextMenu(contextMenu.thread, "down")
                         }
                       >
                         <span>Move Down</span>
-                        <span
-                          className="thread-context-menu__shortcut"
-                          aria-hidden="true"
-                        >
-                          {"⌘⇧↓"}
-                        </span>
+                        {menuShortcut("threads.move_down")}
                       </button>
                     </>
                   ) : null}
@@ -3155,11 +3343,13 @@ export function Sidebar(props: SidebarProps) {
                     <button
                       role="menuitem"
                       type="button"
+                      aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.rename")}
                       onClick={() =>
                         requestRenameFromContextMenu(contextMenu.thread)
                       }
                     >
-                      Rename Thread
+                        <span>Rename Thread</span>
+                        {menuShortcut("threads.rename")}
                     </button>
                   ) : null}
                   {contextMenuCanLock && contextMenu.thread.lock ? (
@@ -3167,9 +3357,11 @@ export function Sidebar(props: SidebarProps) {
                       <button
                         role="menuitem"
                         type="button"
+                        aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.lock")}
                         onClick={() => unlockFromContextMenu(contextMenu.thread)}
                       >
-                        Unlock Thread
+                          <span>Unlock Thread</span>
+                          {menuShortcut("threads.lock")}
                       </button>
                       <button
                         role="menuitem"
@@ -3185,33 +3377,39 @@ export function Sidebar(props: SidebarProps) {
                     <button
                       role="menuitem"
                       type="button"
+                      aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.lock")}
                       onClick={() =>
                         requestLockFromContextMenu(contextMenu.thread, "lock")
                       }
                     >
-                      Lock Thread…
+                        <span>Lock Thread…</span>
+                        {menuShortcut("threads.lock")}
                     </button>
                   ) : null}
                   {contextMenuCanMarkUnread ? (
                     <button
                       role="menuitem"
                       type="button"
+                      aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.toggle_unread")}
                       onClick={() =>
                         markUnreadFromContextMenu(contextMenu.thread)
                       }
                     >
-                      Mark Unread
+                        <span>Mark Unread</span>
+                        {menuShortcut("threads.toggle_unread")}
                     </button>
                   ) : null}
                   {contextMenuCanMarkRead ? (
                     <button
                       role="menuitem"
                       type="button"
+                      aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.toggle_unread")}
                       onClick={() =>
                         markReadFromContextMenu(contextMenu.thread)
                       }
                     >
-                      Mark Read
+                        <span>Mark Read</span>
+                        {menuShortcut("threads.toggle_unread")}
                     </button>
                   ) : null}
                   {contextMenuCanSendToMachine ? (
@@ -3275,9 +3473,11 @@ export function Sidebar(props: SidebarProps) {
                     <button
                       role="menuitem"
                       type="button"
+                      aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.archive")}
                       onClick={() => archiveFromContextMenu(contextMenu.thread)}
                     >
-                      Archive Thread
+                        <span>Archive Thread</span>
+                        {menuShortcut("threads.archive")}
                     </button>
                   ) : null}
                 </div>
@@ -3343,8 +3543,10 @@ export function Sidebar(props: SidebarProps) {
                       }),
                     )
                   }
+                  aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.copy_link")}
                 >
-                  Copy Thread Link
+                  <span>Copy Thread Link</span>
+                  {menuShortcut("threads.copy_link")}
                 </button>
                 <button
                   role="menuitem"
@@ -3537,7 +3739,7 @@ export function Sidebar(props: SidebarProps) {
                   <button
                     role="menuitem"
                     type="button"
-                    aria-keyshortcuts="Meta+Shift+ArrowUp"
+                    aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.move_up")}
                     disabled={!directoryMenuCanMoveUp}
                     onClick={() =>
                       moveDirectoryFromContextMenu(
@@ -3547,17 +3749,12 @@ export function Sidebar(props: SidebarProps) {
                     }
                   >
                     <span>Move Up</span>
-                    <span
-                      className="thread-context-menu__shortcut"
-                      aria-hidden="true"
-                    >
-                      {"⌘⇧↑"}
-                    </span>
+                    {menuShortcut("threads.move_up")}
                   </button>
                   <button
                     role="menuitem"
                     type="button"
-                    aria-keyshortcuts="Meta+Shift+ArrowDown"
+                    aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.move_down")}
                     disabled={!directoryMenuCanMoveDown}
                     onClick={() =>
                       moveDirectoryFromContextMenu(
@@ -3567,12 +3764,7 @@ export function Sidebar(props: SidebarProps) {
                     }
                   >
                     <span>Move Down</span>
-                    <span
-                      className="thread-context-menu__shortcut"
-                      aria-hidden="true"
-                    >
-                      {"⌘⇧↓"}
-                    </span>
+                    {menuShortcut("threads.move_down")}
                   </button>
                 </>
               ) : null}
@@ -3630,70 +3822,6 @@ export function Sidebar(props: SidebarProps) {
             setLockDialog(undefined);
           }}
         />
-      ) : null}
-
-      {renameThread ? (
-        <div className="rename-thread-backdrop" role="presentation">
-          <section
-            ref={renameDialogRef}
-            aria-labelledby="rename-thread-title"
-            aria-modal="true"
-            className="rename-thread-dialog"
-            role="dialog"
-          >
-            <h2 id="rename-thread-title">Rename Thread</h2>
-            <label className="rename-thread-dialog__field">
-              <span>Name</span>
-              <input
-                autoFocus
-                ref={renameInputRef}
-                value={renameDraft}
-                onChange={(event) => {
-                  setRenameDraft(event.currentTarget.value);
-                  setRenameValidationError(undefined);
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    submitRename();
-                  } else if (
-                    (event.key === "ArrowLeft" || event.key === "ArrowRight") &&
-                    !event.altKey &&
-                    !event.ctrlKey &&
-                    !event.metaKey &&
-                    !event.shiftKey &&
-                    event.currentTarget.selectionStart === 0 &&
-                    event.currentTarget.selectionEnd === event.currentTarget.value.length
-                  ) {
-                    event.preventDefault();
-                    const nextPosition =
-                      event.key === "ArrowLeft" ? 0 : event.currentTarget.value.length;
-                    event.currentTarget.setSelectionRange(nextPosition, nextPosition);
-                  }
-                }}
-              />
-            </label>
-            {renameValidationError ? (
-              <p className="rename-thread-dialog__error">{renameValidationError}</p>
-            ) : null}
-            <div className="rename-thread-dialog__actions">
-              <button
-                className="button button--secondary"
-                type="button"
-                onClick={() => setRenameThread(undefined)}
-              >
-                Cancel
-              </button>
-              <button
-                className="button button--primary"
-                type="button"
-                onClick={submitRename}
-              >
-                Rename Thread
-              </button>
-            </div>
-          </section>
-        </div>
       ) : null}
 
     </aside>

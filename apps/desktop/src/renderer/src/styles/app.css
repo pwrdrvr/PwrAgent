@@ -6761,6 +6761,31 @@ a.button {
   line-height: 1.25;
 }
 
+/* Rename in place: the title becomes a field of the same type, so the row
+   keeps its height and the text does not jump. The header passes pointer
+   events through to the open-thread overlay; the field takes them back. */
+.thread-row__rename-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: -2px -4px;
+  padding: 1px 3px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--sidebar-title-size);
+  font-weight: 600;
+  line-height: 1.25;
+  pointer-events: auto;
+}
+
+.thread-row__rename-input:focus,
+.thread-row__rename-input:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
 .thread-row__time,
 .directory-group__count,
 .context-list__meta,
@@ -21560,6 +21585,33 @@ a.button {
 
 .thread-header__title-button:hover {
   color: var(--accent-bright);
+}
+
+/* A renamable title takes its own double-click: in the drag region the OS
+   would zoom the window instead. */
+.thread-header .thread-header__compact-title[data-renamable="true"],
+.thread-header .thread-header__compact-title[data-renamable="true"] * {
+  -webkit-app-region: no-drag;
+}
+
+/* Rename in place, at the title's own type size so the strip keeps its
+   height. */
+.thread-header__rename-input {
+  width: min(58vw, 520px);
+  max-width: 100%;
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.thread-header__rename-input:focus,
+.thread-header__rename-input:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
 }
 
 .thread-header__project-button:focus-visible,

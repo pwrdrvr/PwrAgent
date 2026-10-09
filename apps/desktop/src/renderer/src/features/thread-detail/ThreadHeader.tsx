@@ -27,6 +27,9 @@ import {
   ThreadHeaderProjectCrumb,
   type ThreadHeaderProject,
 } from "./ThreadHeaderProjectCrumb";
+import { readRendererFederationTarget } from "../../lib/federation-window";
+import { InlineRenameInput } from "../navigation/InlineRenameInput";
+import { threadSupportsRename } from "../navigation/thread-action-hotkeys";
 
 type ThreadHeaderLayoutControls = {
   sidebarOpen: boolean;
@@ -114,6 +117,18 @@ type ThreadHeaderProps = {
     disabledReason?: string;
     onOpen: () => void;
   };
+  /**
+   * Rename the thread in place from its title: double-click it, or the Rename
+   * shortcut while the sidebar is hidden. The app owns `active`, so the
+   * shortcut can start it.
+   */
+  titleRename?: ThreadTitleRenameControls;
+};
+
+export type ThreadTitleRenameControls = {
+  active: boolean;
+  onStart: () => void;
+  onEnd: (thread: NavigationThreadSummary, name: string | null) => void;
 };
 
 /**
@@ -132,6 +147,13 @@ export function ThreadHeader(props: ThreadHeaderProps) {
   // toggle, whose state (running dot, per-thread disabled reason) is
   // thread-scoped and would drag thread state up into a global strip.
   const hasAppTitleBar = paintsAppTitleBar();
+  const canRenameTitle = Boolean(props.titleRename)
+    && threadSupportsRename(
+      props.thread,
+      props.backends ?? [],
+      readRendererFederationTarget() !== undefined,
+    );
+  const titleRenaming = canRenameTitle && props.titleRename?.active === true;
   // When the sidebar is hidden, its wordmark + action buttons relocate
   // here (macOS only — the strip platforms keep them in the title bar).
   const sidebarHidden = props.layout ? !props.layout.sidebarOpen : false;
@@ -205,11 +227,22 @@ export function ThreadHeader(props: ThreadHeaderProps) {
                 </>
               ) : null}
               <h2
-                aria-label={props.thread.title}
+                aria-label={titleRenaming ? undefined : props.thread.title}
                 className="thread-header__compact-title"
-                title={props.thread.title}
+                data-renamable={canRenameTitle ? "true" : undefined}
+                title={titleRenaming ? undefined : props.thread.title}
+                onDoubleClick={canRenameTitle ? props.titleRename?.onStart : undefined}
               >
-                {props.onRevealSelectedThreadInList ? (
+                {titleRenaming ? (
+                  <InlineRenameInput
+                    // A new thread under the open field starts a new edit.
+                    key={props.thread.id}
+                    ariaLabel="Thread name"
+                    className="thread-header__rename-input"
+                    initialValue={props.thread.title}
+                    onCommit={(name) => props.titleRename?.onEnd(props.thread, name)}
+                  />
+                ) : props.onRevealSelectedThreadInList ? (
                   <button
                     aria-label="Show selected thread in thread list"
                     className="thread-header__title-button"

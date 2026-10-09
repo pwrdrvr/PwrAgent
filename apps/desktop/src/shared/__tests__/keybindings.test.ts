@@ -256,7 +256,7 @@ describe("formatChordLabel", () => {
 
 describe("formatAriaKeyShortcut", () => {
   it("writes the ARIA token for the platform", () => {
-    expect(formatAriaKeyShortcut("CmdOrCtrl+Shift+Up", "darwin")).toBe("Shift+Meta+ArrowUp");
+    expect(formatAriaKeyShortcut("CmdOrCtrl+Shift+Up", "darwin")).toBe("Meta+Shift+ArrowUp");
     expect(formatAriaKeyShortcut("CmdOrCtrl+Shift+Up", "linux")).toBe("Control+Shift+ArrowUp");
   });
 });

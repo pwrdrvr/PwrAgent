@@ -124,7 +124,11 @@ import { useEditCommitStates } from "./useEditCommitStates";
 import type { HistoryNavControls } from "../chrome/HistoryNavButtons";
 import type { MastheadActionsProps } from "../chrome/MastheadActions";
 import { ThreadFindBar } from "./ThreadFindBar";
-import { ThreadHeader, type StarMapToggleControls } from "./ThreadHeader";
+import {
+  ThreadHeader,
+  type StarMapToggleControls,
+  type ThreadTitleRenameControls,
+} from "./ThreadHeader";
 import type { ThreadHeaderProject } from "./ThreadHeaderProjectCrumb";
 import type { FederationThreadTarget } from "../chrome/federation-thread-targets";
 import type {
@@ -951,7 +955,9 @@ export type ThreadViewProps = {
   /** Bumped on each ⌘F so an already-open bar pulls focus back to its field. */
   findFocusNonce?: number;
   onLoadOlder: () => Promise<void>;
-  onArchiveThread?: (thread: NavigationThreadSummary) => Promise<void>;
+  onArchiveThread?: (thread: NavigationThreadSummary) => Promise<unknown>;
+  /** Rename the open thread from its title strip. */
+  titleRename?: ThreadTitleRenameControls;
   onRefreshNavigation?: () => Promise<void>;
   onReloadThread?: () => Promise<void>;
   onLiveTranscriptEntry?: (entry: AppServerThreadEntry) => void;
@@ -4011,6 +4017,7 @@ export function ThreadView(props: ThreadViewProps) {
       thread={selectedThread!}
       backends={props.backends}
       onRevealSelectedThreadInList={props.onRevealSelectedThreadInList}
+      titleRename={props.titleRename}
       layout={{
         ...headerChrome.layout,
         terminalOpen: selectedThreadTerminalOpen,
