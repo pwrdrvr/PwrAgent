@@ -25,6 +25,7 @@ import type {
   FederationPeerSummary,
   FederationTarget,
   NavigationSnapshot,
+  NavigationLaunchpadDraft,
   NavigationSelectedDetailRequest,
   StartTurnRequest,
   StartTurnResponse,
@@ -4362,6 +4363,127 @@ describe("App", () => {
     expect(ensureDirectoryLaunchpad).not.toHaveBeenCalled();
   });
 
+  it.each(["Cmd+N", "Cmd+K", "workspace menu", "relocated workspace menu"] as const)(
+    "preserves launchpad Auto access when opening from %s",
+    async (entryPoint) => {
+      let openNewThreadListener: (() => void) | undefined;
+      let launchpad: NavigationLaunchpadDraft | undefined;
+      const project = {
+        key: "directory:/repos/Example",
+        kind: "directory" as const,
+        label: "Example",
+        path: "/repos/Example",
+        threadKeys: ["codex:existing-thread"],
+        needsAttentionCount: 0,
+      };
+      const thread = {
+        id: "existing-thread",
+        title: "Existing project thread",
+        titleSource: "explicit" as const,
+        source: "codex" as const,
+        executionMode: "full-access" as const,
+        linkedDirectories: [{ id: project.key, kind: "local" as const, label: project.label, path: project.path }],
+        inbox: { inInbox: true },
+        updatedAt: 1,
+      };
+      const defaults = { backend: "codex" as const, executionMode: "default" as const };
+      const ensureDirectoryLaunchpad = vi.fn(async (request: EnsureDirectoryLaunchpadRequest) => {
+        launchpad = {
+          directoryKey: request.directoryKey,
+          directoryKind: request.directoryKind,
+          directoryLabel: request.directoryLabel,
+          directoryPath: request.directoryPath,
+          backend: "codex",
+          executionMode: "auto",
+          prompt: "",
+          workMode: "local",
+          createdAt: 1,
+          updatedAt: 2,
+        };
+        return { launchpad, defaults };
+      });
+      const updateDirectoryLaunchpad = vi.fn<NonNullable<DesktopApi["updateDirectoryLaunchpad"]>>(async ({ patch }) => {
+        launchpad = { ...launchpad!, ...patch };
+        return { launchpad, defaults };
+      });
+      Object.defineProperty(window, "pwragent", {
+        configurable: true,
+        value: ownerApi({
+          platform: "darwin",
+          listBackends: async () => ({
+            fetchedAt: Date.now(),
+            backends: [{
+              kind: "codex",
+              source: "builtin",
+              label: "OpenAI",
+              available: true,
+              methods: ["thread/start", "turn/start"],
+              capabilities: {
+                listThreads: true, createThread: true, resumeThread: true,
+                renameThread: true, readThread: true, startTurn: true,
+                interruptTurn: true, steerTurn: true, transcriptPagination: true,
+                toolUse: true, approvalRequests: true, multiDirectoryThreads: true,
+              },
+              executionModes: [
+                { mode: "default", label: "Default Access", available: true, isDefault: true },
+                { mode: "auto", label: "Auto", available: true },
+                { mode: "full-access", label: "Full Access", available: true },
+              ],
+            }],
+          }),
+          getNavigationSnapshot: async () => ({
+            backend: "all",
+            fetchedAt: Date.now(),
+            unchanged: false,
+            inboxThreadKeys: ["codex:existing-thread"],
+            threads: [thread],
+            directories: [{ ...project, ...(launchpad?.directoryKey === project.key ? { launchpad } : {}) }],
+            launchpadDefaults: defaults,
+          }),
+          ensureDirectoryLaunchpad,
+          updateDirectoryLaunchpad,
+          onAgentEvent: () => () => undefined,
+          onOpenNewThreadRequested: (listener: () => void) => {
+            openNewThreadListener = listener;
+            return () => { openNewThreadListener = undefined; };
+          },
+        }),
+      });
+
+      const { container } = render(<App />);
+      await waitFor(() => expect(screen.getByRole("button", { name: "Access mode" })).toHaveTextContent("Full Access"));
+      if (entryPoint === "Cmd+N") {
+        expect(openNewThreadListener).toBeDefined();
+        await act(async () => { openNewThreadListener!(); });
+      } else if (entryPoint === "Cmd+K") {
+        fireEvent.keyDown(window, { metaKey: true, code: "KeyK", key: "k" });
+        const dialog = await screen.findByRole("dialog", { name: "Jump to thread or project" });
+        const input = within(dialog).getByRole("textbox", { name: "Jump to thread or project" });
+        fireEvent.change(input, { target: { value: project.label } });
+        await within(dialog).findByRole("option", { name: /Example.*Project/ });
+        await act(async () => { fireEvent.keyDown(input, { key: "Enter" }); });
+      } else {
+        if (entryPoint === "relocated workspace menu") {
+          fireEvent.keyDown(window, { metaKey: true, code: "KeyB", key: "b" });
+        }
+        const masthead = entryPoint === "relocated workspace menu"
+          ? container.querySelector<HTMLElement>(".thread-header__masthead")!
+          : screen.getByRole("complementary", { name: "Threads" });
+        expect(masthead).not.toBeNull();
+        const newThreadButton = within(masthead).getByRole("button", { name: "New thread" });
+        fireEvent.mouseEnter(newThreadButton.parentElement!);
+        fireEvent.click(await within(masthead).findByRole("menuitem", { name: "New chat without a directory" }));
+      }
+
+      expect(await screen.findByRole("textbox", { name: "New thread" })).toBeInTheDocument();
+      expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith(expect.objectContaining({
+        directoryKey: entryPoint.includes("workspace") ? "workspace:new-thread" : project.key,
+      }));
+      expect(screen.getByRole("button", { name: "Access mode" })).toHaveTextContent("Auto");
+      expect(updateDirectoryLaunchpad).not.toHaveBeenCalled();
+    },
+  );
+
   it("routes the new-thread menu push into the existing launchpad flow", async () => {
     let openNewThreadListener: (() => void) | undefined;
     const ensureDirectoryLaunchpad = vi.fn(async () => ({
@@ -6659,6 +6781,14 @@ describe("App", () => {
       level: 2,
       name: "Second project thread",
     });
+    // The heading and the history cursor commit separately. Wait for history
+    // to record the destination before consuming its Back entry.
+    await waitFor(() => {
+      expect(screen.getByTestId("history-nav-back")).toHaveAttribute(
+        "aria-description",
+        "New thread in PwrAgent",
+      );
+    });
     await clickButton("Back");
 
     await screen.findByRole("heading", { level: 2, name: "New thread" });
@@ -6668,6 +6798,12 @@ describe("App", () => {
     expect(screen.getAllByText("Full Access").length).toBeGreaterThan(0);
     expect(ensureDirectoryLaunchpad).toHaveBeenCalledTimes(1);
 
+    await waitFor(() => {
+      expect(screen.getByTestId("history-nav-back")).toHaveAttribute(
+        "aria-description",
+        "First project thread",
+      );
+    });
     await clickButton("Cancel");
     await screen.findByRole("heading", {
       level: 2,

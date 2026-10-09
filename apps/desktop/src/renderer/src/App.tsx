@@ -3161,7 +3161,7 @@ function DesktopAppShell(props: {
     },
     onCreateThreadWithoutDirectory: async () => {
       setMainView("thread");
-      await navigation.createThread(undefined, "default", { forceWorkspace: true });
+      await navigation.createThread(undefined, undefined, { forceWorkspace: true });
     },
     onCreateThreadOnFederationTarget: createThreadOnFederationTarget,
   };
@@ -3807,7 +3807,7 @@ function DesktopAppShell(props: {
           }}
           onCreateThreadWithoutDirectory={async () => {
             setMainView("thread");
-            await navigation.createThread(undefined, "default", {
+            await navigation.createThread(undefined, undefined, {
               forceWorkspace: true,
             });
           }}

@@ -7930,6 +7930,59 @@ describe("useThreadNavigation", () => {
     });
   });
 
+  it.each(["default", "auto", "full-access"] as const)(
+    "preserves saved %s access when opening a new-thread launchpad",
+    async (executionMode) => {
+      let launchpad: NavigationLaunchpadDraft = {
+        directoryKey: "workspace:new-thread",
+        directoryKind: "workspace",
+        directoryLabel: "Workspaces",
+        backend: "codex",
+        executionMode,
+        prompt: "",
+        workMode: "local",
+        createdAt: 1,
+        updatedAt: 2,
+      };
+      const defaults: NavigationLaunchpadDefaults = { backend: "codex", executionMode: "default" };
+      const ensureDirectoryLaunchpad = vi.fn(async () => ({ launchpad, defaults }));
+      const updateDirectoryLaunchpad = vi.fn<NonNullable<DesktopApi["updateDirectoryLaunchpad"]>>(async ({ patch }) => {
+        launchpad = { ...launchpad, ...patch };
+        return { launchpad, defaults };
+      });
+      const desktopApi: DesktopApi = {
+        ensureDirectoryLaunchpad,
+        updateDirectoryLaunchpad,
+        readPopulation: async () => ({
+          backend: "all",
+          fetchedAt: Date.now(),
+          unchanged: false,
+          inboxThreadKeys: [],
+          threads: [],
+          directories: [],
+          launchpadDefaults: defaults,
+        }),
+        onAgentEvent: () => () => undefined,
+      };
+      const { result } = renderHook(() => useThreadNavigation(desktopApi));
+      await waitFor(() => expect(result.current.loaded).toBe(true));
+
+      await act(async () => { await result.current.createThread(); });
+
+      expect(result.current.selectedLaunchpad?.executionMode).toBe(executionMode);
+      expect(updateDirectoryLaunchpad).not.toHaveBeenCalled();
+
+      // An explicit caller override still applies, including "default".
+      const override = executionMode === "default" ? "auto" : "default";
+      await act(async () => { await result.current.createThread(undefined, override); });
+      expect(result.current.selectedLaunchpad?.executionMode).toBe(override);
+      expect(updateDirectoryLaunchpad).toHaveBeenCalledWith({
+        directoryKey: launchpad.directoryKey,
+        patch: { executionMode: override },
+      });
+    },
+  );
+
   it("opens masthead new-thread drafts inside the Workspaces directory", async () => {
     const ensureDirectoryLaunchpad = vi.fn(async () => ({
       launchpad: {
