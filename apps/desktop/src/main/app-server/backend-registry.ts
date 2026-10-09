@@ -8550,6 +8550,12 @@ function readProviderRuntimeFingerprints(
   ) as Record<ProviderId, string>;
 }
 
+type ThreadRenameOptions = {
+  titleSource?: AppServerRenamedTitleSource;
+  renameOrigin?: "agent_tool";
+  previousThreadName?: string;
+};
+
 export class DesktopBackendRegistry {
   private readonly codexClient: BackendClient;
   private readonly configStore?: Pick<
@@ -9075,6 +9081,7 @@ export class DesktopBackendRegistry {
     string,
     { title: string; titleSource: AppServerRenamedTitleSource }
   >();
+  private readonly threadRenameQueues = new Map<string, Promise<void>>();
   private hasLoggedNotificationsEnabledError = false;
   private readonly threadTurnQueue: ThreadTurnQueue;
   private readonly queuedMessageTitler = new QueuedMessageTitler({
@@ -15078,15 +15085,49 @@ export class DesktopBackendRegistry {
     // Not on `RenameThreadRequest`: that type crosses IPC, and an operator
     // rename must never be able to claim it was generated. Only this class's
     // own title generator supplies a source.
-    options?: { titleSource?: AppServerRenamedTitleSource },
+    options?: ThreadRenameOptions,
   ): Promise<RenameThreadResponse> {
     const backend = request.backend ?? "codex";
-    // A rename supersedes PwrAgent's launch placeholder. Clear this before the
-    // provider round trip so an in-flight title helper's late eligibility
-    // check cannot overwrite an operator rename that is still being accepted.
-    this.systemPlaceholderTitleThreadKeys.delete(
-      buildThreadIdentityKey(backend, request.threadId),
-    );
+    const key = buildThreadIdentityKey(backend, request.threadId);
+    // Clear helper eligibility before this rename waits on earlier requests or
+    // metadata, so a late title helper cannot enqueue after an operator rename.
+    this.systemPlaceholderTitleThreadKeys.delete(key);
+    const previous = this.threadRenameQueues.get(key) ?? Promise.resolve();
+    const operation = previous.then(() => this.applyThreadRename(request, options));
+    const settled = operation.then(() => {}, () => {});
+    this.threadRenameQueues.set(key, settled);
+    try {
+      return await operation;
+    } finally {
+      if (this.threadRenameQueues.get(key) === settled) this.threadRenameQueues.delete(key);
+    }
+  }
+
+  private async applyThreadRename(
+    request: RenameThreadRequest,
+    options?: ThreadRenameOptions,
+  ): Promise<RenameThreadResponse> {
+    const backend = request.backend ?? "codex";
+    if (request.expectedName !== undefined || options?.renameOrigin === "agent_tool") {
+      const summaryPromise = backend === "codex"
+        ? this.withCodexThreadClient(request.threadId, async (client) =>
+            client.readThreadSummary
+              ? await client.readThreadSummary(request.threadId)
+              : await this.readThreadInspectionSummaryForMutation({ backend, threadId: request.threadId, fresh: true }))
+        : this.readThreadInspectionSummaryForMutation({ backend, threadId: request.threadId, fresh: true });
+      const summary = await summaryPromise.catch((error: unknown) => {
+        // The prior title is optional notice metadata. A failed metadata read
+        // must not prevent a requested rename; Undo must still fail closed.
+        if (request.expectedName !== undefined) throw error;
+        return undefined;
+      });
+      if (request.expectedName !== undefined && summary?.title !== request.expectedName) {
+        throw new Error("The thread title has changed. Undo was not applied.");
+      }
+      if (options?.renameOrigin === "agent_tool") {
+        options = { ...options, previousThreadName: summary?.title };
+      }
+    }
     let result: { threadId: string };
     if (isAcpBackendId(backend)) {
       result = await this.renameAcpSession(
@@ -15126,6 +15167,8 @@ export class DesktopBackendRegistry {
             threadId: result.threadId,
             threadName: request.name.trim(),
             ...(options?.titleSource ? { titleSource: options.titleSource } : {}),
+            ...(options?.renameOrigin ? { renameOrigin: options.renameOrigin } : {}),
+            ...(options?.previousThreadName ? { previousThreadName: options.previousThreadName } : {}),
           },
         },
       });
@@ -15142,7 +15185,7 @@ export class DesktopBackendRegistry {
     backend: AcpBackendId,
     threadId: string,
     name: string,
-    options?: { titleSource?: AppServerThreadTitleSource },
+    options?: Omit<ThreadRenameOptions, "titleSource"> & { titleSource?: AppServerThreadTitleSource },
   ): Promise<{ threadId: string }> {
     const nextName = name.trim();
     if (!nextName) {
@@ -15177,6 +15220,8 @@ export class DesktopBackendRegistry {
           threadId,
           threadName: nextName,
           ...(announcedTitleSource ? { titleSource: announcedTitleSource } : {}),
+          ...(options?.renameOrigin ? { renameOrigin: options.renameOrigin } : {}),
+          ...(options?.previousThreadName ? { previousThreadName: options.previousThreadName } : {}),
         },
       },
     });
@@ -41580,6 +41625,20 @@ export class DesktopBackendRegistry {
       }
     }
 
+    if (request.operation === "rename_current_thread") {
+      const args = request.args;
+      if (typeof args.title !== "string" || !args.title.trim() || args.title.length > 200
+        || Object.keys(args).some((key) => key !== "title")) {
+        return threadInspectionFailure("invalid_arguments", "Provide only a title between 1 and 200 characters.");
+      }
+      return await this.handleMutateThreadInspectionRequest({
+        backend: request.context.backend,
+        threadId: request.context.threadId,
+        includeRemote: false,
+        title: args.title,
+      }, request.context);
+    }
+
     if (request.operation === "mutate_thread") {
       return await this.handleMutateThreadInspectionRequest(
         request.args,
@@ -42514,6 +42573,8 @@ export class DesktopBackendRegistry {
         backend: args.backend,
         threadId,
         name: title,
+      }, {
+        renameOrigin: "agent_tool",
       });
     }
 

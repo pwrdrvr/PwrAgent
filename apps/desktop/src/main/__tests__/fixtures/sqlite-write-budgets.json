@@ -916,6 +916,8 @@
     "rowsChanged": 27,
     "statements": 27
   },
+  "thread-self-rename": {"commits": 0, "note": "One ordinary-thread self-rename: zero commits/WAL bytes, projecting 0 MB/day. Notification and Undo state remain in memory, with no idle writes.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "thread-self-rename-agent": {"commits": 1, "note": "One self-rename with Agent metadata: existing Agent-name overlay update, 1 commit/~16 KB WAL; 100 renames/day projects ~1.65 MB/day. Notification and Undo state remain in memory, with no idle writes.", "observedWalBytes": 16480, "rowsChanged": 1, "statements": 1},
   "thread-spend-alert-boundary": {
     "commits": 2,
     "note": "one pending total-spend alert and one renderer acknowledgement; repeated updates and acknowledgements are read-only",

@@ -751,6 +751,9 @@ export function permissionForDynamicTool(
 ): MessagingPermissionId | undefined {
   switch (category) {
     case "thread_inspection":
+      if (tool === "rename_current_thread") {
+        return "thread.settings.name";
+      }
       if (tool === "mark_project_read") {
         return "thread.control.organize";
       }

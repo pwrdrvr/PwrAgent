@@ -1120,6 +1120,8 @@ export type RenameThreadRequest = {
   federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   name: string;
+  /** Refuse an Undo if the owning thread no longer has this title. */
+  expectedName?: string;
 };
 
 export type RenameThreadResponse = {
@@ -2125,6 +2127,10 @@ export type AppServerNotification =
          * and a federated payload is another instance's JSON.
          */
         titleSource?: AppServerRenamedTitleSource;
+        /** Host-attributed Agent tool rename, shown in the notification rail. */
+        renameOrigin?: "agent_tool";
+        /** Previous title, when known, for an in-window Undo action. */
+        previousThreadName?: string;
       };
     }
   | {
