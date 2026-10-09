@@ -60689,6 +60689,38 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
     await registry.whenMissingCodexThreadWorkSettledForTests();
   }
 
+  let fixtureEnvironmentDirectories: Set<string> | undefined;
+
+  /**
+   * Answers the fixture's Codex environment-directory probes in memory.
+   *
+   * Listing and archiving a thread run `listCodexEnvironmentOptions` against
+   * its cwd, which probes `.codex/environments` with a native `stat`. The
+   * fixture's workspaces are invented, and fake-timer advancement never waits
+   * for host filesystem I/O, so on a slow runner `withArchivePacing` ran out of
+   * slices while a probe was still in flight (#2665). One override serves every
+   * fixture a test builds, and the host implementation returns when it ends.
+   */
+  function answerFixtureEnvironmentProbes(directories: string[]): void {
+    if (!fixtureEnvironmentDirectories) {
+      const controlled = new Set<string>();
+      const hostStat = vi.mocked(stat).getMockImplementation()!;
+      vi.mocked(stat).mockClear();
+      vi.mocked(stat).mockImplementation(async (filePath, options) => {
+        if (typeof filePath === "string" && controlled.has(filePath)) {
+          throw Object.assign(new Error("Contrived environment directory does not exist."), { code: "ENOENT" });
+        }
+        return await hostStat(filePath, options);
+      });
+      fixtureEnvironmentDirectories = controlled;
+      onTestFinished(() => {
+        fixtureEnvironmentDirectories = undefined;
+        vi.mocked(stat).mockImplementation(hostStat);
+      });
+    }
+    for (const directory of directories) fixtureEnvironmentDirectories.add(directory);
+  }
+
   function buildMissingThreadFixture(params: {
     missingThreadIds: string[];
     presentThreadIds: string[];
@@ -60730,7 +60762,14 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
         },
       ]),
     );
+    // Each thread's cwd: its handoff worktree when missing, else its repository.
+    const environmentDirectories = [
+      ...params.missingThreadIds.map((id) => `/worktrees/${id}`),
+      ...params.presentThreadIds.map((id) => `/repo/${id}`),
+    ].map((workspace) => path.join(workspace, ".codex", "environments"));
+    answerFixtureEnvironmentProbes(environmentDirectories);
     return {
+      environmentDirectories,
       overlays,
       threads: [
         ...params.missingThreadIds.map(buildThread),
@@ -60778,20 +60817,6 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
 
   it("does not synchronize archived threads while collecting archive cleanup metadata", async () => {
     vi.useFakeTimers();
-    const hostStat = vi.mocked(stat).getMockImplementation()!;
-    const environmentDirectories = [
-      path.join("/repo/archive-target", ".codex", "environments"),
-      path.join("/worktrees/already-archived", ".codex", "environments"),
-    ];
-    vi.mocked(stat).mockClear();
-    // These workspaces are contrived. Their environment-directory probes must
-    // settle in memory too; fake timers cannot complete host filesystem I/O.
-    vi.mocked(stat).mockImplementation(async (filePath, options) => {
-      if (typeof filePath === "string" && environmentDirectories.includes(filePath)) {
-        throw Object.assign(new Error("Contrived environment directory does not exist."), { code: "ENOENT" });
-      }
-      return await hostStat(filePath, options);
-    });
     const fixture = buildMissingThreadFixture({
       missingThreadIds: ["already-archived"],
       presentThreadIds: ["archive-target"],
@@ -60810,7 +60835,7 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
     try {
       const result = await withArchivePacing(registry.archiveThread({ backend: "codex", threadId: "archive-target" }));
       expect(result.cleanup).toEqual([]);
-      for (const directory of environmentDirectories) {
+      for (const directory of fixture.environmentDirectories) {
         expect(stat).toHaveBeenCalledWith(directory);
       }
       await settleMissingCodexThreadAudit(registry);
@@ -60821,7 +60846,6 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
       )).toEqual([]);
     } finally {
       await registry.close();
-      vi.mocked(stat).mockImplementation(hostStat);
       vi.useRealTimers();
     }
   });
@@ -60846,11 +60870,15 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
       await registry.listThreads({ backend: "codex", forceRefresh: true });
       await settleMissingCodexThreadAudit(registry);
       expect(codexClient.archivedThreadIds).toEqual([]);
+      vi.mocked(stat).mockClear();
       const result = await withArchivePacing(registry.resolveMissingCodexThreads({
         action: "archive",
         threadIds: ["thread-missing"],
       }));
       expect(result.failedThreadIds).toEqual(["thread-missing"]);
+      for (const directory of fixture.environmentDirectories) {
+        expect(stat).toHaveBeenCalledWith(directory);
+      }
     } finally {
       await registry.close();
       vi.useRealTimers();
