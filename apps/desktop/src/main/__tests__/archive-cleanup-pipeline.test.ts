@@ -46,7 +46,7 @@ function build(active: AppServerThreadSummary[], target = codexThread({ id: "tar
       archived = [target];
       return { threadId };
     }),
-    listThreads: vi.fn(async () => { counts.aggregateLists += 1; throw new Error("Broad discovery is outside the archive budget."); }),
+    listThreads: vi.fn(async (): Promise<AppServerThreadSummary[]> => { counts.aggregateLists += 1; throw new Error("Broad discovery is outside the archive budget."); }),
     listArchiveCleanupThreadsPage: vi.fn(async (params: { archived: boolean; cursor?: string; limit: number }) => {
       counts.providerPages += 1;
       counts.largestProviderPage = Math.max(counts.largestProviderPage, params.limit);
@@ -63,6 +63,7 @@ function build(active: AppServerThreadSummary[], target = codexThread({ id: "tar
   });
   const store = new Proxy({
     getArchiveCleanupOverlayStates: readOverlays,
+    getThreadOverlayStates: readOverlays,
     getThreadOverlayState: vi.fn(async ({ threadId }: { threadId: string }) => overlays.get(threadId)),
     setThreadParent: vi.fn(async () => {}),
     setThreadArchiveTombstone: vi.fn(async () => {}),
@@ -123,6 +124,79 @@ describe("archive cleanup pipeline", () => {
     expect(fixture.counts.providerPages).toBe(2);
   });
 
+  it.each([false, true])("removes a newly started thread's worktree before navigation acknowledges its workspace (background: %s)", async (backgroundCleanup) => {
+    const target = codexThread({ id: "target", linkedDirectories: [{
+      id: "directory", kind: "worktree", label: "repo", path: "/contrived/repo", worktreePath: "/contrived/worktree",
+    }] });
+    const fixture = build([], target);
+    Object.assign(fixture.client, { startThread: vi.fn(async () => ({ threadId: target.id })) });
+    await fixture.registry.startThread({
+      backend: "codex", cwd: "/contrived/worktree", linkedDirectories: target.linkedDirectories,
+      mcpConnectionIds: [],
+    });
+    vi.useFakeTimers();
+
+    const result = await drivePacer(fixture.registry.archiveThread({ backend: "codex", threadId: target.id, backgroundCleanup }));
+    let cleanup: unknown = result.cleanup;
+    if (backgroundCleanup) {
+      const notification = (await drivePacer(fixture.completion)).notification;
+      if (notification.method !== "thread/archiveCleanup/completed") throw new Error("Expected archive cleanup completion.");
+      cleanup = notification.params.cleanup;
+    }
+
+    expect(cleanup).toEqual([expect.objectContaining({
+      removedWorktree: true, worktreePath: "/contrived/worktree",
+    })]);
+    expect(fixture.archiveWorktree).toHaveBeenCalledOnce();
+    expect(stat).toHaveBeenCalledWith("/contrived/worktree");
+    expect(fixture.counts.providerPages).toBe(4);
+    expect(fixture.counts.aggregateLists).toBe(0);
+  });
+
+  it("retains the provisional active thread when the provider rejects archive", async () => {
+    const fixture = build([]);
+    Object.assign(fixture.client, { startThread: vi.fn(async () => ({ threadId: "target" })) });
+    await fixture.registry.startThread({ backend: "codex", cwd: "/contrived/worktree", mcpConnectionIds: [] });
+    fixture.client.archiveThread.mockRejectedValue(new Error("Archive rejected."));
+
+    await expect(fixture.registry.archiveThread({ backend: "codex", threadId: "target" })).rejects.toThrow("Archive rejected.");
+
+    fixture.client.listThreads.mockResolvedValue([]);
+    expect(await fixture.registry.listThreads({ backend: "codex" })).toEqual([
+      expect.objectContaining({ id: "target", projectKey: "/contrived/worktree" }),
+    ]);
+    expect(fixture.archiveWorktree).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { method: "thread/archived", params: { threadId: "target" } },
+    { method: "thread/deleted", params: { threadId: "target" } },
+  ] as const)("retires provisional active metadata on $method", async (notification) => {
+    const fixture = build([]);
+    Object.assign(fixture.client, { startThread: vi.fn(async () => ({ threadId: "target" })) });
+    await fixture.registry.startThread({ backend: "codex", cwd: "/contrived/worktree", mcpConnectionIds: [] });
+
+    await publishNotification(fixture.registry, notification);
+
+    fixture.client.listThreads.mockResolvedValue([]);
+    expect(await fixture.registry.listThreads({ backend: "codex" })).toEqual([]);
+  });
+
+  it("keeps a worktree used by another newly started thread absent from provider listings", async () => {
+    const directory = { id: "directory", kind: "worktree" as const, label: "repo", path: "/contrived/repo", worktreePath: "/contrived/worktree" };
+    const fixture = build([], codexThread({ id: "target", linkedDirectories: [directory] }));
+    Object.assign(fixture.client, { startThread: vi.fn(async () => ({ threadId: "shared-user" })) });
+    await fixture.registry.startThread({
+      backend: "codex", cwd: "/contrived/worktree", linkedDirectories: [directory], mcpConnectionIds: [],
+    });
+    vi.useFakeTimers();
+
+    const result = await drivePacer(fixture.registry.archiveThread({ backend: "codex", threadId: "target" }));
+
+    expect(result.cleanup[0]?.skippedReason).toContain("another active thread: shared-user");
+    expect(fixture.archiveWorktree).not.toHaveBeenCalled();
+  });
+
   it("recovers retained active metadata after a confirmed missing rollout, including removal admission", async () => {
     vi.useFakeTimers();
     const directory = { id: "directory", kind: "worktree" as const, label: "repo", path: "/contrived/repo", worktreePath: "/contrived/worktree" };
@@ -137,6 +211,27 @@ describe("archive cleanup pipeline", () => {
     expect(fixture.store.setThreadArchiveTombstone).toHaveBeenCalledWith(expect.objectContaining({ backend: "codex", threadId: "target" }));
     expect(fixture.counts.providerPages).toBe(4);
     expect(fixture.counts.aggregateLists).toBe(0);
+  });
+
+  it("recovers a missing rollout using only the newly started thread's retained workspace", async () => {
+    const target = codexThread({ id: "target", linkedDirectories: [{
+      id: "directory", kind: "worktree", label: "repo", path: "/contrived/repo", worktreePath: "/contrived/worktree",
+    }] });
+    const fixture = build([], target);
+    Object.assign(fixture.client, { startThread: vi.fn(async () => ({ threadId: target.id })) });
+    await fixture.registry.startThread({
+      backend: "codex", cwd: "/contrived/worktree", linkedDirectories: target.linkedDirectories, mcpConnectionIds: [],
+    });
+    fixture.client.archiveThread.mockRejectedValue(new Error("json-rpc error (-32600): no rollout found for thread id target"));
+    vi.useFakeTimers();
+
+    const result = fixture.registry.archiveThread({ backend: "codex", threadId: target.id });
+    const observed = result.then((response) => ({ response }), (error: Error) => ({ error }));
+    expect(await drivePacer(observed)).toMatchObject({ response: { cleanup: [expect.objectContaining({ removedWorktree: true })] } });
+    expect(fixture.store.setThreadArchiveTombstone).toHaveBeenCalledOnce();
+
+    fixture.client.listThreads.mockResolvedValue([]);
+    expect(await fixture.registry.listThreads({ backend: "codex" })).toEqual([]);
   });
 
   it("removes independent worktrees for concurrent synchronous archives after both provider mutations settle", async () => {

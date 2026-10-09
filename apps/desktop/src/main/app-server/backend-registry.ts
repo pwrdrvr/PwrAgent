@@ -14497,6 +14497,12 @@ export class DesktopBackendRegistry {
       });
       result = { threadId: request.threadId };
     }
+    // A successful archive supersedes the provisional active workspace kept
+    // until navigation acknowledges a newly started or forked thread. Leaving
+    // it pending makes cleanup rediscover the archived target as active.
+    // Missing-rollout recovery still needs any retained workspace until its
+    // cleanup and tombstone have settled.
+    if (!codexRolloutMissing) this.pendingStartedThreads.delete(buildThreadIdentityKey(backend, result.threadId));
     await this.overlayStore.observeArchivedThreads?.([{ backend, threadId: result.threadId }], archivedAt);
     this.invalidateThreadListCache(backend);
     this.invalidateArchiveCleanupReads(backend);
@@ -14649,6 +14655,7 @@ export class DesktopBackendRegistry {
         threadId: result.threadId,
         archivedAt,
       });
+      this.pendingStartedThreads.delete(key);
       this.invalidateThreadListCache(backend);
       backendRegistryLog.warn("codex archive tombstoned missing rollout", {
         backend,
@@ -44013,6 +44020,9 @@ export class DesktopBackendRegistry {
       // Provider notifications enter before async cleanup, then reach emit.
       // One notification must advance the archive generation only once.
       this.archiveCleanupNotifications.add(notification);
+      if (notification.method === "thread/archived" || notification.method === "thread/deleted") {
+        this.pendingStartedThreads.delete(buildThreadIdentityKey(backend, notification.params.threadId));
+      }
       this.invalidateArchiveCleanupReads(backend, notification);
     }
   }
