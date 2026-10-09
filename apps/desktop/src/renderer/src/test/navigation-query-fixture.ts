@@ -79,7 +79,7 @@ export function navigationQueryFixture(
     else if (!options?.ownerLensOrder) threads = [...all].sort((left, right) => query.lens === "recents"
       ? (right.createdAt ?? 0) - (left.createdAt ?? 0) : (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
   }
-  // The Recents split: a subtree follows its root's pin, the pinned bucket
+  // The lens split: a subtree follows its root's pin, the pinned bucket
   // sorts by rank, and the owner acknowledges the split with a size.
   let lensRootCount: number | undefined;
   if (query.kind === "lens" && query.roots) {

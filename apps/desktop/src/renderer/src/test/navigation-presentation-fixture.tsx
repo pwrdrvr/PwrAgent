@@ -16,6 +16,7 @@ type FixtureProps = {
   selectedItemKey?: string;
   thinkingThreadKeys?: Record<string, boolean>;
   attentionPromoteOnTurnEnd?: boolean;
+  pinnedThreadsOnTop?: boolean;
   draftThreadKeys?: Record<string, boolean>;
 };
 
@@ -64,10 +65,11 @@ function usePresentationOwner(props: FixtureProps) {
   if (mode === "drafts") add('drafts:"":0', { kind: "exact", identities: ownerThreads
     .filter((thread) => props.draftThreadKeys?.[threadSummaryIdentityKey(thread)])
     .map((thread) => ({ backend: thread.source, threadId: thread.id })), includeAncestry: true });
-  else if (mode === "recents") {
+  else if ((mode === "inbox" || mode === "recents") && props.pinnedThreadsOnTop !== false) {
     // Split like the real demand: the Pinned group's page beside the list.
-    add("lens-pins", { kind: "lens", lens: "recents", roots: "pinned" }, props.recentThreads ?? ownerThreads);
-    add("lens", { kind: "lens", lens: "recents", roots: "unpinned" }, props.recentThreads ?? ownerThreads);
+    const lensThreads = mode === "recents" ? props.recentThreads ?? ownerThreads : ownerThreads;
+    add("lens-pins", { kind: "lens", lens: mode, roots: "pinned" }, lensThreads);
+    add("lens", { kind: "lens", lens: mode, roots: "unpinned" }, lensThreads);
   } else if (mode !== "directories") add("lens", { kind: "lens", lens: mode }, mode === "attention" ? attention.threads : ownerThreads);
   for (const directory of props.directories) {
     add(`directory-pins:${directory.key}`, { kind: "directory", directoryKey: directory.key, roots: "pinned" });

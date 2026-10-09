@@ -78,7 +78,7 @@ function renderRecents(props: Partial<ComponentProps<typeof Sidebar>> = {}) {
 }
 
 function pinnedGroup(): HTMLElement | null {
-  return document.querySelector<HTMLElement>(".recents-pinned-group");
+  return document.querySelector<HTMLElement>(".pinned-group");
 }
 
 function groupHeader(): HTMLElement {
@@ -92,11 +92,11 @@ function titlesIn(container: HTMLElement): string[] {
 
 function listTitles(): string[] {
   const list = [...document.querySelectorAll<HTMLElement>(".sidebar-list--compact[role='list']")]
-    .find((element) => !element.closest(".recents-pinned-group"));
+    .find((element) => !element.closest(".pinned-group"));
   return list ? titlesIn(list) : [];
 }
 
-describe("Recents Pinned group", () => {
+describe("Pinned group", () => {
   it("renders every pin once, in the group, in the one global pin order", () => {
     renderRecents();
 
@@ -144,24 +144,54 @@ describe("Recents Pinned group", () => {
     ]);
   });
 
-  it("draws no group without pins, and keeps Inbox a pure sort order", () => {
-    const unpinned = population.map((entry) => ({ ...entry, pinnedRank: undefined }));
-    const view = renderRecents({ threads: unpinned });
+  it.each(["recents", "inbox"] as const)("draws no group in %s without pins", (browseMode) => {
+    renderRecents({ browseMode, threads: population.map((entry) => ({ ...entry, pinnedRank: undefined })) });
     expect(pinnedGroup()).toBeNull();
     expect(screen.queryByRole("button", { name: /^Pinned,/ })).not.toBeInTheDocument();
-
-    view.unmount();
-    renderRecents({ browseMode: "inbox" });
-    expect(pinnedGroup()).toBeNull();
     expect(listTitles()).toEqual(population.map((entry) => entry.title));
   });
 
+  it("gathers Updated's pins the same way, above its last-update list", () => {
+    // The owner orders Updated by last update; pins leave that order for the group.
+    const byUpdate = [glossary, rateLimiter, flakyFixture, releaseManager, chartTokens, docsMigration];
+    renderRecents({ browseMode: "inbox", threads: byUpdate,
+      onReorderThreadPins: async () => undefined, onSetThreadPin: async () => undefined });
+
+    expect(titlesIn(pinnedGroup()!)).toEqual([
+      "Release manager",
+      "Docs IA migration",
+      "Rate limiter rewrite",
+    ]);
+    expect(listTitles()).toEqual([
+      "Glossary search index",
+      "Flaky auth fixture",
+      "Dark-mode chart tokens",
+    ]);
+    fireEvent.contextMenu(screen.getByRole("button", { name: /^Docs IA migration/ }));
+    expect(screen.getByRole("menuitem", { name: /Move Up/ })).toBeInTheDocument();
+  });
+
+  it.each(["recents", "inbox"] as const)("keeps %s a pure time sort with pinned threads in place", (browseMode) => {
+    renderRecents({ browseMode, pinnedThreadsOnTop: false,
+      onReorderThreadPins: async () => undefined, onSetThreadPin: async () => undefined });
+
+    expect(pinnedGroup()).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Pinned,/ })).not.toBeInTheDocument();
+    expect(listTitles()).toEqual(population.map((entry) => entry.title));
+    // No visible pin order, so no pin-order controls either.
+    const docs = screen.getByRole("button", { name: /^Docs IA migration/ });
+    expect(docs.closest(".thread-row-shell")).not.toHaveClass("is-draggable");
+    fireEvent.contextMenu(docs);
+    expect(screen.queryByRole("menuitem", { name: /Move Up/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitemcheckbox", { name: "Keep at Top" })).not.toBeInTheDocument();
+  });
+
   it("toggles from its header and renders closed from the saved state", () => {
-    const onSetRecentsPinnedCollapsed = vi.fn();
-    const view = renderRecents({ onSetRecentsPinnedCollapsed });
+    const onSetPinnedGroupCollapsed = vi.fn();
+    const view = renderRecents({ onSetPinnedGroupCollapsed });
 
     fireEvent.click(groupHeader());
-    expect(onSetRecentsPinnedCollapsed).toHaveBeenCalledWith(true);
+    expect(onSetPinnedGroupCollapsed).toHaveBeenCalledWith(true);
 
     view.rerender(
       <Sidebar
@@ -169,13 +199,13 @@ describe("Recents Pinned group", () => {
         browseMode="recents"
         directories={[]}
         loading={false}
-        recentsPinnedCollapsed
+        pinnedGroupCollapsed
         threads={population}
         onBrowseModeChange={() => undefined}
         onCreateThread={async () => undefined}
         onOpenLaunchpad={async () => undefined}
         onSelectThread={() => undefined}
-        onSetRecentsPinnedCollapsed={onSetRecentsPinnedCollapsed}
+        onSetPinnedGroupCollapsed={onSetPinnedGroupCollapsed}
       />,
     );
     expect(groupHeader()).toHaveAttribute("aria-expanded", "false");
@@ -187,11 +217,11 @@ describe("Recents Pinned group", () => {
     ]);
 
     fireEvent.click(groupHeader());
-    expect(onSetRecentsPinnedCollapsed).toHaveBeenLastCalledWith(false);
+    expect(onSetPinnedGroupCollapsed).toHaveBeenLastCalledWith(false);
   });
 
   it("keeps both rollups on the collapsed header, grey at zero", () => {
-    renderRecents({ recentsPinnedCollapsed: true });
+    renderRecents({ pinnedGroupCollapsed: true });
     const header = groupHeader();
 
     const active = header.querySelector("[data-attention-active-count]");
@@ -205,7 +235,7 @@ describe("Recents Pinned group", () => {
 
   it("counts running and unread work inside the collapsed group only", () => {
     renderRecents({
-      recentsPinnedCollapsed: true,
+      pinnedGroupCollapsed: true,
       threads: population.map((entry) =>
         entry === rateLimiter ? { ...entry, threadStatus: "active" as const }
         : entry === docsMigration ? { ...entry, inbox: { inInbox: true, reason: "updated-since-seen" as const } }
@@ -222,14 +252,14 @@ describe("Recents Pinned group", () => {
   });
 
   it("opens a closed group to reveal a pinned selection, and only then", () => {
-    const onSetRecentsPinnedCollapsed = vi.fn();
+    const onSetPinnedGroupCollapsed = vi.fn();
     const view = renderRecents({
-      recentsPinnedCollapsed: true,
+      pinnedGroupCollapsed: true,
       selectedItemKey: "codex:glossary",
       revealSelectedThreadRequest: 1,
-      onSetRecentsPinnedCollapsed,
+      onSetPinnedGroupCollapsed,
     });
-    expect(onSetRecentsPinnedCollapsed).not.toHaveBeenCalled();
+    expect(onSetPinnedGroupCollapsed).not.toHaveBeenCalled();
 
     view.rerender(
       <Sidebar
@@ -237,7 +267,7 @@ describe("Recents Pinned group", () => {
         browseMode="recents"
         directories={[]}
         loading={false}
-        recentsPinnedCollapsed
+        pinnedGroupCollapsed
         revealSelectedThreadRequest={2}
         selectedItemKey="codex:docs"
         threads={population}
@@ -245,16 +275,16 @@ describe("Recents Pinned group", () => {
         onCreateThread={async () => undefined}
         onOpenLaunchpad={async () => undefined}
         onSelectThread={() => undefined}
-        onSetRecentsPinnedCollapsed={onSetRecentsPinnedCollapsed}
+        onSetPinnedGroupCollapsed={onSetPinnedGroupCollapsed}
       />,
     );
-    expect(onSetRecentsPinnedCollapsed).toHaveBeenCalledExactlyOnceWith(false);
+    expect(onSetPinnedGroupCollapsed).toHaveBeenCalledExactlyOnceWith(false);
   });
 
   it("opens a closed group when a list row is pinned, so selection follows it", async () => {
-    const onSetRecentsPinnedCollapsed = vi.fn();
+    const onSetPinnedGroupCollapsed = vi.fn();
     const onSetThreadPin = vi.fn(async () => undefined);
-    renderRecents({ recentsPinnedCollapsed: true, onSetRecentsPinnedCollapsed, onSetThreadPin });
+    renderRecents({ pinnedGroupCollapsed: true, onSetPinnedGroupCollapsed, onSetThreadPin });
 
     const row = screen.getByRole("button", { name: /^Glossary search index/ });
     fireEvent.click(row.closest(".thread-row-shell")!.querySelector(".thread-row__overflow-button")!);
@@ -263,7 +293,7 @@ describe("Recents Pinned group", () => {
     });
 
     expect(onSetThreadPin).toHaveBeenCalledWith(expect.objectContaining({ id: "glossary" }), true);
-    expect(onSetRecentsPinnedCollapsed).toHaveBeenCalledWith(false);
+    expect(onSetPinnedGroupCollapsed).toHaveBeenCalledWith(false);
   });
 
   it("orders the group with Directories' controls, and the list gets none", async () => {
@@ -306,7 +336,7 @@ describe("Recents Pinned group", () => {
   });
 });
 
-describe("Recents Pinned group against an owner without the split", () => {
+describe("Pinned group against an owner without the split", () => {
   const resource = (id: string, query: NavigationWindowResource["state"]["request"]["query"], pageSize: number): NavigationWindowResource => {
     const request = { protocol: 2 as const, consumer: "main-sidebar" as const, query, pageSize };
     // An older owner ignores `roots`: both pages carry every thread, by
@@ -341,6 +371,27 @@ describe("Recents Pinned group against an owner without the split", () => {
       "Glossary search index",
       "Flaky auth fixture",
     ]);
+  });
+
+  it("keeps every pin in the list until the group's own page is demanded", () => {
+    // The render where the setting turns on: the list's page is in hand and
+    // the group's is not yet demanded. No pin may vanish from both.
+    const resources = new Map([
+      ["lens", resource("lens", { kind: "lens", lens: "recents" }, 100)],
+    ]);
+    render(
+      <RecentsList
+        pagedNavigation={{ resources } as unknown as ComponentProps<typeof RecentsList>["pagedNavigation"]}
+        pinnedResourceId="lens-pins"
+        resourceIds={["lens"]}
+        threads={population}
+        onOpenThreadContextMenu={() => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    expect(pinnedGroup()).toBeNull();
+    expect(listTitles()).toEqual(population.map((entry) => entry.title));
   });
 
   it("counts the header from the loaded pins when the owner sent no split", () => {

@@ -419,7 +419,7 @@ it.each([undefined, "199680"])("keeps a local handoff reachable when its remote 
   expect(child.parentThreadInstanceId).toBeUndefined();
 });
 
-describe("Recents lens split by root pin", () => {
+describe("Lens split by root pin", () => {
   const kept = String(-(2 ** 40));
   const source = () => snapshot([
     thread("t1", { pinnedRank: "2048" }),
@@ -463,6 +463,23 @@ describe("Recents lens split by root pin", () => {
     expect(unsplit.collectionSize).toBeUndefined();
     expect(unsplit.counts.total).toBe(9);
     expect(unsplit.entries.map(({ row }) => row.id)).toEqual(["t9", "t8", "t7", "t6", "t5", "t4", "t3", "t2", "t1"]);
+  });
+
+  it("splits Updated the same way, keeping its list in last-update order", () => {
+    // t2 was created early but touched last; Updated lists it first.
+    const updated = (roots: "pinned" | "unpinned") => projectNavigationQuery({
+      index: snapshot([
+        thread("t1", { pinnedRank: "2048", updatedAt: 90 }),
+        thread("t2", { updatedAt: 80 }),
+        thread("t3", { pinnedRank: kept }),
+        thread("t4", { updatedAt: 5 }),
+      ]),
+      request: request({ kind: "lens", lens: "inbox", roots }),
+    });
+    // Pins keep their rank, however recently they changed.
+    expect(updated("pinned").entries.map(({ row }) => row.id)).toEqual(["t3", "t1"]);
+    expect(updated("pinned").collectionSize).toBe(2);
+    expect(updated("unpinned").entries.map(({ row }) => row.id)).toEqual(["t2", "t4"]);
   });
 
   it("applies the lens filter to both buckets", () => {
