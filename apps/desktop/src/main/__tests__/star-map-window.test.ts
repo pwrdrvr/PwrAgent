@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { NAVIGATION_MENTION_SOURCES_CHANGED_EVENT_CHANNEL } from "../../shared/ipc";
+import {
+  KEYBINDINGS_CHANGED_CHANNEL,
+  NAVIGATION_MENTION_SOURCES_CHANGED_EVENT_CHANNEL,
+} from "../../shared/ipc";
 
 const mocks = vi.hoisted(() => {
   const windows: Array<{
@@ -82,6 +85,18 @@ describe("star map window", () => {
       expect.arrayContaining([
         NAVIGATION_MENTION_SOURCES_CHANGED_EVENT_CHANNEL,
       ]),
+    );
+  });
+
+  it("follows keyboard shortcut changes, so the Find chip shows the current chord", async () => {
+    const { showStarMapWindow } = await import("../star-map-window");
+
+    showStarMapWindow();
+
+    expect(mocks.registerWindowChannels).toHaveBeenCalledWith(
+      mocks.windows[0],
+      "star-map",
+      expect.arrayContaining([KEYBINDINGS_CHANGED_CHANNEL]),
     );
   });
 });

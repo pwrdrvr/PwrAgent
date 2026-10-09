@@ -25,6 +25,10 @@ function installKeybindingsApi(
     } else if (request.kind === "reset") {
       const { [request.actionId]: _removed, ...rest } = overrides;
       overrides = rest;
+    } else if (request.kind === "set_many") {
+      for (const change of request.changes) {
+        overrides = { ...overrides, [change.actionId]: [...change.chords] };
+      }
     } else {
       overrides = { ...overrides, [request.actionId]: [...request.chords] };
     }
@@ -116,9 +120,15 @@ describe("KeyboardSettings", () => {
     expect(writes).toEqual([]);
 
     fireEvent.click(within(notice).getByRole("button", { name: "Move It Here" }));
+    // One save: a failure would leave both actions as they were.
     await waitFor(() => expect(writes).toEqual([
-      { kind: "set", actionId: "navigation.search_threads", chords: [] },
-      { kind: "set", actionId: "threads.toggle_pin", chords: ["CmdOrCtrl+Shift+F"] },
+      {
+        kind: "set_many",
+        changes: [
+          { actionId: "navigation.search_threads", chords: [] },
+          { actionId: "threads.toggle_pin", chords: ["CmdOrCtrl+Shift+F"] },
+        ],
+      },
     ]));
     // The loss is visible: Search Threads reads Not set, with Reset.
     expect(await within(row("Pin / Unpin")).findByText("⇧⌘F")).toBeInTheDocument();

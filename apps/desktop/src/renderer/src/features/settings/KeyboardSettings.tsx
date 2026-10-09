@@ -101,16 +101,21 @@ export function KeyboardSettings(props: { desktopApi?: DesktopApi }) {
     const next = target.mode === "add" ? [...current, chord] : [chord];
     const failed = () => setRecording((current) =>
       current?.actionId === target.actionId ? { ...current, live: undefined, saving: false } : current);
-    if (takeFrom !== undefined) {
-      // Unbind it from the other action first, so the file never holds the
-      // chord twice.
-      const remaining = chordsOf(takeFrom).filter((existing) => !sameChord(existing, chord));
-      if (!(await save(takeFrom, { kind: "set", actionId: takeFrom, chords: remaining }))) {
-        failed();
-        return;
-      }
-    }
-    if (!(await save(target.actionId, { kind: "set", actionId: target.actionId, chords: next }))) {
+    // Move It Here takes the chord from the other action in the same save,
+    // so the file never holds it twice and a failure leaves both as they were.
+    const request: KeybindingWriteRequest = takeFrom === undefined
+      ? { kind: "set", actionId: target.actionId, chords: next }
+      : {
+          kind: "set_many",
+          changes: [
+            {
+              actionId: takeFrom,
+              chords: chordsOf(takeFrom).filter((existing) => !sameChord(existing, chord)),
+            },
+            { actionId: target.actionId, chords: next },
+          ],
+        };
+    if (!(await save(target.actionId, request))) {
       failed();
       return;
     }
@@ -171,9 +176,9 @@ export function KeyboardSettings(props: { desktopApi?: DesktopApi }) {
   };
 
   const recordKeyDown = (event: KeyboardEvent<HTMLElement>, target: Recording) => {
-    const plain = !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey;
-    // Tab leaves the recorder like any field; the blur cancels.
-    if (plain && event.key === "Tab") return;
+    // Tab and Shift+Tab leave the recorder like any field; the blur cancels.
+    // Neither could be saved: Shift alone is not a modifier for a shortcut.
+    if (event.key === "Tab" && !event.metaKey && !event.ctrlKey && !event.altKey) return;
     // The recorder swallows every other key, including the chord it would
     // otherwise fire.
     event.preventDefault();

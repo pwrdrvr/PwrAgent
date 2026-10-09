@@ -66,6 +66,19 @@ function parseWriteRequest(payload: unknown): KeybindingWriteRequest {
   }
   const request = payload as Record<string, unknown>;
   if (request.kind === "reset_all") return { kind: "reset_all" };
+  if (request.kind === "set_many") {
+    if (!Array.isArray(request.changes) || request.changes.length === 0) {
+      throw new Error("keybindings:write requires a non-empty list of changes");
+    }
+    return {
+      kind: "set_many",
+      changes: request.changes.map((change: unknown) => {
+        const parsed = parseWriteRequest({ ...(change as object), kind: "set" });
+        if (parsed.kind !== "set") throw new Error("keybindings:write requires set changes");
+        return { actionId: parsed.actionId, chords: parsed.chords };
+      }),
+    };
+  }
   const actionId = request.actionId;
   if (typeof actionId !== "string" || !isKeybindingActionId(actionId)) {
     throw new Error("keybindings:write requires a known actionId");
@@ -78,7 +91,7 @@ function parseWriteRequest(payload: unknown): KeybindingWriteRequest {
     }
     return { kind: "set", actionId, chords: chords as string[] };
   }
-  throw new Error("keybindings:write requires kind set, reset or reset_all");
+  throw new Error("keybindings:write requires kind set, set_many, reset or reset_all");
 }
 
 export function registerKeybindingsIpcHandlers(options: { filePath?: string } = {}): void {

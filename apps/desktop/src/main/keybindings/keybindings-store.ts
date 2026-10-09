@@ -26,6 +26,7 @@ import {
   KEYBINDING_ACTIONS,
   keybindingTomlPath,
   normalizeAccelerator,
+  type KeybindingActionId,
   type KeybindingOverrides,
   type KeybindingWriteRequest,
   type KeybindingsSnapshot,
@@ -109,19 +110,31 @@ function editsFor(request: KeybindingWriteRequest): TomlEdit[] {
       path: keybindingTomlPath(action.id),
     }));
   }
-  const tomlPath = keybindingTomlPath(request.actionId);
-  if (request.kind === "reset") {
-    return [{ op: "delete", path: tomlPath }];
+  if (request.kind === "set_many") {
+    return request.changes.map((change) => setEdit(change.actionId, change.chords));
   }
+  if (request.kind === "reset") {
+    return [{ op: "delete", path: keybindingTomlPath(request.actionId) }];
+  }
+  return [setEdit(request.actionId, request.chords)];
+}
+
+function setEdit(actionId: KeybindingActionId, requested: readonly string[]): TomlEdit {
   const chords: string[] = [];
-  for (const chord of request.chords) {
+  for (const chord of requested) {
     const normalized = normalizeAccelerator(chord);
     if (normalized === null) {
       throw new Error(`"${chord}" is not a keyboard shortcut.`);
     }
     if (!chords.includes(normalized)) chords.push(normalized);
   }
-  return [{ op: "set", path: tomlPath, value: chords }];
+  return { op: "set", path: keybindingTomlPath(actionId), value: chords };
+}
+
+function requestActionIds(request: KeybindingWriteRequest): readonly string[] {
+  if (request.kind === "reset_all") return [];
+  if (request.kind === "set_many") return request.changes.map((change) => change.actionId);
+  return [request.actionId];
 }
 
 /** Apply one change and write the file atomically. Returns what it now holds. */
@@ -129,8 +142,10 @@ export function writeKeybindingsFile(
   filePath: string,
   request: KeybindingWriteRequest,
 ): KeybindingsSnapshot {
-  if (request.kind !== "reset_all" && !KEYBINDING_ACTIONS.some((action) => action.id === request.actionId)) {
-    throw new Error(`Unknown keyboard shortcut action: ${request.actionId}`);
+  for (const actionId of requestActionIds(request)) {
+    if (!KEYBINDING_ACTIONS.some((action) => action.id === actionId)) {
+      throw new Error(`Unknown keyboard shortcut action: ${actionId}`);
+    }
   }
   let source: string | undefined;
   try {
@@ -143,7 +158,7 @@ export function writeKeybindingsFile(
   if (source !== undefined) {
     parseTomlTables(source, filePath);
   }
-  if (source === undefined && request.kind !== "set") {
+  if (source === undefined && request.kind !== "set" && request.kind !== "set_many") {
     return readKeybindingsFile(filePath);
   }
   const next = applyTomlEdits(source ?? FILE_HEADER, editsFor(request));

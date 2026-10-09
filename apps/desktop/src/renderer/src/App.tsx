@@ -3017,6 +3017,11 @@ function DesktopAppShell(props: {
       if (name !== null) void renameThread(thread, name);
     },
   }), [renameThread, selectedItemKey, titleRenameKey]);
+  // Opening another thread drops the field without a commit; forget the edit,
+  // or the field would reopen when the operator comes back to this thread.
+  useEffect(() => {
+    setTitleRenameKey((current) => (current === selectedItemKey ? current : undefined));
+  }, [selectedItemKey]);
   const requestTitleRename = useCallback((thread: NavigationThreadSummary) => {
     setTitleRenameKey(threadSummaryIdentityKey(thread));
   }, []);
@@ -3032,7 +3037,10 @@ function DesktopAppShell(props: {
     showAppNotice({
       id,
       title: archived.length === 1 ? "Thread archived" : `${archived.length} threads archived`,
-      message: details.title ?? "Undo brings them all back.",
+      // A peer's thread cannot be restored from here, so say what Undo covers.
+      message: restorable.length < archived.length
+        ? `Undo brings back the ${restorable.length} on this machine.`
+        : details.title ?? "Undo brings them all back.",
       actions: [{
         label: "Undo",
         onClick: () => {
