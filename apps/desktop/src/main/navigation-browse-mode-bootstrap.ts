@@ -13,6 +13,8 @@ import { normalizeNavigationBrowseMode } from "./state/overlay-store-sqlite";
 
 export type BootstrapNavigationPreferences = {
   browseMode: NavigationBrowseMode;
+  /** The Recents Pinned group's saved disclosure, so it paints closed on frame one. */
+  recentsPinnedCollapsed: boolean;
 };
 
 export const BOOTSTRAP_NAVIGATION_ARG_PREFIX =
@@ -20,11 +22,13 @@ export const BOOTSTRAP_NAVIGATION_ARG_PREFIX =
 
 export function readBootstrapNavigationPreferences(): BootstrapNavigationPreferences {
   try {
+    const store = getAppOverlayStore();
     return {
-      browseMode: getAppOverlayStore().getNavigationBrowseModeSync(),
+      browseMode: store.getNavigationBrowseModeSync(),
+      recentsPinnedCollapsed: store.getRecentsPinnedCollapsedSync(),
     };
   } catch {
-    return { browseMode: "inbox" };
+    return { browseMode: "inbox", recentsPinnedCollapsed: false };
   }
 }
 
@@ -49,6 +53,7 @@ export function parseBootstrapNavigationPreferencesArg(
       const raw = JSON.parse(arg.slice(BOOTSTRAP_NAVIGATION_ARG_PREFIX.length));
       return {
         browseMode: normalizeNavigationBrowseMode(raw?.browseMode),
+        recentsPinnedCollapsed: raw?.recentsPinnedCollapsed === true,
       };
     } catch {
       return undefined;

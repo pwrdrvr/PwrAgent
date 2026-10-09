@@ -5561,7 +5561,7 @@ describe("Sidebar", () => {
     });
   });
 
-  it("pins from the row menu and leaves pinned threads in sort order", () => {
+  it("pins from the row menu and leaves pinned threads in sort order in Inbox", () => {
     const onSetThreadPin = vi.fn(async () => undefined);
     const pinnedThread = {
       ...updatedSinceSeenThread,
@@ -5571,7 +5571,7 @@ describe("Sidebar", () => {
     render(
       <Sidebar
         backends={backends}
-        browseMode="recents"
+        browseMode="inbox"
         directories={directories}
         inboxThreads={[sharedThread]}
         loading={false}
@@ -5590,12 +5590,13 @@ describe("Sidebar", () => {
     const rows = within(browseSection as HTMLElement).getAllByRole("button", {
       name: /Cross-project cleanup|Updated thread/i,
     });
-    // Created is a pure sort order: the pinned thread keeps the position the
-    // caller's ordering gave it instead of floating to a pinned section.
+    // Inbox is a pure sort order: the pinned thread keeps the position the
+    // owner's ordering gave it instead of floating to a pinned section.
     expect(rows.map((row) => threadCard(row).textContent)).toEqual([
       expect.stringContaining("Cross-project cleanup"),
       expect.stringContaining("Updated thread"),
     ]);
+    expect(screen.queryByRole("button", { name: /^Pinned,/ })).not.toBeInTheDocument();
     expect(
       within(
         rows[1]!.closest(".thread-row-shell") as HTMLElement,
@@ -6822,9 +6823,9 @@ describe("Sidebar", () => {
   });
 
   it("shows directory drop targets for pinned row edges and the append slot", async () => {
-    // Pin reorder-by-drag lives only where a pinned section is rendered, which
-    // after the Updated/Created lenses became pure sort orders means the
-    // Directories lens alone.
+    // Pin reorder-by-drag lives only where a pinned section is rendered: each
+    // project in Directories, and the Recents Pinned group
+    // (recents-pinned-group.test.tsx).
     const firstPinnedThread = {
       ...sharedThread,
       pinnedRank: "1024",
@@ -6919,7 +6920,7 @@ describe("Sidebar", () => {
     });
   });
 
-  it("renders no pinned section or drag affordance in the Created lens", () => {
+  it("renders no pinned section or drag affordance in the Inbox lens", () => {
     const pinnedThread = {
       ...updatedSinceSeenThread,
       pinnedRank: "1024",
@@ -6928,7 +6929,7 @@ describe("Sidebar", () => {
     render(
       <Sidebar
         backends={backends}
-        browseMode="recents"
+        browseMode="inbox"
         directories={directories}
         inboxThreads={[sharedThread]}
         loading={false}
@@ -6946,11 +6947,13 @@ describe("Sidebar", () => {
     expect(
       screen.queryByRole("separator", { name: /Unpinned threads/ }),
     ).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Pinned,/ })).not.toBeInTheDocument();
     for (const title of [/Cross-project cleanup/i, /Updated thread/i]) {
       const shell = screen
         .getByRole("button", { name: title })
         .closest(".thread-row-shell");
       expect(shell).not.toHaveAttribute("draggable", "true");
+      expect(shell).not.toHaveClass("is-draggable");
     }
   });
 
@@ -9282,9 +9285,9 @@ describe("Sidebar directory pinning", () => {
 });
 
 describe("Sidebar thread pinning Move items", () => {
-  // Move Up / Move Down only surface in the Directories lens — the only lens
-  // that still renders a pinned section, and therefore the only one where a
-  // reorder visibly moves the row. Updated and Created are pure sort orders.
+  // Move Up / Move Down only surface where a pinned section renders, so a
+  // reorder visibly moves the row: Directories, and the Recents Pinned group
+  // (recents-pinned-group.test.tsx). Inbox is a pure sort order.
   const pinnedThreadsDirectory = (
     threadKeys: string[],
   ): NavigationDirectorySummary => ({
@@ -9585,7 +9588,7 @@ describe("Sidebar menus from the keyboard", () => {
     expect(document.activeElement).toBe(stops[at - 1]);
   });
 
-  it("keeps the menu open on a pin toggle and returns focus to ⋮ on Return", () => {
+  it("keeps the menu open on a pin toggle and returns focus to ⋮ on Return", async () => {
     const onSetThreadPin = vi.fn(async () => undefined);
     renderThreadSidebar({ onSetThreadPin });
     const actions = openThreadActions();
@@ -9597,8 +9600,10 @@ describe("Sidebar menus from the keyboard", () => {
     }
     expect(pin).toHaveFocus();
 
-    // A checkable item toggles in place, so both checks can be set.
-    act(() => pin.click());
+    // A checkable item toggles in place, so both checks can be set. A pin
+    // moves a Recents row into the Pinned group, so the list reveals the
+    // write's result once it settles.
+    await act(async () => pin.click());
     expect(onSetThreadPin).toHaveBeenCalledWith(
       expect.objectContaining({ id: sharedThread.id }),
       true,

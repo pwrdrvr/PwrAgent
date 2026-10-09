@@ -202,8 +202,10 @@ Rules:
   hidden
 - Inbox is the default thread lens, sorted by recent activity
 - Recents sorts by thread creation time
-- Inbox and Recents are pure sort orders: no pinned section, no pinned-first
-  float. Pins float only inside a directory in the Directories lens
+- Inbox is a pure sort order: no pinned section, no pinned-first float
+- Recents has one collapsible Pinned group on top, holding every pin across
+  projects in the global pin order; every other thread lists by creation time
+  below it. Directories pins at the top of each project
 - unread work is a row-local state shown with the orange cookie marker
 - section headers should be quiet, compact, and utility-first
 - rows should carry metadata inline

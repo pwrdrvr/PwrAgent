@@ -1,10 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyNavigationLaunchpadProviderSettingsPatch,
   type NavigationLaunchpadDraft,
 } from "@pwragent/shared";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
+import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
+import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import {
   createTempStateDb,
   openInMemoryStateDb,
@@ -162,6 +164,49 @@ describe("SqliteOverlayStore - launchpad defaults", () => {
         reopenedDb.close();
       }
     } finally {
+      stateDb.close();
+      removeTempStateDbDir(tempDir);
+      stateDb = openInMemoryStateDb();
+      store = new SqliteOverlayStore(stateDb);
+    }
+  });
+
+  it("persists the Recents Pinned group's collapse with one commit per change", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const { dbPath, tempDir } = createTempStateDb(
+      "pwragent-recents-pinned-collapse-test-",
+    );
+    stateDb.close();
+    stateDb = StateDb.open(dbPath);
+    store = new SqliteOverlayStore(stateDb);
+
+    try {
+      expect(store.getRecentsPinnedCollapsedSync()).toBe(false);
+      const { writes } = await measureSqliteWrites(async () => {
+        await expect(store.setRecentsPinnedCollapsed(true)).resolves.toBe(true);
+        // A repeat, such as a reveal that finds the group already in the
+        // state it wants, commits nothing.
+        await store.setRecentsPinnedCollapsed(true);
+        await store.setRecentsPinnedCollapsed(true);
+        await store.setRecentsPinnedCollapsed(false);
+        await store.setRecentsPinnedCollapsed(false);
+        await store.setRecentsPinnedCollapsed(true);
+      });
+      expectSqliteWriteBudget({
+        note: "three header clicks and three repeated writes of the same value: one commit per change, none per repeat; a few clicks a day is well under 1 MB/day of WAL",
+        scenario: "recents-pinned-group-collapse",
+        writes,
+      });
+      stateDb.close();
+
+      const reopenedDb = StateDb.open(dbPath);
+      try {
+        expect(new SqliteOverlayStore(reopenedDb).getRecentsPinnedCollapsedSync()).toBe(true);
+      } finally {
+        reopenedDb.close();
+      }
+    } finally {
+      vi.unstubAllEnvs();
       stateDb.close();
       removeTempStateDbDir(tempDir);
       stateDb = openInMemoryStateDb();

@@ -50,8 +50,11 @@ complete scope, native typecheck command and formatting policy.
   fix. New signals that should move a row need a transition in the reducer, not
   a tiebreaker in the sort.
 - User-curated Pins live as a scrollable section at the top of each directory
-  in the Directories lens. Inbox and Recents are pure sort orders and do not
-  float pins.
+  in the Directories lens, and in one collapsible Pinned group at the top of
+  Recents that holds every pin across projects in the same global order.
+  Recents lists every other thread by creation time below the group, and a
+  thread renders in only one of them. Inbox is a pure sort order and does
+  not float pins.
 - Unread state uses the orange cookie marker, not punctuation badges.
 - The sidebar is an information surface, not a stack of generic cards.
 - Do not use browser-default controls in shipped UI.

@@ -3901,6 +3901,8 @@ function DesktopAppShell(props: {
           backends={backendSummaries.backends}
           onRefreshRateLimits={backendSummaries.refreshRateLimits}
           browseMode={navigation.browseMode}
+          recentsPinnedCollapsed={navigation.recentsPinnedCollapsed}
+          onSetRecentsPinnedCollapsed={navigation.setRecentsPinnedCollapsed}
           threadLensesEmpty={navigation.threadLensesEmpty}
           creatingThread={navigation.creatingThread}
           pagedNavigation={navigation.pagedNavigation}

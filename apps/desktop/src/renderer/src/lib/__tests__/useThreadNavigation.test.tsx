@@ -13035,6 +13035,44 @@ describe("useThreadNavigation", () => {
     });
   });
 
+  it("starts the Recents Pinned group from its bridged state and writes only changes", async () => {
+    Object.defineProperty(window, "__pwragentNavigationPreferences", {
+      configurable: true,
+      value: { browseMode: "recents", recentsPinnedCollapsed: true },
+    });
+    const readPopulation = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const setRecentsPinnedCollapsed = vi.fn(async (request: { collapsed: boolean }) => request);
+    const desktopApi: DesktopApi = {
+      readPopulation,
+      onAgentEvent: () => () => undefined,
+      setRecentsPinnedCollapsed,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+    // Closed on the first render: the group never paints open and then shuts.
+    expect(result.current.recentsPinnedCollapsed).toBe(true);
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+
+    // The state it already has is not a change, so nothing is written.
+    act(() => result.current.setRecentsPinnedCollapsed(true));
+    expect(setRecentsPinnedCollapsed).not.toHaveBeenCalled();
+    act(() => result.current.setRecentsPinnedCollapsed(false));
+    act(() => result.current.setRecentsPinnedCollapsed(false));
+    expect(result.current.recentsPinnedCollapsed).toBe(false);
+    expect(setRecentsPinnedCollapsed).toHaveBeenCalledExactlyOnceWith({ collapsed: false });
+  });
+
   describe("when the owner index holds no threads", () => {
     const emptyPopulation = (overrides: Partial<NavigationSnapshot> = {}): NavigationSnapshot => ({
       backend: "all",
