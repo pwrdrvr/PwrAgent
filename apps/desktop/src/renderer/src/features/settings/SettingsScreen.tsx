@@ -19,6 +19,7 @@ import { describeGitCommandState } from "./CommandToolsSettings";
 import type { PwrAgentProfilesState } from "../../lib/usePwrAgentProfiles";
 import type { DesktopSettingsState } from "./useDesktopSettings";
 import { AboutSettings } from "./AboutSettings";
+import { KeyboardSettings } from "./KeyboardSettings";
 import { AccessControlSettings } from "./AccessControlSettings";
 import { ExperimentalSettings } from "./ExperimentalSettings";
 import { FederationSettings } from "./FederationSettings";
@@ -75,6 +76,7 @@ import { BrandLockup } from "../chrome/BrandLockup";
 
 export type SettingsSection =
   | "general"
+  | "keyboard"
   | "updates"
   | "git"
   | "experimental"
@@ -94,6 +96,7 @@ export type SettingsSection =
 
 const SECTIONS: Array<{ id: SettingsSection; label: string }> = [
   { id: "general", label: "General" },
+  { id: "keyboard", label: "Keyboard" },
   { id: "updates", label: "Updates" },
   { id: "applications", label: "Applications" },
   { id: "plugins", label: "Plugins" },
@@ -114,6 +117,7 @@ const SECTIONS: Array<{ id: SettingsSection; label: string }> = [
 
 const PRIMARY_SECTIONS: SettingsSection[] = [
   "general",
+  "keyboard",
   "updates",
   "applications",
   "plugins",
@@ -881,6 +885,10 @@ function SettingsSectionBody(props: {
 }) {
   if (props.section === "about") {
     return <AboutSettings desktopApi={props.desktopApi} />;
+  }
+
+  if (props.section === "keyboard") {
+    return <KeyboardSettings desktopApi={props.desktopApi} />;
   }
 
   if (props.section === "updates") {

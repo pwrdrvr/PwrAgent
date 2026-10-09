@@ -252,6 +252,7 @@ import {
 
 const SETTINGS_SECTIONS = new Set<SettingsSection>([
   "general",
+  "keyboard",
   "updates",
   "applications",
   "plugins",

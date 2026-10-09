@@ -117,7 +117,8 @@ describe("COMPOSER_TIPS", () => {
       win.pwragent = { platform: "darwin" };
       const mac = COMPOSER_TIPS.map((render) => render()).join("\n");
       expect(mac).toContain("⌘K finds threads");
-      expect(mac).toContain("⌘⇧F searches the text of every transcript");
+      // The native menu's modifier order: ⇧ before ⌘.
+      expect(mac).toContain("⇧⌘F searches the text of every transcript");
       expect(mac).not.toContain("Ctrl+");
       win.pwragent = { platform: "win32" };
       const windows = COMPOSER_TIPS.map((render) => render()).join("\n");
