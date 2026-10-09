@@ -4,7 +4,13 @@
  * renderer: the primary accelerator is ⌘ on macOS and Ctrl elsewhere,
  * and chords never fire while the user is typing in a field.
  */
+import type { KeybindingActionId } from "../../../shared/keybindings";
 import { getDesktopApi } from "./desktop-api";
+import {
+  chordLabelFor,
+  getKeybindingsState,
+  keydownMatchesAction,
+} from "./keybindings-store";
 
 export function isPrimaryAccel(
   event: Pick<KeyboardEvent, "ctrlKey" | "metaKey">,
@@ -74,10 +80,10 @@ export function isAccelLetter(event: KeyboardEvent, letter: string): boolean {
 
 /**
  * Classify a keydown as one of the two window-layout chords, or `null`:
- *   ⌘B / ⌃B   → "sidebar" (toggle the left sidebar)
- *   ⌘⌥B / ⌃⌥B → "rail"    (toggle the right context rail)
- * Returns `null` while typing in a field, without the primary modifier, or
- * for any other key.
+ *   "sidebar" toggles the left sidebar (⌘B / Ctrl+B by default)
+ *   "rail"    toggles the right context rail (⌥⌘B / Ctrl+Alt+B)
+ * Both never fire while typing in a field. The chords are the operator's
+ * current bindings from `keybindings.toml`.
  *
  * Pure + side-effect-free so a SINGLE owner can wire one window listener to it
  * (see `useLayoutChordHotkeys`). Previously each `PanelToggleButtons` instance
@@ -88,117 +94,86 @@ export function isAccelLetter(event: KeyboardEvent, letter: string): boolean {
 export function matchLayoutChord(
   event: KeyboardEvent,
 ): "sidebar" | "rail" | null {
-  if (isEditableTarget(event)) {
-    return null;
+  const inField = isEditableTarget(event);
+  if (keydownMatchesAction(event, "layout.toggle_sidebar", inField)) {
+    return "sidebar";
   }
-  if (!isPrimaryAccel(event)) {
-    return null;
+  if (keydownMatchesAction(event, "layout.toggle_context_rail", inField)) {
+    return "rail";
   }
-  if (!isAccelLetter(event, "b")) {
-    return null;
-  }
-  return event.altKey ? "rail" : "sidebar";
+  return null;
 }
 
 /**
- * Classify a keydown as a history-navigation chord, or `null`:
- *   ⌘[ / ⌃[   → "back"     (the universal browser binding)
- *   ⌘] / ⌃]   → "forward"
- *   ⌥← / Alt+← → "back"     (the Windows/Linux browser convention)
- *   ⌥→ / Alt+→ → "forward"
+ * Classify a keydown as a history-navigation chord, or `null`. The defaults
+ * are ⌘[ / ⌘] (the universal browser binding) and Alt+← / Alt+→ (the
+ * Windows/Linux browser convention).
  *
  * The bracket chords stay live inside editable fields — like a browser,
  * ⌘[ never types anything — so navigation works while the caret sits in
- * the composer. The Alt-arrow pair must NOT fire while editing: Option/
- * Alt+arrow is word-wise caret movement there.
- *
- * Brackets match `event.code` first (layout-independent physical key)
- * with an `event.key` fallback, mirroring {@link isAccelLetter}.
+ * the composer. A chord that edits text, such as Alt+arrow (word-wise caret
+ * movement), never fires while editing.
  */
 export function matchHistoryNavChord(
   event: KeyboardEvent,
 ): "back" | "forward" | null {
-  if (isPrimaryAccel(event) && !event.altKey && !event.shiftKey) {
-    if (event.code === "BracketLeft" || event.key === "[") {
-      return "back";
-    }
-    if (event.code === "BracketRight" || event.key === "]") {
-      return "forward";
-    }
-    return null;
+  const inField = isEditableTarget(event);
+  if (keydownMatchesAction(event, "navigation.back", inField)) {
+    return "back";
   }
-  if (
-    event.altKey &&
-    !event.metaKey &&
-    !event.ctrlKey &&
-    !event.shiftKey &&
-    !isEditableTarget(event)
-  ) {
-    if (event.key === "ArrowLeft") {
-      return "back";
-    }
-    if (event.key === "ArrowRight") {
-      return "forward";
-    }
+  if (keydownMatchesAction(event, "navigation.forward", inField)) {
+    return "forward";
   }
   return null;
 }
 
 /**
  * Classify a keydown as a find/search chord, or `null`:
- *   ⌘F / ⌃F   → "find"   (context find — in-thread find when a thread is open,
- *                          or the thread-list quick-search when the sidebar is
- *                          focused; the caller resolves which from focus)
- *   ⌘⇧F / ⌃⇧F → "search" (open the global thread search screen)
+ *   "find"   context find, ⌘F by default — in-thread find when a thread is
+ *            open, or the thread-list quick-search when the sidebar is
+ *            focused; the caller resolves which from focus
+ *   "search" open the global thread search screen, ⇧⌘F by default
  *
- * ⌘F is deliberately focus-sensitive; {@link matchThreadJumpChord} (⌘K) is the
- * unambiguous way to reach the thread list from anywhere.
- *
- * Unlike {@link matchLayoutChord}, find stays live inside editable fields —
- * ⌘F is a universal "find" gesture that should fire even while the caret is in
- * the composer or another input. ⌥ is excluded so it never collides with an
- * Option chord.
+ * Find is deliberately focus-sensitive; {@link matchThreadJumpChord} is the
+ * unambiguous way to reach the thread list from anywhere. Both stay live in
+ * editable fields, unless the operator bound a chord that edits text there.
  */
 export function matchFindChord(event: KeyboardEvent): "find" | "search" | null {
-  if (!isPrimaryAccel(event)) {
-    return null;
+  const inField = isEditableTarget(event);
+  if (keydownMatchesAction(event, "navigation.find", inField)) {
+    return "find";
   }
-  if (event.altKey) {
-    return null;
+  if (keydownMatchesAction(event, "navigation.search_threads", inField)) {
+    return "search";
   }
-  if (!isAccelLetter(event, "f")) {
-    return null;
-  }
-  return event.shiftKey ? "search" : "find";
+  return null;
 }
 
 /**
- * Whether `event` is the thread-jump chord: ⌘K / ⌃K.
+ * Whether `event` is the thread-jump chord, ⌘K / Ctrl+K by default.
  *
- * ⌘K is the focus-independent way into the thread-list quick search — the
+ * It is the focus-independent way into the thread-list quick search — the
  * near-universal "jump to a thing in the list" binding (Slack's quick switcher,
- * Linear, GitHub, VS Code's ⌘P sibling). It exists because ⌘F follows focus:
+ * Linear, GitHub, VS Code's ⌘P sibling). It exists because find follows focus:
  * the operator reaching for the thread list from inside a thread would land in
  * the in-thread find instead, since the composer and transcript belong to the
- * thread. ⌘K always means the list.
+ * thread. The jump chord always means the list.
  *
- * Like {@link matchFindChord} it stays live in editable fields — the composer is
- * exactly where an operator is standing when they want to jump elsewhere. Shift
- * and Option are excluded so it can't collide with a future chord.
- *
- * Unlike every other chord here it uses {@link isPlatformPrimaryAccel}, NOT the
- * lenient Cmd-or-Ctrl check: staying live in text fields means the Ctrl form
- * would swallow macOS's ⌃K (delete-to-end-of-line) in the composer. So ⌘K on
- * macOS, Ctrl+K on Windows/Linux (where Ctrl+K binds nothing native), and the
- * composer keeps its editing keys on both.
+ * It stays live in editable fields — the composer is exactly where an operator
+ * is standing when they want to jump elsewhere. The platform's modifier is
+ * matched strictly, so the default never swallows macOS's ⌃K
+ * (delete-to-end-of-line) in the composer.
  */
 export function matchThreadJumpChord(event: KeyboardEvent): boolean {
-  return (
-    isPlatformPrimaryAccel(event) &&
-    !event.altKey &&
-    !event.shiftKey &&
-    isAccelLetter(event, "k")
-  );
+  return keydownMatchesAction(event, "navigation.jump_to_thread", isEditableTarget(event));
+}
+
+/**
+ * The display label of an action's current first chord, in this platform's
+ * notation, or `undefined` when the operator unbound it.
+ */
+export function formatActionChord(actionId: KeybindingActionId): string | undefined {
+  return chordLabelFor(getKeybindingsState(), actionId);
 }
 
 /**

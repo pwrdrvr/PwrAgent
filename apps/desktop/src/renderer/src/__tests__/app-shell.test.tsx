@@ -6426,11 +6426,10 @@ describe("App", () => {
     if (!deferDetail && !rapid) {
       await waitFor(() => expect(screen.getByRole("textbox", { name: "Reply" })).toHaveFocus());
     }
-    expect(screen.queryByRole("dialog", { name: "Rename Thread" })).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "Thread name" })).toBeNull();
     const target = click(2);
     fireEvent.doubleClick(target, { button: 0, detail: 2 });
-    const dialog = screen.getByRole("dialog", { name: "Rename Thread" });
-    const input = within(dialog).getByRole("textbox", { name: "Name" });
+    const input = screen.getByRole("textbox", { name: "Thread name" });
     expect(input).toHaveFocus();
     act(() => detailReady.resolve());
     await waitFor(() => expect(deliveredDetail).toHaveBeenCalled());
@@ -6441,7 +6440,7 @@ describe("App", () => {
     expect(input).toHaveFocus();
 
     fireEvent.keyDown(input, { key: "Escape" });
-    expect(screen.queryByRole("dialog", { name: "Rename Thread" })).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "Thread name" })).toBeNull();
     // Returning to the origin after closing must not revive the canceled request.
     act(() => row.focus());
     await act(async () => {
@@ -7040,7 +7039,8 @@ describe("App", () => {
     expect(screen.queryByRole("button", { name: /sub-thread draft/ })).not.toBeInTheDocument();
   });
 
-  it("renames the selected thread from the sidebar actions menu", async () => {
+  // One Codex thread whose backend renames, reflected by the next snapshot.
+  function installRenamableThreadFixture() {
     let threadTitle = "Build Codex client";
     const renameThread = vi.fn(
       async ({ name }: { backend: "codex"; threadId: string; name: string }) => {
@@ -7154,6 +7154,11 @@ describe("App", () => {
         renameThread,
       }),
     });
+    return { renameThread };
+  }
+
+  it("renames the selected thread from the sidebar actions menu", async () => {
+    const { renameThread } = installRenamableThreadFixture();
 
     render(<App />);
 
@@ -7168,11 +7173,9 @@ describe("App", () => {
     );
     fireEvent.click(screen.getByRole("menuitem", { name: "Rename Thread" }));
 
-    const dialog = screen.getByRole("dialog", { name: "Rename Thread" });
-    fireEvent.change(within(dialog).getByLabelText("Name"), {
-      target: { value: "Renamed Codex client" },
-    });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Rename Thread" }));
+    const input = within(browseSection).getByRole("textbox", { name: "Thread name" });
+    fireEvent.change(input, { target: { value: "Renamed Codex client" } });
+    fireEvent.keyDown(input, { key: "Enter" });
 
     expect(renameThread).toHaveBeenCalledWith({
       backend: "codex",
@@ -7182,6 +7185,32 @@ describe("App", () => {
     await screen.findByRole("heading", {
       level: 2,
       name: "Renamed Codex client",
+    });
+  });
+
+  it("renames the open thread from its title strip on double-click", async () => {
+    const { renameThread } = installRenamableThreadFixture();
+
+    render(<App />);
+
+    const title = await screen.findByRole("heading", {
+      level: 2,
+      name: "Build Codex client",
+    });
+    fireEvent.doubleClick(title);
+    const input = within(title).getByRole("textbox", { name: "Thread name" });
+    expect(input).toHaveFocus();
+    fireEvent.change(input, { target: { value: "Renamed in the title" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(renameThread).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Renamed in the title",
+    });
+    await screen.findByRole("heading", {
+      level: 2,
+      name: "Renamed in the title",
     });
   });
 });

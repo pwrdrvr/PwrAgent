@@ -814,11 +814,13 @@ export function formatAriaKeyShortcut(accelerator: string, platform: KeybindingP
   const chord = parseChord(accelerator);
   if (chord === null) return null;
   const mods = resolveModifiers(chord, isMacPlatform(platform) ? "darwin" : "linux");
+  // The primary modifier leads, as the attribute's existing values in the
+  // app have always written it ("Meta+Shift+ArrowUp").
   const parts: string[] = [];
+  if (mods.meta) parts.push("Meta");
   if (mods.ctrl) parts.push("Control");
   if (mods.alt) parts.push("Alt");
   if (mods.shift) parts.push("Shift");
-  if (mods.meta) parts.push("Meta");
   parts.push(ARIA_KEY_NAMES[chord.key] ?? chord.key);
   return parts.join("+");
 }

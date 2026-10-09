@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { COMPOSER_TIPS } from "../composer-tips";
 import { resetComposerTipRotationForTests, useComposerTip } from "../useComposerTip";
 
-const tip = (index: number): string => COMPOSER_TIPS[index % COMPOSER_TIPS.length]!();
+const tip = (index: number): string | undefined => COMPOSER_TIPS[index % COMPOSER_TIPS.length]!();
 
 describe("useComposerTip", () => {
   beforeEach(() => {
@@ -105,7 +105,8 @@ describe("COMPOSER_TIPS", () => {
     // No desktop bridge here, so shortcut tips render their longer
     // Windows/Linux form ("Ctrl+Shift+F"), which is the one to budget for.
     for (const render of COMPOSER_TIPS) {
-      expect(render().length).toBeLessThanOrEqual(58);
+      // Defaults bind every chord a tip names, so every tip renders.
+      expect(render()?.length).toBeLessThanOrEqual(58);
     }
   });
 
