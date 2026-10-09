@@ -59,6 +59,18 @@ async function renderPage() {
 }
 
 /** Press a chord and let its key go, as the recorder saves on release. */
+/**
+ * The cap a row shows once its save resolves. While recording, the row draws
+ * the same chord in the recorder, which unmounts when the save lands, so wait
+ * for the recorder to go before reading the saved cap.
+ */
+async function savedCap(name: string, chord: string): Promise<HTMLElement> {
+  await waitFor(() => expect(
+    screen.queryByRole("textbox", { name: `Record a shortcut for ${name}` }),
+  ).not.toBeInTheDocument());
+  return within(row(name)).getByText(chord);
+}
+
 function press(target: HTMLElement, init: KeyboardEventInit) {
   fireEvent.keyDown(target, init);
   fireEvent.keyUp(target, init);
@@ -102,8 +114,9 @@ describe("KeyboardSettings", () => {
       { kind: "set", actionId: "threads.toggle_pin", chords: ["CmdOrCtrl+Alt+P"] },
     ]));
     // The write is logged when it starts; the row leaves recording once it
-    // resolves, which a slow runner can see later.
-    expect(await within(row("Pin / Unpin")).findByText("⌥⌘P")).toBeInTheDocument();
+    // resolves, which a slow runner can see later. Until then the recorder
+    // shows the same chord, so read the saved cap only after it goes.
+    expect(await savedCap("Pin / Unpin", "⌥⌘P")).toBeInTheDocument();
     expect(within(row("Pin / Unpin")).getByRole("img", { name: "Changed" })).toBeInTheDocument();
   });
 
@@ -131,7 +144,7 @@ describe("KeyboardSettings", () => {
       },
     ]));
     // The loss is visible: Search Threads reads Not set, with Reset.
-    expect(await within(row("Pin / Unpin")).findByText("⇧⌘F")).toBeInTheDocument();
+    expect(await savedCap("Pin / Unpin", "⇧⌘F")).toBeInTheDocument();
     expect(within(row("Search Threads")).getByText("Not set")).toBeInTheDocument();
     expect(within(row("Search Threads")).getByRole("button", { name: "Reset Search Threads" }))
       .toBeInTheDocument();
@@ -176,7 +189,7 @@ describe("KeyboardSettings", () => {
     await waitFor(() => expect(writes).toEqual([
       { kind: "set", actionId: "threads.toggle_pin", chords: ["CmdOrCtrl+Shift+K"] },
     ]));
-    expect(await within(row("Pin / Unpin")).findByText("⇧⌘K")).toBeInTheDocument();
+    expect(await savedCap("Pin / Unpin", "⇧⌘K")).toBeInTheDocument();
   });
 
   it("drops a modifier from the preview when it is let go", async () => {
