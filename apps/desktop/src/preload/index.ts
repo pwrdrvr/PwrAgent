@@ -43,6 +43,15 @@ import type { PrActivitySnapshot } from "@pwragent/shared";
 import { subscribeBundledGitLfsAdvisory } from "./bundled-git-lfs-advisory";
 import { subscribeGithubPrAuthenticationFailure } from "./github-pr-authentication-notice";
 import { unwrapNavigationRead } from "../shared/navigation-ipc-result";
+import {
+  KEYBINDINGS_CHANGED_CHANNEL,
+  KEYBINDINGS_READ_CHANNEL,
+  KEYBINDINGS_WRITE_CHANNEL,
+} from "../shared/ipc";
+import type {
+  KeybindingWriteRequest,
+  KeybindingsSnapshot,
+} from "../shared/keybindings";
 import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
 import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
 import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
@@ -1650,6 +1659,28 @@ const desktopApi = Object.freeze({
       SETTINGS_READ_CHANNEL,
       request,
     ),
+  readKeybindings: async (): Promise<KeybindingsSnapshot> =>
+    await invokeWithStartupProfileTiming(
+      "readKeybindings",
+      KEYBINDINGS_READ_CHANNEL,
+    ),
+  writeKeybindings: async (
+    request: KeybindingWriteRequest,
+  ): Promise<KeybindingsSnapshot> =>
+    await ipcRenderer.invoke(KEYBINDINGS_WRITE_CHANNEL, request),
+  onKeybindingsChanged: (
+    callback: (snapshot: KeybindingsSnapshot) => void,
+  ): (() => void) => {
+    // keybindings.toml changed: a save in any window, or a hand edit.
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      snapshot: KeybindingsSnapshot,
+    ) => callback(snapshot);
+    ipcRenderer.on(KEYBINDINGS_CHANGED_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(KEYBINDINGS_CHANGED_CHANNEL, listener);
+    };
+  },
   readConfigBootstrap: async (): Promise<ReadDesktopConfigBootstrapResponse> =>
     await invokeWithStartupProfileTiming(
       "readConfigBootstrap",

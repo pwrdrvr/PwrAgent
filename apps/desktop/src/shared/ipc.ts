@@ -866,3 +866,11 @@ export const USAGE_ACTIVITY_ANALYZE_CHANNEL = "usage-activity:analyzeUsageActivi
 export const USAGE_ACTIVITY_OPEN_WINDOW_CHANNEL = "usage-activity:openWindow";
 /** From the Usage Activity window: focus the main window and open a thread there. */
 export const USAGE_ACTIVITY_OPEN_THREAD_CHANNEL = "usage-activity:openThreadInMainWindow";
+
+// Keyboard shortcuts (see shared/keybindings.ts). `read` returns the stored
+// overrides, `write` applies one change from Settings → Keyboard, and
+// `changed` pushes the new snapshot to every window whenever the file
+// changes, including from another profile's process.
+export const KEYBINDINGS_READ_CHANNEL = "keybindings:read";
+export const KEYBINDINGS_WRITE_CHANNEL = "keybindings:write";
+export const KEYBINDINGS_CHANGED_CHANNEL = "keybindings:changed";

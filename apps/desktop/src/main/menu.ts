@@ -3,6 +3,11 @@ import {
   profileMenuShortcutDigits,
   type DesktopPwrAgentProfileSummary,
 } from "@pwragent/shared";
+import {
+  resolveKeybindings,
+  type KeybindingActionId,
+  type KeybindingOverrides,
+} from "../shared/keybindings";
 
 export type ApplicationMenuFederationPeer = {
   instanceId: string;
@@ -72,7 +77,22 @@ export type ApplicationMenuOptions = {
   profiles: DesktopPwrAgentProfileSummary[];
   windows: ApplicationMenuWindow[];
   actions: ApplicationMenuActions;
+  /** `keybindings.toml` overrides; a menu row shows its action's first chord. */
+  keybindings?: KeybindingOverrides;
 };
+
+/**
+ * The chord a menu row shows. New Thread is the menu's own; for an action the
+ * renderer owns, the renderer claims the keydown first and the accelerator
+ * fires only where no renderer handled it, such as an auxiliary window.
+ */
+function menuAccelerator(
+  options: ApplicationMenuOptions,
+  actionId: KeybindingActionId,
+): string | undefined {
+  const platform = options.isMac ? "darwin" : "other";
+  return resolveKeybindings(options.keybindings ?? {}, platform).get(actionId)?.[0];
+}
 
 /**
  * The PwrSuite menu standard (v1), shared with PwrGit and PwrSnap:
@@ -160,7 +180,7 @@ function buildFileMenu(options: ApplicationMenuOptions): MenuItemConstructorOpti
     submenu: [
       {
         label: "New Thread",
-        accelerator: "CmdOrCtrl+N",
+        accelerator: menuAccelerator(options, "threads.new"),
         click: options.actions.openNewThread,
       },
       { type: "separator" },
@@ -194,7 +214,7 @@ function buildViewMenu(options: ApplicationMenuOptions): MenuItemConstructorOpti
         label: "Search Threads",
         // The renderer owns this chord (useFindHotkeys) and claims the
         // keydown, so the row shows the shortcut without a second handler.
-        accelerator: "CmdOrCtrl+Shift+F",
+        accelerator: menuAccelerator(options, "navigation.search_threads"),
         click: options.actions.openThreadSearch,
       },
       {

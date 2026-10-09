@@ -27,6 +27,10 @@ import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryRespons
 import { useEffect, useState } from "react";
 import type { ReceivingFolderRequest, ReceivingFolderResponse } from "../../../shared/federation-receiving-folder";
 import type { RendererErrorReport } from "../../../shared/renderer-error";
+import type {
+  KeybindingWriteRequest,
+  KeybindingsSnapshot,
+} from "../../../shared/keybindings";
 import type { RendererDiagnosticLogRequest } from "../../../shared/renderer-diagnostic";
 import type {
   ImageUploadFallbackRequest,
@@ -1722,6 +1726,15 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
    * or presses the native `CmdOrCtrl+N` accelerator.
    */
   onOpenNewThreadRequested?: (callback: () => void) => () => void;
+  /** `~/.pwragent/keybindings.toml`: the operator's changed shortcuts. */
+  readKeybindings?: () => Promise<KeybindingsSnapshot>;
+  writeKeybindings?: (
+    request: KeybindingWriteRequest,
+  ) => Promise<KeybindingsSnapshot>;
+  /** Main → renderer push when the file changes, from any profile's window. */
+  onKeybindingsChanged?: (
+    callback: (snapshot: KeybindingsSnapshot) => void,
+  ) => () => void;
   /**
    * Main -> renderer push: focuses an existing thread from an
    * out-of-app surface such as a native notification.
