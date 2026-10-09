@@ -1124,6 +1124,13 @@ export type RenameThreadRequest = {
   expectedName?: string;
 };
 
+/**
+ * The refusal for a stale `expectedName`. The renderer matches it to tell a
+ * permanent refusal, which no retry can fix, from a transient failure.
+ */
+export const RENAME_THREAD_EXPECTED_NAME_MISMATCH =
+  "The thread title has changed. Undo was not applied.";
+
 export type RenameThreadResponse = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;

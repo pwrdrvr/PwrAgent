@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import type { AgentEvent } from "@pwragent/shared";
+import { RENAME_THREAD_EXPECTED_NAME_MISMATCH, type AgentEvent } from "@pwragent/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentThreadRenameNotice } from "../AgentThreadRenameNotice";
 
@@ -38,10 +38,12 @@ function setup(renameThread = vi.fn(async () => ({ backend: "codex" as const, th
 }
 
 describe("AgentThreadRenameNotice", () => {
-  it("shows a quiet notice with both titles and undoes the correct owning thread", async () => {
+  it("names the agent and the old title, and undoes the correct owning thread", async () => {
     const { emit, renameThread, onOpenThread } = setup();
     act(() => emit(renameEvent({}, "peer-one")));
-    expect(screen.getByText("Renamed “Original title” → “Investigate rename feedback”.")).toBeInTheDocument();
+    expect(screen.getByText("The agent renamed it from “Original title”.")).toBeInTheDocument();
+    // The chip, not the message, carries the new title.
+    expect(screen.getAllByText(/Investigate rename feedback/)).toHaveLength(1);
     expect(screen.getByRole("status")).toHaveAttribute("data-tone", "neutral");
     fireEvent.click(screen.getByRole("button", { name: "Open thread Investigate rename feedback" }));
     expect(onOpenThread).toHaveBeenCalledWith(expect.objectContaining({ instanceId: "peer-one" }));
@@ -77,7 +79,25 @@ describe("AgentThreadRenameNotice", () => {
     expect(renameThread).not.toHaveBeenCalled();
   });
 
-  it("reports failed Undo, prevents duplicate clicks, and permits a retry", async () => {
+  it("shows Undo progress without a countdown until the result arrives", async () => {
+    vi.useFakeTimers();
+    let finish!: () => void;
+    const renameThread = vi.fn(() => new Promise<{ backend: "codex"; threadId: string; renamedAt: number }>((resolve) => {
+      finish = () => resolve({ backend: "codex", threadId: "thread", renamedAt: 1 });
+    }));
+    const { emit, container } = setup(renameThread);
+    act(() => emit(renameEvent()));
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    expect(screen.getByText("Restoring the previous title")).toBeInTheDocument();
+    expect(container.querySelector(".status-dot--blink")).not.toBeNull();
+    expect(container.querySelector(".app-notice-toast__timer")).toBeNull();
+    await act(async () => { await vi.advanceTimersByTimeAsync(20_000); });
+    expect(screen.getByText("Restoring the previous title")).toBeInTheDocument();
+    await act(async () => finish());
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("reports failed Undo without Electron's IPC wrapper, prevents duplicate clicks, and permits a retry", async () => {
     let fail!: (error: Error) => void;
     const renameThread = vi.fn().mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; }))
       .mockResolvedValue({ backend: "codex", threadId: "thread", renamedAt: 1 });
@@ -86,12 +106,27 @@ describe("AgentThreadRenameNotice", () => {
     fireEvent.click(screen.getByRole("button", { name: "Undo" }));
     fireEvent.click(screen.getByRole("button", { name: "Undo" }));
     expect(renameThread).toHaveBeenCalledTimes(1);
-    await act(async () => fail(new Error("Owner unavailable")));
-    expect(screen.getByText("Could not undo thread rename")).toBeInTheDocument();
+    await act(async () => fail(new Error("Error invoking remote method 'app-server:renameThread': Error: Owner unavailable")));
+    expect(screen.getByText("Rename not undone")).toBeInTheDocument();
     expect(screen.getByText("Owner unavailable")).toBeInTheDocument();
+    expect(screen.queryByText("Restoring the previous title")).not.toBeInTheDocument();
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Undo" })));
     expect(renameThread).toHaveBeenCalledTimes(2);
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("drops Undo when the title changed again, since every retry would be refused", async () => {
+    const renameThread = vi.fn(async () => {
+      throw new Error(`Error invoking remote method 'app-server:renameThread': Error: ${RENAME_THREAD_EXPECTED_NAME_MISMATCH}`);
+    });
+    const { emit } = setup(renameThread);
+    act(() => emit(renameEvent()));
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Undo" })));
+    expect(screen.getByText("Rename not undone")).toBeInTheDocument();
+    expect(screen.getByText("The title was changed again after the agent renamed it, so PwrAgent left it as it is.")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveAttribute("data-tone", "error");
+    expect(screen.queryByRole("button", { name: "Undo" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open thread Investigate rename feedback" })).toBeInTheDocument();
   });
 
   it("does not replace a newer notice with an older Undo failure", async () => {
@@ -109,7 +144,7 @@ describe("AgentThreadRenameNotice", () => {
     vi.useFakeTimers();
     const { emit, unmount, unsubscribe } = setup();
     act(() => emit(renameEvent({ previousThreadName: undefined })));
-    expect(screen.getByText("Renamed this thread to “Investigate rename feedback”.")).toBeInTheDocument();
+    expect(screen.getByText("The agent renamed it.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Undo" })).not.toBeInTheDocument();
     await act(async () => { await vi.advanceTimersByTimeAsync(9000); });
     expect(screen.queryByRole("status")).not.toBeInTheDocument();

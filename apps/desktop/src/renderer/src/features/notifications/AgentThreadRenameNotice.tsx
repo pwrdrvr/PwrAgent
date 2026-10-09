@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { AgentEvent } from "@pwragent/shared";
+import { RENAME_THREAD_EXPECTED_NAME_MISMATCH, type AgentEvent } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ResolvedThreadLink } from "../../lib/thread-links";
 import { AppNoticeToast, type AppNoticeToastNotice } from "./AppNoticeToast";
@@ -9,6 +9,12 @@ type PendingRename = {
   title: string;
   undoing: boolean;
 };
+
+/** The failure without the "Error invoking remote method …" wrapper Electron adds. */
+function undoFailureMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.replace(/^Error invoking remote method '[^']*': (?:Error: )?/, "");
+}
 
 function renameKey(event: AgentEvent, threadId: string): string {
   const instance = event.federationTarget?.scope === "remote"
@@ -60,9 +66,11 @@ export function AgentThreadRenameNotice(props: {
       const next: AppNoticeToastNotice = {
         id: `agent-thread-rename:${key}:${++sequence}`,
         title: "Thread renamed",
+        // The chip below carries the new title and opens the thread. The
+        // stack is window-wide, so the message names who, not "this thread".
         message: previousTitle
-          ? `Renamed “${previousTitle}” → “${title}”.`
-          : `Renamed this thread to “${title}”.`,
+          ? `The agent renamed it from “${previousTitle}”.`
+          : "The agent renamed it.",
         tone: "neutral",
         threadLink: {
           backend: event.backend,
@@ -80,6 +88,13 @@ export function AgentThreadRenameNotice(props: {
           onClick: () => {
             if (pending.current !== current || current.undoing) return;
             current.undoing = true;
+            // The countdown stops while Undo runs: a card that closed first
+            // would drop the failure, which is only reported while pending.
+            setNotice({
+              ...next,
+              autoDismiss: false,
+              status: { label: "Restoring the previous title", state: "progress" },
+            });
             void (async () => {
               await renameThread({ ...identity, name: previousTitle, expectedName: title });
               if (pending.current === current) {
@@ -89,12 +104,18 @@ export function AgentThreadRenameNotice(props: {
             })().catch((error: unknown) => {
               if (pending.current !== current) return;
               current.undoing = false;
+              const message = undoFailureMessage(error);
+              // A changed title refuses every retry, so it offers no Undo.
+              const titleChanged = message === RENAME_THREAD_EXPECTED_NAME_MISMATCH;
               setNotice({
                 ...next,
                 autoDismiss: false,
-                title: "Could not undo thread rename",
-                message: error instanceof Error ? error.message : String(error),
+                title: "Rename not undone",
+                message: titleChanged
+                  ? "The title was changed again after the agent renamed it, so PwrAgent left it as it is."
+                  : message,
                 tone: "error",
+                ...(titleChanged ? { actions: undefined } : {}),
               });
             });
           },

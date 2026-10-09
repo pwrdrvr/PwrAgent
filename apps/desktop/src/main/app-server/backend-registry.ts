@@ -2,6 +2,7 @@ import { sweepThreadArchiveRetention, archivedThreadFamily, archiveRetentionFami
 import { runGitCommand } from "./git-executable";
 import {
   DEFAULT_THREAD_ARCHIVE_POLICY,
+  RENAME_THREAD_EXPECTED_NAME_MISMATCH,
   classifyDirectory,
   type DesktopThreadArchivePolicy,
   type DesktopThreadArchiveSweepStatus,
@@ -15123,7 +15124,7 @@ export class DesktopBackendRegistry {
         return undefined;
       });
       if (request.expectedName !== undefined && name !== request.expectedName) {
-        throw new Error("The thread title has changed. Undo was not applied.");
+        throw new Error(RENAME_THREAD_EXPECTED_NAME_MISMATCH);
       }
       if (options?.renameOrigin === "agent_tool") {
         options = { ...options, previousThreadName: name };
