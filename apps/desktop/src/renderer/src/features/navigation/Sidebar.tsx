@@ -1999,10 +1999,25 @@ export function Sidebar(props: SidebarProps) {
           canArchiveThread(candidate)
           && threadCanRouteRemoteCapability(candidate, "turn_control"));
         handled = archivable.length > 0;
-        if (handled) {
-          hoverStableSnapshot.release();
-          void archiveThreads(archivable);
+        if (!handled) break;
+        hoverStableSnapshot.release();
+        if (targets?.source === "rows") {
+          // Focus moves to the row that takes this one's place, so a run of
+          // archives needs no mouse.
+          const archivingKeys = new Set(archivable.map(threadSummaryIdentityKey));
+          const focusKey = nextThreadAfterArchive(
+            readVisibleThreadRowKeys(sidebarRef.current),
+            archivingKeys,
+            threadSummaryIdentityKey(archivable[archivable.length - 1]!),
+          );
+          window.requestAnimationFrame(() => {
+            if (focusKey === undefined) return;
+            findThreadRowElement(sidebarRef.current, focusKey)
+              ?.querySelector<HTMLElement>(".thread-row__open")
+              ?.focus();
+          });
         }
+        void archiveThreads(archivable);
         break;
       }
       case "threads.toggle_pin": {

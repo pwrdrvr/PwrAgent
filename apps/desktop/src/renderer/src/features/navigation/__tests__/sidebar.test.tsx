@@ -9764,3 +9764,45 @@ describe("Sidebar thread shortcuts", () => {
     }
   });
 });
+
+describe("Sidebar archive shortcut on a focused row", () => {
+  it("moves focus to the row that takes its place", async () => {
+    const second = { ...sharedThread, id: "thread-2", title: "Second thread", updatedAt: sharedThread.updatedAt - 1000 };
+    const third = { ...sharedThread, id: "thread-3", title: "Third thread", updatedAt: sharedThread.updatedAt - 2000 };
+    const onArchiveThread = vi.fn(async () => undefined);
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        directories={directories}
+        inboxThreads={[sharedThread, second, third]}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread, second, third]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onArchiveThread={onArchiveThread}
+      />,
+    );
+
+    const secondRow = screen.getByRole("button", { name: "Second thread" });
+    secondRow.focus();
+    act(() => {
+      secondRow.dispatchEvent(new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "Backspace",
+        code: "Backspace",
+        ctrlKey: true,
+        shiftKey: true,
+      }));
+    });
+
+    // A focused row that is not the open thread: no new selection.
+    expect(onArchiveThread).toHaveBeenCalledWith(second);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Third thread" })).toHaveFocus());
+  });
+});
