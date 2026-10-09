@@ -535,7 +535,7 @@ function inputSchemaForOperation(
           project: {
             type: "string",
             description:
-              "The project the work is for: a projectKey from list_instance_projects for this machine, the project's name such as PwrSnap, or any path inside the project or one of its worktrees. Omit for this thread's own project.",
+              "The project the work is for. Pass a projectKey from list_instance_projects, a project name, or a path inside the project or its worktree. Omit for this thread's own project.",
           },
           action: {
             type: "object",
