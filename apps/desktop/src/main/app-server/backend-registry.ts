@@ -990,6 +990,7 @@ type BackendClient = {
     limit?: number;
   }): Promise<AppServerReadThreadResponse["replay"]>;
   readThreadSummary?(threadId: string): Promise<AppServerThreadSummary>;
+  readThreadName?(threadId: string): Promise<string | undefined>;
   readThreadActivity?(params: { threadId: string; turnId: string; entryId: string }): Promise<AppServerThreadActivityEntry>;
   prepareFreshNativeVoiceThread?(params: Parameters<CodexAppServerClient["refreshThreadTools"]>[0]): Promise<boolean>;
   resumeNativeVoiceThread?(params: Parameters<CodexAppServerClient["resumeNativeVoiceThread"]>[0]): Promise<void>;
@@ -15109,23 +15110,23 @@ export class DesktopBackendRegistry {
   ): Promise<RenameThreadResponse> {
     const backend = request.backend ?? "codex";
     if (request.expectedName !== undefined || options?.renameOrigin === "agent_tool") {
-      const summaryPromise = backend === "codex"
-        ? this.withCodexThreadClient(request.threadId, async (client) =>
-            client.readThreadSummary
-              ? await client.readThreadSummary(request.threadId)
-              : await this.readThreadInspectionSummaryForMutation({ backend, threadId: request.threadId, fresh: true }))
-        : this.readThreadInspectionSummaryForMutation({ backend, threadId: request.threadId, fresh: true });
-      const summary = await summaryPromise.catch((error: unknown) => {
+      const namePromise = backend === "codex"
+        ? this.withCodexThreadClient(request.threadId, async (client) => {
+            if (!client.readThreadName) throw new Error("Persisted thread names are unavailable.");
+            return await client.readThreadName(request.threadId);
+          })
+        : this.readThreadInspectionSummaryForMutation({ backend, threadId: request.threadId, fresh: true }).then((summary) => summary?.title);
+      const name = await namePromise.catch((error: unknown) => {
         // The prior title is optional notice metadata. A failed metadata read
         // must not prevent a requested rename; Undo must still fail closed.
         if (request.expectedName !== undefined) throw error;
         return undefined;
       });
-      if (request.expectedName !== undefined && summary?.title !== request.expectedName) {
+      if (request.expectedName !== undefined && name !== request.expectedName) {
         throw new Error("The thread title has changed. Undo was not applied.");
       }
       if (options?.renameOrigin === "agent_tool") {
-        options = { ...options, previousThreadName: summary?.title };
+        options = { ...options, previousThreadName: name };
       }
     }
     let result: { threadId: string };

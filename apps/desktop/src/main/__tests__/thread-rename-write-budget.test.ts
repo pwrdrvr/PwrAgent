@@ -21,7 +21,7 @@ it.each([false, true])("budgets self-renaming through the real SQLite store (Age
       close: async () => {},
       getInitializeResult: async () => ({ methods: [] }),
       listThreads: async () => [summary()],
-      readThreadSummary: async () => summary(),
+      readThreadName: async () => title,
       renameThread: async ({ threadId, name }: { threadId: string; name: string }) => {
         title = name;
         return { threadId };

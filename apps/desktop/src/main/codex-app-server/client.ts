@@ -120,6 +120,7 @@ import type {
   ThreadItemsListResponse as CodexThreadItemsListResponse,
   ThreadListParams as CodexThreadListParams,
   ThreadReadParams as CodexThreadReadParams,
+  ThreadReadResponse as CodexThreadReadResponse,
   ThreadResumeParams as CodexThreadResumeParams,
   ThreadSettingsUpdateParams as CodexThreadSettingsUpdateParams,
   ThreadStartParams as CodexThreadStartParams,
@@ -9700,6 +9701,18 @@ export class CodexAppServerClient {
     const entry = replay.entries.find((candidate) => candidate.type === "activity" && candidate.id === params.entryId);
     if (!entry || entry.type !== "activity") throw new Error("Activity details are no longer available. Reload the thread.");
     return entry;
+  }
+
+  async readThreadName(threadId: string): Promise<string | undefined> {
+    await this.ensureInitialized();
+    const result = await requestWithThreadMetadataReadRetry(async () =>
+      await this.connection.request("thread/read", { threadId, includeTurns: false },
+        this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS),
+    ) as CodexThreadReadResponse;
+    if (result.thread?.id !== threadId) throw new Error(`Thread metadata was not found: ${threadId}`);
+    // Undo needs the persisted name, before display-title normalization or
+    // preview fallback changes the value shown in thread summaries.
+    return typeof result.thread.name === "string" ? result.thread.name : undefined;
   }
 
   async readThreadSummary(threadId: string): Promise<AppServerThreadSummary> {
