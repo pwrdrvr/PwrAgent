@@ -2,7 +2,6 @@ import { NAVIGATION_QUERY_MAX_PAGE_ROWS } from "@pwragent/shared";
 import type {
   FederationTarget, NavigationDirectoryRow, NavigationIdentity, NavigationQueryRequest,
 } from "@pwragent/shared";
-import { NAVIGATION_QUERY_MAX_PAGE_ROWS } from "@pwragent/shared";
 import { navigationIdentityKey } from "./navigation-query-state";
 
 /** The Updated and Created lenses' Pinned group: its own collection beside `lens`. */
