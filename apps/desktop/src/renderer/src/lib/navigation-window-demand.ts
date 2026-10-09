@@ -1,3 +1,4 @@
+import { NAVIGATION_QUERY_MAX_PAGE_ROWS } from "@pwragent/shared";
 import type {
   FederationTarget, NavigationDirectoryRow, NavigationIdentity, NavigationQueryRequest,
 } from "@pwragent/shared";
@@ -78,7 +79,12 @@ export function buildNavigationWindowDemand(params: {
       }
     }
   } else {
-    demand.set("lens", request({ kind: "lens", lens: params.browseMode }));
+    // Attention is a work queue and its tab badge counts every member, so its
+    // first page asks for the whole queue up to one protocol page. At the
+    // browsing lenses' 10 rows, an 11th running or review thread sat behind
+    // "Load more threads" while the badge still counted it.
+    demand.set("lens", request({ kind: "lens", lens: params.browseMode },
+      params.browseMode === "attention" ? NAVIGATION_QUERY_MAX_PAGE_ROWS : undefined));
   }
   for (const parent of params.disclosedParents ?? []) {
     demand.set(`children:${navigationIdentityKey(parent)}`, { ...request({ kind: "children", parent }),
