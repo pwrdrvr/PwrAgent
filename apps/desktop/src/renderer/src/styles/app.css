@@ -15999,7 +15999,10 @@ a.button {
 
 .settings-keyboard__row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 240px) auto;
+  /* Every row is its own grid, so an `auto` action column let Set, Change,
+     and Reset + Add + Change each start the keys somewhere else. The floor
+     is the widest set (Reset + Add + Change, 216px), so the keys line up. */
+  grid-template-columns: minmax(0, 1fr) minmax(0, 240px) minmax(216px, max-content);
   align-items: center;
   gap: 4px 12px;
   min-height: 44px;
