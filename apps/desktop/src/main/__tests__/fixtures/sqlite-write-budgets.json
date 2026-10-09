@@ -701,7 +701,7 @@
   "owner-pr-candidate-bootstrap": {
     "commits": 1,
     "note": "120 owner PR candidates reconciled at startup/provider completion: one commit when membership changes, never per-thread commits; no idle timer writes",
-    "observedWalBytes": 0,
+    "observedWalBytes": 57680,
     "rowsChanged": 120,
     "statements": 120
   },

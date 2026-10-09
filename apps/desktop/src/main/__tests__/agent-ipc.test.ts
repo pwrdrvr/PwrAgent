@@ -37,6 +37,7 @@ import type {
 import type { ThreadTurnQueueSubmissionResult } from "../app-server/thread-turn-queue";
 
 const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
+const invalidateExactOwner = vi.hoisted(() => vi.fn());
 const send = vi.fn();
 const mockAppServerLog = vi.hoisted(() => ({
   debug: vi.fn(),
@@ -174,6 +175,12 @@ const registry = {
       status: "acknowledged-new-thread" as const,
     }),
   ),
+  checkThreadBranchDrift: vi.fn(async (request: CheckThreadBranchDriftRequest) => ({
+    ...request,
+    checkedAt: 1_000,
+    drifted: true,
+    observedBranch: "main",
+  })),
   setCodexThreadEnvironment: vi.fn(async (
     request: SetCodexThreadEnvironmentRequest,
     _onProgress?: (event: CodexEnvironmentSetupProgressEvent) => void,
@@ -421,6 +428,10 @@ vi.mock("../app-server/backend-registry", () => ({
   getDesktopBackendRegistry: () => registry,
 }));
 
+vi.mock("../app-server/navigation-query-pool", () => ({
+  getDesktopNavigationQueryPool: () => ({ invalidateExactOwner }),
+}));
+
 vi.mock("../federation/federation-runtime", () => ({
   federationEventClassForMethod: () => "transcript",
   getDesktopFederationRuntime: () => federationMock.runtime,
@@ -471,6 +482,8 @@ describe("agent ipc", () => {
     registry.cancelThreadPrAutoDispatch.mockClear();
     registry.sendThreadPrAutoDispatchNow.mockClear();
     registry.applyThreadModelMigration.mockClear();
+    registry.checkThreadBranchDrift.mockClear();
+    invalidateExactOwner.mockClear();
     registry.setCodexThreadEnvironment.mockClear();
     federationMock.runtime.remoteBackend.mockClear();
     federationMock.runtime.hydrateLiveThreadMessageOrigin.mockReset();
@@ -498,6 +511,42 @@ describe("agent ipc", () => {
     await handlers.get(AGENT_START_REVIEW_CHANNEL)?.({}, request);
     expect(registry.startReview).toHaveBeenLastCalledWith(request);
     expect(registry.startReview.mock.calls.at(-1)).toHaveLength(1);
+  });
+
+  it("fences only the checked thread's selected detail after a local or remote branch probe", async () => {
+    const { registerAgentIpcHandlers, disposeAgentIpcHandlers } = await import("../ipc/agent-ipc");
+    const { AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL } = await import("../../shared/ipc");
+    const request = {
+      backend: "codex" as const,
+      expectedBranch: "feature/old",
+      threadId: "thread-1",
+    };
+    let finish!: () => void;
+    registry.checkThreadBranchDrift.mockImplementationOnce(async (checked) => {
+      await new Promise<void>((resolve) => { finish = resolve; });
+      return { ...checked, checkedAt: 1_000, drifted: true, observedBranch: "main" };
+    });
+    registerAgentIpcHandlers();
+    try {
+      const local = handlers.get(AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL)?.({}, request);
+      expect(invalidateExactOwner).not.toHaveBeenCalled();
+      finish();
+      await expect(local).resolves.toMatchObject({ drifted: true });
+      expect(invalidateExactOwner).toHaveBeenLastCalledWith(
+        undefined, { backend: "codex", threadId: "thread-1" }, "detail",
+      );
+
+      const federationTarget = { scope: "remote" as const, instanceId: "owner-one" };
+      await handlers.get(AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL)?.({}, {
+        ...request, federationTarget,
+      });
+      expect(invalidateExactOwner).toHaveBeenLastCalledWith(
+        federationTarget, { backend: "codex", threadId: "thread-1" }, "detail",
+      );
+      expect(invalidateExactOwner).toHaveBeenCalledTimes(2);
+    } finally {
+      disposeAgentIpcHandlers();
+    }
   });
 
   it("routes remote thread controls through federation without leaking the target", async () => {

@@ -794,6 +794,8 @@ CREATE TABLE IF NOT EXISTS pr_auto_dispatch_candidates (
 );
 CREATE INDEX IF NOT EXISTS idx_pr_auto_dispatch_candidate_winner
   ON pr_auto_dispatch_candidates(pr_key, eligible_since, backend, thread_id);
+CREATE INDEX IF NOT EXISTS idx_pr_auto_dispatch_candidate_thread
+  ON pr_auto_dispatch_candidates(backend, thread_id, pr_key);
 `;
 
 const PR_AUTO_DISPATCH_GLOBAL_FINGERPRINT_INDEX = `
