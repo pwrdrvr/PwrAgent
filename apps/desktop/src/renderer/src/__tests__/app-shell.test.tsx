@@ -6195,7 +6195,7 @@ describe("App", () => {
     expect(readThread).toHaveBeenCalledTimes(2);
   });
 
-  it("walks back and forward across threads and search from the title bar", async () => {
+  it.each(["title button", "row padding"])("walks back and forward across threads and search after %s clicks", async (clickSurface) => {
     const secondThreadReady = createDeferred<void>();
     const deliveredSecondThread = vi.fn();
     const searchThreads = vi.fn(async () => ({
@@ -6394,9 +6394,13 @@ describe("App", () => {
 
     // A new mouse click on the ready thread still hands off focus.
     act(() => {
-      fireEvent.pointerDown(secondRow, { pointerType: "mouse", button: 0 });
-      fireEvent.pointerUp(secondRow, { pointerType: "mouse", button: 0 });
-      fireEvent.click(secondRow, { detail: 1 });
+      const target = clickSurface === "title button" ? secondRow : secondRow.closest(".thread-row")!;
+      fireEvent.pointerDown(target, { pointerType: "mouse", button: 0 });
+      // jsdom does not perform the browser's default pointer focus action.
+      // Clicking non-focusable row padding drops focus from the old control.
+      if (target !== secondRow) secondRow.blur();
+      fireEvent.pointerUp(target, { pointerType: "mouse", button: 0 });
+      fireEvent.click(target, { detail: 1 });
     });
     await waitFor(() => expect(screen.getByRole("textbox", { name: "Reply" })).toHaveFocus());
     expect(screen.getByRole("button", { name: "Back" })).toBeEnabled();

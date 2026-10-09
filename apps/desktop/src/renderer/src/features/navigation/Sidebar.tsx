@@ -942,12 +942,19 @@ export function Sidebar(props: SidebarProps) {
       ? { threadKey: entry, directoryKey: undefined } : entry);
 
     if (!event.metaKey && !event.shiftKey) {
+      // Padding, chip gaps, and status indicators select through the row's
+      // non-focusable div. Anchor every real mouse selection to its accessible
+      // open button so the pending handoff has one concrete focus owner.
+      const focusOrigin = mousePress
+        ? event.currentTarget.closest(".thread-row")?.querySelector<HTMLButtonElement>(".thread-row__open") ?? undefined
+        : undefined;
+      focusOrigin?.focus({ preventScroll: true });
       selectionAnchorKeyRef.current = threadKey;
       selectionAnchorDirectoryKeyRef.current = row?.directoryKey;
       setSelectedThreadKeys(new Set([threadKey]));
       props.onSelectThread(thread, {
-        focusComposer: mousePress,
-        ...(mousePress ? { focusOrigin: event.currentTarget } : {}),
+        focusComposer: Boolean(focusOrigin),
+        ...(focusOrigin ? { focusOrigin } : {}),
       });
       return;
     }

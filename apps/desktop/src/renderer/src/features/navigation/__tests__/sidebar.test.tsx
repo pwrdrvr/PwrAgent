@@ -4868,6 +4868,36 @@ describe("Sidebar", () => {
     });
   });
 
+  it.each([".thread-row", ".thread-row__chips", ".thread-row__status-indicator"])("anchors a mouse selection from %s to the row's open button", (selector) => {
+    const onSelectThread = vi.fn();
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        loading={false}
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={onSelectThread}
+      />,
+    );
+    const openButton = screen.getByRole("button", { name: sharedThread.title });
+    const row = openButton.closest(".thread-row")!;
+    const target = selector === ".thread-row" ? row : row.querySelector(selector)!;
+    expect(target).not.toBeNull();
+    fireEvent.pointerDown(target, { pointerType: "mouse", button: 0 });
+    fireEvent.pointerUp(target, { pointerType: "mouse", button: 0 });
+    fireEvent.click(target, { detail: 1 });
+    expect(onSelectThread).toHaveBeenCalledExactlyOnceWith(sharedThread, {
+      focusComposer: true,
+      focusOrigin: openButton,
+    });
+    expect(openButton).toHaveFocus();
+  });
+
   it("supports Cmd, Shift, and Cmd+Shift thread selections for batch actions", () => {
     const copyText = vi.fn(async () => undefined);
     const onArchiveThread = vi.fn(async () => undefined);
