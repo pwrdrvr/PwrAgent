@@ -149,6 +149,12 @@ import {
   registerSettingsIpcHandlers,
 } from "./ipc/settings";
 import {
+  disposeKeybindingsIpcHandlers,
+  getKeybindingsSnapshot,
+  onKeybindingsChanged,
+  registerKeybindingsIpcHandlers,
+} from "./ipc/keybindings";
+import {
   disposeWindowPointerIpcHandlers,
   registerWindowPointerIpcHandlers,
 } from "./ipc/window-pointer";
@@ -633,6 +639,7 @@ function disposeMainProcessResourcesSync(options?: {
   disposeQuitBlockerIpcHandlers();
   disposeProfilesIpcHandlers();
   disposeSettingsIpcHandlers();
+  disposeKeybindingsIpcHandlers();
   disposeAppIconDragIpcHandlers();
   disposeDesktopConfigStore();
   disposeWindowPointerIpcHandlers();
@@ -1156,6 +1163,7 @@ function installApplicationMenu(): void {
     isMac,
     federationPeers,
     focusedRemoteWindow,
+    keybindings: getKeybindingsSnapshot().overrides,
     profiles,
     windows,
     actions: {
@@ -1618,6 +1626,12 @@ export function bootstrapApp(): void {
     // native title bar — and with it the native menu bar — is hidden).
     wireAppMenuBridge();
     installWindowMenuRefreshHandlers();
+    // keybindings.toml is shared by every profile: a save from any window,
+    // in this process or another, re-labels this process's menu.
+    registerKeybindingsIpcHandlers();
+    onKeybindingsChanged(() => {
+      installApplicationMenu();
+    });
     // Linux: back the caption buttons the renderer paints, and tell every
     // window's renderer when the window manager maximizes it.
     wireWindowControlsBridge();
