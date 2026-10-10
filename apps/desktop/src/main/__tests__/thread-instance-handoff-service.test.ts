@@ -126,6 +126,18 @@ it("transfers a Git workspace and keeps the thread's subdirectory cwd", async ()
   }));
   const importedRepository = backend.forkThread.mock.calls[0]![0].importedWorktree!.repositoryPath;
   expect(path.resolve(importedRepository)).toBe(path.resolve(canonicalDestinationRepo));
+  expect(result.warnings).toContain("Workspace is detached at the source commit. Original branch: main.");
+});
+
+it("checks out a free source branch and reports no detached-workspace warning", async () => {
+  const { sender, backend, root } = await setup();
+  const { repository, subdirectory, destinationRepo, git } = await gitFixture(root);
+  await git(repository, "switch", "-c", "feature/handoff");
+  await git(repository, "push", "-u", "origin", "feature/handoff");
+  backend.exportThreadForHandoff.mockResolvedValue({ ...source, cwd: subdirectory });
+  const result = await sender.send({ sourceThreadId: "source-thread", targetInstanceId: "pwr_receiver", targetRepositoryPath: destinationRepo, operation: "copy" });
+  expect((await git(result.directoryPath, "branch", "--show-current")).stdout.trim()).toBe("feature/handoff");
+  expect(result.warnings.some((warning) => warning.includes("detached"))).toBe(false);
 });
 
 it("places a Git import where the receiver's Worktrees setting puts worktrees", async () => {

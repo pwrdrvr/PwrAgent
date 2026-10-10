@@ -224,7 +224,11 @@ export class ThreadInstanceHandoffService {
       warnings.push("PwrAgent PR tracking, schedules, messaging bindings, and thread grouping remain on the source instance.");
       if (pkg.title) await this.options.backend.renameThread({ backend: "codex", threadId, name: pkg.title })
         .catch(() => warnings.push("Thread history transferred; the title could not be restored."));
-      if (pkg.git?.sourceBranch) warnings.push(`Workspace is detached at the source commit. Original branch: ${pkg.git.sourceBranch}.`);
+      if (pkg.git?.sourceBranch) {
+        const branch = (await runGitCommand(workspace, ["symbolic-ref", "--quiet", "--short", "HEAD"])
+          .catch(() => ({ stdout: "" }))).stdout.trim();
+        if (!branch) warnings.push(`Workspace is detached at the source commit. Original branch: ${pkg.git.sourceBranch}.`);
+      }
       return { handoffId: pkg.handoffId, sourceThreadId: pkg.sourceThreadId, instanceId: this.options.localInstanceId(), backend: "codex", threadId, directoryPath: cwd, sourceArchived: false, warnings };
     } catch (error) {
       // A rejected fork can follow successful provider creation or a lost response.

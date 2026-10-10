@@ -17899,6 +17899,12 @@ export class DesktopBackendRegistry {
       parentThreadId: request.parentThreadId,
       threadId: result.threadId,
     });
+    // Provider thread/started can arrive before the fork's workspace overlay
+    // is saved. Publish membership again once the prepared link is durable.
+    await this.emitCodexDirectoryRelationshipsUpdated({
+      reason: "thread-created",
+      threadIds: [result.threadId],
+    });
 
     return {
       backend,
@@ -27631,7 +27637,7 @@ export class DesktopBackendRegistry {
   }
 
   private async emitCodexDirectoryRelationshipsUpdated(params: {
-    reason: "selected-thread" | "full-reconcile";
+    reason: "selected-thread" | "full-reconcile" | "thread-created";
     threadIds: string[];
   }): Promise<void> {
     await this.emit({
@@ -34026,6 +34032,17 @@ export class DesktopBackendRegistry {
       await Promise.all(pendingSyncs.map((pending) => pending.promise));
       await evaluation;
     }
+  }
+
+  /**
+   * Resolves once archive cleanup is parked on its pacing checkpoint, the one
+   * timer the cleanup path owns. A fake-clock test advances time exactly then
+   * and otherwise awaits the cleanup itself. Slicing the clock on a budget
+   * instead raced the host I/O that runs between checkpoints, which fake
+   * timers cannot complete (#2665).
+   */
+  whenArchiveCleanupCheckpointPendingForTests(): Promise<void> {
+    return this.archiveCleanupQueue.whenCheckpointPending();
   }
 
   private isCodexThreadKnownMissing(threadId: string): boolean {

@@ -3,8 +3,9 @@ import { lstat, mkdtemp, mkdir, readFile, readlink, rm, symlink, writeFile } fro
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { assertGitHandoffUnchanged, exportGitHandoff, handoffRepositoryIdentity, importGitHandoff, prepareGitHandoff } from "../app-server/git-instance-handoff";
+import * as gitExecutable from "../app-server/git-executable";
 
 const execute = promisify(execFile);
 const roots: string[] = [];
@@ -38,10 +39,11 @@ async function fixture() {
   return { root, source, receiver, remote };
 }
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-it("preflights a published ref and fetches it into a detached worktree without transferring workspace bytes", async () => {
+it("preflights a published ref and checks out the free source branch without transferring workspace bytes", async () => {
   const { source, receiver, root } = await fixture();
   await writeFile(path.join(source, "ignored.txt"), "never transferred\n");
   await writeFile(path.join(receiver, "code.txt"), "receiver changes\n");
@@ -55,7 +57,9 @@ it("preflights a published ref and fetches it into a detached worktree without t
   const worktree = path.join(root, "handoff");
   const rollback = await importGitHandoff({ repository: receiver, worktree, snapshot });
   expect((await git(worktree, "rev-parse", "HEAD")).trim()).toBe(sourceHead);
-  expect(await git(worktree, "branch", "--show-current")).toBe("");
+  expect((await git(worktree, "branch", "--show-current")).trim()).toBe("feature/handoff");
+  expect((await git(worktree, "config", "--get", "branch.feature/handoff.remote")).trim()).toBe("origin");
+  expect((await git(worktree, "config", "--get", "branch.feature/handoff.merge")).trim()).toBe(snapshot.ref);
   expect(await readFile(path.join(worktree, "commit.txt"), "utf8")).toBe("published feature\n");
   await expect(readFile(path.join(worktree, "ignored.txt"))).rejects.toMatchObject({ code: "ENOENT" });
   expect(await git(source, "status", "--porcelain=v1", "-z")).toBe(sourceStatus);
@@ -66,6 +70,126 @@ it("preflights a published ref and fetches it into a detached worktree without t
   expect(await git(receiver, "for-each-ref", "refs/pwragent/handoffs")).toBe("");
   await rollback();
   expect(await git(receiver, "worktree", "list")).not.toContain(worktree);
+  expect(await git(receiver, "branch", "--list", "feature/handoff")).toBe("");
+});
+
+it("reuses a free local branch at the source commit and retains it on rollback", async () => {
+  const { source, receiver, root } = await fixture();
+  const snapshot = await exportGitHandoff(source);
+  await git(receiver, "fetch", "origin");
+  await git(receiver, "branch", "feature/handoff", snapshot.head);
+  const worktree = path.join(root, "handoff");
+  const rollback = await importGitHandoff({ repository: receiver, worktree, snapshot });
+  expect((await git(worktree, "branch", "--show-current")).trim()).toBe("feature/handoff");
+  expect((await git(worktree, "rev-parse", "HEAD")).trim()).toBe(snapshot.head);
+  await rollback();
+  expect((await git(receiver, "rev-parse", "feature/handoff")).trim()).toBe(snapshot.head);
+});
+
+it("uses detached HEAD when the source branch is already checked out on the receiver", async () => {
+  const { source, receiver, root } = await fixture();
+  const snapshot = await exportGitHandoff(source);
+  await git(receiver, "fetch", "origin");
+  await git(receiver, "branch", "feature/handoff", snapshot.head);
+  const occupied = path.join(root, "occupied");
+  await git(receiver, "worktree", "add", occupied, "feature/handoff");
+  const worktree = path.join(root, "handoff");
+  await importGitHandoff({ repository: receiver, worktree, snapshot });
+  expect(await git(worktree, "branch", "--show-current")).toBe("");
+  expect((await git(worktree, "rev-parse", "HEAD")).trim()).toBe(snapshot.head);
+  expect((await git(occupied, "branch", "--show-current")).trim()).toBe("feature/handoff");
+  expect((await git(receiver, "branch", "--show-current")).trim()).toBe("main");
+});
+
+it("removes a newly created branch and worktree when the imported cwd is unavailable", async () => {
+  const { source, receiver, root } = await fixture();
+  const snapshot = { ...await exportGitHandoff(source), cwdRelative: "missing-directory" };
+  const worktree = path.join(root, "handoff");
+  await expect(importGitHandoff({ repository: receiver, worktree, snapshot })).rejects.toMatchObject({ code: "ENOENT" });
+  expect(await git(receiver, "worktree", "list")).not.toContain(worktree);
+  expect(await git(receiver, "branch", "--list", "feature/handoff")).toBe("");
+  expect(await git(receiver, "for-each-ref", "refs/pwragent/handoffs")).toBe("");
+});
+
+it.each(["feature", "feature/handoff/nested"])("detaches when receiver branch %s conflicts with the source branch namespace", async (conflictingBranch) => {
+  const { source, receiver, root } = await fixture();
+  const snapshot = await exportGitHandoff(source);
+  const receiverHead = (await git(receiver, "rev-parse", "HEAD")).trim();
+  await git(receiver, "branch", conflictingBranch, receiverHead);
+  await git(receiver, "pack-refs", "--all");
+  const worktree = path.join(root, "handoff");
+  const rollback = await importGitHandoff({ repository: receiver, worktree, snapshot });
+  expect(await git(worktree, "branch", "--show-current")).toBe("");
+  expect((await git(worktree, "rev-parse", "HEAD")).trim()).toBe(snapshot.head);
+  expect((await git(receiver, "rev-parse", conflictingBranch)).trim()).toBe(receiverHead);
+  await rollback();
+  expect((await git(receiver, "rev-parse", conflictingBranch)).trim()).toBe(receiverHead);
+  expect(await git(receiver, "branch", "--list", "feature/handoff")).toBe("");
+});
+
+it("leaves no new branch after a required smudge filter rejects checkout and configures the branch on retry", async () => {
+  const { source, receiver, root } = await fixture();
+  await writeFile(path.join(source, ".gitattributes"), "code.txt filter=handoff-failure\n");
+  await git(source, "add", ".gitattributes");
+  await git(source, "commit", "-m", "checkout failure fixture");
+  await git(source, "push");
+  const snapshot = await exportGitHandoff(source);
+  await git(receiver, "config", "filter.handoff-failure.smudge", "false");
+  await git(receiver, "config", "filter.handoff-failure.required", "true");
+  const worktree = path.join(root, "handoff");
+  await expect(importGitHandoff({ repository: receiver, worktree, snapshot })).rejects.toThrow(/smudge filter .*failed/);
+  expect(await git(receiver, "branch", "--list", "feature/handoff")).toBe("");
+  expect(await git(receiver, "worktree", "list")).not.toContain(worktree);
+  expect(await git(receiver, "for-each-ref", "refs/pwragent/handoffs")).toBe("");
+  await git(receiver, "config", "--unset", "filter.handoff-failure.smudge");
+  await git(receiver, "config", "filter.handoff-failure.required", "false");
+  await importGitHandoff({ repository: receiver, worktree, snapshot });
+  expect((await git(worktree, "branch", "--show-current")).trim()).toBe("feature/handoff");
+  expect((await git(worktree, "config", "--get", "branch.feature/handoff.remote")).trim()).toBe("origin");
+  expect((await git(worktree, "config", "--get", "branch.feature/handoff.merge")).trim()).toBe(snapshot.ref);
+});
+
+it("preserves a branch created concurrently before the import can claim its name", async () => {
+  const { source, receiver, root } = await fixture();
+  const snapshot = await exportGitHandoff(source);
+  const worktree = path.join(root, "handoff");
+  const runGit = gitExecutable.runGitCommand;
+  let claimed = false;
+  vi.spyOn(gitExecutable, "runGitCommand").mockImplementation(async (cwd, args, options) => {
+    if (!claimed && args.includes("switch") && args.includes("feature/handoff")) {
+      claimed = true;
+      await git(receiver, "branch", "feature/handoff", snapshot.head);
+    }
+    return await runGit(cwd, args, options);
+  });
+  const rollback = await importGitHandoff({ repository: receiver, worktree, snapshot });
+  expect(claimed).toBe(true);
+  expect(await git(worktree, "branch", "--show-current")).toBe("");
+  await rollback();
+  expect((await git(receiver, "rev-parse", "feature/handoff")).trim()).toBe(snapshot.head);
+  await expect(git(receiver, "config", "--get", "branch.feature/handoff.remote")).rejects.toMatchObject({ code: 1 });
+});
+
+it("preserves a free receiver branch at a different commit and detaches at the source commit", async () => {
+  const { source, receiver, root } = await fixture();
+  const snapshot = await exportGitHandoff(source);
+  const localHead = (await git(receiver, "rev-parse", "HEAD")).trim();
+  await git(receiver, "branch", "feature/handoff", localHead);
+  const worktree = path.join(root, "handoff");
+  await importGitHandoff({ repository: receiver, worktree, snapshot });
+  expect(await git(worktree, "branch", "--show-current")).toBe("");
+  expect((await git(worktree, "rev-parse", "HEAD")).trim()).toBe(snapshot.head);
+  expect((await git(receiver, "rev-parse", "feature/handoff")).trim()).toBe(localHead);
+});
+
+it("keeps a detached source detached even when its published branch is free", async () => {
+  const { source, receiver, root } = await fixture();
+  await git(source, "switch", "--detach");
+  const snapshot = await exportGitHandoff(source);
+  const worktree = path.join(root, "handoff");
+  await importGitHandoff({ repository: receiver, worktree, snapshot });
+  expect(await git(worktree, "branch", "--show-current")).toBe("");
+  expect((await git(worktree, "rev-parse", "HEAD")).trim()).toBe(snapshot.head);
 });
 
 it.each(["unstaged", "staged", "untracked"])("blocks %s non-ignored changes before transfer", async (kind) => {
@@ -137,6 +261,8 @@ it("uses a published branch for a detached source and checks for subsequent edit
 it("hands off an imported detached commit again after its published branch advances", async () => {
   const { source, receiver, root } = await fixture();
   const snapshot = await exportGitHandoff(source);
+  await git(receiver, "fetch", "origin");
+  await git(receiver, "switch", "--track", "origin/feature/handoff");
   const imported = path.join(root, "first-handoff");
   await importGitHandoff({ repository: receiver, worktree: imported, snapshot });
   await git(source, "commit", "--allow-empty", "-m", "later published commit");
