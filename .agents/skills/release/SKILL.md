@@ -128,7 +128,11 @@ releases on `main`. Only after the owner directs the `1.1` transition do you cut
 Before changing metadata, run `pnpm release:channels --audit`. Compare GitHub
 Latest with the authoritative `pwrdrvr/homebrew-tap` cask and
 `microsoft/winget-pkgs` manifest versions. Record identifiers, check time,
-source URLs, open submissions and exact blockers in the release handoff.
+source URLs, architecture-specific artifact URLs/hashes, open/closed submissions
+and exact blockers in the release handoff. The existing helper also compares
+GitHub Latest with the highest promoted stable and searches remote Winget,
+vendor-tap and official Homebrew sources for alternate identities. Never replace
+its complete paginated searches with a local cache or a single-page result.
 Investigate ahead/stale channels and reuse pending PRs; do not create duplicate
 registrations. An API failure or incomplete search is not an absent package.
 Public source audits/searches and verified manifest generation use the
@@ -140,6 +144,9 @@ organization owner, and arrange rotation before expiry without copying the value
 or broadening permissions. Require a successful authenticated audit after rotation.
 Retain bounded rate-limit retries; a PAT can still receive HTTP 429 or incomplete
 code-search results. Report these as blockers and retry later or narrow the query.
+Use `distribution-audit.yml` for a non-publishing Actions runtime check of the
+organization read credential; log only its source/availability. Harold owns an
+expiry inventory and renewal/rotation under the same name without wider scope.
 Check automation credential readiness. Prereleases still require this comparison
 but do not update either stable package channel.
 
@@ -377,6 +384,15 @@ approved changelog entry. `isPrerelease` must be `true` at this point — that i
 the expected published state for every tag, not a failure signal. If it reads
 `false`, the publish step's own assertion should already have failed the job;
 investigate before going further.
+
+After every GitHub publication, including prereleases, rerun the same remote
+channel comparison. `release.yml` calls the read-only `distribution-audit.yml`
+after release notes; require its saved report or retain an owned retry blocker
+with the failed run URL. Stable channels still compare with the promoted GitHub
+Latest release. A complete read audit does not prove accepted source metadata,
+refreshed-client availability or installation/upgrade. Name Harold/PwrDrvr tap
+maintainers for tap follow-up and `huntharo`/Microsoft reviewers for Winget
+CLA, draft, review and indexing follow-up as described in the distribution runbook.
 
 ## Promote To Latest
 

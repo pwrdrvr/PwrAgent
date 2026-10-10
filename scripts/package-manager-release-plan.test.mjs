@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, readFile, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { SOURCE_REPO, TAP_REPO, WINGET_REPO, WINGET_PATH } from "./package-manager-release.mjs";
+import { renderPackages, SOURCE_REPO, TAP_REPO, WINGET_REPO, WINGET_PATH } from "./package-manager-release.mjs";
 import {
   assetKey, buildPlan, cachedAsset, imageMatches, metadataPackages, prepare,
   reusableValidation, selectImage, validationCode, validationKey,
@@ -35,12 +35,26 @@ afterEach(async () => {
 async function temporary() { const dir = await mkdtemp(resolve(tmpdir(), "distribution-plan-")); dirs.push(dir); return dir; }
 function apiFixture({ published = false, pending = false, hit = false, cacheRef = "refs/heads/main", winget = "v1.12.0", downloads = 0 } = {}) {
   return vi.fn((endpoint) => {
+    if (/^repos\/[^/]+\/[^/?]+$/.test(endpoint)) return { private: false, default_branch: "main" };
     if (endpoint === `repos/${SOURCE_REPO}/releases/latest`) return structuredClone(current);
     if (endpoint === `repos/${SOURCE_REPO}/releases/tags/${previous.tag_name}`) return structuredClone(previous);
     if (endpoint.includes(`${SOURCE_REPO}/releases?`)) return [current, previous];
-    if (endpoint.includes(`${TAP_REPO}/contents`)) return { content: Buffer.from(`  version "${published ? "1.1.4" : "1.1.3"}"\n`).toString("base64") };
-    if (endpoint.includes(`${WINGET_REPO}/contents/${WINGET_PATH}`)) return [{ type: "dir", name: published ? "1.1.4" : "1.1.3" }];
-    if (endpoint.startsWith("search/")) return { incomplete_results: false, total_count: pending ? 1 : 0, items: pending ? [{ html_url: "pending", title: "PwrAgent" }] : [] };
+    if (endpoint.includes(`${TAP_REPO}/contents`) || endpoint.includes(`${WINGET_REPO}/contents/${WINGET_PATH}`)) {
+      const publishedRelease = published ? current : previous;
+      const version = publishedRelease.tag_name.slice(1);
+      const hashes = Object.fromEntries(publishedRelease.assets.slice(0, 3).map((asset) => [asset.name, asset.digest.slice(7)]));
+      const files = renderPackages(publishedRelease, hashes);
+      const path = endpoint.includes(`${TAP_REPO}/contents`)
+        ? "Casks/pwragent.rb" : `${WINGET_PATH}/${version}/PwrDrvr.PwrAgent.installer.yaml`;
+      if (endpoint.includes(".installer.yaml") || endpoint.includes(`${TAP_REPO}/contents`)) {
+        return { encoding: "base64", content: Buffer.from(files[path]).toString("base64") };
+      }
+      return [{ type: "dir", name: version }];
+    }
+    if (endpoint.startsWith("search/")) {
+      const items = pending && endpoint.startsWith("search/issues") ? [{ html_url: "pending", title: "PwrAgent" }] : [];
+      return { incomplete_results: false, total_count: items.length, items };
+    }
     if (endpoint.startsWith("repos/Homebrew/homebrew-")) return null;
     if (endpoint.startsWith("repos/actions/runner-images/releases")) return [
       { tag_name: "macos-26-arm64/20260907.1", body: "Image Version: 20260907.1" },
@@ -65,8 +79,26 @@ describe("metadata-only distribution planning", () => {
       const plan = await buildPlan(event, api);
       expect(plan.needed).toBe(false);
       expect(plan.assets).toEqual([]);
-      expect(api.mock.calls.some(([endpoint]) => /actions\/caches|runner-images|winget-cli|releases\?/.test(endpoint))).toBe(false);
+      expect(api.mock.calls.some(([endpoint]) => /actions\/caches|runner-images|winget-cli/.test(endpoint))).toBe(false);
     }
+  });
+
+  it("preserves blocked ownership evidence without resolving native runners or caches", async () => {
+    const base = apiFixture();
+    const api = vi.fn((endpoint, ...args) => endpoint.startsWith("search/code") && decodeURIComponent(endpoint).includes("Homebrew/homebrew-cask")
+      ? { incomplete_results: false, total_count: 1, items: [{ path: "Casks/p/pwragent.rb", html_url: "https://github.com/Homebrew/homebrew-cask/blob/main/Casks/p/pwragent.rb" }] }
+      : base(endpoint, ...args));
+    const plan = await buildPlan(event, api);
+    expect(plan.audit.status).toBe("blocked");
+    expect(plan.needed).toBe(false);
+    expect(plan.submit).toBe(false);
+    expect(plan.native).toEqual([]);
+    expect(plan.assets).toEqual([]);
+    expect(api.mock.calls.some(([endpoint]) => /actions\/caches|runner-images|winget-cli/.test(endpoint))).toBe(false);
+    const dir = await mkdtemp(resolve(tmpdir(), "distribution-blocked-"));
+    dirs.push(dir);
+    await prepare(plan, dir);
+    expect(JSON.parse(await readFile(resolve(dir, "preflight.json"), "utf8")).blockers[0]).toMatch(/reconcile ownership/);
   });
 
   it.each(["pull_request", "workflow_dispatch", "schedule"])("reuses identical successful %s candidates before native jobs/downloads", async (name) => {

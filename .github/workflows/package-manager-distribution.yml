@@ -58,11 +58,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           DISTRIBUTION_READ_TOKEN: ${{ secrets.DISTRIBUTION_READ_TOKEN || github.token }}
+          DISTRIBUTION_READ_TOKEN_AVAILABLE: ${{ secrets.DISTRIBUTION_READ_TOKEN != '' }}
           EVENT_TAG: ${{ github.event.release.tag_name }}
           FORCE_VALIDATION: ${{ inputs.force_validation || false }}
           SUBMIT_REQUESTED: ${{ inputs.submit || false }}
         run: |
           set -euo pipefail
+          echo "Organization distribution read token available: $DISTRIBUTION_READ_TOKEN_AVAILABLE"
           node scripts/package-manager-release-plan.mjs plan distribution | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: ./.github/actions/distribution-asset
         if: steps.plan.outputs.asset_0 != ''
@@ -118,6 +120,7 @@ jobs:
         if: steps.plan.outputs.native == 'true'
         run: node scripts/package-manager-release-plan.mjs verify distribution
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always()
         with:
           name: package-manager-inputs
           compression-level: 0
@@ -293,7 +296,7 @@ jobs:
       - name: Install Microsoft's WinGet client
         shell: pwsh
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.DISTRIBUTION_READ_TOKEN || github.token }}
         run: |
           $ErrorActionPreference = "Stop"
           # Install complete release packages rather than registering the runner's

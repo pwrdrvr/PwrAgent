@@ -233,7 +233,9 @@ GitHub Latest).
 Before editing release metadata, run `pnpm release:channels --audit` and follow
 the [package-manager distribution preflight](package-manager-distribution.md).
 Every release, including alpha/beta candidates, records authoritative Homebrew
-and Winget versions, pending submissions and blockers. Stable package entries
+and Winget versions, pending submissions and blockers. The read-only
+`distribution-audit.yml` also records identity discovery, architecture-specific
+URLs/hashes and GitHub Latest versus highest promoted stable. Stable package entries
 change only after a suffix-free release is promoted.
 
 The channel preflight and public manifest generation use the organization's
@@ -639,6 +641,12 @@ gh release edit v<version> --repo pwrdrvr/PwrAgent --latest --prerelease=false
 
 No retag is needed. Clearing the flag on a suffix-free tag moves it from
 Stable · Prerelease into Stable · Latest.
+
+After every publication, including prereleases, require the read-only
+`audit-published-channels` job's source report. A failure here leaves the release
+published: Harold owns the retry with its failed run URL. This audit does not
+submit, install or establish refreshed-client availability. See the
+[package-manager handoff owners and actions](package-manager-distribution.md#required-follow-up-after-every-github-publication).
 
 Promotion also begins the [Homebrew and Winget channel procedure](package-manager-distribution.md).
 Monitor `package-manager-distribution.yml` through checksum/architecture,

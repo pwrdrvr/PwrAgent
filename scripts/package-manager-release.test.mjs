@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { candidateKey, distributionNeeded, materializeRelease, auditChannels, checksumFor, compareVersions, ghJson, releaseAssets, renderPackages, stableVersion, verifyFile, SOURCE_REPO, TAP_REPO, WINGET_REPO, WINGET_PATH } from "./package-manager-release.mjs";
+import { candidateKey, distributionNeeded, materializeRelease, auditChannels, checksumFor, compareVersions, ghJson, releaseAssets, renderPackages, stableVersion, verifyFile, SOURCE_REPO, TAP_REPO, WINGET_PATH } from "./package-manager-release.mjs";
 import { submitChannel } from "./submit-package-manager-release.mjs";
 
 const version = "1.1.4";
@@ -122,20 +122,24 @@ describe("package manager release inputs", () => {
     expect(() => renderPackages(release, {})).toThrow(/checksums/);
   });
 
-  it("reports authoritative versions and pending links, and propagates API failures", () => {
+  it("reports initial registration and pending links, and propagates API failures", () => {
     const api = (endpoint) => {
+      if (/^repos\/[^/]+\/[^/?]+$/.test(endpoint)) return { private: false, default_branch: "main" };
       if (endpoint.endsWith("releases/latest")) return release;
-      if (endpoint.includes(`${TAP_REPO}/contents`)) return { content: Buffer.from('  version "1.1.3"\n').toString("base64") };
-      if (endpoint.includes(`${WINGET_REPO}/contents`)) return [{ type: "dir", name: "1.9.0" }, { type: "dir", name: "1.10.0" }];
+      if (endpoint.includes("/releases?")) return [release];
       if (endpoint.startsWith("search/issues")) return { incomplete_results: false, total_count: 1, items: [{ html_url: "https://github.com/example/pull/1", title: "PwrAgent" }] };
+      if (endpoint.startsWith("search/code")) return { incomplete_results: false, total_count: 0, items: [] };
       return null;
     };
     const audit = auditChannels(api);
-    expect(audit.homebrew.version).toBe("1.1.3");
-    expect(audit.winget.version).toBe("1.10.0");
+    expect(audit.homebrew.version).toBeNull();
+    expect(audit.winget.version).toBeNull();
     expect(audit.winget.pending[0].url).toContain("/pull/1");
     expect(() => auditChannels(() => { throw new Error("HTTP 403"); })).toThrow("HTTP 403");
-    expect(() => auditChannels((endpoint) => endpoint.includes("Homebrew/homebrew-cask") ? {} : api(endpoint))).toThrow(/reconcile ownership/);
+    const official = auditChannels((endpoint) => endpoint.startsWith("search/code") && decodeURIComponent(endpoint).includes("Homebrew/homebrew-cask")
+      ? { incomplete_results: false, total_count: 1, items: [{ path: "Casks/p/pwragent.rb", html_url: "https://github.com/Homebrew/homebrew-cask/blob/main/Casks/p/pwragent.rb" }] } : api(endpoint));
+    expect(official.status).toBe("blocked");
+    expect(official.blockers[0]).toMatch(/reconcile ownership/);
     expect(() => auditChannels((endpoint) => endpoint.startsWith("search/")
       ? { incomplete_results: true, total_count: 0, items: [] } : api(endpoint))).toThrow(/Incomplete/);
   });

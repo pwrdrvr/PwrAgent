@@ -38,24 +38,33 @@ const readRuntime = {
   },
 };
 
-export function ghJson(endpoint, optional = false, projection = null, runtime = readRuntime) {
+function ghPage(endpoint, optional = false, projection = null, runtime = readRuntime) {
   if (endpoint.startsWith("search/") && projection) throw new Error("Search metadata must remain available for completeness validation");
   const args = ["api", "--include", endpoint];
   if (projection) args.push("--jq", projection);
   // Only this GET helper uses the read credential. Submission writes keep GH_TOKEN.
-  const env = { ...runtime.env };
+  const env = { ...runtime.env, GH_DEBUG: "" };
   if (env.DISTRIBUTION_READ_TOKEN && !endpoint.includes("/actions/caches")) env.GH_TOKEN = env.DISTRIBUTION_READ_TOKEN;
   let waited = 0;
   for (let attempt = 0; attempt < 3; attempt++) {
-    const result = runtime.run("gh", args, { encoding: "utf8", env });
+    const result = runtime.run("gh", args, { encoding: "utf8", env, timeout: 45_000, maxBuffer: 16 * 1024 * 1024 });
     const response = (result.stdout ?? "").split(/\r?\n\r?\n/);
     const headers = response.shift() ?? "";
     const header = (name) => headers.match(new RegExp(`^${name}:\\s*(.+)$`, "im"))?.[1].trim();
     const status = Number(headers.match(/^HTTP\/\S+\s+(\d+)/)?.[1])
       || Number(result.stderr?.match(/HTTP (\d+)/)?.[1]);
     if (result.status === 0) {
-      const json = JSON.parse(response.join("\n\n"));
-      if (endpoint.startsWith("search/")) completeSearchItems(json);
+      let json;
+      try {
+        json = JSON.parse(response.join("\n\n"));
+      } catch {
+        throw new Error(`Malformed GitHub API response at ${endpoint.split("?")[0]}; audit blocked`);
+      }
+      if (endpoint.startsWith("search/") && (json.incomplete_results !== false
+        || !Number.isInteger(json.total_count) || json.total_count < 0 || json.total_count > 1000
+        || !Array.isArray(json.items) || json.items.length > 100)) {
+        throw new Error("Incomplete GitHub search; narrow the query or retry later; no absence conclusion");
+      }
       return json;
     }
     // A throttled, unauthorized or incomplete query is never package absence.
@@ -77,8 +86,80 @@ export function ghJson(endpoint, optional = false, projection = null, runtime = 
         continue;
       }
     }
-    throw new Error(`GitHub API ${endpoint}: ${result.error?.message ?? result.stderr?.trim()}${limited ? "; bounded rate-limit retries exhausted; retry later, do not infer absence" : ""}`);
+    throw new Error(`GitHub API ${endpoint.split("?")[0]}: HTTP ${status || "unavailable"}${limited ? "; bounded rate-limit retries exhausted; retry later, do not infer absence" : "; audit blocked, no absence conclusion"}`);
   }
+}
+
+// Search pages must be complete and stable before callers can infer absence.
+export function ghJson(endpoint, optional = false, projection = null, runtime = readRuntime) {
+  if (!endpoint.startsWith("search/")) return ghPage(endpoint, optional, projection, runtime);
+  if (projection) throw new Error("Search metadata must remain available for completeness validation");
+  const items = [];
+  const seen = new Set();
+  let total;
+  for (let page = 1; page <= 10; page++) {
+    const result = ghPage(`${endpoint}&page=${page}`, false, null, runtime);
+    total ??= result.total_count;
+    if (result.total_count !== total) throw new Error("Incomplete GitHub search: results changed during pagination; retry later");
+    for (const item of result.items) {
+      const key = item.html_url ?? item.id;
+      if (key === undefined || seen.has(key)) throw new Error("Incomplete GitHub search: duplicate or malformed page; retry later");
+      seen.add(key);
+    }
+    items.push(...result.items);
+    if (items.length === total) return { incomplete_results: false, total_count: total, items };
+    if (!result.items.length || items.length > total) break;
+  }
+  throw new Error("Incomplete GitHub search pagination; narrow the query or retry later; no absence conclusion");
+}
+
+export function publishedReleases(api = ghJson) {
+  const releases = [];
+  for (let page = 1; page <= 20; page++) {
+    const batch = api(`repos/${SOURCE_REPO}/releases?per_page=100&page=${page}`);
+    if (!Array.isArray(batch)) throw new Error("Malformed GitHub releases response");
+    releases.push(...batch);
+    if (batch.length < 100) return releases;
+  }
+  throw new Error("Release pagination limit reached; select an upgrade baseline manually");
+}
+
+const sourceText = (file) => {
+  if (file?.encoding !== "base64" || typeof file.content !== "string") throw new Error("Missing authoritative source content");
+  return Buffer.from(file.content, "base64").toString("utf8");
+};
+
+export function caskMetadata(text) {
+  const version = /^  version "([^"\n]+)"$/m.exec(text)?.[1];
+  const arch = /^  arch arm: "([^"\n]+)", intel: "([^"\n]+)"$/m.exec(text);
+  const hashes = /^  sha256 arm: +"([a-f0-9]{64})",\s+intel: "([a-f0-9]{64})"$/m.exec(text);
+  const url = /^  url "([^"\n]+)"$/m.exec(text)?.[1];
+  if (!version || !arch || !hashes || !url || !/^cask "pwragent" do$/m.test(text)) {
+    throw new Error("Authoritative PwrAgent cask layout changed; inspect its version, architectures, URL and hashes");
+  }
+  compareVersions(version, version);
+  if (arch[1] !== "arm64" || arch[2] !== "universal") throw new Error("PwrAgent cask architectures changed; inspect source");
+  return { version, installers: ["arm64", "universal"].map((architecture, index) => ({
+    architecture,
+    url: url.replaceAll("#{version}", version).replaceAll("#{arch}", architecture),
+    sha256: hashes[index + 1],
+  })) };
+}
+
+export function wingetMetadata(text, version) {
+  if (!new RegExp(`^PackageIdentifier: ${PACKAGE_ID.replaceAll(".", "\\.")}\\r?$`, "m").test(text)
+    || !text.split(/\r?\n/).includes(`PackageVersion: ${version}`)) {
+    throw new Error("Authoritative Winget package identity/version changed; inspect source");
+  }
+  const installers = [...text.matchAll(/^  - Architecture: (\S+)\r?\n    Scope: (\S+)\r?\n    InstallerUrl: (\S+)\r?\n    InstallerSha256: ([A-Fa-f0-9]{64})\r?$/gm)]
+    .map((match) => ({ architecture: match[1], scope: match[2], url: match[3], sha256: match[4].toLowerCase() }));
+  if (installers.length !== 2 || (text.match(/^\s*- Architecture:/gm) ?? []).length !== installers.length
+    || installers.some((item) => item.architecture !== "x64")
+    || new Set(installers.map((item) => item.scope)).size !== 2
+    || installers.some((item) => !["user", "machine"].includes(item.scope))) {
+    throw new Error("Authoritative Winget installer layout changed; inspect architectures, scopes, URLs and hashes");
+  }
+  return { version, installers };
 }
 
 export function stableVersion(release) {
@@ -216,26 +297,88 @@ ReleaseNotesUrl: https://github.com/${SOURCE_REPO}/releases/tag/v${version}
 }
 
 export function auditChannels(api = ghJson) {
+  const repos = [SOURCE_REPO, TAP_REPO, WINGET_REPO, "Homebrew/homebrew-cask", "Homebrew/homebrew-core"];
+  const branches = {};
+  for (const repo of repos) {
+    const metadata = api(`repos/${repo}`);
+    if (metadata.private !== false || !metadata.default_branch) throw new Error(`Audit blocked: ${repo} is not confirmed readable and public`);
+    branches[repo] = metadata.default_branch;
+  }
   const latest = api(`repos/${SOURCE_REPO}/releases/latest`);
   const version = stableVersion(latest);
-  const cask = api(`repos/${TAP_REPO}/contents/Casks/pwragent.rb`, true);
-  const core = api("repos/Homebrew/homebrew-cask/contents/Casks/p/pwragent.rb", true);
-  const formula = api("repos/Homebrew/homebrew-core/contents/Formula/p/pwragent.rb", true);
-  if (core || formula) throw new Error("PwrAgent exists in official Homebrew; reconcile ownership before updating the tap");
-  const caskVersion = cask
-    ? Buffer.from(cask.content, "base64").toString().match(/^  version "([^"]+)"$/m)?.[1]
-    : null;
-  if (cask && !caskVersion) throw new Error("Cannot parse authoritative PwrAgent cask version");
-  const entries = api(`repos/${WINGET_REPO}/contents/${WINGET_PATH}`, true);
-  const wingetVersions = entries?.filter((entry) => entry.type === "dir").map((entry) => entry.name) ?? [];
-  const wingetVersion = wingetVersions.sort(compareVersions).at(-1) ?? null;
-  const pending = (repo) => completeSearchItems(api(`search/issues?per_page=100&q=${encodeURIComponent(`repo:${repo} is:pr is:open PwrAgent`)}`))
-    .map(({ html_url, title }) => ({ url: html_url, title }));
+  const promoted = publishedReleases(api).filter((item) => !item.draft && !item.prerelease && /^v\d+\.\d+\.\d+$/.test(item.tag_name))
+    .sort((a, b) => compareVersions(b.tag_name.slice(1), a.tag_name.slice(1)));
+  const path = (repo, file) => `repos/${repo}/contents/${file}?ref=${encodeURIComponent(branches[repo])}`;
+  const source = (repo, file) => `https://github.com/${repo}/blob/${branches[repo]}/${file}`;
+  const search = (kind, repo, suffix = "", term = "PwrAgent") => completeSearchItems(api(`search/${kind}?per_page=100&q=${encodeURIComponent(`repo:${repo} ${term} ${suffix}`)}`));
+  const links = (items) => items.map(({ html_url, title, path, state, draft }) => ({ url: html_url, title, path, state, draft }));
+  const cask = api(path(TAP_REPO, "Casks/pwragent.rb"), true);
+  const homebrew = cask ? caskMetadata(sourceText(cask)) : { version: null, installers: [] };
+  const entries = api(path(WINGET_REPO, WINGET_PATH), true);
+  if (entries !== null && !Array.isArray(entries)) throw new Error("Malformed authoritative Winget directory");
+  const wingetVersions = (entries ?? []).filter((entry) => entry.type === "dir").map((entry) => entry.name).sort(compareVersions);
+  if (entries !== null && !wingetVersions.length) throw new Error("Winget directory has no recognizable versions; inspect source");
+  const wingetVersion = wingetVersions.at(-1) ?? null;
+  const installerPath = wingetVersion && `${WINGET_PATH}/${wingetVersion}/${PACKAGE_ID}.installer.yaml`;
+  const winget = installerPath ? wingetMetadata(sourceText(api(path(WINGET_REPO, installerPath))), wingetVersion) : { version: null, installers: [] };
+  // Contents reads remain authoritative while GitHub's code-search index catches up.
+  const officialHomebrew = [];
+  for (const [repo, file] of [["Homebrew/homebrew-cask", "Casks/p/pwragent.rb"], ["Homebrew/homebrew-core", "Formula/p/pwragent.rb"]]) {
+    if (api(path(repo, file), true)) officialHomebrew.push({ repository: repo, path: file, html_url: source(repo, file) });
+  }
+  const identities = {};
+  // Sequential reads avoid bursting GitHub's separate code-search budget.
+  for (const repo of repos.slice(1)) {
+    const matches = [
+      ...officialHomebrew.filter((item) => item.repository === repo),
+      ...search("code", repo),
+      ...search("code", repo, "", "\"pwragent.ai\""),
+    ];
+    identities[repo] = links([...new Map(matches.map((item) => [item.html_url, item])).values()]);
+  }
+  const blockers = [];
+  if (identities["Homebrew/homebrew-cask"].length || identities["Homebrew/homebrew-core"].length) {
+    blockers.push("PwrAgent exists in official Homebrew; reconcile ownership before updating the tap");
+  }
+  if (identities[WINGET_REPO].some((item) => !item.path?.startsWith(`${WINGET_PATH}/`))) {
+    blockers.push("Alternate Winget identity discovered; inspect source before registering/updating");
+  }
+  if (identities[TAP_REPO].some((item) => /^(Casks|Formula)\//.test(item.path ?? "") && item.path !== "Casks/pwragent.rb")) {
+    blockers.push("Alternate Homebrew identity discovered; reconcile tap ownership");
+  }
+  const evidence = (channel) => {
+    if (!channel.version) return "not-published-at-known-path";
+    const order = compareVersions(channel.version, version);
+    return order === 0 ? "matches-github-latest" : order < 0 ? "behind-github-latest" : "ahead-of-github-latest";
+  };
+  for (const [channel, platform] of [[homebrew, "macos"], [winget, "windows"]]) {
+    if (!channel.version) continue;
+    const release = channel.version === version ? latest : api(`repos/${SOURCE_REPO}/releases/tags/v${channel.version}`);
+    stableVersion(release);
+    for (const installer of channel.installers) {
+      const name = platform === "macos" ? `PwrAgent-${channel.version}-${installer.architecture}.dmg` : `PwrAgent-${channel.version}-windows-x64-setup.exe`;
+      const expected = `https://github.com/${SOURCE_REPO}/releases/download/v${channel.version}/${name}`;
+      const asset = release.assets.filter((item) => item.name === name);
+      if (installer.url !== expected || asset.length !== 1 || asset[0].browser_download_url !== expected
+        || (asset[0].digest && asset[0].digest !== `sha256:${installer.sha256}`)) {
+        blockers.push(`Published package URL/checksum differs from release asset: ${name}; inspect authoritative source`);
+      }
+    }
+  }
   return {
+    status: blockers.length ? "blocked" : "complete",
     checkedAt: new Date().toISOString(),
     stable: { version, url: latest.html_url },
-    homebrew: { token: "pwrdrvr/tap/pwragent", repository: TAP_REPO, version: caskVersion, pending: pending(TAP_REPO) },
-    winget: { identifier: PACKAGE_ID, repository: WINGET_REPO, version: wingetVersion, pending: pending(WINGET_REPO) },
+    highestPromotedStable: promoted[0] && { version: promoted[0].tag_name.slice(1), url: promoted[0].html_url },
+    assets: releaseAssets(latest).map((asset) => ({ name: asset.name, url: asset.browser_download_url, digest: asset.digest, bytes: asset.size })),
+    homebrew: { ...homebrew, token: "pwrdrvr/tap/pwragent", repository: TAP_REPO, source: source(TAP_REPO, "Casks/pwragent.rb"),
+      comparison: evidence(homebrew), pending: links(search("issues", TAP_REPO, "is:pr is:open")), submissions: links(search("issues", TAP_REPO, "is:pr")) },
+    winget: { ...winget, identifier: PACKAGE_ID, repository: WINGET_REPO,
+      source: installerPath ? source(WINGET_REPO, installerPath) : `https://github.com/${WINGET_REPO}/tree/${branches[WINGET_REPO]}/${WINGET_PATH}`,
+      comparison: evidence(winget), pending: links(search("issues", WINGET_REPO, "is:pr is:open")), submissions: links(search("issues", WINGET_REPO, "is:pr")) },
+    identities,
+    blockers,
+    verification: "Remote source metadata and available GitHub digests only; downloaded-byte, signature, install/upgrade and refreshed-client validation remain required",
   };
 }
 
@@ -259,12 +402,12 @@ export function candidateKey(releases) {
 }
 
 export function previousRelease(version, api = ghJson) {
-  const releases = api(`repos/${SOURCE_REPO}/releases?per_page=100`, false, "map({tag_name, draft, prerelease})");
+  const releases = publishedReleases(api);
   const candidates = releases.filter((item) => !item.draft && !item.prerelease && /^v\d+\.\d+\.\d+$/.test(item.tag_name))
     .filter((item) => compareVersions(item.tag_name.slice(1), version) < 0)
     .sort((a, b) => compareVersions(a.tag_name.slice(1), b.tag_name.slice(1)));
   const previous = candidates.at(-1);
-  if (!previous) throw new Error("No previous stable release in the latest 100 releases; select an upgrade baseline manually");
+  if (!previous) throw new Error("No previous promoted stable release; select an upgrade baseline manually");
   return api(`repos/${SOURCE_REPO}/releases/tags/${encodeURIComponent(previous.tag_name)}`);
 }
 
@@ -325,6 +468,7 @@ async function main(argv) {
   }
   const audit = auditChannels();
   console.log(JSON.stringify(audit, null, 2));
+  if (audit.status === "blocked") { process.exitCode = 1; return; }
   if (options["--audit"]) return;
   if (!options["--out"]) throw new Error("Use --audit, or --out <directory> [--tag vX.Y.Z] [--assets <cache>]");
   const tag = options["--tag"] ?? `v${audit.stable.version}`;
@@ -350,7 +494,7 @@ async function main(argv) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   main(process.argv.slice(2)).catch((error) => {
-    console.error(error.message);
+    console.log(JSON.stringify({ status: "blocked", checkedAt: new Date().toISOString(), error: error.message }, null, 2));
     process.exitCode = 1;
   });
 }

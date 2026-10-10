@@ -86,7 +86,7 @@ async function writePackages(out, files) {
 
 export async function buildPlan({ event, ref, tag = "", force = false, publication = true, logic }, api = ghJson) {
   const audit = auditChannels(api);
-  const needed = distributionNeeded(audit, event, tag);
+  const needed = audit.status === "complete" && distributionNeeded(audit, event, tag);
   const plan = { audit, needed, native: [], assets: [], submit: false };
   // Preserve the daily publication/pending-PR guard before asset/cache resolution.
   if (!needed) return plan;
@@ -188,6 +188,11 @@ async function main(argv) {
       tag: process.env.EVENT_TAG, force: process.env.FORCE_VALIDATION === "true",
       publication: process.env.GITHUB_EVENT_NAME !== "workflow_dispatch" || process.env.SUBMIT_REQUESTED === "true", logic });
     await prepare(plan, dir);
+    if (plan.audit.status !== "complete") {
+      console.log(JSON.stringify(plan.audit, null, 2));
+      process.exitCode = 1;
+      return;
+    }
     const mac = plan.native.filter((p) => p.family === "homebrew" && !p.reuse);
     const windows = plan.native.find((p) => p.family === "winget");
     const outputs = { needed: plan.needed, submit: plan.submit, native: plan.assets.length > 0,
@@ -227,5 +232,14 @@ async function main(argv) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  main(process.argv.slice(2)).catch((error) => { console.error(error.message); process.exitCode = 1; });
+  main(process.argv.slice(2)).catch(async (error) => {
+    if (process.argv[2] === "plan") {
+      const report = { status: "blocked", checkedAt: new Date().toISOString(), error: error.message };
+      const dir = resolve(process.argv[3] ?? "distribution");
+      await mkdir(dir, { recursive: true });
+      await writeFile(resolve(dir, "preflight.json"), JSON.stringify(report, null, 2) + "\n");
+      console.log(JSON.stringify(report, null, 2));
+    } else console.error(error.message);
+    process.exitCode = 1;
+  });
 }
