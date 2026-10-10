@@ -2754,6 +2754,7 @@ function createKimiAcpRegistry(options?: {
   createScratchProjectDirectory?: () => Promise<string>;
   startSession?: KimiStartSession;
   steerSession?: AcpSteerSession;
+  supportsTurnSteering?: boolean;
   rewindSession?: AcpRewindSession;
   configureWorkflowBudget?: AcpConfigureWorkflowBudget;
   offersThoughtLevel?: (sessionId: string, level: string) => boolean;
@@ -2841,6 +2842,7 @@ function createKimiAcpRegistry(options?: {
       sessions.find((session) => session.sessionId === params.sessionId)?.acpRuntime
       ?? { updatedAt: 1000 }),
     steerSession,
+    supportsTurnSteering: () => options?.supportsTurnSteering === true,
     rewindSession,
     configureWorkflowBudget,
     ...(options?.offersThoughtLevel
@@ -27032,11 +27034,13 @@ command = "pnpm dev"
       ...createKimiAgentRecord(backend),
       registryId: "grok",
       name: "Grok Build",
+      version: "1.0.50-pwragent.1",
     };
     const { registry, steerSession } = createKimiAcpRegistry({
       acpBackendId: backend,
       installedAgent,
       sessions,
+      supportsTurnSteering: true,
     });
     const pendingTurnId = "pending:grok-session-1:1000";
     await emitStartedTurn(
@@ -27083,11 +27087,13 @@ command = "pnpm dev"
       ...createKimiAgentRecord(backend),
       registryId: "grok",
       name: "Grok Build",
+      version: "1.0.50-pwragent.1",
     };
     const { registry, steerSession } = createKimiAcpRegistry({
       acpBackendId: backend,
       installedAgent,
       sessions,
+      supportsTurnSteering: true,
     });
     await emitStartedTurn(
       registry,
@@ -27136,11 +27142,13 @@ command = "pnpm dev"
       ...createKimiAgentRecord(backend),
       registryId: "grok",
       name: "Grok Build",
+      version: "1.0.50-pwragent.1",
     };
     const { registry } = createKimiAcpRegistry({
       acpBackendId: backend,
       installedAgent,
       sessions,
+      supportsTurnSteering: true,
       steerSession: vi.fn(async () => ({ delivery: "nextTurn" as const })),
     });
     const events: AgentEvent[] = [];

@@ -116,17 +116,55 @@ describe("describeInstalledAcpBackend", () => {
     expect(gemini.capabilities.startReview).toBe(false);
   });
 
-  it("advertises ACP steering only for Grok", () => {
+  it.each([undefined, "1.0.50"])("does not advertise ACP steering for vendor Grok %s", (version) => {
     const grok = describeInstalledAcpBackend({
       ...buildInstalledAgent(),
       backendId: "acp:grok" as AcpBackendId,
       registryId: "grok",
       name: "Grok",
+      version,
+      // Older discovery records persisted the unconditional catalog entry.
+      capabilities: {
+        liveWorkspaceHandoff: false,
+        managedReview: true,
+        steerTurn: true,
+      },
     });
     const gemini = describeInstalledAcpBackend(buildInstalledAgent());
 
-    expect(grok.capabilities.steerTurn).toBe(true);
+    expect(grok.capabilities.steerTurn).toBe(false);
     expect(gemini.capabilities.steerTurn).toBe(false);
+  });
+
+  it("advertises ACP steering for a manually installed PwrAgent Grok build", () => {
+    const grok = describeInstalledAcpBackend({
+      ...buildInstalledAgent(),
+      backendId: "acp:grok",
+      registryId: "grok",
+      name: "Grok",
+      version: "1.0.50-pwragent.1",
+    });
+
+    expect(grok.capabilities.steerTurn).toBe(true);
+  });
+
+  it("advertises ACP steering for a PwrAgent-supplied Grok runtime without version metadata", () => {
+    const grok = describeInstalledAcpBackend({
+      ...buildInstalledAgent(),
+      backendId: "acp:grok",
+      registryId: "grok",
+      name: "Grok",
+      launchDescriptor: {
+        backendId: "acp:grok",
+        registryId: "grok",
+        distributionKind: "local",
+        command: "/fixture/grok",
+        args: [],
+        env: { GROK_INSTALLER: "pwragent" },
+      },
+    });
+
+    expect(grok.capabilities.steerTurn).toBe(true);
   });
 
   it("advertises Grok 4.5 reasoning efforts in launchpad options", () => {
@@ -497,6 +535,82 @@ describe("isAcpSessionMissingForProjectError", () => {
 });
 
 describe("AcpBackendAdapter", () => {
+  it.each([
+    { version: "1.0.50", runtimeVersion: undefined, supported: false },
+    { version: "1.0.50-pwragent.1", runtimeVersion: undefined, supported: true },
+    { version: undefined, runtimeVersion: "1.0.50", supported: false },
+    { version: undefined, runtimeVersion: "1.0.50-pwragent.1", supported: true },
+  ])("gates the live Grok steering RPC for $version (runtime: $runtimeVersion)", async ({ version, runtimeVersion, supported }) => {
+    const backendId = "acp:grok";
+    let agent: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "grok",
+      name: "Grok",
+      version,
+      launchDescriptor: {
+        backendId,
+        registryId: "grok",
+        distributionKind: "local",
+        command: "/fixture/grok",
+        args: [],
+        env: {},
+      },
+    };
+    const session: AcpSessionMetadata = {
+      backendId,
+      sessionId: "session-1",
+      title: "Grok fixture",
+      createdAt: 1000,
+      updatedAt: 1000,
+      executionMode: "default",
+      status: "active",
+    };
+    const transport = new FakeAcpAgentTransport({
+      initialize: {
+        protocolVersion: 1,
+        ...(runtimeVersion ? { agentInfo: { name: "grok", version: runtimeVersion } } : {}),
+      },
+      "_x.ai/session/steer": { result: { delivery: "currentTurn" } },
+    });
+    const adapter = createTestAcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => agent,
+        listInstalledAgents: () => [agent],
+        upsertInstalledAgent: vi.fn((updated: AcpInstalledAgentRecord) => { agent = updated; }),
+      },
+      acpSessionStore: {
+        listSessions: () => [session],
+        getSession: () => session,
+        upsertSession: vi.fn(),
+      },
+      captureStores: [],
+      createAcpTransport: () => transport,
+      emit: vi.fn(async () => undefined),
+      handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
+    });
+    try {
+      await adapter.getClient(backendId);
+      expect(describeInstalledAcpBackend(agent).capabilities.steerTurn).toBe(supported);
+      const result = adapter.steerSession({
+        backend: backendId,
+        sessionId: session.sessionId,
+        text: "Add berries",
+        content: [{ type: "text", text: "Add berries" }],
+        interjectionId: "steer-1",
+      });
+      if (supported) {
+        await expect(result).resolves.toEqual({ delivery: "currentTurn" });
+      } else {
+        await expect(result).rejects.toThrow("does not support turn steering over ACP");
+      }
+      expect(transport.requests.filter((request) => request.method === "_x.ai/session/steer"))
+        .toHaveLength(supported ? 1 : 0);
+    } finally {
+      await adapter.close();
+    }
+  });
+
   it("replaces a stale stored launch descriptor with the actively discovered executable", async () => {
     const backendId = "acp:grok" as AcpBackendId;
     const stored: AcpInstalledAgentRecord[] = [
