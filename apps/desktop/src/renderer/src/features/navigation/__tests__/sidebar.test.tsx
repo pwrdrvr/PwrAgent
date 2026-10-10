@@ -7554,7 +7554,7 @@ describe("Sidebar", () => {
     },
   );
 
-  it("forwards double-clicks on row padding and status but excludes row actions and modified clicks", () => {
+  it("forwards double-clicks on row padding and status but excludes row actions and modified clicks", async () => {
     const onSelectThread = vi.fn();
     const onSetThreadPin = vi.fn(async () => undefined);
     const onOpenPullRequest = vi.fn();
@@ -7592,8 +7592,11 @@ describe("Sidebar", () => {
     }
     expect(screen.queryByRole("textbox", { name: "Thread name" })).toBeNull();
     expect(onSelectThread).not.toHaveBeenCalled();
-    // The action's own click still performs its existing operation.
-    fireEvent.click(within(card).getByRole("button", { name: "Pin thread" }));
+    // The action's own click still performs its existing operation. A pin
+    // moves the row into Created's Pinned group, so it settles a reveal.
+    await act(async () => {
+      fireEvent.click(within(card).getByRole("button", { name: "Pin thread" }));
+    });
     expect(onSetThreadPin).toHaveBeenCalledWith(pullRequestThread, true);
     fireEvent.click(within(card).getByRole("button", { name: "Open thread actions" }));
     expect(screen.getByRole("menuitem", { name: "Rename Thread" })).toBeInTheDocument();
