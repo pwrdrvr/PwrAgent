@@ -44,10 +44,15 @@ const retiredFixtureTerms = [
   ["spectrum", "db"].join(""),
   ["search", "-4803"].join(""),
 ];
-// One case-insensitive pass per file. The scan reads ~40 MB of source; an
+// One case-insensitive pass per file. The scan covers every source file; an
 // awaited read, a UTF-8 decode, a lowercased copy, and a scan per term for
 // every file is work that a loaded full run stretches past the default timeout.
-const retiredFixturePattern = new RegExp(retiredFixtureTerms.join("|"), "i");
+const retiredFixturePattern = new RegExp(
+  retiredFixtureTerms
+    .map((term) => term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("|"),
+  "i",
+);
 
 async function listTextFiles(directory: string): Promise<string[]> {
   const entries = await readdir(directory, { withFileTypes: true });
