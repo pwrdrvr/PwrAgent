@@ -6,6 +6,7 @@ import { useBoundedNavigationWindow } from "./useBoundedNavigationWindow";
 import { readNavigationArchiveGroup, type NavigationArchiveMember } from "./navigation-archive-group";
 import { useNavigationLaunchpadConfiguration } from "./useNavigationLaunchpadConfiguration";
 import { navigationQueryEventRequiresRefresh } from "./navigation-query-events";
+import { isLensCollectionId } from "./navigation-window-demand";
 import type { ComposerDraftStore } from "../features/composer/useComposerDraftStore";
 import { useRecoverableRef, useRecoverableState } from "./RendererRecoveryState";
 import { buildStartingLaunchpadComposerScopeKey } from "../features/composer/launchpad-composer-scope";
@@ -170,6 +171,24 @@ function readBridgedBrowseMode(): BrowseMode {
     __pwragentNavigationPreferences?: { browseMode?: unknown };
   }).__pwragentNavigationPreferences;
   return normalizeBrowseMode(bridged?.browseMode);
+}
+
+function readBridgedPinnedThreadsOnTop(): boolean {
+  if (typeof window === "undefined") {
+    return true;
+  }
+  return (window as unknown as {
+    __pwragentNavigationPreferences?: { pinnedThreadsOnTop?: unknown };
+  }).__pwragentNavigationPreferences?.pinnedThreadsOnTop !== false;
+}
+
+function readBridgedPinnedGroupCollapsed(): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  return (window as unknown as {
+    __pwragentNavigationPreferences?: { pinnedGroupCollapsed?: unknown };
+  }).__pwragentNavigationPreferences?.pinnedGroupCollapsed === true;
 }
 
 function isRendererViewVisible(): boolean {
@@ -2837,6 +2856,11 @@ type UseThreadNavigationOptions = {
   localFederationInstanceId?: FederationInstanceId;
   composerDraftStore?: ComposerDraftStore;
   attentionPromoteOnTurnEnd?: boolean;
+  /**
+   * `general.pinned_threads_on_top` from the settings snapshot. Undefined
+   * until the snapshot loads; the window's bootstrap hint answers until then.
+   */
+  pinnedThreadsOnTop?: boolean;
   progressiveInitialRefresh?: boolean;
   threadViewVisible?: boolean;
   /**
@@ -2860,6 +2884,11 @@ export function useThreadNavigation(
 ): {
   /** The lens the sidebar shows: the saved lens, or Directories while `threadLensesEmpty`. */
   browseMode: BrowseMode;
+  /** Whether Updated and Created gather their pins into a Pinned group. */
+  pinnedThreadsOnTop: boolean;
+  /** Whether the Pinned group is closed; persisted per profile, shared by both lenses. */
+  pinnedGroupCollapsed: boolean;
+  setPinnedGroupCollapsed: (collapsed: boolean) => void;
   /** The owner index has settled on zero threads, so every thread lens would be empty. */
   threadLensesEmpty: boolean;
   directoryDisclosure: NavigationDirectoryDisclosure;
@@ -3189,11 +3218,16 @@ export function useThreadNavigation(
   const sendThreadPrAutoDispatchNowRequest =
     desktopApi?.sendThreadPrAutoDispatchNow;
   const setNavigationBrowseModeRequest = desktopApi?.setNavigationBrowseMode;
+  const setPinnedGroupCollapsedRequest = desktopApi?.setPinnedGroupCollapsed;
   const enabled = options.enabled ?? true;
   const rendererFederationTarget = useMemo(readRendererFederationTarget, []);
   const isRendererFederationWindow = Boolean(rendererFederationTarget);
   const threadViewVisible = options.threadViewVisible ?? true;
   const [browseMode, setBrowseMode] = useRecoverableState<BrowseMode>("navigation.browseMode", readBridgedBrowseMode);
+  const [pinnedGroupCollapsed, setPinnedGroupCollapsedState] = useRecoverableState<boolean>(
+    "navigation.pinnedGroupCollapsed", readBridgedPinnedGroupCollapsed);
+  const [bridgedPinnedThreadsOnTop] = useState(readBridgedPinnedThreadsOnTop);
+  const pinnedThreadsOnTop = options.pinnedThreadsOnTop ?? bridgedPinnedThreadsOnTop;
   const [selectedItemKey, setSelectedItemKey] = useRecoverableState<string | undefined>(
     "navigation.selection", undefined,
     // Materialization remains main-owned, but its old hook's pending row and
@@ -3466,6 +3500,17 @@ export function useThreadNavigation(
     }).catch(() => undefined);
   }, [setBrowseMode]);
 
+  // One write per change: a reveal that finds the group already open, or a
+  // repeated toggle to the same value, must not commit.
+  const pinnedGroupCollapsedRef = useRef(pinnedGroupCollapsed);
+  pinnedGroupCollapsedRef.current = pinnedGroupCollapsed;
+  const setPinnedGroupCollapsed = useCallback((collapsed: boolean): void => {
+    if (pinnedGroupCollapsedRef.current === collapsed) return;
+    pinnedGroupCollapsedRef.current = collapsed;
+    setPinnedGroupCollapsedState(collapsed);
+    void setPinnedGroupCollapsedRequest?.({ collapsed }).catch(() => undefined);
+  }, [setPinnedGroupCollapsedRequest, setPinnedGroupCollapsedState]);
+
   const releaseRetainedUnreadThread = useCallback((nextSelectionKey?: string): void => {
     const retainedThread = retainedUnreadThreadRef.current;
     if (!retainedThread) {
@@ -3527,6 +3572,7 @@ export function useThreadNavigation(
     : (getLaunchpadSelectionDirectoryKey(selectedItemKey) ? [getLaunchpadSelectionDirectoryKey(selectedItemKey)!] : []);
   const boundedNavigation = useBoundedNavigationWindow({ desktopApi, enabled, visible: viewVisible, observeEvents: false,
     browseMode, target: rendererFederationTarget, attentionView: { id: attentionViewId, promoteOnTurnEnd: options.attentionPromoteOnTurnEnd ?? true },
+    pinnedThreadsOnTop,
     expandedByKey: directoryDisclosure.expandedByKey, unpinnedExpandedByKey: directoryDisclosure.unpinnedExpandedByKey,
     selectedRef: selectedIdentity, selectedDirectoryKeys, removedDirectoryKeys: [...removedDirectoryKeysRef.current],
     disclosedParents: loadedThreadRows(state.rows).filter((thread) => !thread.subthreadsCollapsed && Boolean(thread.ordinaryChildCount))
@@ -3556,7 +3602,7 @@ export function useThreadNavigation(
     const error = boundedNavigation.connectionError ?? boundedNavigation.admissionError ?? resources.find((resource) => resource.state.error)?.state.error;
     const refreshing = resources.some((resource) => resource.loading);
     const primary = resources.filter((resource) => browseMode === "directories" ? resource.id === "directory-index"
-      : browseMode === "drafts" ? resource.id.startsWith("drafts:") : resource.id === "lens");
+      : browseMode === "drafts" ? resource.id.startsWith("drafts:") : isLensCollectionId(resource.id));
     const loading = enabled && primary.some((resource) => !resource.state.page && !resource.state.error);
     if (changed && pages.size) {
       const changedPages = [...pages].filter(([id, page]) => acceptedPagesRef.current.get(id) !== page);
@@ -9224,6 +9270,9 @@ export function useThreadNavigation(
 
   return {
     browseMode: shownBrowseMode,
+    pinnedThreadsOnTop,
+    pinnedGroupCollapsed,
+    setPinnedGroupCollapsed,
     threadLensesEmpty,
     directoryDisclosure,
     composerSourceThreadKey,

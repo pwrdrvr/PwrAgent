@@ -1908,6 +1908,16 @@ export type NavigationQuery =
       kind: "lens";
       lens: "attention" | "inbox" | "recents";
       filter?: string;
+      /**
+       * Updated and Created (`inbox`, `recents`) with pinned threads on top:
+       * split the lens by its root's pin, so the Pinned group and the
+       * time-sorted list page independently. A thread's whole
+       * subtree goes with its root. An owner that honors the split answers
+       * with `collectionSize` (the pinned bucket's root count); an older
+       * owner ignores the field and answers with every thread, which the
+       * viewer then filters by each root's own pin.
+       */
+      roots?: "pinned" | "unpinned";
     }
   | {
       kind: "directory";
@@ -2142,6 +2152,14 @@ export type SetNavigationBrowseModeRequest = {
 
 export type SetNavigationBrowseModeResponse = {
   browseMode: NavigationBrowseMode;
+};
+
+export type SetPinnedGroupCollapsedRequest = {
+  collapsed: boolean;
+};
+
+export type SetPinnedGroupCollapsedResponse = {
+  collapsed: boolean;
 };
 
 export type MarkThreadSeenRequest = {

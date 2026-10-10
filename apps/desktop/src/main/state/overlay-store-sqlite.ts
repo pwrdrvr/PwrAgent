@@ -593,6 +593,14 @@ function normalizeLaunchpadDefaults(
 
 const NAVIGATION_BROWSE_MODE_META_KEY = "navigation_browse_mode";
 /**
+ * Whether the Pinned group, which Updated and Created share, is collapsed.
+ * Beside the lens for the same reason: the first paint reads it, and
+ * `config.toml` is no home for it because a config write restarts the
+ * federation runtime. Written only by a click on the group header, so one
+ * commit per toggle.
+ */
+const NAVIGATION_PINNED_GROUP_COLLAPSED_META_KEY = "navigation_pinned_group_collapsed";
+/**
  * Which thread the Star Map manager card reopens. Written once when the
  * manager thread is created (and once more if the operator resets it), so
  * it needs no write budget: this is not a per-turn or per-event write.
@@ -7452,6 +7460,18 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     return normalized;
   }
 
+  getPinnedGroupCollapsedSync(): boolean {
+    return this.stateDb.getMeta(NAVIGATION_PINNED_GROUP_COLLAPSED_META_KEY) === "1";
+  }
+
+  async setPinnedGroupCollapsed(collapsed: boolean): Promise<boolean> {
+    // A repeated value commits nothing: the budget is one commit per change.
+    if (this.getPinnedGroupCollapsedSync() !== collapsed) {
+      this.stateDb.setMeta(NAVIGATION_PINNED_GROUP_COLLAPSED_META_KEY, collapsed ? "1" : "0");
+    }
+    return collapsed;
+  }
+
   async getDirectoryLaunchpad(params: {
     directoryKey: string;
   }): Promise<DirectoryLaunchpadOverlayState | undefined> {
@@ -9585,6 +9605,7 @@ export type OverlayStoreLike = Pick<
   forgetThreadArchiveStates?: SqliteOverlayStore["forgetThreadArchiveStates"];
   upsertThreadMessageOrigin?: SqliteOverlayStore["upsertThreadMessageOrigin"];
   readThreadMessageOrigins?: SqliteOverlayStore["readThreadMessageOrigins"];
+  setPinnedGroupCollapsed?: SqliteOverlayStore["setPinnedGroupCollapsed"];
 };
 
 function reliableSubAgentCompletionBoundary(

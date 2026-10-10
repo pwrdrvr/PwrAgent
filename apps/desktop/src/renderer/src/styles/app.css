@@ -8261,6 +8261,40 @@ a.button {
   padding-right: 8px;
 }
 
+/* The Pinned group of Updated and Created. It borrows a project's header
+   primitives (`.directory-row__header` is sticky over the rows,
+   `.directory-row__summary` is the disclosure button) so the group reads as
+   the same kind of section a Directories project is; only the section box,
+   the mark and the count are its own. The section box mirrors
+   `.directory-row`: `position: relative` contains the drop indicators of a
+   pin drag, and the 2px top pad is the same seam. The hairline under it is
+   the one boundary between the pins and the time-sorted list, open or
+   closed. */
+.pinned-group {
+  position: relative;
+  padding: 2px 0 4px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/* The same accent the rows' own pin glyph uses (`.thread-row__pin`). */
+.pinned-group__icon {
+  color: var(--accent-bright);
+}
+
+/* The group's size, in the readouts' type so the meta reads as one row: mono,
+   tabular, and the two-digit box `.directory-row__summary-meta` gives every
+   count so the readouts beside it hold their x. Muted: it is a size, not a
+   signal. */
+.pinned-group__count {
+  min-width: 2ch;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
 .directory-row__threads-slot {
   /* `role="listitem"` box around the children of `.directory-row__threads`
      that are not thread rows: the "Directory threads" disclosure, "Show

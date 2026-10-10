@@ -920,6 +920,11 @@ function SettingsSectionBody(props: {
             general: { attentionPromoteOnTurnEnd },
           });
         }}
+        onPinnedThreadsOnTopChange={async (pinnedThreadsOnTop: boolean) => {
+          await props.settings.writeConfig({
+            general: { pinnedThreadsOnTop },
+          });
+        }}
         onInteractiveSvgChange={async (patch) => {
           await props.settings.writeConfig({ general: patch });
         }}

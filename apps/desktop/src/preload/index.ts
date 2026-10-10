@@ -536,6 +536,8 @@ import type {
   SetDefaultDesktopPwrAgentProfileResponse,
   SetNavigationBrowseModeRequest,
   SetNavigationBrowseModeResponse,
+  SetPinnedGroupCollapsedRequest,
+  SetPinnedGroupCollapsedResponse,
   StartDesktopCodexAuthProfileLoginRequest,
   StartDesktopCodexAuthProfileLoginResponse,
   UpdateDirectoryLaunchpadRequest,
@@ -898,6 +900,7 @@ import {
   NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL,
   NAVIGATION_MARK_THREAD_SEEN_CHANNEL,
   NAVIGATION_SET_BROWSE_MODE_CHANNEL,
+  NAVIGATION_SET_PINNED_GROUP_COLLAPSED_CHANNEL,
   NAVIGATION_SET_SUBTHREADS_COLLAPSED_CHANNEL,
   NAVIGATION_SET_DIRECTORY_PIN_CHANNEL,
   NAVIGATION_SET_DIRECTORY_THREADS_COLLAPSED_CHANNEL,
@@ -2362,6 +2365,10 @@ const desktopApi = Object.freeze({
     request: SetNavigationBrowseModeRequest,
   ): Promise<SetNavigationBrowseModeResponse> =>
     await ipcRenderer.invoke(NAVIGATION_SET_BROWSE_MODE_CHANNEL, request),
+  setPinnedGroupCollapsed: async (
+    request: SetPinnedGroupCollapsedRequest,
+  ): Promise<SetPinnedGroupCollapsedResponse> =>
+    await ipcRenderer.invoke(NAVIGATION_SET_PINNED_GROUP_COLLAPSED_CHANNEL, request),
   markThreadSeen: async (
     request: MarkThreadSeenRequest,
   ): Promise<MarkThreadSeenResponse> =>
@@ -3246,6 +3253,8 @@ const bootstrapAppearance = readBootstrapAppearance();
 const NAVIGATION_ARG_PREFIX = "--pwragent-navigation-preferences=";
 function readBootstrapNavigationPreferences(): {
   browseMode: NavigationBrowseMode;
+  pinnedGroupCollapsed: boolean;
+  pinnedThreadsOnTop: boolean;
 } {
   for (const arg of process.argv) {
     if (!arg.startsWith(NAVIGATION_ARG_PREFIX)) continue;
@@ -3255,12 +3264,16 @@ function readBootstrapNavigationPreferences(): {
       // only inbox/recents/directories, so an operator whose saved lens was
       // Attention got Inbox at first paint and then a visible jump — the
       // exact flicker this bootstrap hint exists to prevent.
-      return { browseMode: normalizeNavigationBrowseMode(raw?.browseMode) };
+      return {
+        browseMode: normalizeNavigationBrowseMode(raw?.browseMode),
+        pinnedGroupCollapsed: raw?.pinnedGroupCollapsed === true,
+        pinnedThreadsOnTop: raw?.pinnedThreadsOnTop !== false,
+      };
     } catch {
       break;
     }
   }
-  return { browseMode: DEFAULT_NAVIGATION_BROWSE_MODE };
+  return { browseMode: DEFAULT_NAVIGATION_BROWSE_MODE, pinnedGroupCollapsed: false, pinnedThreadsOnTop: true };
 }
 const bootstrapNavigationPreferences = readBootstrapNavigationPreferences();
 

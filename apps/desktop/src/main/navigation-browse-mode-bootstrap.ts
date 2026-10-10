@@ -8,23 +8,43 @@
  */
 
 import type { NavigationBrowseMode } from "@pwragent/shared";
+import { getExistingDesktopConfigStore } from "./settings/config-store/desktop-config-store-singleton";
 import { getAppOverlayStore } from "./state/app-state";
 import { normalizeNavigationBrowseMode } from "./state/overlay-store-sqlite";
 
 export type BootstrapNavigationPreferences = {
   browseMode: NavigationBrowseMode;
+  /** The Pinned group's saved disclosure, so it paints closed on frame one. */
+  pinnedGroupCollapsed: boolean;
+  /**
+   * `general.pinned_threads_on_top`, so Updated and Created request the right
+   * pages on frame one instead of re-splitting when the settings snapshot lands.
+   */
+  pinnedThreadsOnTop: boolean;
 };
 
 export const BOOTSTRAP_NAVIGATION_ARG_PREFIX =
   "--pwragent-navigation-preferences=";
 
 export function readBootstrapNavigationPreferences(): BootstrapNavigationPreferences {
+  const pinnedThreadsOnTop = readPinnedThreadsOnTop();
   try {
+    const store = getAppOverlayStore();
     return {
-      browseMode: getAppOverlayStore().getNavigationBrowseModeSync(),
+      browseMode: store.getNavigationBrowseModeSync(),
+      pinnedGroupCollapsed: store.getPinnedGroupCollapsedSync(),
+      pinnedThreadsOnTop,
     };
   } catch {
-    return { browseMode: "inbox" };
+    return { browseMode: "inbox", pinnedGroupCollapsed: false, pinnedThreadsOnTop };
+  }
+}
+
+function readPinnedThreadsOnTop(): boolean {
+  try {
+    return getExistingDesktopConfigStore()?.read("general").settings?.pinnedThreadsOnTop ?? true;
+  } catch {
+    return true;
   }
 }
 
@@ -49,6 +69,8 @@ export function parseBootstrapNavigationPreferencesArg(
       const raw = JSON.parse(arg.slice(BOOTSTRAP_NAVIGATION_ARG_PREFIX.length));
       return {
         browseMode: normalizeNavigationBrowseMode(raw?.browseMode),
+        pinnedGroupCollapsed: raw?.pinnedGroupCollapsed === true,
+        pinnedThreadsOnTop: raw?.pinnedThreadsOnTop !== false,
       };
     } catch {
       return undefined;

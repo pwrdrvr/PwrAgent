@@ -112,6 +112,7 @@ export type DesktopSettingsConfig = {
   general?: {
     confirmQuitWithInProgressThreads?: boolean;
     attentionPromoteOnTurnEnd?: boolean;
+    pinnedThreadsOnTop?: boolean;
     interactiveSvgSkipNotice?: boolean;
     interactiveSvgAutoOpen?: boolean;
     mcpGatewayEnabled?: boolean;
@@ -661,6 +662,12 @@ export function desktopSettingsPatchToEdits(
     set(
       ["general", "attention_promote_on_turn_end"],
       patch.general.attentionPromoteOnTurnEnd,
+    );
+  }
+  if (patch.general?.pinnedThreadsOnTop !== undefined) {
+    set(
+      ["general", "pinned_threads_on_top"],
+      patch.general.pinnedThreadsOnTop,
     );
   }
   if (patch.general?.interactiveSvgSkipNotice !== undefined) {
@@ -2061,6 +2068,7 @@ function normalizeDesktopConfig(
       attentionPromoteOnTurnEnd: readBoolean(
         general?.attention_promote_on_turn_end,
       ),
+      pinnedThreadsOnTop: readBoolean(general?.pinned_threads_on_top),
       interactiveSvgSkipNotice: readBoolean(
         general?.interactive_svg_skip_notice,
       ),
@@ -2525,6 +2533,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const confirmQuitWithInProgressThreads =
     config.general?.confirmQuitWithInProgressThreads;
   const attentionPromoteOnTurnEnd = config.general?.attentionPromoteOnTurnEnd;
+  const pinnedThreadsOnTop = config.general?.pinnedThreadsOnTop;
   const interactiveSvgSkipNotice = config.general?.interactiveSvgSkipNotice;
   const interactiveSvgAutoOpen = config.general?.interactiveSvgAutoOpen;
   const pdfAnalysisEnabled = config.general?.pdfAnalysisEnabled;
@@ -2548,6 +2557,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     hotCpuProfilingHeapSnapshotLimit !== undefined ||
     confirmQuitWithInProgressThreads !== undefined ||
     attentionPromoteOnTurnEnd !== undefined ||
+    pinnedThreadsOnTop !== undefined ||
     interactiveSvgSkipNotice !== undefined ||
     interactiveSvgAutoOpen !== undefined ||
     pdfAnalysisEnabled !== undefined ||
@@ -2589,6 +2599,9 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     }
     if (attentionPromoteOnTurnEnd !== undefined) {
       pruned.general.attentionPromoteOnTurnEnd = attentionPromoteOnTurnEnd;
+    }
+    if (pinnedThreadsOnTop !== undefined) {
+      pruned.general.pinnedThreadsOnTop = pinnedThreadsOnTop;
     }
     if (interactiveSvgSkipNotice !== undefined) {
       pruned.general.interactiveSvgSkipNotice = interactiveSvgSkipNotice;

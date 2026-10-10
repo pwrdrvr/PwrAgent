@@ -269,6 +269,7 @@ export function GeneralSettings(props: {
   snapshot: DesktopSettingsSnapshot;
   onConfirmQuitWithInProgressThreadsChange: (value: boolean) => Promise<void>;
   onAttentionPromoteOnTurnEndChange: (value: boolean) => Promise<void>;
+  onPinnedThreadsOnTopChange: (value: boolean) => Promise<void>;
   onInteractiveSvgChange: (patch: {
     interactiveSvgSkipNotice?: boolean;
     interactiveSvgAutoOpen?: boolean;
@@ -286,6 +287,7 @@ export function GeneralSettings(props: {
     props.snapshot.general.confirmQuitWithInProgressThreads;
   const attentionPromoteOnTurnEnd =
     props.snapshot.general.attentionPromoteOnTurnEnd;
+  const pinnedThreadsOnTop = props.snapshot.general.pinnedThreadsOnTop;
   const interactiveSvgSkipNotice =
     props.snapshot.general.interactiveSvgSkipNotice;
   const interactiveSvgAutoOpen = props.snapshot.general.interactiveSvgAutoOpen;
@@ -486,6 +488,25 @@ export function GeneralSettings(props: {
             source={sourceBadge(attentionPromoteOnTurnEnd)}
             onChange={(next) => {
               return props.onAttentionPromoteOnTurnEndChange(next);
+            }}
+          />
+        </div>
+      </SettingsSection>
+
+      <SettingsSection
+        eyebrow="General"
+        title="Pinned threads"
+        chip={sourceBadge(pinnedThreadsOnTop)}
+      >
+        <div className="settings-fields">
+          <ToggleField
+            checked={pinnedThreadsOnTop.value}
+            disabled={props.saving}
+            label="Show pinned threads in a group at the top"
+            sub="Updated and Created gather every pinned thread into one Pinned group, in the order you set, above the time-sorted list. Turn this off to keep both lists sorted by time alone, with each pin in its own place. Directories always shows a project's pins at its top."
+            source={sourceBadge(pinnedThreadsOnTop)}
+            onChange={(next) => {
+              return props.onPinnedThreadsOnTopChange(next);
             }}
           />
         </div>

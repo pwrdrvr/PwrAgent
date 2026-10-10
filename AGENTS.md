@@ -584,7 +584,7 @@ Render a brand through `BrandLockup`
 ### Attention order
 
 - Order Attention by turn, not by activity.
-- All other lenses use a pure `updatedAt` or `createdAt` sort.
+- Inbox lists by `updatedAt` and Recents by `createdAt`, each below its Pinned group when pins are on top.
 - Do not use `updatedAt` to order Attention.
 - `updatedAt` changes for each streamed item, subagent call, and tool result.
 - Activity ordering would move queue items while the operator uses the queue.
@@ -629,17 +629,43 @@ Render a brand through `BrandLockup`
 
 ### Inbox, Recents, and Directories
 
+- The code names and the tab tooltips differ: `inbox` is the **Updated**
+  tab and `recents` is the **Created** tab. No tab is labelled Recents.
 - Use Inbox as the default browsing lens.
 - Sort Inbox by recent activity.
 - Show all threads in Inbox.
-- Sort Recents by thread creation time.
 - Show all threads in Recents.
-- This creation-time order prevents active threads from moving.
-- Keep Inbox and Recents as pure sort orders.
-- Do not create a pinned section in those lenses.
-- In Inbox, show each pinned thread at its normal `updatedAt` position.
-- In Recents, show each pinned thread at its normal `createdAt` position.
-- Offer visible pin ordering only in Directories.
+- `general.pinned_threads_on_top` decides where pins go in both lenses.
+  It defaults on, and it lives in **Settings → General → Pinned threads**.
+  - On: Inbox and Recents share one collapsible **Pinned** group above
+    their time-sorted list.
+  - Off: both are pure sorts. Each pinned thread keeps its `updatedAt` or
+    `createdAt` position, and neither lens shows pin-order controls.
+  - Never re-sort pins by time inside the group. Pin order is the
+    operator's own, and it must read the same on every tab.
+  - Directories ignores the setting; each project keeps its pins on top.
+- The Pinned group:
+  - Holds every pinned root from every project, including threads with no
+    directory and pinned peer threads. A root's sub-threads stay in its tray.
+  - Order the group by the global pin rank (`comparePinnedThreads`).
+    Reordering there and in a Directories project changes the same rank.
+  - A thread renders once. A pinned root is never in the list. Unpinning
+    returns it to its slot in the list's own order.
+  - The collapsed header shows the pin, **Pinned**, the count, and the
+    Attention tab's two indicators scoped to the group. Both stay visible
+    and grey at zero, so collapsing never hides a live turn or unread work.
+  - One collapsed state serves both lenses. Persist it per profile in the
+    state DB, beside the selected lens. Never in `config.toml`. One commit
+    per toggle.
+  - Revealing a pinned thread from search or the jump palette opens a
+    closed group. Pinning a thread opens it too.
+  - The group pages separately (`lens-pins`, 100 rows) from the list
+    (`lens`, 10 rows). An owner that predates the split ignores `roots`,
+    so the renderer also filters each page by each root's own pin.
+  - Draw no group when no pin exists or none matches the lens filter.
+  - The list below the group keeps no pin-order controls.
+- Offer visible pin ordering in Directories and in the Pinned group.
+  Both use `useThreadPinOrdering`; do not fork it.
 - The pin-order controls are:
   - Drag.
   - The `⌘⇧↑` and `⌘⇧↓` shortcuts.

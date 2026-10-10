@@ -26,13 +26,17 @@ it.each([1, 10, 101])("budgets federation navigation traffic for %s visible moun
   let samples: { diagnosticBytes: number; requestBytes: number; responseBytes: number; ids: string[] }[] = [];
   const read = vi.fn<NonNullable<DesktopApi["getNavigationQueryPage"]>>(async (request) => {
     const query = request.query;
-    const selected = query.kind === "directory-index" ? [] : query.kind === "exact"
+    // A current owner splits a lens by pin: none of these rows is pinned, so
+    // the Pinned group's page is empty and acknowledged by `collectionSize`.
+    const pinnedSplit = query.kind === "lens" && query.roots === "pinned";
+    const selected = query.kind === "directory-index" || pinnedSplit ? [] : query.kind === "exact"
       ? rows.filter((row) => query.identities.some((ref) => ref.threadId === row.id)) : rows;
     const offset = Number(request.cursor ?? 0);
     const end = offset + (request.pageSize ?? 100);
     const response: NavigationQueryPage = {
       protocol: 2, queryKey: "q", generation: "g", ownerEpoch: "o", countsRevision: "c",
       counts: { total: count, active: 0, unread: 0, review: 0 }, coverage: { state: "complete" }, complete: end >= selected.length,
+      ...(pinnedSplit ? { collectionSize: 0 } : {}),
       ...(end < selected.length ? { nextCursor: String(end) } : {}),
       entries: selected.slice(offset, end).map((row) => ({ row, placement: { kind: "root" }, orderKey: row.id })),
     };
