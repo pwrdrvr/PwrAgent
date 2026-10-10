@@ -119,6 +119,43 @@ describe("GitWorkspaceHandoffService", () => {
     expect(await readFile(path.join(worktreePath, "notes.txt"), "utf8")).toBe("ongoing work");
   });
 
+  it.each(["project-root", "worktree-root"])("preserves managed ownership across repeated project moves: %s", async (target) => {
+    const repo = await createRepo();
+    const service = new GitWorkspaceHandoffService({ resolveWorktreeStorage: () => "in-repo" });
+    const created = await service.handoff({
+      backend: "codex", threadId: "thread-1", direction: "to-project", targetPath: repo,
+      sourceWorkMode: "worktree", now: 1000,
+    });
+    await writeFile(path.join(created.targetPath, "notes.txt"), "ongoing managed work");
+    const before = await git(repo, ["worktree", "list", "--porcelain"]);
+    const reused = await service.handoff({
+      backend: "codex", threadId: "thread-1", direction: "to-project",
+      targetPath: target === "project-root" ? repo : created.targetPath,
+      sourceWorkMode: "worktree", workspacePaths: [created.targetPath],
+      workspaceDirectories: [created.linkedDirectory],
+    });
+    expect(reused.targetPath).toBe(created.targetPath);
+    expect(reused.linkedDirectory.worktreeOwnership).toBeUndefined();
+    expect(await git(repo, ["worktree", "list", "--porcelain"])).toBe(before);
+    expect(await readFile(path.join(reused.targetPath, "notes.txt"), "utf8")).toBe("ongoing managed work");
+  });
+
+  it.each([false, true])("keeps persisted external ownership when reusing a worktree, even with a conflicting alias: %s", async (conflictingAlias) => {
+    const repo = await createRepo();
+    const worktreePath = path.join(repo, ".worktrees", "external");
+    await git(repo, ["worktree", "add", "--detach", worktreePath, "HEAD"]);
+    const directory = { id: "external", label: "target", path: repo, kind: "worktree" as const, worktreePath };
+    const result = await new GitWorkspaceHandoffService().handoff({
+      backend: "codex", threadId: "thread-1", direction: "to-project", targetPath: repo,
+      workspacePaths: [worktreePath], workspaceDirectories: [
+        { ...directory, worktreeOwnership: "external" },
+        ...(conflictingAlias ? [{ ...directory, id: "alias" }] : []),
+      ],
+    });
+    expect(result.targetPath).toBe(toForwardSlashes(await realpath(worktreePath)));
+    expect(result.linkedDirectory.worktreeOwnership).toBe("external");
+  });
+
   it("moves a scratch thread to another project without touching either checkout", async () => {
     const source = await createRepo();
     const target = await createRepo();

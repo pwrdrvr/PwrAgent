@@ -91,6 +91,7 @@ type HandoffParams = {
   sourcePath?: string;
   sourceWorkMode?: "local" | "worktree";
   workspacePaths?: string[];
+  workspaceDirectories?: LinkedDirectorySummary[];
   sourceBranch?: string;
   leaveLocalBranch?: string;
   newBranchName?: string;
@@ -416,6 +417,19 @@ export class GitWorkspaceHandoffService {
       }
     }
     const isWorktree = path.resolve(repositoryPath) !== path.resolve(targetPath);
+    const knownDirectories = isWorktree && !createdWorktree
+      ? await Promise.all((params.workspaceDirectories ?? [])
+          .filter((directory) => directory.kind === "worktree")
+          .map(async (directory) => ({
+            path: await realpath(directory.worktreePath ?? directory.path).catch(() => undefined),
+            ownership: directory.worktreeOwnership,
+          })))
+      : [];
+    const targetDirectories = knownDirectories.filter((directory) =>
+      directory.path && path.resolve(directory.path) === path.resolve(targetPath),
+    );
+    const threadOwnsWorktree = createdWorktree
+      || (targetDirectories.length > 0 && targetDirectories.every((directory) => directory.ownership !== "external"));
     const branch = createdWorktree ? "HEAD" : targetPath === workspacePath
       ? inspection.branch
       : trim((await runGit(targetPath, ["rev-parse", "--abbrev-ref", "HEAD"], this.gitEnv)).stdout);
@@ -434,7 +448,7 @@ export class GitWorkspaceHandoffService {
         kind: isWorktree ? "worktree" : "local",
         ...(isWorktree ? {
           worktreePath: targetPath,
-          ...(!createdWorktree ? { worktreeOwnership: "external" as const } : {}),
+          ...(!threadOwnsWorktree ? { worktreeOwnership: "external" as const } : {}),
         } : {}),
       },
       warnings: [],

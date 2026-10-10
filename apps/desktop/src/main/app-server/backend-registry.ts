@@ -14970,13 +14970,13 @@ export class DesktopBackendRegistry {
       ? {}
       : this.resolveHandoffWorkspaceCandidate(thread, request);
     const workspaceDirectories = request.direction === "to-project"
-      ? mergeThreadLinkedDirectories([
+      ? [
           ...(thread?.linkedDirectories ?? []),
           ...(projectMoveOverlay?.extraLinkedDirectories ?? []),
-        ])
+        ]
       : undefined;
     const sourceCwd = resolveThreadWorkspaceCwd(thread, projectMoveOverlay?.extraLinkedDirectories);
-    const sourceWorkMode: "local" | "worktree" = workspaceDirectories?.some((directory) =>
+    const sourceWorkMode: "local" | "worktree" = workspaceDirectories && mergeThreadLinkedDirectories(workspaceDirectories).some((directory) =>
       directory.kind === "worktree"
       && sourceCwd
       && normalizeWorktreePathForComparison(directory.worktreePath ?? directory.path) === normalizeWorktreePathForComparison(sourceCwd),
@@ -14991,7 +14991,16 @@ export class DesktopBackendRegistry {
     ] : undefined;
     const result = await this.gitWorkspaceHandoffService.handoff({
       ...request,
-      ...(workspacePaths ? { workspacePaths, sourceWorkMode } : {}),
+      ...(workspacePaths ? {
+        workspacePaths,
+        sourceWorkMode,
+        // Persisted links carry ownership. A provider-discovered worktree or
+        // PR path alone must not grant cleanup ownership to this thread.
+        workspaceDirectories: [
+          ...(projectMoveOverlay?.extraLinkedDirectories ?? []),
+          ...(workspaceDirectories ?? []).filter((directory) => directory.worktreeOwnership === "external"),
+        ],
+      } : {}),
       repositoryPath: request.repositoryPath ?? candidate.repositoryPath,
       sourcePath: request.sourcePath ?? candidate.sourcePath,
       sourceBranch: request.sourceBranch ?? candidate.sourceBranch,

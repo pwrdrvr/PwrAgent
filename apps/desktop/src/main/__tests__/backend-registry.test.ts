@@ -136,6 +136,7 @@ import type { ProviderThreadSnapshot } from "../app-server/provider-thread-snaps
 import type { GitWorkingStateService } from "../app-server/git-working-state-service";
 import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
 import { WorktreeArchiveService } from "../app-server/worktree-archive-service";
+import { GitWorkspaceHandoffService } from "../app-server/git-workspace-handoff-service";
 import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
 import { AcpRolloutStore } from "../acp/acp-rollout-store";
 import { AcpSessionStore, type AcpSessionMetadata } from "../acp/acp-session-store";
@@ -55566,7 +55567,49 @@ script = "printf setup"
     }
   });
 
-  it.each(["directory", "pr", "relinked-pr"])("passes existing worktrees and source isolation to a project move: %s", async (provenance) => {
+  it("archives the managed worktree after repeated project moves", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-repeated-project-move-"));
+    let registry: DesktopBackendRegistry | undefined;
+    try {
+      const repoPath = path.join(root, "PwrGit");
+      await mkdir(repoPath);
+      await git(repoPath, ["init", "-b", "main"]);
+      await writeFile(path.join(repoPath, "README.md"), "base\n", "utf8");
+      await git(repoPath, ["add", "README.md"]);
+      await git(repoPath, ["commit", "-m", "initial"]);
+      const handoffService = new GitWorkspaceHandoffService({ resolveWorktreeStorage: () => "in-repo" });
+      const created = await handoffService.handoff({
+        backend: "codex", threadId: "thread-1", direction: "to-project", targetPath: repoPath,
+        sourceWorkMode: "worktree", now: 1000,
+      });
+      const overlayStore = createOverlayStoreMock();
+      await overlayStore.replaceWorkspaceLinkedDirectory({
+        backend: "codex", threadId: "thread-1", directory: created.linkedDirectory,
+      });
+      const thread: AppServerThreadSummary = {
+        id: "thread-1", title: "Repeated project move", titleSource: "explicit", source: "codex",
+        projectKey: created.targetPath, linkedDirectories: [created.linkedDirectory], gitBranch: "HEAD", updatedAt: 2,
+      };
+      registry = new DesktopBackendRegistry({
+        codexClient: new MockBackendClient({ threads: [thread] }), overlayStore, gitWorkspaceHandoffService: handoffService,
+      });
+      for (let move = 0; move < 2; move += 1) {
+        const result = await registry.handoffThreadWorkspace({
+          backend: "codex", threadId: thread.id, direction: "to-project", targetPath: repoPath,
+        });
+        expect(result.targetPath).toBe(created.targetPath);
+      }
+      const archived = await registry.archiveThread({ backend: "codex", threadId: thread.id });
+      expect(archived.cleanup).toContainEqual(expect.objectContaining({ removedWorktree: true }));
+      expect(await pathExists(created.targetPath)).toBe(false);
+      expect(await git(repoPath, ["worktree", "list", "--porcelain"])).not.toContain(created.targetPath);
+    } finally {
+      await registry?.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["directory", "pr", "relinked-pr", "overlay"])("passes existing worktrees and source isolation to a project move: %s", async (provenance) => {
     const directories: LinkedDirectorySummary[] = [{
       id: "source", label: "Workspaces", path: "/repo/Workspaces", kind: "worktree", worktreePath: "/worktrees/Workspaces",
     }, {
@@ -55575,7 +55618,7 @@ script = "printf setup"
     const thread: AppServerThreadSummary = {
       id: "thread-1", title: "Move", titleSource: "explicit", source: "codex",
       projectKey: provenance === "relinked-pr" ? "/repo/PwrGit" : "/worktrees/Workspaces",
-      linkedDirectories: provenance === "directory" ? directories : provenance === "pr" ? directories.slice(0, 1) : [], updatedAt: 2,
+      linkedDirectories: provenance === "directory" ? directories : provenance === "relinked-pr" ? [] : directories.slice(0, 1), updatedAt: 2,
     };
     const handoff = vi.fn(async () => ({
       backend: "codex" as const, threadId: thread.id, direction: "to-project" as const,
@@ -55584,8 +55627,16 @@ script = "printf setup"
       warnings: [], completedAt: 1000,
     }));
     const recordCodexWorktreeOwnerThread = vi.fn();
-    const overlayStore = createOverlayStoreMock();
-    if (provenance !== "directory") await overlayStore.addThreadPullRequestReference({
+    const overlayDirectories = [
+      { ...directories[0]!, id: "pwragent-handoff:codex:thread-1" },
+      directories[1]!,
+    ];
+    const overlayStore = createOverlayStoreMock(provenance === "overlay" ? {
+      overlays: { "codex:thread-1": {
+        backend: "codex", threadId: thread.id, executionMode: "default", extraLinkedDirectories: overlayDirectories,
+      } },
+    } : undefined);
+    if (provenance === "pr" || provenance === "relinked-pr") await overlayStore.addThreadPullRequestReference({
       backend: "codex", threadId: thread.id,
       pr: { provider: "github.com", org: "example", repo: "PwrGit", number: 461, state: "passing", url: "https://github.com/example/PwrGit/pull/461", linkedDirectoryPaths: ["/worktrees/PwrGit"] },
     });
@@ -55603,6 +55654,9 @@ script = "printf setup"
       expect(handoff).toHaveBeenCalledWith(expect.objectContaining({
         sourceWorkMode: provenance === "relinked-pr" ? "local" : "worktree",
         workspacePaths: expect.arrayContaining(provenance === "relinked-pr" ? ["/worktrees/PwrGit"] : ["/worktrees/Workspaces", "/worktrees/PwrGit"]),
+      }));
+      if (provenance === "overlay") expect(handoff).toHaveBeenCalledWith(expect.objectContaining({
+        workspaceDirectories: expect.arrayContaining(overlayDirectories),
       }));
       expect(replaceWorkspace).toHaveBeenCalledWith(expect.objectContaining({ resetProjectState: true }));
       expect(events).toContainEqual(expect.objectContaining({
