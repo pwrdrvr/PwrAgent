@@ -60943,22 +60943,23 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
 
   it("does not synchronize archived threads while collecting archive cleanup metadata", async () => {
     vi.useFakeTimers();
-    const fixture = buildMissingThreadFixture({
-      missingThreadIds: ["already-archived"],
-      presentThreadIds: ["archive-target"],
-    });
-    const codexClient = new MissingThreadCodexClient(new Set(["already-archived"]), {
-      initializeResult: { methods: ["thread/list", "thread/archive"] },
-      threads: fixture.threads.filter((thread) => thread.id === "archive-target"),
-      archivedThreads: fixture.threads.filter((thread) => thread.id === "already-archived"),
-    });
-    const registry = new DesktopBackendRegistry({
-      codexClient,
-      overlayStore: createOverlayStoreMock({ overlays: fixture.overlays }),
-    });
-    const events: AgentEvent[] = [];
-    registry.onEvent((event) => { events.push(event); });
+    let registry: DesktopBackendRegistry | undefined;
     try {
+      const fixture = buildMissingThreadFixture({
+        missingThreadIds: ["already-archived"],
+        presentThreadIds: ["archive-target"],
+      });
+      const codexClient = new MissingThreadCodexClient(new Set(["already-archived"]), {
+        initializeResult: { methods: ["thread/list", "thread/archive"] },
+        threads: fixture.threads.filter((thread) => thread.id === "archive-target"),
+        archivedThreads: fixture.threads.filter((thread) => thread.id === "already-archived"),
+      });
+      registry = new DesktopBackendRegistry({
+        codexClient,
+        overlayStore: createOverlayStoreMock({ overlays: fixture.overlays }),
+      });
+      const events: AgentEvent[] = [];
+      registry.onEvent((event) => { events.push(event); });
       vi.mocked(stat).mockClear();
       const result = await withArchivePacing(registry.archiveThread({ backend: "codex", threadId: "archive-target" }));
       expect(result.cleanup).toEqual([]);
@@ -60972,28 +60973,29 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
         event.notification.method === "codex/missingThreads/updated",
       )).toEqual([]);
     } finally {
-      await registry.close();
+      await registry?.close();
       vi.useRealTimers();
     }
   });
 
   it("reports the failed thread when an approved missing-thread archive fails", async () => {
     vi.useFakeTimers();
-    const fixture = buildMissingThreadFixture({
-      missingThreadIds: ["thread-missing"],
-      presentThreadIds: ["a", "b", "c", "d", "e"],
-    });
-    const codexClient = new MissingThreadCodexClient(new Set(["thread-missing"]), {
-      initializeResult: { methods: ["thread/list", "thread/archive"] },
-      threads: fixture.threads,
-      archivedThreads: [],
-    });
-    const overlayStore = createOverlayStoreMock({ overlays: fixture.overlays });
-    vi.spyOn(overlayStore, "setThreadArchiveTombstone").mockRejectedValue(
-      new Error("archive storage unavailable"),
-    );
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    let registry: DesktopBackendRegistry | undefined;
     try {
+      const fixture = buildMissingThreadFixture({
+        missingThreadIds: ["thread-missing"],
+        presentThreadIds: ["a", "b", "c", "d", "e"],
+      });
+      const codexClient = new MissingThreadCodexClient(new Set(["thread-missing"]), {
+        initializeResult: { methods: ["thread/list", "thread/archive"] },
+        threads: fixture.threads,
+        archivedThreads: [],
+      });
+      const overlayStore = createOverlayStoreMock({ overlays: fixture.overlays });
+      vi.spyOn(overlayStore, "setThreadArchiveTombstone").mockRejectedValue(
+        new Error("archive storage unavailable"),
+      );
+      registry = new DesktopBackendRegistry({ codexClient, overlayStore });
       await registry.listThreads({ backend: "codex", forceRefresh: true });
       await settleMissingCodexThreadAudit(registry);
       expect(codexClient.archivedThreadIds).toEqual([]);
@@ -61007,7 +61009,7 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
         expect(stat).toHaveBeenCalledWith(directory);
       }
     } finally {
-      await registry.close();
+      await registry?.close();
       vi.useRealTimers();
     }
   });
