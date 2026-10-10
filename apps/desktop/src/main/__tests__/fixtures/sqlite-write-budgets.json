@@ -755,6 +755,7 @@
     "rowsChanged": 110,
     "statements": 106
   },
+  "project-move-parent-detachment": {"commits": 1, "note": "One workspace boundary commit also clears the parent (~0.0165 MB/move, ~1.65 MB/day at 100 moves); no timer or per-turn writes.", "observedWalBytes": 16480, "rowsChanged": 1, "statements": 1},
   "provider-thread-snapshot-refresh": {
     "commits": 1,
     "note": "one secret-free provider thread projection per successful full provider list, never per thread",

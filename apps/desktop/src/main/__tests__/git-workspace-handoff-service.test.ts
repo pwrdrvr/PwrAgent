@@ -72,6 +72,90 @@ afterEach(async () => {
 });
 
 describe("GitWorkspaceHandoffService", () => {
+  it("keeps a worktree thread isolated when moving to another project's checkout", async () => {
+    const source = await createRepo();
+    const sourceWorktree = path.join(source, ".worktrees", "source");
+    await git(source, ["worktree", "add", "--detach", sourceWorktree, "HEAD"]);
+    const target = await createRepo();
+    await writeFile(path.join(sourceWorktree, "notes.txt"), "source changes");
+    await writeFile(path.join(target, "README.md"), "destination changes");
+    const targetHead = await git(target, ["rev-parse", "HEAD"]);
+    const result = await new GitWorkspaceHandoffService({
+      resolveWorktreeStorage: () => "in-repo",
+    }).handoff({
+      backend: "codex", threadId: "thread-1", direction: "to-project",
+      sourcePath: sourceWorktree, sourceWorkMode: "worktree", targetPath: target, now: 1000,
+    });
+    expect(result.workMode).toBe("worktree");
+    expect(result.targetPath).not.toBe(toForwardSlashes(await realpath(target)));
+    expect(result.linkedDirectory).toMatchObject({
+      path: toForwardSlashes(await realpath(target)), worktreePath: result.targetPath,
+    });
+    expect(result.linkedDirectory.worktreeOwnership).toBeUndefined();
+    expect(result.branch).toBe("HEAD");
+    expect(await git(result.targetPath, ["rev-parse", "HEAD"])).toBe(targetHead);
+    expect(await git(target, ["branch", "--show-current"])).toBe("feature/handoff");
+    expect(await readFile(path.join(target, "README.md"), "utf8")).toBe("destination changes");
+    expect(await readFile(path.join(sourceWorktree, "notes.txt"), "utf8")).toBe("source changes");
+    expect(result.archivedSourceWorktree).toBeUndefined();
+  });
+
+  it("reuses the thread's destination worktree when a project root is selected", async () => {
+    const target = await createRepo();
+    const worktreePath = path.join(target, ".worktrees", "existing");
+    await git(target, ["worktree", "add", "-b", "feature/existing", worktreePath, "HEAD"]);
+    await writeFile(path.join(worktreePath, "notes.txt"), "ongoing work");
+    const before = await git(target, ["worktree", "list", "--porcelain"]);
+    const result = await new GitWorkspaceHandoffService().handoff({
+      backend: "codex", threadId: "thread-1", direction: "to-project", targetPath: target,
+      workspacePaths: [worktreePath],
+    });
+    expect(result).toMatchObject({
+      workMode: "worktree", branch: "feature/existing",
+      targetPath: toForwardSlashes(await realpath(worktreePath)),
+      linkedDirectory: { worktreeOwnership: "external" },
+    });
+    expect(await git(target, ["worktree", "list", "--porcelain"])).toBe(before);
+    expect(await readFile(path.join(worktreePath, "notes.txt"), "utf8")).toBe("ongoing work");
+  });
+
+  it.each(["project-root", "worktree-root"])("preserves managed ownership across repeated project moves: %s", async (target) => {
+    const repo = await createRepo();
+    const service = new GitWorkspaceHandoffService({ resolveWorktreeStorage: () => "in-repo" });
+    const created = await service.handoff({
+      backend: "codex", threadId: "thread-1", direction: "to-project", targetPath: repo,
+      sourceWorkMode: "worktree", now: 1000,
+    });
+    await writeFile(path.join(created.targetPath, "notes.txt"), "ongoing managed work");
+    const before = await git(repo, ["worktree", "list", "--porcelain"]);
+    const reused = await service.handoff({
+      backend: "codex", threadId: "thread-1", direction: "to-project",
+      targetPath: target === "project-root" ? repo : created.targetPath,
+      sourceWorkMode: "worktree", workspacePaths: [created.targetPath],
+      workspaceDirectories: [created.linkedDirectory],
+    });
+    expect(reused.targetPath).toBe(created.targetPath);
+    expect(reused.linkedDirectory.worktreeOwnership).toBeUndefined();
+    expect(await git(repo, ["worktree", "list", "--porcelain"])).toBe(before);
+    expect(await readFile(path.join(reused.targetPath, "notes.txt"), "utf8")).toBe("ongoing managed work");
+  });
+
+  it.each([false, true])("keeps persisted external ownership when reusing a worktree, even with a conflicting alias: %s", async (conflictingAlias) => {
+    const repo = await createRepo();
+    const worktreePath = path.join(repo, ".worktrees", "external");
+    await git(repo, ["worktree", "add", "--detach", worktreePath, "HEAD"]);
+    const directory = { id: "external", label: "target", path: repo, kind: "worktree" as const, worktreePath };
+    const result = await new GitWorkspaceHandoffService().handoff({
+      backend: "codex", threadId: "thread-1", direction: "to-project", targetPath: repo,
+      workspacePaths: [worktreePath], workspaceDirectories: [
+        { ...directory, worktreeOwnership: "external" },
+        ...(conflictingAlias ? [{ ...directory, id: "alias" }] : []),
+      ],
+    });
+    expect(result.targetPath).toBe(toForwardSlashes(await realpath(worktreePath)));
+    expect(result.linkedDirectory.worktreeOwnership).toBe("external");
+  });
+
   it("moves a scratch thread to another project without touching either checkout", async () => {
     const source = await createRepo();
     const target = await createRepo();
@@ -112,6 +196,33 @@ describe("GitWorkspaceHandoffService", () => {
       kind: "worktree",
     });
     expect(result.branch).toBe("HEAD");
+  });
+
+  it("requires an explicit worktree when the thread has multiple destination worktrees", async () => {
+    const repo = await createRepo();
+    const paths = ["first", "second"].map((name) => path.join(repo, ".worktrees", name));
+    for (const worktreePath of paths) await git(repo, ["worktree", "add", "--detach", worktreePath, "HEAD"]);
+    const service = new GitWorkspaceHandoffService();
+    await expect(service.handoff({
+      backend: "codex", threadId: "thread-1", direction: "to-project", targetPath: repo, workspacePaths: paths,
+    })).rejects.toThrow("multiple worktrees");
+    const result = await service.handoff({
+      backend: "codex", threadId: "thread-1", direction: "to-project", targetPath: paths[1], workspacePaths: paths,
+    });
+    expect(result.targetPath).toBe(toForwardSlashes(await realpath(paths[1]!)));
+  });
+
+  it("does not reuse a linked worktree from another repository", async () => {
+    const source = await createRepo();
+    const worktreePath = path.join(source, ".worktrees", "source");
+    await git(source, ["worktree", "add", "--detach", worktreePath, "HEAD"]);
+    const target = await createRepo();
+    const result = await new GitWorkspaceHandoffService().handoff({
+      backend: "codex", threadId: "thread-1", direction: "to-project", targetPath: target,
+      workspacePaths: [worktreePath],
+    });
+    expect(result.targetPath).toBe(toForwardSlashes(await realpath(target)));
+    expect(result.workMode).toBe("local");
   });
 
   it("rejects missing, non-Git, and non-root destination directories", async () => {
