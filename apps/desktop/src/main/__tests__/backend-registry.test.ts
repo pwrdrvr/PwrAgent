@@ -58396,16 +58396,7 @@ script = "printf setup"
       // entire applyThreadExecutionMode path to complete (codex call,
       // overlay flip, audit-log append, both notifications) — polling
       // on setThreadPermissions alone is too early.
-      const waitForApplied = async () => {
-        for (let attempt = 0; attempt < 50; attempt += 1) {
-          const log = await getLog(overlayStore, "thread-1");
-          if (log.some((entry) => entry.status === "applied")) {
-            return;
-          }
-          await new Promise((resolve) => setTimeout(resolve, 0));
-        }
-      };
-      await waitForApplied();
+      await registry.whenQueuedExecutionModeFlushesSettledForTests();
 
       expect(codexClient.lastSetThreadPermissionsParams).toEqual({
         threadId: "thread-1",
@@ -58594,13 +58585,7 @@ script = "printf setup"
       await Promise.all([turnEndPromise, startTurnPromise]);
 
       // Wait for any deferred flush completion.
-      for (let attempt = 0; attempt < 50; attempt += 1) {
-        const log = await getLog(overlayStore, "thread-1");
-        if (log.filter((entry) => entry.status === "applied").length >= 1) {
-          break;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 0));
-      }
+      await registry.whenQueuedExecutionModeFlushesSettledForTests();
 
       const log = await getLog(overlayStore, "thread-1");
       const appliedEntries = log.filter(

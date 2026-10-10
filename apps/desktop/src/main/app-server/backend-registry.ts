@@ -34063,6 +34063,23 @@ export class DesktopBackendRegistry {
     }
   }
 
+  /**
+   * Resolves once no queued execution-mode change is being applied. Turn end
+   * applies the queue fire-and-forget, so nothing a caller awaits says when
+   * the codex call, overlay flip, and transition log have landed. Loop
+   * because one flush can be followed by another; the bound is a runaway
+   * guard.
+   */
+  async whenQueuedExecutionModeFlushesSettledForTests(): Promise<void> {
+    for (let pass = 0; pass < 10; pass += 1) {
+      const flushes = [...this.queuedExecutionModeFlushes.values()];
+      if (flushes.length === 0) {
+        return;
+      }
+      await Promise.allSettled(flushes);
+    }
+  }
+
   private isCodexThreadKnownMissing(threadId: string): boolean {
     return this.missingCodexThreadIds.has(threadId);
   }

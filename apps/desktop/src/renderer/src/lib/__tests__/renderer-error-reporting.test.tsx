@@ -59,7 +59,10 @@ describe("renderer error reporting", () => {
     const capture = vi.spyOn(diagnostics, "snapshotRendererUpdates");
     const retain = vi.spyOn(diagnostics, "retainRendererUpdateFailure");
     const uninstall = installGlobalRendererErrorHandlers();
-    for (let index = 0; index < 1000; index += 1) {
+    // Coalescing is per fault within the repeat window, with no count
+    // threshold, so a handful of identical errors is the whole burst.
+    const burst = 5;
+    for (let index = 0; index < burst; index += 1) {
       window.dispatchEvent(new ErrorEvent("error", {
         message: "ResizeObserver loop completed with undelivered notifications.",
       }));
@@ -74,7 +77,7 @@ describe("renderer error reporting", () => {
     vi.advanceTimersByTime(60_000);
     expect(bridge).toHaveBeenCalledTimes(2);
     expect(bridge).toHaveBeenLastCalledWith(expect.objectContaining({
-      repeat: expect.objectContaining({ count: 999 }),
+      repeat: expect.objectContaining({ count: burst - 1 }),
       faultId: bridge.mock.calls[0][0].faultId,
     }));
     expect(bridge.mock.calls[1][0]).not.toHaveProperty("updateDiagnostics");

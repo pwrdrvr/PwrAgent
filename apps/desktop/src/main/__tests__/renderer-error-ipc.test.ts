@@ -205,7 +205,10 @@ describe("renderer error ipc", () => {
       updateDiagnostics: { version: 1, counts: [], get events() { return events(); } },
     };
     registerRendererErrorIpcHandlers();
-    for (let index = 0; index < 1000; index += 1) {
+    // Coalescing is per fault within the repeat window, with no count
+    // threshold, so a handful of identical reports is the whole burst.
+    const burst = 5;
+    for (let index = 0; index < burst; index += 1) {
       await handlers.get(RENDERER_ERROR_REPORT_CHANNEL)?.(event, report);
     }
     const diagnosticSerializations = serialization.mock.calls.filter(([input]) => input?.eventNames).length;
@@ -216,7 +219,7 @@ describe("renderer error ipc", () => {
     vi.advanceTimersByTime(60_000);
     expect(errorLog.error).toHaveBeenCalledTimes(3);
     expect(errorLog.error).toHaveBeenLastCalledWith("report repeats", expect.objectContaining({
-      repeat: expect.objectContaining({ count: 999 }),
+      repeat: expect.objectContaining({ count: burst - 1 }),
     }));
     expect(vi.getTimerCount()).toBe(0);
     disposeRendererErrorIpcHandlers();
