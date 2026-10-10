@@ -60973,8 +60973,11 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
         event.notification.method === "codex/missingThreads/updated",
       )).toEqual([]);
     } finally {
-      await registry?.close();
-      vi.useRealTimers();
+      try {
+        await registry?.close();
+      } finally {
+        vi.useRealTimers();
+      }
     }
   });
 
@@ -61009,8 +61012,11 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
         expect(stat).toHaveBeenCalledWith(directory);
       }
     } finally {
-      await registry?.close();
-      vi.useRealTimers();
+      try {
+        await registry?.close();
+      } finally {
+        vi.useRealTimers();
+      }
     }
   });
 
@@ -61050,8 +61056,11 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
         threadId: "thread-missing",
       }))?.archiveTombstonedAt).toBeUndefined();
     } finally {
-      await registry?.close();
-      vi.useRealTimers();
+      try {
+        await registry?.close();
+      } finally {
+        vi.useRealTimers();
+      }
     }
   });
 
@@ -61092,8 +61101,11 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
         (update!.notification.params as { threadIds: string[] }).threadIds.sort(),
       ).toEqual(["thread-missing-1", "thread-missing-2"]);
     } finally {
-      await registry?.close();
-      vi.useRealTimers();
+      try {
+        await registry?.close();
+      } finally {
+        vi.useRealTimers();
+      }
     }
   });
 
@@ -61135,8 +61147,11 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
       expect(codexClient.updateThreadWorkspaceCallCount).toBe(callsBeforeAnswer);
       expect(codexClient.archivedThreadIds).toEqual([]);
     } finally {
-      await registry?.close();
-      vi.useRealTimers();
+      try {
+        await registry?.close();
+      } finally {
+        vi.useRealTimers();
+      }
     }
   });
 
@@ -61177,8 +61192,11 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
         expect(stat).toHaveBeenCalledWith(directory);
       }
     } finally {
-      await registry?.close();
-      vi.useRealTimers();
+      try {
+        await registry?.close();
+      } finally {
+        vi.useRealTimers();
+      }
     }
   });
 
@@ -61246,8 +61264,11 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
         status: "confirmationRequired",
       });
     } finally {
-      await registry?.close();
-      vi.useRealTimers();
+      try {
+        await registry?.close();
+      } finally {
+        vi.useRealTimers();
+      }
     }
   });
 
@@ -61317,8 +61338,11 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
         threadIds: ["thread-missing-3"],
       });
     } finally {
-      await registry?.close();
-      vi.useRealTimers();
+      try {
+        await registry?.close();
+      } finally {
+        vi.useRealTimers();
+      }
     }
   });
 });
