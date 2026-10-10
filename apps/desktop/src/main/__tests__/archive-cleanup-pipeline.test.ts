@@ -2,10 +2,19 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { stat } from "node:fs/promises";
 import type { AgentEvent, AppServerThreadSummary, ThreadOverlayState } from "@pwragent/shared";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
+import { deleteThreadAssets } from "../app-server/thread-assets";
 import { CountingBackendClient, codexThread, publishNotification } from "./fixtures/thread-read-harness";
 import budgets from "./fixtures/archive-cleanup-budgets.json";
 
 vi.mock("../log", () => ({ getMainLogger: () => ({ debug() {}, info() {}, warn() {}, error() {} }) }));
+vi.mock("../app-server/thread-assets", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../app-server/thread-assets")>(),
+  // The registry delivers `thread/deleted` only after removing the thread's
+  // owned asset directories, and a test publishes it from inside an inventory
+  // read. These threads own no assets, and advancing fake timers cannot
+  // complete the host `rm` calls the real cleanup makes.
+  deleteThreadAssets: vi.fn(async () => {}),
+}));
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   return {
@@ -33,6 +42,7 @@ const registries: DesktopBackendRegistry[] = [];
 afterEach(async () => {
   await Promise.all(registries.splice(0).map((registry) => registry.close()));
   vi.mocked(stat).mockReset();
+  vi.mocked(deleteThreadAssets).mockClear();
   vi.useRealTimers();
 });
 
@@ -370,6 +380,9 @@ describe("archive cleanup pipeline", () => {
 
     expect(result.cleanup[0]?.removedWorktree).toBe(false);
     expect(result.cleanup[0]?.skippedReason ?? result.cleanup[0]?.error).toContain("cancelled");
+    if (notification.method === "thread/deleted") {
+      expect(deleteThreadAssets).toHaveBeenCalledWith({ backend: "codex", threadId: "target" });
+    }
   });
 
   it("still rejects a different thread's archive notification during removal admission", async () => {
