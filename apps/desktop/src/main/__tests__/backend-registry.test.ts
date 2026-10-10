@@ -61014,23 +61014,22 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
 
   it("preserves a handed-off thread when workspace synchronization reports it missing in a large profile", async () => {
     vi.useFakeTimers();
+    const missingThreadIds = new Set(["thread-missing"]);
+    const fixture = buildMissingThreadFixture({
+      missingThreadIds: [...missingThreadIds],
+      presentThreadIds: ["a", "b", "c", "d", "e", "f", "g", "h", "i"],
+    });
+    const codexClient = new MissingThreadCodexClient(missingThreadIds, {
+      initializeResult: { methods: ["thread/list", "thread/archive"] },
+      threads: fixture.threads,
+    });
+    const overlayStore = createOverlayStoreMock({ overlays: fixture.overlays });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      events.push(event);
+    });
     try {
-      const missingThreadIds = new Set(["thread-missing"]);
-      const fixture = buildMissingThreadFixture({
-        missingThreadIds: [...missingThreadIds],
-        presentThreadIds: ["a", "b", "c", "d", "e", "f", "g", "h", "i"],
-      });
-      const codexClient = new MissingThreadCodexClient(missingThreadIds, {
-        initializeResult: { methods: ["thread/list", "thread/archive"] },
-        threads: fixture.threads,
-      });
-      const overlayStore = createOverlayStoreMock({ overlays: fixture.overlays });
-      const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
-      const events: AgentEvent[] = [];
-      registry.onEvent((event) => {
-        events.push(event);
-      });
-
       await registry.listThreads({ backend: "codex", forceRefresh: true });
       await settleMissingCodexThreadAudit(registry);
 
@@ -61046,32 +61045,30 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
         backend: "codex",
         threadId: "thread-missing",
       }))?.archiveTombstonedAt).toBeUndefined();
-
-      await registry.close();
     } finally {
+      await registry.close();
       vi.useRealTimers();
     }
   });
 
   it("asks before archiving when Codex reports more than a fifth of the profile missing", async () => {
     vi.useFakeTimers();
+    const missingThreadIds = new Set(["thread-missing-1", "thread-missing-2"]);
+    const fixture = buildMissingThreadFixture({
+      missingThreadIds: [...missingThreadIds],
+      presentThreadIds: ["a", "b", "c"],
+    });
+    const codexClient = new MissingThreadCodexClient(missingThreadIds, {
+      initializeResult: { methods: ["thread/list", "thread/archive"] },
+      threads: fixture.threads,
+    });
+    const overlayStore = createOverlayStoreMock({ overlays: fixture.overlays });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      events.push(event);
+    });
     try {
-      const missingThreadIds = new Set(["thread-missing-1", "thread-missing-2"]);
-      const fixture = buildMissingThreadFixture({
-        missingThreadIds: [...missingThreadIds],
-        presentThreadIds: ["a", "b", "c"],
-      });
-      const codexClient = new MissingThreadCodexClient(missingThreadIds, {
-        initializeResult: { methods: ["thread/list", "thread/archive"] },
-        threads: fixture.threads,
-      });
-      const overlayStore = createOverlayStoreMock({ overlays: fixture.overlays });
-      const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
-      const events: AgentEvent[] = [];
-      registry.onEvent((event) => {
-        events.push(event);
-      });
-
       await registry.listThreads({ backend: "codex", forceRefresh: true });
       await settleMissingCodexThreadAudit(registry);
 
@@ -61088,28 +61085,26 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
       expect(
         (update!.notification.params as { threadIds: string[] }).threadIds.sort(),
       ).toEqual(["thread-missing-1", "thread-missing-2"]);
-
-      await registry.close();
     } finally {
+      await registry.close();
       vi.useRealTimers();
     }
   });
 
   it("stops retrying missing Codex threads the operator chose to keep", async () => {
     vi.useFakeTimers();
+    const missingThreadIds = new Set(["thread-missing-1", "thread-missing-2"]);
+    const fixture = buildMissingThreadFixture({
+      missingThreadIds: [...missingThreadIds],
+      presentThreadIds: ["a", "b", "c"],
+    });
+    const codexClient = new MissingThreadCodexClient(missingThreadIds, {
+      initializeResult: { methods: ["thread/list", "thread/archive"] },
+      threads: fixture.threads,
+    });
+    const overlayStore = createOverlayStoreMock({ overlays: fixture.overlays });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
     try {
-      const missingThreadIds = new Set(["thread-missing-1", "thread-missing-2"]);
-      const fixture = buildMissingThreadFixture({
-        missingThreadIds: [...missingThreadIds],
-        presentThreadIds: ["a", "b", "c"],
-      });
-      const codexClient = new MissingThreadCodexClient(missingThreadIds, {
-        initializeResult: { methods: ["thread/list", "thread/archive"] },
-        threads: fixture.threads,
-      });
-      const overlayStore = createOverlayStoreMock({ overlays: fixture.overlays });
-      const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
-
       await registry.listThreads({ backend: "codex", forceRefresh: true });
       await settleMissingCodexThreadAudit(registry);
       const callsBeforeAnswer = codexClient.updateThreadWorkspaceCallCount;
@@ -61131,28 +61126,26 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
 
       expect(codexClient.updateThreadWorkspaceCallCount).toBe(callsBeforeAnswer);
       expect(codexClient.archivedThreadIds).toEqual([]);
-
-      await registry.close();
     } finally {
+      await registry.close();
       vi.useRealTimers();
     }
   });
 
   it("archives the missing Codex threads once when both windows answer the prompt", async () => {
     vi.useFakeTimers();
+    const missingThreadIds = new Set(["thread-missing-1", "thread-missing-2"]);
+    const fixture = buildMissingThreadFixture({
+      missingThreadIds: [...missingThreadIds],
+      presentThreadIds: ["a", "b", "c"],
+    });
+    const codexClient = new MissingThreadCodexClient(missingThreadIds, {
+      initializeResult: { methods: ["thread/list", "thread/archive"] },
+      threads: fixture.threads,
+    });
+    const overlayStore = createOverlayStoreMock({ overlays: fixture.overlays });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
     try {
-      const missingThreadIds = new Set(["thread-missing-1", "thread-missing-2"]);
-      const fixture = buildMissingThreadFixture({
-        missingThreadIds: [...missingThreadIds],
-        presentThreadIds: ["a", "b", "c"],
-      });
-      const codexClient = new MissingThreadCodexClient(missingThreadIds, {
-        initializeResult: { methods: ["thread/list", "thread/archive"] },
-        threads: fixture.threads,
-      });
-      const overlayStore = createOverlayStoreMock({ overlays: fixture.overlays });
-      const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
-
       await registry.listThreads({ backend: "codex", forceRefresh: true });
       await settleMissingCodexThreadAudit(registry);
 
@@ -61173,32 +61166,30 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
       for (const directory of fixture.environmentDirectories) {
         expect(stat).toHaveBeenCalledWith(directory);
       }
-
-      await registry.close();
     } finally {
+      await registry.close();
       vi.useRealTimers();
     }
   });
 
   it("re-asks when another Codex thread goes missing after an unanswered prompt", async () => {
     vi.useFakeTimers();
+    const missingThreadIds = new Set(["thread-missing-1", "thread-missing-2"]);
+    const fixture = buildMissingThreadFixture({
+      missingThreadIds: ["thread-missing-1", "thread-missing-2"],
+      presentThreadIds: ["a", "b", "c"],
+    });
+    const codexClient = new MissingThreadCodexClient(missingThreadIds, {
+      initializeResult: { methods: ["thread/list", "thread/archive"] },
+      threads: fixture.threads,
+    });
+    const overlayStore = createOverlayStoreMock({ overlays: fixture.overlays });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      events.push(event);
+    });
     try {
-      const missingThreadIds = new Set(["thread-missing-1", "thread-missing-2"]);
-      const fixture = buildMissingThreadFixture({
-        missingThreadIds: ["thread-missing-1", "thread-missing-2"],
-        presentThreadIds: ["a", "b", "c"],
-      });
-      const codexClient = new MissingThreadCodexClient(missingThreadIds, {
-        initializeResult: { methods: ["thread/list", "thread/archive"] },
-        threads: fixture.threads,
-      });
-      const overlayStore = createOverlayStoreMock({ overlays: fixture.overlays });
-      const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
-      const events: AgentEvent[] = [];
-      registry.onEvent((event) => {
-        events.push(event);
-      });
-
       // The first prompt is emitted before any window subscribes. Nothing
       // answers it, so a latched flag would disable the audit for the session.
       await registry.listThreads({ backend: "codex", forceRefresh: true });
@@ -61242,32 +61233,30 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
       expect(updates[1]?.notification.params).toMatchObject({
         status: "confirmationRequired",
       });
-
-      await registry.close();
     } finally {
+      await registry.close();
       vi.useRealTimers();
     }
   });
 
   it("requires a new decision for later missing threads after the operator chose keep", async () => {
     vi.useFakeTimers();
+    const missingThreadIds = new Set(["thread-missing-1", "thread-missing-2"]);
+    const fixture = buildMissingThreadFixture({
+      missingThreadIds: ["thread-missing-1", "thread-missing-2"],
+      presentThreadIds: ["a", "b", "c"],
+    });
+    const codexClient = new MissingThreadCodexClient(missingThreadIds, {
+      initializeResult: { methods: ["thread/list", "thread/archive"] },
+      threads: fixture.threads,
+    });
+    const overlayStore = createOverlayStoreMock({ overlays: fixture.overlays });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      events.push(event);
+    });
     try {
-      const missingThreadIds = new Set(["thread-missing-1", "thread-missing-2"]);
-      const fixture = buildMissingThreadFixture({
-        missingThreadIds: ["thread-missing-1", "thread-missing-2"],
-        presentThreadIds: ["a", "b", "c"],
-      });
-      const codexClient = new MissingThreadCodexClient(missingThreadIds, {
-        initializeResult: { methods: ["thread/list", "thread/archive"] },
-        threads: fixture.threads,
-      });
-      const overlayStore = createOverlayStoreMock({ overlays: fixture.overlays });
-      const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
-      const events: AgentEvent[] = [];
-      registry.onEvent((event) => {
-        events.push(event);
-      });
-
       await registry.listThreads({ backend: "codex", forceRefresh: true });
       await settleMissingCodexThreadAudit(registry);
       // The initial failures require an operator decision.
@@ -61313,9 +61302,8 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
         status: "confirmationRequired",
         threadIds: ["thread-missing-3"],
       });
-
-      await registry.close();
     } finally {
+      await registry.close();
       vi.useRealTimers();
     }
   });
