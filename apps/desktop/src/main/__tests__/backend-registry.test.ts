@@ -3095,7 +3095,7 @@ describe("DesktopBackendRegistry", () => {
 
   it("registers an imported handoff worktree with its repository before navigation enrichment", async () => {
     const repositoryPath = "/repo/app";
-    const worktreePath = "/repo/app/.worktrees/handoff/app";
+    const worktreePath = "/worktrees/handoff/app";
     const prepareLaunchpadWorkspace = vi.fn();
     const recordCodexWorktreeOwnerThread = vi.fn(async () => {});
     const overlayStore = createOverlayStoreMock();
@@ -3104,6 +3104,15 @@ describe("DesktopBackendRegistry", () => {
       gitDirectoryService: { prepareLaunchpadWorkspace, recordCodexWorktreeOwnerThread } as never,
     });
     onTestFinished(() => registry.close());
+    const directoryNotifications: AgentEvent[] = [];
+    const visibleThreads: AppServerThreadSummary[] = [];
+    registry.onEvent(async (event) => {
+      if (event.notification.method !== "navigation/threadDirectories/updated") return;
+      directoryNotifications.push(event);
+      // The owner refreshes project membership from a cheap listing. It must
+      // see the imported link without selecting or enriching the thread first.
+      visibleThreads.push(...await registry.listThreads({ backend: "codex", enrichDirectories: false }));
+    });
     const response = await registry.forkThread({ backend: "codex", sourceThreadId: "source",
       directoryKind: "directory", directoryLabel: "app", directoryPath: `${worktreePath}/packages`, workMode: "worktree",
       importedWorktree: { repositoryPath, worktreePath },
@@ -3114,6 +3123,15 @@ describe("DesktopBackendRegistry", () => {
     expect(await overlayStore.getThreadOverlayState({ backend: "codex", threadId: response.threadId }))
       .toMatchObject({ extraLinkedDirectories: [expect.objectContaining({ path: expectedDir(repositoryPath), worktreePath: expectedDir(worktreePath) })] });
     expect(recordCodexWorktreeOwnerThread).toHaveBeenCalledWith({ threadId: response.threadId, worktreePath });
+    expect(directoryNotifications).toEqual([{
+      backend: "codex",
+      notification: {
+        method: "navigation/threadDirectories/updated",
+        params: { reason: "thread-created", threadIds: [response.threadId] },
+      },
+    }]);
+    expect(visibleThreads.find((thread) => thread.id === response.threadId)?.linkedDirectories)
+      .toEqual([expect.objectContaining({ kind: "worktree", path: expectedDir(repositoryPath), worktreePath: expectedDir(worktreePath) })]);
   });
 
   it("reads what a handoff inherits from its source thread", async () => {
