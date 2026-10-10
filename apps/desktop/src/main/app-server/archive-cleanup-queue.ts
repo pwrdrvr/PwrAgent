@@ -32,8 +32,17 @@ export class ArchiveCleanupQueue<T> {
   private running?: Job<T>;
   private closed = false;
   private wake?: () => void;
+  private readonly checkpointWaiters: (() => void)[] = [];
 
   constructor(private readonly pauseMs = ARCHIVE_CLEANUP_PAUSE_MS) {}
+
+  /** Resolves once the running cleanup is parked on its checkpoint pause, the
+   * only timer the queue owns. Between checkpoints a job awaits provider, DB,
+   * and filesystem work that no clock can complete. */
+  whenCheckpointPending(): Promise<void> {
+    if (this.wake) return Promise.resolve();
+    return new Promise((resolve) => { this.checkpointWaiters.push(resolve); });
+  }
 
   pending(key: string): Promise<T> | undefined {
     return this.jobs.get(key)?.promise;
@@ -102,6 +111,7 @@ export class ArchiveCleanupQueue<T> {
         };
         const timer = setTimeout(finish, this.pauseMs);
         this.wake = finish;
+        for (const waiter of this.checkpointWaiters.splice(0)) waiter();
       });
     };
     const checkpoint = async () => {

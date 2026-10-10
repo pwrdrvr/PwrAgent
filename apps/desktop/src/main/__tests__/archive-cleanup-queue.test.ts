@@ -95,4 +95,30 @@ describe("archive cleanup scheduling budgets", () => {
     expect(drained).toBe(true);
     await queue.close();
   });
+
+  it("signals a pending checkpoint only while a job is parked on its pause", async () => {
+    vi.useFakeTimers();
+    const queue = new ArchiveCleanupQueue<number>();
+    let release!: () => void;
+    const io = new Promise<void>((resolve) => { release = resolve; });
+    const result = queue.enqueue("codex:one", async (context) => {
+      await io;
+      await context.checkpoint();
+      return 1;
+    });
+    // The admission checkpoint parks first, and stays pending until it fires.
+    await queue.whenCheckpointPending();
+    await expect(queue.whenCheckpointPending()).resolves.toBeUndefined();
+    await vi.advanceTimersByTimeAsync(ARCHIVE_CLEANUP_PAUSE_MS);
+    // The job is now awaiting I/O, which no clock advance completes.
+    let parked = false;
+    const secondPark = queue.whenCheckpointPending().then(() => { parked = true; });
+    await vi.advanceTimersByTimeAsync(ARCHIVE_CLEANUP_PAUSE_MS * 4);
+    expect(parked).toBe(false);
+    release();
+    await secondPark;
+    await vi.advanceTimersByTimeAsync(ARCHIVE_CLEANUP_PAUSE_MS);
+    expect(await result).toBe(1);
+    await queue.close();
+  });
 });
