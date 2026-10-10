@@ -110,13 +110,21 @@ describe("sandboxed PATH", () => {
 function expectSandboxedPath(searchPath: string): void {
   const nodeDirectory = path.dirname(process.execPath);
   const [first, ...rest] = searchPath.split(path.delimiter);
-  const outsideRepository = rest.filter((entry) => !isPathWithin(REPOSITORY_ROOT, path.resolve(entry)));
+  const outsideRepository = rest.filter((entry) => !isAtOrWithin(REPOSITORY_ROOT, entry));
 
   expect(first).toBe(nodeDirectory);
-  expect(outsideRepository.filter((entry) => isPathWithin(os.homedir(), path.resolve(entry)))).toEqual([]);
+  expect(outsideRepository.filter((entry) => isAtOrWithin(os.homedir(), entry))).toEqual([]);
   if (process.platform !== "win32") {
     expect(outsideRepository).toEqual(POSIX_SYSTEM_PATH.filter((entry) => entry !== nodeDirectory));
   }
+}
+
+/** The config's own containment rule: the root counts, and Windows ignores case. */
+function isAtOrWithin(root: string, entry: string): boolean {
+  const fold = (value: string) => (process.platform === "win32" ? value.toLowerCase() : value);
+  const resolvedRoot = fold(path.resolve(root));
+  const resolvedEntry = fold(path.resolve(entry));
+  return resolvedEntry === resolvedRoot || isPathWithin(resolvedRoot, resolvedEntry);
 }
 
 function findProject(name: string): ConfiguredProject | undefined {

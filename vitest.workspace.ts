@@ -79,7 +79,11 @@ const PATH_KEY =
   Object.keys(process.env).find((key) => key.toUpperCase() === "PATH")
   ?? "PATH";
 const REPOSITORY_ROOT = path.dirname(fileURLToPath(import.meta.url));
-const HOST_PATH = (process.env[PATH_KEY] ?? "").split(path.delimiter).filter(Boolean);
+// Relative entries resolve against whatever directory a child runs in, so
+// none of them is kept.
+const HOST_PATH = (process.env[PATH_KEY] ?? "")
+  .split(path.delimiter)
+  .filter((entry) => path.isAbsolute(entry));
 const SANDBOX_PATH = [...new Set([
   path.dirname(process.execPath),
   ...HOST_PATH.filter((entry) => isWithin(REPOSITORY_ROOT, entry)),

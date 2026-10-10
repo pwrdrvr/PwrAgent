@@ -212,9 +212,10 @@ it("caps all numeric storage at 28.73 MB even when every peer and size histogram
     return 0;
   }
   // Storage is allocated on a series' first record, so one second of every
-  // peer (past the 32-peer attribution cap) reaches the ceiling. Ten seconds
-  // on each side of both hour boundaries then overwrite wrapped slots (3600+)
-  // and leave stale ones (5-9) behind; neither may grow storage or count.
+  // peer (past the 32-peer attribution cap) reaches the ceiling. Seconds
+  // 3595-3604 straddle the first wrap and overwrite slots 0-4; 7190-7199 end
+  // the second hour and leave seconds 5-9 stale. Neither may grow storage or
+  // count.
   const seconds = [0, 3_595, 7_190].flatMap((start) => Array.from({ length: 10 }, (_, index) => start + index));
   for (const second of seconds) {
     for (let peer = 0; peer < 40; peer += 1) {

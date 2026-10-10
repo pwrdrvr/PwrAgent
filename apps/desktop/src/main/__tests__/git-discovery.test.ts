@@ -80,7 +80,9 @@ describe("Git discovery", () => {
       const lfs = path.join(lfsRoot, path.basename(bundledGitLfsExecutable()));
       if (process.platform === "win32") await copyFile(bundledGitLfsExecutable(), lfs);
       else await symlink(bundledGitLfsExecutable(), lfs);
-      const env = { ...process.env, PATH: [lfsRoot, process.env.PATH].join(path.delimiter) };
+      // Replace the key the host uses: Windows spells it `Path`.
+      const pathKey = Object.keys(process.env).find((key) => key.toUpperCase() === "PATH") ?? "PATH";
+      const env = { ...process.env, [pathKey]: [lfsRoot, process.env[pathKey]].join(path.delimiter) };
       expect(await validateGitCommand({ command: bundledGitExecutable(), env })).toMatchObject({
         executable: true, version: expect.any(String), lfsVersion: expect.any(String),
       });
