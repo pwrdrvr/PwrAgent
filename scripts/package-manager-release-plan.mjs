@@ -94,7 +94,7 @@ export async function buildPlan({ event, ref, tag = "", force = false, publicati
   if (!needed) return plan;
   const current = api(`repos/${SOURCE_REPO}/releases/latest`);
   if (stableVersion(current) !== audit.stable.version) throw new Error("GitHub Latest changed during planning; retry");
-  for (const channel of [audit.homebrew, audit.winget]) {
+  for (const channel of families.map((family) => audit[family])) {
     if (channel.version && compareVersions(audit.stable.version, channel.version) < 0) throw new Error("Refusing channel downgrade");
   }
   const previous = previousRelease(stableVersion(current), api);
@@ -102,10 +102,13 @@ export async function buildPlan({ event, ref, tag = "", force = false, publicati
   const previousInputs = metadataPackages(previous);
   const images = api("repos/actions/runner-images/releases?per_page=100", false,
     'map({tag_name, draft, body: (.body | split("\\n") | map(select(contains("Image Version"))) | join("\\n"))})');
-  const brewRelease = api("repos/Homebrew/brew/releases/latest");
-  if (brewRelease.draft || brewRelease.prerelease) throw new Error("Homebrew validator must be stable");
-  const brew = api(`repos/Homebrew/brew/commits/${encodeURIComponent(brewRelease.tag_name)}`).sha;
-  if (!/^[a-f0-9]{40}$/.test(brew)) throw new Error("Cannot pin Homebrew validator");
+  let brew;
+  if (families.includes("homebrew")) {
+    const brewRelease = api("repos/Homebrew/brew/releases/latest");
+    if (brewRelease.draft || brewRelease.prerelease) throw new Error("Homebrew validator must be stable");
+    brew = api(`repos/Homebrew/brew/commits/${encodeURIComponent(brewRelease.tag_name)}`).sha;
+    if (!/^[a-f0-9]{40}$/.test(brew)) throw new Error("Cannot pin Homebrew validator");
+  }
   const winget = api("repos/microsoft/winget-cli/releases/latest");
   if (winget.draft || winget.prerelease) throw new Error("WinGet client must be stable");
   const wingetAssets = ["Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle", "DesktopAppInstaller_Dependencies.zip"].map((name) => {
@@ -162,11 +165,11 @@ export async function prepare(plan, dir) {
   }, null, 2) + "\n");
 }
 
-export async function cachedAsset(plan, index, dir, cacheRoot = ".local/distribution-assets") {
+export async function cachedAsset(plan, index, dir, cacheRoot = ".local/distribution-assets", acquire) {
   const { role, asset, key } = plan.assets[index];
   const cache = resolve(cacheRoot, key);
   await mkdir(cache, { recursive: true });
-  const file = await download(asset, cache);
+  const file = await download(asset, cache, acquire);
   // A corrupt restore fails closed. Never save, copy or install unchecked bytes.
   await verifyFile(file, asset, asset.digest.slice(7));
   console.log(`Verified release asset: ${asset.name}`);

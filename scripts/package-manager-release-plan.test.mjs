@@ -174,18 +174,17 @@ describe("metadata-only distribution planning", () => {
     const asset = current.assets[0];
     const key = assetKey(current.tag_name, asset);
     const plan = { assets: [{ asset, key, role: "current" }] };
-    const fetchAsset = vi.fn(async () => new Response("abc"));
-    vi.stubGlobal("fetch", fetchAsset);
-    await cachedAsset(plan, 0, resolve(dir, "first"), resolve(dir, "cache"));
-    await cachedAsset(plan, 0, resolve(dir, "second"), resolve(dir, "cache"));
-    expect(fetchAsset).toHaveBeenCalledTimes(1);
-    await cachedAsset({ assets: [{ asset, key, role: "previous" }] }, 0, resolve(dir, "baseline"), resolve(dir, "cache"));
+    const acquire = vi.fn(async (value, file) => writeFile(file, "abc"));
+    await cachedAsset(plan, 0, resolve(dir, "first"), resolve(dir, "cache"), acquire);
+    await cachedAsset(plan, 0, resolve(dir, "second"), resolve(dir, "cache"), acquire);
+    expect(acquire).toHaveBeenCalledTimes(1);
+    await cachedAsset({ assets: [{ asset, key, role: "previous" }] }, 0, resolve(dir, "baseline"), resolve(dir, "cache"), acquire);
     expect(await readFile(resolve(dir, "baseline/assets/previous", asset.name), "utf8")).toBe("abc");
-    expect(fetchAsset).toHaveBeenCalledTimes(1);
+    expect(acquire).toHaveBeenCalledTimes(1);
     await writeFile(resolve(dir, "cache", key, asset.name), "bad");
-    await expect(cachedAsset(plan, 0, resolve(dir, "bad"), resolve(dir, "cache"))).rejects.toThrow(/SHA-256/);
+    await expect(cachedAsset(plan, 0, resolve(dir, "bad"), resolve(dir, "cache"), acquire)).rejects.toThrow(/SHA-256/);
     await expect(readFile(resolve(dir, "bad/assets", asset.name))).rejects.toMatchObject({ code: "ENOENT" });
-    expect(fetchAsset).toHaveBeenCalledTimes(1);
+    expect(acquire).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -227,4 +226,17 @@ describe("WinGet installation-only mirror", () => {
     await writeFile(resolve(dir, "assets", current.assets[2].name), "bad");
     await expect(serveInstallers(dir, plan)).rejects.toThrow(/SHA-256/);
   });
+});
+
+
+it("Winget-only planning excludes Mac jobs/assets and Homebrew validator dependencies", async () => {
+  const api = apiFixture();
+  const reads = [];
+  const plan = await buildPlan({ ...event, families: ["winget"] }, (endpoint, ...args) => {
+    reads.push(endpoint);
+    return api(endpoint, ...args);
+  });
+  expect(plan.native.map((platform) => platform.family)).toEqual(["winget"]);
+  expect(plan.assets.every(({ asset }) => asset.name.endsWith(".exe") || asset.name.includes("windows-SHA256SUMS"))).toBe(true);
+  expect(reads.some((endpoint) => endpoint.startsWith("repos/Homebrew/brew/"))).toBe(false);
 });

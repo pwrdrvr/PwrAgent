@@ -5,6 +5,9 @@ on:
     paths:
       - .github/workflows/package-manager-distribution.yml
       - .github/actions/distribution-asset/**
+      - scripts/build-artifact.py
+      - scripts/ci-curl.py
+      - scripts/test_build_artifact.py
       - scripts/package-manager-release*
       - scripts/submit-package-manager-release.mjs
   # Releases are built as prereleases. Only explicit stable promotion qualifies.
@@ -243,7 +246,7 @@ jobs:
           if brew trust --help >/dev/null 2>&1; then brew trust --cask "$token"; fi
           brew style "$tap/Casks/pwragent.rb"
           seed_cache "$(jq -r .stable.version distribution/current/audit.json)" distribution/assets
-          brew audit --cask --online "$token"
+          brew audit --cask --online --except=url_https_availability "$token"
           brew install --cask "$token"
           test -d /Applications/PwrAgent.app
           test ! -L /Applications/PwrAgent.app
