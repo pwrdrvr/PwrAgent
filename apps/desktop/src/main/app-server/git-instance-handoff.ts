@@ -153,7 +153,7 @@ export async function importGitHandoff(params: {
   };
   try {
     return await withFetchedHandoff(repository, snapshot, async (remote) => {
-      let checkout = ["--detach", worktree, snapshot.head];
+      let switchBranch: string[] | undefined;
       const branch = snapshot.sourceBranch;
       if (branch) {
         await git(repository, ["check-ref-format", `refs/heads/${branch}`]);
@@ -164,21 +164,29 @@ export async function importGitHandoff(params: {
         const branchHead = (await git(repository, ["show-ref", "--verify", "--hash", ref])
           .catch(() => ({ stdout: "" }))).stdout.trim();
         if (!occupied && (!branchHead || branchHead === snapshot.head)) {
-          checkout = branchHead ? [worktree, branch] : ["-b", branch, worktree, snapshot.head];
+          switchBranch = branchHead ? ["--no-guess", branch] : ["-c", branch, snapshot.head];
         }
       }
-      try {
-        await git(repository, ["-c", "core.hooksPath=", "worktree", "add", ...checkout]);
-        if (checkout[0] === "-b") createdBranch = branch;
-      } catch (error) {
-        // Git owns branch reservations. If another checkout claimed the name
-        // after our inspection, fall back without forcing that reservation.
-        const stderr = error && typeof error === "object" && "stderr" in error ? error.stderr : undefined;
-        if (checkout[0] === "--detach" || typeof stderr !== "string"
-          || !/already (?:checked out|used by worktree|exists)/i.test(stderr)) throw error;
-        await git(repository, ["-c", "core.hooksPath=", "worktree", "add", "--detach", worktree, snapshot.head]);
-      }
+      // worktree add -b creates its branch before checkout, and leaves it behind
+      // if a filter fails. Complete checkout before transactional switch -c.
+      await git(repository, ["-c", "core.hooksPath=", "worktree", "add", "--detach", worktree, snapshot.head]);
       created = true;
+      if (switchBranch && branch) {
+        try {
+          await git(worktree, ["-c", "core.hooksPath=", "switch", ...switchBranch]);
+          if (switchBranch[0] === "-c") createdBranch = branch;
+        } catch (error) {
+          // Git owns branch reservations. A concurrent branch creation or a
+          // parent/child ref name conflict leaves this checkout detached.
+          const ref = `refs/heads/${branch}`;
+          const refs = (await git(repository, ["for-each-ref", "--format=%(refname)", "refs/heads"])).stdout.trim().split("\n");
+          const namespaceConflict = switchBranch[0] === "-c" && refs.some((existing) =>
+            existing === ref || existing.startsWith(`${ref}/`) || ref.startsWith(`${existing}/`));
+          const stderr = error && typeof error === "object" && "stderr" in error ? error.stderr : undefined;
+          if (!namespaceConflict && (typeof stderr !== "string"
+            || !/already (?:checked out|used by worktree|exists)/i.test(stderr))) throw error;
+        }
+      }
       if ((await git(worktree, ["rev-parse", "HEAD"])).stdout.trim() !== snapshot.head) {
         throw new Error("The receiving branch changed during handoff. Retry after Git changes settle.");
       }
