@@ -60705,7 +60705,6 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
     if (!fixtureEnvironmentDirectories) {
       const controlled = new Set<string>();
       const hostStat = vi.mocked(stat).getMockImplementation()!;
-      vi.mocked(stat).mockClear();
       vi.mocked(stat).mockImplementation(async (filePath, options) => {
         if (typeof filePath === "string" && controlled.has(filePath)) {
           throw Object.assign(new Error("Contrived environment directory does not exist."), { code: "ENOENT" });
@@ -60833,6 +60832,7 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
     const events: AgentEvent[] = [];
     registry.onEvent((event) => { events.push(event); });
     try {
+      vi.mocked(stat).mockClear();
       const result = await withArchivePacing(registry.archiveThread({ backend: "codex", threadId: "archive-target" }));
       expect(result.cleanup).toEqual([]);
       for (const directory of fixture.environmentDirectories) {
