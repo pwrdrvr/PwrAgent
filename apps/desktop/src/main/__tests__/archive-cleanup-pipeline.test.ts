@@ -380,9 +380,10 @@ describe("archive cleanup pipeline", () => {
 
     expect(result.cleanup[0]?.removedWorktree).toBe(false);
     expect(result.cleanup[0]?.skippedReason ?? result.cleanup[0]?.error).toContain("cancelled");
-    if (notification.method === "thread/deleted") {
-      expect(deleteThreadAssets).toHaveBeenCalledWith({ backend: "codex", threadId: "target" });
-    }
+    // Only permanent deletion releases the thread's assets; unarchive keeps them.
+    expect(vi.mocked(deleteThreadAssets).mock.calls).toEqual(notification.method === "thread/deleted"
+      ? [[{ backend: "codex", threadId: "target" }]]
+      : []);
   });
 
   it("still rejects a different thread's archive notification during removal admission", async () => {
