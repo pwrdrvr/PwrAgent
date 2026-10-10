@@ -2725,6 +2725,7 @@ function buildPendingForkEnvironmentSetup(params: {
   if (
     mode !== "new-worktree" ||
     runtime?.executionTarget !== "local" ||
+    !runtime.environmentId ||
     !runtime.setupCommand
   ) {
     return undefined;
@@ -2736,7 +2737,7 @@ function buildPendingForkEnvironmentSetup(params: {
     directoryKey: `fork:${params.parent.source}:${params.parent.id}:${mode}`,
     directoryLabel: params.directoryLabel,
     environmentId: runtime.environmentId,
-    environmentName: runtime.environmentName,
+    environmentName: runtime.environmentName ?? runtime.environmentId,
     ...(params.directoryPath ? { cwd: params.directoryPath } : {}),
   };
 }

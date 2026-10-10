@@ -6486,7 +6486,7 @@ function cloneCodexEnvironmentRuntimeForFork(
   } = runtime;
   const inheritedSelectedActionIdByEnvironmentId =
     selectedActionIdByEnvironmentId ??
-    (_actionId ? { [runtime.environmentId]: _actionId } : undefined);
+    (_actionId && runtime.environmentId ? { [runtime.environmentId]: _actionId } : undefined);
   const next: CodexThreadEnvironmentRuntime = {
     ...rest,
     ...(inheritedSelectedActionIdByEnvironmentId
@@ -6516,7 +6516,7 @@ function readSelectedActionIdByEnvironmentIdForFork(
   if (runtime.selectedActionIdByEnvironmentId) {
     return { ...runtime.selectedActionIdByEnvironmentId };
   }
-  if (runtime.actionId) {
+  if (runtime.actionId && runtime.environmentId) {
     return { [runtime.environmentId]: runtime.actionId };
   }
   return undefined;
@@ -24455,7 +24455,7 @@ export class DesktopBackendRegistry {
           threadId: request.threadId,
         });
         const runtime = overlay?.codexEnvironmentRuntime;
-        if (!runtime) {
+        if (!runtime?.environmentId) {
           throw new Error("This thread does not have a selected environment.");
         }
 
@@ -24474,7 +24474,7 @@ export class DesktopBackendRegistry {
           ...refreshedRuntimeForAction,
           selectedActionIdByEnvironmentId: {
             ...(refreshedRuntimeForAction.selectedActionIdByEnvironmentId ?? {}),
-            [refreshedRuntimeForAction.environmentId]: request.actionId,
+            [runtime.environmentId]: request.actionId,
           },
         };
         const runId = randomUUID();
@@ -24710,28 +24710,40 @@ export class DesktopBackendRegistry {
     request: SetCodexThreadEnvironmentRequest,
     onSetupProgress?: (event: CodexEnvironmentSetupProgressEvent) => void,
   ): Promise<SetCodexThreadEnvironmentResponse> {
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: request.backend,
+      threadId: request.threadId,
+    });
+    const previousRuntime = overlay?.codexEnvironmentRuntime;
+    // Runs belong to the thread, not its current environment selection. Fill
+    // provenance for older entries before replacing the selected environment.
+    const actionRuns = readCodexEnvironmentActionRuns(previousRuntime).map((run) => ({
+      ...run,
+      environmentId: run.environmentId ?? previousRuntime?.environmentId,
+      environmentName: run.environmentName ?? previousRuntime?.environmentName,
+    }));
     if (!request.environmentId) {
+      const codexEnvironmentRuntime: CodexThreadEnvironmentRuntime | undefined = actionRuns.length > 0
+        ? { executionTarget: "local", actionRuns }
+        : undefined;
       await this.overlayStore.setThreadCodexEnvironmentRuntime?.({
         backend: request.backend,
         threadId: request.threadId,
-        codexEnvironmentRuntime: undefined,
+        codexEnvironmentRuntime,
       });
       this.invalidateThreadListCache(request.backend);
       await this.emitCodexEnvironmentRuntimeUpdated({
         backend: request.backend,
         threadId: request.threadId,
-        codexEnvironmentRuntime: undefined,
+        codexEnvironmentRuntime,
       });
       return {
         backend: request.backend,
         threadId: request.threadId,
+        codexEnvironmentRuntime,
       };
     }
 
-    const overlay = await this.overlayStore.getThreadOverlayState({
-      backend: request.backend,
-      threadId: request.threadId,
-    });
     const cwd = await this.resolveThreadEnvironmentCwd(
       request.backend,
       request.threadId,
@@ -24796,6 +24808,7 @@ export class DesktopBackendRegistry {
     }
     const codexEnvironmentRuntime: CodexThreadEnvironmentRuntime = {
       ...(setupRuntime ?? {}),
+      actionRuns: actionRuns.length > 0 ? actionRuns : undefined,
       environmentId: environment.id,
       environmentName: environment.name,
       executionTarget: existingRuntime?.executionTarget ?? "local",

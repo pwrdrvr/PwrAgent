@@ -10556,10 +10556,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       : selectedThreadCodexEnvironmentOption?.actions ?? [];
   const selectedThreadCodexEnvironmentForAction =
     selectedThreadCodexEnvironmentOption ??
-    (props.thread?.codexEnvironmentRuntime
+    (props.thread?.codexEnvironmentRuntime?.environmentId
       ? {
           id: props.thread.codexEnvironmentRuntime.environmentId,
-          name: props.thread.codexEnvironmentRuntime.environmentName,
+          name: props.thread.codexEnvironmentRuntime.environmentName
+            ?? props.thread.codexEnvironmentRuntime.environmentId,
           sourcePath: props.thread.codexEnvironmentRuntime.sourcePath ?? "",
           actions: threadCodexEnvironmentActions,
         }
@@ -10567,9 +10568,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const selectedThreadCodexActionId = resolveSelectedCodexEnvironmentActionId({
     environment: selectedThreadCodexEnvironmentForAction,
     actionId:
-      props.thread?.codexEnvironmentRuntime?.selectedActionIdByEnvironmentId?.[
-        props.thread.codexEnvironmentRuntime.environmentId
-      ],
+      props.thread?.codexEnvironmentRuntime?.environmentId
+        ? props.thread.codexEnvironmentRuntime.selectedActionIdByEnvironmentId?.[
+            props.thread.codexEnvironmentRuntime.environmentId
+          ]
+        : undefined,
     actionIdByEnvironmentId:
       props.thread?.codexEnvironmentRuntime?.selectedActionIdByEnvironmentId,
   });
