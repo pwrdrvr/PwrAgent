@@ -112,6 +112,20 @@ export type ArchiveThreadNotice = {
 
 export type ArchiveThreadOptions = {
   includeSubthreads?: boolean;
+  /**
+   * The thread to open when the open thread is archived: the sidebar passes
+   * the row after it as the operator sees the list. Without it, selection
+   * falls back to the first loaded thread.
+   */
+  nextSelectionKey?: string;
+};
+
+/** A thread `archiveThread` archived, for an Undo that restores it. */
+export type ArchivedThreadRef = {
+  backend: NavigationThreadSummary["source"];
+  threadId: string;
+  /** Owned by a peer: this window cannot restore it. */
+  remote: boolean;
 };
 
 export type PendingForkEnvironmentSetup = {
@@ -3094,6 +3108,10 @@ export function useThreadNavigation(
   archiveThread: (
     thread: NavigationThreadSummary,
     options?: ArchiveThreadOptions,
+  ) => Promise<ArchivedThreadRef[]>;
+  restoreArchivedThreads: (
+    threads: readonly ArchivedThreadRef[],
+    reopenKey?: string,
   ) => Promise<void>;
   archiveWorktree: (
     thread: NavigationThreadSummary,
@@ -8068,10 +8086,10 @@ export function useThreadNavigation(
     async (
       thread: NavigationThreadSummary,
       options?: ArchiveThreadOptions,
-    ): Promise<void> => {
+    ): Promise<ArchivedThreadRef[]> => {
       if (!archiveThreadRequest) {
         setArchiveThreadError("Desktop bridge is missing archiveThread().");
-        return;
+        return [];
       }
 
       const threadKey = threadSummaryIdentityKey(thread);
@@ -8085,7 +8103,7 @@ export function useThreadNavigation(
           : [thread];
       } catch (error) {
         setArchiveThreadError(error instanceof Error ? error.message : String(error));
-        return;
+        return [];
       }
       const targetThreadKeys = new Set(
         targetThreads.map((target) =>
@@ -8119,9 +8137,13 @@ export function useThreadNavigation(
               })
         ),
       }));
+      const nextSelectionKey = options?.nextSelectionKey !== undefined
+        && !targetThreadKeys.has(options.nextSelectionKey)
+        ? options.nextSelectionKey
+        : undefined;
       setSelectedItemKey((current) =>
         current && targetThreadKeys.has(current)
-          ? getFallbackSelectionAfterRemoval(state.rows, {
+          ? nextSelectionKey ?? getFallbackSelectionAfterRemoval(state.rows, {
               backend: thread.source,
               federationTarget: thread.federation?.ref.target
                 ?? readRendererFederationTarget(),
@@ -8142,6 +8164,7 @@ export function useThreadNavigation(
       );
 
       const archivedKeys = new Set<string>();
+      const archived: ArchivedThreadRef[] = [];
       try {
         for (const target of targetThreads) {
           const federationTarget = target.federationTarget ?? target.federation?.ref.target
@@ -8157,6 +8180,11 @@ export function useThreadNavigation(
           });
           const cleanupNotice = formatArchiveCleanupNotice(response.cleanup);
           archivedKeys.add(threadSummaryIdentityKey(target));
+          archived.push({
+            backend: target.source,
+            threadId: target.id,
+            remote: federationTarget?.scope === "remote" || Boolean(target.federation),
+          });
           if (cleanupNotice) {
             setArchiveThreadNotice(cleanupNotice);
           }
@@ -8177,6 +8205,7 @@ export function useThreadNavigation(
         setArchiveThreadError(error instanceof Error ? error.message : String(error));
         await refresh(archivedKeys.has(threadKey) ? undefined : threadKey, undefined, !archivedKeys.has(threadKey));
       }
+      return archived;
     },
     [
       archiveThreadRequest,
@@ -8187,6 +8216,40 @@ export function useThreadNavigation(
       state.rows,
       setSelectedItemKey,
     ]
+  );
+
+  /**
+   * Undo an archive: restore each thread this window owns (its worktrees come
+   * back with it), show its row again, and reopen `reopenKey`.
+   */
+  const restoreArchivedThreads = useCallback(
+    async (
+      threads: readonly ArchivedThreadRef[],
+      reopenKey?: string,
+    ): Promise<void> => {
+      const restoreThreadRequest = desktopApi?.restoreThread;
+      if (!restoreThreadRequest) {
+        setArchiveThreadError("Desktop bridge is missing restoreThread().");
+        return;
+      }
+      setArchiveThreadError(undefined);
+      try {
+        for (const thread of threads) {
+          if (thread.remote) continue;
+          await restoreThreadRequest({ backend: thread.backend, threadId: thread.threadId });
+          // The `thread/unarchived` event lifts this too; a backend that
+          // does not send one would otherwise keep the row hidden.
+          suppressedArchivedThreadKeysRef.current.delete(
+            buildThreadIdentityKey(thread.backend, thread.threadId),
+          );
+        }
+        await refresh(reopenKey, undefined, reopenKey !== undefined);
+      } catch (error) {
+        setArchiveThreadError(error instanceof Error ? error.message : String(error));
+        await refresh();
+      }
+    },
+    [desktopApi, refresh],
   );
 
   const archiveWorktree = useCallback(
@@ -9309,6 +9372,7 @@ export function useThreadNavigation(
     markThreadUnread,
     showThread,
     archiveThread,
+    restoreArchivedThreads,
     archiveWorktree,
     restoreWorktree,
     handoffThreadWorkspace,

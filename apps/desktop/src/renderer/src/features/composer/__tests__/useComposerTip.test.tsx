@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { COMPOSER_TIPS } from "../composer-tips";
 import { resetComposerTipRotationForTests, useComposerTip } from "../useComposerTip";
 
-const tip = (index: number): string => COMPOSER_TIPS[index % COMPOSER_TIPS.length]!();
+const tip = (index: number): string | undefined => COMPOSER_TIPS[index % COMPOSER_TIPS.length]!();
 
 describe("useComposerTip", () => {
   beforeEach(() => {
@@ -105,7 +105,8 @@ describe("COMPOSER_TIPS", () => {
     // No desktop bridge here, so shortcut tips render their longer
     // Windows/Linux form ("Ctrl+Shift+F"), which is the one to budget for.
     for (const render of COMPOSER_TIPS) {
-      expect(render().length).toBeLessThanOrEqual(58);
+      // Defaults bind every chord a tip names, so every tip renders.
+      expect(render()?.length).toBeLessThanOrEqual(58);
     }
   });
 
@@ -116,7 +117,8 @@ describe("COMPOSER_TIPS", () => {
       win.pwragent = { platform: "darwin" };
       const mac = COMPOSER_TIPS.map((render) => render()).join("\n");
       expect(mac).toContain("⌘K finds threads");
-      expect(mac).toContain("⌘⇧F searches the text of every transcript");
+      // The native menu's modifier order: ⇧ before ⌘.
+      expect(mac).toContain("⇧⌘F searches the text of every transcript");
       expect(mac).not.toContain("Ctrl+");
       win.pwragent = { platform: "win32" };
       const windows = COMPOSER_TIPS.map((render) => render()).join("\n");

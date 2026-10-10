@@ -6761,6 +6761,31 @@ a.button {
   line-height: 1.25;
 }
 
+/* Rename in place: the title becomes a field of the same type, so the row
+   keeps its height and the text does not jump. The header passes pointer
+   events through to the open-thread overlay; the field takes them back. */
+.thread-row__rename-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: -2px -4px;
+  padding: 1px 3px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--sidebar-title-size);
+  font-weight: 600;
+  line-height: 1.25;
+  pointer-events: auto;
+}
+
+.thread-row__rename-input:focus,
+.thread-row__rename-input:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
 .thread-row__time,
 .directory-group__count,
 .context-list__meta,
@@ -15951,6 +15976,337 @@ a.button {
    freshness, and Refresh; empty and error states render where the list
    would. Every pane action uses the 26px `.settings-section-controls__button`
    size. */
+/* Settings › Keyboard. Rows are a three-column grid (action, chords,
+   buttons); the filter row borrows the Archived Threads toolbar. */
+.settings-keyboard__toolbar {
+  flex-wrap: wrap;
+}
+
+.settings-keyboard__toolbar > .button {
+  margin-left: auto;
+}
+
+.settings-keyboard__notice,
+.settings-keyboard__error {
+  margin: 0;
+}
+
+.settings-keyboard__rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.settings-keyboard__row {
+  display: grid;
+  /* Every row is its own grid, so an `auto` action column let Set, Change,
+     and Reset + Add + Change each start the keys somewhere else. The floor
+     is the widest set (Reset + Add + Change, 216px), so the keys line up. */
+  grid-template-columns: minmax(0, 1fr) minmax(0, 240px) minmax(216px, max-content);
+  align-items: center;
+  gap: 4px 12px;
+  min-height: 44px;
+  padding: 7px 18px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.settings-keyboard__row:last-child {
+  border-bottom: 0;
+}
+
+.settings-keyboard__row:hover,
+.settings-keyboard__row.is-recording {
+  background: var(--bg-panel-hover);
+}
+
+.settings-keyboard__label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.settings-keyboard__name {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.settings-keyboard__row.is-fixed .settings-keyboard__name {
+  color: var(--text-secondary);
+}
+
+.settings-keyboard__scope {
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+/* A changed row: the accent dot beside its name, as the mockup draws it. */
+.settings-keyboard__changed {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.settings-keyboard__keys {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.settings-keyboard__chord {
+  display: inline-flex;
+  align-items: center;
+}
+
+/* One cap per chord, glyphs together, as macOS menus draw them. */
+.settings-keyboard__cap {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 7px;
+  border: 1px solid var(--border-subtle);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  background: var(--bg-panel-elevated);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.settings-keyboard__cap.is-muted {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+/* The × that removes one chord: quiet until its row is hovered or it has
+   focus, and a full 24px target either way. */
+.settings-keyboard__remove {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.settings-keyboard__row:hover .settings-keyboard__remove,
+.settings-keyboard__remove:focus-visible {
+  opacity: 1;
+}
+
+.settings-keyboard__remove:hover {
+  color: var(--text-primary);
+}
+
+.settings-keyboard__remove:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.settings-keyboard__unset {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-style: italic;
+}
+
+.settings-keyboard__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.settings-keyboard__recorder {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 9px;
+  border: 1px dashed var(--accent);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.settings-keyboard__recorder:focus,
+.settings-keyboard__recorder:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.settings-keyboard__recorder .settings-keyboard__cap {
+  height: 18px;
+  padding: 0 5px;
+  font-size: 11.5px;
+}
+
+.settings-keyboard__rec-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+/* The empty recorder shows an example chord whose keys light in turn, so it
+   says what to do without a sentence. Held modifiers without a key yet show
+   as a dashed cap. */
+.settings-keyboard__cap.is-example,
+.settings-keyboard__cap.is-partial {
+  border-style: dashed;
+}
+
+.settings-keyboard__cap.is-example {
+  color: var(--text-muted);
+}
+
+.settings-keyboard__cap.is-example > span {
+  animation: settings-keyboard-example 2.4s ease-in-out infinite;
+}
+
+.settings-keyboard__cap.is-example > span:nth-child(2) {
+  animation-delay: 0.25s;
+}
+
+.settings-keyboard__cap.is-example > span:nth-child(3) {
+  animation-delay: 0.5s;
+}
+
+.settings-keyboard__cap.is-example > span:nth-child(4) {
+  animation-delay: 0.75s;
+}
+
+.settings-keyboard__cap.is-example > span:nth-child(5) {
+  animation-delay: 1s;
+}
+
+@keyframes settings-keyboard-example {
+  0%,
+  45%,
+  100% {
+    color: var(--text-muted);
+  }
+
+  15% {
+    color: var(--accent-bright);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-keyboard__cap.is-example > span {
+    animation: none;
+  }
+}
+
+/* What to do next while recording, under the row. */
+.settings-keyboard__hint {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+/* A clash or a refusal under its row: neutral frame, tone on the label. */
+.settings-keyboard__notice-row {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  margin: 2px 0 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel-elevated);
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.settings-keyboard__notice-row b {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.settings-keyboard__tag {
+  color: var(--accent-bright);
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.settings-keyboard__notice-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.settings-keyboard__note,
+.settings-keyboard__row-error {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.settings-keyboard__note {
+  color: var(--text-muted);
+}
+
+.settings-keyboard__file {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+/* Reset All's confirmation: each changed action, now → default. */
+.settings-keyboard__reset-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 280px;
+  margin: 8px 0 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+
+.settings-keyboard__reset-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+}
+
+.settings-keyboard__reset-keys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.settings-keyboard__reset-arrow {
+  color: var(--text-muted);
+}
+
 .settings-archive-toolbar {
   display: flex;
   align-items: center;
@@ -21560,6 +21916,33 @@ a.button {
 
 .thread-header__title-button:hover {
   color: var(--accent-bright);
+}
+
+/* A renamable title takes its own double-click: in the drag region the OS
+   would zoom the window instead. */
+.thread-header .thread-header__compact-title[data-renamable="true"],
+.thread-header .thread-header__compact-title[data-renamable="true"] * {
+  -webkit-app-region: no-drag;
+}
+
+/* Rename in place, at the title's own type size so the strip keeps its
+   height. */
+.thread-header__rename-input {
+  width: min(58vw, 520px);
+  max-width: 100%;
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.thread-header__rename-input:focus,
+.thread-header__rename-input:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
 }
 
 .thread-header__project-button:focus-visible,
