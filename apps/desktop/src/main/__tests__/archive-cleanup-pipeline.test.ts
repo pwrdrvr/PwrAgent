@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { stat } from "node:fs/promises";
 import type { AgentEvent, AppServerThreadSummary, ThreadOverlayState } from "@pwragent/shared";
+import { ARCHIVE_CLEANUP_PAUSE_MS } from "../app-server/archive-cleanup-queue";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { deleteThreadAssets } from "../app-server/thread-assets";
 import { CountingBackendClient, codexThread, publishNotification } from "./fixtures/thread-read-harness";
@@ -30,12 +31,21 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   };
 });
 
+// Advances the clock only while a cleanup is parked on its checkpoint pause,
+// the one timer the queue owns. Between checkpoints, archive work awaits
+// provider, store and filesystem work that no fake-clock budget can complete;
+// the stubs above remove the host I/O this file knows about, not all of it.
 async function drivePacer<T>(promise: Promise<T>): Promise<T> {
   let settled = false;
-  void promise.then(() => { settled = true; }, () => { settled = true; });
-  for (let slice = 0; slice < 500 && !settled; slice += 1) await vi.advanceTimersByTimeAsync(25);
-  expect(settled).toBe(true);
-  return await promise;
+  const settlement = promise.then(() => { settled = true; }, () => { settled = true; });
+  for (;;) {
+    await Promise.race([
+      settlement,
+      ...registries.map((registry) => registry.whenArchiveCleanupCheckpointPendingForTests()),
+    ]);
+    if (settled) return await promise;
+    await vi.advanceTimersByTimeAsync(ARCHIVE_CLEANUP_PAUSE_MS);
+  }
 }
 
 const registries: DesktopBackendRegistry[] = [];
