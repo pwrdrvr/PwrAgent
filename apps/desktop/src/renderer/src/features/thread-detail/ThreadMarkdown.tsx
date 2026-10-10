@@ -10,6 +10,7 @@ import {
   type AppServerThreadImagePart,
   type DesktopApplicationsSnapshot,
   type MarkdownFileViewerContext,
+  type ResolvedTranscriptFile,
 } from "@pwragent/shared";
 import {
   createContext,
@@ -65,6 +66,7 @@ import { remarkTableProfile } from "./remark-table-profile";
 import { TranscriptCopyButton } from "./TranscriptCopyButton";
 import { MermaidDiagram } from "./MermaidDiagram";
 import { useMarkdownFileSource } from "./useMarkdownFileSource";
+import { useTranscriptFiles } from "./useTranscriptFiles";
 import {
   FilePreviewBody,
   FilePreviewCopyButton,
@@ -81,6 +83,7 @@ type ThreadMarkdownProps = {
     | "openApplication"
     | "openMarkdownFileViewer"
     | "readMarkdownFile"
+    | "resolveTranscriptFiles"
   >;
   fileViewerContext?: MarkdownFileViewerContext;
   imageParts?: AppServerThreadImagePart[];
@@ -216,7 +219,6 @@ function copySelectedPullRequestLinks(
 function TranscriptCode(props: {
   children: ReactNode;
   className?: string;
-  desktopApi?: Pick<DesktopApi, "copyText">;
   editorName?: string;
   onOpenSkillInEditor?: (skill: SkillActionTarget) => void;
   onViewSkillMarkdown?: (skill: SkillActionTarget) => void;
@@ -271,14 +273,69 @@ function TranscriptCode(props: {
     return <code className="transcript-message__code">{props.children}</code>;
   }
 
+  return <InlineTranscriptCode text={copyText}>{props.children}</InlineTranscriptCode>;
+}
+
+function InlineTranscriptCode(props: { children: ReactNode; text: string }) {
+  const {
+    props: markdownProps,
+    inlineFiles,
+    editorApplication,
+    openLocalFileInEditor,
+    viewLocalFile,
+  } = useContext(MarkdownRenderContext)!;
+  const target = inlineFiles.get(props.text);
+  if (target) {
+    const canPreview = target.previewable && markdownProps.desktopApi?.readMarkdownFile;
+    return (
+      <span className="thread-markdown__file-link">
+        {canPreview ? (
+          <a
+            className="transcript-message__link"
+            href={`file://${encodeURI(target.path)}`}
+            title={target.path}
+            onClick={(event) => {
+              event.preventDefault();
+              viewLocalFile({ ...target, label: props.text });
+            }}
+          >
+            <code className="transcript-message__code">{props.children}</code>
+          </a>
+        ) : (
+          <TranscriptCopyButton
+            as="span"
+            className="transcript-message__inline-code transcript-copy-button--inline"
+            copiedLabel="Copied inline code"
+            desktopApi={markdownProps.desktopApi}
+            label="Copy inline code"
+            text={props.text}
+          >
+            <code className="transcript-message__code">{props.children}</code>
+          </TranscriptCopyButton>
+        )}
+        {editorApplication && markdownProps.desktopApi?.openApplication ? (
+          <button
+            type="button"
+            className="thread-markdown__editor-link"
+            aria-label={openFileInEditorLabel(props.text, editorApplication.name)}
+            title={openFileInEditorTitle(editorApplication.name)}
+            onClick={() => openLocalFileInEditor(target)}
+          >
+            <AppIcon application={editorApplication} className="thread-markdown__editor-link-icon" size={13} />
+          </button>
+        ) : null}
+      </span>
+    );
+  }
+
   return (
     <TranscriptCopyButton
       as="span"
       className="transcript-message__inline-code transcript-copy-button--inline"
       copiedLabel="Copied inline code"
-      desktopApi={props.desktopApi}
+      desktopApi={markdownProps.desktopApi}
       label="Copy inline code"
-      text={copyText}
+      text={props.text}
     >
       <code className="transcript-message__code">{props.children}</code>
     </TranscriptCopyButton>
@@ -305,6 +362,8 @@ type MarkdownRenderState = {
   skillsByPath: Map<string, AppServerSkillSummary & { path: string }>;
   skillsByToken: Map<string, AppServerSkillSummary & { path: string }>;
   sharedSkillNames: ReturnType<typeof findSharedSkillNames>;
+  inlineFiles: Map<string, ResolvedTranscriptFile>;
+  viewLocalFile: (target: MarkdownViewerTarget) => void;
   openLocalFileInEditor: (target: LocalFileTarget) => boolean;
   openLocalFileLink: (event: MouseEvent<HTMLAnchorElement>, href: string, label: string) => void;
   openSkillMarkdownInEditor: (skill: SkillActionTarget) => void;
@@ -549,7 +608,6 @@ const markdownComponents: Components = {
     return (
       <TranscriptCode
         className={codeProps.className}
-        desktopApi={props.desktopApi}
         editorName={editorApplication?.name}
         onOpenSkillInEditor={editorApplication && props.desktopApi?.openApplication
           ? openSkillMarkdownInEditor
@@ -659,6 +717,7 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
   );
   const [markdownViewerTarget, setMarkdownViewerTarget] =
     useState<MarkdownViewerTarget>();
+  const inlineFiles = useTranscriptFiles(markdownText, props.desktopApi, props.fileViewerContext);
   const editorApplication = useMemo(
     () =>
       props.applications?.editors.find(
@@ -788,6 +847,8 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
     skillsByPath,
     skillsByToken,
     sharedSkillNames,
+    inlineFiles,
+    viewLocalFile: setMarkdownViewerTarget,
     openLocalFileInEditor,
     openLocalFileLink,
     openSkillMarkdownInEditor,
@@ -800,6 +861,7 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
     skillsByPath,
     skillsByToken,
     sharedSkillNames,
+    inlineFiles,
     openLocalFileInEditor,
     openLocalFileLink,
     openSkillMarkdownInEditor,

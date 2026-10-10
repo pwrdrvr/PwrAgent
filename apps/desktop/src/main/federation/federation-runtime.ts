@@ -5,7 +5,7 @@ import type {
   TerminateBackgroundTerminalResponse,
 } from "@pwragent/shared";
 import type { ReadUsageActivityRequest, ReadUsageActivityResponse, AnalyzeUsageActivityRequest, AnalyzeUsageActivityResponse } from "@pwragent/shared";
-import { FederationFilePullReader, FILE_PULL_MARKDOWN_METHOD, resolveFilePullThread } from "./federation-file-pull";
+import { FederationFilePullReader, FILE_PULL_MARKDOWN_METHOD, FILE_RESOLVE_TRANSCRIPT_METHOD, resolveFilePullThread } from "./federation-file-pull";
 import type { HandoffInstanceThreadRequest, HandoffInstanceThreadResult } from "@pwragent/shared";
 import { resolveActiveProfileDir } from "../profile";
 import { ThreadInstanceHandoffService, THREAD_HANDOFF_METHODS, type ImportInstanceThreadRequest } from "./thread-instance-handoff-service";
@@ -144,6 +144,8 @@ import {
   resolveThreadTerminalCwd,
   type ReadMarkdownFileRequest,
   type ReadMarkdownFileResponse,
+  type ResolveTranscriptFilesRequest,
+  type ResolveTranscriptFilesResponse,
   type AppServerListSkillsRequest,
   type AppServerReadThreadRequest,
   type AppServerBackendKind,
@@ -2384,6 +2386,17 @@ export class DesktopFederationRuntime {
     };
   }
 
+  async resolveTranscriptFiles(target: FederationRemoteTarget, request: ResolveTranscriptFilesRequest) {
+    const peer = this.visiblePeers().find((candidate) => candidate.id === target.instanceId);
+    if (!peer?.capabilities.includes("file_pull") || peer.receiverPermissions?.filePull !== true) {
+      throw new Error("File pull is unavailable on the owning machine.");
+    }
+    return await this.rpcFor(target).request<ResolveTranscriptFilesResponse>({
+      method: FILE_RESOLVE_TRANSCRIPT_METHOD,
+      params: { references: request.references, thread: request.thread },
+    });
+  }
+
   async pullMarkdownFile(target: FederationRemoteTarget, request: ReadMarkdownFileRequest) {
     const peer = this.visiblePeers().find((candidate) => candidate.id === target.instanceId);
     if (!peer?.capabilities.includes("file_pull")) throw new Error("The owning machine does not support file pull. Update PwrAgent on that machine.");
@@ -3135,6 +3148,7 @@ export class DesktopFederationRuntime {
         [THREAD_HANDOFF_METHODS.import]: "thread_handoff",
         [THREAD_HANDOFF_METHODS.prepare]: "thread_handoff",
         [FILE_PULL_MARKDOWN_METHOD]: "file_pull",
+        [FILE_RESOLVE_TRANSCRIPT_METHOD]: "file_pull",
       },
       additionalRequiredCapabilities: (envelope) => envelope.method === THREAD_HANDOFF_METHODS.import
         ? ["file_push", "turn_control", "environment_actions"]
@@ -3219,6 +3233,7 @@ export class DesktopFederationRuntime {
         resolveFilePullThread(getDesktopBackendRegistry(), backend, threadId),
     });
     router.registerHandler(FILE_PULL_MARKDOWN_METHOD, (envelope) => filePullReader.readMarkdown(envelope.params));
+    router.registerHandler(FILE_RESOLVE_TRANSCRIPT_METHOD, (envelope) => filePullReader.resolveTranscript(envelope.params));
     this.ptyService = new FederationPtyService({
       allowOpen: () => this.receiverPermissions().remoteShells,
       spawnPty: async (params) => await spawnTerminalPty(params),

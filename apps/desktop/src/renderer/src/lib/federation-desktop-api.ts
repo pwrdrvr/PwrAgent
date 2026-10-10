@@ -11,6 +11,7 @@ export function scopeDesktopApiToFederationTarget(
   const setThreadAgent = desktopApi.setThreadAgent;
   const setThreadTokenMiser = desktopApi.setThreadTokenMiser;
   const openApplication = desktopApi.openApplication;
+  const resolveTranscriptFiles = desktopApi.resolveTranscriptFiles;
   const readMarkdownFile = desktopApi.readMarkdownFile;
   const openMarkdownFileViewer = desktopApi.openMarkdownFileViewer;
   const refreshDirectoryGitStatuses = desktopApi.refreshDirectoryGitStatuses;
@@ -78,6 +79,9 @@ export function scopeDesktopApiToFederationTarget(
     onPwrSuiteInstaller: undefined,
     openPath: undefined,
     revealPath: undefined,
+    resolveTranscriptFiles: resolveTranscriptFiles
+      ? async (request) => await resolveTranscriptFiles({ ...request, federationTarget })
+      : undefined,
     readMarkdownFile: readMarkdownFile
       ? async (request) => await readMarkdownFile({ ...request, federationTarget })
       : undefined,

@@ -35,6 +35,24 @@ describe("Federation file pull", () => {
     expect(resolveThread).toHaveBeenCalledWith("codex", "owner-thread");
   });
 
+  it("hydrates inline files using the owner thread root and ignores viewer-supplied roots", async () => {
+    await writeFile(path.join(directory, "code.ts"), "fixture");
+    const outside = path.join(root, "outside.md");
+    await writeFile(outside, "outside");
+    await symlink(outside, path.join(directory, "escape.md"));
+    const request = { references: ["report.md:7", "code.ts", "missing.md", "../outside.md", "escape.md"], thread: identity, projectPath: root };
+    expect(await reader.resolveTranscript(request)).toEqual({ files: [
+      { reference: "report.md:7", path: path.join(directory, "report.md"), line: 7, previewable: true },
+      { reference: "code.ts", path: path.join(directory, "code.ts"), previewable: false },
+    ] });
+    permissions.filePull = false;
+    await expect(reader.resolveTranscript(request)).rejects.toThrow("disabled");
+    permissions.filePull = true;
+    thread = undefined;
+    await expect(reader.resolveTranscript(request)).rejects.toThrow("not found");
+    await expect(reader.resolveTranscript({ references: ["report.md"] })).rejects.toThrow("owning thread");
+  });
+
   it("previews JSON with the same owner permission and size checks", async () => {
     const filePath = path.join(directory, "widget.JSON");
     const content = '{"title":"Owner widget"}';

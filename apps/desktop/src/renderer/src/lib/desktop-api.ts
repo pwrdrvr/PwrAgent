@@ -499,6 +499,8 @@ import type {
   OpenPathResponse,
   ReadMarkdownFileRequest,
   ReadMarkdownFileResponse,
+  ResolveTranscriptFilesRequest,
+  ResolveTranscriptFilesResponse,
   ReadMarkdownFileViewerSnapshotRequest,
   ReadMarkdownFileViewerSnapshotResponse,
   OpenDesktopPwrAgentProfileRequest,
@@ -1248,6 +1250,9 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   openPath?: (request: OpenPathRequest) => Promise<OpenPathResponse>;
   revealPath?: (request: OpenPathRequest) => Promise<OpenPathResponse>;
   receivingFolder?: (request: ReceivingFolderRequest) => Promise<ReceivingFolderResponse>;
+  resolveTranscriptFiles?: (
+    request: ResolveTranscriptFilesRequest
+  ) => Promise<ResolveTranscriptFilesResponse>;
   readMarkdownFile?: (
     request: ReadMarkdownFileRequest
   ) => Promise<ReadMarkdownFileResponse>;

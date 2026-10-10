@@ -6,11 +6,15 @@ import {
   isFilePreviewPath,
   type AppServerThreadSummary,
   type ReadMarkdownFileResponse,
+  type ResolveTranscriptFilesRequest,
+  type ResolveTranscriptFilesResponse,
 } from "@pwragent/shared";
 
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
+import { resolveTranscriptFiles, transcriptThreadDirectories } from "../transcript-files";
 
 export const FILE_PULL_MARKDOWN_METHOD = "file.pull.markdown";
+export const FILE_RESOLVE_TRANSCRIPT_METHOD = "file.resolve.transcript";
 export const FILE_PULL_MAX_BYTES = 2 * 1024 * 1024;
 
 type Options = {
@@ -43,6 +47,32 @@ export class FederationFilePullReader {
   private active = 0;
 
   constructor(private readonly options: Options) {}
+
+  async resolveTranscript(input: unknown): Promise<ResolveTranscriptFilesResponse> {
+    if (this.active >= 4) throw new Error("File pull is busy. Try again.");
+    this.active++;
+    try {
+      const permissions = { ...this.options.permissions() };
+      if (!permissions.filePull) throw new Error("File pull is disabled on the owning machine.");
+      const request = input as ResolveTranscriptFilesRequest | null;
+      const identity = request?.thread;
+      if (!request || !identity || !isAppServerBackendKind(identity.backend)
+        || typeof identity.threadId !== "string" || !identity.threadId) {
+        throw new Error("File resolution requires an owning thread.");
+      }
+      const thread = await this.options.resolveThread(identity.backend, identity.threadId);
+      if (!thread) throw new Error("File pull thread was not found on the owning machine.");
+      const result = await resolveTranscriptFiles(request, transcriptThreadDirectories(thread),
+        !permissions.filePullOutsideThreadDirectories);
+      const current = this.options.permissions();
+      if (!current.filePull || (permissions.filePullOutsideThreadDirectories && !current.filePullOutsideThreadDirectories)) {
+        throw new Error("File pull permissions changed. Try again.");
+      }
+      return result;
+    } finally {
+      this.active--;
+    }
+  }
 
   async readMarkdown(input: unknown): Promise<ReadMarkdownFileResponse> {
     if (this.active >= 4) throw new Error("File pull is busy. Try again.");

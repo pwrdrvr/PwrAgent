@@ -99,3 +99,4 @@ export * from "./contracts/usage-activity";
 
 export * from "./contracts/background-terminals";
 export * from "./thread-archive-policy";
+export * from "./transcript-file-reference";

@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { registerApplicationIpcHandlers } from "../ipc/applications";
-import { MARKDOWN_FILE_READ_CHANNEL } from "../../shared/ipc";
+import { MARKDOWN_FILE_READ_CHANNEL, TRANSCRIPT_FILES_RESOLVE_CHANNEL } from "../../shared/ipc";
 import type {
   DesktopApplicationsSnapshot,
   OpenDesktopApplicationRequest,
@@ -48,6 +48,8 @@ const mocks = vi.hoisted(() => {
     handlers,
     openApplication,
     readApplications,
+    resolveTranscriptFiles: vi.fn(async () => ({ files: [{ reference: "notes.md", path: "/owner/notes.md", previewable: true }] })),
+    resolveThread: vi.fn(async () => ({ projectKey: "/owner", linkedDirectories: [] })),
     discoverDesktopApplications: vi.fn(async () => remoteApplications),
     openDesktopApplication: vi.fn(
       async (): Promise<OpenDesktopApplicationResponse> => ({ opened: true }),
@@ -85,7 +87,12 @@ vi.mock("../settings/application-discovery", () => ({
 vi.mock("../federation/federation-runtime", () => ({
   getDesktopFederationRuntime: () => ({
     remoteBackend: mocks.remoteBackendForTarget,
+    resolveTranscriptFiles: mocks.resolveTranscriptFiles,
   }),
+}));
+
+vi.mock("../app-server/backend-registry", () => ({
+  getDesktopBackendRegistry: () => ({ resolveThread: mocks.resolveThread }),
 }));
 
 vi.mock("../markdown-files-window", () => ({
@@ -107,6 +114,8 @@ vi.mock("../tool-output-incident-explorer-window", () => ({
 describe("application IPC", () => {
   beforeEach(() => {
     mocks.handlers.clear();
+    mocks.resolveThread.mockClear();
+    mocks.resolveTranscriptFiles.mockClear();
     mocks.openApplication.mockClear();
     mocks.readApplications.mockClear();
     mocks.discoverDesktopApplications.mockClear();
@@ -114,6 +123,32 @@ describe("application IPC", () => {
     mocks.remoteBackendForTarget.mockClear();
     mocks.showThreadFromToolOutputIncidentExplorer.mockClear();
     mocks.showToolOutputIncidentExplorerWindow.mockClear();
+  });
+
+  it("routes hydration to the owning peer and never stats a remote path locally", async () => {
+    registerApplicationIpcHandlers();
+    const federationTarget = { scope: "remote" as const, instanceId: "owner" };
+    const request = { references: ["notes.md"], thread: { backend: "codex", threadId: "thread-1" }, federationTarget };
+    expect(await mocks.handlers.get(TRANSCRIPT_FILES_RESOLVE_CHANNEL)?.({}, request))
+      .toEqual({ files: [{ reference: "notes.md", path: "/owner/notes.md", previewable: true }] });
+    expect(mocks.resolveTranscriptFiles).toHaveBeenCalledWith(federationTarget, request);
+    expect(mocks.resolveThread).not.toHaveBeenCalled();
+    mocks.resolveTranscriptFiles.mockRejectedValueOnce(new Error("Peer offline"));
+    expect(await mocks.handlers.get(TRANSCRIPT_FILES_RESOLVE_CHANNEL)?.({}, request)).toEqual({ files: [] });
+  });
+
+  it("resolves local references against the owner thread instead of the supplied viewer root", async () => {
+    registerApplicationIpcHandlers();
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-inline-files-"));
+    try {
+      await writeFile(path.join(root, "notes.md"), "fixture");
+      mocks.resolveThread.mockResolvedValueOnce({ projectKey: root, linkedDirectories: [] });
+      expect(await mocks.handlers.get(TRANSCRIPT_FILES_RESOLVE_CHANNEL)?.({}, {
+        references: ["notes.md"], projectPath: "/incorrect/viewer/root", thread: { backend: "codex", threadId: "thread-1" },
+      })).toEqual({ files: [{ reference: "notes.md", path: path.join(root, "notes.md"), previewable: true }] });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it("reads local previewable files and rejects unsupported, missing, directory and oversized paths", async () => {
