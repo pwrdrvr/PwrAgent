@@ -1,7 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
-import { openInMemoryStateDb } from "./sqlite-test-utils";
+import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
+import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
+import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 
 let stateDb: StateDb;
 let store: SqliteOverlayStore;
@@ -16,6 +18,56 @@ afterEach(() => {
 });
 
 describe("SqliteOverlayStore — linked directories", () => {
+  it.each([undefined, "remote-instance"])("detaches a moved project thread from its parent in the workspace commit: %s", async (parentThreadInstanceId) => {
+    await store.setThreadParent({
+      backend: "codex", threadId: "child", parentThreadId: "parent",
+      parentThreadBackend: "acp:grok", parentThreadInstanceId,
+    });
+    const overlay = await store.replaceWorkspaceLinkedDirectory({
+      backend: "codex", threadId: "child", resetProjectState: true, gitBranch: "HEAD",
+      directory: { id: "pwragent-handoff:codex:child", label: "target", path: "/repo/target", kind: "worktree", worktreePath: "/worktrees/target" },
+    });
+    expect(overlay.parentThreadId).toBeUndefined();
+    expect(overlay.parentThreadBackend).toBeUndefined();
+    expect(overlay.parentThreadInstanceId).toBeUndefined();
+    expect((await store.getThreadOverlayState({ backend: "codex", threadId: "child" }))?.parentThreadId).toBeUndefined();
+  });
+
+  it("keeps project movement and parent detachment in one SQLite commit", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const temp = createTempStateDb("pwragent-project-move-");
+    const db = StateDb.open(temp.dbPath);
+    const persisted = new SqliteOverlayStore(db);
+    try {
+      await persisted.setThreadParent({ backend: "codex", threadId: "child", parentThreadId: "parent" });
+      const { writes } = await measureSqliteWrites(async () => {
+        await persisted.replaceWorkspaceLinkedDirectory({
+          backend: "codex", threadId: "child", resetProjectState: true,
+          directory: { id: "pwragent-handoff:codex:child", label: "target", path: "/repo/target", kind: "local" },
+        });
+      });
+      expect(writes.commits).toBe(1);
+      expectSqliteWriteBudget({
+        scenario: "project-move-parent-detachment",
+        note: "One workspace boundary commit also clears the parent; no timer or per-turn writes.",
+        writes,
+      });
+    } finally {
+      db.close();
+      removeTempStateDbDir(temp.tempDir);
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("preserves the parent when changing workspaces within the repository", async () => {
+    await store.setThreadParent({ backend: "codex", threadId: "child", parentThreadId: "parent" });
+    const overlay = await store.replaceWorkspaceLinkedDirectory({
+      backend: "codex", threadId: "child",
+      directory: { id: "pwragent-handoff:codex:child", label: "source", path: "/repo/source", kind: "worktree", worktreePath: "/worktrees/source" },
+    });
+    expect(overlay.parentThreadId).toBe("parent");
+  });
+
   it("replaces same-path local directories even when their IDs use different shapes", async () => {
     await store.addLinkedDirectory({
       backend: "codex",

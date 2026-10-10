@@ -89,6 +89,8 @@ type HandoffParams = {
   strategy?: ThreadWorkspaceHandoffStrategy;
   repositoryPath?: string;
   sourcePath?: string;
+  sourceWorkMode?: "local" | "worktree";
+  workspacePaths?: string[];
   sourceBranch?: string;
   leaveLocalBranch?: string;
   newBranchName?: string;
@@ -364,7 +366,7 @@ export class GitWorkspaceHandoffService {
     if (!params.targetPath?.trim() || !path.isAbsolute(params.targetPath.trim())) {
       throw new Error("Move to Project requires an absolute destination directory.");
     }
-    const targetPath = await realpath(params.targetPath.trim());
+    let targetPath = await realpath(params.targetPath.trim());
     if (!(await stat(targetPath)).isDirectory()) {
       throw new Error("Move to Project requires an existing directory.");
     }
@@ -385,13 +387,44 @@ export class GitWorkspaceHandoffService {
     if (path.resolve(workspacePath) !== path.resolve(targetPath)) {
       throw new Error("Select the root of the destination checkout or worktree.");
     }
+    let createdWorktree = false;
+    if (path.resolve(repositoryPath) === path.resolve(targetPath)) {
+      // A project root identifies the repository. Keep the conversation in
+      // its already-linked worktree instead of silently switching to Local.
+      const linkedPaths = await Promise.all((params.workspacePaths ?? [])
+        .map((workspacePath) => realpath(workspacePath).catch(() => undefined)));
+      const candidates = worktrees.filter((worktree) =>
+        path.resolve(worktree.path) !== path.resolve(repositoryPath)
+        && linkedPaths.some((linkedPath) => linkedPath && path.resolve(linkedPath) === path.resolve(worktree.path)),
+      );
+      if (candidates.length > 1) {
+        throw new Error("This thread has multiple worktrees in the destination project. Select the worktree root to continue in.");
+      }
+      if (candidates[0]) {
+        targetPath = candidates[0].path;
+      } else if (params.sourceWorkMode === "worktree") {
+        targetPath = await computeWorktreePath({
+          backend: params.backend, repoRoot: repositoryPath,
+          storage: await this.resolveStorage(), homeDir: this.homeDir, timestamp: params.now,
+        });
+        try {
+          await runGit(repositoryPath, ["worktree", "add", "--detach", targetPath, "HEAD"], this.gitEnv);
+        } catch (error) {
+          await releaseReservationAndRethrow(targetPath, error);
+        }
+        createdWorktree = true;
+      }
+    }
     const isWorktree = path.resolve(repositoryPath) !== path.resolve(targetPath);
+    const branch = createdWorktree ? "HEAD" : targetPath === workspacePath
+      ? inspection.branch
+      : trim((await runGit(targetPath, ["rev-parse", "--abbrev-ref", "HEAD"], this.gitEnv)).stdout);
     return {
       backend: params.backend,
       threadId: params.threadId,
       direction: "to-project",
       workMode: isWorktree ? "worktree" : "local",
-      branch: inspection.branch,
+      branch,
       repositoryPath,
       targetPath,
       linkedDirectory: {
@@ -399,7 +432,10 @@ export class GitWorkspaceHandoffService {
         label: pathBaseName(repositoryPath),
         path: repositoryPath,
         kind: isWorktree ? "worktree" : "local",
-        ...(isWorktree ? { worktreePath: targetPath, worktreeOwnership: "external" as const } : {}),
+        ...(isWorktree ? {
+          worktreePath: targetPath,
+          ...(!createdWorktree ? { worktreeOwnership: "external" as const } : {}),
+        } : {}),
       },
       warnings: [],
       completedAt: params.now ?? Date.now(),

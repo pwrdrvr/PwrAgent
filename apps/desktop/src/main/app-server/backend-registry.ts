@@ -14953,9 +14953,11 @@ export class DesktopBackendRegistry {
     if (!thread && request.direction === "to-project") {
       throw new Error("Thread workspace metadata is unavailable for handoff.");
     }
+    const projectMoveOverlay = request.direction === "to-project"
+      ? await this.overlayStore.getThreadOverlayState(request)
+      : undefined;
     if (request.direction === "to-project") {
-      const overlay = await this.overlayStore.getThreadOverlayState(request);
-      const runtime = overlay?.codexEnvironmentRuntime;
+      const runtime = projectMoveOverlay?.codexEnvironmentRuntime;
       if (runtime && (
         runtime.executionTarget !== "local"
         || runtime.actionStatus === "started"
@@ -14967,8 +14969,29 @@ export class DesktopBackendRegistry {
     const candidate = request.direction === "to-project"
       ? {}
       : this.resolveHandoffWorkspaceCandidate(thread, request);
+    const workspaceDirectories = request.direction === "to-project"
+      ? mergeThreadLinkedDirectories([
+          ...(thread?.linkedDirectories ?? []),
+          ...(projectMoveOverlay?.extraLinkedDirectories ?? []),
+        ])
+      : undefined;
+    const sourceCwd = resolveThreadWorkspaceCwd(thread, projectMoveOverlay?.extraLinkedDirectories);
+    const sourceWorkMode: "local" | "worktree" = workspaceDirectories?.some((directory) =>
+      directory.kind === "worktree"
+      && sourceCwd
+      && normalizeWorktreePathForComparison(directory.worktreePath ?? directory.path) === normalizeWorktreePathForComparison(sourceCwd),
+    ) ? "worktree" : "local";
+    // PR workspace provenance survives an earlier project relink that lost
+    // its directory. Git still validates every candidate against the target
+    // repository's registered worktrees before it can be reused.
+    const workspacePaths = workspaceDirectories ? [
+      ...workspaceDirectories.filter((directory) => directory.kind === "worktree")
+        .map((directory) => directory.worktreePath ?? directory.path),
+      ...(projectMoveOverlay?.prs ?? []).flatMap((pr) => pr.linkedDirectoryPaths ?? []),
+    ] : undefined;
     const result = await this.gitWorkspaceHandoffService.handoff({
       ...request,
+      ...(workspacePaths ? { workspacePaths, sourceWorkMode } : {}),
       repositoryPath: request.repositoryPath ?? candidate.repositoryPath,
       sourcePath: request.sourcePath ?? candidate.sourcePath,
       sourceBranch: request.sourceBranch ?? candidate.sourceBranch,
@@ -15020,7 +15043,7 @@ export class DesktopBackendRegistry {
       threadId: request.threadId,
       cwd: result.linkedDirectory.worktreePath ?? result.targetPath,
     });
-    if (result.workMode === "worktree" && request.direction !== "to-project") {
+    if (result.workMode === "worktree" && result.linkedDirectory.worktreeOwnership !== "external") {
       await this.recordCodexWorktreeOwnerThread({
         backend: request.backend,
         threadId: request.threadId,
@@ -15040,6 +15063,15 @@ export class DesktopBackendRegistry {
     // Publish only after workspace replacement and CWD/branch synchronization
     // finish, so every selected-detail consumer can revalidate the new owner
     // configuration without depending on a full navigation refresh.
+    if (projectMoveOverlay?.parentThreadId) {
+      await this.emit({
+        backend: request.backend,
+        notification: {
+          method: "thread/parent/cleared",
+          params: { threadId: request.threadId },
+        },
+      });
+    }
     await this.publishLocalEvent({
       backend: request.backend,
       notification: {

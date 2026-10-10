@@ -55566,6 +55566,55 @@ script = "printf setup"
     }
   });
 
+  it.each(["directory", "pr", "relinked-pr"])("passes existing worktrees and source isolation to a project move: %s", async (provenance) => {
+    const directories: LinkedDirectorySummary[] = [{
+      id: "source", label: "Workspaces", path: "/repo/Workspaces", kind: "worktree", worktreePath: "/worktrees/Workspaces",
+    }, {
+      id: "target", label: "PwrGit", path: "/repo/PwrGit", kind: "worktree", worktreePath: "/worktrees/PwrGit",
+    }];
+    const thread: AppServerThreadSummary = {
+      id: "thread-1", title: "Move", titleSource: "explicit", source: "codex",
+      projectKey: provenance === "relinked-pr" ? "/repo/PwrGit" : "/worktrees/Workspaces",
+      linkedDirectories: provenance === "directory" ? directories : provenance === "pr" ? directories.slice(0, 1) : [], updatedAt: 2,
+    };
+    const handoff = vi.fn(async () => ({
+      backend: "codex" as const, threadId: thread.id, direction: "to-project" as const,
+      workMode: "worktree" as const, branch: "HEAD", repositoryPath: "/repo/PwrGit", targetPath: "/worktrees/new-PwrGit",
+      linkedDirectory: { id: "pwragent-handoff:codex:thread-1", label: "PwrGit", path: "/repo/PwrGit", kind: "worktree" as const, worktreePath: "/worktrees/new-PwrGit" },
+      warnings: [], completedAt: 1000,
+    }));
+    const recordCodexWorktreeOwnerThread = vi.fn();
+    const overlayStore = createOverlayStoreMock();
+    if (provenance !== "directory") await overlayStore.addThreadPullRequestReference({
+      backend: "codex", threadId: thread.id,
+      pr: { provider: "github.com", org: "example", repo: "PwrGit", number: 461, state: "passing", url: "https://github.com/example/PwrGit/pull/461", linkedDirectoryPaths: ["/worktrees/PwrGit"] },
+    });
+    await overlayStore.setThreadParent({ backend: "codex", threadId: thread.id, parentThreadId: "parent", parentThreadBackend: "acp:grok", parentThreadInstanceId: "remote-instance" });
+    const replaceWorkspace = vi.spyOn(overlayStore, "replaceWorkspaceLinkedDirectory");
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [thread] }), overlayStore,
+      gitDirectoryService: { recordCodexWorktreeOwnerThread } as never,
+      gitWorkspaceHandoffService: { handoff } as never,
+    });
+    const events: AgentEvent[] = [];
+    const unsubscribe = registry.onEvent((event) => { events.push(event); });
+    try {
+      await registry.handoffThreadWorkspace({ backend: "codex", threadId: thread.id, direction: "to-project", targetPath: "/repo/PwrGit" });
+      expect(handoff).toHaveBeenCalledWith(expect.objectContaining({
+        sourceWorkMode: provenance === "relinked-pr" ? "local" : "worktree",
+        workspacePaths: expect.arrayContaining(provenance === "relinked-pr" ? ["/worktrees/PwrGit"] : ["/worktrees/Workspaces", "/worktrees/PwrGit"]),
+      }));
+      expect(replaceWorkspace).toHaveBeenCalledWith(expect.objectContaining({ resetProjectState: true }));
+      expect(events).toContainEqual(expect.objectContaining({
+        backend: "codex", notification: { method: "thread/parent/cleared", params: { threadId: thread.id } },
+      }));
+      expect(recordCodexWorktreeOwnerThread).toHaveBeenCalledWith({ threadId: thread.id, worktreePath: "/worktrees/new-PwrGit" });
+    } finally {
+      unsubscribe();
+      await registry.close();
+    }
+  });
+
   it.each(["local", "worktree"] as const)("moves a scratch Codex conversation to another project and starts its next turn there: %s", async (workMode) => {
     const targetPath = workMode === "local" ? "/projects/demo" : "/worktrees/demo";
     const thread: AppServerThreadSummary = {
@@ -55580,7 +55629,7 @@ script = "printf setup"
       targetPath,
       linkedDirectory: {
         id: "pwragent-handoff:codex:thread-1", label: "demo", path: "/projects/demo", kind: workMode,
-        ...(workMode === "worktree" ? { worktreePath: targetPath } : {}),
+        ...(workMode === "worktree" ? { worktreePath: targetPath, worktreeOwnership: "external" as const } : {}),
       },
       warnings: [], completedAt: 1000,
     }));
