@@ -44,19 +44,20 @@ export class ReplayController {
       return response;
     }
 
+    const requested = selector.archived ? `${method} (archived)` : method;
     const nextStep = this.steps[this.index];
     if (!nextStep) {
-      throw new Error(`Replay fixture exhausted before ${method}`);
+      throw new Error(`Replay fixture exhausted before ${requested}`);
     }
 
     if (nextStep.kind !== "response") {
       throw new Error(
-        `Replay fixture expected live step ${nextStep.id} before response ${method}`
+        `Replay fixture expected live step ${nextStep.id} before response ${requested}`
       );
     }
 
     throw new Error(
-      `Replay fixture expected ${nextStep.method} before ${method}`
+      `Replay fixture expected ${nextStep.method}${nextStep.archived ? " (archived)" : ""} before ${requested}`
     );
   }
 
