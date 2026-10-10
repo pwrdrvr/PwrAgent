@@ -60771,17 +60771,6 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
   });
 
   /**
-   * Runs the missing-thread audit to completion.
-   *
-   * Each wait is for a specific thing, not for a guessed amount of time. The
-   * first settles the fire-and-forget workspace synchronizations, whose
-   * rejections are what arm the audit at all. The clock then advances by
-   * exactly the debounce so the audit starts. The second settles the audit
-   * itself, however many awaited hops its archive path happens to take — the
-   * count differs by platform, and pumping a fixed number of fake-timer ticks
-   * instead is what made this flaky on Windows (#1793).
-   */
-  /**
    * Runs the missing-thread audit to completion. Each wait is for a specific
    * thing rather than for a guessed amount of time, and the two waits cover
    * different failures:
