@@ -303,7 +303,7 @@ jobs:
             apps/desktop/release-stage/dist/latest-mac.yml
             apps/desktop/release-stage/dist/PwrAgent-macos-SHA256SUMS
             apps/desktop/release-stage/dist/builder-debug.yml
-          retention-days: 30
+          retention-days: 90
 
   linux-package:
     name: Package Linux (${{ matrix.builder_arch }})
@@ -556,7 +556,7 @@ jobs:
             apps/desktop/release-stage/dist/*.exe.blockmap
             apps/desktop/release-stage/dist/latest.yml
             apps/desktop/release-stage/dist/SHA256SUMS
-          retention-days: 7
+          retention-days: 90
 
   publish-release-assets:
     name: Publish release assets
@@ -718,7 +718,7 @@ jobs:
             linux-dist/latest-linux*.yml
             linux-dist/SHA256SUMS
             debug-dist/*
-          retention-days: 30
+          retention-days: 90
 
   publish-release-notes:
     name: Publish release notes

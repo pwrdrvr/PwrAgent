@@ -1,13 +1,11 @@
 #!/usr/bin/env node
 
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { createReadStream, createWriteStream } from "node:fs";
-import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { Readable } from "node:stream";
-import { pipeline } from "node:stream/promises";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 export const SOURCE_REPO = "pwrdrvr/PwrAgent";
 export const TAP_REPO = "pwrdrvr/homebrew-tap";
@@ -268,30 +266,29 @@ export function previousRelease(version, api = ghJson) {
   return api(`repos/${SOURCE_REPO}/releases/tags/${encodeURIComponent(previous.tag_name)}`);
 }
 
-export async function download(asset, dir) {
+function acquireBuildArtifact(asset, file) {
+  if (!/^sha256:[a-f0-9]{64}$/.test(asset.digest ?? "")) throw new Error(`Missing GitHub digest: ${asset.name}`);
+  execFileSync("python3", [fileURLToPath(new URL("./build-artifact.py", import.meta.url)),
+    "--url", asset.browser_download_url, "--sha256", asset.digest.slice(7), "--size", String(asset.size), "--output", file],
+  { stdio: "inherit" });
+}
+
+export async function download(asset, dir, acquire = acquireBuildArtifact) {
   const file = resolve(dir, asset.name);
   try {
     await stat(file);
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
-    console.log(`Release asset download (cache miss): ${asset.name}`);
-    const response = await fetch(asset.browser_download_url);
-    if (!response.ok) throw new Error(`Download ${asset.name}: HTTP ${response.status}`);
-    try {
-      await pipeline(Readable.fromWeb(response.body), createWriteStream(`${file}.part`));
-      const { rename } = await import("node:fs/promises");
-      await rename(`${file}.part`, file);
-    } finally {
-      await rm(`${file}.part`, { force: true });
-    }
+    console.log(`Build artifact acquisition (cache miss): ${asset.name}`);
+    await acquire(asset, file);
   }
   return file;
 }
 
-export async function materializeRelease(release, out, cache) {
+export async function materializeRelease(release, out, cache, acquire) {
   await mkdir(cache, { recursive: true });
   const assets = releaseAssets(release);
-  for (const asset of assets) await download(asset, cache);
+  for (const asset of assets) await download(asset, cache, acquire);
   for (const asset of assets.slice(3)) {
     if (asset.digest) await verifyFile(resolve(cache, asset.name), asset, asset.digest.replace(/^sha256:/, ""));
   }

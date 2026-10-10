@@ -55,18 +55,17 @@ describe("package manager release inputs", () => {
       ...asset, id, size: Buffer.byteLength(contents.get(asset.name)),
       digest: `sha256:${createHash("sha256").update(contents.get(asset.name)).digest("hex")}`,
     })) };
-    const fetchAsset = vi.fn(async (url) => new Response(contents.get(url.split("/").at(-1))));
-    vi.stubGlobal("fetch", fetchAsset);
+    const acquire = vi.fn(async (asset, file) => writeFile(file, contents.get(asset.name)));
     const cache = join(dir, "assets");
-    await materializeRelease(pinned, join(dir, "first"), cache);
-    await materializeRelease(pinned, join(dir, "second"), cache);
-    expect(fetchAsset).toHaveBeenCalledTimes(5);
+    await materializeRelease(pinned, join(dir, "first"), cache, acquire);
+    await materializeRelease(pinned, join(dir, "second"), cache, acquire);
+    expect(acquire).toHaveBeenCalledTimes(5);
     await writeFile(join(cache, names[3]), "corrupt");
-    await expect(materializeRelease(pinned, join(dir, "bad"), cache)).rejects.toThrow(/mismatch/);
+    await expect(materializeRelease(pinned, join(dir, "bad"), cache, acquire)).rejects.toThrow(/mismatch/);
     await writeFile(join(cache, names[3]), contents.get(names[3]));
     await writeFile(join(cache, names[0]), "bad");
-    await expect(materializeRelease(pinned, join(dir, "bad"), cache)).rejects.toThrow(/mismatch/);
-    expect(fetchAsset).toHaveBeenCalledTimes(5);
+    await expect(materializeRelease(pinned, join(dir, "bad"), cache, acquire)).rejects.toThrow(/mismatch/);
+    expect(acquire).toHaveBeenCalledTimes(5);
   });
 
   it("rejects drafts and every unpromoted or suffixed release", () => {
