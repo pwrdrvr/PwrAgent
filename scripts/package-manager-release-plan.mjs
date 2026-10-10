@@ -84,9 +84,11 @@ async function writePackages(out, files) {
   }
 }
 
-export async function buildPlan({ event, ref, tag = "", force = false, publication = true, logic }, api = ghJson) {
+export async function buildPlan({ event, ref, tag = "", force = false, publication = true, logic, families = ["homebrew", "winget"] }, api = ghJson) {
   const audit = auditChannels(api);
-  const needed = distributionNeeded(audit, event, tag);
+  const selectedAudit = families.includes("homebrew") ? audit :
+    { ...audit, homebrew: { ...audit.homebrew, version: audit.stable.version, pending: [] } };
+  const needed = distributionNeeded(selectedAudit, event, tag);
   const plan = { audit, needed, native: [], assets: [], submit: false };
   // Preserve the daily publication/pending-PR guard before asset/cache resolution.
   if (!needed) return plan;
@@ -113,7 +115,7 @@ export async function buildPlan({ event, ref, tag = "", force = false, publicati
     return { id, name: assetName, size, digest, browser_download_url };
   });
   const files = { current: currentInputs.files, previous: previousInputs.files };
-  for (const platform of PLATFORMS) {
+  for (const platform of PLATFORMS.filter((item) => families.includes(item.family))) {
     const inputs = {
       ...platform, image: selectImage(images, platform.imagePrefix),
       tool: platform.family === "homebrew" ? { brew } : { tag: winget.tag_name, assets: wingetAssets },
@@ -133,16 +135,16 @@ export async function buildPlan({ event, ref, tag = "", force = false, publicati
     const reuse = reusableValidation(result.actions_caches, key, { event, ref, tag: current.tag_name, force, publication });
     plan.native.push({ ...inputs, key, reuse });
   }
-  const families = new Set(plan.native.filter((platform) => !platform.reuse).map((platform) => platform.family));
+  const requiredFamilies = new Set(plan.native.filter((platform) => !platform.reuse).map((platform) => platform.family));
   for (const [role, release] of [["current", current], ["previous", previous]]) {
     for (const [index, asset] of releaseAssets(release).entries()) {
       const family = index === 2 || index === 4 ? "winget" : "homebrew";
-      if (!families.has(family)) continue;
+      if (!requiredFamilies.has(family)) continue;
       plan.assets.push({ role, asset, key: assetKey(release.tag_name, asset) });
     }
   }
   Object.assign(plan, { current, previous, files, hashes: currentInputs.hashes,
-    submit: event !== "pull_request" && [audit.homebrew, audit.winget].some((channel) =>
+    submit: event !== "pull_request" && families.map((family) => audit[family]).some((channel) =>
       channel.version !== audit.stable.version && channel.pending.length === 0),
   });
   return plan;
@@ -186,7 +188,8 @@ async function main(argv) {
     const logic = Object.fromEntries(["homebrew", "winget"].map((family) => [family, validationCode(workflow, family, sources)]));
     const plan = await buildPlan({ event: process.env.GITHUB_EVENT_NAME, ref: process.env.GITHUB_REF,
       tag: process.env.EVENT_TAG, force: process.env.FORCE_VALIDATION === "true",
-      publication: process.env.GITHUB_EVENT_NAME !== "workflow_dispatch" || process.env.SUBMIT_REQUESTED === "true", logic });
+      publication: process.env.GITHUB_EVENT_NAME !== "workflow_dispatch" || process.env.SUBMIT_REQUESTED === "true",
+      families: process.env.WINGET_ONLY === "true" ? ["winget"] : ["homebrew", "winget"], logic });
     await prepare(plan, dir);
     const mac = plan.native.filter((p) => p.family === "homebrew" && !p.reuse);
     const windows = plan.native.find((p) => p.family === "winget");
