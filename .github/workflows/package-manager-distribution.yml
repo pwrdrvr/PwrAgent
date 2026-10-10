@@ -63,6 +63,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           DISTRIBUTION_READ_TOKEN: ${{ secrets.DISTRIBUTION_READ_TOKEN || github.token }}
+          DISTRIBUTION_READ_TOKEN_AVAILABLE: ${{ secrets.DISTRIBUTION_READ_TOKEN != '' }}
           EVENT_TAG: ${{ github.event.release.tag_name }}
           FORCE_VALIDATION: ${{ inputs.force_validation || false }}
           WINGET_ONLY: "true"
