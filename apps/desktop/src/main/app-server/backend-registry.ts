@@ -34028,6 +34028,17 @@ export class DesktopBackendRegistry {
     }
   }
 
+  /**
+   * Resolves once archive cleanup is parked on its pacing checkpoint, the one
+   * timer the cleanup path owns. A fake-clock test advances time exactly then
+   * and otherwise awaits the cleanup itself. Slicing the clock on a budget
+   * instead raced the host I/O that runs between checkpoints, which fake
+   * timers cannot complete (#2665).
+   */
+  whenArchiveCleanupCheckpointPendingForTests(): Promise<void> {
+    return this.archiveCleanupQueue.whenCheckpointPending();
+  }
+
   private isCodexThreadKnownMissing(threadId: string): boolean {
     return this.missingCodexThreadIds.has(threadId);
   }
