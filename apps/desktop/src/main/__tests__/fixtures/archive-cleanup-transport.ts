@@ -9,6 +9,7 @@ export class ArchiveCleanupTransport implements JsonRpcTransport {
   readonly listings: Array<{ archived: boolean; cursor?: string }> = [];
   private readonly heldKinds = new Set<boolean>();
   private readonly replies: Array<{ archived: boolean; reply: () => void }> = [];
+  private readonly listingWaiters: Array<{ archived: boolean; resolve: () => void }> = [];
   private messageHandler: (message: string) => void = () => {};
 
   constructor() {
@@ -28,6 +29,14 @@ export class ArchiveCleanupTransport implements JsonRpcTransport {
 
   holdNextListing(archived: boolean): void {
     this.heldKinds.add(archived);
+  }
+
+  /** Resolves once a `thread/list` of this kind has reached the transport.
+   * The client issues it after work no clock can complete (the registry's
+   * environment probes stat the host filesystem). */
+  whenListing(archived: boolean): Promise<void> {
+    if (this.listings.some((listing) => listing.archived === archived)) return Promise.resolve();
+    return new Promise((resolve) => { this.listingWaiters.push({ archived, resolve }); });
   }
 
   releaseListings(archived?: boolean): void {
@@ -52,6 +61,10 @@ export class ArchiveCleanupTransport implements JsonRpcTransport {
       const archived = request.params?.archived === true;
       const cursor = request.params?.cursor;
       this.listings.push({ archived, cursor });
+      for (const waiter of this.listingWaiters.splice(0)) {
+        if (waiter.archived === archived) waiter.resolve();
+        else this.listingWaiters.push(waiter);
+      }
       const page = cursor ? Number(cursor) : 0;
       const ids = archived ? this.archivedIds.slice(page, page + 1) : this.activeIds;
       result = {
