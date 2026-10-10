@@ -394,6 +394,27 @@ describe("Pinned group against an owner without the split", () => {
     expect(listTitles()).toEqual(population.map((entry) => entry.title));
   });
 
+  it("keeps the list to its own page when the group's page is the whole lens", () => {
+    const resources = new Map([
+      ["lens-pins", resource("lens-pins", { kind: "lens", lens: "recents", roots: "pinned" }, 100)],
+      ["lens", resource("lens", { kind: "lens", lens: "recents", roots: "unpinned" }, 3)],
+    ]);
+    render(
+      <RecentsList
+        pagedNavigation={{ resources } as unknown as ComponentProps<typeof RecentsList>["pagedNavigation"]}
+        pinnedResourceId="lens-pins"
+        resourceIds={["lens"]}
+        threads={population}
+        onOpenThreadContextMenu={() => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    // The list's three newest rows less its two pins. Older unpinned rows on
+    // the group's page are not just-unpinned ones; they wait for Load more.
+    expect(listTitles()).toEqual(["Dark-mode chart tokens"]);
+  });
+
   it("counts the header from the loaded pins when the owner sent no split", () => {
     const page = { counts: { total: 6, active: 4, unread: 4, review: 4 } } as unknown as NavigationQueryPage;
     const roots = [{ ...rateLimiter, threadStatus: "active" as const }, docsMigration];
@@ -441,6 +462,33 @@ describe("Pinned group before its pages are read again", () => {
       />,
     );
   };
+
+  it("offers the group page's reload even with no pin loaded", () => {
+    const request = { protocol: 2 as const, consumer: "main-sidebar" as const,
+      query: { kind: "lens" as const, lens: "recents" as const, roots: "pinned" as const }, pageSize: 100 };
+    const list = { protocol: 2 as const, consumer: "main-sidebar" as const,
+      query: { kind: "lens" as const, lens: "recents" as const, roots: "unpinned" as const }, pageSize: 10 };
+    const resources = new Map<string, NavigationWindowResource>([
+      ["lens-pins", { id: "lens-pins", loading: false,
+        state: { ...createNavigationPageState(request), rebaselineRequired: true } }],
+      ["lens", { id: "lens", loading: false, state: { ...createNavigationPageState(list),
+        page: navigationQueryFixture(list, { threads: population }, { ownerLensOrder: true }), stale: false } }],
+    ]);
+    render(
+      <RecentsList
+        pagedNavigation={{ resources } as unknown as ComponentProps<typeof RecentsList>["pagedNavigation"]}
+        pinnedResourceId="lens-pins"
+        resourceIds={["lens"]}
+        threads={population}
+        onOpenThreadContextMenu={() => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    expect(pinnedGroup()).toBeNull();
+    expect(within(screen.getByRole("list", { name: "Pinned threads" }))
+      .getByRole("button", { name: "Reload pinned threads" })).toBeInTheDocument();
+  });
 
   it("moves a just-pinned row into the group at once", () => {
     const pinned = { ...glossary, pinnedRank: "4096" };

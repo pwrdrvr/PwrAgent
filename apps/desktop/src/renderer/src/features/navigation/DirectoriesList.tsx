@@ -36,7 +36,6 @@ import {
 import {
   ChevronDownIcon,
   NewThreadIcon,
-  PinIcon,
   UnlinkedDotIcon,
 } from "../../icons";
 import { useEventCallback } from "../../lib/useEventCallback";
@@ -57,6 +56,7 @@ import {
 } from "../../lib/federated-thread-events";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { isFederationViewerWindow } from "../../lib/federation-window";
+import { KeepAtTopSlot } from "./KeepAtTopSlot";
 import { SidebarShowMore } from "./SidebarShowMore";
 import { useThreadPinOrdering, type ThreadPinScope } from "./useThreadPinOrdering";
 import { SubthreadPagination } from "./SubthreadPagination";
@@ -1682,20 +1682,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
                                 // Same role-carrying boundary as the append
                                 // target below; see its comment. It grows to
                                 // hold the slot only while a drag is live.
-                                <div
-                                  className="directory-row__pin-drop-boundary"
-                                  role="listitem"
-                                >
-                                  <div
-                                    aria-label={`Keep thread at top of pinned threads for ${directory.label}`}
-                                    aria-hidden="true"
-                                    className="directory-row__keep-top-slot"
-                                    role="separator"
-                                  >
-                                    <PinIcon size={12} />
-                                    Keep at top
-                                  </div>
-                                </div>
+                                <KeepAtTopSlot
+                                  label={`Keep thread at top of pinned threads for ${directory.label}`}
+                                />
                               ) : null}
 	                        <ThreadRow
 	                          key={`${directory.key}:${threadKey}`}

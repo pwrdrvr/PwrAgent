@@ -35,6 +35,7 @@ import {
   isSubthreadSectionCollapsed,
   NativeSubAgentsDisclosure,
 } from "./NativeSubAgentsDisclosure";
+import { KeepAtTopSlot } from "./KeepAtTopSlot";
 import { SidebarShowMore } from "./SidebarShowMore";
 import { SubthreadPagination } from "./SubthreadPagination";
 import { ThreadRow, type ThreadRowRef } from "./ThreadRow";
@@ -204,8 +205,9 @@ export function RecentsList(props: RecentsListProps) {
   // The group takes pinned roots from the list only once its own page is
   // demanded. Before that, as when the setting turns on mid-session, a pin
   // stays in the list rather than vanishing from both.
-  const groupActive = Boolean(props.pinnedResourceId)
-    && (!props.pagedNavigation || props.pagedNavigation.resources.has(props.pinnedResourceId!));
+  const pinnedResource = props.pinnedResourceId
+    ? props.pagedNavigation?.resources.get(props.pinnedResourceId) : undefined;
+  const groupActive = Boolean(props.pinnedResourceId) && (!props.pagedNavigation || Boolean(pinnedResource));
   // Each root's own pin decides its side, not only the page that carried it,
   // as in Directories. An owner that predates the split answers both queries
   // with every thread, and a pin or unpin patches the row before the stale
@@ -220,13 +222,15 @@ export function RecentsList(props: RecentsListProps) {
     : props.threads.filter((thread) => !thread.parentThreadId))
     .filter((thread) => !groupActive
       || (!isPinnedThread(thread) && !pinnedRootKeys.has(threadSummaryIdentityKey(thread))));
-  if (groupActive && entries) {
+  // `collectionSize` is the owner's acknowledgment of the split. An older
+  // owner's group page is the whole unsplit lens, not a set of pins.
+  if (groupActive && entries && pinnedResource?.state.page?.collectionSize !== undefined) {
     // A just-unpinned root is still on the group's page. Return it to its
     // slot in the list's own order until the list's page is read again.
     const listedKeys = new Set(topLevelThreads.map(threadSummaryIdentityKey));
-    const groupQuery = props.pagedNavigation?.resources.get(props.pinnedResourceId!)?.state.request.query;
+    const groupQuery = pinnedResource.state.request.query;
     const sortTime = (thread: NavigationThreadSummary) =>
-      (groupQuery?.kind === "lens" && groupQuery.lens === "recents" ? thread.createdAt : thread.updatedAt) ?? 0;
+      (groupQuery.kind === "lens" && groupQuery.lens === "recents" ? thread.createdAt : thread.updatedAt) ?? 0;
     for (const thread of rootThreads(pinnedEntries)) {
       if (isPinnedThread(thread) || listedKeys.has(threadSummaryIdentityKey(thread))) continue;
       const before = topLevelThreads.findIndex((listed) => sortTime(listed) < sortTime(thread));
@@ -594,8 +598,19 @@ export function RecentsList(props: RecentsListProps) {
     );
   };
 
-  const pinnedResource = props.pinnedResourceId
-    ? props.pagedNavigation?.resources.get(props.pinnedResourceId) : undefined;
+  // A failed group page raises the thread-list toast like any other page.
+  // Its recovery control must still show with no pin loaded: the list below
+  // never carries a pin, so without it every pin would stay hidden.
+  const pinnedFooter = pinnedResource && (pinnedResource.state.rebaselineRequired
+    || pinnedResource.state.page?.nextCursor) ? (
+    <div role="listitem">
+      {pinnedResource.state.rebaselineRequired ? (
+        <SidebarShowMore label="Reload pinned threads" onClick={() => void props.pagedNavigation?.restart(pinnedResource.id)} />
+      ) : pinnedResource.state.page?.nextCursor ? (
+        <SidebarShowMore busy={pinnedResource.loading} label="Load more pinned threads" onClick={() => void props.pagedNavigation?.loadMore(pinnedResource.id)} />
+      ) : null}
+    </div>
+  ) : null;
   const pinnedGroup = pinnedRoots.length > 0 ? (
     <PinnedGroup
       collapsed={pinnedGroupCollapsed}
@@ -621,32 +636,18 @@ export function RecentsList(props: RecentsListProps) {
         return (
           <Fragment key={threadSummaryIdentityKey(thread)}>
             {keepAtTopSeam ? (
-              <div className="directory-row__pin-drop-boundary" role="listitem">
-                <div
-                  aria-label="Keep thread at top of pinned threads"
-                  aria-hidden="true"
-                  className="directory-row__keep-top-slot"
-                  role="separator"
-                >
-                  <PinIcon size={12} />
-                  Keep at top
-                </div>
-              </div>
+              <KeepAtTopSlot label="Keep thread at top of pinned threads" />
             ) : null}
             {renderThreadGroup(thread, true)}
           </Fragment>
         );
       })}
-      {pinnedResource && (pinnedResource.state.rebaselineRequired || pinnedResource.state.page?.nextCursor) ? (
-        <div role="listitem">
-          {pinnedResource.state.rebaselineRequired ? (
-            <SidebarShowMore label="Reload pinned threads" onClick={() => void props.pagedNavigation?.restart(pinnedResource.id)} />
-          ) : pinnedResource.state.page?.nextCursor ? (
-            <SidebarShowMore busy={pinnedResource.loading} label="Load more pinned threads" onClick={() => void props.pagedNavigation?.loadMore(pinnedResource.id)} />
-          ) : null}
-        </div>
-      ) : null}
+      {pinnedFooter}
     </PinnedGroup>
+  ) : pinnedFooter && groupActive ? (
+    <div className="sidebar-list sidebar-list--compact" role="list" aria-label="Pinned threads">
+      {pinnedFooter}
+    </div>
   ) : null;
 
   // After the lens's rows rather than above them: no queue row moves when the

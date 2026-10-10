@@ -602,6 +602,8 @@ function selectQueryThreads(params: {
   threadsByIdentity: Map<string, NavigationThreadSummary>;
   threadsByLegacyKey: Map<string, NavigationThreadSummary>;
   parentCandidates: ReadonlyMap<string, readonly NavigationThreadSummary[]>;
+  /** A split lens's root resolver, shared with the page's collection size. */
+  lensRootOf?: (thread: NavigationThreadSummary) => NavigationThreadSummary;
 }): NavigationThreadSummary[] {
   const ordinaryThreads = params.index.threads.filter(isOrdinaryThread);
   const query = params.query;
@@ -638,7 +640,7 @@ function selectQueryThreads(params: {
   }
   if (query.kind === "lens") {
     const filter = query.filter?.trim().toLowerCase();
-    const rootOf = query.roots ? lensRootResolver(params) : undefined;
+    const rootOf = params.lensRootOf;
     const threads = ordinaryThreads
       .filter((thread) => {
         if (query.lens === "attention") {
@@ -865,12 +867,15 @@ export function projectNavigationQuery(params: {
       viewerChildCountByParent.set(key, (viewerChildCountByParent.get(key) ?? 0) + 1);
     }
   }
+  const lensRootOf = query.kind === "lens" && query.roots
+    ? lensRootResolver({ threadsByIdentity, parentCandidates }) : undefined;
   const selectedThreads = selectQueryThreads({
     query,
     index: params.index,
     threadsByIdentity,
     threadsByLegacyKey,
     parentCandidates,
+    lensRootOf,
   });
   if (((query.kind === "lens" && query.lens === "attention")
     || (query.kind === "star-map" && query.filters.attention === "include")) && params.attentionOrder) {
@@ -959,8 +964,6 @@ export function projectNavigationQuery(params: {
       || (query.kind === "lens" && query.roots !== undefined)
       ? selectedThreads
       : params.index.threads;
-  const lensRootOf = query.kind === "lens" && query.roots
-    ? lensRootResolver({ threadsByIdentity, parentCandidates }) : undefined;
   return {
     coverage: params.index.coverage ?? { state: "complete" },
     counts: countsForThreads(countsThreads),
