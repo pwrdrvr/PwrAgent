@@ -110,7 +110,9 @@ export function buildPwrAgentThreadToolDefinitions(
   options: { namespace?: string } = {},
 ): AgentToolDefinition<PwrAgentThreadInspectionOperationName>[] {
   const operations = PWRAGENT_THREAD_INSPECTION_OPERATION_NAMES
-    .filter((operation) => options.namespace !== PWRAGENT_THREAD_TOOL_NAMESPACE || operation !== "rename_current_thread");
+    .filter((operation) => options.namespace !== PWRAGENT_THREAD_TOOL_NAMESPACE || operation !== "rename_current_thread")
+    .filter((operation) =>
+      operation !== "manage_thread_dependencies" || !options.namespace || options.namespace === PWRAGENT_TOOL_NAMESPACE);
   return operations.map((operation) => ({
     namespace: options.namespace ?? PWRAGENT_TOOL_NAMESPACE,
     name: operation,
@@ -155,6 +157,8 @@ function descriptionForOperation(
       return "Create a durable, one-time watch for an attached pull request at the current head. The watch wakes the thread after CI success, early failure, or a merge conflict. Only a primary-workspace PR is eligible. The oldest duplicate watch receives the result. A terminal snapshot returns currentOutcome without a new watch. Omit backend and threadId for the current thread. Omit url only when one eligible PR exists. After creation, end the turn. Do not poll CI or create a monitor. Auto-fix PR handles failure wake-ups without a duplicate turn.";
     case "rename_current_thread":
       return "Rename the PwrAgent thread running this turn, including an ordinary coding thread. Use when the user asks to rename this thread. Choose a concise title from the conversation when no title is supplied. The calling thread is resolved automatically. The rename applies immediately and appears in the notification rail. No additional approval is required. Do not overwrite a user-set title without a request. This does not rename an attached messaging topic or conversation. Use rename_current_messaging_conversation for that.";
+    case "manage_thread_dependencies":
+      return "Manage durable prerequisites that resume this thread after another local thread reaches a turn or PR milestone. Conditions include successful turn completion, reviewable PR attachment, passing CI, and PR merge. Use dependencies instead of polling read_thread, gh, or a Job Monitor for prerequisites. Supports all/any conditions and rejects cycles. Create requires continuation: the concrete instructions the resumed turn will follow, since this conversation may be compacted by then. Omit backend/threadId for the calling thread. For turn_completed, omit turnId to pin the current or latest turn. For PR conditions, omit prUrl only for an unambiguous primary-workspace PR, which may be attached later. Omit headSha to follow the current head. CI must be fresh and complete. onFailure defaults to notify once. The wait option tolerates CI repairs. After creation, end this turn if no unrelated work remains. Do not poll the dependency. List returns failures and uncertain delivery for operator review. Cancel cannot undo an admitted continuation. Use dismiss only after the operator has inspected an uncertain admission. It retires the claim without cancelling any turn. Dependencies currently stay within this PwrAgent instance/profile.";
     case "mutate_thread":
       return "Change guarded settings on a PwrAgent thread: its title, model, execution mode, project, pin, read state, lock, or archived state. Use rename_current_thread when the user asks to rename this thread. To mark a whole project read, use mark_project_read once instead of looping through threads. Pass instanceId for a known remote thread. Otherwise, PwrAgent resolves the owner. This tool does not rename a messaging topic or thread. For projectPath, use a path from list_instance_projects on the thread's own instance. Confirm an archive with the user first. archive false restores it. Lock a thread whose worktree you hand to another agent, with a lockNote saying why. A locked thread refuses every new turn until it is unlocked.";
     case "mark_project_read":
@@ -177,6 +181,35 @@ function inputSchemaForOperation(
             minLength: 1,
             maxLength: 200,
             description: "New title for the current PwrAgent thread.",
+          },
+        },
+      };
+    case "manage_thread_dependencies":
+      return {
+        type: "object", additionalProperties: false, required: ["action"],
+        properties: {
+          action: { type: "string", enum: ["create", "list", "cancel", "dismiss"] },
+          backend: { type: "string" },
+          threadId: { type: "string", description: "Waiting thread. Defaults to the caller." },
+          dependencyId: { type: "string", description: "Required for cancel or dismiss." },
+          mode: { type: "string", enum: ["all", "any"] },
+          onFailure: { type: "string", enum: ["notify", "wait"] },
+          continuation: {
+            type: "string", maxLength: 8000,
+            description: "Required for create. What this thread must do once the prerequisites are met, written for a reader who has lost this conversation. Name the PR, branch, and concrete steps, e.g. \"When #2999 merges, retarget this PR to main and replay our commits onto fetched main so they don't duplicate #2999's.\"",
+          },
+          conditions: {
+            type: "array", minItems: 1, maxItems: 16,
+            description: "Required for create. May target a thread before its PR exists.",
+            items: {
+              type: "object", additionalProperties: false, required: ["backend", "threadId", "when"],
+              properties: {
+                backend: { type: "string" }, threadId: { type: "string" },
+                when: { type: "string", enum: ["turn_completed", "pr_attached", "ci_passed", "pr_merged"] },
+                turnId: { type: "string" }, prUrl: { type: "string" }, headSha: { type: "string" },
+                title: { type: "string", maxLength: 200, description: "Optional display title. PwrAgent fills it from the thread when omitted." },
+              },
+            },
           },
         },
       };

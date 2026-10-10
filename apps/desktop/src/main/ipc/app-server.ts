@@ -1,4 +1,7 @@
 import { publishedPrCommitShas } from "../../shared/pull-request-publication";
+import { THREAD_DEPENDENCIES_CHANNEL, type ManageThreadDependenciesRequest, type ManageThreadDependenciesResponse, type ThreadDependencyCondition, type AppServerThreadTurnMetadata, type AppServerNotification } from "@pwragent/shared";
+import { ThreadDependencyStore } from "../state/thread-dependency-store";
+import { ThreadDependencyCoordinator, validateDependencyCreate, type DependencyThreadSnapshot } from "../app-server/thread-dependency-coordinator";
 import { USAGE_ACTIVITY_ANALYZE_CHANNEL } from "../../shared/ipc";
 import { archiveCandidateProtectionReason } from "../app-server/thread-archive-sweeper";
 import { USAGE_ACTIVITY_READ_CHANNEL } from "../../shared/ipc";
@@ -258,7 +261,7 @@ import {
   DIRECTORY_GIT_STATUS_FORCE_COALESCE_WINDOW_MS,
   isFreshDirectoryGitStatusCacheEntry,
 } from "../app-server/directory-git-status-refresh-policy";
-import { getAppStateDb } from "../state/app-state";
+import { getAppStateDb, getAppStateMode } from "../state/app-state";
 import {
   listModelSettingsRecents,
   recordModelSettingsRecent,
@@ -1429,6 +1432,7 @@ class DesktopAppServerService {
   private prAutoDispatchBudgetPausedAt: number | undefined;
   private prAutoDispatchCoordinator: PrAutoDispatchCoordinator | undefined;
   private prStatusWatchCoordinator: PrStatusWatchCoordinator | undefined;
+  private threadDependencyCoordinator: ThreadDependencyCoordinator | undefined;
   private ownerNavigationActive = false;
   private ownerNavigationMetadataVersion = 0;
   private ownerNavigationMetadataRead: Promise<void> | undefined;
@@ -6382,6 +6386,12 @@ class DesktopAppServerService {
     const canonical = this.canonicalizePrs(merged);
     this.recordPrCheck(canonical, "background poll");
     await this.handlePrAutoDispatchSnapshots(canonical, fetchedAt);
+    // An unchanged accepted poll refreshes CI freshness without publishing a
+    // field-change event. Dependencies still need that observation for admission.
+    const freshPrUrls = canonical
+      .filter((pr) => this.prStatusRegistry.get(getPrStatusKey(pr))?.fetchedAt === fetchedAt)
+      .map((pr) => pr.url);
+    if (freshPrUrls.length > 0) await this.threadDependencyCoordinator?.handlePrEvent(freshPrUrls);
     if (changed.length === 0) {
       return [];
     }
@@ -8070,6 +8080,139 @@ class DesktopAppServerService {
     return this.prStatusWatchCoordinator;
   }
 
+  private getThreadDependencyCoordinator(): ThreadDependencyCoordinator {
+    if (!this.threadDependencyCoordinator) {
+      const store = new ThreadDependencyStore(getAppStateDb().raw);
+      this.threadDependencyCoordinator = new ThreadDependencyCoordinator({
+        store,
+        hasDeliveryReceipt: (dependency) => store.hasDeliveryReceipt(dependency),
+        readThread: (condition) => this.readDependencyThread(condition),
+        submit: (request) => getDesktopBackendRegistry().submitTurnIfIdle(request),
+        isConsumerBusy: (dependency) => Boolean(getDesktopBackendRegistry().getActiveTurnForThread(dependency)),
+        canDispatch: (dependency) => this.ownerNavigationActive
+          && (dependency.conditions.every((condition) => condition.when === "turn_completed") || this.backgroundPrPollingEnabled),
+        changed: async (dependency) => {
+          // Prerequisite threads list their dependents, so they refresh too.
+          const targets = new Map<string, { backend: AppServerBackendKind; threadId: string }>();
+          for (const target of [dependency, ...dependency.conditions]) {
+            targets.set(JSON.stringify([target.backend, target.threadId]), { backend: target.backend, threadId: target.threadId });
+          }
+          for (const target of targets.values()) {
+            await getDesktopBackendRegistry().publishLocalEvent({
+              backend: target.backend,
+              notification: { method: "thread/dependencies/updated", params: { threadId: target.threadId, dependencyId: dependency.id } },
+            });
+          }
+        },
+      });
+    }
+    return this.threadDependencyCoordinator;
+  }
+
+  private async readDependencyThread(condition: Pick<ThreadDependencyCondition, "backend" | "threadId"> & Partial<ThreadDependencyCondition>): Promise<DependencyThreadSnapshot> {
+    const registry = getDesktopBackendRegistry();
+    const turns = new Map<string, AppServerThreadTurnMetadata>();
+    // Use the provider protocol for validation and turn catch-up. PR event
+    // evaluation reads only PwrAgent's attachment/status stores.
+    if (!condition.when || condition.when === "turn_completed") {
+      let before: string | undefined;
+      for (let page = 0; page < 50; page++) {
+        const response = await registry.readThread({
+          backend: condition.backend, threadId: condition.threadId,
+          includeTurns: true, limit: 100, viewOnly: true, ...(before ? { before } : {}),
+        });
+        for (const entry of response.replay.entries) {
+          if (entry.turn) turns.set(entry.turn.id, entry.turn);
+        }
+        const pagination = response.replay.pagination;
+        if (!condition.turnId || turns.has(condition.turnId) || !pagination.hasPreviousPage
+          || !pagination.previousCursor || pagination.previousCursor === before) break;
+        before = pagination.previousCursor;
+      }
+    }
+    const overlay = await this.getOverlayStore().getThreadOverlayState(condition);
+    const prs = this.primaryAttachedPrsForThread({
+      ...condition, prs: await this.canonicalizeStoredPullRequests(overlay?.prs ?? []),
+    });
+    return {
+      activeTurnId: registry.getActiveTurnForThread(condition)?.turnId,
+      turns: [...turns.values()],
+      prs: prs.map((pr) => {
+        const current = this.prStatusRegistry.get(getPrStatusKey(pr));
+        return { pr: current?.pr ?? pr, fetchedAt: current?.fetchedAt ?? 0 };
+      }),
+    };
+  }
+
+  async manageThreadDependencies(request: ManageThreadDependenciesRequest): Promise<ManageThreadDependenciesResponse> {
+    if (!request || typeof request.backend !== "string" || !isAppServerBackendKind(request.backend) || typeof request.threadId !== "string" || !request.threadId.trim()) {
+      throw new Error("A local backend and waiting threadId are required.");
+    }
+    if (Object.keys(request).some((key) => !["action", "backend", "threadId", "conditions", "mode", "onFailure", "continuation", "dependencyId"].includes(key))) throw new Error("Unknown dependency request field.");
+    if (request.action === "create") {
+      validateDependencyCreate(request);
+      if (request.conditions?.some((condition) => !isAppServerBackendKind(condition?.backend))) throw new Error("Prerequisites must use known local backends.");
+      // Validate PR-only prerequisites through the protocol before
+      // registration; the coordinator already reads turn prerequisites.
+      for (const condition of request.conditions ?? []) {
+        if (condition.when !== "turn_completed") await this.readDependencyThread({ backend: condition.backend, threadId: condition.threadId });
+      }
+      if (request.conditions?.some((condition) => condition.when !== "turn_completed") && !this.backgroundPrPollingEnabled) {
+        throw new Error("Enable background PR polling before waiting for a PR prerequisite.");
+      }
+    }
+    return await this.getThreadDependencyCoordinator().manage({ ...request, backend: request.backend, threadId: request.threadId.trim() });
+  }
+
+  async reconcileThreadDependencies(): Promise<void> {
+    if (!getAppStateMode()) return;
+    await this.getThreadDependencyCoordinator().reconcile();
+  }
+
+  handleAgentEventForDependencies(event: AgentEvent): void {
+    if (!getAppStateMode()) return;
+    if (event.federationTarget && isRemoteFederationTarget(event.federationTarget)) return;
+    const notification = event.notification as AppServerNotification;
+    let task: Promise<void> | undefined;
+    if (notification.method === "turn/completed" || notification.method === "turn/failed" || notification.method === "turn/cancelled") {
+      // Codex also completes interrupted turns through this method. Missing
+      // terminal metadata must reconcile through provider history, not imply success.
+      const turn = notification.params.turn;
+      const observedStatus = turn && typeof turn === "object" && "status" in turn ? turn.status : undefined;
+      const status = typeof observedStatus === "string" && ["completed", "failed", "cancelled", "interrupted"].includes(observedStatus)
+        ? observedStatus as AppServerThreadTurnMetadata["status"]
+        : notification.method === "turn/failed" ? "failed" : notification.method === "turn/cancelled" ? "cancelled" : undefined;
+      const turnId = notification.params.turnId;
+      task = this.getThreadDependencyCoordinator().handleThreadEvent(
+        { backend: event.backend, threadId: notification.params.threadId },
+        status && turnId ? { id: turnId, status } : undefined,
+        true,
+      );
+    } else if (notification.method === "thread/pullRequests/updated") {
+      task = this.getThreadDependencyCoordinator().handleThreadEvent({ backend: event.backend, threadId: notification.params.threadId });
+    } else if (notification.method === "thread/status/changed") {
+      const status = notification.params.status;
+      if (status && typeof status === "object" && "type" in status && status.type === "idle") {
+        task = this.getThreadDependencyCoordinator().handleThreadEvent({ backend: event.backend, threadId: notification.params.threadId }, undefined, true);
+      }
+    } else if (notification.method === "thread/turnQueue/updated" && typeof notification.params.status === "string"
+      && ["cancelled", "terminal"].includes(notification.params.status)) {
+      task = this.getThreadDependencyCoordinator().handleThreadEvent({ backend: event.backend, threadId: notification.params.threadId }, undefined, true);
+    } else if (notification.method === "pullRequest/status/updated") {
+      const pr = notification.params.pr;
+      if (pr && typeof pr === "object" && "url" in pr && typeof pr.url === "string") {
+        task = this.getThreadDependencyCoordinator().handlePrEvent(pr.url);
+      }
+    } else if (notification.method === "thread/lock/updated" && !notification.params.lock) {
+      // A lock reads as busy at admission. Unlocking is the consumer's only
+      // availability signal when it stays idle.
+      task = this.getThreadDependencyCoordinator().handleThreadEvent({ backend: event.backend, threadId: notification.params.threadId }, undefined, true);
+    } else if (notification.method === "navigation/providerThreads/refreshed") {
+      task = this.getThreadDependencyCoordinator().reconcile();
+    }
+    void task?.catch((error) => appServerLog.warn("thread dependency evaluation failed", { error: String(error) }));
+  }
+
   private getFocusedDiffService(): FocusedDiffService {
     if (this.focusedDiffService) {
       return this.focusedDiffService;
@@ -8269,6 +8412,7 @@ export const appServerService = new DesktopAppServerService();
 
 export async function startAppServerOwnerNavigation(): Promise<void> {
   await appServerService.startOwnerNavigation();
+  await appServerService.reconcileThreadDependencies();
 }
 const navigationAttentionViewLeases = new NavigationAttentionViewLeases((request) => appServerService.releaseNavigationAttentionView(request));
 
@@ -8317,6 +8461,7 @@ export function registerAppServerIpcHandlers(): void {
     invalidateNavigationEvent(event);
     appServerService.handleAgentEventForWorkingState(event);
     appServerService.handleAgentEventForPrAttachments(event);
+    appServerService.handleAgentEventForDependencies(event);
   });
   getDesktopBackendRegistry().setThreadPullRequestStatusToolHandler(
     async (args, context) =>
@@ -8332,6 +8477,18 @@ export function registerAppServerIpcHandlers(): void {
   getDesktopBackendRegistry().setLocalPullRequestAuthorityResolver((prKey) =>
     appServerService.isPullRequestLocallyMonitored(prKey)
   );
+  getDesktopBackendRegistry().setThreadDependencyToolHandler(async (request) => {
+    try {
+      return { ok: true, data: { threadDependencies: await appServerService.manageThreadDependencies(request) } };
+    } catch (error) {
+      return { ok: false, error: { code: "invalid_arguments", message: error instanceof Error ? error.message : String(error) } };
+    }
+  });
+  ipcMain.removeHandler(THREAD_DEPENDENCIES_CHANNEL);
+  ipcMain.handle(THREAD_DEPENDENCIES_CHANNEL, async (event, request: ManageThreadDependenciesRequest) => {
+    if (isFederationWindowWebContents(event.sender)) throw new Error("Thread dependencies currently require a local window.");
+    return await appServerService.manageThreadDependencies(request);
+  });
   getDesktopBackendRegistry().setThreadPullRequestWatchToolHandler(
     async (args) => await appServerService.watchThreadPullRequestForTool(args),
   );
@@ -9486,6 +9643,7 @@ export function registerAppServerIpcHandlers(): void {
 }
 
 export async function disposeAppServerIpcHandlers(): Promise<void> {
+  ipcMain.removeHandler(THREAD_DEPENDENCIES_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_ATTENTION_VIEW_RELEASE_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_MARK_DIRECTORY_SEEN_CHANNEL);
   await navigationAttentionViewLeases.dispose();
@@ -9564,6 +9722,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(APP_SERVER_GET_THREAD_ARCHIVE_SWEEP_STATUS_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_RUN_THREAD_ARCHIVE_SWEEP_CHANNEL);
   const registry = getExistingDesktopBackendRegistry();
+  registry?.setThreadDependencyToolHandler(undefined);
   registry?.setThreadPullRequestStatusToolHandler(undefined);
   registry?.setThreadPullRequestCanonicalizer(undefined);
   registry?.setThreadPrimaryGitRepositoryReader(undefined);

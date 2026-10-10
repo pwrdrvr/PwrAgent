@@ -43,6 +43,7 @@ export * from "./contracts/thread-link";
 export * from "./contracts/thread-tools";
 export * from "./contracts/thread-todos";
 export * from "./contracts/operator-requests";
+export * from "./contracts/thread-dependencies";
 export * from "./contracts/thread-search";
 export * from "./messaging-contact-labels";
 export * from "./messaging-id-validation";

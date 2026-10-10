@@ -11,7 +11,7 @@ Search when the user wants to:
 - Create or attach a worktree, link another project/repository directory, detach a directory, or move this thread into another project folder or existing checkout.
 - Run work on another machine or instance through Federation; discover connected machines, their load and projects; find remote threads or create work there.
 - Work with messaging in Telegram, Discord, Slack, LINE, Lark/Feishu, or Mattermost: inspect the current conversation, attach a thread or native child topic, rename a conversation, send a requested file or private response, or inspect/render PDF attachments. Search does not authorize sending messages.
-- Attach, check, or watch a pull request/merge request and CI; request a code review.
+- Attach, check, or watch a pull request/merge request and CI; wait for another thread's turn or PR prerequisite with durable dependencies; request a code review.
 - Inspect automations, schedules, runs, alerts, artifacts, or failures; inspect PwrAgent version, updates, restart, or shutdown.
 - Manage PwrAgent MCP connections and app access; inspect what connections a thread received.
 - Discover or invoke live tools from this thread's selected MCP connections, including tools added after registration. Use search_mcp_tools and call_mcp_tool.
@@ -25,6 +25,7 @@ In Code Mode: text(await tools.pwragent__tool_search({query: "handoff child thre
 const SEARCH_ALIASES: Record<string, string> = {
   handoff_task: "delegate delegation child subagent split parallel tasks worktree",
   create_monitor_delegation: "job monitor polling long running command parallel tasks collect results",
+  manage_thread_dependencies: "wait waiting prerequisite dependency dependencies dag notify notification continue after turn completion CI PR",
   mutate_thread: "close closing archive restore rename pin lock unlock park freeze model fast priority mode settings",
   rename_current_thread: "rename name title this thread conversation self",
   mark_project_read: "bulk batch clear dismiss unread read project folder directory repository all",

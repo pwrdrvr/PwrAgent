@@ -46964,6 +46964,74 @@ script = "printf setup"
     await registry.close();
   });
 
+  it("routes durable dependencies with the trusted waiting thread defaults", async () => {
+    const codexClient = new MockBackendClient({ initializeResult: { methods: ["thread/list"] } });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const handler = vi.fn(async () => ({ ok: true as const, data: { threadDependencies: { dependencies: [] } } }));
+    registry.setThreadDependencyToolHandler(handler);
+    await registry.publishLocalEvent({ backend: "codex", notification: {
+      method: "turn/started", params: { threadId: "waiting-thread", turnId: "turn-1", turn: { id: "turn-1" } },
+    } });
+    const response = await codexClient.emitRequest({ method: "item/tool/call", params: {
+      threadId: "waiting-thread", turnId: "turn-1", callId: "call-dependency", requestId: "call-dependency",
+      namespace: "pwragent", tool: "manage_thread_dependencies",
+      arguments: { action: "create", continuation: "Rebase onto the helper.", conditions: [{ backend: "codex", threadId: "foundation", when: "ci_passed" }] },
+    } } as AppServerPendingRequestNotification);
+    expect(handler).toHaveBeenCalledExactlyOnceWith({ action: "create", backend: "codex", threadId: "waiting-thread",
+      continuation: "Rebase onto the helper.",
+      conditions: [{ backend: "codex", threadId: "foundation", when: "ci_passed" }],
+    });
+    expect(response).toMatchObject({ success: true });
+    await registry.close();
+  });
+
+  it("requires agents to write down what the resumed turn should do", async () => {
+    const codexClient = new MockBackendClient({ initializeResult: { methods: ["thread/list"] } });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const handler = vi.fn(async () => ({ ok: true as const, data: { threadDependencies: { dependencies: [] } } }));
+    registry.setThreadDependencyToolHandler(handler);
+    await registry.publishLocalEvent({ backend: "codex", notification: {
+      method: "turn/started", params: { threadId: "waiting-thread", turnId: "turn-1", turn: { id: "turn-1" } },
+    } });
+    for (const [index, continuation] of [undefined, "   "].entries()) {
+      const response = await codexClient.emitRequest({ method: "item/tool/call", params: {
+        threadId: "waiting-thread", turnId: "turn-1", callId: `call-dependency-${index}`, requestId: `call-dependency-${index}`,
+        namespace: "pwragent", tool: "manage_thread_dependencies",
+        arguments: { action: "create", ...(continuation === undefined ? {} : { continuation }), conditions: [{ backend: "codex", threadId: "foundation", when: "ci_passed" }] },
+      } } as AppServerPendingRequestNotification);
+      expect(response).toMatchObject({ success: false });
+      expect(JSON.stringify(response)).toContain("Provide continuation");
+    }
+    expect(handler).not.toHaveBeenCalled();
+    await registry.close();
+  });
+
+  it("saves prerequisite titles for agent-registered dependencies that omit them", async () => {
+    const foundation: AppServerThreadSummary = { id: "foundation", title: "Extract retry helper", titleSource: "explicit", source: "codex", updatedAt: 1000, linkedDirectories: [] };
+    const codexClient = new MockBackendClient({ threads: [foundation], initializeResult: { methods: ["thread/list"] } });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const handler = vi.fn(async () => ({ ok: true as const, data: { threadDependencies: { dependencies: [] } } }));
+    registry.setThreadDependencyToolHandler(handler);
+    await registry.publishLocalEvent({ backend: "codex", notification: {
+      method: "turn/started", params: { threadId: "waiting-thread", turnId: "turn-1", turn: { id: "turn-1" } },
+    } });
+    await codexClient.emitRequest({ method: "item/tool/call", params: {
+      threadId: "waiting-thread", turnId: "turn-1", callId: "call-dependency", requestId: "call-dependency",
+      namespace: "pwragent", tool: "manage_thread_dependencies",
+      arguments: { action: "create", continuation: "Adopt the helper.", conditions: [
+        { backend: "codex", threadId: "foundation", when: "ci_passed" },
+        { backend: "codex", threadId: "unknown", when: "pr_merged" },
+        { backend: "codex", threadId: "foundation", when: "turn_completed", title: "Agent's name" },
+      ] },
+    } } as AppServerPendingRequestNotification);
+    expect(handler).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ conditions: [
+      { backend: "codex", threadId: "foundation", when: "ci_passed", title: "Extract retry helper" },
+      { backend: "codex", threadId: "unknown", when: "pr_merged" },
+      { backend: "codex", threadId: "foundation", when: "turn_completed", title: "Agent's name" },
+    ] }));
+    await registry.close();
+  });
+
   it("routes one-shot PR watches with invoking thread defaults", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/list"] },

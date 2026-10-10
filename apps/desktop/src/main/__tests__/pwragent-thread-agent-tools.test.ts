@@ -25,6 +25,19 @@ describe("PwrAgent thread agent tools", () => {
       .buildMcpTools().some((tool) => tool.name === "rename_current_thread")).toBe(false);
   });
 
+  it("exposes durable dependencies through the unified dynamic and MCP contracts only", async () => {
+    const handler = vi.fn(async () => ({ ok: true as const, data: { threadDependencies: { dependencies: [] } } }));
+    const router = buildPwrAgentThreadToolRouter(handler);
+    const namespace = router.buildDynamicToolSpecs()[0];
+    if (namespace.type !== "namespace") throw new Error("Expected namespace");
+    const dynamic = namespace.tools.find((tool) => tool.name === "manage_thread_dependencies");
+    const mcp = router.buildMcpTools().find((tool) => tool.name === "manage_thread_dependencies");
+    expect(mcp?.inputSchema).toEqual(dynamic?.inputSchema);
+    const args = { action: "create", conditions: [{ backend: "codex", threadId: "foundation", when: "ci_passed" }] };
+    await router.handleMcpToolCall({ backend: "codex", threadId: "waiting", tool: "manage_thread_dependencies", args });
+    expect(handler).toHaveBeenCalledExactlyOnceWith({ operation: "manage_thread_dependencies", context: { backend: "codex", threadId: "waiting" }, args });
+    expect(buildPwrAgentThreadToolRouter(handler, { namespace: "pwragent_threads" }).buildMcpTools().some((tool) => tool.name === "manage_thread_dependencies")).toBe(false);
+  });
   it("advertises the same project mark-read contract through dynamic tools and MCP", async () => {
     const projectRead = { projectKey: "directory:/repo", instanceId: "local", isLocal: true, changedCount: 140 };
     const handler = vi.fn(async () => ({ ok: true as const, data: { projectRead } }));

@@ -903,6 +903,8 @@
     "rowsChanged": 5,
     "statements": 5
   },
+  "thread-dependencies-unchanged-events": {"commits": 0, "note": "100 unchanged PR polls plus 100 thread events with a busy consumer: zero commits and 0 MB/day idle.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "thread-dependency-lifecycle": {"commits": 5, "note": "One dependency registration and one successful continuation; no per-poll or per-turn writes when evidence is unchanged.", "observedWalBytes": 49440, "rowsChanged": 5, "statements": 5},
   "thread-lock-toggle": {
     "commits": 2,
     "note": "An operator or agent lock and unlock: one commit each, never on a timer or per turn; a redundant unlock writes nothing. 50 toggles/day at ~4 KiB/commit is ~0.4 MB/day",
@@ -1068,5 +1070,6 @@
     "observedWalBytes": 4120,
     "rowsChanged": 2,
     "statements": 2
-  }
+  },
+  "thread-dependencies-unchanged-service-polls": {"commits": 0, "note": "100 accepted unchanged passing service polls with a busy consumer: zero commits and 0 MB/day idle.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0}
 }

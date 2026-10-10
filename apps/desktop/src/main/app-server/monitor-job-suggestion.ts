@@ -65,7 +65,8 @@ export const MONITOR_JOB_SUGGESTION =
   + "Give the monitor the target, check interval, completion conditions, and problems to watch for. "
   + "It will stop and report back when the task finishes or a specified problem occurs. "
   + "For an attached PR, first check PwrAgent's PR automation guidance and use watch_thread_pull_request when applicable. "
-  + "After the monitor or PR watch starts, end this turn if no unrelated work remains. "
+  + "For another thread's turn completion or PR prerequisite, use manage_thread_dependencies instead of polling or creating a monitor; it can wait before the PR exists. "
+  + "After the monitor, PR watch, or dependency starts, end this turn if no unrelated work remains. "
   + "A monitor cannot inherit a parent-local session or cell ID; give it durable process, log, or status identifiers. "
   + "This is an automatic reminder, sent at most once this turn.";
 
