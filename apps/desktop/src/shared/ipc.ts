@@ -858,6 +858,9 @@ export const NAVIGATION_ATTENTION_VIEW_RELEASE_CHANNEL = "navigation:release-att
 
 export const USAGE_ACTIVITY_READ_CHANNEL = "usage-activity:readUsageActivity";
 
+/** Stored pricing totals for a thread and every sub-thread under it. */
+export const THREAD_FAMILY_PRICING_READ_CHANNEL = "pricing:readThreadFamilyPricing";
+
 export const USAGE_ACTIVITY_ANALYZE_CHANNEL = "usage-activity:analyzeUsageActivity";
 /** Spawn or focus the dedicated Usage Activity window. */
 export const USAGE_ACTIVITY_OPEN_WINDOW_CHANNEL = "usage-activity:openWindow";

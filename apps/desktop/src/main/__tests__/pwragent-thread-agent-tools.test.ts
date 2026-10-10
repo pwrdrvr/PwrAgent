@@ -3,6 +3,28 @@ import { describe, expect, it, vi } from "vitest";
 import { buildPwrAgentThreadToolRouter } from "../agent-tools/pwragent-thread-agent-tools";
 
 describe("PwrAgent thread agent tools", () => {
+  it("advertises a title-only self-rename contract in the unified namespace and MCP", async () => {
+    const handler = vi.fn(async () => ({ ok: true as const, data: { mutation: {
+      backend: "codex" as const, threadId: "ordinary-thread", dryRun: false, changes: [],
+    } } }));
+    const router = buildPwrAgentThreadToolRouter(handler);
+    const namespace = router.buildDynamicToolSpecs()[0];
+    if (!namespace || namespace.type !== "namespace") throw new Error("Expected a namespace");
+    const dynamic = namespace.tools.find((tool) => tool.name === "rename_current_thread");
+    const mcp = router.buildMcpTools().find((tool) => tool.name === "rename_current_thread");
+    expect(mcp?.inputSchema).toEqual(dynamic?.inputSchema);
+    expect(mcp?.inputSchema).toEqual({
+      type: "object", additionalProperties: false, required: ["title"],
+      properties: { title: { type: "string", minLength: 1, maxLength: 200, description: expect.any(String) } },
+    });
+    await router.handleMcpToolCall({ backend: "codex", threadId: "ordinary-thread",
+      tool: "rename_current_thread", args: { title: "Investigate rename feedback" } });
+    expect(handler).toHaveBeenCalledExactlyOnceWith({ operation: "rename_current_thread",
+      context: { backend: "codex", threadId: "ordinary-thread" }, args: { title: "Investigate rename feedback" } });
+    expect(buildPwrAgentThreadToolRouter(handler, { namespace: "pwragent_threads" })
+      .buildMcpTools().some((tool) => tool.name === "rename_current_thread")).toBe(false);
+  });
+
   it("advertises the same project mark-read contract through dynamic tools and MCP", async () => {
     const projectRead = { projectKey: "directory:/repo", instanceId: "local", isLocal: true, changedCount: 140 };
     const handler = vi.fn(async () => ({ ok: true as const, data: { projectRead } }));

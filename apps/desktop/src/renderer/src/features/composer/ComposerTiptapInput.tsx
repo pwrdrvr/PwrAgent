@@ -3451,14 +3451,20 @@ export const ComposerTiptapInput = forwardRef<
       if (propsRef.current.readOnly) return;
       editor?.commands.deleteSelection();
     },
-    focus: () => {
+    focus: (options) => {
       if (
         editor &&
         getContentSignature(readTiptapContent(editor, readMode)) !== propsSignature
       ) {
         pendingExternalSignatureRef.current = propsSignature;
       }
-      editor?.commands.focus();
+      if (options?.synchronous) {
+        // A committed-editor handoff must check ownership and apply focus in
+        // one turn. Tiptap's command queues focus for the next animation frame.
+        editor?.view.focus();
+      } else {
+        editor?.commands.focus();
+      }
     },
     insertMentionToken: (token) => {
       if (!editor || propsRef.current.readOnly) {

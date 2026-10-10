@@ -120,6 +120,7 @@ import type {
   ThreadItemsListResponse as CodexThreadItemsListResponse,
   ThreadListParams as CodexThreadListParams,
   ThreadReadParams as CodexThreadReadParams,
+  ThreadReadResponse as CodexThreadReadResponse,
   ThreadResumeParams as CodexThreadResumeParams,
   ThreadSettingsUpdateParams as CodexThreadSettingsUpdateParams,
   ThreadStartParams as CodexThreadStartParams,
@@ -6369,6 +6370,13 @@ function buildThreadDiscoveryPayloads(
 
 const CODEX_NATIVE_SUBAGENT_DISCOVERY_LIMIT = 100;
 
+// Worktree safety inventories include every checkout user, including threads
+// excluded from navigation and older app-server/exec-created conversations.
+const CODEX_WORKTREE_SAFETY_SOURCE_KINDS: NonNullable<CodexThreadListParams["sourceKinds"]> = [
+  "cli", "vscode", "exec", "appServer", "subAgent", "subAgentReview",
+  "subAgentCompact", "subAgentThreadSpawn", "subAgentOther", "unknown",
+];
+
 function threadTitleSourcePriority(
   titleSource: AppServerThreadTitleSource
 ): number {
@@ -9196,12 +9204,17 @@ export class CodexAppServerClient {
       client: this.connection,
       diagnostics: { callerReason: "archive-cleanup" },
       methods: ["thread/list"] as CodexClientRequestMethod[],
-      payloads: buildThreadDiscoveryPayloads(undefined, params.archived, params.cursor, params.limit),
+      // A compatibility fallback that drops source/archived/page filters is
+      // an incomplete safety inventory, even if the provider accepts it.
+      payloads: [{
+        archived: params.archived, cursor: params.cursor, limit: params.limit,
+        sortKey: "updated_at", sourceKinds: CODEX_WORKTREE_SAFETY_SOURCE_KINDS, useStateDbOnly: true,
+      } satisfies CodexThreadListParams],
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     });
     const page = extractThreadListPage(result, this.threadListTextCache);
     if (page.threads.length > params.limit) throw new Error("Archive discovery exceeded the requested provider page budget.");
-    const threads = await this.enrichRawThreadDirectories(filterVisibleCodexThreads(page.threads), "thread-list", {
+    const threads = await this.enrichRawThreadDirectories(page.threads, "thread-list", {
       checkpoint: params.checkpoint,
       strict: true,
       concurrency: 1,
@@ -9700,6 +9713,18 @@ export class CodexAppServerClient {
     const entry = replay.entries.find((candidate) => candidate.type === "activity" && candidate.id === params.entryId);
     if (!entry || entry.type !== "activity") throw new Error("Activity details are no longer available. Reload the thread.");
     return entry;
+  }
+
+  async readThreadName(threadId: string): Promise<string | undefined> {
+    await this.ensureInitialized();
+    const result = await requestWithThreadMetadataReadRetry(async () =>
+      await this.connection.request("thread/read", { threadId, includeTurns: false },
+        this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS),
+    ) as CodexThreadReadResponse;
+    if (result.thread?.id !== threadId) throw new Error(`Thread metadata was not found: ${threadId}`);
+    // Undo needs the persisted name, before display-title normalization or
+    // preview fallback changes the value shown in thread summaries.
+    return typeof result.thread.name === "string" ? result.thread.name : undefined;
   }
 
   async readThreadSummary(threadId: string): Promise<AppServerThreadSummary> {

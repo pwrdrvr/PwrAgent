@@ -35,6 +35,10 @@ afterEach(() => {
 });
 
 async function setup() {
+  let resolveThreadViewImported!: () => void;
+  const threadViewImported = new Promise<void>((resolve) => {
+    resolveThreadViewImported = resolve;
+  });
   const thread: NavigationThreadSummary = {
     id: "thread-a",
     source: "codex",
@@ -76,6 +80,9 @@ async function setup() {
         directories: [],
       }),
       listBackends: async () => ({ fetchedAt: 1, backends: [] }),
+      recordStartupProfileEvent: (name) => {
+        if (name === "thread-view-import:end") resolveThreadViewImported();
+      },
       markThreadSeen: async ({ backend, threadId }) => ({ backend, threadId, seenAt: 1 }),
       checkThreadBranchDrift,
       setThreadExecutionMode,
@@ -94,6 +101,19 @@ async function setup() {
     }),
   });
   const view = render(<App />);
+  // App defers the thread view behind two animation frames and an import.
+  // Await that owner's completion before starting the heading query's budget.
+  await act(async () => { await Promise.resolve(); });
+  await act(async () => {
+    await new Promise<void>((resolve) => {
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => {
+          window.setTimeout(resolve, 0);
+        });
+      });
+    });
+  });
+  await act(async () => { await threadViewImported; });
   await screen.findByRole("heading", { name: "Render fixture" });
   await screen.findByTestId("composer-probe");
   await waitFor(() => expect(probe.props?.thread?.id).toBe(thread.id));

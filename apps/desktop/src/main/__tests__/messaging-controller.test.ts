@@ -25572,6 +25572,20 @@ describe("RBAC capability enforcement", () => {
     ).toEqual({ owns: true, allowed: true });
   });
 
+  it.each([true, false])("requires the rename permission for self-renaming (granted: %s)", async (granted) => {
+    const harness = await createHarness({ rbacPolicy: rbacProviderGranting([
+      "message.reply",
+      ...(granted ? ["thread.settings.name" as const] : ["tools.thread_inspection" as const]),
+    ]) });
+    await driveOneTurn(harness, "rename this thread");
+    expect(harness.controller.checkDynamicToolPermission({
+      backend: "codex", threadId: "thread-1", turnId: "turn-1",
+      category: "thread_inspection", tool: "rename_current_thread", arguments: { title: "New title" },
+    })).toEqual(granted
+      ? { owns: true, allowed: true }
+      : { owns: true, allowed: false, permission: "thread.settings.name" });
+  });
+
   it("gates mutate_thread per field, including the full-access double-gate", async () => {
     // Power User + Tools: can change settings, cannot escalate to full access.
     const harness = await createHarness({

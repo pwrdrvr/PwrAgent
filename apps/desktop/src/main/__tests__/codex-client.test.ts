@@ -6547,6 +6547,36 @@ describe("CodexAppServerClient", () => {
     } finally { await client.close(); }
   });
 
+  it("reads the persisted name without normalizing it as a display title", async () => {
+    MockTransport.readThreadResultByThreadId.set("rename-metadata", {
+      thread: { id: "rename-metadata", name: "Please fix the parser", preview: "Please fix the parser" },
+    });
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    try {
+      expect((await client.readThreadSummary("rename-metadata")).title).toBe("Fix the parser");
+      expect(await client.readThreadName("rename-metadata")).toBe("Please fix the parser");
+      const requests = MockTransport.instances.at(-1)!.sentMessages.map((message) => JSON.parse(message) as { method?: string; params?: unknown });
+      const reads = requests.filter((request) => request.method === "thread/read");
+      expect(reads.map((request) => request.params)).toEqual([
+        { threadId: "rename-metadata", includeTurns: false },
+        { threadId: "rename-metadata", includeTurns: false },
+      ]);
+      expect(requests.some((request) => ["thread/turns/list", "thread/items/list", "thread/resume"].includes(request.method ?? ""))).toBe(false);
+    } finally { await client.close(); }
+  });
+
+  it.each([null, undefined])("does not substitute a preview for an unset persisted name: %s", async (name) => {
+    MockTransport.readThreadResultByThreadId.set("unnamed-metadata", {
+      thread: { id: "unnamed-metadata", name, preview: "Please fix the parser" },
+    });
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    try {
+      expect(await client.readThreadName("unnamed-metadata")).toBeUndefined();
+    } finally { await client.close(); }
+  });
+
   it("forwards metadata-only thread/read requests to Codex", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 

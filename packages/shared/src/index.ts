@@ -72,6 +72,7 @@ export * from "./thread-terminal";
 export * from "./thread-titles";
 export * from "./tool-activity-burst";
 export * from "./token-usage-pricing";
+export * from "./thread-family-pricing";
 export * from "./thread-pricing-projection";
 export * from "./worktree-paths";
 

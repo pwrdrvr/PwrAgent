@@ -18,6 +18,7 @@ import type {
   OperatorRequestsChangedEvent,
 } from "@pwragent/shared";
 import type { ReadUsageActivityRequest, ReadUsageActivityResponse, AnalyzeUsageActivityRequest, AnalyzeUsageActivityResponse } from "@pwragent/shared";
+import type { ReadThreadFamilyPricingRequest, ReadThreadFamilyPricingResponse } from "@pwragent/shared";
 import type { PrActivitySnapshot } from "@pwragent/shared";
 import type { HandoffInstanceThreadRequest, HandoffInstanceThreadResult } from "@pwragent/shared";
 import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
@@ -903,6 +904,8 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
     request: AppServerReadThreadRequest
   ) => Promise<AppServerReadThreadResponse>;
   readUsageActivity?: (request: ReadUsageActivityRequest) => Promise<ReadUsageActivityResponse>;
+  /** Stored totals for a local thread and every sub-thread under it. */
+  readThreadFamilyPricing?: (request: ReadThreadFamilyPricingRequest) => Promise<ReadThreadFamilyPricingResponse>;
   analyzeUsageActivity?: (request: AnalyzeUsageActivityRequest) => Promise<AnalyzeUsageActivityResponse>;
   /** Spawns or focuses the dedicated Usage Activity window. */
   openUsageActivity?: () => Promise<void>;

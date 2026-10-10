@@ -5147,8 +5147,14 @@ export function useThreadNavigation(
       authoritativeThread,
       pendingEnvironmentFailures[threadSummaryIdentityKey(authoritativeThread)],
     );
-    const configured = optimisticThread && threadSummaryIdentityKey(detailThread) === threadSummaryIdentityKey(optimisticThread)
+    const hydrated = optimisticThread && threadSummaryIdentityKey(detailThread) === threadSummaryIdentityKey(optimisticThread)
       ? mergeHydratedThreadWithOptimisticState(detailThread, optimisticThread) : detailThread;
+    // The detail read carries no child count; the loaded row does. The Pricing
+    // rail reads it to decide whether a sub-thread total is worth fetching.
+    const row: NavigationPresentedThread | undefined = selectedRow;
+    const configured: NavigationPresentedThread = row?.ordinaryChildCount !== undefined
+      && threadSummaryIdentityKey(row) === threadSummaryIdentityKey(hydrated)
+      ? { ...hydrated, ordinaryChildCount: row.ordinaryChildCount } : hydrated;
     return rendererFederationTarget?.scope !== "remote" && configured.federation?.ref.target.scope === "remote"
       ? { ...configured, pinnedRank: selectedRow?.pinnedRank } : configured;
   }, [selectedDetail.state?.detail?.thread, selectedRow, optimisticThread, pendingEnvironmentFailures, rendererFederationTarget]);
@@ -5649,7 +5655,7 @@ export function useThreadNavigation(
   const createThread = useCallback(
     async (
       backend?: AppServerBackendKind,
-      executionMode: ThreadExecutionMode = "default",
+      executionMode?: ThreadExecutionMode,
       options?: { forceWorkspace?: boolean }
     ): Promise<void> => {
       if (!desktopApi?.ensureDirectoryLaunchpad) {
@@ -5657,7 +5663,7 @@ export function useThreadNavigation(
         return;
       }
 
-      setCreatingThread({ backend: backend ?? "codex", executionMode });
+      setCreatingThread({ backend: backend ?? "codex", executionMode: executionMode ?? "default" });
       setCreateThreadError(undefined);
       setLaunchpadError(undefined);
       setArchiveThreadError(undefined);
@@ -5697,6 +5703,7 @@ export function useThreadNavigation(
         let launchpad = response.launchpad;
         let defaults: NavigationLaunchpadDefaults = response.defaults;
         if (
+          executionMode !== undefined &&
           executionMode !== response.launchpad.executionMode &&
           desktopApi.updateDirectoryLaunchpad
         ) {

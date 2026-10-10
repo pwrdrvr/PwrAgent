@@ -26,6 +26,7 @@ const SEARCH_ALIASES: Record<string, string> = {
   handoff_task: "delegate delegation child subagent split parallel tasks worktree",
   create_monitor_delegation: "job monitor polling long running command parallel tasks collect results",
   mutate_thread: "close closing archive restore rename pin lock unlock park freeze model fast priority mode settings",
+  rename_current_thread: "rename name title this thread conversation self",
   mark_project_read: "bulk batch clear dismiss unread read project folder directory repository all",
   attach_thread_directory: "link repository project folder worktree",
   move_thread_workspace: "move project folder checkout worktree",

@@ -4,6 +4,17 @@ import { handlePwrAgentMessagingDynamicToolCall } from "../agent-tools/pwragent-
 import { handlePwrAgentThreadDynamicToolCall } from "../agent-tools/pwragent-thread-codex-tools";
 
 describe("PwrAgent legacy agent tool namespaces", () => {
+  it("does not add self-renaming to a frozen legacy namespace", async () => {
+    const handler = vi.fn();
+    await expect(handlePwrAgentThreadDynamicToolCall({
+      backend: "codex", handler, call: {
+        threadId: "ordinary-thread", turnId: "turn-1", callId: "call-1",
+        namespace: "pwragent_threads", tool: "rename_current_thread", arguments: { title: "New title" },
+      },
+    })).resolves.toMatchObject({ success: false });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
   it("routes pwragent_threads calls through the unified thread handler", async () => {
     const handler = vi.fn(async () => ({
       ok: true as const,

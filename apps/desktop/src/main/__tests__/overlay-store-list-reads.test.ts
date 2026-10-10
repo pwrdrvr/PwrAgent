@@ -24,6 +24,21 @@ function pending(id: string, status: string, target = db.raw, backend = "codex")
 }
 
 describe("thread listing overlay reads", () => {
+  it("preserves absent optional cleanup fields instead of manufacturing null tombstones", async () => {
+    await store.observeArchivedThreads([{ backend: "codex", threadId: "archived" }], 1000);
+    const identity = { backend: "codex" as const, threadId: "archived" };
+    const projected = (await store.getArchiveCleanupOverlayStates({ backend: "codex", threadIds: ["archived", "missing"] })).archived;
+    expect(projected).toMatchObject({ ...identity, extraLinkedDirectories: [] });
+    for (const field of ["archiveTombstonedAt", "parentThreadId", "parentThreadBackend", "parentThreadInstanceId"] as const) {
+      expect(projected?.[field]).toBeUndefined();
+      expect(Object.hasOwn(projected!, field)).toBe(false);
+    }
+    await store.setThreadArchiveTombstone({ ...identity, archivedAt: 2000 });
+    expect((await store.getArchiveCleanupOverlayStates({ backend: "codex", threadIds: ["archived"] })).archived?.archiveTombstonedAt).toBe(2000);
+    await store.setThreadArchiveTombstone({ ...identity, restoredAt: 3000 });
+    expect((await store.getArchiveCleanupOverlayStates({ backend: "codex", threadIds: ["archived"] })).archived?.archiveTombstonedAt).toBeUndefined();
+  });
+
   it.each([10, 100, 1_000])("batches %i overlays without per-thread SQL or extra parses", async (count) => {
     const ids = Array.from({ length: count }, (_, i) => String(i));
     db.raw.transaction(() => { for (const id of ids) seed(id); })();

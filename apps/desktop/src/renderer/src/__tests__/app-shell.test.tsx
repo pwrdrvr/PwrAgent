@@ -25,6 +25,7 @@ import type {
   FederationPeerSummary,
   FederationTarget,
   NavigationSnapshot,
+  NavigationLaunchpadDraft,
   NavigationSelectedDetailRequest,
   StartTurnRequest,
   StartTurnResponse,
@@ -4362,6 +4363,127 @@ describe("App", () => {
     expect(ensureDirectoryLaunchpad).not.toHaveBeenCalled();
   });
 
+  it.each(["Cmd+N", "Cmd+K", "workspace menu", "relocated workspace menu"] as const)(
+    "preserves launchpad Auto access when opening from %s",
+    async (entryPoint) => {
+      let openNewThreadListener: (() => void) | undefined;
+      let launchpad: NavigationLaunchpadDraft | undefined;
+      const project = {
+        key: "directory:/repos/Example",
+        kind: "directory" as const,
+        label: "Example",
+        path: "/repos/Example",
+        threadKeys: ["codex:existing-thread"],
+        needsAttentionCount: 0,
+      };
+      const thread = {
+        id: "existing-thread",
+        title: "Existing project thread",
+        titleSource: "explicit" as const,
+        source: "codex" as const,
+        executionMode: "full-access" as const,
+        linkedDirectories: [{ id: project.key, kind: "local" as const, label: project.label, path: project.path }],
+        inbox: { inInbox: true },
+        updatedAt: 1,
+      };
+      const defaults = { backend: "codex" as const, executionMode: "default" as const };
+      const ensureDirectoryLaunchpad = vi.fn(async (request: EnsureDirectoryLaunchpadRequest) => {
+        launchpad = {
+          directoryKey: request.directoryKey,
+          directoryKind: request.directoryKind,
+          directoryLabel: request.directoryLabel,
+          directoryPath: request.directoryPath,
+          backend: "codex",
+          executionMode: "auto",
+          prompt: "",
+          workMode: "local",
+          createdAt: 1,
+          updatedAt: 2,
+        };
+        return { launchpad, defaults };
+      });
+      const updateDirectoryLaunchpad = vi.fn<NonNullable<DesktopApi["updateDirectoryLaunchpad"]>>(async ({ patch }) => {
+        launchpad = { ...launchpad!, ...patch };
+        return { launchpad, defaults };
+      });
+      Object.defineProperty(window, "pwragent", {
+        configurable: true,
+        value: ownerApi({
+          platform: "darwin",
+          listBackends: async () => ({
+            fetchedAt: Date.now(),
+            backends: [{
+              kind: "codex",
+              source: "builtin",
+              label: "OpenAI",
+              available: true,
+              methods: ["thread/start", "turn/start"],
+              capabilities: {
+                listThreads: true, createThread: true, resumeThread: true,
+                renameThread: true, readThread: true, startTurn: true,
+                interruptTurn: true, steerTurn: true, transcriptPagination: true,
+                toolUse: true, approvalRequests: true, multiDirectoryThreads: true,
+              },
+              executionModes: [
+                { mode: "default", label: "Default Access", available: true, isDefault: true },
+                { mode: "auto", label: "Auto", available: true },
+                { mode: "full-access", label: "Full Access", available: true },
+              ],
+            }],
+          }),
+          getNavigationSnapshot: async () => ({
+            backend: "all",
+            fetchedAt: Date.now(),
+            unchanged: false,
+            inboxThreadKeys: ["codex:existing-thread"],
+            threads: [thread],
+            directories: [{ ...project, ...(launchpad?.directoryKey === project.key ? { launchpad } : {}) }],
+            launchpadDefaults: defaults,
+          }),
+          ensureDirectoryLaunchpad,
+          updateDirectoryLaunchpad,
+          onAgentEvent: () => () => undefined,
+          onOpenNewThreadRequested: (listener: () => void) => {
+            openNewThreadListener = listener;
+            return () => { openNewThreadListener = undefined; };
+          },
+        }),
+      });
+
+      const { container } = render(<App />);
+      await waitFor(() => expect(screen.getByRole("button", { name: "Access mode" })).toHaveTextContent("Full Access"));
+      if (entryPoint === "Cmd+N") {
+        expect(openNewThreadListener).toBeDefined();
+        await act(async () => { openNewThreadListener!(); });
+      } else if (entryPoint === "Cmd+K") {
+        fireEvent.keyDown(window, { metaKey: true, code: "KeyK", key: "k" });
+        const dialog = await screen.findByRole("dialog", { name: "Jump to thread or project" });
+        const input = within(dialog).getByRole("textbox", { name: "Jump to thread or project" });
+        fireEvent.change(input, { target: { value: project.label } });
+        await within(dialog).findByRole("option", { name: /Example.*Project/ });
+        await act(async () => { fireEvent.keyDown(input, { key: "Enter" }); });
+      } else {
+        if (entryPoint === "relocated workspace menu") {
+          fireEvent.keyDown(window, { metaKey: true, code: "KeyB", key: "b" });
+        }
+        const masthead = entryPoint === "relocated workspace menu"
+          ? container.querySelector<HTMLElement>(".thread-header__masthead")!
+          : screen.getByRole("complementary", { name: "Threads" });
+        expect(masthead).not.toBeNull();
+        const newThreadButton = within(masthead).getByRole("button", { name: "New thread" });
+        fireEvent.mouseEnter(newThreadButton.parentElement!);
+        fireEvent.click(await within(masthead).findByRole("menuitem", { name: "New chat without a directory" }));
+      }
+
+      expect(await screen.findByRole("textbox", { name: "New thread" })).toBeInTheDocument();
+      expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith(expect.objectContaining({
+        directoryKey: entryPoint.includes("workspace") ? "workspace:new-thread" : project.key,
+      }));
+      expect(screen.getByRole("button", { name: "Access mode" })).toHaveTextContent("Auto");
+      expect(updateDirectoryLaunchpad).not.toHaveBeenCalled();
+    },
+  );
+
   it("routes the new-thread menu push into the existing launchpad flow", async () => {
     let openNewThreadListener: (() => void) | undefined;
     const ensureDirectoryLaunchpad = vi.fn(async () => ({
@@ -6195,7 +6317,141 @@ describe("App", () => {
     expect(readThread).toHaveBeenCalledTimes(2);
   });
 
-  it("walks back and forward across threads and search from the title bar", async () => {
+  it.each([".thread-row__open", ".thread-row", ".thread-row__chips", ".thread-row__status-indicator"].flatMap((clickSurface) => [
+    { clickSurface, deferDetail: false, rapid: false },
+    { clickSurface, deferDetail: true, rapid: false },
+    { clickSurface, deferDetail: false, rapid: true },
+  ]))("keeps rename focused after a native double-click from $clickSurface with deferred detail=$deferDetail, rapid=$rapid", async ({ clickSurface, deferDetail, rapid }) => {
+    const detailReady = createDeferred<void>();
+    const deliveredDetail = vi.fn();
+    const threads = ["First thread", "Double-click thread"].map((title, index) => ({
+      id: `thread-${index + 1}`,
+      title,
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      threadStatus: "active" as const,
+      linkedDirectories: [],
+      inbox: { inInbox: true, reason: "new-thread" as const },
+      updatedAt: 3_000 - index,
+    }));
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: ownerApi({
+        ping: () => "pong",
+        listSkills: async () => ({ backend: "codex", fetchedAt: Date.now(), data: [] }),
+        listBackends: async () => ({
+          fetchedAt: Date.now(),
+          backends: [{
+            kind: "codex",
+            label: "Codex app server",
+            available: true,
+            methods: ["thread/list", "thread/read", "turn/start"],
+            capabilities: {
+              listThreads: true,
+              createThread: false,
+              resumeThread: true,
+              renameThread: true,
+              readThread: true,
+              startTurn: true,
+              interruptTurn: true,
+              steerTurn: false,
+              transcriptPagination: true,
+              toolUse: false,
+              approvalRequests: false,
+              multiDirectoryThreads: true,
+            },
+            executionModes: [{ mode: "default", label: "Default Access", available: true, isDefault: true }],
+          }],
+        }),
+        getNavigationSnapshot: async () => ({
+          backend: "all",
+          fetchedAt: Date.now(),
+          unchanged: false,
+          inboxThreadKeys: threads.map((thread) => `codex:${thread.id}`),
+          directories: [],
+          threads,
+        }),
+        markThreadSeen: async ({ backend, threadId }: { backend: AppServerBackendKind; threadId: string }) => ({
+          backend, threadId, seenAt: Date.now(),
+        }),
+        onAgentEvent: () => () => undefined,
+        onWindowFocus: () => () => undefined,
+        platform: "darwin",
+        readThread: async ({ backend, threadId }: { backend: AppServerBackendKind; threadId: string }) => ({
+          backend,
+          fetchedAt: Date.now(),
+          threadId,
+          replay: { entries: [], messages: [], pagination: { supportsPagination: false, hasPreviousPage: false } },
+        }),
+      }),
+    });
+    const api = (window as Window & { pwragent?: DesktopApi }).pwragent!;
+    const readSelectedDetail = api.getNavigationSelectedDetail!;
+    api.getNavigationSelectedDetail = async (...args) => {
+      if (args[0].ref.threadId === "thread-2" && deferDetail) {
+        await detailReady.promise;
+      }
+      const response = await readSelectedDetail(...args);
+      if (args[0].ref.threadId === (rapid ? "thread-1" : "thread-2")) {
+        deliveredDetail();
+      }
+      return response;
+    };
+    render(<App />);
+    await screen.findByRole("heading", { level: 2, name: "First thread" });
+    const row = screen.getByRole("button", { name: rapid ? "First thread" : "Double-click thread" });
+    const card = row.closest(".thread-row")!;
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Reply" })).toBeEnabled());
+    const click = (detail: number) => {
+      // Resolve the current surface for each press as navigation publishes.
+      const target = clickSurface === ".thread-row" ? card : card.querySelector<HTMLElement>(clickSurface)!;
+      expect(target).toBeInTheDocument();
+      act(() => {
+        fireEvent.pointerDown(target, { pointerType: "mouse", button: 0 });
+        fireEvent.mouseDown(target, { button: 0, detail });
+        // jsdom does not apply the native mouse focus default. Lower row
+        // surfaces blur the previous control; Sidebar focuses the open button.
+        if (target === row) row.focus();
+        else (document.activeElement as HTMLElement).blur();
+        fireEvent.pointerUp(target, { pointerType: "mouse", button: 0 });
+        fireEvent.mouseUp(target, { button: 0, detail });
+        fireEvent.click(target, { button: 0, detail });
+      });
+      return target;
+    };
+    click(1);
+    if (!rapid) {
+      await screen.findByRole("heading", { level: 2, name: "Double-click thread" });
+    }
+    if (!deferDetail && !rapid) {
+      await waitFor(() => expect(screen.getByRole("textbox", { name: "Reply" })).toHaveFocus());
+    }
+    expect(screen.queryByRole("textbox", { name: "Thread name" })).toBeNull();
+    const target = click(2);
+    fireEvent.doubleClick(target, { button: 0, detail: 2 });
+    const input = screen.getByRole("textbox", { name: "Thread name" });
+    expect(input).toHaveFocus();
+    act(() => detailReady.resolve());
+    await waitFor(() => expect(deliveredDetail).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Reply" })).toBeEnabled());
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+    expect(input).toHaveFocus();
+
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(screen.queryByRole("textbox", { name: "Thread name" })).toBeNull();
+    // Returning to the origin after closing must not revive the canceled request.
+    act(() => row.focus());
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+    expect(row).toHaveFocus();
+  });
+
+  it.each(["title button", "row padding"])("walks back and forward across threads and search after %s clicks", async (clickSurface) => {
+    const secondThreadReady = createDeferred<void>();
+    const deliveredSecondThread = vi.fn();
     const searchThreads = vi.fn(async () => ({
       backend: "all" as const,
       contentMode: "available" as const,
@@ -6273,6 +6529,7 @@ describe("App", () => {
           fetchedAt: Date.now(),
           unchanged: false,
           inboxThreadKeys: ["codex:thread-1"],
+          directories: [],
           threads: [
             {
               id: "thread-1",
@@ -6341,6 +6598,18 @@ describe("App", () => {
       }),
     });
 
+    const api = (window as Window & { pwragent?: DesktopApi }).pwragent!;
+    const readSelectedDetail = api.getNavigationSelectedDetail!;
+    api.getNavigationSelectedDetail = async (...args) => {
+      if (args[0].ref.threadId === "thread-2") {
+        await secondThreadReady.promise;
+      }
+      const response = await readSelectedDetail(...args);
+      if (args[0].ref.threadId === "thread-2") {
+        deliveredSecondThread();
+      }
+      return response;
+    };
     render(<App />);
 
     await screen.findByRole("heading", {
@@ -6352,12 +6621,59 @@ describe("App", () => {
     expect(screen.getByRole("button", { name: "Back" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Forward" })).toBeDisabled();
 
-    await clickButton(/Second cached thread/i);
+    const secondRow = screen.getByRole("button", { name: /Second cached thread/i });
+    act(() => {
+      secondRow.focus();
+      fireEvent.pointerDown(secondRow, { pointerType: "mouse", button: 0 });
+      fireEvent.pointerUp(secondRow, { pointerType: "mouse", button: 0 });
+      fireEvent.click(secondRow, { detail: 1 });
+    });
     await screen.findByRole("heading", {
       level: 2,
       name: "Second cached thread",
     });
+    // Moving away cancels the pending request even when the operator returns
+    // to its originating row before configuration becomes ready.
+    act(() => {
+      screen.getByRole("button", { name: /First cached thread/i }).focus();
+      secondRow.focus();
+      secondThreadReady.resolve();
+    });
+    await waitFor(() => expect(deliveredSecondThread).toHaveBeenCalled());
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+    expect(secondRow).toHaveFocus();
+
+    // A new mouse click on the ready thread still hands off focus.
+    act(() => {
+      const target = clickSurface === "title button" ? secondRow : secondRow.closest(".thread-row")!;
+      fireEvent.pointerDown(target, { pointerType: "mouse", button: 0 });
+      // jsdom does not perform the browser's default pointer focus action.
+      // Clicking non-focusable row padding drops focus from the old control.
+      if (target !== secondRow) secondRow.blur();
+      fireEvent.pointerUp(target, { pointerType: "mouse", button: 0 });
+      fireEvent.click(target, { detail: 1 });
+    });
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Reply" })).toHaveFocus());
     expect(screen.getByRole("button", { name: "Back" })).toBeEnabled();
+
+    // Search unmounts Composer. Keyboard history must not replay the handled
+    // mouse request when it mounts again, even with a sidebar row focused.
+    await clickButton("Search threads");
+    await screen.findByRole("heading", { level: 2, name: "Search" });
+    act(() => {
+      secondRow.focus();
+      fireEvent.keyDown(window, { metaKey: true, code: "BracketLeft", key: "[" });
+    });
+    await screen.findByRole("heading", { level: 2, name: "Second cached thread" });
+    await screen.findByRole("textbox", { name: "Reply" });
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+    expect(secondRow).toHaveFocus();
 
     // Search, then open the result (thread 1).
     await clickButton("Search threads");
@@ -6659,6 +6975,14 @@ describe("App", () => {
       level: 2,
       name: "Second project thread",
     });
+    // The heading and the history cursor commit separately. Wait for history
+    // to record the destination before consuming its Back entry.
+    await waitFor(() => {
+      expect(screen.getByTestId("history-nav-back")).toHaveAttribute(
+        "aria-description",
+        "New thread in PwrAgent",
+      );
+    });
     await clickButton("Back");
 
     await screen.findByRole("heading", { level: 2, name: "New thread" });
@@ -6668,6 +6992,12 @@ describe("App", () => {
     expect(screen.getAllByText("Full Access").length).toBeGreaterThan(0);
     expect(ensureDirectoryLaunchpad).toHaveBeenCalledTimes(1);
 
+    await waitFor(() => {
+      expect(screen.getByTestId("history-nav-back")).toHaveAttribute(
+        "aria-description",
+        "First project thread",
+      );
+    });
     await clickButton("Cancel");
     await screen.findByRole("heading", {
       level: 2,

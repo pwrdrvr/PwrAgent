@@ -23,6 +23,7 @@ import {
 } from "../shared/native-voice";
 import { USAGE_ACTIVITY_ANALYZE_CHANNEL } from "../shared/ipc";
 import { USAGE_ACTIVITY_READ_CHANNEL } from "../shared/ipc";
+import { THREAD_FAMILY_PRICING_READ_CHANNEL } from "../shared/ipc";
 import { USAGE_ACTIVITY_OPEN_THREAD_CHANNEL, USAGE_ACTIVITY_OPEN_WINDOW_CHANNEL } from "../shared/ipc";
 import type {
   ListThreadTodosRequest,
@@ -37,6 +38,7 @@ import type {
   OperatorRequestsChangedEvent,
 } from "@pwragent/shared";
 import type { ReadUsageActivityRequest, ReadUsageActivityResponse, AnalyzeUsageActivityRequest, AnalyzeUsageActivityResponse } from "@pwragent/shared";
+import type { ReadThreadFamilyPricingRequest, ReadThreadFamilyPricingResponse } from "@pwragent/shared";
 import type { PrActivitySnapshot } from "@pwragent/shared";
 import { subscribeBundledGitLfsAdvisory } from "./bundled-git-lfs-advisory";
 import { subscribeGithubPrAuthenticationFailure } from "./github-pr-authentication-notice";
@@ -2001,6 +2003,8 @@ const desktopApi = Object.freeze({
     ),
   readUsageActivity: async (request: ReadUsageActivityRequest): Promise<ReadUsageActivityResponse> =>
     await ipcRenderer.invoke(USAGE_ACTIVITY_READ_CHANNEL, request),
+  readThreadFamilyPricing: async (request: ReadThreadFamilyPricingRequest): Promise<ReadThreadFamilyPricingResponse> =>
+    await ipcRenderer.invoke(THREAD_FAMILY_PRICING_READ_CHANNEL, request),
   analyzeUsageActivity: async (request: AnalyzeUsageActivityRequest): Promise<AnalyzeUsageActivityResponse> =>
     await ipcRenderer.invoke(USAGE_ACTIVITY_ANALYZE_CHANNEL, request),
   openUsageActivity: async (): Promise<void> =>

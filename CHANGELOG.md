@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.2.0-prerelease.4 - 2026-10-09
+
+- MCP Approvals - Allow a tool once or for the conversation, reducing repeated prompts while keeping permission scoped to that connection and tool.
+- Usage and Cost - See combined spending for a thread and its sub-threads, with individual cost breakdowns and direct links.
+- Attention Queue - Load up to 100 threads initially instead of ten, making running and waiting work easier to find.
+- New Threads - Respect your launchpad's configured access mode instead of silently resetting new chats to Default Access.
+- Performance - Reduce redundant sidebar rebuilding and history parsing during archiving and pull-request bookkeeping.
+- Desktop Polish - Keep queued-message images clear of row actions, improve image viewing, and make the storage-maintenance window follow the app's theme.
+
 ## v1.2.0-prerelease.3 - 2026-10-08
 
 - Waiting on You - The To-dos panel now gathers approvals, forms, and questions across threads and projects, with unread counts and inline approval actions. Sidebar labels show exactly what each thread needs.

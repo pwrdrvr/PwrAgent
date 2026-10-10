@@ -4818,6 +4818,104 @@ describe("Sidebar", () => {
     expect(onArchiveThread).toHaveBeenCalledWith(sharedThread);
   });
 
+  it("asks for composer focus only after a real mouse press on the row", () => {
+    const onSelectThread = vi.fn();
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        loading={false}
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={onSelectThread}
+      />,
+    );
+    const row = screen.getByRole("button", { name: sharedThread.title });
+
+    fireEvent.pointerDown(row, { pointerType: "mouse", button: 0 });
+    fireEvent.pointerUp(row, { pointerType: "mouse", button: 0 });
+    fireEvent.click(row, { detail: 1 });
+    expect(onSelectThread).toHaveBeenLastCalledWith(sharedThread, {
+      focusComposer: true,
+      focusOrigin: row,
+    });
+
+    // Enter or Space on the focused row: a click with no pointerdown.
+    fireEvent.click(row, { detail: 0 });
+    expect(onSelectThread).toHaveBeenLastCalledWith(sharedThread, {
+      focusComposer: false,
+    });
+
+    // Assistive technology that synthesizes a mouse click sends no
+    // pointerdown either, even when it reports a click count.
+    fireEvent.click(row, { detail: 1 });
+    expect(onSelectThread).toHaveBeenLastCalledWith(sharedThread, {
+      focusComposer: false,
+    });
+
+    fireEvent.pointerDown(row, { pointerType: "pen" });
+    fireEvent.click(row, { detail: 1 });
+    expect(onSelectThread).toHaveBeenLastCalledWith(sharedThread, {
+      focusComposer: false,
+    });
+
+    fireEvent.pointerDown(row, { pointerType: "touch" });
+    fireEvent.click(row, { detail: 1 });
+    expect(onSelectThread).toHaveBeenLastCalledWith(sharedThread, {
+      focusComposer: false,
+    });
+
+    // A context-menu press is never a primary selection, even if an
+    // assistive-technology click later targets the same row.
+    fireEvent.pointerDown(row, { pointerType: "mouse", button: 2 });
+    fireEvent.click(row, { detail: 1 });
+    expect(onSelectThread).toHaveBeenLastCalledWith(sharedThread, {
+      focusComposer: false,
+    });
+
+    fireEvent.pointerDown(row, { pointerType: "mouse", button: 0 });
+    fireEvent.click(row, { detail: 1, metaKey: true });
+    fireEvent.click(row, { detail: 1 });
+    expect(onSelectThread).toHaveBeenLastCalledWith(sharedThread, {
+      focusComposer: false,
+    });
+    expect(screen.queryByRole("textbox", { name: "Thread name" })).toBeNull();
+  });
+
+  it.each([".thread-row", ".thread-row__chips", ".thread-row__status-indicator"])("anchors a mouse selection from %s to the row's open button", (selector) => {
+    const onSelectThread = vi.fn();
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        loading={false}
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={onSelectThread}
+      />,
+    );
+    const openButton = screen.getByRole("button", { name: sharedThread.title });
+    const row = openButton.closest(".thread-row")!;
+    const target = selector === ".thread-row" ? row : row.querySelector(selector)!;
+    expect(target).not.toBeNull();
+    fireEvent.pointerDown(target, { pointerType: "mouse", button: 0 });
+    fireEvent.pointerUp(target, { pointerType: "mouse", button: 0 });
+    fireEvent.click(target, { detail: 1 });
+    expect(onSelectThread).toHaveBeenCalledExactlyOnceWith(sharedThread, {
+      focusComposer: true,
+      focusOrigin: openButton,
+    });
+    expect(openButton).toHaveFocus();
+  });
+
   it("supports Cmd, Shift, and Cmd+Shift thread selections for batch actions", () => {
     const copyText = vi.fn(async () => undefined);
     const onArchiveThread = vi.fn(async () => undefined);
@@ -4904,7 +5002,9 @@ describe("Sidebar", () => {
     expect(secondButton).toHaveAttribute("aria-pressed", "true");
     expect(thirdButton).toHaveAttribute("aria-pressed", "true");
     expect(onSelectThread).toHaveBeenCalledTimes(1);
-    expect(onSelectThread).toHaveBeenCalledWith(firstThread);
+    expect(onSelectThread).toHaveBeenCalledWith(firstThread, {
+      focusComposer: false,
+    });
 
     fireEvent.contextMenu(secondButton, { clientX: 48, clientY: 64 });
     const menu = screen.getByRole("menu", {
@@ -7361,6 +7461,178 @@ describe("Sidebar", () => {
 
     expect(onRenameThread).toHaveBeenCalledWith(sharedThread, "Renamed cleanup");
     expect(screen.queryByRole("textbox", { name: "Thread name" })).not.toBeInTheDocument();
+  });
+
+  it.each((["attention", "drafts", "inbox", "recents", "directories"] as const).flatMap((browseMode) =>
+    [".thread-row__open", ".thread-row", ".thread-row__chips", ".thread-row__status-indicator"].map((clickSurface) => ({ browseMode, clickSurface })),
+  ))(
+    "renames a thread after the native double-click sequence in $browseMode from $clickSurface",
+    ({ browseMode, clickSurface }) => {
+      const onRenameThread = vi.fn(async () => undefined);
+      const onSelectThread = vi.fn();
+      render(
+        <Sidebar
+          backends={backends}
+          browseMode={browseMode}
+          draftThreadKeys={{ "codex:thread-1": true }}
+          directories={directories}
+          inboxThreads={[sharedThread]}
+          loading={false}
+          threads={[sharedThread]}
+          onBrowseModeChange={() => undefined}
+          onCreateThread={async () => undefined}
+          onOpenLaunchpad={async () => undefined}
+          onSelectThread={onSelectThread}
+          onRenameThread={onRenameThread}
+        />,
+      );
+      if (browseMode === "directories") {
+        fireEvent.click(screen.getByRole("button", { name: "PwrAgent, 1 thread to review" }));
+      }
+      const row = screen.getByRole("button", { name: sharedThread.title });
+      const card = row.closest(".thread-row")!;
+      const target = clickSurface === ".thread-row" ? card : card.querySelector<HTMLElement>(clickSurface)!;
+      expect(target).toBeInTheDocument();
+      for (const detail of [1, 2]) {
+        fireEvent.pointerDown(target, { pointerType: "mouse", button: 0 });
+        fireEvent.mouseDown(target, { button: 0, detail });
+        act(() => {
+          if (target === row) row.focus();
+          else (document.activeElement as HTMLElement).blur();
+        }); // jsdom does not apply mousedown's focus default.
+        fireEvent.pointerUp(target, { pointerType: "mouse", button: 0 });
+        fireEvent.mouseUp(target, { button: 0, detail });
+        fireEvent.click(target, { button: 0, detail });
+        expect(screen.queryByRole("textbox", { name: "Thread name" })).toBeNull();
+        expect(row).toHaveFocus();
+        expect(onSelectThread).toHaveBeenLastCalledWith(sharedThread, {
+          focusComposer: true,
+          focusOrigin: row,
+        });
+      }
+      fireEvent.doubleClick(target, { button: 0, detail: 2 });
+      expect(onSelectThread).toHaveBeenCalledTimes(2);
+      const input = screen.getByRole("textbox", { name: "Thread name" });
+      expect(input.closest("[data-thread-key]")).toHaveAttribute("data-thread-key", "codex:thread-1");
+      expect(input).toHaveFocus();
+      expect(input).toHaveValue(sharedThread.title);
+      expect((input as HTMLInputElement).selectionStart).toBe(0);
+      expect((input as HTMLInputElement).selectionEnd).toBe(sharedThread.title.length);
+      fireEvent.change(input, { target: { value: "  Renamed cleanup  " } });
+      fireEvent.keyDown(input, { key: "Enter" });
+      expect(onRenameThread).toHaveBeenCalledExactlyOnceWith(sharedThread, "Renamed cleanup");
+    },
+  );
+
+  it("forwards double-clicks on row padding and status but excludes row actions and modified clicks", () => {
+    const onSelectThread = vi.fn();
+    const onSetThreadPin = vi.fn(async () => undefined);
+    const onOpenPullRequest = vi.fn();
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: { openExternal: onOpenPullRequest },
+    });
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        directories={directories}
+        inboxThreads={[pullRequestThread]}
+        loading={false}
+        threads={[pullRequestThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={onSelectThread}
+        onRenameThread={async () => undefined}
+        onSetThreadPin={onSetThreadPin}
+      />,
+    );
+    const row = screen.getByRole("button", { name: sharedThread.title });
+    const card = threadCard(row);
+    for (const modifier of ["metaKey", "ctrlKey", "shiftKey", "altKey"]) {
+      fireEvent.doubleClick(row, { button: 0, detail: 2, [modifier]: true });
+      expect(screen.queryByRole("textbox", { name: "Thread name" })).toBeNull();
+    }
+    fireEvent.doubleClick(row, { button: 2, detail: 2 });
+    for (const control of card.querySelectorAll<HTMLElement>("button, [role='button'], a")) {
+      if (control !== row) {
+        fireEvent.doubleClick(control, { button: 0, detail: 2 });
+      }
+    }
+    expect(screen.queryByRole("textbox", { name: "Thread name" })).toBeNull();
+    expect(onSelectThread).not.toHaveBeenCalled();
+    // The action's own click still performs its existing operation.
+    fireEvent.click(within(card).getByRole("button", { name: "Pin thread" }));
+    expect(onSetThreadPin).toHaveBeenCalledWith(pullRequestThread, true);
+    fireEvent.click(within(card).getByRole("button", { name: "Open thread actions" }));
+    expect(screen.getByRole("menuitem", { name: "Rename Thread" })).toBeInTheDocument();
+    pressEscape();
+
+    for (const target of [card, within(card).getByRole("img", { name: "Unread update" })]) {
+      fireEvent.doubleClick(target, { button: 0, detail: 2 });
+      expect(screen.getByRole("textbox", { name: "Thread name" })).toBeInTheDocument();
+      pressEscape();
+    }
+  });
+
+  it.each([
+    ["recents", false],
+    ["directories", false],
+    ["directories", true],
+  ] as const)("renames roots and nested rows in %s with pinned root=%s", (browseMode, pinned) => {
+    const parent = { ...sharedThread, ...(pinned ? { pinnedRank: "a0" } : {}), subthreadsCollapsed: false };
+    const child = { ...sharedThread, id: "thread-child", title: "Nested worker", parentThreadId: parent.id };
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode={browseMode}
+        directories={directories}
+        inboxThreads={[parent, child]}
+        loading={false}
+        threads={[parent, child]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onRenameThread={async () => undefined}
+      />,
+    );
+    if (browseMode === "directories") {
+      fireEvent.click(screen.getByRole("button", { name: /PwrAgent, .* to review/ }));
+    }
+    for (const thread of [parent, child]) {
+      const row = screen.getByRole("button", {
+        name: pinned && thread === parent ? `${thread.title}, pinned` : thread.title,
+      });
+      fireEvent.doubleClick(row, { button: 0, detail: 2 });
+      expect(screen.getByRole("textbox", { name: "Thread name" })).toHaveValue(thread.title);
+      pressEscape();
+    }
+  });
+
+  it.each(["unavailable", "unsupported"])("does not open rename for an %s backend", (reason) => {
+    render(
+      <Sidebar
+        backends={backends.map((backend) => ({
+          ...backend,
+          available: reason !== "unavailable",
+          capabilities: { ...backend.capabilities, renameThread: reason !== "unsupported" },
+        }))}
+        browseMode="recents"
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        loading={false}
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onRenameThread={async () => undefined}
+      />,
+    );
+    fireEvent.doubleClick(screen.getByRole("button", { name: sharedThread.title }), { detail: 2 });
+    expect(screen.queryByRole("textbox", { name: "Thread name" })).toBeNull();
   });
 
   it("locks a thread with a note from the thread context menu", async () => {

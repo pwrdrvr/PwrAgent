@@ -9,6 +9,7 @@ import { readNavigationPresentationOrder } from "./navigation-presentation-order
 import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationWindow";
 import { navigationPageErrorCopy, navigationThreadSelectionKey } from "../../lib/navigation-query-state";
 import { useEventCallback } from "../../lib/useEventCallback";
+import { useMousePress } from "../../lib/useMousePress";
 import { useLensScrollRestoration } from "../../lib/useLensScrollRestoration";
 import { useMenuNavigation } from "../../lib/useMenuNavigation";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
@@ -357,7 +358,15 @@ type SidebarProps = {
   onOpenProfile?: (profile: string) => Promise<void>;
   /** Opens the Usage Activity window: account limits and spend across instances. */
   onOpenUsageActivity?: () => void;
-  onSelectThread: (thread: NavigationThreadSummary) => void;
+  /**
+   * `focusComposer` is set only for a plain click from a real mouse or
+   * trackpad. A keyboard or assistive-technology activation leaves focus on
+   * the row, so the list stays navigable from where the operator is.
+   */
+  onSelectThread: (
+    thread: NavigationThreadSummary,
+    options?: { focusComposer?: boolean; focusOrigin?: HTMLElement },
+  ) => void;
   onMarkThreadsSeen?: (threads: NavigationThreadSummary[]) => Promise<void>;
   onMarkDirectoriesSeen?: (directoryKeys: string[]) => Promise<void>;
   onArchiveDirectories?: (directoryKeys: string[]) => Promise<void>;
@@ -951,6 +960,8 @@ export function Sidebar(props: SidebarProps) {
     );
   }, [browseMode]);
 
+  const isMousePress = useMousePress();
+
   // The four handlers a thread row receives are wrapped in `useEventCallback`
   // rather than declared plainly, because a memoized row cannot bail out past
   // a prop that is a new function on every render of this component — and it
@@ -961,15 +972,26 @@ export function Sidebar(props: SidebarProps) {
     selectionOrder: (string | Pick<ThreadRowRef, "directoryKey" | "threadKey">)[],
     row?: ThreadRowRef,
   ): void => {
+    const mousePress = isMousePress(event);
     const threadKey = threadSummaryIdentityKey(thread);
     const occurrences = selectionOrder.map((entry) => typeof entry === "string"
       ? { threadKey: entry, directoryKey: undefined } : entry);
 
     if (!event.metaKey && !event.shiftKey) {
+      // Padding, chip gaps, and status indicators select through the row's
+      // non-focusable div. Anchor every real mouse selection to its accessible
+      // open button so the pending handoff has one concrete focus owner.
+      const focusOrigin = mousePress
+        ? event.currentTarget.closest(".thread-row")?.querySelector<HTMLButtonElement>(".thread-row__open") ?? undefined
+        : undefined;
+      focusOrigin?.focus({ preventScroll: true });
       selectionAnchorKeyRef.current = threadKey;
       selectionAnchorDirectoryKeyRef.current = row?.directoryKey;
       setSelectedThreadKeys(new Set([threadKey]));
-      props.onSelectThread(thread);
+      props.onSelectThread(thread, {
+        focusComposer: Boolean(focusOrigin),
+        ...(focusOrigin ? { focusOrigin } : {}),
+      });
       return;
     }
 
