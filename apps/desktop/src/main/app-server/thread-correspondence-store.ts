@@ -9,9 +9,11 @@ import type {
   AppServerThreadEntry,
   AppServerThreadMessageEntry,
   AppServerThreadReplay,
+  AppServerThreadTurnMetadata,
   AppServerTurnInputItem,
 } from "@pwragent/shared";
 import { buildThreadMarkdownLink } from "@pwragent/shared";
+import { isUsageActivityEntry } from "./overlay-transcript-entries";
 
 type ThreadRef = { backend: AppServerBackendKind; threadId: string; instanceId?: string; title?: string };
 export type CorrespondenceRecord = {
@@ -23,30 +25,16 @@ export type CorrespondenceRecord = {
   state: "sending" | "queued" | "started" | "failed" | "cancelled" | "held";
   queueEntryId?: string;
   turnId?: string;
+  sourceTurnId?: string;
+  sourceItemId?: string;
 };
 type Status = Pick<CorrespondenceRecord, "state"> & Partial<Pick<CorrespondenceRecord, "destination" | "queueEntryId" | "turnId">>;
 type Event = { type: "message"; record: CorrespondenceRecord } | { type: "status"; id: string; status: Status };
 
-/** Keep provider order, including undated activities; insert before the next
- * strictly newer timestamp. Ties retain provider order before correspondence. */
-function mergeCorrespondence<T extends { id: string }>(
-  entries: T[],
-  messages: AppServerThreadMessageEntry[],
-  timestamp: (entry: T) => number | undefined,
-): (T | AppServerThreadMessageEntry)[] {
-  const ids = new Set(messages.map((message) => message.id));
-  const merged: (T | AppServerThreadMessageEntry)[] = [];
-  let index = 0;
-  for (const entry of entries) {
-    if (ids.has(entry.id)) continue;
-    const createdAt = timestamp(entry);
-    while (index < messages.length && createdAt !== undefined && messages[index]!.createdAt! < createdAt) {
-      merged.push(messages[index++]!);
-    }
-    merged.push(entry);
-  }
-  merged.push(...messages.slice(index));
-  return merged;
+function codexTurnStartedAt(id: string): number | undefined {
+  // Only UUIDv7 encodes a creation time. Arbitrary provider ids are opaque.
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)) return undefined;
+  return Number.parseInt(id.replace(/-/g, "").slice(0, 12), 16);
 }
 
 /** PwrAgent-owned supplemental correspondence, never provider history or SQLite. */
@@ -134,10 +122,16 @@ export class ThreadCorrespondenceStore {
     }, id).entries[0] as AppServerThreadMessageEntry | undefined;
   }
 
-  appendToReplay(source: ThreadRef, replay: AppServerThreadReplay, onlyId?: string): AppServerThreadReplay {
+  appendToReplay(
+    source: ThreadRef,
+    replay: AppServerThreadReplay,
+    onlyId?: string,
+    knownTurns: AppServerThreadTurnMetadata[] = [],
+  ): AppServerThreadReplay {
     const stored = this.load(source);
     const selected = onlyId ? stored.get(onlyId) : undefined;
     const records = onlyId ? (selected ? [selected] : []) : [...stored.values()];
+    if (records.length === 0) return replay;
     records.sort((left, right) => left.createdAt - right.createdAt);
     const messages: AppServerThreadMessageEntry[] = records.map((record) => {
       const destination = buildThreadMarkdownLink({ ...record.destination, ...(record.turnId ? { messageId: `user:${record.turnId}` } : {}) });
@@ -156,6 +150,7 @@ export class ThreadCorrespondenceStore {
         id: record.id,
         role: "assistant",
         createdAt: record.createdAt,
+        ...(record.sourceTurnId ? { turn: { id: record.sourceTurnId } } : {}),
         origin: { kind: "pwragent", systemReason: "thread-correspondence" },
         text: `${heading}\n\n${body}`,
         parts: [
@@ -171,15 +166,107 @@ export class ThreadCorrespondenceStore {
         ],
       };
     });
-    const timestamp = (entry: AppServerThreadEntry) => entry.createdAt ?? entry.turn?.startedAt;
-    // The compact message list omits turn metadata; use the corresponding
-    // replay entry's timestamp so both views place messages consistently.
-    const entryTimestamps = new Map(replay.entries.map((entry) => [entry.id, timestamp(entry)]));
-    return {
-      ...replay,
-      entries: mergeCorrespondence(replay.entries, messages, timestamp),
-      messages: mergeCorrespondence<AppServerThreadMessage>(replay.messages, messages,
-        (message) => message.createdAt ?? entryTimestamps.get(message.id)),
-    };
+    const storedIds = new Set(stored.keys());
+    const providerEntries: AppServerThreadEntry[] = (replay.entries.length
+      ? replay.entries
+      : replay.messages.map((message) => ({ ...message, type: "message" as const })))
+      .filter((entry) => !storedIds.has(entry.id));
+    const turns = new Map<string, AppServerThreadTurnMetadata>();
+    for (const turn of knownTurns) {
+      const previous = turns.get(turn.id);
+      turns.set(turn.id, {
+        ...previous, ...turn,
+        startedAt: turn.startedAt ?? previous?.startedAt,
+        completedAt: turn.completedAt ?? previous?.completedAt,
+      });
+    }
+    const indexesByTurn = new Map<string, number[]>();
+    const indexesByItem = new Map<string, number>();
+    providerEntries.forEach((entry, index) => {
+      if (entry.turn) {
+        const previous = turns.get(entry.turn.id);
+        turns.set(entry.turn.id, {
+          ...previous, ...entry.turn,
+          startedAt: entry.turn.startedAt ?? previous?.startedAt,
+          completedAt: entry.turn.completedAt ?? previous?.completedAt,
+        });
+        const indexes = indexesByTurn.get(entry.turn.id) ?? [];
+        indexes.push(index);
+        indexesByTurn.set(entry.turn.id, indexes);
+        indexesByItem.set(`${entry.turn.id}:${entry.id}`, index);
+        if (entry.type === "activity") {
+          for (const detail of entry.details) indexesByItem.set(`${entry.turn.id}:${detail.id}`, index);
+        }
+      }
+    });
+    const startedAt = (turn: AppServerThreadTurnMetadata) => turn.startedAt
+      ?? (source.backend === "codex" ? codexTurnStartedAt(turn.id) : undefined);
+    const timedTurns = [...turns.values()].flatMap((turn) => {
+      const time = startedAt(turn);
+      return time === undefined ? [] : [{ id: turn.id, time }];
+    }).sort((left, right) => left.time - right.time);
+    const timestamp = (entry: AppServerThreadEntry) => entry.createdAt
+      ?? (entry.turn ? startedAt(turns.get(entry.turn.id) ?? entry.turn) : undefined);
+    const insertions = new Map<number, AppServerThreadMessageEntry[]>();
+    const cursors = new Map<string | undefined, number>();
+    const allIndexes = providerEntries.map((_entry, index) => index);
+    let turnIndex = -1;
+    for (let index = 0; index < records.length; index += 1) {
+      const record = records[index]!;
+      const message = messages[index]!;
+      while (turnIndex + 1 < timedTurns.length && timedTurns[turnIndex + 1]!.time <= record.createdAt) turnIndex += 1;
+      const sourceTurnId = record.sourceTurnId ?? timedTurns[turnIndex]?.id;
+      const turnIndexes = sourceTurnId ? indexesByTurn.get(sourceTurnId) : undefined;
+      // A page owns its source turns. Never attach the thread's entire send
+      // history to the newest page, where provider rows may have no dates.
+      if (!onlyId && indexesByTurn.size > 0 && sourceTurnId && !turnIndexes) continue;
+      if (!onlyId && replay.pagination.hasPreviousPage && turnIndex < 0 && !sourceTurnId && timedTurns.length > 0) continue;
+      if (sourceTurnId) message.turn = { id: sourceTurnId };
+      const itemIndex = sourceTurnId && record.sourceItemId
+        ? indexesByItem.get(`${sourceTurnId}:${record.sourceItemId}`) : undefined;
+      let position: number;
+      if (itemIndex !== undefined) {
+        position = itemIndex + 1;
+      } else {
+        const indexes = turnIndexes ?? allIndexes;
+        let cursor = cursors.get(sourceTurnId) ?? 0;
+        while (cursor < indexes.length) {
+          const entry = providerEntries[indexes[cursor]!]!;
+          const time = timestamp(entry);
+          if (time !== undefined && time > record.createdAt) break;
+          // A turn total follows all its messages, including undated sends.
+          if (turnIndexes && isUsageActivityEntry(entry)) break;
+          cursor += 1;
+        }
+        cursors.set(sourceTurnId, cursor);
+        position = indexes[cursor] ?? (indexes.length ? indexes[indexes.length - 1]! + 1 : providerEntries.length);
+      }
+      const bucket = insertions.get(position) ?? [];
+      bucket.push(message);
+      insertions.set(position, bucket);
+    }
+    const entries: AppServerThreadEntry[] = [];
+    providerEntries.forEach((entry, index) => entries.push(...(insertions.get(index) ?? []), entry));
+    entries.push(...(insertions.get(providerEntries.length) ?? []));
+
+    // Derive compact-message anchors from the timeline merge, since that
+    // list omits both activity rows and the source turn metadata.
+    const providerMessages = replay.messages.filter((message) => !storedIds.has(message.id));
+    const providerMessageIds = new Set(providerMessages.map((message) => message.id));
+    const messagesBefore = new Map<string | undefined, AppServerThreadMessageEntry[]>();
+    let nextMessageId: string | undefined;
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      const entry = entries[index]!;
+      if (providerMessageIds.has(entry.id)) nextMessageId = entry.id;
+      else if (storedIds.has(entry.id) && entry.type === "message") {
+        const bucket = messagesBefore.get(nextMessageId) ?? [];
+        bucket.push(entry);
+        messagesBefore.set(nextMessageId, bucket);
+      }
+    }
+    const compactMessages: AppServerThreadMessage[] = [];
+    for (const message of providerMessages) compactMessages.push(...(messagesBefore.get(message.id) ?? []).reverse(), message);
+    compactMessages.push(...(messagesBefore.get(undefined) ?? []).reverse());
+    return { ...replay, entries, messages: compactMessages };
   }
 }

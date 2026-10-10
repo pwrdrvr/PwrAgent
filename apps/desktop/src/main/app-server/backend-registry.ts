@@ -11382,12 +11382,14 @@ export class DesktopBackendRegistry {
           method: "item/completed",
           params: {
             threadId: source.threadId,
+            ...(message.turn ? { turnId: message.turn.id } : {}),
             item: {
               id: message.id,
               type: "agentMessage",
               text: message.text,
               content: message.parts,
               origin: message.origin,
+              createdAt: message.createdAt,
             },
           },
         },
@@ -15957,11 +15959,14 @@ export class DesktopBackendRegistry {
       const response = await this.readAcpThread(request, backend);
       return {
         ...response,
-        replay: request.includeTurns === false || request.before
+        replay: request.includeTurns === false
           ? response.replay
           : this.correspondenceStore.appendToReplay(
               { backend, threadId: request.threadId },
               response.replay,
+              undefined,
+              response.pricing?.lines.flatMap((line) => line.scope === "turn" && line.turnId
+                ? [{ id: line.turnId, startedAt: line.startedAt, completedAt: line.completedAt }] : []),
             ),
         readDurationMs: Math.max(0, Math.round(performance.now() - readStartedAt)),
       };
@@ -16160,11 +16165,14 @@ export class DesktopBackendRegistry {
       ...(replayWithReviewMetadata.threadStatus
         ? { threadStatus: replayWithReviewMetadata.threadStatus }
         : {}),
-      replay: request.includeTurns === false || request.before
+      replay: request.includeTurns === false
         ? replayWithReviewMetadata
         : this.correspondenceStore.appendToReplay(
             { backend, threadId: request.threadId },
             replayWithReviewMetadata,
+            undefined,
+            pricing.lines.flatMap((line) => line.scope === "turn" && line.turnId
+              ? [{ id: line.turnId, startedAt: line.startedAt, completedAt: line.completedAt }] : []),
           ),
     };
   }
@@ -38346,6 +38354,8 @@ export class DesktopBackendRegistry {
         input,
         createdAt: Date.now(),
         state: "sending",
+        sourceTurnId: request.context.turnId ?? this.getActiveTurnForThread(source)?.turnId,
+        sourceItemId: request.context.callId,
       });
       let targetTitle: string | undefined;
       let targetInstanceId: string | undefined;

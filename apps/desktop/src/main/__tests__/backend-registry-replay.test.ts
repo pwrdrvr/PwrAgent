@@ -3,6 +3,7 @@ import type { AppServerBackendKind } from "@pwragent/shared";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
 import { ReplayClient } from "../testing/replay-client";
+import { ThreadCorrespondenceStore } from "../app-server/thread-correspondence-store";
 
 function createOverlayStoreMock() {
   return {
@@ -42,6 +43,55 @@ function createOverlayStoreMock() {
 }
 
 describe("DesktopBackendRegistry replay integration", () => {
+  it("returns each delivery only with its source turn when reading newest and older transcript pages", async () => {
+    const source = { backend: "codex" as const, threadId: "sender" };
+    const correspondenceStore = new ThreadCorrespondenceStore();
+    const pages = ["newer", "older"].map((id) => {
+      const turn = { id, startedAt: id === "older" ? 1_000 : 3_000 };
+      const entries = [
+        { type: "message" as const, id: `${id}-user`, role: "user" as const, text: `${id} prompt`, turn },
+        { type: "message" as const, id: `${id}-response`, role: "assistant" as const, text: `${id} response`, turn },
+      ];
+      correspondenceStore.record({
+        id: `${id}-delivery`, source, sourceTurnId: id,
+        destination: { backend: "codex", threadId: "recipient" },
+        input: [{ type: "text", text: `${id} guidance` }],
+        createdAt: turn.startedAt + 100, state: "started",
+      });
+      return {
+        entries, messages: entries.map(({ turn: _turn, ...message }) => message),
+        pagination: { supportsPagination: true, hasPreviousPage: id === "newer", previousCursor: id === "newer" ? "older-page" : undefined },
+      };
+    });
+    const replayClient = ReplayClient.fromFixture({
+      metadata: { backend: "codex", scenario: "correspondence-pagination" },
+      steps: [
+        { id: "initialize", kind: "response", method: "initialize", result: { methods: ["thread/read"] } },
+        ...pages.map((result, index) => ({ id: `read-${index}`, kind: "response" as const, method: "thread/read", result })),
+      ],
+    });
+    const overlayStore = {
+      ...createOverlayStoreMock(),
+      readThreadMessageOrigins: async () => ({}),
+      readThreadPricing: async () => ({ summaries: [], lines: [] }),
+      readThreadToolAccounting: async () => undefined,
+    } as unknown as OverlayStoreLike;
+    const registry = new DesktopBackendRegistry({ codexClient: replayClient, correspondenceStore, overlayStore, threadTitleGenerationService: null });
+    try {
+      for (const id of ["newer", "older"]) {
+        const result = await registry.readThread({
+          ...source, viewOnly: true, ...(id === "older" ? { before: "older-page" } : {}),
+          display: { resource: "transcript" },
+        });
+        expect(result.replay.entries.map((entry) => entry.id)).toEqual([
+          `${id}-user`, `${id}-response`, `${id}-delivery`,
+        ]);
+      }
+    } finally {
+      await registry.close();
+    }
+  });
+
   it("pages normalized history and persists one completed analysis batch", async () => {
     const replayClient = ReplayClient.fromFixture({
       metadata: {

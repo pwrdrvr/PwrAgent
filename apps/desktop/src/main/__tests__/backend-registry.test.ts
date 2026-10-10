@@ -42399,6 +42399,14 @@ script = "printf setup"
       entries: [], messages: [], pagination: { supportsPagination: false, hasPreviousPage: false },
     });
     expect(replay.messages).toHaveLength(1);
+    expect(replay.entries[0]?.turn?.id).toBe("active:sender");
+    expect(events).toContainEqual(expect.objectContaining({ notification: {
+      method: "item/completed",
+      params: expect.objectContaining({
+        threadId: "sender", turnId: "active:sender",
+        item: expect.objectContaining({ id: replay.entries[0]?.id, createdAt: replay.entries[0]?.createdAt }),
+      }),
+    } }));
     expect(replay.messages[0]?.text).toContain("Complete consolidated findings");
     expect(replay.messages[0]?.text).not.toContain("Initial evidence");
     registry.cancelQueuedTurn(queueEntryId);
