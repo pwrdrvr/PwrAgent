@@ -40,7 +40,7 @@ export class ArchiveCleanupQueue<T> {
    * only timer the queue owns. Between checkpoints a job awaits provider, DB,
    * and filesystem work that no clock can complete. */
   whenCheckpointPending(): Promise<void> {
-    if (this.wake) return Promise.resolve();
+    if (this.wake || this.closed) return Promise.resolve();
     return new Promise((resolve) => { this.checkpointWaiters.push(resolve); });
   }
 
@@ -92,6 +92,8 @@ export class ArchiveCleanupQueue<T> {
   async close(): Promise<void> {
     this.closed = true;
     await Promise.all([...this.jobs.keys()].map((key) => this.cancelAndWait(key)));
+    // Nothing parks after shutdown; release anyone still waiting for a pause.
+    for (const waiter of this.checkpointWaiters.splice(0)) waiter();
   }
 
   private startNext(): void {
