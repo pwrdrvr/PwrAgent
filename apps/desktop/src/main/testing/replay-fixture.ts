@@ -14,6 +14,12 @@ export type ReplayResponseStep = {
   method: ReplayResponseMethod;
   /** Reuse the preceding response until this causal response has completed. */
   afterResponseId?: string;
+  /**
+   * `thread/list` only: answer archived listings instead of active ones.
+   * Archived listings are empty until a fixture scripts one, as Codex moves
+   * an archived thread out of the active listing and into the archived one.
+   */
+  archived?: boolean;
   result?: unknown;
   error?: {
     code?: number;
@@ -78,6 +84,9 @@ export function validateReplayFixture(fixture: ReplayFixture): void {
       }
       if (!step.method?.trim()) {
         throw new Error(`Replay response step ${step.id} requires method`);
+      }
+      if (step.archived !== undefined && step.method !== "thread/list") {
+        throw new Error(`Replay response ${step.id} sets archived, which only thread/list answers`);
       }
       if (
         !Object.hasOwn(step, "result")
