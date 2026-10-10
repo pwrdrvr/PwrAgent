@@ -1,9 +1,11 @@
 import { ipcMain } from "electron";
 import type {
+  ListThreadTodoProjectsResponse,
   ListThreadTodosRequest,
   ListThreadTodosResponse,
   ResolveThreadTodoRequest,
   RunThreadTodoActionRequest,
+  SetThreadTodoProjectRequest,
   ThreadTodoMutationResponse,
   ThreadTodosChangedEvent,
 } from "@pwragent/shared";
@@ -15,8 +17,10 @@ import {
 import {
   THREAD_TODOS_CHANGED_EVENT_CHANNEL,
   THREAD_TODOS_LIST_CHANNEL,
+  THREAD_TODOS_LIST_PROJECTS_CHANNEL,
   THREAD_TODOS_RESOLVE_CHANNEL,
   THREAD_TODOS_RUN_ACTION_CHANNEL,
+  THREAD_TODOS_SET_PROJECT_CHANNEL,
 } from "../../shared/ipc";
 import type { PwrAgentFederationHandler } from "../agent-tools/pwragent-federation-agent-tools";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
@@ -25,6 +29,8 @@ import type { ThreadTodoProjectCandidate } from "../thread-todos/thread-todo-pro
 import {
   getThreadTodoService,
   installThreadTodoRuntime,
+  listThreadTodoProjects,
+  setThreadTodoProject,
 } from "../thread-todos/thread-todo-runtime";
 import { subscribersForChannel } from "../window-channels";
 import { appServerService } from "./app-server";
@@ -121,5 +127,30 @@ export function registerThreadTodoIpcHandlers(options: {
           : {}),
       }),
     }),
+  );
+
+  ipcMain.removeHandler(THREAD_TODOS_LIST_PROJECTS_CHANNEL);
+  ipcMain.handle(
+    THREAD_TODOS_LIST_PROJECTS_CHANNEL,
+    async (): Promise<ListThreadTodoProjectsResponse> => ({
+      projects: await listThreadTodoProjects(),
+    }),
+  );
+
+  ipcMain.removeHandler(THREAD_TODOS_SET_PROJECT_CHANNEL);
+  ipcMain.handle(
+    THREAD_TODOS_SET_PROJECT_CHANNEL,
+    async (
+      _event,
+      request: SetThreadTodoProjectRequest,
+    ): Promise<ThreadTodoMutationResponse> => {
+      const projectKey = request.projectKey;
+      if (projectKey !== null && typeof projectKey !== "string") {
+        throw new Error("A to-do's project must be a project key or null.");
+      }
+      return {
+        todo: await setThreadTodoProject({ id: request.id, projectKey }),
+      };
+    },
   );
 }

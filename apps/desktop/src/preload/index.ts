@@ -26,10 +26,12 @@ import { USAGE_ACTIVITY_READ_CHANNEL } from "../shared/ipc";
 import { THREAD_FAMILY_PRICING_READ_CHANNEL } from "../shared/ipc";
 import { USAGE_ACTIVITY_OPEN_THREAD_CHANNEL, USAGE_ACTIVITY_OPEN_WINDOW_CHANNEL } from "../shared/ipc";
 import type {
+  ListThreadTodoProjectsResponse,
   ListThreadTodosRequest,
   ListThreadTodosResponse,
   ResolveThreadTodoRequest,
   RunThreadTodoActionRequest,
+  SetThreadTodoProjectRequest,
   ThreadTodoMutationResponse,
   ThreadTodosChangedEvent,
   DismissOperatorQuestionRequest,
@@ -611,8 +613,10 @@ import {
   SCHEDULED_ACTIONS_UPDATE_CHANNEL,
   THREAD_TODOS_CHANGED_EVENT_CHANNEL,
   THREAD_TODOS_LIST_CHANNEL,
+  THREAD_TODOS_LIST_PROJECTS_CHANNEL,
   THREAD_TODOS_RESOLVE_CHANNEL,
   THREAD_TODOS_RUN_ACTION_CHANNEL,
+  THREAD_TODOS_SET_PROJECT_CHANNEL,
   OPERATOR_REQUESTS_CHANGED_EVENT_CHANNEL,
   OPERATOR_REQUESTS_DISMISS_QUESTION_CHANNEL,
   OPERATOR_REQUESTS_LIST_CHANNEL,
@@ -2119,6 +2123,12 @@ const desktopApi = Object.freeze({
     request: RunThreadTodoActionRequest,
   ): Promise<ThreadTodoMutationResponse> =>
     await ipcRenderer.invoke(THREAD_TODOS_RUN_ACTION_CHANNEL, request),
+  listThreadTodoProjects: async (): Promise<ListThreadTodoProjectsResponse> =>
+    await ipcRenderer.invoke(THREAD_TODOS_LIST_PROJECTS_CHANNEL),
+  setThreadTodoProject: async (
+    request: SetThreadTodoProjectRequest,
+  ): Promise<ThreadTodoMutationResponse> =>
+    await ipcRenderer.invoke(THREAD_TODOS_SET_PROJECT_CHANNEL, request),
   onThreadTodosChanged: (
     callback: (event: ThreadTodosChangedEvent) => void,
   ): (() => void) => {

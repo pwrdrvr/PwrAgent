@@ -3,6 +3,7 @@ import type {
   CreateInstanceThreadResult,
   ListInstanceProjectsResult,
   PwrAgentFederationContext,
+  ThreadTodo,
   ThreadTodoMergeMethod,
   ThreadTodoProject,
   ThreadTodosChangedEvent,
@@ -16,6 +17,7 @@ import { getAppStateDb } from "../state/app-state.js";
 import {
   findPeerThreadTodoProject,
   matchThreadTodoProject,
+  threadTodoProjectChoices,
   threadTodoProjectForDirectory,
   type ThreadTodoProjectCandidate,
 } from "./thread-todo-projects.js";
@@ -34,6 +36,7 @@ const threadTodoLog = getMainLogger("pwragent:thread-todos");
 let service: ThreadTodoService | null = null;
 let unsubscribeArchive: (() => void) | undefined;
 let readDefaultMergeMethod: (() => ThreadTodoMergeMethod) | undefined;
+let listProjectCandidates: (() => Promise<ThreadTodoProjectCandidate[]>) | undefined;
 
 export function getThreadTodoService(): ThreadTodoService {
   if (!service) {
@@ -50,7 +53,33 @@ export function resetThreadTodoServiceForTests(): void {
   unsubscribeArchive?.();
   unsubscribeArchive = undefined;
   readDefaultMergeMethod = undefined;
+  listProjectCandidates = undefined;
   service = null;
+}
+
+/** The projects a card's project menu offers. Empty before install. */
+export async function listThreadTodoProjects(): Promise<ThreadTodoProject[]> {
+  return threadTodoProjectChoices(await (listProjectCandidates?.() ?? []));
+}
+
+/**
+ * The operator's pick from a card's project menu. A key the sidebar no
+ * longer lists is refused rather than kept as a stale label.
+ */
+export async function setThreadTodoProject(params: {
+  id: string;
+  projectKey: string | null;
+}): Promise<ThreadTodo> {
+  const todos = getThreadTodoService();
+  if (params.projectKey === null) {
+    return todos.update({ id: params.id, targetProject: null });
+  }
+  const project = (await listThreadTodoProjects())
+    .find((candidate) => candidate.key === params.projectKey);
+  if (!project) {
+    throw new ThreadTodoError("not_found", "That project is no longer in the sidebar.");
+  }
+  return todos.update({ id: params.id, targetProject: project });
 }
 
 /**
@@ -129,6 +158,7 @@ export function installThreadTodoRuntime(params: {
       });
       return [] as ThreadTodoProjectCandidate[];
     });
+  listProjectCandidates = listProjectsForTodo;
   const matchProject = (
     query: string,
     projects: readonly ThreadTodoProjectCandidate[],

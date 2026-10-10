@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   findPeerThreadTodoProject,
   matchThreadTodoProject,
+  threadTodoProjectChoices,
   type ThreadTodoProjectCandidate,
 } from "../thread-todos/thread-todo-projects";
 
@@ -37,8 +38,49 @@ describe("matchThreadTodoProject", () => {
   it("names the known projects when nothing matches, and never a workspace", () => {
     expect(matchThreadTodoProject("Notes", CANDIDATES)).toEqual({
       ok: false,
-      message: 'No project named "Notes". Known projects: PwrAgent, PwrSnap, pwrgit, pwrgit (fork).',
+      message: 'No project named "Notes". Known projects: PwrAgent, PwrSnap, pwrgit, pwrgit (fork). list_instance_projects gives each one\'s projectKey.',
     });
+  });
+
+  it("resolves a path inside a project to that project", () => {
+    expect(matchThreadTodoProject("/src/PwrSnap/apps/agent", CANDIDATES)).toMatchObject({
+      ok: true,
+      project: { key: "directory:/src/PwrSnap" },
+    });
+    // A sibling whose name only starts with the root is not inside it.
+    expect(matchThreadTodoProject("/src/pwragent-docs", CANDIDATES).ok).toBe(false);
+  });
+
+  it("prefers the deepest project when one holds another", () => {
+    const nested: ThreadTodoProjectCandidate[] = [
+      ...CANDIDATES,
+      { key: "directory:/src/pwragent/vendor/lib", label: "lib", kind: "directory", path: "/src/pwragent/vendor/lib" },
+    ];
+    expect(matchThreadTodoProject("/src/pwragent/vendor/lib/src", nested)).toMatchObject({
+      ok: true,
+      project: { key: "directory:/src/pwragent/vendor/lib" },
+    });
+  });
+
+  it("resolves a worktree outside the project by its folder name", () => {
+    expect(matchThreadTodoProject("~/.codex/worktrees/k3p/PwrSnap", CANDIDATES)).toMatchObject({
+      ok: true,
+      project: { key: "directory:/src/PwrSnap" },
+    });
+    expect(matchThreadTodoProject("C:\\worktrees\\k3p\\pwragent", CANDIDATES)).toMatchObject({
+      ok: true,
+      project: { key: "directory:/src/pwragent" },
+    });
+    // Two clones share the folder name: refused, as a bare name would be.
+    const match = matchThreadTodoProject("/tmp/worktrees/abc/pwrgit", CANDIDATES);
+    expect(match.ok).toBe(false);
+  });
+});
+
+describe("threadTodoProjectChoices", () => {
+  it("lists directories once each, without workspaces", () => {
+    expect(threadTodoProjectChoices([...CANDIDATES, CANDIDATES[0]!]).map((project) => project.label))
+      .toEqual(["PwrAgent", "PwrSnap", "pwrgit", "pwrgit (fork)"]);
   });
 });
 

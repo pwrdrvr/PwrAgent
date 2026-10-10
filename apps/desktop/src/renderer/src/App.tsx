@@ -2425,6 +2425,8 @@ function DesktopAppShell(props: {
     return () => window.removeEventListener("focus", mark);
   }, [markOperatorItemsSeen, selectedOpenTodos, selectedWaits]);
   const listThreadTodos = desktopApi?.listThreadTodos;
+  const listThreadTodoProjects = desktopApi?.listThreadTodoProjects;
+  const setThreadTodoProject = desktopApi?.setThreadTodoProject;
   const submitServerRequest = desktopApi?.submitServerRequest;
   const configuredMergeMethod = props.settings.snapshot?.git?.defaultMergeMethod?.value;
   // Peers that can host a handoff thread, the same list the new-thread
@@ -2476,6 +2478,15 @@ function DesktopAppShell(props: {
       runningIds: threadTodoController.runningIds,
       mergeMethods,
       instances: todoHandoffInstances,
+      ...(listThreadTodoProjects && setThreadTodoProject
+        ? {
+            projectMenu: {
+              list: async () => (await listThreadTodoProjects()).projects,
+              set: async (todo, projectKey) =>
+                (await setThreadTodoProject({ id: todo.id, projectKey })).todo,
+            },
+          }
+        : {}),
       threadTitle: (todo) =>
         localThreadTitles.get(buildThreadIdentityKey(todo.backend, todo.threadId))
           ?? "Untitled thread",
@@ -2542,12 +2553,14 @@ function DesktopAppShell(props: {
     };
   }, [
     configuredMergeMethod,
+    listThreadTodoProjects,
     listThreadTodos,
     localThreadProjects,
     localThreadTitles,
     operatorRequests,
     submitServerRequest,
     requestTodoExecutionMode,
+    setThreadTodoProject,
     showThreadFromLink,
     threadTodoController,
     todoHandoffInstances,
