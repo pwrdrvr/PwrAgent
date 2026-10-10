@@ -183,6 +183,7 @@ async function main(argv) {
   if (command === "plan") {
     const workflow = await readFile(".github/workflows/package-manager-distribution.yml", "utf8");
     const sources = {
+      artifact: await readFile("scripts/build-artifact.py", "utf8"),
       assetAction: await readFile(".github/actions/distribution-asset/action.yml", "utf8"),
       release: await readFile("scripts/package-manager-release.mjs", "utf8"),
       planner: await readFile("scripts/package-manager-release-plan.mjs", "utf8"),
