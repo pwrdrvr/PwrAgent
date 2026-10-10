@@ -15,6 +15,14 @@ vi.mock("../app-server/thread-assets", async (importOriginal) => ({
   // complete the host `rm` calls the real cleanup makes.
   deleteThreadAssets: vi.fn(async () => {}),
 }));
+vi.mock("../app-server/thread-directory-enricher", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../app-server/thread-directory-enricher")>(),
+  // Cleanup's fake clock cannot finish host filesystem discovery. Every
+  // workspace in this fixture is contrived and must use the injected resolver.
+  resolveWorktreeRepositoryDirectory: vi.fn(async () => {
+    throw new Error("Archive cleanup fixture used host workspace discovery.");
+  }),
+}));
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   return {
@@ -89,7 +97,9 @@ function build(active: AppServerThreadSummary[], target = codexThread({ id: "tar
       repositoryPath: "/contrived/repo", snapshotRef: "refs/codex/snapshots/test", snapshotCommit: "abc",
       createdAt: 1, archivedAt: 2, state: "archived", ignoredFilesExcluded: true };
   });
+  const resolveWorkspace = vi.fn(async () => undefined);
   const registry = new DesktopBackendRegistry({ codexClient: client as never, overlayStore: store as never,
+    acpWorktreeRepositoryResolver: resolveWorkspace,
     worktreeArchiveService: { archive: archiveWorktree } as never, threadTitleGenerationService: null });
   registries.push(registry);
   const events: AgentEvent[] = [];
@@ -99,7 +109,7 @@ function build(active: AppServerThreadSummary[], target = codexThread({ id: "tar
       if (event.notification.method === "thread/archiveCleanup/completed") resolve(event);
     });
   });
-  return { registry, client, counts, events, overlays, store, archiveWorktree, completion };
+  return { registry, client, counts, events, overlays, store, archiveWorktree, resolveWorkspace, completion };
 }
 
 describe("archive cleanup pipeline", () => {
@@ -203,6 +213,7 @@ describe("archive cleanup pipeline", () => {
 
     const result = await drivePacer(fixture.registry.archiveThread({ backend: "codex", threadId: "target" }));
 
+    expect(fixture.resolveWorkspace).toHaveBeenCalledWith("/contrived/worktree");
     expect(result.cleanup[0]?.skippedReason).toContain("another active thread: shared-user");
     expect(fixture.archiveWorktree).not.toHaveBeenCalled();
   });
