@@ -1107,6 +1107,11 @@ function SettingsSectionBody(props: {
             experimental: { codexToolDiscovery: enabled },
           });
         }}
+        onClaudeAcpChange={async (enabled: boolean) => {
+          await props.settings.writeConfig({
+            experimental: { claudeAcp: enabled },
+          });
+        }}
       />
     );
   }
