@@ -152,7 +152,10 @@ import {
   ThreadTodoCountsContext,
   useThreadTodos,
 } from "./features/thread-todos/useThreadTodos";
-import type { ThreadTodosView } from "./features/thread-todos/thread-todos-view";
+import type {
+  ThreadTodoProjectMenu,
+  ThreadTodosView,
+} from "./features/thread-todos/thread-todos-view";
 import {
   OperatorWaitsContext,
   useOperatorRequests,
@@ -2425,6 +2428,20 @@ function DesktopAppShell(props: {
     return () => window.removeEventListener("focus", mark);
   }, [markOperatorItemsSeen, selectedOpenTodos, selectedWaits]);
   const listThreadTodos = desktopApi?.listThreadTodos;
+  const listThreadTodoProjects = desktopApi?.listThreadTodoProjects;
+  const setThreadTodoProject = desktopApi?.setThreadTodoProject;
+  // Its own memo: the card's menu refetches when this object changes, and
+  // the to-dos view below rebuilds on every card change.
+  const todoProjectMenu = useMemo<ThreadTodoProjectMenu | undefined>(
+    () => listThreadTodoProjects && setThreadTodoProject
+      ? {
+          list: async () => (await listThreadTodoProjects()).projects,
+          set: async (todo, projectKey) =>
+            (await setThreadTodoProject({ id: todo.id, projectKey })).todo,
+        }
+      : undefined,
+    [listThreadTodoProjects, setThreadTodoProject],
+  );
   const submitServerRequest = desktopApi?.submitServerRequest;
   const configuredMergeMethod = props.settings.snapshot?.git?.defaultMergeMethod?.value;
   // Peers that can host a handoff thread, the same list the new-thread
@@ -2476,6 +2493,7 @@ function DesktopAppShell(props: {
       runningIds: threadTodoController.runningIds,
       mergeMethods,
       instances: todoHandoffInstances,
+      ...(todoProjectMenu ? { projectMenu: todoProjectMenu } : {}),
       threadTitle: (todo) =>
         localThreadTitles.get(buildThreadIdentityKey(todo.backend, todo.threadId))
           ?? "Untitled thread",
@@ -2550,6 +2568,7 @@ function DesktopAppShell(props: {
     requestTodoExecutionMode,
     showThreadFromLink,
     threadTodoController,
+    todoProjectMenu,
     todoHandoffInstances,
   ]);
   // Fetch the boot info once at mount. Stable for the renderer's

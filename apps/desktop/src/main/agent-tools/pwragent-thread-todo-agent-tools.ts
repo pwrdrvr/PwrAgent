@@ -491,6 +491,7 @@ function descriptionForOperation(operation: PwrAgentThreadTodoOperationName): st
         "Pass a stable key to update one card instead of adding another each turn.",
         "Use update_todo to change some fields of a card you already raised.",
         "Pass project when the work is for another project, and raise one card per project.",
+        "For the exact project, pass a projectKey from list_instance_projects for this machine.",
       ].join(" ");
     case "update_todo":
       return [
@@ -534,7 +535,7 @@ function inputSchemaForOperation(
           project: {
             type: "string",
             description:
-              "The project the work is for, by name or path, such as PwrSnap. Omit for this thread's own project.",
+              "The project the work is for. Pass a projectKey from list_instance_projects, a project name, or a path inside the project or its worktree. Omit for this thread's own project.",
           },
           action: {
             type: "object",
@@ -594,7 +595,7 @@ function inputSchemaForOperation(
           detail: { type: "string", description: "Empty clears it." },
           project: {
             type: "string",
-            description: "The project the work is for, by name or path. Empty returns the card to this thread's project.",
+            description: "The project the work is for: a projectKey from list_instance_projects, a name, or a path. Empty returns the card to this thread's project.",
           },
           prompt: { type: "string", description: "Handoff cards: the new thread's complete first message." },
           threadTitle: { type: "string", description: "Handoff cards: the new thread's name. Empty clears it." },

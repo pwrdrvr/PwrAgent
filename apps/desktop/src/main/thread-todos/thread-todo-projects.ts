@@ -23,9 +23,34 @@ export type ThreadTodoProjectMatch =
 const MAX_LISTED_PROJECTS = 20;
 
 /**
+ * The projects a card can name: the Directories lens rows that are real
+ * directories. Workspaces and unlinked rows are not somewhere work can be
+ * sent.
+ */
+export function threadTodoProjectChoices(
+  candidates: readonly ThreadTodoProjectCandidate[],
+): ThreadTodoProject[] {
+  const projects = new Map<string, ThreadTodoProject>();
+  for (const candidate of candidates) {
+    if (candidate.kind !== "directory" || typeof candidate.path !== "string") continue;
+    if (projects.has(candidate.key)) continue;
+    projects.set(candidate.key, {
+      key: candidate.key,
+      label: candidate.label,
+      path: candidate.path,
+    });
+  }
+  return [...projects.values()];
+}
+
+/**
  * Resolve the project a thread named ("PwrSnap", a path, or a directory key)
- * against the projects the sidebar lists. Only real directories qualify:
- * Workspaces and unlinked rows are not somewhere work can be sent.
+ * against the projects the sidebar lists.
+ *
+ * A path resolves to the project that contains it, so a subdirectory works.
+ * A worktree lives outside its project's root, so a path that no project
+ * contains falls back to its folder name, which Codex and PwrAgent
+ * worktrees keep.
  *
  * A name that matches two projects is refused rather than guessed, since
  * two clones can share a folder name and the card would act in whichever
@@ -35,33 +60,36 @@ export function matchThreadTodoProject(
   query: string,
   candidates: readonly ThreadTodoProjectCandidate[],
 ): ThreadTodoProjectMatch {
-  const projects = candidates.filter(
-    (candidate): candidate is ThreadTodoProjectCandidate & { path: string } =>
-      candidate.kind === "directory" && typeof candidate.path === "string",
-  );
+  const projects = threadTodoProjectChoices(candidates);
   const trimmed = query.trim();
-  const needle = trimmed.toLowerCase();
   const asPath = canonicalizeNavigationPath(trimmed);
-  const exact = projects.filter((project) =>
-    project.key === trimmed
-    || canonicalizeNavigationPath(project.path) === asPath);
-  const byName = exact.length > 0
-    ? exact
-    : projects.filter((project) =>
-        project.label.toLowerCase() === needle
-        || basename(project.path).toLowerCase() === needle);
-  const matches = [...new Map(byName.map((project) => [project.key, project])).values()];
-  if (matches.length === 1) {
-    const [project] = matches;
-    return {
-      ok: true,
-      project: { key: project!.key, label: project!.label, path: project!.path },
-    };
+  const isPath = looksLikePath(trimmed);
+  // Most specific first. macOS and Windows paths ignore case, so a path
+  // that matches nothing exactly is tried again without it.
+  const lookups: Array<() => ThreadTodoProject[]> = [
+    () => projects.filter((project) =>
+      project.key === trimmed || samePath(project.path, asPath, false)),
+    ...(isPath
+      ? [
+          () => containingProjects(asPath, projects, false),
+          () => projects.filter((project) => samePath(project.path, asPath, true)),
+          () => containingProjects(asPath, projects, true),
+        ]
+      : []),
+    () => projectsNamed(isPath ? basename(trimmed) : trimmed, projects),
+  ];
+  let resolved: ThreadTodoProject[] = [];
+  for (const lookup of lookups) {
+    resolved = lookup();
+    if (resolved.length > 0) break;
   }
-  if (matches.length > 1) {
+  if (resolved.length === 1) {
+    return { ok: true, project: resolved[0]! };
+  }
+  if (resolved.length > 1) {
     return {
       ok: false,
-      message: `"${trimmed}" matches more than one project: ${matches
+      message: `"${trimmed}" matches more than one project: ${resolved
         .map((project) => project.path)
         .join(", ")}. Pass the project's path instead.`,
     };
@@ -70,9 +98,53 @@ export function matchThreadTodoProject(
   return {
     ok: false,
     message: known.length > 0
-      ? `No project named "${trimmed}". Known projects: ${known.join(", ")}.`
+      ? `No project named "${trimmed}". Known projects: ${known.join(", ")}. list_instance_projects gives each one's projectKey.`
       : `No project named "${trimmed}", and PwrAgent lists no projects yet.`,
   };
+}
+
+function looksLikePath(value: string): boolean {
+  return value.includes("/") || value.includes("\\");
+}
+
+function comparablePath(path: string, ignoreCase: boolean): string {
+  const canonical = canonicalizeNavigationPath(path);
+  return ignoreCase ? canonical.toLowerCase() : canonical;
+}
+
+function samePath(projectPath: string, path: string, ignoreCase: boolean): boolean {
+  return comparablePath(projectPath, ignoreCase) === comparablePath(path, ignoreCase);
+}
+
+/** The deepest project whose root holds `path`; nested clones are rare. */
+function containingProjects(
+  path: string,
+  projects: readonly ThreadTodoProject[],
+  ignoreCase: boolean,
+): ThreadTodoProject[] {
+  const target = comparablePath(path, ignoreCase);
+  let best: ThreadTodoProject[] = [];
+  let bestLength = 0;
+  for (const project of projects) {
+    const root = comparablePath(project.path, ignoreCase);
+    if (!root || !target.startsWith(`${root}/`)) continue;
+    if (root.length > bestLength) {
+      best = [project];
+      bestLength = root.length;
+    }
+  }
+  return best;
+}
+
+function projectsNamed(
+  name: string,
+  projects: readonly ThreadTodoProject[],
+): ThreadTodoProject[] {
+  const needle = name.toLowerCase();
+  if (!needle) return [];
+  return projects.filter((project) =>
+    project.label.toLowerCase() === needle
+    || basename(project.path).toLowerCase() === needle);
 }
 
 /**

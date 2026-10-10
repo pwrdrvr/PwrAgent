@@ -169,6 +169,8 @@ export const SCHEDULED_ACTIONS_SEND_NOW_CHANNEL = "scheduled-actions:send-now";
 export const THREAD_TODOS_LIST_CHANNEL = "thread-todos:list";
 export const THREAD_TODOS_RESOLVE_CHANNEL = "thread-todos:resolve";
 export const THREAD_TODOS_RUN_ACTION_CHANNEL = "thread-todos:run-action";
+export const THREAD_TODOS_LIST_PROJECTS_CHANNEL = "thread-todos:list-projects";
+export const THREAD_TODOS_SET_PROJECT_CHANNEL = "thread-todos:set-project";
 /**
  * Marker event: a thread's to-do cards changed. Listeners refetch with
  * `thread-todos:list`. Sent to local windows only; a peer's cards stay on

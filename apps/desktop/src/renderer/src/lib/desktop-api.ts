@@ -6,10 +6,12 @@ import type {
   TerminateBackgroundTerminalResponse,
 } from "@pwragent/shared";
 import type {
+  ListThreadTodoProjectsResponse,
   ListThreadTodosRequest,
   ListThreadTodosResponse,
   ResolveThreadTodoRequest,
   RunThreadTodoActionRequest,
+  SetThreadTodoProjectRequest,
   ThreadTodoMutationResponse,
   ThreadTodosChangedEvent,
   DismissOperatorQuestionRequest,
@@ -993,6 +995,12 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   /** Merge or start-thread; start_review runs through the composer instead. */
   runThreadTodoAction?: (
     request: RunThreadTodoActionRequest,
+  ) => Promise<ThreadTodoMutationResponse>;
+  /** The projects a card's project menu offers. */
+  listThreadTodoProjects?: () => Promise<ListThreadTodoProjectsResponse>;
+  /** The operator's pick from a card's project menu. */
+  setThreadTodoProject?: (
+    request: SetThreadTodoProjectRequest,
   ) => Promise<ThreadTodoMutationResponse>;
   /** Marker event; refetch with `listThreadTodos`. Local windows only. */
   onThreadTodosChanged?: (

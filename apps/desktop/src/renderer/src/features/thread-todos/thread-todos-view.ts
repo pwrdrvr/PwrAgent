@@ -3,6 +3,7 @@ import type {
   SubmitServerRequestRequest,
   ThreadTodo,
   ThreadTodoMergeMethodPreferences,
+  ThreadTodoProject,
   ThreadTodoResolution,
   ThreadTodoStatus,
 } from "@pwragent/shared";
@@ -16,6 +17,14 @@ export type ThreadTodoInstance = {
 };
 
 export type ThreadTodoRunOptions = Omit<RunThreadTodoActionRequest, "id">;
+
+/** What a card's project menu reads and writes. */
+export type ThreadTodoProjectMenu = {
+  /** The projects a card can be for, fetched as the menu opens. */
+  list: () => Promise<ThreadTodoProject[]>;
+  /** `null` returns the card to its thread's project. */
+  set: (todo: ThreadTodo, projectKey: string | null) => Promise<ThreadTodo | undefined>;
+};
 
 /**
  * Everything ThreadView's to-do surfaces read, built once in App. The stack
@@ -33,6 +42,8 @@ export type ThreadTodosView = {
   mergeMethods?: ThreadTodoMergeMethodPreferences;
   /** Peers a handoff can start on. Empty without federation. */
   instances: ThreadTodoInstance[];
+  /** The cards' project menu. Absent where a card's project cannot change. */
+  projectMenu?: ThreadTodoProjectMenu;
   /** Name of the thread a card belongs to. */
   threadTitle: (todo: ThreadTodo) => string;
   resolve: (

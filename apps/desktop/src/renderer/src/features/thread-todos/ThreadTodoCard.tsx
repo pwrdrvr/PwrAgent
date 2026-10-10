@@ -17,7 +17,6 @@ import {
   ChevronUpIcon,
   CloseIcon,
   CopyIcon,
-  FolderIcon,
   HandoffIcon,
   MergeIcon,
   ReviewIcon,
@@ -25,8 +24,13 @@ import {
 } from "../../icons";
 import { copyText } from "../../lib/copy-text";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
+import { TodoProjectPicker } from "./TodoProjectPicker";
 import { TodoSplitButton, type TodoSplitMenuEntry } from "./TodoSplitButton";
-import type { ThreadTodoInstance, ThreadTodoRunOptions } from "./thread-todos-view";
+import type {
+  ThreadTodoInstance,
+  ThreadTodoProjectMenu,
+  ThreadTodoRunOptions,
+} from "./thread-todos-view";
 
 const KIND_ICONS: Record<ThreadTodoKind, ComponentType<IconProps> | undefined> = {
   reminder: undefined,
@@ -69,6 +73,8 @@ export type ThreadTodoCardProps = ThreadTodoCardHandlers & {
   running: boolean;
   mergeMethods?: ThreadTodoMergeMethodPreferences;
   instances?: ThreadTodoInstance[];
+  /** Changes the project the card's action runs in. */
+  projectMenu?: ThreadTodoProjectMenu;
   pager?: {
     position: number;
     total: number;
@@ -294,12 +300,12 @@ export function ThreadTodoCard(props: ThreadTodoCardProps) {
         </div>
       </div>
 
-      {todo.targetProject ? (
-        <p className="thread-todo-card__project">
-          <FolderIcon size={11} aria-hidden="true" />
-          <span className="thread-todo-card__project-label">For {todo.targetProject.label}</span>
-        </p>
-      ) : null}
+      {/* A review starts on the card's own thread, so it has no project to change. */}
+      <TodoProjectPicker
+        todo={todo}
+        menu={todo.kind === "review" ? undefined : props.projectMenu}
+        disabled={props.running}
+      />
 
       {todo.detail || facts.length > 0 || prompt || todo.error ? (
         <div className="thread-todo-card__body">
