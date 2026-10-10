@@ -17899,6 +17899,12 @@ export class DesktopBackendRegistry {
       parentThreadId: request.parentThreadId,
       threadId: result.threadId,
     });
+    // Provider thread/started can arrive before the fork's workspace overlay
+    // is saved. Publish membership again once the prepared link is durable.
+    await this.emitCodexDirectoryRelationshipsUpdated({
+      reason: "thread-created",
+      threadIds: [result.threadId],
+    });
 
     return {
       backend,
@@ -27631,7 +27637,7 @@ export class DesktopBackendRegistry {
   }
 
   private async emitCodexDirectoryRelationshipsUpdated(params: {
-    reason: "selected-thread" | "full-reconcile";
+    reason: "selected-thread" | "full-reconcile" | "thread-created";
     threadIds: string[];
   }): Promise<void> {
     await this.emit({

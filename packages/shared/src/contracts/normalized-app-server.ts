@@ -2270,7 +2270,7 @@ export type AppServerNotification =
   | {
       method: "navigation/threadDirectories/updated";
       params: {
-        reason: "selected-thread" | "full-reconcile";
+        reason: "selected-thread" | "full-reconcile" | "thread-created";
         threadIds: string[];
       };
     }

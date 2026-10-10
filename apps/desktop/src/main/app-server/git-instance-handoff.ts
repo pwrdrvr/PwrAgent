@@ -97,7 +97,7 @@ export async function assertGitHandoffUnchanged(cwd: string, snapshot: ThreadHan
 }
 
 /** Fetch only from a receiver-configured remote belonging to the same repo. */
-async function withFetchedHandoff<T>(repository: string, snapshot: ThreadHandoffGitReference, work: () => Promise<T>): Promise<T> {
+async function withFetchedHandoff<T>(repository: string, snapshot: ThreadHandoffGitReference, work: (remote: string) => Promise<T>): Promise<T> {
   validateGitHandoffReference(snapshot);
   await git(repository, ["rev-parse", "--show-toplevel"]).catch((error: unknown) => {
     throw new Error("The repository is not available on the receiving machine. Clone it there and choose its path before handing off.", { cause: error });
@@ -125,7 +125,7 @@ async function withFetchedHandoff<T>(repository: string, snapshot: ThreadHandoff
     // Worktree creation does not populate gitlinks. Reject before preflight
     // succeeds or an incomplete checkout can be acknowledged to the sender.
     await assertNoSubmodules(repository, snapshot.head);
-    return await work();
+    return await work(remote);
   } finally {
     await git(repository, ["update-ref", "-d", ref]);
   }
@@ -135,7 +135,7 @@ export async function prepareGitHandoff(repository: string, snapshot: ThreadHand
   return await withFetchedHandoff(repository, snapshot, async () => ({ head: snapshot.head }));
 }
 
-/** Create a new detached checkout without moving a receiver branch or index. */
+/** Prefer the source branch without moving a receiver branch or index. */
 export async function importGitHandoff(params: {
   repository: string;
   worktree: string;
@@ -143,11 +143,57 @@ export async function importGitHandoff(params: {
 }): Promise<() => Promise<void>> {
   const { repository, worktree, snapshot } = params;
   let created = false;
-  const rollback = async () => { if (created) await git(repository, ["worktree", "remove", "--force", worktree]); };
+  let createdBranch: string | undefined;
+  const rollback = async () => {
+    if (created) await git(repository, ["worktree", "remove", "--force", worktree]);
+    if (createdBranch) {
+      const head = (await git(repository, ["rev-parse", `refs/heads/${createdBranch}`])).stdout.trim();
+      if (head === snapshot.head) await git(repository, ["branch", "-D", createdBranch]);
+    }
+  };
   try {
-    return await withFetchedHandoff(repository, snapshot, async () => {
+    return await withFetchedHandoff(repository, snapshot, async (remote) => {
+      let switchBranch: string[] | undefined;
+      const branch = snapshot.sourceBranch;
+      if (branch) {
+        await git(repository, ["check-ref-format", `refs/heads/${branch}`]);
+        await git(repository, ["check-ref-format", "--branch", branch]);
+        const ref = `refs/heads/${branch}`;
+        const occupied = (await git(repository, ["worktree", "list", "--porcelain", "-z"])).stdout
+          .split("\0").includes(`branch ${ref}`);
+        const branchHead = (await git(repository, ["show-ref", "--verify", "--hash", ref])
+          .catch(() => ({ stdout: "" }))).stdout.trim();
+        if (!occupied && (!branchHead || branchHead === snapshot.head)) {
+          switchBranch = branchHead ? ["--no-guess", branch] : ["-c", branch, snapshot.head];
+        }
+      }
+      // worktree add -b creates its branch before checkout, and leaves it behind
+      // if a filter fails. Complete checkout before transactional switch -c.
       await git(repository, ["-c", "core.hooksPath=", "worktree", "add", "--detach", worktree, snapshot.head]);
       created = true;
+      if (switchBranch && branch) {
+        try {
+          await git(worktree, ["-c", "core.hooksPath=", "switch", ...switchBranch]);
+          if (switchBranch[0] === "-c") createdBranch = branch;
+        } catch (error) {
+          // Git owns branch reservations. A concurrent branch creation or a
+          // parent/child ref name conflict leaves this checkout detached.
+          const ref = `refs/heads/${branch}`;
+          const refs = (await git(repository, ["for-each-ref", "--format=%(refname)", "refs/heads"])).stdout.trim().split("\n");
+          const namespaceConflict = switchBranch[0] === "-c" && refs.some((existing) =>
+            existing === ref || existing.startsWith(`${ref}/`) || ref.startsWith(`${existing}/`));
+          const stderr = error && typeof error === "object" && "stderr" in error ? error.stderr : undefined;
+          if (!namespaceConflict && (typeof stderr !== "string"
+            || !/already (?:checked out|used by worktree|exists)/i.test(stderr))) throw error;
+        }
+      }
+      if ((await git(worktree, ["rev-parse", "HEAD"])).stdout.trim() !== snapshot.head) {
+        throw new Error("The receiving branch changed during handoff. Retry after Git changes settle.");
+      }
+      if (createdBranch) {
+        await git(repository, ["config", `branch.${createdBranch}.remote`, remote]);
+        await git(repository, ["config", `branch.${createdBranch}.merge`, snapshot.ref]);
+      }
       const cwd = snapshot.cwdRelative ? path.join(worktree, ...snapshot.cwdRelative.split("/")) : worktree;
       // Validate the Git-owned directory before returning the checkout to the
       // caller. Never create a missing path or follow a link outside the tree.

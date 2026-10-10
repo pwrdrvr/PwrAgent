@@ -95,7 +95,7 @@ describe("SendThreadToMachineDialog", () => {
     const input = screen.getByRole("textbox", { name: "Repository on studio-mac" });
     await waitFor(() => expect(input).toHaveValue("/Users/operator/src/PwrAgent"));
     expect(input).toHaveAccessibleDescription(
-      "Matched by origin github.com/pwrdrvr/pwragent. The thread starts in a new detached worktree there.",
+      "Matched by origin github.com/pwrdrvr/pwragent. A new worktree uses the source branch when available, or starts detached at the source commit.",
     );
     expect(screen.getByRole("button", { name: "Copy to studio-mac" })).toBeEnabled();
   });
