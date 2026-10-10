@@ -102,6 +102,8 @@ export const THREAD_TODO_ACTION_TYPES = [
 
 export type ThreadTodo = {
   id: string;
+  /** A projected tracked review, whose status is owned by review tracking. */
+  reviewId?: string;
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   /** Re-adding an open card with the same key updates it in place. */

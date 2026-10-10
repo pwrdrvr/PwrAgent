@@ -21,6 +21,7 @@ import { OperatorWaitRow } from "../operator-requests/OperatorWaitRow";
 import { isBlockingWait, type OperatorWait } from "../operator-requests/operator-waits";
 import { ThreadTodoCard, formatTodoAge } from "./ThreadTodoCard";
 import type { ThreadTodosView } from "./thread-todos-view";
+import { operatorWaitMatchesFilter, threadTodoMatchesFilter, type ThreadTodoFilter } from "./thread-todo-filters";
 
 export type ThreadTodoScope = "thread" | "project" | "all";
 
@@ -65,6 +66,8 @@ type TodoGroup = {
 
 export type ThreadTodosPanelProps = {
   view: ThreadTodosView;
+  /** UX may supply any combination of questions, approvals, reviews, and cards. */
+  filter?: ThreadTodoFilter;
   /** `backend:threadId` of the thread on screen. */
   threadKey: string;
   /** Directory key of that thread's project, when it has one. */
@@ -139,15 +142,15 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
   };
   const openItemsIn = (lens: ThreadTodoScope): PanelItem[] => [
     ...view.waits
-      .filter((wait) => waitInScope(wait, lens))
+      .filter((wait) => waitInScope(wait, lens) && operatorWaitMatchesFilter(wait, props.filter))
       .map((wait): PanelItem => ({ type: "wait", key: wait.key, wait })),
     ...view.open
-      .filter((todo) => todoInScope(todo, lens))
+      .filter((todo) => todoInScope(todo, lens) && threadTodoMatchesFilter(todo, props.filter))
       .map((todo): PanelItem => ({ type: "todo", key: operatorTodoItemKey(todo.id), todo })),
   ];
   const items: PanelItem[] | undefined = showResolved
     ? resolved
-      ?.filter((todo) => todoInScope(todo, activeScope))
+      ?.filter((todo) => todoInScope(todo, activeScope) && threadTodoMatchesFilter(todo, props.filter))
       .map((todo) => ({ type: "todo", key: operatorTodoItemKey(todo.id), todo }))
     : openItemsIn(activeScope);
   const groups = items ? groupItems(items, activeScope, props) : undefined;

@@ -1,5 +1,5 @@
 import type {
-  AppServerReviewFinding,
+  AppServerBackendKind,
   AppServerReviewOutput,
   AppServerThreadReviewEntry,
   DesktopApplicationsSnapshot,
@@ -9,7 +9,7 @@ import { formatPathRelativeToDirectories } from "@pwragent/shared";
 import { useCallback, useMemo, type MouseEvent } from "react";
 import { normalizeReviewDisplayText } from "../../../../shared/review-command";
 import { pullRequestReviewPromptUrl } from "../../../../shared/pull-request-review";
-import { withoutRedundantPriorityTag } from "../../../../shared/review-output";
+import { parsePlainReview, withoutRedundantPriorityTag } from "../../../../shared/review-output";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -24,6 +24,7 @@ import {
 } from "./review-clipboard";
 import { ThreadMarkdown } from "./ThreadMarkdown";
 import { TranscriptCopyButton } from "./TranscriptCopyButton";
+import { ReviewStatusControls, useTrackedReview } from "../thread-todos/review-tracking";
 
 type TranscriptReviewProps = {
   applications?: DesktopApplicationsSnapshot;
@@ -37,6 +38,8 @@ type TranscriptReviewProps = {
     | "readMarkdownFile"
   >;
   entry: AppServerThreadReviewEntry;
+  parentThreadId?: string;
+  parentThreadBackend?: AppServerBackendKind;
   fileViewerContext?: MarkdownFileViewerContext;
   threadLinkSource?: ThreadLinkSource;
 };
@@ -118,63 +121,6 @@ function shouldHideReviewBody(summary: string, review: string): boolean {
   );
 }
 
-function parsePlainReview(review: string): {
-  explanation: string;
-  findings: AppServerReviewFinding[];
-} {
-  const [rawExplanation, rawComments] = review.split(
-    /\n\s*(?:Full\s+)?Review comments?:\s*\n/i
-  );
-  if (!rawComments) {
-    return {
-      explanation: review,
-      findings: [],
-    };
-  }
-
-  const findingPattern =
-    /(?:^|\n)- \[P(\d+)\] ([^\n—]+?)\s+—\s+(.+?):(\d+)(?:-(\d+))?\n([\s\S]*?)(?=\n- \[P\d+\] |\n*$)/g;
-  const findings: AppServerReviewFinding[] = [];
-
-  for (const match of rawComments.matchAll(findingPattern)) {
-    const priority = Number.parseInt(match[1] ?? "", 10);
-    const title = match[2]?.trim();
-    const absoluteFilePath = match[3]?.trim();
-    const start = Number.parseInt(match[4] ?? "", 10);
-    const end = Number.parseInt(match[5] ?? match[4] ?? "", 10);
-    const body = match[6]?.trim();
-
-    if (
-      !title ||
-      !absoluteFilePath ||
-      !body ||
-      !Number.isInteger(priority) ||
-      !Number.isInteger(start) ||
-      !Number.isInteger(end)
-    ) {
-      continue;
-    }
-
-    findings.push({
-      title,
-      body,
-      priority,
-      confidence_score: 0,
-      code_location: {
-        absolute_file_path: absoluteFilePath,
-        line_range: {
-          start,
-          end,
-        },
-      },
-    });
-  }
-
-  return {
-    explanation: rawExplanation.trim(),
-    findings,
-  };
-}
 
 /**
  * The transcript scrolls, so the CSS pseudo-element tooltip would be clipped
@@ -220,6 +166,12 @@ function ReviewVerdictBadge(props: {
 }
 
 export function TranscriptReview(props: TranscriptReviewProps) {
+  const tracking = useTrackedReview(
+    props.parentThreadId && props.fileViewerContext?.federationTarget?.scope !== "remote"
+      ? { backend: props.parentThreadBackend ?? "codex", threadId: props.parentThreadId }
+      : undefined,
+    { sourceKey: props.entry.id },
+  );
   const editorApplication = useMemo(
     () =>
       props.applications?.editors.find(
@@ -396,6 +348,11 @@ export function TranscriptReview(props: TranscriptReviewProps) {
         </div>
       ) : null}
 
+      {tracking.review ? (
+        <ReviewStatusControls review={tracking.review} busy={tracking.busy} update={tracking.update} />
+      ) : null}
+      {tracking.error ? <p role="alert">{tracking.error}</p> : null}
+
       {findings.length > 0 ? (
         <ol className="transcript-review__findings">
           {findings.map((finding, index) => {
@@ -454,6 +411,14 @@ export function TranscriptReview(props: TranscriptReviewProps) {
                       : `Lines ${range.start}-${range.end}`}
                   </span>
                 </div>
+                {tracking.review?.items[index] ? (
+                  <ReviewStatusControls
+                    review={tracking.review}
+                    item={tracking.review.items[index]}
+                    busy={tracking.busy}
+                    update={tracking.update}
+                  />
+                ) : null}
               </li>
             );
           })}

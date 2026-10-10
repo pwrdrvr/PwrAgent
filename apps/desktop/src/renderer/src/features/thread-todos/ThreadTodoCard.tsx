@@ -31,6 +31,7 @@ import type {
   ThreadTodoProjectMenu,
   ThreadTodoRunOptions,
 } from "./thread-todos-view";
+import { ReviewStatusControls, useTrackedReview } from "./review-tracking";
 
 const KIND_ICONS: Record<ThreadTodoKind, ComponentType<IconProps> | undefined> = {
   reminder: undefined,
@@ -97,6 +98,42 @@ type MergeConfirmation = {
  * card's own action trails it, the way out last.
  */
 export function ThreadTodoCard(props: ThreadTodoCardProps) {
+  return props.todo.reviewId ? <TrackedReviewCard {...props} /> : <ActionThreadTodoCard {...props} />;
+}
+
+function TrackedReviewCard(props: ThreadTodoCardProps) {
+  const tracking = useTrackedReview(props.todo, { id: props.todo.reviewId });
+  return (
+    <section className="thread-todo-card" aria-label="Review awaiting resolution">
+      <p className="thread-todo-card__title">{props.todo.title}</p>
+      <p>{props.todo.detail}</p>
+      {props.pager ? (
+        <div className="review-tracking">
+          <button type="button" onClick={props.pager.onPrevious} aria-label="Previous to-do">Previous</button>
+          <span>{props.pager.position} / {props.pager.total}</span>
+          <button type="button" onClick={props.pager.onNext} aria-label="Next to-do">Next</button>
+        </div>
+      ) : null}
+      {tracking.review ? (
+        <>
+          <ReviewStatusControls review={tracking.review} busy={tracking.busy} update={tracking.update} />
+          <ul>
+            {tracking.review.items.map((item) => (
+              <li key={item.id}>
+                <span>{item.title}</span>
+                <ReviewStatusControls review={tracking.review!} item={item} busy={tracking.busy} update={tracking.update} />
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : <p>Loading review…</p>}
+      {tracking.error ? <p role="alert">{tracking.error}</p> : null}
+      {props.onCollapse ? <button type="button" className="thread-todos-panel__row-link" onClick={props.onCollapse}>Collapse</button> : null}
+    </section>
+  );
+}
+
+function ActionThreadTodoCard(props: ThreadTodoCardProps) {
   const { todo } = props;
   const [confirmingMerge, setConfirmingMerge] = useState<MergeConfirmation>();
   const [promptExpanded, setPromptExpanded] = useState(false);

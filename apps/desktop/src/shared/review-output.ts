@@ -1,4 +1,4 @@
-import type { AppServerReviewOutput } from "@pwragent/shared";
+import type { AppServerReviewOutput, AppServerReviewFinding } from "@pwragent/shared";
 
 /**
  * The structured review contract a PwrAgent Sub Agent child answers in. Main
@@ -250,4 +250,62 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : undefined;
+}
+
+export function parsePlainReview(review: string): {
+  explanation: string;
+  findings: AppServerReviewFinding[];
+} {
+  const [rawExplanation, rawComments] = review.split(
+    /\n\s*(?:Full\s+)?Review comments?:\s*\n/i
+  );
+  if (!rawComments) {
+    return {
+      explanation: review,
+      findings: [],
+    };
+  }
+
+  const findingPattern =
+    /(?:^|\n)- \[P(\d+)\] ([^\n—]+?)\s+—\s+(.+?):(\d+)(?:-(\d+))?\n([\s\S]*?)(?=\n- \[P\d+\] |\n*$)/g;
+  const findings: AppServerReviewFinding[] = [];
+
+  for (const match of rawComments.matchAll(findingPattern)) {
+    const priority = Number.parseInt(match[1] ?? "", 10);
+    const title = match[2]?.trim();
+    const absoluteFilePath = match[3]?.trim();
+    const start = Number.parseInt(match[4] ?? "", 10);
+    const end = Number.parseInt(match[5] ?? match[4] ?? "", 10);
+    const body = match[6]?.trim();
+
+    if (
+      !title ||
+      !absoluteFilePath ||
+      !body ||
+      !Number.isInteger(priority) ||
+      !Number.isInteger(start) ||
+      !Number.isInteger(end)
+    ) {
+      continue;
+    }
+
+    findings.push({
+      title,
+      body,
+      priority,
+      confidence_score: 0,
+      code_location: {
+        absolute_file_path: absoluteFilePath,
+        line_range: {
+          start,
+          end,
+        },
+      },
+    });
+  }
+
+  return {
+    explanation: rawExplanation.trim(),
+    findings,
+  };
 }

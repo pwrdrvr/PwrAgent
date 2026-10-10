@@ -16078,6 +16078,8 @@ export class DesktopBackendRegistry {
     const backend = request.backend ?? "codex";
     if (isAcpBackendId(backend)) {
       const response = await this.readAcpThread(request, backend);
+      this.threadTodoHandler?.importReviews?.({ backend, threadId: request.threadId },
+        response.replay.entries.filter((entry): entry is AppServerThreadReviewEntry => entry.type === "review"));
       return {
         ...response,
         replay: request.includeTurns === false
@@ -16225,6 +16227,8 @@ export class DesktopBackendRegistry {
       replay: replayWithMessageOrigins,
       subAgents: overlay?.subAgents,
     });
+    this.threadTodoHandler?.importReviews?.({ backend, threadId: request.threadId },
+      replayWithReviewMetadata.entries.filter((entry): entry is AppServerThreadReviewEntry => entry.type === "review"));
     if (!request.viewOnly && !request.before && shouldAppendTranscriptOverlays) {
       // Hydration supersedes live rows for the same turn in sqlite. Preserve
       // that ordering now that live observations are delayed in memory: first

@@ -17,7 +17,7 @@ import {
   isSqliteWriteMetricsEnabled,
 } from "./sqlite-write-metrics.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 72;
+export const CURRENT_STATE_DB_USER_VERSION = 73;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -1992,6 +1992,21 @@ export class StateDb {
         db.transaction(() => {
           db.exec(OPERATOR_REQUEST_SCHEMA);
           db.pragma("user_version = 72");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 73) {
+        db.transaction(() => {
+          db.exec(`CREATE TABLE IF NOT EXISTS thread_reviews (
+            review_id TEXT PRIMARY KEY,
+            backend TEXT NOT NULL,
+            thread_id TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ('open', 'handled', 'dismissed')),
+            updated_at INTEGER NOT NULL,
+            payload TEXT NOT NULL
+          );
+          CREATE INDEX IF NOT EXISTS idx_thread_reviews_status_thread
+            ON thread_reviews(status, backend, thread_id);`);
+          db.pragma("user_version = 73");
         })();
       }
       // Keep current-version databases converged without asking pre-v36 profiles

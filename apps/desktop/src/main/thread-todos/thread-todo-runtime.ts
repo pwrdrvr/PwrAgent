@@ -30,6 +30,12 @@ import {
   type ThreadTodoActionRunners,
 } from "./thread-todo-service.js";
 import { ThreadTodoStore } from "./thread-todo-store.js";
+import {
+  getThreadReviewService,
+  setThreadReviewBroadcast,
+  resetThreadReviewServiceForTests,
+} from "../thread-reviews/thread-review-runtime";
+import { completedThreadReview } from "../thread-reviews/thread-review-events";
 
 const threadTodoLog = getMainLogger("pwragent:thread-todos");
 
@@ -55,6 +61,7 @@ export function resetThreadTodoServiceForTests(): void {
   readDefaultMergeMethod = undefined;
   listProjectCandidates = undefined;
   service = null;
+  resetThreadReviewServiceForTests();
 }
 
 /**
@@ -105,23 +112,27 @@ export function installThreadTodoRuntime(params: {
 }): void {
   const { registry, listProjects, federation } = params;
   const todos = getThreadTodoService();
+  const reviews = getThreadReviewService();
+  setThreadReviewBroadcast(params.broadcast);
+  reviews.importStoredReviews();
   readDefaultMergeMethod = params.readDefaultMergeMethod;
   todos.setOnChanged(params.broadcast);
   todos.setRunners(createThreadTodoRunners({ registry, federation }));
   // An archived thread's cards have nothing left to act on.
   unsubscribeArchive?.();
   unsubscribeArchive = registry.onEvent((event) => {
-    if (
-      event.notification.method !== "thread/archived"
-      || event.federationTarget?.scope === "remote"
-    ) {
-      return;
-    }
+    if (event.federationTarget?.scope === "remote") return;
+    const completed = completedThreadReview(event);
+    if (completed) reviews.importEntry(completed.identity, completed.entry);
+    if (event.notification.method !== "thread/archived") return;
     try {
       todos.dismissOpenForThread({
         backend: event.backend,
         threadId: event.notification.params.threadId,
       });
+      for (const review of reviews.list({ backend: event.backend, threadId: event.notification.params.threadId })) {
+        reviews.update({ id: review.id, status: "dismissed", note: "Thread archived." }, "system");
+      }
     } catch (error) {
       threadTodoLog.warn("could not dismiss an archived thread's to-dos", {
         error: error instanceof Error ? error.message : String(error),
@@ -193,6 +204,17 @@ export function installThreadTodoRuntime(params: {
     };
   };
   registry.setPwrAgentThreadTodoHandler({
+    reviews: {
+      record: async (identity, input) => {
+        const cwd = await registry.resolveThreadWorkspaceCwd(identity.backend, identity.threadId);
+        return reviews.record(identity, { ...input, ...(cwd ? { context: { workspacePath: cwd } } : {}) });
+      },
+      list: (identity, status) => reviews.list({ ...identity, status }),
+      update: (identity, request) => reviews.update(request, "agent", identity),
+    },
+    importReviews: (identity, entries) => {
+      for (const entry of entries) reviews.importEntry(identity, entry);
+    },
     update: async (context, target, input) => {
       const current = todos.findForThread({ ...context, ...target });
       let action: ThreadTodoActionPatch | undefined = input.action;

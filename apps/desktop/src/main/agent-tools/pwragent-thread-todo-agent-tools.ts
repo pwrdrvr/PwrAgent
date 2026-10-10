@@ -1,5 +1,6 @@
 import type {
   AppServerBackendKind,
+  AppServerThreadReviewEntry,
   PwrAgentThreadTodoOperationName,
   ThreadExecutionMode,
   ThreadTodo,
@@ -26,6 +27,10 @@ import type {
   UpdateThreadTodoInput,
 } from "../thread-todos/thread-todo-service.js";
 import { ThreadTodoError } from "../thread-todos/thread-todo-service.js";
+import {
+  buildPwrAgentThreadReviewToolDefinitions,
+  type PwrAgentThreadReviewHandler,
+} from "./pwragent-thread-review-agent-tools";
 
 export const PWRAGENT_THREAD_TODO_UNAVAILABLE_MESSAGE =
   "PwrAgent to-do tools are not available.";
@@ -52,6 +57,8 @@ type ThreadTodoToolContext = {
  * arguments, so a thread can only raise and resolve its own cards.
  */
 export type PwrAgentThreadTodoHandler = {
+  reviews?: PwrAgentThreadReviewHandler;
+  importReviews?: (context: ThreadTodoToolContext, entries: AppServerThreadReviewEntry[]) => void;
   add: (
     context: ThreadTodoToolContext,
     input: AddThreadTodoInput,
@@ -74,7 +81,10 @@ export type PwrAgentThreadTodoHandler = {
 export function buildPwrAgentThreadTodoToolRouter(
   handler: PwrAgentThreadTodoHandler | undefined,
 ): AgentToolRouter {
-  return new AgentToolRouter(buildPwrAgentThreadTodoToolDefinitions(handler), {
+  return new AgentToolRouter([
+    ...buildPwrAgentThreadTodoToolDefinitions(handler),
+    ...buildPwrAgentThreadReviewToolDefinitions(handler?.reviews),
+  ], {
     unsupportedMessage: "Unsupported PwrAgent to-do tool.",
   });
 }

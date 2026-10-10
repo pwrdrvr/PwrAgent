@@ -182,6 +182,8 @@ function renderEntry(params: {
       directoryPaths={params.directoryPaths}
       desktopApi={params.desktopApi}
       entry={entry}
+      parentThreadId={params.parentThreadId}
+      parentThreadBackend={params.parentThreadBackend}
       fileViewerContext={params.fileViewerContext}
       threadLinkSource={params.threadLinkSource}
     />

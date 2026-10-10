@@ -8,11 +8,14 @@ import type {
   SetThreadTodoProjectRequest,
   ThreadTodoMutationResponse,
   ThreadTodosChangedEvent,
+  ListThreadReviewsRequest,
+  UpdateThreadReviewRequest,
 } from "@pwragent/shared";
 import {
   isThreadTodoMergeMethod,
   isThreadTodoResolution,
   isThreadTodoStatus,
+  threadReviewTodo,
 } from "@pwragent/shared";
 import {
   THREAD_TODOS_CHANGED_EVENT_CHANNEL,
@@ -21,6 +24,8 @@ import {
   THREAD_TODOS_RESOLVE_CHANNEL,
   THREAD_TODOS_RUN_ACTION_CHANNEL,
   THREAD_TODOS_SET_PROJECT_CHANNEL,
+  THREAD_REVIEWS_LIST_CHANNEL,
+  THREAD_REVIEWS_UPDATE_CHANNEL,
 } from "../../shared/ipc";
 import type { PwrAgentFederationHandler } from "../agent-tools/pwragent-federation-agent-tools";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
@@ -34,6 +39,7 @@ import {
 } from "../thread-todos/thread-todo-runtime";
 import { subscribersForChannel } from "../window-channels";
 import { appServerService } from "./app-server";
+import { getThreadReviewService } from "../thread-reviews/thread-review-runtime";
 
 function broadcastThreadTodosChanged(event: ThreadTodosChangedEvent): void {
   for (const webContents of subscribersForChannel(
@@ -75,13 +81,30 @@ export function registerThreadTodoIpcHandlers(options: {
     ...(options.federation ? { federation: options.federation } : {}),
   });
 
+  ipcMain.removeHandler(THREAD_REVIEWS_LIST_CHANNEL);
+  ipcMain.handle(THREAD_REVIEWS_LIST_CHANNEL, (_event, request: ListThreadReviewsRequest = {}) => ({
+    reviews: getThreadReviewService().list(request),
+  }));
+  ipcMain.removeHandler(THREAD_REVIEWS_UPDATE_CHANNEL);
+  ipcMain.handle(THREAD_REVIEWS_UPDATE_CHANNEL, (_event, request: UpdateThreadReviewRequest) => ({
+    review: getThreadReviewService().update({
+      ...request,
+      note: request.note ?? (request.status === "dismissed" ? "Dismissed by operator." : "Marked addressed by operator."),
+    }, "user"),
+  }));
+
   ipcMain.removeHandler(THREAD_TODOS_LIST_CHANNEL);
   ipcMain.handle(
     THREAD_TODOS_LIST_CHANNEL,
     (_event, request: ListThreadTodosRequest = {}): ListThreadTodosResponse => {
       const todos = getThreadTodoService();
       return {
-        todos: todos.list(request),
+        todos: [
+          ...todos.list(request),
+          ...getThreadReviewService().list({
+            ...request, status: request.status === "done" ? "handled" : request.status,
+          }).map(threadReviewTodo),
+        ].sort((a, b) => b.createdAt - a.createdAt),
         mergeMethods: todos.mergeMethodPreferences(),
       };
     },
@@ -96,13 +119,19 @@ export function registerThreadTodoIpcHandlers(options: {
         throw new Error(`Unknown to-do status: ${String(request.status)}`);
       }
       return {
-        todo: getThreadTodoService().resolve({
-          id: request.id,
-          status: request.status,
-          ...(isThreadTodoResolution(request.resolution)
-            ? { resolution: request.resolution }
-            : {}),
-        }),
+        todo: request.id.startsWith("review:")
+          ? threadReviewTodo(getThreadReviewService().update({
+              id: request.id.slice("review:".length),
+              status: request.status === "done" ? "handled" : request.status,
+              note: request.status === "dismissed" ? "Dismissed by operator." : "Marked handled by operator.",
+            }, "user"))
+          : getThreadTodoService().resolve({
+              id: request.id,
+              status: request.status,
+              ...(isThreadTodoResolution(request.resolution)
+                ? { resolution: request.resolution }
+                : {}),
+            }),
       };
     },
   );
