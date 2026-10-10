@@ -40,3 +40,7 @@ export function acpAgentCapabilitiesForRegistryId(
     ACP_AGENT_CAPABILITY_CATALOG[registryId] ?? DEFAULT_ACP_AGENT_CAPABILITIES
   );
 }
+
+export function isPwrAgentGrokBuildVersion(version: string | undefined): boolean {
+  return /^\d+\.\d+\.\d+-pwragent\.\d+(?:[.+-].*)?$/.test(version ?? "");
+}

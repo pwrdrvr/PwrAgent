@@ -32,6 +32,7 @@ import {
 import { isBannedAcpRegistryId } from "../acp/acp-agent-allowlist";
 import {
   acpAgentCapabilitiesForRegistryId,
+  isPwrAgentGrokBuildVersion,
   type AcpAgentCapabilities,
 } from "../acp/acp-agent-capabilities";
 import {
@@ -572,8 +573,8 @@ function effectiveAcpAgentCapabilities(
     // value persisted by older catalog/discovery records for vendor Grok.
     steerTurn: agent.registryId === "grok"
       && (isPwrAgentOwnedGrokRuntime(agent)
-        || /^\d+\.\d+\.\d+-pwragent\.\d+(?:[.+-].*)?$/.test(
-          agent.runtimeCapabilities?.agentInfo?.version ?? agent.version ?? "",
+        || isPwrAgentGrokBuildVersion(
+          agent.runtimeCapabilities?.agentInfo?.version ?? agent.version,
         )),
     liveWorkspaceHandoff:
       configured.liveWorkspaceHandoff ||

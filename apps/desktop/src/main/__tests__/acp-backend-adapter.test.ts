@@ -536,11 +536,13 @@ describe("isAcpSessionMissingForProjectError", () => {
 
 describe("AcpBackendAdapter", () => {
   it.each([
-    { version: "1.0.50", supported: false },
-    { version: "1.0.50-pwragent.1", supported: true },
-  ])("gates the live Grok steering RPC for $version", async ({ version, supported }) => {
+    { version: "1.0.50", runtimeVersion: undefined, supported: false },
+    { version: "1.0.50-pwragent.1", runtimeVersion: undefined, supported: true },
+    { version: undefined, runtimeVersion: "1.0.50", supported: false },
+    { version: undefined, runtimeVersion: "1.0.50-pwragent.1", supported: true },
+  ])("gates the live Grok steering RPC for $version (runtime: $runtimeVersion)", async ({ version, runtimeVersion, supported }) => {
     const backendId = "acp:grok";
-    const agent: AcpInstalledAgentRecord = {
+    let agent: AcpInstalledAgentRecord = {
       ...buildInstalledAgent(),
       backendId,
       registryId: "grok",
@@ -565,13 +567,17 @@ describe("AcpBackendAdapter", () => {
       status: "active",
     };
     const transport = new FakeAcpAgentTransport({
+      initialize: {
+        protocolVersion: 1,
+        ...(runtimeVersion ? { agentInfo: { name: "grok", version: runtimeVersion } } : {}),
+      },
       "_x.ai/session/steer": { result: { delivery: "currentTurn" } },
     });
     const adapter = createTestAcpBackendAdapter({
       acpAgentStore: {
         getInstalledAgent: () => agent,
         listInstalledAgents: () => [agent],
-        upsertInstalledAgent: vi.fn(),
+        upsertInstalledAgent: vi.fn((updated: AcpInstalledAgentRecord) => { agent = updated; }),
       },
       acpSessionStore: {
         listSessions: () => [session],
@@ -584,6 +590,8 @@ describe("AcpBackendAdapter", () => {
       handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
     });
     try {
+      await adapter.getClient(backendId);
+      expect(describeInstalledAcpBackend(agent).capabilities.steerTurn).toBe(supported);
       const result = adapter.steerSession({
         backend: backendId,
         sessionId: session.sessionId,

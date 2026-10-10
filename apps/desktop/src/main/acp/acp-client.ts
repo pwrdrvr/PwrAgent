@@ -28,6 +28,7 @@ import {
   acpSessionRuntimeStateFromUpdate,
   normalizeAcpRuntimeCapabilities,
 } from "./acp-runtime-capabilities.js";
+import { isPwrAgentGrokBuildVersion } from "./acp-agent-capabilities.js";
 import {
   normalizeGrokBillingStatus,
   type AcpProviderStatus,
@@ -331,7 +332,8 @@ export class AcpAgentClient {
 
   supportsTurnSteering(): boolean {
     return this.options.backendId === "acp:grok"
-      && this.options.supportsTurnSteering === true;
+      && (this.options.supportsTurnSteering === true
+        || isPwrAgentGrokBuildVersion(this.runtimeCapabilities?.agentInfo?.version));
   }
 
   // Count the whole public operation, including setup before the transport
