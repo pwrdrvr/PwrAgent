@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { stat } from "node:fs/promises";
 import type { AgentEvent, AppServerThreadSummary, ThreadOverlayState } from "@pwragent/shared";
+import { ARCHIVE_CLEANUP_PAUSE_MS } from "../app-server/archive-cleanup-queue";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { deleteThreadAssets } from "../app-server/thread-assets";
 import { CountingBackendClient, codexThread, publishNotification } from "./fixtures/thread-read-harness";
@@ -30,12 +31,23 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   };
 });
 
-async function drivePacer<T>(promise: Promise<T>): Promise<T> {
+/**
+ * Runs archive cleanup to completion under fake timers. The clock advances only
+ * while cleanup is parked on its checkpoint pause, the one timer it owns.
+ * Between checkpoints it awaits provider, DB, and filesystem work that no clock
+ * advance completes. Slicing the clock on a budget instead ran out on a loaded
+ * runner while the real thread-asset `rm` was in flight; 500 slices cover well
+ * under 50 ms of wall time. The stub above removes that I/O; this pacer keeps
+ * the next host call on the path from needing one.
+ */
+async function drivePacer<T>(registry: DesktopBackendRegistry, promise: Promise<T>): Promise<T> {
   let settled = false;
-  void promise.then(() => { settled = true; }, () => { settled = true; });
-  for (let slice = 0; slice < 500 && !settled; slice += 1) await vi.advanceTimersByTimeAsync(25);
-  expect(settled).toBe(true);
-  return await promise;
+  const settlement = promise.then(() => { settled = true; }, () => { settled = true; });
+  for (;;) {
+    await Promise.race([settlement, registry.whenArchiveCleanupCheckpointPendingForTests()]);
+    if (settled) return await promise;
+    await vi.advanceTimersByTimeAsync(ARCHIVE_CLEANUP_PAUSE_MS);
+  }
 }
 
 const registries: DesktopBackendRegistry[] = [];
@@ -117,7 +129,7 @@ describe("archive cleanup pipeline", () => {
     await vi.advanceTimersToNextTimerAsync();
     expect(fixture.counts.providerPages).toBe(1);
     expect(fixture.counts.overlayReads).toBe(0);
-    await drivePacer(fixture.completion);
+    await drivePacer(fixture.registry, fixture.completion);
     expect(fixture.counts).toEqual(budgets["1000-active-threads"]);
     expect(fixture.events.find((event) => event.notification.method === "thread/archiveCleanup/completed")?.notification.params)
       .toMatchObject({ threadId: "target", cleanup: [] });
@@ -128,7 +140,7 @@ describe("archive cleanup pipeline", () => {
     const fixture = build([]);
     const first = fixture.registry.archiveThread({ backend: "codex", threadId: "target" });
     const second = fixture.registry.archiveThread({ backend: "codex", threadId: "target" });
-    await drivePacer(first);
+    await drivePacer(fixture.registry, first);
     expect(await first).toEqual(await second);
     expect(fixture.client.archiveThread).toHaveBeenCalledOnce();
     expect(fixture.counts.providerPages).toBe(2);
@@ -146,10 +158,10 @@ describe("archive cleanup pipeline", () => {
     });
     vi.useFakeTimers();
 
-    const result = await drivePacer(fixture.registry.archiveThread({ backend: "codex", threadId: target.id, backgroundCleanup }));
+    const result = await drivePacer(fixture.registry, fixture.registry.archiveThread({ backend: "codex", threadId: target.id, backgroundCleanup }));
     let cleanup: unknown = result.cleanup;
     if (backgroundCleanup) {
-      const notification = (await drivePacer(fixture.completion)).notification;
+      const notification = (await drivePacer(fixture.registry, fixture.completion)).notification;
       if (notification.method !== "thread/archiveCleanup/completed") throw new Error("Expected archive cleanup completion.");
       cleanup = notification.params.cleanup;
     }
@@ -201,7 +213,7 @@ describe("archive cleanup pipeline", () => {
     });
     vi.useFakeTimers();
 
-    const result = await drivePacer(fixture.registry.archiveThread({ backend: "codex", threadId: "target" }));
+    const result = await drivePacer(fixture.registry, fixture.registry.archiveThread({ backend: "codex", threadId: "target" }));
 
     expect(result.cleanup[0]?.skippedReason).toContain("another active thread: shared-user");
     expect(fixture.archiveWorktree).not.toHaveBeenCalled();
@@ -217,7 +229,7 @@ describe("archive cleanup pipeline", () => {
     // Observe rejection while driving the pacer so the failing regression is
     // not reported as an unhandled rejection by the test runner.
     const observed = result.then((response) => ({ response }), (error: Error) => ({ error }));
-    expect(await drivePacer(observed)).toMatchObject({ response: { cleanup: [expect.objectContaining({ removedWorktree: true })] } });
+    expect(await drivePacer(fixture.registry, observed)).toMatchObject({ response: { cleanup: [expect.objectContaining({ removedWorktree: true })] } });
     expect(fixture.store.setThreadArchiveTombstone).toHaveBeenCalledWith(expect.objectContaining({ backend: "codex", threadId: "target" }));
     expect(fixture.counts.providerPages).toBe(4);
     expect(fixture.counts.aggregateLists).toBe(0);
@@ -237,7 +249,7 @@ describe("archive cleanup pipeline", () => {
 
     const result = fixture.registry.archiveThread({ backend: "codex", threadId: target.id });
     const observed = result.then((response) => ({ response }), (error: Error) => ({ error }));
-    expect(await drivePacer(observed)).toMatchObject({ response: { cleanup: [expect.objectContaining({ removedWorktree: true })] } });
+    expect(await drivePacer(fixture.registry, observed)).toMatchObject({ response: { cleanup: [expect.objectContaining({ removedWorktree: true })] } });
     expect(fixture.store.setThreadArchiveTombstone).toHaveBeenCalledOnce();
 
     fixture.client.listThreads.mockResolvedValue([]);
@@ -256,7 +268,7 @@ describe("archive cleanup pipeline", () => {
       return { threadId };
     });
     fixture.client.listArchiveCleanupThreadsPage.mockImplementation(async ({ archived: isArchived }) => ({ threads: isArchived ? archived : [], nextCursor: undefined }));
-    const results = await drivePacer(Promise.all(targets.map((target) =>
+    const results = await drivePacer(fixture.registry, Promise.all(targets.map((target) =>
       fixture.registry.archiveThread({ backend: "codex", threadId: target.id }),
     )));
     expect(fixture.client.archiveThread).toHaveBeenCalledTimes(2);
@@ -294,13 +306,13 @@ describe("archive cleanup pipeline", () => {
     let settled = false;
     const results = Promise.all([first, second]).then((responses) => { settled = true; return responses; });
     try {
-      await drivePacer(sentinelStarted);
+      await drivePacer(fixture.registry, sentinelStarted);
       expect(stat).toHaveBeenCalledWith("/contrived/worktree");
       expect(settled).toBe(false);
       // Only the first job's initial and final admission inventories ran.
       expect(fixture.counts.providerPages).toBe(4);
     } finally { release(); }
-    const responses = await drivePacer(results);
+    const responses = await drivePacer(fixture.registry, results);
     expect(responses[0].cleanup[0]?.removedWorktree).toBe(true);
     expect(fixture.counts.providerPages).toBe(6);
   });
@@ -309,7 +321,7 @@ describe("archive cleanup pipeline", () => {
     vi.useFakeTimers();
     const target = codexThread({ id: "target" });
     const fixture = build([target], target);
-    const result = await drivePacer(fixture.registry.archiveThread({ backend: "codex", threadId: "target" }));
+    const result = await drivePacer(fixture.registry, fixture.registry.archiveThread({ backend: "codex", threadId: "target" }));
     expect(result.cleanup[0]?.skippedReason).toContain("thread is active again");
     expect(fixture.store.setThreadArchiveTombstone).not.toHaveBeenCalled();
   });
@@ -329,7 +341,7 @@ describe("archive cleanup pipeline", () => {
       return await listPage(params);
     });
 
-    const result = await drivePacer(fixture.registry.archiveThread({ backend: "codex", threadId: "target" }));
+    const result = await drivePacer(fixture.registry, fixture.registry.archiveThread({ backend: "codex", threadId: "target" }));
 
     expect(result.cleanup).toEqual([expect.objectContaining({ removedWorktree: true })]);
     expect(fixture.counts.providerPages).toBe(4);
@@ -351,7 +363,7 @@ describe("archive cleanup pipeline", () => {
       threads: (archived ? inventory.archived : inventory.active) ? [target] : [], nextCursor: undefined,
     }));
 
-    const result = await drivePacer(fixture.registry.archiveThread({ backend: "codex", threadId: "target" }));
+    const result = await drivePacer(fixture.registry, fixture.registry.archiveThread({ backend: "codex", threadId: "target" }));
 
     expect(result.cleanup[0]?.removedWorktree).toBe(inventory.removes);
     if (!inventory.removes) {
@@ -376,7 +388,7 @@ describe("archive cleanup pipeline", () => {
       return await listPage(params);
     });
 
-    const result = await drivePacer(fixture.registry.archiveThread({ backend: "codex", threadId: "target" }));
+    const result = await drivePacer(fixture.registry, fixture.registry.archiveThread({ backend: "codex", threadId: "target" }));
 
     expect(result.cleanup[0]?.removedWorktree).toBe(false);
     expect(result.cleanup[0]?.skippedReason ?? result.cleanup[0]?.error).toContain("cancelled");
@@ -399,7 +411,7 @@ describe("archive cleanup pipeline", () => {
       return await listPage(params);
     });
 
-    const result = await drivePacer(fixture.registry.archiveThread({ backend: "codex", threadId: "target" }));
+    const result = await drivePacer(fixture.registry, fixture.registry.archiveThread({ backend: "codex", threadId: "target" }));
 
     expect(result.cleanup[0]?.removedWorktree).toBe(false);
     expect(result.cleanup[0]?.error).toContain("workspace state changed");
@@ -417,7 +429,7 @@ describe("archive cleanup pipeline", () => {
       return await listPage(params);
     });
 
-    const result = await drivePacer(fixture.registry.archiveThread({ backend: "codex", threadId: "target" }));
+    const result = await drivePacer(fixture.registry, fixture.registry.archiveThread({ backend: "codex", threadId: "target" }));
 
     expect(result.cleanup[0]?.skippedReason).toContain("Inventory unavailable");
     expect(fixture.archiveWorktree).not.toHaveBeenCalled();
@@ -428,7 +440,7 @@ describe("archive cleanup pipeline", () => {
     const fixture = build([]);
     fixture.client.listArchiveCleanupThreadsPage.mockResolvedValue({ threads: [], nextCursor: "repeat" });
 
-    const result = await drivePacer(fixture.registry.archiveThread({ backend: "codex", threadId: "target" }));
+    const result = await drivePacer(fixture.registry, fixture.registry.archiveThread({ backend: "codex", threadId: "target" }));
 
     expect(result.cleanup[0]?.skippedReason).toContain("repeated cursor");
     expect(fixture.archiveWorktree).not.toHaveBeenCalled();
@@ -441,7 +453,7 @@ describe("archive cleanup pipeline", () => {
     const target = codexThread({ id: "target", linkedDirectories: [directory] });
     const fixture = build([target, codexThread({ id: "shared-user", linkedDirectories: [directory] })], target);
     fixture.client.archiveThread.mockRejectedValue(new Error("json-rpc error (-32600): no rollout found for thread id target"));
-    const result = await drivePacer(fixture.registry.archiveThread({ backend: "codex", threadId: "target" }));
+    const result = await drivePacer(fixture.registry, fixture.registry.archiveThread({ backend: "codex", threadId: "target" }));
     expect(result.cleanup[0]?.skippedReason).toContain("another active thread: shared-user");
     expect(fixture.archiveWorktree).not.toHaveBeenCalled();
     expect(fixture.store.setThreadArchiveTombstone).toHaveBeenCalledOnce();
@@ -460,7 +472,7 @@ describe("archive cleanup pipeline", () => {
     });
     const result = fixture.registry.archiveThread({ backend: "codex", threadId: "target" });
     const observed = result.then(() => undefined, (error: Error) => error.message);
-    const error = await drivePacer(observed);
+    const error = await drivePacer(fixture.registry, observed);
     expect(error).toContain("cleanup did not complete");
     expect(error).toContain("cancelled");
     expect(fixture.archiveWorktree).toHaveBeenCalledOnce();
@@ -481,11 +493,11 @@ describe("archive cleanup pipeline", () => {
     const first = fixture.registry.archiveThread({ backend: "codex", threadId: "target" });
     const second = fixture.registry.archiveThread({ backend: "codex", threadId: "second" });
     try {
-      const result = await drivePacer(first);
+      const result = await drivePacer(fixture.registry, first);
       expect(result.cleanup[0]?.error).toContain("lifecycle mutation is still in flight");
     } finally {
       release();
-      await drivePacer(second);
+      await drivePacer(fixture.registry, second);
     }
   });
 
@@ -495,7 +507,7 @@ describe("archive cleanup pipeline", () => {
     const read = vi.fn(async () => codexThread({ id: "target" }));
     Object.assign(fixture.client, { readArchiveCleanupThreadSummary: read });
     const result = fixture.registry.archiveThread({ backend: "codex", threadId: "target" });
-    await drivePacer(result);
+    await drivePacer(fixture.registry, result);
     expect((await result).cleanup).toEqual([]);
     expect(read).toHaveBeenCalledOnce();
     expect(fixture.client.listArchiveCleanupThreadsPage.mock.calls.map(([params]) => params.archived)).toEqual([false]);
@@ -507,7 +519,7 @@ describe("archive cleanup pipeline", () => {
     fixture.client.listArchiveCleanupThreadsPage.mockRejectedValue(new Error("provider unavailable"));
     expect(await fixture.registry.archiveThread({ backend: "codex", threadId: "target", backgroundCleanup: true }))
       .toMatchObject({ cleanupPending: true });
-    const event = await drivePacer(fixture.completion);
+    const event = await drivePacer(fixture.registry, fixture.completion);
     expect(event.notification.params).toMatchObject({ cleanup: [expect.objectContaining({ skippedReason: expect.stringContaining("provider unavailable") })] });
     expect(fixture.archiveWorktree).not.toHaveBeenCalled();
   });
@@ -525,7 +537,7 @@ describe("archive cleanup pipeline", () => {
     const inverse = fixture.registry.withThreadLifecycleMutation({ backend: "codex", threadId: "target" }, async () => { inverseRan = true; });
     expect(inverseRan).toBe(false);
     release();
-    await drivePacer(inverse);
+    await drivePacer(fixture.registry, inverse);
     expect(inverseRan).toBe(true);
     expect((await result).cleanup[0]?.skippedReason).toContain("cancelled");
     expect(fixture.counts.providerPages).toBe(0);
@@ -543,7 +555,7 @@ describe("archive cleanup pipeline", () => {
       throw new Error("Removal should have been denied.");
     });
     const result = fixture.registry.archiveThread({ backend: "codex", threadId: "target" });
-    await drivePacer(result);
+    await drivePacer(fixture.registry, result);
     expect((await result).cleanup).toEqual([expect.objectContaining({ removedWorktree: false, error: expect.stringContaining("still used") })]);
     expect(fixture.counts.providerPages).toBe(4);
   });
@@ -558,7 +570,7 @@ describe("archive cleanup pipeline", () => {
     await vi.advanceTimersByTimeAsync(0);
     try {
       const result = fixture.registry.archiveThread({ backend: "codex", threadId: "target" });
-      await drivePacer(result);
+      await drivePacer(fixture.registry, result);
       expect((await result).cleanup[0]?.error).toContain("lifecycle mutation is still in flight");
     } finally { release(); await other; }
   });
@@ -568,7 +580,7 @@ describe("archive cleanup pipeline", () => {
     const fixture = build([]);
     await fixture.registry.archiveThread({ backend: "codex", threadId: "target", backgroundCleanup: true });
     await publishNotification(fixture.registry, { method: "thread/unarchived", params: { threadId: "target" } });
-    await drivePacer(fixture.completion);
+    await drivePacer(fixture.registry, fixture.completion);
     expect(fixture.counts.providerPages).toBe(0);
     expect(fixture.archiveWorktree).not.toHaveBeenCalled();
     expect(fixture.events.find((event) => event.notification.method === "thread/archiveCleanup/completed")?.notification.params)
@@ -581,7 +593,7 @@ describe("archive cleanup pipeline", () => {
     await fixture.registry.archiveThread({ backend: "codex", threadId: "target", backgroundCleanup: true });
     await publishNotification(fixture.registry, { method: "thread/unarchived", params: { threadId: "target" } });
     const retry = fixture.registry.archiveThread({ backend: "codex", threadId: "target" });
-    await drivePacer(retry);
+    await drivePacer(fixture.registry, retry);
     expect((await retry).cleanup).toEqual([]);
     expect(fixture.client.archiveThread).toHaveBeenCalledTimes(2);
     expect(fixture.counts.providerPages).toBe(2);
@@ -596,7 +608,7 @@ describe("archive cleanup pipeline", () => {
       ...fixture.overlays.get(threadId)!, parentThreadId: "new-parent",
     }));
     const result = fixture.registry.archiveThread({ backend: "codex", threadId: "target" });
-    await drivePacer(result);
+    await drivePacer(fixture.registry, result);
     await result;
     expect(fixture.store.setThreadParent).not.toHaveBeenCalled();
   });
