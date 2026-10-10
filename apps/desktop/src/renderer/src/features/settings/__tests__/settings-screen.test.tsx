@@ -9060,6 +9060,7 @@ describe("SettingsScreen", () => {
     expect(buttons).toEqual([
       "← Exit Settings",
       "General",
+      "Keyboard",
       "Updates",
       "Applications",
       "Plugins",

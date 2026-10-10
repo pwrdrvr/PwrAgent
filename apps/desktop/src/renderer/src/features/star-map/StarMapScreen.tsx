@@ -40,10 +40,8 @@ import { navigationPageErrorCopy } from "../../lib/navigation-query-state";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ComposerDraftStore } from "../composer/useComposerDraftStore";
 import { SearchIcon } from "../../icons";
-import {
-  formatPrimaryAccel,
-  matchThreadJumpChord,
-} from "../../lib/keyboard-accel";
+import { matchThreadJumpChord } from "../../lib/keyboard-accel";
+import { chordLabelFor, useKeybindings } from "../../lib/keybindings-store";
 import { useCelestialIcons } from "../../lib/useCelestialIcons";
 import { useFederationHealth } from "../../lib/useFederationHealth";
 import { SidebarSearchPopup } from "../navigation/SidebarSearchPopup";
@@ -577,6 +575,7 @@ function projectBaseSlot(
 
 export function StarMapScreen(props: StarMapScreenProps) {
   const active = useStarMapForeground();
+  const jumpChord = chordLabelFor(useKeybindings(), "navigation.jump_to_thread");
   const layerRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -6678,9 +6677,11 @@ export function StarMapScreen(props: StarMapScreenProps) {
           >
             <SearchIcon size={13} />
             <span>Find</span>
-            <span className="star-map__find-chord" aria-hidden="true">
-              {formatPrimaryAccel("K")}
-            </span>
+            {jumpChord === undefined ? null : (
+              <span className="star-map__find-chord" aria-hidden="true">
+                {jumpChord}
+              </span>
+            )}
           </button>
           <StarMapViewOptions
             preferences={preferences}

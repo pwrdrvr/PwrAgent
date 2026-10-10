@@ -515,6 +515,38 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
           await expect(smokeThread).toBeVisible();
         });
 
+        // Key caps, a recorder that swallows keys, and per-row notices: its
+        // own surface, so its own scan, with the recorder open.
+        await test.step("settings → keyboard", async () => {
+          await app.window.getByRole("button", { name: "Open settings" }).click();
+          const settingsNav = app.window.getByRole("navigation", {
+            name: "Settings sections",
+          });
+          await expect(settingsNav).toBeVisible();
+          await settingsNav
+            .getByRole("button", { name: /^Keyboard$/ })
+            .click();
+          const keyboardSettings = app.window.getByRole("region", {
+            name: "Keyboard shortcuts",
+          });
+          await expect(keyboardSettings).toBeVisible();
+          await keyboardSettings
+            .getByRole("button", { name: "Change Pin / Unpin" })
+            .click();
+          await expect(
+            keyboardSettings.getByRole("textbox", { name: "Record a shortcut for Pin / Unpin" }),
+          ).toBeFocused();
+          await runAxe(app.window, "settings → keyboard");
+
+          await keyboardSettings.getByRole("button", { name: "Cancel" }).click();
+          await settingsNav
+            .getByRole("button", { name: /Exit Settings/i })
+            .click();
+          await expect(keyboardSettings).toBeHidden();
+          await expect(settingsNav).toBeHidden();
+          await expect(smokeThread).toBeVisible();
+        });
+
         await test.step("open thread view", async () => {
           await smokeThread.click();
           await expect(

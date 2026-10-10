@@ -31,7 +31,6 @@ import {
   pressEscape,
   pressKey,
   pressTab,
-  tabEscapes,
 } from "../../../test/tab-walk";
 
 /**
@@ -387,7 +386,25 @@ const nativeChildThread: NavigationThreadSummary = {
   ],
 };
 
+/** A menu row's label, without the shortcut chord drawn beside it. */
+function menuItemLabel(item: HTMLElement): string {
+  return [...item.childNodes]
+    .filter((node) => !(node instanceof HTMLElement
+      && node.classList.contains("thread-context-menu__shortcut")))
+    .map((node) => node.textContent)
+    .join("");
+}
+
+/** Shortcut labels follow the host platform; these tests read macOS glyphs. */
+function stubMacPlatform(): void {
+  Object.defineProperty(window, "pwragent", {
+    configurable: true,
+    value: { platform: "darwin" },
+  });
+}
+
 afterEach(() => {
+  delete (window as Window & { pwragent?: unknown }).pwragent;
   delete (window as unknown as {
     __pwragentFederationLabel?: unknown;
   }).__pwragentFederationLabel;
@@ -4866,7 +4883,7 @@ describe("Sidebar", () => {
     expect(onSelectThread).toHaveBeenLastCalledWith(sharedThread, {
       focusComposer: false,
     });
-    expect(screen.queryByRole("dialog", { name: "Rename Thread" })).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "Thread name" })).toBeNull();
   });
 
   it.each([".thread-row", ".thread-row__chips", ".thread-row__status-indicator"])("anchors a mouse selection from %s to the row's open button", (selector) => {
@@ -5472,8 +5489,11 @@ describe("Sidebar", () => {
       }),
     );
 
+    // The open thread goes, so the row after it opens: here the child,
+    // which the archive ungroups rather than removes.
     expect(onArchiveThread).toHaveBeenCalledWith(sharedThread, {
       includeSubthreads: false,
+      nextSelectionKey: "codex:thread-child",
     });
   });
 
@@ -5576,6 +5596,7 @@ describe("Sidebar", () => {
   });
 
   it("exposes Move Up / Move Down with shortcut hints on a pinned thread's context menu", async () => {
+    stubMacPlatform();
     // Discoverability: the Cmd+Arrow keyboard shortcut for
     // reordering pinned threads is invisible without a surfaced
     // affordance. Mirrors the macOS-native pattern of showing
@@ -5633,9 +5654,10 @@ describe("Sidebar", () => {
     });
     expect(moveUp).toBeDisabled();
     expect(moveDown).not.toBeDisabled();
-    // Unified shortcut with directory pinning (Cmd+Shift+Arrow).
-    expect(moveUp).toHaveTextContent("⌘⇧↑");
-    expect(moveDown).toHaveTextContent("⌘⇧↓");
+    // Unified shortcut with directory pinning, in the native menu's
+    // modifier order (⌃⌥⇧⌘).
+    expect(moveUp).toHaveTextContent("⇧⌘↑");
+    expect(moveDown).toHaveTextContent("⇧⌘↓");
     // aria-keyshortcuts so screen readers can announce the binding
     // independently of the visual chip (which is aria-hidden).
     expect(moveUp).toHaveAttribute("aria-keyshortcuts", "Meta+Shift+ArrowUp");
@@ -7000,7 +7022,7 @@ describe("Sidebar", () => {
 
     const menu = screen.getByRole("menu");
     expect(within(menu).getByRole("separator")).toBeInTheDocument();
-    expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+    expect(within(menu).getAllByRole("menuitem").map(menuItemLabel)).toEqual([
       "Rename Thread",
       "Archive Thread",
       "Copy Thread Link",
@@ -7123,7 +7145,7 @@ describe("Sidebar", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Open thread actions" }));
     const menu = screen.getByRole("menu");
-    const items = within(menu).getAllByRole("menuitem").map((item) => item.textContent);
+    const items = within(menu).getAllByRole("menuitem").map(menuItemLabel);
     // Beside Archive: a Move ends in one.
     expect(items.indexOf("Send to Another Machine…")).toBe(items.indexOf("Archive Thread") - 1);
     await clickElement(screen.getByRole("menuitem", { name: "Send to Another Machine…" }));
@@ -7431,12 +7453,14 @@ describe("Sidebar", () => {
     fireEvent.contextMenu(threadRowCard, { clientX: 12, clientY: 34 });
     fireEvent.click(screen.getByRole("menuitem", { name: "Rename Thread" }));
 
-    const dialog = screen.getByRole("dialog", { name: "Rename Thread" });
-    const input = within(dialog).getByLabelText("Name");
+    // The row's title becomes the field: no dialog.
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    const input = screen.getByRole("textbox", { name: "Thread name" });
     fireEvent.change(input, { target: { value: "  Renamed cleanup  " } });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Rename Thread" }));
+    fireEvent.keyDown(input, { key: "Enter" });
 
     expect(onRenameThread).toHaveBeenCalledWith(sharedThread, "Renamed cleanup");
+    expect(screen.queryByRole("textbox", { name: "Thread name" })).not.toBeInTheDocument();
   });
 
   it.each((["attention", "drafts", "inbox", "recents", "directories"] as const).flatMap((browseMode) =>
@@ -7479,7 +7503,7 @@ describe("Sidebar", () => {
         fireEvent.pointerUp(target, { pointerType: "mouse", button: 0 });
         fireEvent.mouseUp(target, { button: 0, detail });
         fireEvent.click(target, { button: 0, detail });
-        expect(screen.queryByRole("dialog", { name: "Rename Thread" })).toBeNull();
+        expect(screen.queryByRole("textbox", { name: "Thread name" })).toBeNull();
         expect(row).toHaveFocus();
         expect(onSelectThread).toHaveBeenLastCalledWith(sharedThread, {
           focusComposer: true,
@@ -7488,13 +7512,12 @@ describe("Sidebar", () => {
       }
       fireEvent.doubleClick(target, { button: 0, detail: 2 });
       expect(onSelectThread).toHaveBeenCalledTimes(2);
-      const dialog = screen.getByRole("dialog", { name: "Rename Thread" });
-      const input = within(dialog).getByRole("textbox", { name: "Name" });
+      const input = screen.getByRole("textbox", { name: "Thread name" });
+      expect(input.closest("[data-thread-key]")).toHaveAttribute("data-thread-key", "codex:thread-1");
       expect(input).toHaveFocus();
       expect(input).toHaveValue(sharedThread.title);
       expect((input as HTMLInputElement).selectionStart).toBe(0);
       expect((input as HTMLInputElement).selectionEnd).toBe(sharedThread.title.length);
-      expect(tabEscapes(dialog)).toEqual({ forward: [], backward: [] });
       fireEvent.change(input, { target: { value: "  Renamed cleanup  " } });
       fireEvent.keyDown(input, { key: "Enter" });
       expect(onRenameThread).toHaveBeenCalledExactlyOnceWith(sharedThread, "Renamed cleanup");
@@ -7521,6 +7544,7 @@ describe("Sidebar", () => {
         onCreateThread={async () => undefined}
         onOpenLaunchpad={async () => undefined}
         onSelectThread={onSelectThread}
+        onRenameThread={async () => undefined}
         onSetThreadPin={onSetThreadPin}
       />,
     );
@@ -7528,7 +7552,7 @@ describe("Sidebar", () => {
     const card = threadCard(row);
     for (const modifier of ["metaKey", "ctrlKey", "shiftKey", "altKey"]) {
       fireEvent.doubleClick(row, { button: 0, detail: 2, [modifier]: true });
-      expect(screen.queryByRole("dialog", { name: "Rename Thread" })).toBeNull();
+      expect(screen.queryByRole("textbox", { name: "Thread name" })).toBeNull();
     }
     fireEvent.doubleClick(row, { button: 2, detail: 2 });
     for (const control of card.querySelectorAll<HTMLElement>("button, [role='button'], a")) {
@@ -7536,7 +7560,7 @@ describe("Sidebar", () => {
         fireEvent.doubleClick(control, { button: 0, detail: 2 });
       }
     }
-    expect(screen.queryByRole("dialog", { name: "Rename Thread" })).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "Thread name" })).toBeNull();
     expect(onSelectThread).not.toHaveBeenCalled();
     // The action's own click still performs its existing operation.
     fireEvent.click(within(card).getByRole("button", { name: "Pin thread" }));
@@ -7547,7 +7571,7 @@ describe("Sidebar", () => {
 
     for (const target of [card, within(card).getByRole("img", { name: "Unread update" })]) {
       fireEvent.doubleClick(target, { button: 0, detail: 2 });
-      expect(screen.getByRole("dialog", { name: "Rename Thread" })).toBeInTheDocument();
+      expect(screen.getByRole("textbox", { name: "Thread name" })).toBeInTheDocument();
       pressEscape();
     }
   });
@@ -7571,6 +7595,7 @@ describe("Sidebar", () => {
         onCreateThread={async () => undefined}
         onOpenLaunchpad={async () => undefined}
         onSelectThread={() => undefined}
+        onRenameThread={async () => undefined}
       />,
     );
     if (browseMode === "directories") {
@@ -7581,7 +7606,7 @@ describe("Sidebar", () => {
         name: pinned && thread === parent ? `${thread.title}, pinned` : thread.title,
       });
       fireEvent.doubleClick(row, { button: 0, detail: 2 });
-      expect(within(screen.getByRole("dialog", { name: "Rename Thread" })).getByLabelText("Name")).toHaveValue(thread.title);
+      expect(screen.getByRole("textbox", { name: "Thread name" })).toHaveValue(thread.title);
       pressEscape();
     }
   });
@@ -7603,10 +7628,11 @@ describe("Sidebar", () => {
         onCreateThread={async () => undefined}
         onOpenLaunchpad={async () => undefined}
         onSelectThread={() => undefined}
+        onRenameThread={async () => undefined}
       />,
     );
     fireEvent.doubleClick(screen.getByRole("button", { name: sharedThread.title }), { detail: 2 });
-    expect(screen.queryByRole("dialog", { name: "Rename Thread" })).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "Thread name" })).toBeNull();
   });
 
   it("locks a thread with a note from the thread context menu", async () => {
@@ -7733,16 +7759,14 @@ describe("Sidebar", () => {
     fireEvent.contextMenu(threadRowCard, { clientX: 12, clientY: 34 });
     fireEvent.click(screen.getByRole("menuitem", { name: "Rename Thread" }));
 
-    const dialog = screen.getByRole("dialog", { name: "Rename Thread" });
-    fireEvent.change(within(dialog).getByLabelText("Name"), {
-      target: { value: "Gemini cleanup" },
-    });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Rename Thread" }));
+    const input = screen.getByRole("textbox", { name: "Thread name" });
+    fireEvent.change(input, { target: { value: "Gemini cleanup" } });
+    fireEvent.keyDown(input, { key: "Enter" });
 
     expect(onRenameThread).toHaveBeenCalledWith(acpThread, "Gemini cleanup");
   });
 
-  it("focuses and selects the current name when opening the rename dialog", () => {
+  it("focuses and selects the current name when rename starts", () => {
     render(
       <Sidebar
         backends={backends}
@@ -7765,15 +7789,15 @@ describe("Sidebar", () => {
     fireEvent.contextMenu(threadRowCard, { clientX: 12, clientY: 34 });
     fireEvent.click(screen.getByRole("menuitem", { name: "Rename Thread" }));
 
-    const dialog = screen.getByRole("dialog", { name: "Rename Thread" });
-    const input = within(dialog).getByLabelText("Name") as HTMLInputElement;
+    const input = screen.getByRole("textbox", { name: "Thread name" }) as HTMLInputElement;
 
     expect(input).toHaveFocus();
     expect(input.selectionStart).toBe(0);
     expect(input.selectionEnd).toBe("Cross-project cleanup".length);
   });
 
-  it("keeps the rename dialog keyboard-contained and returns focus to the thread actions button", () => {
+  it("cancels the rename on Escape and leaves focus on the row", () => {
+    const onRenameThread = vi.fn(async () => undefined);
     render(
       <Sidebar
         backends={backends}
@@ -7788,23 +7812,25 @@ describe("Sidebar", () => {
         onCreateThread={async () => undefined}
         onOpenLaunchpad={async () => undefined}
         onSelectThread={() => undefined}
-        onRenameThread={async () => undefined}
+        onRenameThread={onRenameThread}
       />
     );
 
     const actions = screen.getByRole("button", { name: "Open thread actions" });
     actions.focus();
     act(() => actions.click());
-    const item = screen.getByRole("menuitem", { name: "Rename Thread" });
-    item.focus();
-    act(() => item.click());
+    act(() => screen.getByRole("menuitem", { name: "Rename Thread" }).click());
 
-    const dialog = screen.getByRole("dialog", { name: "Rename Thread" });
-    expect(tabEscapes(dialog)).toEqual({ forward: [], backward: [] });
-    pressEscape();
-    expect(screen.queryByRole("dialog", { name: "Rename Thread" })).not.toBeInTheDocument();
-    // The menu item that opened the dialog went with its menu.
-    expect(actions).toHaveFocus();
+    const input = screen.getByRole("textbox", { name: "Thread name" });
+    fireEvent.change(input, { target: { value: "Not this" } });
+    fireEvent.keyDown(input, { key: "Escape" });
+
+    expect(screen.queryByRole("textbox", { name: "Thread name" })).not.toBeInTheDocument();
+    expect(onRenameThread).not.toHaveBeenCalled();
+    expect(screen.getByText("Cross-project cleanup")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Cross-project cleanup", pressed: true }),
+    ).toHaveFocus();
   });
 
   it("collapses a fully selected rename field to either end with arrow keys", () => {
@@ -7829,8 +7855,7 @@ describe("Sidebar", () => {
     fireEvent.click(screen.getByRole("button", { name: "Open thread actions" }));
     fireEvent.click(screen.getByRole("menuitem", { name: "Rename Thread" }));
 
-    const dialog = screen.getByRole("dialog", { name: "Rename Thread" });
-    const input = within(dialog).getByLabelText("Name") as HTMLInputElement;
+    const input = screen.getByRole("textbox", { name: "Thread name" }) as HTMLInputElement;
 
     fireEvent.keyDown(input, { key: "ArrowLeft" });
     expect(input.selectionStart).toBe(0);
@@ -7842,7 +7867,7 @@ describe("Sidebar", () => {
     expect(input.selectionEnd).toBe("Cross-project cleanup".length);
   });
 
-  it("keeps the rename dialog open for blank names", () => {
+  it("puts the old name back when the new one is blank", () => {
     const onRenameThread = vi.fn(async () => undefined);
 
     render(
@@ -7866,14 +7891,13 @@ describe("Sidebar", () => {
     fireEvent.click(screen.getByRole("button", { name: "Open thread actions" }));
     fireEvent.click(screen.getByRole("menuitem", { name: "Rename Thread" }));
 
-    const dialog = screen.getByRole("dialog", { name: "Rename Thread" });
-    fireEvent.change(within(dialog).getByLabelText("Name"), {
-      target: { value: "   " },
-    });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Rename Thread" }));
+    const input = screen.getByRole("textbox", { name: "Thread name" });
+    fireEvent.change(input, { target: { value: "   " } });
+    fireEvent.keyDown(input, { key: "Enter" });
 
     expect(onRenameThread).not.toHaveBeenCalled();
-    expect(within(dialog).getByText("Thread name cannot be blank.")).toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "Thread name" })).not.toBeInTheDocument();
+    expect(screen.getByText("Cross-project cleanup")).toBeInTheDocument();
   });
 
   it("archives directly from the thread context menu", () => {
@@ -9060,6 +9084,7 @@ describe("Sidebar directory pinning", () => {
   });
 
   it("exposes Move Up / Move Down with shortcut hints on a pinned directory's context menu", async () => {
+    stubMacPlatform();
     // Discoverability: the Cmd+Shift+Arrow keyboard shortcut for
     // reordering pinned directories is invisible without a
     // surfaced affordance. Mirrors the macOS-native pattern of
@@ -9098,8 +9123,8 @@ describe("Sidebar directory pinning", () => {
     });
     expect(moveUp).not.toBeDisabled();
     expect(moveDown).not.toBeDisabled();
-    expect(moveUp).toHaveTextContent("⌘⇧↑");
-    expect(moveDown).toHaveTextContent("⌘⇧↓");
+    expect(moveUp).toHaveTextContent("⇧⌘↑");
+    expect(moveDown).toHaveTextContent("⇧⌘↓");
     expect(moveUp).toHaveAttribute("aria-keyshortcuts", "Meta+Shift+ArrowUp");
     expect(moveDown).toHaveAttribute(
       "aria-keyshortcuts",
@@ -9862,4 +9887,194 @@ it("opens a project launchpad from the palette and reveals its folder without ta
   } finally {
     restore();
   }
+});
+
+describe("Sidebar thread shortcuts", () => {
+  const secondThread = {
+    ...sharedThread,
+    id: "thread-2",
+    title: "Second thread",
+    updatedAt: sharedThread.updatedAt - 1000,
+  };
+
+  function renderShortcutSidebar(props: Partial<ComponentProps<typeof Sidebar>> = {}) {
+    return render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        directories={directories}
+        inboxThreads={[sharedThread, secondThread]}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread, secondThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        {...props}
+      />,
+    );
+  }
+
+  // No desktop bridge: the platform is unknown, so Windows/Linux defaults
+  // apply and CmdOrCtrl accepts either ⌘ or Ctrl.
+  const press = (target: EventTarget, init: KeyboardEventInit) => {
+    act(() => {
+      target.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init }));
+    });
+  };
+
+  it("renames the open thread in its row from the Rename shortcut", () => {
+    const onRenameThread = vi.fn(async () => undefined);
+    renderShortcutSidebar({ onRenameThread });
+
+    press(document.body, { key: "F2", code: "F2" });
+
+    const input = screen.getByRole("textbox", { name: "Thread name" });
+    expect(input).toHaveFocus();
+    expect(input.closest("[data-thread-key]")).toHaveAttribute("data-thread-key", "codex:thread-1");
+    fireEvent.change(input, { target: { value: "Renamed by key" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onRenameThread).toHaveBeenCalledWith(sharedThread, "Renamed by key");
+  });
+
+  it("renames on double-click and saves when the field loses focus", () => {
+    const onRenameThread = vi.fn(async () => undefined);
+    renderShortcutSidebar({ onRenameThread });
+
+    fireEvent.doubleClick(screen.getByRole("button", { name: "Second thread" }));
+    const input = screen.getByRole("textbox", { name: "Thread name" });
+    fireEvent.change(input, { target: { value: "Saved on blur" } });
+    fireEvent.blur(input);
+
+    expect(onRenameThread).toHaveBeenCalledWith(secondThread, "Saved on blur");
+  });
+
+  it("acts on the focused row rather than the open thread", () => {
+    const onSetThreadPin = vi.fn(async () => undefined);
+    renderShortcutSidebar({ onSetThreadPin });
+
+    const secondRow = screen.getByRole("button", { name: "Second thread" });
+    secondRow.focus();
+    press(secondRow, { key: "P", code: "KeyP", ctrlKey: true, shiftKey: true });
+
+    expect(onSetThreadPin).toHaveBeenCalledTimes(1);
+    expect(onSetThreadPin).toHaveBeenCalledWith(secondThread, true);
+  });
+
+  it("archives the open thread, opens the next row, and reports it for Undo", async () => {
+    const archived = [{ backend: "codex" as const, threadId: "thread-1", remote: false }];
+    const onArchiveThread = vi.fn(async () => archived);
+    const onThreadsArchived = vi.fn();
+    renderShortcutSidebar({ onArchiveThread, onThreadsArchived });
+
+    press(document.body, { key: "Backspace", code: "Backspace", ctrlKey: true, shiftKey: true });
+
+    expect(onArchiveThread).toHaveBeenCalledWith(sharedThread, {
+      nextSelectionKey: "codex:thread-2",
+    });
+    await waitFor(() => expect(onThreadsArchived).toHaveBeenCalledWith(archived, {
+      title: "Cross-project cleanup",
+      reopenKey: "codex:thread-1",
+    }));
+  });
+
+  it("leaves text fields other than the composer alone", () => {
+    const onSetThreadPin = vi.fn(async () => undefined);
+    renderShortcutSidebar({ onSetThreadPin });
+    const field = document.createElement("input");
+    document.body.append(field);
+    try {
+      field.focus();
+      press(field, { key: "P", code: "KeyP", ctrlKey: true, shiftKey: true });
+      expect(onSetThreadPin).not.toHaveBeenCalled();
+    } finally {
+      field.remove();
+    }
+  });
+
+  it("fires from the composer, where the chord cannot edit text", () => {
+    const onSetThreadPin = vi.fn(async () => undefined);
+    renderShortcutSidebar({ onSetThreadPin });
+    const composer = document.createElement("form");
+    composer.className = "composer";
+    const field = document.createElement("textarea");
+    composer.append(field);
+    document.body.append(composer);
+    try {
+      field.focus();
+      press(field, { key: "P", code: "KeyP", ctrlKey: true, shiftKey: true });
+      expect(onSetThreadPin).toHaveBeenCalledWith(sharedThread, true);
+    } finally {
+      composer.remove();
+    }
+  });
+
+  it("does nothing while Settings covers the window", () => {
+    const onSetThreadPin = vi.fn(async () => undefined);
+    renderShortcutSidebar({ onSetThreadPin, inert: true });
+    press(document.body, { key: "P", code: "KeyP", ctrlKey: true, shiftKey: true });
+    expect(onSetThreadPin).not.toHaveBeenCalled();
+  });
+
+  it("follows a rebound chord", async () => {
+    const { _resetKeybindingsStoreForTests } = await import("../../../lib/keybindings-store");
+    _resetKeybindingsStoreForTests({
+      overrides: { "threads.toggle_pin": ["Alt+P"] },
+      filePath: "/tmp/keybindings.toml",
+    });
+    try {
+      const onSetThreadPin = vi.fn(async () => undefined);
+      renderShortcutSidebar({ onSetThreadPin });
+      press(document.body, { key: "P", code: "KeyP", ctrlKey: true, shiftKey: true });
+      expect(onSetThreadPin).not.toHaveBeenCalled();
+      press(document.body, { key: "π", code: "KeyP", altKey: true });
+      expect(onSetThreadPin).toHaveBeenCalledWith(sharedThread, true);
+    } finally {
+      act(() => _resetKeybindingsStoreForTests());
+    }
+  });
+});
+
+describe("Sidebar archive shortcut on a focused row", () => {
+  it("moves focus to the row that takes its place", async () => {
+    const second = { ...sharedThread, id: "thread-2", title: "Second thread", updatedAt: sharedThread.updatedAt - 1000 };
+    const third = { ...sharedThread, id: "thread-3", title: "Third thread", updatedAt: sharedThread.updatedAt - 2000 };
+    const onArchiveThread = vi.fn(async () => undefined);
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        directories={directories}
+        inboxThreads={[sharedThread, second, third]}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread, second, third]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onArchiveThread={onArchiveThread}
+      />,
+    );
+
+    const secondRow = screen.getByRole("button", { name: "Second thread" });
+    secondRow.focus();
+    act(() => {
+      secondRow.dispatchEvent(new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "Backspace",
+        code: "Backspace",
+        ctrlKey: true,
+        shiftKey: true,
+      }));
+    });
+
+    // A focused row that is not the open thread: no new selection.
+    expect(onArchiveThread).toHaveBeenCalledWith(second);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Third thread" })).toHaveFocus());
+  });
 });

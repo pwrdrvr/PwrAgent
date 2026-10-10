@@ -536,6 +536,13 @@ vi.mock("../ipc/settings", () => ({
   disposeSettingsIpcHandlers: disposeSettingsIpcHandlersMock,
 }));
 
+vi.mock("../ipc/keybindings", () => ({
+  registerKeybindingsIpcHandlers: vi.fn(),
+  disposeKeybindingsIpcHandlers: vi.fn(),
+  getKeybindingsSnapshot: vi.fn(() => ({ overrides: {}, filePath: "/tmp/keybindings.toml" })),
+  onKeybindingsChanged: vi.fn(() => () => undefined),
+}));
+
 vi.mock("../ipc/window-pointer", () => ({
   registerWindowPointerIpcHandlers: registerWindowPointerIpcHandlersMock,
   disposeWindowPointerIpcHandlers: disposeWindowPointerIpcHandlersMock,
