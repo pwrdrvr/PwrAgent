@@ -1,5 +1,4 @@
-import { fromMarkdown } from "mdast-util-from-markdown";
-import { useEffect, useMemo, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import {
   transcriptFileReference,
   type MarkdownFileViewerContext,
@@ -8,60 +7,70 @@ import {
 import type { DesktopApi } from "../../lib/desktop-api";
 import { useMarkdownFileSource } from "./useMarkdownFileSource";
 
-type Node = { type: string; value?: string; children?: Node[] };
-const EMPTY_FILES = new Map<string, ResolvedTranscriptFile>();
+type Files = Map<string, ResolvedTranscriptFile>;
+const EMPTY_FILES: Files = new Map();
+export const TranscriptFileRegistrationContext = createContext<(reference: string) => void>(() => undefined);
 
-export function inlineFileReferences(markdown: string): string[] {
-  if (!markdown.includes("`")) return [];
-  const references = new Set<string>();
-  const visit = (node: Node): void => {
-    if (["link", "linkReference", "code", "html"].includes(node.type)) return;
-    if (node.type === "inlineCode" && node.value && transcriptFileReference(node.value)) {
-      if (references.size < 128) references.add(node.value);
-    }
-    node.children?.forEach(visit);
-  };
-  visit(fromMarkdown(markdown));
-  return [...references];
+/** Existing Markdown code nodes supply candidates; never parse the growing message again. */
+export function useTranscriptFileReference(text: string, enabled: boolean): void {
+  const register = useContext(TranscriptFileRegistrationContext);
+  const reference = useMemo(() => enabled && transcriptFileReference(text) ? text : undefined, [text, enabled]);
+  useEffect(() => {
+    if (reference) register(reference);
+  }, [reference, register]);
 }
 
 export function useTranscriptFiles(
-  markdown: string,
   desktopApi: Pick<DesktopApi, "resolveTranscriptFiles"> | undefined,
   context: MarkdownFileViewerContext | undefined,
-): Map<string, ResolvedTranscriptFile> {
+) {
   const resolveFiles = desktopApi?.resolveTranscriptFiles;
   const { thread, federationTarget } = useMarkdownFileSource(context);
   const projectPath = context?.projectPath;
-  const canResolve = Boolean(resolveFiles && (thread || projectPath));
-  const identity = JSON.stringify([thread, federationTarget, projectPath]);
-  const referencesKey = useMemo(() => JSON.stringify(canResolve
-    ? inlineFileReferences(markdown)
-    : []), [markdown, canResolve]);
-  const [resolved, setResolved] = useState<{
-    identity: string;
-    files: Map<string, ResolvedTranscriptFile>;
-  }>();
-
-  useEffect(() => {
-    const references = JSON.parse(referencesKey) as string[];
-    if (!resolveFiles || !references.length) return;
-    let cancelled = false;
-    // Coalesce paths introduced together while the model streams Markdown.
-    const timer = window.setTimeout(() => {
-      void resolveFiles({ references, thread, federationTarget, projectPath }).then((result) => {
-        if (!cancelled) {
-          setResolved({ identity, files: new Map(result.files.map((file) => [file.reference, file])) });
-        }
-      }).catch(() => {
-        if (!cancelled) setResolved({ identity, files: EMPTY_FILES });
-      });
-    }, 120);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
+  const hydrator = useMemo(() => {
+    const seen = new Set<string>();
+    const pending = new Set<string>();
+    const files: Files = new Map();
+    let timer: number | undefined;
+    let publish: ((files: Files) => void) | undefined;
+    const schedule = (): void => {
+      if (timer !== undefined) window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        timer = undefined;
+        if (!resolveFiles || !publish || !pending.size) return;
+        const references = [...pending];
+        pending.clear();
+        void resolveFiles({ references, thread, federationTarget, projectPath }).then((result) => {
+          for (const file of result.files) files.set(file.reference, file);
+          publish?.(new Map(files));
+        }).catch(() => {
+          // An offline/older owner leaves code literal; never fall back to local stat.
+        });
+      }, 120);
     };
-  }, [resolveFiles, referencesKey, thread, federationTarget, projectPath, identity]);
-
-  return resolved?.identity === identity && canResolve ? resolved.files : EMPTY_FILES;
+    return {
+      register: (reference: string): void => {
+        if (!resolveFiles || !(thread || projectPath) || seen.has(reference) || seen.size >= 128) return;
+        seen.add(reference);
+        pending.add(reference);
+        schedule();
+      },
+      subscribe: (listener: (files: Files) => void): (() => void) => {
+        publish = listener;
+        // React StrictMode may clear the first timer before re-subscribing.
+        if (pending.size) schedule();
+        return () => {
+          publish = undefined;
+          if (timer !== undefined) window.clearTimeout(timer);
+          timer = undefined;
+        };
+      },
+    };
+  }, [resolveFiles, thread, federationTarget, projectPath]);
+  const [resolved, setResolved] = useState<{ hydrator: typeof hydrator; files: Files }>();
+  useEffect(() => hydrator.subscribe((files) => setResolved({ hydrator, files })), [hydrator]);
+  return {
+    files: resolved?.hydrator === hydrator ? resolved.files : EMPTY_FILES,
+    register: hydrator.register,
+  };
 }

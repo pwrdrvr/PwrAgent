@@ -66,7 +66,11 @@ import { remarkTableProfile } from "./remark-table-profile";
 import { TranscriptCopyButton } from "./TranscriptCopyButton";
 import { MermaidDiagram } from "./MermaidDiagram";
 import { useMarkdownFileSource } from "./useMarkdownFileSource";
-import { useTranscriptFiles } from "./useTranscriptFiles";
+import {
+  TranscriptFileRegistrationContext,
+  useTranscriptFileReference,
+  useTranscriptFiles,
+} from "./useTranscriptFiles";
 import {
   FilePreviewBody,
   FilePreviewCopyButton,
@@ -228,6 +232,8 @@ function TranscriptCode(props: {
   const insideCodeBlock = useContext(CodeBlockContext);
   const insideLink = useContext(MarkdownLinkContext);
   const isBlockCode = insideCodeBlock || (props.className?.includes("language-") ?? false);
+  const inlineText = !isBlockCode && !insideLink ? extractTextContent(props.children) : "";
+  useTranscriptFileReference(inlineText, !isBlockCode && !insideLink && !props.skill);
 
   // Only inline code on a navigation-capable surface can become a chip; skip
   // the text extraction entirely on block code and on the Activity/Changelog/
@@ -239,7 +245,7 @@ function TranscriptCode(props: {
     // anyone to re-run anything. Gated on the id resolving to a real thread,
     // so an unrelated uuid stays plain code.
     const threadLink = resolveThreadIdText(
-      extractTextContent(props.children),
+      inlineText,
       threadLinks,
     );
     if (threadLink) {
@@ -267,7 +273,7 @@ function TranscriptCode(props: {
     );
   }
 
-  const copyText = extractTextContent(props.children);
+  const copyText = inlineText;
 
   if (!copyText) {
     return <code className="transcript-message__code">{props.children}</code>;
@@ -717,7 +723,7 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
   );
   const [markdownViewerTarget, setMarkdownViewerTarget] =
     useState<MarkdownViewerTarget>();
-  const inlineFiles = useTranscriptFiles(markdownText, props.desktopApi, props.fileViewerContext);
+  const { files: inlineFiles, register: registerInlineFile } = useTranscriptFiles(props.desktopApi, props.fileViewerContext);
   const editorApplication = useMemo(
     () =>
       props.applications?.editors.find(
@@ -881,23 +887,25 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
       onMouseDown={suppressPullRequestChipSelectionStart}
     >
       <MarkdownRenderContext.Provider value={renderState}>
-        <MarkdownCodeApiContext.Provider value={props.desktopApi}>
-          <ReactMarkdown
-            components={markdownComponents}
-            rehypePlugins={mathRuntime?.rehypePlugins}
-            remarkPlugins={[
-              ...(mathRuntime?.remarkPlugins ?? []),
-              remarkBreaks,
-              // Single tildes are common in home paths and approximate values.
-              [remarkGfm, { singleTilde: false }],
-              remarkPullRequestReferences,
-              remarkTableProfile,
-            ]}
-            urlTransform={normalizeMarkdownUrl}
-          >
-            {markdownText}
-          </ReactMarkdown>
-        </MarkdownCodeApiContext.Provider>
+        <TranscriptFileRegistrationContext.Provider value={registerInlineFile}>
+          <MarkdownCodeApiContext.Provider value={props.desktopApi}>
+            <ReactMarkdown
+              components={markdownComponents}
+              rehypePlugins={mathRuntime?.rehypePlugins}
+              remarkPlugins={[
+                ...(mathRuntime?.remarkPlugins ?? []),
+                remarkBreaks,
+                // Single tildes are common in home paths and approximate values.
+                [remarkGfm, { singleTilde: false }],
+                remarkPullRequestReferences,
+                remarkTableProfile,
+              ]}
+              urlTransform={normalizeMarkdownUrl}
+            >
+              {markdownText}
+            </ReactMarkdown>
+          </MarkdownCodeApiContext.Provider>
+        </TranscriptFileRegistrationContext.Provider>
       </MarkdownRenderContext.Provider>
       {markdownViewerTarget ? (
         <MarkdownDocumentModal

@@ -1,11 +1,18 @@
 import "@testing-library/jest-dom/vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
-import type { DesktopApplicationsSnapshot, ResolveTranscriptFilesRequest, ResolveTranscriptFilesResponse } from "@pwragent/shared";
+import { StrictMode } from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { transcriptFileReference, type DesktopApplicationsSnapshot, type ResolveTranscriptFilesRequest, type ResolveTranscriptFilesResponse } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { scopeDesktopApiToFederationTarget } from "../../../lib/federation-desktop-api";
 import { ThreadMarkdown } from "../ThreadMarkdown";
-import { inlineFileReferences } from "../useTranscriptFiles";
+
+vi.mock("@pwragent/shared", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@pwragent/shared")>();
+  return { ...actual, transcriptFileReference: vi.fn(actual.transcriptFileReference) };
+});
+
+afterEach(() => vi.mocked(transcriptFileReference).mockClear());
 
 const applications: DesktopApplicationsSnapshot = {
   editors: [{ id: "code", kind: "editor", name: "VS Code", source: "application", appPath: "/fixture/Code.app", canOpenWorkspace: true }],
@@ -24,14 +31,17 @@ describe("inline file links", () => {
     expect(resolveTranscriptFiles).not.toHaveBeenCalled();
     expect(screen.queryByRole("link")).toBeNull();
   });
-  it("collects only unlinked inline-code filenames, including tables, and deduplicates them", () => {
-    expect(inlineFileReferences([
+  it("collects only unlinked inline-code filenames, including tables, and deduplicates them", async () => {
+    const resolveTranscriptFiles = vi.fn(async () => ({ files: [] }));
+    render(<ThreadMarkdown desktopApi={{ resolveTranscriptFiles }} fileViewerContext={context} text={[
       "Read `research/pwr-video-pilot/NOTES.md` and `research/pwr-video-pilot/NOTES.md`.",
       "[`linked.md`](/explicit.md) and `seek(t)` and `#000000` and `npm install` and `https://example.com/doc.md`.",
       "```", "fenced.md", "```",
       "| File |", "| --- |", "| `code.ts:3:2` |",
       "[reference.md][ref]", "[ref]: /ref.md",
-    ].join("\n"))).toEqual(["research/pwr-video-pilot/NOTES.md", "code.ts:3:2"]);
+    ].join("\n")} />);
+    await waitFor(() => expect(resolveTranscriptFiles).toHaveBeenCalledTimes(1));
+    expect(resolveTranscriptFiles).toHaveBeenCalledWith(expect.objectContaining({ references: ["research/pwr-video-pilot/NOTES.md", "code.ts:3:2"] }));
   });
 
   it("hydrates the reported relative Markdown paths and opens preview and detached viewers", async () => {
@@ -103,6 +113,29 @@ describe("inline file links", () => {
     await waitFor(() => expect(resolveTranscriptFiles).toHaveBeenCalledTimes(1));
     view.rerender(<ThreadMarkdown fileViewerContext={{ ...context, title: "Renamed" }} desktopApi={api} text="Read `notes.md`. More prose." />);
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 150)); });
+    expect(resolveTranscriptFiles).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not rescan candidates per appended character and stats only newly introduced filenames", async () => {
+    const resolveTranscriptFiles = vi.fn(async () => ({ files: [] }));
+    const api = { resolveTranscriptFiles };
+    const prefix = "Prose ".repeat(500) + "`notes.md` ";
+    const view = render(<ThreadMarkdown fileViewerContext={context} desktopApi={api} text={prefix} />);
+    await waitFor(() => expect(resolveTranscriptFiles).toHaveBeenCalledTimes(1));
+    for (let length = 1; length <= 150; length++) {
+      view.rerender(<ThreadMarkdown fileViewerContext={context} desktopApi={api} text={prefix + "x".repeat(length)} />);
+    }
+    expect(transcriptFileReference).toHaveBeenCalledTimes(1);
+    view.rerender(<ThreadMarkdown fileViewerContext={context} desktopApi={api} text={prefix + "x".repeat(150) + " `next.md`"} />);
+    await waitFor(() => expect(resolveTranscriptFiles).toHaveBeenCalledTimes(2));
+    expect(transcriptFileReference).toHaveBeenCalledTimes(2);
+    expect(resolveTranscriptFiles.mock.calls[1]).toEqual([expect.objectContaining({ references: ["next.md"] })]);
+  });
+
+  it("keeps batched hydration working through StrictMode effect cleanup", async () => {
+    const resolveTranscriptFiles = vi.fn(async () => ({ files: [{ reference: "notes.md", path: "/owner/notes.md", previewable: true }] }));
+    render(<StrictMode><ThreadMarkdown fileViewerContext={context} desktopApi={{ resolveTranscriptFiles, readMarkdownFile: vi.fn() }} text="Read `notes.md`." /></StrictMode>);
+    expect(await screen.findByRole("link", { name: "notes.md" })).toBeInTheDocument();
     expect(resolveTranscriptFiles).toHaveBeenCalledTimes(1);
   });
 });
