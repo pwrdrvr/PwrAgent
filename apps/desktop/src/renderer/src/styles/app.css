@@ -23765,6 +23765,14 @@ a.transcript-message__messaging-origin:focus-visible {
   word-break: break-word;
 }
 
+.thread-markdown__attachment-image {
+  max-width: 100%;
+  max-height: 420px;
+  object-fit: contain;
+  vertical-align: middle;
+  border-radius: 8px;
+}
+
 .transcript-message__text > * {
   margin: 0;
 }
