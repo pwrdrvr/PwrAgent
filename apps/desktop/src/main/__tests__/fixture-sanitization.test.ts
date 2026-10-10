@@ -1,4 +1,5 @@
-import { readdir, readFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
+import { readdir } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -43,6 +44,10 @@ const retiredFixtureTerms = [
   ["spectrum", "db"].join(""),
   ["search", "-4803"].join(""),
 ];
+// One case-insensitive pass per file. The scan reads ~40 MB of source; an
+// awaited read, a UTF-8 decode, a lowercased copy, and a scan per term for
+// every file is work that a loaded full run stretches past the default timeout.
+const retiredFixturePattern = new RegExp(retiredFixtureTerms.join("|"), "i");
 
 async function listTextFiles(directory: string): Promise<string[]> {
   const entries = await readdir(directory, { withFileTypes: true });
@@ -65,9 +70,15 @@ describe("active fixture samples", () => {
     const violations: string[] = [];
     for (const sourceRoot of activeSourceRoots) {
       for (const filePath of await listTextFiles(sourceRoot)) {
-        const source = (await readFile(filePath, "utf8")).toLowerCase();
+        // The terms are ASCII, so latin1 matches them byte for byte in UTF-8
+        // text without paying for a UTF-8 decode.
+        const source = readFileSync(filePath, "latin1");
+        if (!retiredFixturePattern.test(source)) {
+          continue;
+        }
+        const lowered = source.toLowerCase();
         for (const term of retiredFixtureTerms) {
-          if (source.includes(term)) {
+          if (lowered.includes(term)) {
             violations.push(`${path.relative(repoRoot, filePath)}: ${term}`);
           }
         }
