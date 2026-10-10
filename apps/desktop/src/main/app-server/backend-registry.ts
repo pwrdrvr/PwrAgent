@@ -14497,6 +14497,12 @@ export class DesktopBackendRegistry {
       });
       result = { threadId: request.threadId };
     }
+    // A successful archive supersedes the provisional active workspace kept
+    // until navigation acknowledges a newly started or forked thread. Leaving
+    // it pending makes cleanup rediscover the archived target as active.
+    // Missing-rollout recovery still needs any retained workspace until its
+    // cleanup and tombstone have settled.
+    if (!codexRolloutMissing) this.pendingStartedThreads.delete(buildThreadIdentityKey(backend, result.threadId));
     await this.overlayStore.observeArchivedThreads?.([{ backend, threadId: result.threadId }], archivedAt);
     this.invalidateThreadListCache(backend);
     this.invalidateArchiveCleanupReads(backend);
@@ -14649,6 +14655,7 @@ export class DesktopBackendRegistry {
         threadId: result.threadId,
         archivedAt,
       });
+      this.pendingStartedThreads.delete(key);
       this.invalidateThreadListCache(backend);
       backendRegistryLog.warn("codex archive tombstoned missing rollout", {
         backend,
@@ -27029,7 +27036,7 @@ export class DesktopBackendRegistry {
           await this.recordObservedCodexSettings(notification);
         }
         if (this.shouldInvalidateThreadListCacheForNotification(notification.method)) {
-          this.invalidateThreadListCache(backend);
+          this.invalidateThreadListCache(backend, !this.isAcknowledgedArchiveCleanupNotification(backend, notification));
         }
         if (notification.method === "thread/archived") {
           if (backend === "codex") await this.archiveTokenMiserThread(notification.params.threadId);
@@ -27492,8 +27499,8 @@ export class DesktopBackendRegistry {
     return overlay;
   }
 
-  private invalidateThreadListCache(backend?: AppServerBackendKind): void {
-    this.archiveWorkspaceRevision += 1;
+  private invalidateThreadListCache(backend?: AppServerBackendKind, workspaceChanged = true): void {
+    if (workspaceChanged) this.archiveWorkspaceRevision += 1;
     if (!backend) {
       this.invalidateArchiveCleanupReads();
       this.threadListCache.clear();
@@ -43993,8 +44000,9 @@ export class DesktopBackendRegistry {
   private invalidateArchiveCleanupReads(
     backend?: AppServerBackendKind,
     notification?: AppServerNotification,
+    workspaceChanged = true,
   ): void {
-    this.archiveWorkspaceRevision += 1;
+    if (workspaceChanged) this.archiveWorkspaceRevision += 1;
     this.archiveCleanupReads.invalidate(backend);
     if (!backend || backend === "codex") this.codexClient.invalidateThreadListings?.(notification);
   }
@@ -44013,8 +44021,19 @@ export class DesktopBackendRegistry {
       // Provider notifications enter before async cleanup, then reach emit.
       // One notification must advance the archive generation only once.
       this.archiveCleanupNotifications.add(notification);
-      this.invalidateArchiveCleanupReads(backend, notification);
+      if (notification.method === "thread/archived" || notification.method === "thread/deleted") {
+        this.pendingStartedThreads.delete(buildThreadIdentityKey(backend, notification.params.threadId));
+      }
+      // The successful local archive already fenced this mutation. A delayed
+      // matching notification refreshes archive membership, but must not fail
+      // the same cleanup's removal admission as a second workspace change.
+      this.invalidateArchiveCleanupReads(backend, notification, !this.isAcknowledgedArchiveCleanupNotification(backend, notification));
     }
+  }
+
+  private isAcknowledgedArchiveCleanupNotification(backend: AppServerBackendKind, notification: AppServerNotification): boolean {
+    return notification.method === "thread/archived"
+      && this.archiveCleanupCompletions.has(buildThreadIdentityKey(backend, notification.params.threadId));
   }
 
   private emit(event: AgentEvent): Promise<void> {
@@ -44245,7 +44264,7 @@ export class DesktopBackendRegistry {
 
     this.rememberThreadTitleFromEvent(event);
     if (this.shouldInvalidateThreadListCacheForNotification(event.notification.method)) {
-      this.invalidateThreadListCache(event.backend);
+      this.invalidateThreadListCache(event.backend, !this.isAcknowledgedArchiveCleanupNotification(event.backend, event.notification));
     }
 
     if (
