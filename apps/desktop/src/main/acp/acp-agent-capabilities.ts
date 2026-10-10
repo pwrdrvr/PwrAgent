@@ -24,7 +24,7 @@ const ACP_AGENT_CAPABILITY_CATALOG: Record<string, AcpAgentCapabilities> = {
   grok: {
     liveWorkspaceHandoff: false,
     managedReview: true,
-    steerTurn: true,
+    steerTurn: false,
   },
   qwen: {
     liveWorkspaceHandoff: false,
