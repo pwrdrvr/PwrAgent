@@ -118,6 +118,8 @@ export function TodoProjectPicker(props: TodoProjectPickerProps) {
     setError(undefined);
     menu.set(todo, projectKey).then(() => {
       close();
+      // The picked row unmounts with the popover; focus would fall to <body>.
+      triggerRef.current?.focus();
     }).catch((cause: unknown) => {
       setError(errorText(cause, "The project could not be changed."));
     }).finally(() => {
@@ -133,7 +135,7 @@ export function TodoProjectPicker(props: TodoProjectPickerProps) {
           type="button"
           role="option"
           aria-selected={active}
-          disabled={saving}
+          disabled={saving || props.disabled}
           className={`project-picker__row${active ? " is-active" : ""}`}
           onClick={() => pick(row)}
         >
@@ -168,7 +170,7 @@ export function TodoProjectPicker(props: TodoProjectPickerProps) {
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-controls={open ? listboxId : undefined}
-        aria-label={`Project: ${label}. Change project`}
+        aria-label={`To-do project: ${label}. Change project`}
         title="Change project"
         disabled={props.disabled}
         onClick={() => (open ? close() : setOpen(true))}

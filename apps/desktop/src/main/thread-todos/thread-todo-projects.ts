@@ -63,17 +63,26 @@ export function matchThreadTodoProject(
   const projects = threadTodoProjectChoices(candidates);
   const trimmed = query.trim();
   const asPath = canonicalizeNavigationPath(trimmed);
-  const exact = projects.filter((project) =>
-    project.key === trimmed
-    || canonicalizeNavigationPath(project.path) === asPath);
-  const matches = exact.length > 0
-    ? exact
-    : looksLikePath(trimmed)
-      ? containingProjects(asPath, projects)
-      : [];
-  const resolved = matches.length > 0
-    ? matches
-    : projectsNamed(looksLikePath(trimmed) ? basename(trimmed) : trimmed, projects);
+  const isPath = looksLikePath(trimmed);
+  // Most specific first. macOS and Windows paths ignore case, so a path
+  // that matches nothing exactly is tried again without it.
+  const lookups: Array<() => ThreadTodoProject[]> = [
+    () => projects.filter((project) =>
+      project.key === trimmed || samePath(project.path, asPath, false)),
+    ...(isPath
+      ? [
+          () => containingProjects(asPath, projects, false),
+          () => projects.filter((project) => samePath(project.path, asPath, true)),
+          () => containingProjects(asPath, projects, true),
+        ]
+      : []),
+    () => projectsNamed(isPath ? basename(trimmed) : trimmed, projects),
+  ];
+  let resolved: ThreadTodoProject[] = [];
+  for (const lookup of lookups) {
+    resolved = lookup();
+    if (resolved.length > 0) break;
+  }
   if (resolved.length === 1) {
     return { ok: true, project: resolved[0]! };
   }
@@ -98,16 +107,27 @@ function looksLikePath(value: string): boolean {
   return value.includes("/") || value.includes("\\");
 }
 
+function comparablePath(path: string, ignoreCase: boolean): string {
+  const canonical = canonicalizeNavigationPath(path);
+  return ignoreCase ? canonical.toLowerCase() : canonical;
+}
+
+function samePath(projectPath: string, path: string, ignoreCase: boolean): boolean {
+  return comparablePath(projectPath, ignoreCase) === comparablePath(path, ignoreCase);
+}
+
 /** The deepest project whose root holds `path`; nested clones are rare. */
 function containingProjects(
   path: string,
   projects: readonly ThreadTodoProject[],
+  ignoreCase: boolean,
 ): ThreadTodoProject[] {
+  const target = comparablePath(path, ignoreCase);
   let best: ThreadTodoProject[] = [];
   let bestLength = 0;
   for (const project of projects) {
-    const root = canonicalizeNavigationPath(project.path);
-    if (!root || !path.startsWith(`${root}/`)) continue;
+    const root = comparablePath(project.path, ignoreCase);
+    if (!root || !target.startsWith(`${root}/`)) continue;
     if (root.length > bestLength) {
       best = [project];
       bestLength = root.length;

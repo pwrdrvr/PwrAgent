@@ -57,7 +57,10 @@ export function resetThreadTodoServiceForTests(): void {
   service = null;
 }
 
-/** The projects a card's project menu offers. Empty before install. */
+/**
+ * The projects a card's project menu offers. Empty before install. A failed
+ * listing rejects, so the menu says so instead of showing no projects.
+ */
 export async function listThreadTodoProjects(): Promise<ThreadTodoProject[]> {
   return threadTodoProjectChoices(await (listProjectCandidates?.() ?? []));
 }
@@ -66,15 +69,18 @@ export async function listThreadTodoProjects(): Promise<ThreadTodoProject[]> {
  * The operator's pick from a card's project menu. A key the sidebar no
  * longer lists is refused rather than kept as a stale label.
  */
-export async function setThreadTodoProject(params: {
-  id: string;
-  projectKey: string | null;
-}): Promise<ThreadTodo> {
-  const todos = getThreadTodoService();
+export async function setThreadTodoProject(
+  params: { id: string; projectKey: string | null },
+  deps: {
+    todos?: Pick<ThreadTodoService, "update">;
+    listProjects?: () => Promise<ThreadTodoProject[]>;
+  } = {},
+): Promise<ThreadTodo> {
+  const todos = deps.todos ?? getThreadTodoService();
   if (params.projectKey === null) {
     return todos.update({ id: params.id, targetProject: null });
   }
-  const project = (await listThreadTodoProjects())
+  const project = (await (deps.listProjects ?? listThreadTodoProjects)())
     .find((candidate) => candidate.key === params.projectKey);
   if (!project) {
     throw new ThreadTodoError("not_found", "That project is no longer in the sidebar.");
@@ -158,7 +164,7 @@ export function installThreadTodoRuntime(params: {
       });
       return [] as ThreadTodoProjectCandidate[];
     });
-  listProjectCandidates = listProjectsForTodo;
+  listProjectCandidates = listProjects;
   const matchProject = (
     query: string,
     projects: readonly ThreadTodoProjectCandidate[],

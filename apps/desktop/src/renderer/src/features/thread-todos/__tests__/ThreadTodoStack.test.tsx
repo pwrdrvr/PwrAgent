@@ -217,7 +217,7 @@ describe("ThreadTodoStack", () => {
       const card = handoff();
       renderCard(card, projectMenu);
 
-      await openMenu(/^Project: PwrAgent\./);
+      await openMenu(/^To-do project: PwrAgent\./);
       const options = screen.getAllByRole("option");
       expect(options.map((option) => option.textContent)).toEqual([
         "✓PwrAgentThis thread/src/pwragent",
@@ -231,6 +231,10 @@ describe("ThreadTodoStack", () => {
       });
       expect(projectMenu.set).toHaveBeenCalledWith(card, SNAP.key);
       expect(screen.queryByRole("dialog", { name: "Project for this to-do" })).toBeNull();
+      // The picked row is gone, so focus goes back to the line, not <body>.
+      expect(document.activeElement).toBe(
+        screen.getByRole("button", { name: /^To-do project: PwrAgent\./ }),
+      );
     });
 
     it("clears the tag when the thread's own project is picked", async () => {
@@ -238,7 +242,7 @@ describe("ThreadTodoStack", () => {
       const card = handoff({ targetProject: SNAP });
       renderCard(card, projectMenu);
 
-      await openMenu(/^Project: For PwrSnap\./);
+      await openMenu(/^To-do project: For PwrSnap\./);
       expect(screen.getByRole("option", { name: /PwrSnap/ }).getAttribute("aria-selected"))
         .toBe("true");
       await act(async () => {
@@ -249,7 +253,7 @@ describe("ThreadTodoStack", () => {
 
     it("filters by name or path", async () => {
       renderCard(handoff(), menu());
-      await openMenu(/^Project: PwrAgent\./);
+      await openMenu(/^To-do project: PwrAgent\./);
       fireEvent.change(screen.getByRole("textbox", { name: "Find a project" }), {
         target: { value: "git" },
       });
@@ -263,7 +267,7 @@ describe("ThreadTodoStack", () => {
         "Error invoking remote method 'thread-todos:set-project': ThreadTodoError: That project is no longer in the sidebar.",
       ));
       renderCard(handoff(), projectMenu);
-      await openMenu(/^Project: PwrAgent\./);
+      await openMenu(/^To-do project: PwrAgent\./);
       await act(async () => {
         fireEvent.click(screen.getByRole("option", { name: /PwrGit/ }));
       });
@@ -275,20 +279,40 @@ describe("ThreadTodoStack", () => {
       const projectMenu = menu();
       const card = handoff({ sourceProject: undefined });
       renderCard(card, projectMenu);
-      const trigger = screen.getByRole("button", { name: /^Project: No project\./ });
+      const trigger = screen.getByRole("button", { name: /^To-do project: No project\./ });
       expect(trigger.className).toContain("is-empty");
-      await openMenu(/^Project: No project\./);
+      await openMenu(/^To-do project: No project\./);
       expect(screen.getAllByRole("option")).toHaveLength(3);
+    });
+
+    it("offers no pick while the card's action runs", async () => {
+      const card = handoff();
+      const projectMenu = menu();
+      const view = createView([card], { projectMenu });
+      const { rerender } = render(
+        <ThreadTodoStack threadKey="codex:thread-a" todos={[card]} view={view} onStartReview={vi.fn()} />,
+      );
+      await openMenu(/^To-do project: PwrAgent\./);
+      rerender(
+        <ThreadTodoStack
+          threadKey="codex:thread-a"
+          todos={[card]}
+          view={{ ...view, runningIds: new Set([card.id]) }}
+          onStartReview={vi.fn()}
+        />,
+      );
+      expect(screen.getAllByRole("option").every((option) => (option as HTMLButtonElement).disabled))
+        .toBe(true);
     });
 
     it("gives a review card no menu, and a window without one a static line", () => {
       const projectMenu = menu();
       renderCard(todo({ id: "r", kind: "review", sourceProject: AGENT, action: { type: "start_review" } }), projectMenu);
-      expect(screen.queryByRole("button", { name: /^Project:/ })).toBeNull();
+      expect(screen.queryByRole("button", { name: /^To-do project:/ })).toBeNull();
       cleanup();
 
       renderCard(handoff({ targetProject: SNAP }));
-      expect(screen.queryByRole("button", { name: /^Project:/ })).toBeNull();
+      expect(screen.queryByRole("button", { name: /^To-do project:/ })).toBeNull();
       expect(screen.getByText("For PwrSnap")).toBeTruthy();
     });
   });

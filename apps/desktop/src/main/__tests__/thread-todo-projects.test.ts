@@ -62,6 +62,17 @@ describe("matchThreadTodoProject", () => {
     });
   });
 
+  it("tries a path again without case, as macOS and Windows compare it", () => {
+    expect(matchThreadTodoProject("/src/pwrsnap/apps/agent", CANDIDATES)).toMatchObject({
+      ok: true,
+      project: { key: "directory:/src/PwrSnap" },
+    });
+    expect(matchThreadTodoProject("/SRC/PWRSNAP", CANDIDATES)).toMatchObject({
+      ok: true,
+      project: { key: "directory:/src/PwrSnap" },
+    });
+  });
+
   it("resolves a worktree outside the project by its folder name", () => {
     expect(matchThreadTodoProject("~/.codex/worktrees/k3p/PwrSnap", CANDIDATES)).toMatchObject({
       ok: true,
