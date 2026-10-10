@@ -6317,6 +6317,139 @@ describe("App", () => {
     expect(readThread).toHaveBeenCalledTimes(2);
   });
 
+  it.each([".thread-row__open", ".thread-row", ".thread-row__chips", ".thread-row__status-indicator"].flatMap((clickSurface) => [
+    { clickSurface, deferDetail: false, rapid: false },
+    { clickSurface, deferDetail: true, rapid: false },
+    { clickSurface, deferDetail: false, rapid: true },
+  ]))("keeps rename focused after a native double-click from $clickSurface with deferred detail=$deferDetail, rapid=$rapid", async ({ clickSurface, deferDetail, rapid }) => {
+    const detailReady = createDeferred<void>();
+    const deliveredDetail = vi.fn();
+    const threads = ["First thread", "Double-click thread"].map((title, index) => ({
+      id: `thread-${index + 1}`,
+      title,
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      threadStatus: "active" as const,
+      linkedDirectories: [],
+      inbox: { inInbox: true, reason: "new-thread" as const },
+      updatedAt: 3_000 - index,
+    }));
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: ownerApi({
+        ping: () => "pong",
+        listSkills: async () => ({ backend: "codex", fetchedAt: Date.now(), data: [] }),
+        listBackends: async () => ({
+          fetchedAt: Date.now(),
+          backends: [{
+            kind: "codex",
+            label: "Codex app server",
+            available: true,
+            methods: ["thread/list", "thread/read", "turn/start"],
+            capabilities: {
+              listThreads: true,
+              createThread: false,
+              resumeThread: true,
+              renameThread: true,
+              readThread: true,
+              startTurn: true,
+              interruptTurn: true,
+              steerTurn: false,
+              transcriptPagination: true,
+              toolUse: false,
+              approvalRequests: false,
+              multiDirectoryThreads: true,
+            },
+            executionModes: [{ mode: "default", label: "Default Access", available: true, isDefault: true }],
+          }],
+        }),
+        getNavigationSnapshot: async () => ({
+          backend: "all",
+          fetchedAt: Date.now(),
+          unchanged: false,
+          inboxThreadKeys: threads.map((thread) => `codex:${thread.id}`),
+          directories: [],
+          threads,
+        }),
+        markThreadSeen: async ({ backend, threadId }: { backend: AppServerBackendKind; threadId: string }) => ({
+          backend, threadId, seenAt: Date.now(),
+        }),
+        onAgentEvent: () => () => undefined,
+        onWindowFocus: () => () => undefined,
+        platform: "darwin",
+        readThread: async ({ backend, threadId }: { backend: AppServerBackendKind; threadId: string }) => ({
+          backend,
+          fetchedAt: Date.now(),
+          threadId,
+          replay: { entries: [], messages: [], pagination: { supportsPagination: false, hasPreviousPage: false } },
+        }),
+      }),
+    });
+    const api = (window as Window & { pwragent?: DesktopApi }).pwragent!;
+    const readSelectedDetail = api.getNavigationSelectedDetail!;
+    api.getNavigationSelectedDetail = async (...args) => {
+      if (args[0].ref.threadId === "thread-2" && deferDetail) {
+        await detailReady.promise;
+      }
+      const response = await readSelectedDetail(...args);
+      if (args[0].ref.threadId === (rapid ? "thread-1" : "thread-2")) {
+        deliveredDetail();
+      }
+      return response;
+    };
+    render(<App />);
+    await screen.findByRole("heading", { level: 2, name: "First thread" });
+    const row = screen.getByRole("button", { name: rapid ? "First thread" : "Double-click thread" });
+    const card = row.closest(".thread-row")!;
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Reply" })).toBeEnabled());
+    const click = (detail: number) => {
+      // Resolve the current surface for each press as navigation publishes.
+      const target = clickSurface === ".thread-row" ? card : card.querySelector<HTMLElement>(clickSurface)!;
+      expect(target).toBeInTheDocument();
+      act(() => {
+        fireEvent.pointerDown(target, { pointerType: "mouse", button: 0 });
+        fireEvent.mouseDown(target, { button: 0, detail });
+        // jsdom does not apply the native mouse focus default. Lower row
+        // surfaces blur the previous control; Sidebar focuses the open button.
+        if (target === row) row.focus();
+        else (document.activeElement as HTMLElement).blur();
+        fireEvent.pointerUp(target, { pointerType: "mouse", button: 0 });
+        fireEvent.mouseUp(target, { button: 0, detail });
+        fireEvent.click(target, { button: 0, detail });
+      });
+      return target;
+    };
+    click(1);
+    if (!rapid) {
+      await screen.findByRole("heading", { level: 2, name: "Double-click thread" });
+    }
+    if (!deferDetail && !rapid) {
+      await waitFor(() => expect(screen.getByRole("textbox", { name: "Reply" })).toHaveFocus());
+    }
+    expect(screen.queryByRole("dialog", { name: "Rename Thread" })).toBeNull();
+    const target = click(2);
+    fireEvent.doubleClick(target, { button: 0, detail: 2 });
+    const dialog = screen.getByRole("dialog", { name: "Rename Thread" });
+    const input = within(dialog).getByRole("textbox", { name: "Name" });
+    expect(input).toHaveFocus();
+    act(() => detailReady.resolve());
+    await waitFor(() => expect(deliveredDetail).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Reply" })).toBeEnabled());
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+    expect(input).toHaveFocus();
+
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Rename Thread" })).toBeNull();
+    // Returning to the origin after closing must not revive the canceled request.
+    act(() => row.focus());
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+    expect(row).toHaveFocus();
+  });
+
   it.each(["title button", "row padding"])("walks back and forward across threads and search after %s clicks", async (clickSurface) => {
     const secondThreadReady = createDeferred<void>();
     const deliveredSecondThread = vi.fn();

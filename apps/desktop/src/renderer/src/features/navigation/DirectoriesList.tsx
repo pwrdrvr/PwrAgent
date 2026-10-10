@@ -187,6 +187,7 @@ type DirectoriesListProps = {
   /** Directory key whose federation target menu is currently open, if any. */
   openFederationTargetMenuDirectoryKey?: string;
   onRevealSelectedThreadComplete?: (request: number) => void;
+  onRequestRenameThread?: (thread: NavigationThreadSummary) => void;
   onSelectThread: (
     thread: NavigationThreadSummary,
     event: MouseEvent<HTMLElement>,
@@ -1647,6 +1648,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 onRevealSelectedThreadComplete={
                   props.onRevealSelectedThreadComplete
                 }
+                onRequestRenameThread={props.onRequestRenameThread}
                 onSelectThread={selectThread}
                 onSetReaction={props.onSetReaction}
                 onSetThreadPin={props.onSetThreadPin}
@@ -1805,6 +1807,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
             onPrefetchPullRequests={props.onPrefetchPullRequests}
             onPrefetchGitWorkingState={props.onPrefetchGitWorkingState}
             onRevealSelectedThreadComplete={props.onRevealSelectedThreadComplete}
+            onRequestRenameThread={props.onRequestRenameThread}
             onSelectThread={selectThread}
             onSetReaction={props.onSetReaction}
             onSetThreadPin={props.onSetThreadPin}
@@ -2269,6 +2272,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                           onRevealSelectedThreadComplete={
                             props.onRevealSelectedThreadComplete
                           }
+                          onRequestRenameThread={props.onRequestRenameThread}
                           onSelectThread={selectThread}
                           onSetReaction={props.onSetReaction}
                           onSetThreadPin={props.onSetThreadPin}

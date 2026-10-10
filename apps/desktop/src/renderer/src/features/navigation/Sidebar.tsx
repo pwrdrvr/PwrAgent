@@ -1513,12 +1513,15 @@ export function Sidebar(props: SidebarProps) {
     });
   });
 
-  const requestRenameFromContextMenu = (thread: NavigationThreadSummary): void => {
+  const requestRenameThread = useEventCallback((thread: NavigationThreadSummary): void => {
+    if (!canRenameThread(thread)) {
+      return;
+    }
     setContextMenu(undefined);
     setRenameThread(thread);
     setRenameDraft(thread.title);
     setRenameValidationError(undefined);
-  };
+  });
 
   const requestLockFromContextMenu = (
     thread: NavigationThreadSummary,
@@ -2769,6 +2772,7 @@ export function Sidebar(props: SidebarProps) {
               }
               onOpenPullRequestContextMenu={openPullRequestContextMenu}
               onSelectDirectory={selectDirectoryFromList}
+              onRequestRenameThread={requestRenameThread}
               onSelectThread={selectThreadFromList}
               onSetReaction={forwardedSetThreadReaction}
               onSetThreadPin={hoverReleasedListHandlers.setThreadPin}
@@ -2829,6 +2833,7 @@ export function Sidebar(props: SidebarProps) {
                 onSetSubthreadsCollapsed={
                   hoverReleasedListHandlers.setSubthreadsCollapsed
                 }
+                onRequestRenameThread={requestRenameThread}
                 onSelectThread={selectThreadFromList}
                 onSetReaction={forwardedSetThreadReaction}
                 onSetThreadPin={hoverReleasedListHandlers.setThreadPin}
@@ -3178,7 +3183,7 @@ export function Sidebar(props: SidebarProps) {
                       role="menuitem"
                       type="button"
                       onClick={() =>
-                        requestRenameFromContextMenu(contextMenu.thread)
+                        requestRenameThread(contextMenu.thread)
                       }
                     >
                       Rename Thread
