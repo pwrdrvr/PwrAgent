@@ -44,7 +44,7 @@ test("tracks an older review, retains dismissals, and clears To-dos after every 
     await app.window.getByRole("button", { name: /Review the Atlas export queue/ }).first().click();
     const transcript = app.window.getByRole("region", { name: "Transcript" });
     const card = transcript.getByRole("group", { name: "Code review" });
-    await expect(card.getByRole("button", { name: "Dismiss finding" })).toHaveCount(2);
+    await expect(card.getByRole("button", { name: /^Dismiss finding:/ })).toHaveCount(2);
     const readReviews = () => app.window.evaluate(async (identity) => {
       const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
       return (await api.listThreadReviews!({ ...identity, status: "all" })).reviews;
@@ -57,9 +57,9 @@ test("tracks an older review, retains dismissals, and clears To-dos after every 
     await expect(card.getByText("Do not address", { exact: true })).toHaveCount(3);
     await expect(card).toContainText("Cancel pending exports when the panel closes");
     await app.window.screenshot({ path: testInfo.outputPath("review-dismissed.png") });
-    await card.getByRole("button", { name: "Reopen", exact: true }).click();
-    await card.getByRole("button", { name: "Mark addressed", exact: true }).first().click();
-    await card.getByRole("button", { name: "Dismiss finding", exact: true }).click();
+    await card.getByRole("button", { name: "Reopen review", exact: true }).click();
+    await card.getByRole("button", { name: /^Mark addressed:/ }).first().click();
+    await card.getByRole("button", { name: /^Dismiss finding:/ }).click();
     await expect.poll(async () => (await readReviews())[0]?.status).toBe("handled");
     const todos = await app.window.evaluate(async () => {
       const api = (window as unknown as { pwragent: DesktopApi }).pwragent;

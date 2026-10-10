@@ -206,8 +206,20 @@ export function installThreadTodoRuntime(params: {
   registry.setPwrAgentThreadTodoHandler({
     reviews: {
       record: async (identity, input) => {
-        const cwd = await registry.resolveThreadWorkspaceCwd(identity.backend, identity.threadId);
-        return reviews.record(identity, { ...input, ...(cwd ? { context: { workspacePath: cwd } } : {}) });
+        const [cwd, directory, projects] = await Promise.all([
+          registry.resolveThreadWorkspaceCwd(identity.backend, identity.threadId).catch(() => undefined),
+          registry.resolveThreadPrimaryDirectory(identity.backend, identity.threadId).catch(() => undefined),
+          listProjectsForTodo(),
+        ]);
+        const project = threadTodoProjectForDirectory(directory, projects);
+        const workspacePath = cwd ?? project?.path;
+        return reviews.record(identity, {
+          ...input,
+          ...(workspacePath ? { context: {
+            workspacePath,
+            ...(project ? { projectLabel: project.label, repositoryPath: project.path } : {}),
+          } } : {}),
+        });
       },
       list: (identity, status) => reviews.list({ ...identity, status }),
       update: (identity, request) => reviews.update(request, "agent", identity),
