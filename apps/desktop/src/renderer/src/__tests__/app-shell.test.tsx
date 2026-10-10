@@ -6450,6 +6450,13 @@ describe("App", () => {
   });
 
   it.each(["title button", "row padding"])("walks back and forward across threads and search after %s clicks", async (clickSurface) => {
+    const waitForHistoryTarget = async (direction: "back" | "forward", label: string): Promise<void> => {
+      // The thread heading can commit before the history cursor. Consume a
+      // history entry only after its control names the expected destination.
+      await waitFor(() => {
+        expect(screen.getByTestId(`history-nav-${direction}`)).toHaveAttribute("aria-description", label);
+      });
+    };
     const secondThreadReady = createDeferred<void>();
     const deliveredSecondThread = vi.fn();
     const searchThreads = vi.fn(async () => ({
@@ -6663,6 +6670,7 @@ describe("App", () => {
     // mouse request when it mounts again, even with a sidebar row focused.
     await clickButton("Search threads");
     await screen.findByRole("heading", { level: 2, name: "Search" });
+    await waitForHistoryTarget("back", "Second cached thread");
     act(() => {
       secondRow.focus();
       fireEvent.keyDown(window, { metaKey: true, code: "BracketLeft", key: "[" });
@@ -6689,12 +6697,14 @@ describe("App", () => {
     });
 
     // Back lands on search with the results still populated — no re-query.
+    await waitForHistoryTarget("back", "Search");
     await clickButton("Back");
     await screen.findByRole("heading", { level: 2, name: "Search" });
     expect(screen.getByText("Opened from search.")).toBeInTheDocument();
     expect(searchThreads).toHaveBeenCalledTimes(1);
 
     // Back again: the thread we were reading before opening search.
+    await waitForHistoryTarget("back", "Second cached thread");
     await clickButton("Back");
     await screen.findByRole("heading", {
       level: 2,
@@ -6702,6 +6712,7 @@ describe("App", () => {
     });
 
     // Back to the start, where the affordance bottoms out.
+    await waitForHistoryTarget("back", "First cached thread");
     await clickButton("Back");
     await screen.findByRole("heading", {
       level: 2,
@@ -6710,6 +6721,7 @@ describe("App", () => {
     expect(screen.getByRole("button", { name: "Back" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Forward" })).toBeEnabled();
 
+    await waitForHistoryTarget("forward", "Second cached thread");
     await clickButton("Forward");
     await screen.findByRole("heading", {
       level: 2,
@@ -6718,6 +6730,7 @@ describe("App", () => {
 
     // The window-level chord (⌘[) and the mouse thumb buttons drive the
     // same history.
+    await waitForHistoryTarget("back", "First cached thread");
     await act(async () => {
       fireEvent.keyDown(window, {
         metaKey: true,
@@ -6731,6 +6744,7 @@ describe("App", () => {
       name: "First cached thread",
     });
 
+    await waitForHistoryTarget("forward", "Second cached thread");
     await act(async () => {
       fireEvent.mouseUp(window, { button: 4 });
       await Promise.resolve();
