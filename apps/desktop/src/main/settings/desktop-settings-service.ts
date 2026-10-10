@@ -1165,6 +1165,10 @@ export class DesktopSettingsService {
           config.experimental?.managedReview,
           false,
         ),
+        claudeAcp: this.resolveConfigBoolean(
+          config.experimental?.claudeAcp,
+          false,
+        ),
         diffCondensation: {
           enabled: this.resolveDiffCondensationEnabled(
             config.experimental?.diffCondensation?.enabled,
@@ -1631,6 +1635,9 @@ export class DesktopSettingsService {
             ACP_AGENTS_QWEN_CLI_PATH_ENV,
           ),
           enabled: config.acpAgents?.qwen?.enabled ?? true,
+        },
+        "claude-acp": {
+          enabled: config.acpAgents?.["claude-acp"]?.enabled ?? true,
         },
       },
       applications: {
@@ -2141,6 +2148,13 @@ export class DesktopSettingsService {
   resolveDefaultMergeMethod(): ThreadTodoMergeMethod {
     return this.resolveDefaultMergeMethodValue(
       this.configStore.read("git")?.defaultMergeMethod,
+    ).value;
+  }
+
+  resolveClaudeAcpExperimentalEnabled(): boolean {
+    return this.resolveConfigBoolean(
+      this.readConfig().config.experimental?.claudeAcp,
+      false,
     ).value;
   }
 
@@ -3420,6 +3434,7 @@ export class DesktopSettingsService {
           grok: providerConfigSection(providers.grok),
           kimi: providerConfigSection(providers.kimi),
           qwen: providerConfigSection(providers.qwen),
+          "claude-acp": providerConfigSection(providers["claude-acp"]),
         },
         applications: this.configStore.read("applications"),
         git: this.configStore.read("git"),

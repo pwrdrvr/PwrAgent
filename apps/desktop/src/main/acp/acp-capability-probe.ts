@@ -5,6 +5,8 @@ import { getAppStateMode } from "../state/app-state";
 import type { AcpInstalledAgentRecord } from "./acp-registry-types.js";
 import { discoverAcpRuntimeCapabilities } from "./acp-runtime-discovery.js";
 
+import { CLAUDE_ACP_REGISTRY_ID, isClaudeAcpAuthenticationError } from "./claude-acp-runtime";
+
 export type AcpRuntimeCapabilityProbeOptions = {
   /** Terminates the agent; the probe then rejects instead of recording. */
   signal?: AbortSignal;
@@ -50,6 +52,9 @@ export async function probeAcpRuntimeCapabilities(
     return {
       record: {
         ...record,
+        ...(record.registryId === CLAUDE_ACP_REGISTRY_ID
+          ? { authStatus: "authenticated" as const }
+          : {}),
         ...(result.runtimeCapabilities
           ? {
               runtimeCapabilities: result.runtimeCapabilities,
@@ -70,6 +75,9 @@ export async function probeAcpRuntimeCapabilities(
     return {
       record: {
         ...record,
+        ...(record.registryId === CLAUDE_ACP_REGISTRY_ID
+          ? { authStatus: isClaudeAcpAuthenticationError(error) ? "required" as const : "failed" as const }
+          : {}),
         lastDiscoveryError: message,
         updatedAt: Math.max(record.updatedAt, now),
       },

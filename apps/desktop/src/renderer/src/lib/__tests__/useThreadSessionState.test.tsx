@@ -30,6 +30,7 @@ import { pullRequestReviewPrompt, pullRequestReviewUrl } from "../../../../share
 function buildThread(params: {
   codexEnvironmentRuntime?: NavigationThreadSummary["codexEnvironmentRuntime"];
   id: string;
+  source?: AppServerBackendKind;
   updatedAt: number;
 }): NavigationThreadSummary {
   return {
@@ -37,7 +38,7 @@ function buildThread(params: {
     title: `Thread ${params.id}`,
     titleSource: "explicit" as const,
     summary: `Summary for ${params.id}`,
-    source: "codex" as const,
+    source: params.source ?? "codex",
     linkedDirectories: [],
     inbox: {
       inInbox: false,
