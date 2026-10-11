@@ -18,6 +18,7 @@ export const FEDERATION_CAPABILITIES = [
   "thread_grouping",
   "thread_detail",
   "turn_control",
+  "durable_turn_requests_v1",
   "scheduled_actions",
   "pending_request_control",
   "environment_actions",
