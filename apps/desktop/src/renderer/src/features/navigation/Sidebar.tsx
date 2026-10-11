@@ -125,6 +125,7 @@ import {
   nextThreadAfterArchive,
   readVisibleThreadRowKeys,
   resolveThreadHotkeyTargets,
+  threadHotkeyFocusContext,
   threadSupportsRename,
   type RenamingThreadRow,
 } from "./thread-action-hotkeys";
@@ -2104,8 +2105,23 @@ export function Sidebar(props: SidebarProps) {
   });
 
   useEffect(() => {
+    const captureComposerArchive = (event: KeyboardEvent): void => {
+      // ProseMirror consumes native Backspace at a block boundary before the
+      // window's bubble listener sees it. Claim only the permitted archive
+      // chord in the composer, through the same action/lifecycle owner.
+      if (threadHotkeyFocusContext(event) !== "field"
+        || matchThreadHotkey(event) !== "threads.archive") return;
+      runThreadHotkey(event);
+      // Keep the editor from deleting draft content and the bubble listener
+      // from dispatching a second archive. Unhandled chords stay with editing.
+      if (event.defaultPrevented) event.stopPropagation();
+    };
+    window.addEventListener("keydown", captureComposerArchive, true);
     window.addEventListener("keydown", runThreadHotkey);
-    return () => window.removeEventListener("keydown", runThreadHotkey);
+    return () => {
+      window.removeEventListener("keydown", captureComposerArchive, true);
+      window.removeEventListener("keydown", runThreadHotkey);
+    };
   }, [runThreadHotkey]);
 
   const contextMenuThreads = contextMenu?.threads ?? [];

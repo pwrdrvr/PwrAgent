@@ -10003,6 +10003,7 @@ describe("Sidebar thread shortcuts", () => {
       });
       expect(field).toHaveFocus();
       const documentBefore = editor.getJSON();
+      const selectionBefore = editor.state.selection.toJSON();
       // Real Chromium Backspace carries keyCode 8. ProseMirror's native
       // deletion guard consumes it at the start of a block, even with Shift.
       press(field, { key: "Backspace", code: "Backspace", keyCode: 8,
@@ -10012,7 +10013,32 @@ describe("Sidebar thread shortcuts", () => {
         nextSelectionKey: "codex:thread-2",
       });
       expect(editor.getJSON()).toEqual(documentBefore);
+      expect(editor.state.selection.toJSON()).toEqual(selectionBefore);
       expect(onChange).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["inert", "unsupported"])(
+    "does not consume focused composer archive when the action is %s",
+    (guard) => {
+      const onArchiveThread = vi.fn(async () => undefined);
+      renderShortcutSidebar({
+        onArchiveThread,
+        inert: guard === "inert",
+        ...(guard === "unsupported" ? {
+          backends: backends.map((backend) => ({
+            ...backend, capabilities: { ...backend.capabilities, archiveThread: false },
+          })),
+        } : {}),
+      });
+      render(<form className="composer"><textarea aria-label="Guarded prompt" /></form>);
+      const field = screen.getByRole("textbox", { name: "Guarded prompt" });
+      field.focus();
+      const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true,
+        key: "Backspace", code: "Backspace", keyCode: 8, ctrlKey: true, shiftKey: true });
+      act(() => field.dispatchEvent(event));
+      expect(onArchiveThread).not.toHaveBeenCalled();
+      expect(event.defaultPrevented).toBe(false);
     },
   );
 
