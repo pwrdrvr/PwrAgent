@@ -3,6 +3,34 @@ import { closeSync, fsyncSync, openSync, readFileSync, renameSync, writeFileSync
 import path from "node:path";
 
 export const EXIT = { completed: 0, failed: 1, preflight_failed: 2, timeout: 3, cancelled: 4, budget_exceeded: 5, incomplete: 6 };
+
+export function launchHeadlessElectron(electron, desktopRoot, env) {
+  // Playwright otherwise adds --no-sandbox, even for a non-root Linux user.
+  return electron.launch({ chromiumSandbox: true, args: [path.join(desktopRoot, "out/main/index.js"), "--disable-messaging", "--disable-automations"], cwd: desktopRoot, env, timeout: 60_000 });
+}
+
+export async function dispatchTurn({ call, result, request, persist }) {
+  // Persist before the only paid dispatch. A lost acknowledgement is not
+  // evidence that the provider rejected the request or stopped spending.
+  result.status = "incomplete";
+  result.exitCode = EXIT.incomplete;
+  result.dispatchIntentAt = new Date().toISOString();
+  await persist();
+  const turn = await call("startTurn", request);
+  if (typeof turn?.turnId !== "string" || !turn.turnId) throw new Error("Missing turn dispatch acknowledgement");
+  result.turnId = turn.turnId;
+  await persist();
+}
+
+export function errorStatus(result, stopReason) {
+  if (result.dispatchIntentAt) {
+    if (result.status === "incomplete") return "incomplete";
+    // Preserve a known stop outcome if collecting its final artifacts fails.
+    if (result.status !== "completed") return result.status;
+    return "failed";
+  }
+  return stopReason ?? "preflight_failed";
+}
 export function validateInput(input) {
   const allowed = new Set(["schemaVersion", "runId", "cwd", "prompt", "model", "reasoningEffort", "serviceTier", "tokenMiser", "timeoutMs", "profileDir", "codexHome", "runtimeManifest", "preflightOnly", "maxObservedCostUsd", "maxObservedTokens"]);
   for (const key of Object.keys(input)) if (!allowed.has(key)) throw new Error(`Unknown input field: ${key}`);
@@ -82,10 +110,15 @@ export function assertReady(backend, settings, input, runtime, { interruptVerifi
 }
 export function terminalEvent(event, threadId, turnId) {
   const { method, params } = event.notification ?? {};
-  if (event.backend !== "codex" || params?.threadId !== threadId || params?.turnId !== turnId) return undefined;
+  if (event.backend !== "codex" || params?.threadId !== threadId || (params?.turnId ?? params?.turn?.id) !== turnId) return undefined;
+  if (params.turn?.id !== undefined && params.turn.id !== turnId) return undefined;
   if (method === "turn/failed") return "failed";
-  if (method === "turn/completed") return "completed";
-  if (method === "turn/interrupted") return "cancelled";
+  if (method === "turn/completed") {
+    if (["interrupted", "cancelled"].includes(params.turn?.status)) return "cancelled";
+    if (params.turn?.status === "failed") return "failed";
+    if (params.turn?.status === undefined || params.turn.status === "completed") return "completed";
+  }
+  if (method === "turn/interrupted" || method === "turn/cancelled") return "cancelled";
   return undefined;
 }
 export function observedBudget(lines = [], summaries) {
@@ -96,6 +129,30 @@ export function observedBudget(lines = [], summaries) {
   return { costUsd: lines.reduce((n, l) => n + (l.totalCostMicros ?? 0), 0) / 1e6,
     tokens: lines.reduce((n, l) => n + (l.totalTokens ?? 0), 0),
     unpriced: lines.some((l) => l.priceStatus !== "priced") };
+}
+
+export async function observeFamilyBudget(call, root, current) {
+  const familyPricing = await call("readThreadFamilyPricing", root);
+  const key = (member) => JSON.stringify([member.backend, member.threadId]);
+  const rootKey = key(root);
+  const members = new Map([[rootKey, root]]);
+  for (const member of familyPricing.members) members.set(key(member), member);
+  // Family membership includes PwrAgent sub-threads, not native helpers.
+  // Each thread's own pricing already includes its native helper usage.
+  const familyUsage = await Promise.all([...members].map(async ([id, member]) => {
+    const view = id === rootKey ? current : await call("readThread", { backend: member.backend, threadId: member.threadId });
+    if (!view.pricing && member.usageLineCount > 0) throw new Error("Missing pricing for a billed family member");
+    const observed = observedBudget(view.pricing?.lines, view.pricing?.summaries);
+    observed.costUsd = Math.max(observed.costUsd, (member.totalCostMicros ?? 0) / 1e6);
+    observed.unpriced ||= member.unpricedUsageLineCount > 0;
+    return { backend: member.backend, threadId: member.threadId, ...observed };
+  }));
+  const observed = familyUsage.reduce((total, member) => ({
+    costUsd: total.costUsd + member.costUsd,
+    tokens: total.tokens + member.tokens,
+    unpriced: total.unpriced || member.unpriced,
+  }), { costUsd: 0, tokens: 0, unpriced: false });
+  return { observed, familyPricing, familyUsage };
 }
 
 export function budgetStop(input, observed) {
