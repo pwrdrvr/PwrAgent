@@ -1,10 +1,15 @@
 # Thread terminal sessions
 
 Terminal tabs belong inside the thread's bottom terminal panel. They do not
-change conversation navigation. A compact vertical list shows shell/name,
-running/exited/restored status, selection and owner. New, rename and close act
-on one terminal ID. Hiding the panel and switching threads preserve PTYs.
-Keyboard navigation uses a vertical tablist; resize and focus stay accessible.
+change conversation navigation. A compact vertical list shares the terminal's
+surface. Each row shows a status glyph, a name, and the working directory or
+exit code; output in a terminal that is not on screen marks its glyph until it
+is selected (renderer state only). Default names take the lowest free number
+when created and keep it. New, rename (in place: double-click or F2) and close
+act on one terminal ID. An ended or restored terminal keeps its screen and
+offers a new shell in the same directory. Hiding the panel and switching
+threads preserve PTYs. Keyboard navigation uses a vertical tablist; resize and
+focus stay accessible.
 
 Main/owning service owns identity, lifetime and output. An explicit session ID
 attaches only to its original thread and instance. Creation is deduplicated

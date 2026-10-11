@@ -12,6 +12,7 @@ export type IntegratedTerminalPane = {
   name?: string;
   shell?: string;
   status?: "running" | "exited" | "restored";
+  exitCode?: number | null;
   pending?: boolean;
   newSession?: boolean;
 };

@@ -45832,6 +45832,8 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   white-space: nowrap;
 }
 
+/* Thread terminals: one shell canvas plus a session rail on the same
+   surface. The rail is part of the terminal, not a card beside it. */
 .thread-terminal-panel {
   height: var(--integrated-terminal-height, 260px);
   min-height: 140px;
@@ -45843,31 +45845,212 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
 .thread-terminal-panel__body { display: flex; height: calc(100% - 10px); min-height: 0; }
 .thread-terminal-panel__screens { flex: 1; min-width: 0; }
 .thread-terminal-panel__screens > [role="tabpanel"] { height: 100%; display: flex; flex-direction: column; }
-.thread-terminal-panel__sidebar { width: clamp(120px, 22%, 200px); flex-shrink: 0; overflow: auto; border-left: 1px solid var(--border-subtle); background: var(--bg-panel); }
-.thread-terminal-panel__actions { display: flex; align-items: center; gap: 4px; padding: 5px 8px; color: var(--text-muted); font-size: 10px; }
-.thread-terminal-panel__actions > span { flex: 1; }
-.thread-terminal-panel button { border: 0; border-radius: 3px; background: transparent; color: var(--text-secondary); cursor: pointer; }
-.thread-terminal-panel button:hover { background: var(--bg-panel-hover); color: var(--text-primary); }
-.thread-terminal-panel button:focus-visible, .thread-terminal-panel input:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
-.thread-terminal-panel__actions button { width: 24px; height: 24px; font-size: 18px; }
-.thread-terminal-panel__row { display: flex; align-items: center; }
-.thread-terminal-panel__row[role="tab"] { display: flex; flex-direction: column; flex: 1; min-width: 0; text-align: left; padding: 6px 8px; border-left: 2px solid transparent; border-radius: 0; }
-.thread-terminal-panel__row[role="tab"][aria-selected="true"] { background: var(--bg-row-active); border-left-color: var(--accent); color: var(--text-primary); }
-.thread-terminal-panel__row span, .thread-terminal-panel__row small { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.thread-terminal-panel__row span { font-family: var(--font-mono); font-size: 12px; }
-.thread-terminal-panel__row small { font-size: 10px; color: var(--text-muted); }
-.thread-terminal-panel__close { width: 24px; height: 28px; margin-right: 3px; }
-.thread-terminal-panel__rename-button { margin: 6px; padding: 4px; font-size: 11px; }
-.thread-terminal-panel__rename { display: flex; flex-wrap: wrap; gap: 4px; padding: 6px; }
-.thread-terminal-panel__rename input { width: 100%; min-width: 0; padding: 4px; border: 1px solid var(--border-strong); border-radius: 3px; background: var(--bg-input); color: var(--text-primary); font: inherit; }
-
-.thread-terminal-panel__history-note { padding: 5px 10px; color: var(--text-secondary); background: var(--bg-panel); font-size: 11px; }
-.thread-terminal-panel__history-note + .integrated-terminal { height: 0; }
 .thread-terminal-panel__screens > [role="tabpanel"][hidden] { display: none; }
+.thread-terminal-panel__screens .integrated-terminal { flex: 1 1 0; height: auto; min-height: 0; }
+.thread-terminal-panel button {
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.thread-terminal-panel button:focus-visible, .thread-terminal-panel input:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+.thread-terminal-panel svg { display: block; width: 14px; height: 14px; }
 
-.thread-terminal-panel__list { display: flex; }
-.thread-terminal-panel__list [role="tablist"] { flex: 1; min-width: 0; }
-.thread-terminal-panel__row[role="tab"] { width: 100%; height: 40px; }
-.thread-terminal-panel__close-list { display: flex; flex-direction: column; }
-.thread-terminal-panel__close-list button { height: 40px; }
-.thread-terminal-panel__row[role="tab"] { align-items: flex-start; }
+.thread-terminal-panel__sidebar {
+  display: flex;
+  flex-direction: column;
+  width: 184px;
+  flex-shrink: 0;
+  min-height: 0;
+  overflow: auto;
+  border-left: 1px solid var(--border-subtle);
+  background: var(--terminal-bg);
+}
+.thread-terminal-panel__actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  height: 30px;
+  padding: 0 6px 0 12px;
+}
+.thread-terminal-panel__eyebrow {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.thread-terminal-panel__count {
+  margin-left: 4px;
+  color: var(--text-subtle);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+.thread-terminal-panel__actions > button:first-of-type { margin-left: auto; }
+.thread-terminal-panel__actions > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+}
+.thread-terminal-panel__actions > button:hover, .thread-terminal-panel__close:hover {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+.thread-terminal-panel__instance { display: flex; padding: 0 12px 6px; }
+
+.thread-terminal-panel__list { position: relative; }
+.thread-terminal-panel__row[role="tab"] {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr);
+  align-items: center;
+  column-gap: 9px;
+  width: 100%;
+  height: 38px;
+  padding: 0 32px 0 12px;
+  border-radius: 0;
+  color: var(--text-secondary);
+  text-align: left;
+  transition: background 120ms ease;
+}
+.thread-terminal-panel__row[role="tab"]:hover { background: var(--bg-panel-hover); }
+.thread-terminal-panel__row[role="tab"][aria-selected="true"] {
+  background: var(--bg-row-active);
+  box-shadow: inset 2px 0 0 var(--accent);
+  color: var(--text-primary);
+}
+.thread-terminal-panel__text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.thread-terminal-panel__name, .thread-terminal-panel__text small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.thread-terminal-panel__name { font-family: var(--font-mono); font-size: 12px; line-height: 15px; }
+.thread-terminal-panel__text small {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 13px;
+}
+.thread-terminal-panel__text small.is-failed { color: var(--danger-text); }
+.thread-terminal-panel__state {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* One slot carries every state. Live: filled. Ended: hollow. Saved
+   history with no process: dashed. */
+.thread-terminal-panel__dot {
+  width: 8px;
+  height: 8px;
+  box-sizing: border-box;
+  border-radius: 50%;
+  justify-self: center;
+}
+.thread-terminal-panel__dot.is-running { background: var(--status-ok); }
+.thread-terminal-panel__dot.is-unseen {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.thread-terminal-panel__dot.is-starting { border: 1.5px solid var(--accent); }
+.thread-terminal-panel__dot.is-exited { border: 1.5px solid var(--text-subtle); }
+.thread-terminal-panel__dot.is-failed { background: var(--status-error); }
+.thread-terminal-panel__dot.is-saved { border: 1.5px dashed var(--text-subtle); }
+
+/* Close buttons stay outside the tablist (a tab may own no controls) and
+   sit over the right end of their row. */
+.thread-terminal-panel__close-list {
+  position: absolute;
+  top: 0;
+  right: 6px;
+  display: flex;
+  flex-direction: column;
+}
+.thread-terminal-panel__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin: 9px 0;
+  border-radius: 6px;
+  opacity: 0;
+}
+.thread-terminal-panel__close.is-shown, .thread-terminal-panel__close:focus-visible { opacity: 1; }
+.thread-terminal-panel__close svg { width: 12px; height: 12px; }
+.thread-terminal-panel__rename {
+  position: absolute;
+  top: calc(var(--row-index, 0) * 38px + 2px);
+  right: 6px;
+  left: 31px;
+  z-index: 1;
+  margin: 0;
+}
+.thread-terminal-panel__rename input {
+  box-sizing: border-box;
+  width: 100%;
+  height: 20px;
+  padding: 0 5px;
+  border: 1px solid var(--accent-border);
+  border-radius: 4px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font: 12px var(--font-mono);
+}
+
+/* An ended shell keeps its screen; the bar under it offers the next step. */
+.thread-terminal-panel__ended {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  min-height: 34px;
+  padding: 0 8px 0 12px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
+  font-size: 12px;
+}
+.thread-terminal-panel__ended .thread-terminal-panel__dot { flex-shrink: 0; }
+.thread-terminal-panel__ended-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.thread-terminal-panel__ended-text b { color: var(--text-primary); font-weight: 600; }
+.thread-terminal-panel button.thread-terminal-panel__new-here {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid var(--accent-border);
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+  font: 600 11px var(--font-sans);
+}
+.thread-terminal-panel button.thread-terminal-panel__new-here:hover {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+}
+.thread-terminal-panel__new-here svg { width: 12px; height: 12px; }
+.thread-terminal-panel__history-note {
+  padding: 5px 10px;
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font-size: 11px;
+}

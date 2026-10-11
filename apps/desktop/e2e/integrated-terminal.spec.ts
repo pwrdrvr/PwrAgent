@@ -187,7 +187,8 @@ test("retains exited output until the terminal tab is explicitly closed", async 
     const panel = app.window.getByRole("region", { name: "Thread terminals", exact: true });
     await expect(panel.getByRole("tab")).toContainText("Exited");
     await expect(terminalRows(app.window)).toContainText("PWRAGENT_TERMINAL_EXIT_READY");
-    await expect(panel.getByText("Shell exited. Create a new terminal to start a shell.")).toBeVisible();
+    await expect(panel.getByText("Shell exited", { exact: true })).toBeVisible();
+    await expect(panel.getByRole("button", { name: "New shell here", exact: true })).toBeVisible();
     await expect(app.window.getByRole("button", { name: "Hide integrated terminal" })).toHaveAttribute(
       "aria-pressed",
       "true",
@@ -219,9 +220,9 @@ test("isolates terminal side tabs, renames, restores a renderer and retains exit
     };
     await run("echo FIRST_TAB_ONLY");
     await expect(visibleTerminal().locator(".xterm-rows")).toContainText("FIRST_TAB_ONLY");
-    await panel.getByRole("button", { name: "Rename terminal", exact: true }).click();
+    await panel.getByRole("tab").press("F2");
     await panel.getByRole("textbox", { name: "Terminal name" }).fill("Build");
-    await panel.getByRole("button", { name: "Save", exact: true }).click();
+    await panel.getByRole("textbox", { name: "Terminal name" }).press("Enter");
     await expect(panel.getByRole("tab", { name: /Build/ })).toHaveAttribute("aria-selected", "true");
     await panel.getByRole("button", { name: "New terminal", exact: true }).click();
     await expect(panel.getByRole("tab")).toHaveCount(2);
@@ -240,12 +241,13 @@ test("isolates terminal side tabs, renames, restores a renderer and retains exit
     await panel.getByRole("tab").nth(1).click();
     await expect(visibleTerminal().locator(".xterm-rows")).toContainText("SECOND_TAB_ONLY");
     await run("exit 7");
-    await expect(panel.getByRole("tab").nth(1)).toContainText("Exited");
+    await expect(panel.getByRole("tab").nth(1)).toContainText("Exited · code 7");
+    await expect(panel.getByText("Exited with code 7", { exact: true })).toBeVisible();
     await expect(visibleTerminal().locator(".xterm-rows")).toContainText("SECOND_TAB_ONLY");
     const audit = await new AxeBuilder({ page: app.window }).withRules(["aria-required-children", "aria-valid-attr-value"]).setLegacyMode(true).analyze();
     expect(audit.violations).toEqual([]);
     await panel.getByRole("tab", { name: /Build/ }).click();
-    await expect(panel.getByText("Shell exited. Create a new terminal to start a shell.")).toBeHidden();
+    await expect(panel.getByText("Exited with code 7", { exact: true })).toBeHidden();
     await panel.getByRole("tab").nth(1).click();
     await app.window.screenshot({ path: test.info().outputPath("terminal-tabs.png") });
     await panel.getByRole("tab").nth(1).press("Delete");

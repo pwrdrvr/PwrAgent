@@ -51,6 +51,8 @@ type IntegratedTerminalProps = {
   onHeightChange?: (height: number) => void;
   onClose: () => void;
   onExit: () => void;
+  /** Live output arrived while this pane was not on screen. */
+  onHiddenOutput?: () => void;
 };
 
 export function IntegratedTerminal({
@@ -67,6 +69,7 @@ export function IntegratedTerminal({
   onHeightChange,
   onClose,
   onExit,
+  onHiddenOutput,
 }: IntegratedTerminalProps) {
   const hosted = chrome === "hosted";
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -77,6 +80,8 @@ export function IntegratedTerminal({
   const writableRef = useRef(true);
   const fitAndResizeRef = useRef<() => void>(() => undefined);
   const visibleRef = useRef(visible);
+  const onHiddenOutputRef = useRef(onHiddenOutput);
+  onHiddenOutputRef.current = onHiddenOutput;
   // `cwd` is a create-time hint only — main resolves it (falling back to the
   // home directory) and the running PTY's directory can't be changed after the
   // fact. Keeping it OUT of the mount effect's deps matters: the pane's `cwd`
@@ -288,6 +293,7 @@ export function IntegratedTerminal({
           }
           lastSeq = event.seq ?? lastSeq;
           terminal.write(event.data);
+          if (!visibleRef.current) onHiddenOutputRef.current?.();
         });
         const dimensions = fitAddon.proposeDimensions();
         const attach = () => createIntegratedTerminal({
