@@ -67,6 +67,52 @@ reference hashes its reference fields, not mutable filesystem bytes; callers
 that need content identity must capture a stable input rather than a mutable
 path. Large durable attachment transfer needs a future content-addressed protocol.
 
+## Explicit active-turn steering
+
+Steering opts in separately with `durable_steer_requests_v1` and `turn_control`.
+Use `backend.submitSteerRequest` / `backend.getSteerRequest`, or
+`submitDurableSteerRequest(scope, submission, target?)` /
+`getDurableSteerRequest(scope, lookup, target?)`. The client envelope and lookup
+are otherwise the same; steering's request is **only**:
+
+```ts
+{ backend: "codex", threadId: "<thread>", expectedTurnId: "<active turn>",
+  input: [{ type: "text", text: "Focus on the failing test" }] }
+```
+
+Persist the outbox operation and expected turn. Hash
+`canonicalDurableSteerRequest(ownerInstanceId, submission)`, which uses
+`operation: "steerTurn"`. Missing/empty expected-turn IDs, empty input,
+caller-supplied `requestId`, fallback, settings and message origin are rejected.
+Changing the turn on retry is a payload conflict.
+
+The same inbox transactions claim steering before dispatch. Steering keys use a
+separate operation namespace within the authenticated issuer/device scope and
+share the profile-wide quota; the caller quota applies per operation. The owner
+derives a stable, namespaced downstream `requestId` in receipt `queueEntryId`,
+then calls existing `controlActiveTurn` with `operation: "steer"`, required
+`expectedTurnId` and that ID. This reuses the existing active-turn lock,
+expected-target checks and in-process request/signature dedupe. It never asks
+for a new-turn fallback or grouped agent steering. Every replay still checks
+current capability and destination access.
+
+`DurableSteerReceipt` includes `operation: "steerTurn"` and
+`result?: ControlActiveTurnResponse`. An `ok: true` result means accepted
+interjection, recorded as `dispatched`; it does not prove that the turn has
+finished or applied that instruction. Some ACP providers report disposition
+`queued` for a next-turn interjection; this is provider acceptance, not a durable
+PwrAgent queue receipt. Transcript/turn APIs remain the execution source.
+The receipt's `queueEntryId` is a control correlation ID, not a normal queue
+entry. Reconcile steer requests through the steer lookup endpoint.
+
+An exception/lost downstream ACK becomes uncertain and is never automatically
+resent. Structured `ok: false` results retain the refusal code with a fixed,
+sanitized message and remain conservatively uncertain: legacy control code can
+classify a provider-side error as a stale target after an ambiguous call.
+Preserve the receipt and show the refusal; any changed-turn request needs an
+explicit new enqueue/UUID. Regex classification is not proof of nonacceptance.
+Crash, expiry, relay and ownership limits are the same as prompts.
+
 ## Receipts and reconciliation
 
 The submission returns `DurableTurnReceipt`. Lookup uses `{ id, backend,
@@ -174,6 +220,8 @@ per day, the measured four-commit path projects about 2.8 MB/day (about
 The measured production queue path is five commits/~32 KiB, or about 3.3 MB/day
 at 100 prompts (33 MB/day at 1000). No heartbeat is introduced. The test fixture
 owns its SQLite files.
+Steering's checked-in budget is three commits (admission, claim, receipt),
+~24 KiB per accepted interjection; repeated submit/status adds zero writes.
 
 ## Migration and validation
 
@@ -181,11 +229,16 @@ Deploy owner and relay capability support first. Add authenticated adapter
 integration next, then enable client outboxes only for supported destinations.
 Existing entrypoints continue using their existing queue UUID, held-turn dedupe,
 review/steering keys and provider semantics. Those narrower primitives are not
-substitutes for this persisted owner inbox. Active steer and durable attachment
-blobs remain disabled in v1 clients.
+substitutes for this persisted owner inbox. Active steering requires its separate
+capability and the explicit durable steer API. Durable attachment blobs remain
+disabled in v1 clients.
 
 `durable-turn-request-service.test.ts` covers ACK loss/restart, concurrent
 connections, canonical conflict, deliberate repeated prompts, crash boundaries,
 ambiguous providers, queue lifecycle races, authorization/issuer/device scope,
 expiry/quota, trusted peer forwarding and write budgets. Existing bridge/router,
 queue, registry and state migration tests provide legacy regression coverage.
+`durable-steer-request-service.test.ts` covers accepted-but-ACK-lost steering,
+restart/crash claims, concurrent retries, expected-target conflicts, intentional
+repeated instructions, sanitized refusals, authentication, forwarding,
+capability negotiation, retention/quotas and its write budget.

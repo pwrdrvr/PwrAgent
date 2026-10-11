@@ -148,6 +148,15 @@ describe("durable turn request inbox", () => {
     expect((await fixture.service.submit(SCOPE, submission())).state).toBe("completed");
   });
 
+  it("preserves start proof when a delayed queue-admission response arrives after actual start", async () => {
+    const fixture = setup();
+    fixture.dispatch.mockImplementation(async (request) => {
+      fixture.service.observeQueueEvent({ backend: "codex", threadId: "thread", queueEntryId: request.queueEntryId!, status: "started", turnId: "actual-turn" });
+      return { backend: "codex", threadId: "thread", turnId: request.queueEntryId!, queueEntryId: request.queueEntryId, queueStatus: "queued" };
+    });
+    expect(await fixture.service.submit(SCOPE, submission())).toMatchObject({ state: "dispatched", result: { turnId: "actual-turn", queueStatus: "started" } });
+  });
+
   it("marks a queued receipt uncertain if its memory-only queue is lost during restart", async () => {
     const fixture = setup({ dispatch: async (request) => ({ backend: "codex", threadId: request.threadId, turnId: request.queueEntryId!, queueStatus: "queued", queueEntryId: request.queueEntryId }) });
     const value = submission();
