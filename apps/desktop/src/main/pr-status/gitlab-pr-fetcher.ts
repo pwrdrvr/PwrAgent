@@ -5,13 +5,14 @@ import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { discoverGlabCommands } from "../settings/glab-discovery";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { resolveGitLabReposForDirectory } from "./git-remote";
+import { FORGE_JSON_MAX_BYTES, FORGE_LOG_MAX_BYTES } from "./forge-read-limits";
 
 const execFileAsync = promisify(execFile);
 /** Concurrent `glab` subprocesses admitted at once. */
 const API_CONCURRENCY = 3;
 export class GitLabReadError extends Error {
   constructor(readonly status: number, readonly retryAt?: number) {
-    super(`GitLab returned HTTP ${status}. Check host login, read_api permission and project/job access.`);
+    super(status === 413 ? "GitLab response exceeds the download limit (16 MiB logs, 2 MiB metadata). Open the source URL for the full content." : `GitLab returned HTTP ${status}. Check host login, read_api permission and project/job access.`);
   }
 }
 
@@ -185,18 +186,21 @@ export class GitLabPrFetcher {
     const pending = (async () => {
       try {
         const args = ["api", "--hostname", host, "--method", "GET", ...(includeHeaders ? ["--include"] : []), endpoint];
+        const maxBytes = raw ? FORGE_LOG_MAX_BYTES : FORGE_JSON_MAX_BYTES;
         const stdout = this.options.run
           ? await this.options.run(command, args)
           : (await execFileAsync(command, args, {
             env: { ...buildPwrAgentChildProcessEnv(process.env), GLAB_CHECK_UPDATE: "0", GLAB_SEND_SURVEY: "0", GIT_TERMINAL_PROMPT: "0" },
             signal,
             timeout: 15_000,
-            maxBuffer: 2 * 1024 * 1024,
+            maxBuffer: maxBytes + (includeHeaders ? 64 * 1024 : 0),
             encoding: "utf8",
           })).stdout;
         const body = includeHeaders ? readApiBody(stdout) : stdout;
+        if (Buffer.byteLength(body, "utf8") > maxBytes) throw new GitLabReadError(413);
         return (raw ? body : JSON.parse(body)) as T;
       } catch (error) {
+        if (error && typeof error === "object" && "code" in error && error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") throw new GitLabReadError(413);
         if (includeHeaders) {
           if (error instanceof GitLabReadError) throw error;
           if (error && typeof error === "object" && "stdout" in error && typeof error.stdout === "string") readApiBody(error.stdout);

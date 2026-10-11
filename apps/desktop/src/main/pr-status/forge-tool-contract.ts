@@ -1,6 +1,6 @@
 import type { AppServerBackendKind, ForgeKind } from "@pwragent/shared";
 
-export const FORGE_READ_OPERATIONS = ["get_forge_status", "list_ci_runs", "get_ci_run", "get_ci_job", "read_ci_job_log"] as const;
+export const FORGE_READ_OPERATIONS = ["get_forge_status", "list_ci_runs", "get_ci_run", "get_ci_job", "read_ci_job_log", "get_commit_checks", "list_ci_artifacts"] as const;
 export type ForgeReadOperation = typeof FORGE_READ_OPERATIONS[number];
 export type ForgeRepository = { provider: ForgeKind; host: string; owner: string; repo: string };
 export type ForgeReadArgs = {
@@ -17,6 +17,8 @@ export type ForgeReadArgs = {
   runId?: number;
   jobId?: number;
   maxChars?: number;
+  beforeChar?: number;
+  logSnapshot?: string;
 };
 export type ForgeReadRequest = {
   operation: ForgeReadOperation;
@@ -36,7 +38,8 @@ export function validateForgeReadArgs(operation: string, value: unknown): assert
   const common = ["backend", "threadId", "instanceId", "repository"];
   const fields: Record<ForgeReadOperation, string[]> = {
     get_forge_status: ["url", "branch", "refresh"], list_ci_runs: ["branch", "headSha", "page", "perPage"],
-    get_ci_run: ["runId", "page", "perPage"], get_ci_job: ["jobId"], read_ci_job_log: ["jobId", "maxChars"],
+    get_ci_run: ["runId", "page", "perPage"], get_ci_job: ["jobId"], read_ci_job_log: ["jobId", "maxChars", "beforeChar", "logSnapshot"],
+    get_commit_checks: ["headSha", "branch", "page", "perPage"], list_ci_artifacts: ["runId", "page", "perPage"],
   };
   if (Object.keys(args).some((key) => ![...common, ...fields[operation as ForgeReadOperation]].includes(key))) {
     throw new ForgeReadError("invalid_arguments", "Unknown argument for this forge tool.");
@@ -46,13 +49,20 @@ export function validateForgeReadArgs(operation: string, value: unknown): assert
       throw new ForgeReadError("invalid_arguments", `${key} must be a nonempty bounded string.`);
     }
   }
-  for (const [key, max] of [["page", 1000], ["perPage", 100], ["runId", Number.MAX_SAFE_INTEGER], ["jobId", Number.MAX_SAFE_INTEGER], ["maxChars", 50000]] as const) {
+  for (const [key, max] of [["page", 1000], ["perPage", 100], ["runId", Number.MAX_SAFE_INTEGER], ["jobId", Number.MAX_SAFE_INTEGER], ["maxChars", 50000], ["beforeChar", Number.MAX_SAFE_INTEGER]] as const) {
     if (args[key] !== undefined && (!Number.isSafeInteger(args[key]) || Number(args[key]) < 1 || Number(args[key]) > max)) {
       throw new ForgeReadError("invalid_arguments", `${key} must be an integer from 1 to ${max}.`);
     }
   }
-  if ((operation === "get_ci_run" && !args.runId) || (["get_ci_job", "read_ci_job_log"].includes(operation) && !args.jobId)) {
+  if ((["get_ci_run", "list_ci_artifacts"].includes(operation) && !args.runId) || (["get_ci_job", "read_ci_job_log"].includes(operation) && !args.jobId)) {
     throw new ForgeReadError("invalid_arguments", "This operation requires its runId or jobId.");
+  }
+  if (operation === "get_commit_checks" && (typeof args.headSha !== "string" || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(args.headSha))) {
+    throw new ForgeReadError("invalid_arguments", "headSha must be a full commit SHA from PR/MR status or a CI run.");
+  }
+  if ((args.beforeChar !== undefined) !== (args.logSnapshot !== undefined)
+    || (args.logSnapshot !== undefined && (typeof args.logSnapshot !== "string" || !/^[a-f0-9]{64}$/.test(args.logSnapshot)))) {
+    throw new ForgeReadError("invalid_arguments", "Pass both beforeChar and logSnapshot from the previous log page.");
   }
   if (args.refresh !== undefined && typeof args.refresh !== "boolean") throw new ForgeReadError("invalid_arguments", "refresh must be boolean.");
   if (args.repository !== undefined) {
