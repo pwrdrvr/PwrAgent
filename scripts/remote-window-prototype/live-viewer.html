@@ -45,8 +45,12 @@ async function run() {
   active = true; sending = false; pending = []; inputTimes.clear(); inputSeq = 0; displayedSeq = -1;
   $("start").disabled = true; $("stop").disabled = false;
   try {
-    session = await rpc("open", {});
-    if (g !== generation) return;
+    const opened = await rpc("open", {});
+    if (g !== generation) {
+      await rpc("close", { sessionId: opened.sessionId, epoch: opened.epoch, scene: opened.scene }).catch(() => {});
+      return;
+    }
+    session = opened;
     boundedPush(metrics.sessions, { ...session, started: performance.now() });
     $("motion").disabled = !session.control;
     $("status").textContent = session.control ? "LIVE • fixture control granted. Click the canvas to type." : "LIVE • viewing only";
@@ -91,8 +95,8 @@ async function run() {
           if (!first.key || !/^avc1\.[\dA-Fa-f]{6}$/.test(first.codec)) throw new Error("First frame must configure H264");
           const config = { codec: first.codec, codedWidth: 800, codedHeight: 548, optimizeForLatency: true, hardwareAcceleration: "prefer-software" };
           const support = await VideoDecoder.isConfigSupported(config);
-          metrics.decoderConfig = config;
           if (g !== generation) return;
+          metrics.decoderConfig = config;
           if (!support.supported) throw new Error("H264 WebCodecs decoder unsupported");
           decoder = new VideoDecoder({ output(frame) {
             if (g !== generation) { frame.close(); return; }
@@ -101,7 +105,7 @@ async function run() {
             }
             ctx.drawImage(frame, 0, 0); frame.close();
             decoderWait?.resolve(); decoderWait = null;
-          }, error(error) { decoderWait?.reject(error); decoderWait = null; } });
+          }, error(error) { if (g === generation) { decoderWait?.reject(error); decoderWait = null; } } });
           decoder.configure(config);
         }
         await new Promise((resolve, reject) => {
@@ -132,6 +136,7 @@ async function run() {
       }
       if (performance.now() - lastPing > 200) {
         const at = performance.now(); await rpc("ping", address());
+        if (g !== generation) return;
         boundedPush(metrics.pings, performance.now() - at); lastPing = performance.now();
       }
     }
@@ -181,7 +186,11 @@ canvas.addEventListener("wheel", event => { event.preventDefault(); enqueue({ ac
 $("start").onclick = run;
 $("stop").onclick = stop;
 $("motion").onclick = () => { moving = !moving; enqueue({ action: "motion", enabled: moving }); };
-async function save() { await rpc("metrics", metrics); $("status").textContent = "Measurements saved to the running harness."; }
+async function save() {
+  const g = generation;
+  await rpc("metrics", metrics);
+  if (g === generation) $("status").textContent = "Measurements saved to the running harness.";
+}
 $("save").onclick = () => save().catch(fail);
 window.pwrwin = { metrics, enqueue, stop, save, get active() { return active; } };
 </script>
