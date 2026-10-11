@@ -117,3 +117,97 @@ Mobile can reuse discovery and permission concepts. A mobile viewer needs a
 platform-specific loopback listener and foreground lifetime support; otherwise
 it can display declarations without offering Connect. No cloud/public URL is
 implied, and mobile implementation is not a day-one dependency.
+
+
+## Implementation and reproduction
+
+Implemented in `federation-services.ts` (owner),
+`federation-service-forwarder.ts` (viewer), the existing Federation tool catalog,
+`ipc/federation-services.ts`, and `ThreadServices.tsx`. The runtime's local
+identity supplies the owner; a remote window keeps its selected thread's source
+instance rather than using the viewer's host. Window-scoped watch IDs prevent an
+in-flight Connect from creating a listener after navigation or window teardown.
+
+Start the checked-in fake-data HTTP/WebSocket demo on the owning instance:
+
+```sh
+pnpm --filter @pwragent/desktop exec node scripts/federation-service-demo.mjs 3000
+```
+
+It serves only inline invented data, never files, and updates a WebSocket counter
+every second. Alternatively use an app bound to `127.0.0.1` or `::1`. Ask its
+thread to call the normal tool:
+
+```json
+{"port":3000,"name":"Development preview","protocol":"http","ttlSeconds":3600}
+```
+
+That is `advertise_service` input. `list_services` takes `{}`;
+`remove_service` takes `{"serviceId":"<returned-id>"}`. From a compatible
+remote desktop, select the thread, expand **Services**, click **Connect**, then
+**Open**. A local owner shows declarations and Remove; it does not create a
+redundant local tunnel. Open is available only for HTTP(S). Leaving the thread or
+closing the window disconnects its forwards. Removal revokes all viewers.
+
+Use these repository-root verification commands with disposable fixture state:
+
+```sh
+pnpm test apps/desktop/src/main/__tests__/federation-services.test.ts apps/desktop/src/main/__tests__/federation-services-transport.test.ts
+pnpm test apps/desktop/src/renderer/src/features/federation/__tests__/ThreadServices.test.tsx
+pnpm test:desktop-e2e e2e/federation-services.spec.ts
+```
+
+The last command is a headed desktop test and must run through the repository's
+PwrSuiteLab workflow on macOS. It uses a real authenticated in-process gateway,
+real HTTP and WebSocket fixture, real Electron preload/IPC/runtime and renderer,
+and writes `services-available.png` / `services-connected.png` under test results.
+All thread and app contents are contrived. Fixtures enroll ephemeral identities
+in private loopback test state only; they never join the operator's federation.
+
+Observed automated coverage includes direct and relayed HTTP, unchanged Host,
+Origin and Set-Cookie headers, WS messages, IPv6 literal loopback, TLS pass-through
+with successful explicit CA trust and failed ordinary untrusted-cert validation,
+TCP half-close, a 512 KiB upload/download alongside control RPCs, wrong origin,
+missing capability, wrong peer and thread, frame limits, peer stream limits,
+expiry, removal, refused/stopped target, late lease cancellation, listener closure,
+window scoping, tool context validation, and explicit UI actions. The signed
+transport test uses two Noise-encrypted clients through a third gateway and
+checks that diagnostics contain no HTTP/WS body bytes.
+
+### Deliberate v1 limits
+
+- One quantum per direction per RPC; round-trip latency limits throughput. The
+  owner globally schedules one exchange at least 4 ms apart (approximately
+  4 MiB/s of raw data per direction), with 32 owner streams, 8 streams per
+  authenticated peer, 64 leases, 16 leases per peer, 16 local forwards, and
+  64 advertisements. Socket write stalls time out after 10 seconds. Independent
+  directional credits keep a stalled writer from preventing opposite-direction
+  progress. This does not replace global Federation scheduling for other traffic.
+- Leases last 30 seconds and renew every 10 seconds; inactive owner streams reap
+  after 30 seconds without exchange. Idle healthy WebSockets remain usable.
+  Advertisements reap every second; thread availability is rechecked at most
+  every 10 seconds. Viewer inventory refreshes every 3 seconds. Silent link loss
+  therefore has bounded cleanup rather than an instantaneous disconnect signal.
+- No OS process identity verification: a different process reusing the same port
+  during an advertisement's lifetime is indistinguishable. No service restart
+  replay, URL/header rewriting, public URL, UDP, automatic local port selection
+  matching the owner, certificate issuance, or mobile listener.
+- Known Federation listener ports are rejected. Other loopback APIs are not
+  auto-discovered or automatically authorized: only explicit declarations are
+  available. Local processes can access an active local listener. Application
+  authentication and browser-origin protections still belong to the app.
+- All enrolled peers share the same operator trust domain. Service names and
+  descriptions are visible to trusted viewers of the thread; never put secrets
+  there. Per-user roles and thread ACLs are a future Federation-level dependency.
+- Live cross-machine validation requires compatible builds on owner, viewer,
+  and relay. The existing enrolled peers inspected during development did not
+  advertise `service_forward_v1`; no live peer was restarted, reenrolled, or
+  given wider network access to make that test pass.
+
+
+The local validation run passed 171 tests across the service, signed transport,
+Federation runtime, tools, and renderer suites. The initial headed lab request
+was refused with `e2e_display_busy`; no UI screenshot or live cross-machine pass
+is claimed by those tests. The subsequent lab status also reported less than
+0.5 GB of guest free space. The checked-in headed repro remains available when
+the shared lab can stage and run it.

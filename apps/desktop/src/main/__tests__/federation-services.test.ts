@@ -1,3 +1,5 @@
+import { createServer as createHttpsServer, get as httpsGet } from "node:https";
+import { serviceTlsFixture } from "./helpers/service-tls-fixture";
 import { afterEach, describe, expect, it } from "vitest";
 import { createServer as createHttpServer } from "node:http";
 import { createServer, connect, type Server, type AddressInfo } from "node:net";
@@ -237,4 +239,27 @@ it("streams a multi-quantum upload/download while unrelated Federation control r
   const stats = forwarder.list(1, "owner", thread)[0]!;
   expect(stats.sentBytes).toBeGreaterThanOrEqual(payload.length);
   expect(stats.receivedBytes).toBeGreaterThanOrEqual(payload.length);
+});
+
+
+it("passes HTTPS through to the app and retains normal certificate validation", async () => {
+  const tls = await serviceTlsFixture();
+  const server = createHttpsServer(tls, (_request, response) => response.end("TLS fixture"));
+  const port = await listen(server);
+  const service = owner();
+  const declaration = await service.advertise(thread, { port, name: "TLS", protocol: "https" });
+  const { rpc } = routed(service, true);
+  const forwarder = new FederationServiceForwarder();
+  cleanups.push(() => forwarder.dispose());
+  const forward = await forwarder.connect(1, declaration, rpc);
+  const read = (ca?: string): Promise<string> => new Promise((resolve, reject) => {
+    const request = httpsGet(forward.url!, { ca, agent: false }, (response) => {
+      let text = "";
+      response.on("data", (data) => { text += String(data); });
+      response.on("end", () => resolve(text));
+    });
+    request.on("error", reject);
+  });
+  await expect(read()).rejects.toThrow();
+  expect(await read(tls.cert)).toBe("TLS fixture");
 });
