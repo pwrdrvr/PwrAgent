@@ -348,7 +348,8 @@ export class IntegratedTerminalService {
     if (pending) {
       const response = await pending;
       const session = this.sessionsById.get(response.sessionId);
-      if (session?.threadKey !== request.threadKey) throw new Error("Terminal thread mismatch.");
+      if (response.threadKey !== request.threadKey.trim()) throw new Error("Terminal thread mismatch.");
+      if (!session) return response;
       this.subscribe(session, webContents);
       return this.toCreateResponse(session);
     }
@@ -763,7 +764,7 @@ export class IntegratedTerminalService {
       const record: TerminalHistoryRecord = {
         version: 1,
         summary: { ...this.toSummary(session), status: exitCode === undefined ? "restored" : "exited", pid: undefined, exitCode },
-        snapshot: await session.replay.snapshot(),
+        snapshot: { ...await session.replay.snapshot(), pendingEscape: undefined },
         savedAt: this.now(),
       };
       if (session.closing) return;

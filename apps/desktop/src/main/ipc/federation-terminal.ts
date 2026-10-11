@@ -537,6 +537,7 @@ export class FederationTerminalBridge {
   private handleSessionStreamEvent(session: RemoteTerminalSession, event: FederationPtyStreamEvent, acknowledge: boolean): void {
     if (event.kind === "output") {
       if (event.params.snapshot) {
+        if (event.params.snapshot.seq < session.lastSeq) return;
         session.snapshot = event.params.snapshot;
         session.lastSeq = event.params.snapshot.seq;
         this.send(session, INTEGRATED_TERMINAL_OUTPUT_CHANNEL, { sessionId: session.sessionId, data: "", snapshot: session.snapshot });

@@ -268,11 +268,12 @@ export function IntegratedTerminal({
             return;
           }
           if (event.snapshot) {
+            if (event.snapshot.seq < lastSeq) return;
             replayingBufferedOutputRef.current = true;
             terminal.reset();
             terminal.resize(event.snapshot.cols, event.snapshot.rows);
             lastSeq = event.snapshot.seq;
-            terminal.write(event.snapshot.data, () => {
+            terminal.write(event.snapshot.data + (event.snapshot.pendingEscape ?? ""), () => {
               replayingBufferedOutputRef.current = false;
               scheduleFitAndResize();
             });
@@ -312,7 +313,7 @@ export function IntegratedTerminal({
           if (snapshot) terminal.resize(snapshot.cols, snapshot.rows);
           replayingBufferedOutputRef.current = true;
           terminal.reset();
-          terminal.write(snapshot?.data ?? response.buffer ?? "", () => {
+          terminal.write(snapshot ? snapshot.data + (snapshot.pendingEscape ?? "") : response.buffer ?? "", () => {
             if (disposed) return;
             if (overflow) {
               overflow = false;

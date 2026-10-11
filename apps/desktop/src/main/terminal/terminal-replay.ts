@@ -1,3 +1,4 @@
+import { TerminalControlTail } from "./terminal-control-tail";
 import { Terminal } from "@xterm/headless";
 import { SerializeAddon } from "@xterm/addon-serialize";
 import type { TerminalSnapshot } from "../../shared/integrated-terminal";
@@ -17,6 +18,8 @@ export class TerminalReplay {
   private frames: TerminalOutputFrame[] = [];
   private rawChars = 0;
   private parsedSeq = 0;
+  private readonly controlTail = new TerminalControlTail();
+  private parsedTail = "";
   private seq = 0;
   private updatedAt = 0;
   pendingCharacters = 0;
@@ -35,6 +38,7 @@ export class TerminalReplay {
 
   append(data: string, timestamp = Date.now()): TerminalOutputFrame {
     const frame = { seq: ++this.seq, timestamp, data };
+    const tail = this.controlTail.append(data);
     this.pendingCharacters += data.length;
     // Drop whole frames, never slice through ANSI or a surrogate pair.
     if (data.length <= RAW_LIMIT) {
@@ -50,6 +54,7 @@ export class TerminalReplay {
     this.queue = this.queue.then(() => new Promise<void>((resolve) => {
       this.terminal.write(data, () => {
         this.pendingCharacters -= data.length;
+        this.parsedTail = tail;
         this.parsedSeq = frame.seq;
         this.updatedAt = timestamp;
         resolve();
@@ -81,7 +86,7 @@ export class TerminalReplay {
         data = this.plainText().slice(-64 * 1024).replace(/\n/g, "\r\n");
       }
       return {
-        data, seq: this.parsedSeq, timestamp: this.updatedAt,
+        data, pendingEscape: this.parsedTail || undefined, seq: this.parsedSeq, timestamp: this.updatedAt,
         cols: this.terminal.cols, rows: this.terminal.rows, truncated,
       };
     });

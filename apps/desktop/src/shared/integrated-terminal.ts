@@ -154,6 +154,8 @@ export type IntegratedTerminalErrorEvent = {
 
 export type TerminalSnapshot = {
   data: string;
+  /** Live attach only; excluded from persisted history. */
+  pendingEscape?: string;
   seq: number;
   timestamp: number;
   cols: number;

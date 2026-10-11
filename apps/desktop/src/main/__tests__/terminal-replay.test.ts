@@ -33,6 +33,24 @@ describe("TerminalReplay", () => {
     await replay.dispose();
   });
 
+  it("restores an incomplete CSI parser prefix without leaking OSC payloads into the snapshot", async () => {
+    const replay = new TerminalReplay(40, 4);
+    replay.append("prefix\x1b[3");
+    const snapshot = await replay.snapshot();
+    expect(snapshot.pendingEscape).toBe("\x1b[3");
+    const restored = new Terminal({ cols: 40, rows: 4, allowProposedApi: true });
+    await new Promise<void>((resolve) => restored.write(snapshot.data + snapshot.pendingEscape, resolve));
+    replay.append("1mred");
+    await new Promise<void>((resolve) => restored.write("1mred", resolve));
+    expect(text(restored)).toBe("prefixred");
+    replay.append("\x1b]52;c;PRIVATE");
+    const partialOsc = await replay.snapshot();
+    expect(partialOsc.pendingEscape).toBe("\x1b]");
+    expect(partialOsc.data).not.toContain("PRIVATE");
+    restored.dispose();
+    await replay.dispose();
+  });
+
   it("takes an atomic watermark before output appended while the snapshot waits", async () => {
     const replay = new TerminalReplay(80, 4);
     replay.append("before", 10);

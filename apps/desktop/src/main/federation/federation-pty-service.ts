@@ -354,7 +354,7 @@ export class FederationPtyService {
   private checkpoint(session: FederationPtySession, status: "exited" | "restored" = "restored", exitCode?: number): void {
     const saving = session.replay.snapshot().then(async (snapshot) => {
       const record: TerminalHistoryRecord = { version: 1, peerId: session.peerId,
-        summary: { ...this.summary(session), status, exitCode }, snapshot, savedAt: this.now() };
+        summary: { ...this.summary(session), status, exitCode }, snapshot: { ...snapshot, pendingEscape: undefined }, savedAt: this.now() };
       if (!this.sessionsById.has(session.sessionId)) {
         this.archived.set(session.sessionId, record);
         while (this.archived.size > 64) this.archived.delete(this.archived.keys().next().value!);

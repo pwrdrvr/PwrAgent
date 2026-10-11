@@ -38,6 +38,7 @@ export class TerminalHistoryStore {
         }
         const value: unknown = JSON.parse(await readFile(file, "utf8"));
         if (!isRecord(value)) continue;
+        value.snapshot.pendingEscape = undefined;
         records.push(value);
         this.saved.set(value.summary.sessionId, value.savedAt);
       } catch { /* A corrupt or concurrently removed cache is disposable. */ }
@@ -49,7 +50,7 @@ export class TerminalHistoryStore {
 
   save(record: TerminalHistoryRecord): Promise<void> {
     return this.enqueue(async () => {
-      const data = JSON.stringify(record);
+      const data = JSON.stringify({ ...record, snapshot: { ...record.snapshot, pendingEscape: undefined } });
       if (Buffer.byteLength(data) > MAX_FILE_BYTES) throw new Error("Terminal history exceeds its byte budget.");
       await mkdir(this.directory, { recursive: true, mode: 0o700 });
       const destination = this.file(record.summary.sessionId);
