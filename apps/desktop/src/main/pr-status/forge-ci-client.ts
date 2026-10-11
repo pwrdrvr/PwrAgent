@@ -45,7 +45,7 @@ export function redactForgeLog(value: string): string {
     .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "")
     .replace(/-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?(?:-----END [^-]*PRIVATE KEY-----|$)/g, "[REDACTED PRIVATE KEY]")
     .replace(/\b(?:gh[oprsu]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|glpat-[A-Za-z0-9_-]+|AKIA[A-Z0-9]{16})\b/g, "[REDACTED TOKEN]")
-    .replace(/(\b(?:authorization|private-token|[a-z0-9_-]*(?:password|passwd|secret|token|api[_-]?key|access[_-]?key)[a-z0-9_-]*)\b["']?\s*[:=]\s*)(?:Bearer\s+|Basic\s+)?[^\s,"']+/gi, "$1[REDACTED]")
+    .replace(/(\b(?:authorization|private-token|[a-z0-9_-]*(?:password|passwd|secret|token|api[_-]?key|access[_-]?key)[a-z0-9_-]*)\b["']?\s*[:=]\s*)(?:"(?:\\[\s\S]|[^"\\])*(?:"|$)|'(?:\\[\s\S]|[^'\\])*(?:'|$)|(?:Bearer\s+|Basic\s+)?[^\s,"']+)/gi, "$1[REDACTED]")
     .replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/gi, "$1[REDACTED]@")
     .replace(/([?&](?:[^=\s&]*(?:token|signature|credential|secret|key)[^=\s&]*)=)[^\s&]+/gi, "$1[REDACTED]");
 }

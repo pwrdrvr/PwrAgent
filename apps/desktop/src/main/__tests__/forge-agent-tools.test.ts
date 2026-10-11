@@ -206,3 +206,29 @@ it("redacts common credentials, terminal controls and private keys", () => {
   const output = redactForgeLog("\u001b[31mERROR\u001b[0m Authorization: Bearer abc\nPRIVATE-TOKEN: glpat-secret\nhttps://user:secret@host/log?token=abc\n-----BEGIN RSA PRIVATE KEY-----\nabc\n-----END RSA PRIVATE KEY-----");
   expect(output).not.toContain("abc"); expect(output).not.toContain("secret"); expect(output).not.toContain("\u001b");
 });
+
+it.each([
+  ["{\"password\":\"example-secret\"}", "{\"password\":[REDACTED]}"],
+  ["PASSWORD=\"example secret with spaces\"", "PASSWORD=[REDACTED]"],
+  ["API_KEY='example secret with spaces'", "API_KEY=[REDACTED]"],
+  [String.raw`{"token":"example \"quoted\" secret"}`, "{\"token\":[REDACTED]}"],
+  [String.raw`SECRET='example \'quoted\' secret'`, "SECRET=[REDACTED]"],
+  ["Authorization: \"Bearer example secret\"", "Authorization: [REDACTED]"],
+  ["PASSWORD=\"example secret\ncontinued", "PASSWORD=[REDACTED]"],
+  ["{\"password\":\"example secret\",\"status\":\"failed\"}", "{\"password\":[REDACTED],\"status\":\"failed\"}"],
+])("redacts the full quoted credential in %s", (input, expected) => {
+  expect(redactForgeLog(input)).toBe(expected);
+});
+
+it("redacts quoted credentials before bounding logs and extracting failures", async () => {
+  const fetcher = vi.fn<typeof fetch>(async (url) => String(url).endsWith("/jobs/202")
+    ? json(ghJob)
+    : new Response("ERROR {\"password\":\"example secret with spaces\"}\nFAIL API_KEY='another secret'\n"));
+  const result = await client(fetcher).execute("read_ci_job_log", github, { jobId: 202 });
+  expect(result).toMatchObject({ log: {
+    text: "ERROR {\"password\":[REDACTED]}\nFAIL API_KEY=[REDACTED]\n",
+    failureExcerpts: ["ERROR {\"password\":[REDACTED]}", "FAIL API_KEY=[REDACTED]"],
+  } });
+  expect(JSON.stringify(result)).not.toContain("example secret");
+  expect(JSON.stringify(result)).not.toContain("another secret");
+});

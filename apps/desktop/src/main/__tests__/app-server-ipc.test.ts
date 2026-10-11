@@ -8705,6 +8705,46 @@ describe("app server ipc", () => {
     expect(await local("get_forge_status", {}, context)).toMatchObject({ source: "cache", observations: [{ pr: { state: "failing" } }] });
   });
 
+  it.each([false, true])("forge branch refresh preserves whether GitHub answered (%s)", async (answered) => {
+    const { ForgePrFetcher } = await vi.importActual<typeof import("../pr-status/forge-pr-fetcher")>("../pr-status/forge-pr-fetcher");
+    const { appServerService } = await import("../ipc/app-server");
+    const repos = [{ host: "github.com", owner: "pwrdrvr", repo: "PwrAgent" }];
+    const fetchPullRequestsForBranches = vi.fn(async () => new Map<string, PrSummary[]>(
+      answered ? [["pwrdrvr/pwragent#topic", []]] : [],
+    ));
+    const fetcher = new ForgePrFetcher({
+      isProviderEnabled: (provider) => provider === "github",
+      probeGhAvailable: async () => true,
+      resolveGitHubRepos: async () => repos,
+      graphqlClient: { fetchPullRequests: async () => [], fetchPullRequestsForBranches },
+    });
+    const service = appServerService as unknown as { getPrFetcher: () => InstanceType<typeof ForgePrFetcher> };
+    const provider = vi.spyOn(service, "getPrFetcher").mockReturnValue(fetcher);
+    try {
+      resolveGitHubReposForDirectory.mockResolvedValue(repos);
+      listThreads.mockResolvedValue([{
+        id: "thread-1", source: "codex", title: "Fixture", gitBranch: "topic", updatedAt: 2000,
+        linkedDirectories: [{ id: "/repo", kind: "directory", label: "repo", path: "/repo" }],
+      }] as never);
+      getThreadOverlayState.mockResolvedValue({ backend: "codex", threadId: "thread-1", executionMode: "default", prs: [] });
+      registerAppServerIpcHandlers();
+      const local = setForgeReadHandlers.mock.calls.at(-1)?.[0];
+      publishLocalEvent.mockClear();
+      writePrStatusCacheEntries.mockClear();
+      const result = local("get_forge_status", { refresh: true, branch: "topic" }, { backend: "codex", threadId: "thread-1", transport: "mcp" });
+      if (answered) {
+        await expect(result).resolves.toMatchObject({ source: "provider", observations: [], error: { code: "no_matching_pull_requests" } });
+      } else {
+        await expect(result).rejects.toMatchObject({ code: "provider_error" });
+      }
+      expect(fetchPullRequestsForBranches).toHaveBeenCalledOnce();
+      expect(writePrStatusCacheEntries).not.toHaveBeenCalled();
+      expect(publishLocalEvent).not.toHaveBeenCalled();
+    } finally {
+      provider.mockRestore();
+    }
+  });
+
   it("registers a user-invoked PR status tool handler with freshness metadata", async () => {
     const fetchedAt = Date.now() - 45_000;
     const cachedPr = githubPr({
