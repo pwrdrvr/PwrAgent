@@ -1,3 +1,5 @@
+import { TerminalOutputReader, type TerminalToolContext } from "../terminal/terminal-output-reader";
+import { combineTerminalOutputSources } from "../terminal/terminal-output-source";
 import { describe, expect, it, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
@@ -925,5 +927,75 @@ describe("remote terminal snapshots and ownership", () => {
     expect(pty.killed).toBe(false);
     expect(pty.written).toEqual([]);
     await service.disposeAll();
+  });
+});
+
+
+describe("Federation owner-thread read facade", () => {
+  it("lets the owning agent read viewer-opened output without granting another peer access", async () => {
+    const { service, pty } = createHarness();
+    try {
+      const opened = await service.open("peer-a", OPEN_REQUEST);
+      pty.emitData("\x1b[32mOwner output\x1b[0m");
+      const context = { backend: "codex" as const, threadId: "thread-1" };
+      const remoteSource = {
+        ownerInstanceId: () => "owner",
+        list: (ctx: TerminalToolContext) => service.listForOwnerThread(ctx),
+        replay: (ctx: TerminalToolContext, id: string) => service.outputForOwnerThread(ctx, id),
+        snapshot: (ctx: TerminalToolContext, id: string) => service.snapshotForOwnerThread(ctx, id),
+      };
+      const reader = new TerminalOutputReader(combineTerminalOutputSources(() => "owner", [remoteSource]));
+      const list = await reader.list(context);
+      expect(list.terminals.map((terminal) => terminal.terminalId)).toEqual([opened.sessionId]);
+      expect(await reader.read(context, { ownerInstanceId: "owner", terminalId: opened.sessionId, format: "plain" }))
+        .toMatchObject({ data: "Owner output", ownerInstanceId: "owner", kind: "screen_snapshot" });
+      await expect(reader.read(context, { ownerInstanceId: "viewer", terminalId: opened.sessionId, format: "raw" })).rejects.toThrow("owner");
+      expect(await service.listForOwnerThread({ ...context, threadId: "other" })).toEqual([]);
+      expect(service.outputForOwnerThread({ ...context, backend: "acp:claude" }, opened.sessionId)).toBeUndefined();
+      expect(await service.snapshotForOwnerThread({ ...context, threadId: "other" }, opened.sessionId)).toBeUndefined();
+      expect(await service.list("peer-b", OPEN_REQUEST)).toEqual([]);
+      await expect(service.snapshot("peer-b", { sessionId: opened.sessionId })).rejects.toThrow();
+      expect(() => service.outputForThread("peer-b", "codex", "thread-1", opened.sessionId)).toThrow();
+      expect(() => service.input("peer-b", { sessionId: opened.sessionId, dataBase64: Buffer.from("input").toString("base64") })).toThrow();
+      expect(pty.written).toEqual([]);
+    } finally { await service.disposeAll(); }
+  });
+
+  it("does not cancel disconnect reaping, ack output or extend terminal lifetime", async () => {
+    const { service, pty, sent } = createHarness({ graceMs: 50 });
+    try {
+      const opened = await service.open("peer-a", OPEN_REQUEST);
+      pty.emitData("read me");
+      const context = { backend: "codex" as const, threadId: "thread-1" };
+      await service.snapshotForOwnerThread(context, opened.sessionId);
+      vi.useFakeTimers();
+      service.notifyPeerDisconnected("peer-a");
+      const notifications = sent.length;
+      const resumes = pty.resumeCount;
+      await service.listForOwnerThread(context);
+      expect((await service.snapshotForOwnerThread(context, opened.sessionId))?.data).toContain("read me");
+      expect(service.outputForOwnerThread(context, opened.sessionId)?.read().frames).toHaveLength(1);
+      expect(sent).toHaveLength(notifications);
+      expect(pty.resumeCount).toBe(resumes);
+      expect(pty.written).toEqual([]);
+      await vi.advanceTimersByTimeAsync(51);
+      expect(pty.killed).toBe(true);
+      expect(service.sessionCountForPeer("peer-a")).toBe(0);
+    } finally { vi.useRealTimers(); await service.disposeAll(); }
+  });
+
+  it("retains the remote-shell policy gate for owner reads after permission revocation", async () => {
+    let allowed = true;
+    const { service } = createHarness({ allowOpen: () => allowed });
+    try {
+      const opened = await service.open("peer-a", OPEN_REQUEST);
+      const context = { backend: "codex" as const, threadId: "thread-1" };
+      allowed = false;
+      expect(await service.listForOwnerThread(context)).toEqual([]);
+      expect(service.outputForOwnerThread(context, opened.sessionId)).toBeUndefined();
+      expect(await service.snapshotForOwnerThread(context, opened.sessionId)).toBeUndefined();
+      await expect(service.list("peer-a", OPEN_REQUEST)).rejects.toThrow("disabled");
+      await expect(service.snapshot("peer-a", { sessionId: opened.sessionId })).rejects.toThrow("disabled");
+    } finally { await service.disposeAll(); }
   });
 });

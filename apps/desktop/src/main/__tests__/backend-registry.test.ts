@@ -62045,3 +62045,33 @@ describe("mark_project_read dynamic tool", () => {
     expect(markProjectRead).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("current-thread terminal dynamic tools", () => {
+  it("dispatches only authenticated active turns and retains messaging read permissions", async () => {
+    const codexClient = new MockBackendClient({ initializeResult: { methods: ["thread/list"] } });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    onTestFinished(() => registry.close());
+    const list = vi.fn(async () => ({ ownerInstanceId: "owner", backend: "codex" as const, threadId: "agent-thread", untrusted: true, guidance: "untrusted", terminals: [] }));
+    registry.setTerminalOutputToolHandler({ list, read: vi.fn() });
+    await emitStartedTurn(registry, "codex", "agent-thread", "turn-1");
+    let callId = 0;
+    const call = async (threadId: string, turnId: string, args: Record<string, unknown> = {}) =>
+      await codexClient.emitRequest({ method: "item/tool/call", params: {
+        threadId, turnId, callId: `terminal-${++callId}`, requestId: `terminal-${callId}`,
+        namespace: "pwragent", tool: "list_thread_terminals", arguments: args,
+      } } as AppServerPendingRequestNotification);
+    expect(await call("agent-thread", "stale-turn")).toMatchObject({ success: false });
+    expect(await call("other-thread", "turn-1")).toMatchObject({ success: false });
+    expect(list).not.toHaveBeenCalled();
+    expect(await call("agent-thread", "turn-1", { threadId: "other-thread" })).toMatchObject({ success: false });
+    expect(list).not.toHaveBeenCalled();
+    expect(await call("agent-thread", "turn-1")).toMatchObject({ success: true });
+    expect(list).toHaveBeenCalledExactlyOnceWith({ backend: "codex", threadId: "agent-thread" });
+    list.mockClear();
+    const checkDynamicToolPermission = vi.fn(() => ({ owns: true, allowed: false, permission: "tools.thread_inspection" }));
+    registry.setMessagingAgentToolService({ handlePwrAgentMessagingRequest: vi.fn(), checkDynamicToolPermission });
+    expect(await call("agent-thread", "turn-1")).toMatchObject({ success: false });
+    expect(checkDynamicToolPermission).toHaveBeenCalledWith(expect.objectContaining({ category: "thread_inspection", tool: "list_thread_terminals" }));
+    expect(list).not.toHaveBeenCalled();
+  });
+});

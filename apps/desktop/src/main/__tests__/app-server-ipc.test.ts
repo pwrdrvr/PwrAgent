@@ -145,6 +145,13 @@ const federationMock = vi.hoisted(() => {
     remoteBackend,
     remoteThreadSummaries,
     runtime: {
+      localFederationInstanceId: vi.fn(() => "pwr_local"),
+      ownerTerminalOutputSource: vi.fn(() => ({
+        ownerInstanceId: () => "pwr_local",
+        list: async () => [],
+        replay: () => undefined,
+        snapshot: async () => undefined,
+      })),
       connectedPeerTargets: vi.fn((): Array<{
         target: { scope: "remote"; instanceId: string };
         label: string;
@@ -710,6 +717,7 @@ function emitRegistryEvent(event: unknown): void {
 }
 const publishLocalEvent = vi.fn(async (_event?: unknown) => undefined);
 const setForgeReadHandlers = vi.fn();
+const setTerminalOutputToolHandler = vi.fn();
 const setThreadPullRequestStatusToolHandler = vi.fn();
 const setThreadPullRequestCanonicalizer = vi.fn();
 const setLocalPullRequestAuthorityResolver = vi.fn();
@@ -1154,6 +1162,7 @@ vi.mock("../app-server/backend-registry", () => {
     onEvent,
     publishLocalEvent,
     setForgeReadHandlers,
+    setTerminalOutputToolHandler,
     setThreadPullRequestStatusToolHandler,
     setThreadPullRequestCanonicalizer,
     setThreadPrimaryGitRepositoryReader: vi.fn(),
@@ -1362,6 +1371,7 @@ describe("app server ipc", () => {
     onEvent.mockClear();
     registryEventListeners.length = 0;
     publishLocalEvent.mockClear();
+    setTerminalOutputToolHandler.mockClear();
     setThreadPullRequestStatusToolHandler.mockClear();
     setThreadPullRequestCanonicalizer.mockClear();
     setLocalPullRequestAuthorityResolver.mockClear();

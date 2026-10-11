@@ -563,6 +563,11 @@ export class IntegratedTerminalService {
     this.emitSessionsChanged();
   }
 
+  async listForOwnerThread(threadKey: string): Promise<IntegratedTerminalSessionSummary[]> {
+    await this.ready;
+    return this.listSessions().filter((session) => session.threadKey === threadKey);
+  }
+
   /** Thread-bound owner API for the read-only tool stack. */
   outputForThread(threadKey: string, sessionId: string): TerminalReplay | undefined {
     const session = this.sessionsById.get(sessionId);

@@ -4,6 +4,9 @@ import { ForgeReadError, type ForgeReadArgs, type ForgeReadOperation } from "../
 import { readForgeRepositoryRemotes } from "../pr-status/git-remote";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import { createOwnerRoutedForgeReadHandler } from "../federation/federated-forge-read-service";
+import { integratedTerminalOutputSource } from "./integrated-terminal";
+import { TerminalOutputReader } from "../terminal/terminal-output-reader";
+import { combineTerminalOutputSources } from "../terminal/terminal-output-source";
 import { publishedPrCommitShas } from "../../shared/pull-request-publication";
 import { USAGE_ACTIVITY_ANALYZE_CHANNEL } from "../../shared/ipc";
 import { archiveCandidateProtectionReason } from "../app-server/thread-archive-sweeper";
@@ -8417,6 +8420,15 @@ export function registerAppServerIpcHandlers(): void {
     runtime: getDesktopFederationRuntime,
     targetStore: getDesktopOverlayStore(),
   }));
+  const terminalOwnerInstanceId = getDesktopFederationRuntime().localFederationInstanceId();
+  const terminalOwnerId = () => terminalOwnerInstanceId;
+  getDesktopBackendRegistry().setTerminalOutputToolHandler(new TerminalOutputReader(
+    combineTerminalOutputSources(terminalOwnerId, [
+      integratedTerminalOutputSource(terminalOwnerId),
+      getDesktopFederationRuntime().ownerTerminalOutputSource(),
+    ]),
+  ));
+
   getDesktopBackendRegistry().setThreadPullRequestStatusToolHandler(
     async (args, context) =>
       await appServerService.checkThreadPullRequestStatusForTool(args, context),
@@ -9674,6 +9686,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(APP_SERVER_GET_THREAD_ARCHIVE_SWEEP_STATUS_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_RUN_THREAD_ARCHIVE_SWEEP_CHANNEL);
   const registry = getExistingDesktopBackendRegistry();
+  registry?.setTerminalOutputToolHandler(undefined);
   registry?.setThreadPullRequestStatusToolHandler(undefined);
   registry?.setThreadPullRequestCanonicalizer(undefined);
   registry?.setThreadPrimaryGitRepositoryReader(undefined);

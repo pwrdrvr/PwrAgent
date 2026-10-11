@@ -1,4 +1,5 @@
 import { buildForgeReadToolDefinitions, type ForgeReadHandler } from "./pwragent-forge-agent-tools";
+import { buildTerminalOutputToolDefinitions, type TerminalOutputToolHandler } from "./pwragent-terminal-output-tools";
 import type { TokenMiserFocusedSummaries } from "../token-miser/token-miser-focused";
 import type {
   AgentToolCatalogId,
@@ -74,6 +75,7 @@ export function resolveAgentToolCatalogs(params: {
   tokenMiserFocused?: TokenMiserFocusedSummaries;
   starMapHandler?: PwrAgentStarMapHandler;
   threadTodoHandler?: PwrAgentThreadTodoHandler;
+  terminalOutputHandler?: TerminalOutputToolHandler;
 }, options?: {
   taskMonitorRole?: "parent" | "monitor" | "all";
 }): ResolvedAgentToolCatalog[] {
@@ -83,7 +85,12 @@ export function resolveAgentToolCatalogs(params: {
   const automationDynamicTools = automationRouter.buildDynamicToolSpecs();
   const appRouter = buildPwrAgentAppToolRouter(params.appManagementHandler);
   const appDynamicTools = appRouter.buildDynamicToolSpecs();
-  const threadRouter = buildPwrAgentThreadToolRouter(params.threadInspectionHandler, { additionalDefinitions: buildForgeReadToolDefinitions(params.forgeReadHandler) });
+  const threadRouter = buildPwrAgentThreadToolRouter(params.threadInspectionHandler, {
+    additionalDefinitions: [
+      ...buildForgeReadToolDefinitions(params.forgeReadHandler),
+      ...buildTerminalOutputToolDefinitions(params.terminalOutputHandler),
+    ],
+  });
   const threadDynamicTools = threadRouter.buildDynamicToolSpecs();
   const messagingRouter = buildPwrAgentMessagingToolRouter(params.messagingHandler);
   const messagingDynamicTools = messagingRouter.buildDynamicToolSpecs();
