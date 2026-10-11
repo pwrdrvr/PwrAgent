@@ -12,12 +12,13 @@ import { NAVIGATION_BACKEND_METADATA_SCHEMA } from "./navigation-backend-metadat
 import { THREAD_NAVIGATION_RELATIONSHIPS_SCHEMA } from "./thread-navigation-relationships.js";
 import { STORAGE_RETENTION_SCHEMA } from "./storage-maintenance.js";
 import { migratePrReferenceIdentities } from "./migrate-pr-reference-identities.js";
+import { DURABLE_TURN_REQUEST_SCHEMA } from "./durable-turn-request-schema";
 import {
   attachSqliteWriteMetrics,
   isSqliteWriteMetricsEnabled,
 } from "./sqlite-write-metrics.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 72;
+export const CURRENT_STATE_DB_USER_VERSION = 73;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -1992,6 +1993,12 @@ export class StateDb {
         db.transaction(() => {
           db.exec(OPERATOR_REQUEST_SCHEMA);
           db.pragma("user_version = 72");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 73) {
+        db.transaction(() => {
+          db.exec(DURABLE_TURN_REQUEST_SCHEMA);
+          db.pragma("user_version = 73");
         })();
       }
       // Keep current-version databases converged without asking pre-v36 profiles

@@ -206,9 +206,23 @@ import {
   threadReplayCursorIdSpace,
 } from "../app-server/thread-replay-pagination";
 import { FEDERATION_MAX_FRAME_BYTES } from "./federation-transport";
+import type {
+  DurableTurnReceipt,
+  FederationSubmitDurableTurnRequest,
+  FederationGetDurableTurnRequest,
+} from "@pwragent/shared";
+import { DurableTurnRequestError, type DurableTurnRequestService } from "./durable-turn-request-service";
 
 export const FEDERATION_RESPONSE_BYTE_BUDGET =
   FEDERATION_MAX_FRAME_BYTES - 64 * 1024;
+
+/** A delegated device can only occupy its authenticated issuer's namespace. */
+export function durableFederationCallerScope(sourceInstanceId: string, callerScope?: string): string {
+  if (callerScope !== undefined && (typeof callerScope !== "string" || !callerScope || callerScope.length > 256)) {
+    throw new DurableTurnRequestError("request_invalid");
+  }
+  return JSON.stringify(["federation", sourceInstanceId, callerScope ?? ""]);
+}
 
 /**
  * Load queries answer from in-memory OS counters plus one statfs, so a
@@ -339,7 +353,7 @@ type ResolvedSourceInstance = {
   celestialIcon?: CelestialIconId;
 };
 
-function authenticateMessageOrigin(params: {
+export function authenticateMessageOrigin(params: {
   messageOrigin: AppServerThreadMessageOrigin | undefined;
   resolveSourceInstance?: (
     instanceId: string,
@@ -451,6 +465,8 @@ export const FEDERATION_BACKEND_METHODS = {
   startThread: "backend.startThread",
   forkThread: "backend.forkThread",
   startTurn: "backend.startTurn",
+  submitTurnRequest: "backend.submitTurnRequest",
+  getTurnRequest: "backend.getTurnRequest",
   replaceQueuedMessage: "backend.replaceQueuedMessage",
   readQueuedTurn: "backend.readQueuedTurn",
   cancelQueuedTurn: "backend.cancelQueuedTurn",
@@ -583,6 +599,8 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.startThread]: "turn_control",
   [FEDERATION_BACKEND_METHODS.forkThread]: "turn_control",
   [FEDERATION_BACKEND_METHODS.startTurn]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.submitTurnRequest]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.getTurnRequest]: "turn_control",
   [FEDERATION_BACKEND_METHODS.replaceQueuedMessage]: "turn_control",
   [FEDERATION_BACKEND_METHODS.readQueuedTurn]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.cancelQueuedTurn]: "turn_control",
@@ -665,6 +683,8 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
 export function additionalFederationBackendCapabilities(
   envelope: FederationRequestEnvelope,
 ): readonly FederationCapability[] {
+  if (envelope.method === FEDERATION_BACKEND_METHODS.submitTurnRequest
+    || envelope.method === FEDERATION_BACKEND_METHODS.getTurnRequest) return ["durable_turn_requests_v1"];
   if (envelope.method !== FEDERATION_BACKEND_METHODS.steerTurn) return [];
   const request = envelope.params as Partial<SteerTurnRequest> | undefined;
   return request?.fallback ? ["scheduled_actions"] : [];
@@ -949,6 +969,7 @@ export type FederationBackendOperations = {
 export function registerFederationBackendHandlers(params: {
   router: FederationRouter;
   backend: FederationBackendOperations;
+  durableTurnRequests?: DurableTurnRequestService;
   resolveSourceInstance?: (
     instanceId: string,
   ) => ResolvedSourceInstance | undefined;
@@ -958,6 +979,17 @@ export function registerFederationBackendHandlers(params: {
   ) => void;
   resolveTurnInput?: ResolveIncomingFederationTurnInput;
 }): void {
+  if (params.durableTurnRequests) {
+    const service = params.durableTurnRequests;
+    params.router.registerHandler(FEDERATION_BACKEND_METHODS.submitTurnRequest, async (envelope) => {
+      const request = envelope.params as FederationSubmitDurableTurnRequest;
+      return service.submit(durableFederationCallerScope(envelope.sourceInstanceId, request?.callerScope), request);
+    });
+    params.router.registerHandler(FEDERATION_BACKEND_METHODS.getTurnRequest, async (envelope) => {
+      const request = envelope.params as FederationGetDurableTurnRequest;
+      return service.get(durableFederationCallerScope(envelope.sourceInstanceId, request?.callerScope), request);
+    });
+  }
   const forwardEnvironmentSetupProgress = (
     event: CodexEnvironmentSetupProgressEvent,
     targetInstanceId: FederationInstanceId,
@@ -2294,6 +2326,15 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
       method: FEDERATION_BACKEND_METHODS.startTurn,
       params: { ...request, input },
     });
+  }
+
+  async submitTurnRequest(request: FederationSubmitDurableTurnRequest): Promise<DurableTurnReceipt> {
+    // Do not transform attachments: the canonical wire request must stay stable.
+    return this.rpc.request({ method: FEDERATION_BACKEND_METHODS.submitTurnRequest, params: request });
+  }
+
+  async getTurnRequest(request: FederationGetDurableTurnRequest): Promise<DurableTurnReceipt | null> {
+    return this.rpc.request({ method: FEDERATION_BACKEND_METHODS.getTurnRequest, params: request });
   }
 
   async replaceQueuedMessage(

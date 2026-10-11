@@ -1865,6 +1865,7 @@ const FEDERATION_CAPABILITY_LABELS: Record<FederationCapability, string> = {
   thread_grouping: "reorder and collapse sub-threads",
   thread_detail: "read transcripts",
   turn_control: "prompt, steer, and interrupt",
+  durable_turn_requests_v1: "reconcile durable prompt receipts",
   scheduled_actions: "schedule and manage messages",
   pending_request_control: "handle approvals and questions",
   environment_actions: "run environments and scripts",
