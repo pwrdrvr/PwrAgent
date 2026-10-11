@@ -12000,6 +12000,35 @@ export class DesktopBackendRegistry {
     return result;
   }
 
+  /** Service revocation needs complete inventory, never navigation's cached
+   * or error-tolerant empty lists. A failed lookup must remain a failure. */
+  async isThreadActiveForService({ backend, threadId }: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<boolean> {
+    await this.subAgentStartupReconciliation;
+    this.assertNotBootstrap("isThreadActiveForService");
+    if (this.closed || (backend === "codex" && this.isCodexBootstrapDeferredFn())) {
+      throw new Error("Thread discovery is unavailable during startup or shutdown.");
+    }
+    const overlay = await this.overlayStore.getThreadOverlayState({ backend, threadId });
+    if (overlay?.archiveTombstonedAt !== undefined) return false;
+    if (isAcpBackendId(backend)) {
+      const session = this.acpBackend.getSession(backend, threadId);
+      return session !== undefined && session.archivedAt === undefined;
+    }
+    const diagnostics = { callerReason: "federation-services" };
+    const threads = await this.codexClient.listThreads({
+      archived: false, enrichDirectories: false, skipArchivedMetadataRefresh: true, requireComplete: true,
+    }, diagnostics);
+    if (threads.some((thread) => thread.id === threadId && thread.archivedAt === undefined)) return true;
+    if (!this.codexClient.listNativeSubAgentThreads) {
+      throw new Error("Complete descendant discovery is unavailable.");
+    }
+    const descendants = await this.codexClient.listNativeSubAgentThreads({ all: true, archived: false }, diagnostics);
+    return descendants.some((thread) => thread.id === threadId && thread.archivedAt === undefined);
+  }
+
   async listThreads(params: {
     archived?: boolean;
     backend?: AppServerBackendKind;

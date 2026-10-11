@@ -24,12 +24,12 @@ export function ThreadServices({ api, backend, threadId, instanceId, ownerLabel 
     const currentViewId = crypto.randomUUID();
     viewId.current = currentViewId;
     let alive = true;
-    let watching = false;
     let timer: ReturnType<typeof setTimeout>;
     const refresh = async (): Promise<void> => {
       try {
-        const result = await api({ action: watching ? "list" : "watch", viewId: currentViewId, backend, threadId, instanceId });
-        watching = true;
+        // Registration is idempotent. Re-establish it after runtime restarts,
+        // which clear watches and forwards without remounting this component.
+        const result = await api({ action: "watch", viewId: currentViewId, backend, threadId, instanceId });
         if (alive) { setState(result); setError(undefined); }
       } catch (cause) {
         if (alive) { setState({ services: [], forwards: [] }); setError(cause instanceof Error ? cause.message : "Services unavailable."); }

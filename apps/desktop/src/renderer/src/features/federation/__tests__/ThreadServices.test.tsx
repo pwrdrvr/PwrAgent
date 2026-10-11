@@ -1,10 +1,10 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import type { ServiceUiRequest, ServiceUiResponse, ThreadService } from "@pwragent/shared";
 import { ThreadServices } from "../ThreadServices";
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.useRealTimers(); });
 const service: ThreadService = {
   backend: "codex", threadId: "fixture-thread", serviceId: "fixture-service", ownerInstanceId: "fixture-owner",
   ownerSessionId: "fixture-session", address: "127.0.0.1", port: 3000, protocol: "http", name: "Preview app",
@@ -41,4 +41,29 @@ it("shows owner upgrade errors without offering a connection", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Services · 0" }));
   expect(await screen.findByRole("alert")).toHaveTextContent("Owner requires");
   expect(screen.queryByRole("button", { name: "Connect" })).not.toBeInTheDocument();
+});
+
+it("restores an invalidated watch after a runtime restart without reconnecting forwards", async () => {
+  vi.useFakeTimers();
+  let registered = false;
+  let state: ServiceUiResponse = { services: [service], forwards: [] };
+  const api = vi.fn(async (request: ServiceUiRequest): Promise<ServiceUiResponse> => {
+    if (request.action === "watch") registered = true;
+    if (!registered) throw new Error("Service viewer closed or changed thread.");
+    if (request.action === "connect") state = { ...state, forwards: [{ forwardId: "forward", service, localPort: 43210,
+      url: "http://127.0.0.1:43210/", sentBytes: 0, receivedBytes: 0 }] };
+    return state;
+  });
+  await act(async () => { render(<ThreadServices api={api} backend="codex" threadId="fixture-thread" instanceId="fixture-owner" />); });
+  fireEvent.click(screen.getByRole("button", { name: "Services · 1" }));
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Connect" })); });
+  expect(screen.getByRole("button", { name: "Disconnect" })).toBeInTheDocument();
+  // A runtime restart drops watches and forwards while the renderer stays mounted.
+  registered = false;
+  state = { services: [service], forwards: [] };
+  await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+  expect(screen.getByRole("button", { name: "Connect" })).toBeInTheDocument();
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  expect(api.mock.calls.map(([request]) => request.action)).toEqual(["watch", "connect", "watch"]);
+  expect(api.mock.calls[2]![0].viewId).toBe(api.mock.calls[0]![0].viewId);
 });

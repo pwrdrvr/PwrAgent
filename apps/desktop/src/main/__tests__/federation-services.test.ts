@@ -1,6 +1,6 @@
 import { createServer as createHttpsServer, get as httpsGet } from "node:https";
 import { serviceTlsFixture } from "./helpers/service-tls-fixture";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createServer as createHttpServer } from "node:http";
 import { createServer, connect, type Server, type AddressInfo } from "node:net";
 import { once } from "node:events";
@@ -28,6 +28,30 @@ function owner(options: { now?: () => number; threadExists?: (value: ServiceThre
   cleanups.push(() => service.dispose());
   return service;
 }
+
+it("retains advertisements and leases on failed lookups but revokes confirmed absent threads", async () => {
+  vi.useFakeTimers();
+  const threadExists = vi.fn(async () => true);
+  const service = owner({ threadExists });
+  try {
+    const declaration = await service.advertise(thread, { port: 3000, name: "Preview", protocol: "http" });
+    const { leaseId } = await service.lease("viewer", thread, declaration.serviceId);
+    threadExists.mockRejectedValue(new Error("Provider unavailable"));
+    await expect(service.list(thread)).rejects.toThrow("Provider unavailable");
+    await vi.advanceTimersByTimeAsync(1000); // Background reaping must retain it too.
+    expect(() => service.renew("viewer", leaseId)).not.toThrow();
+    threadExists.mockResolvedValue(true);
+    await expect(service.list(thread)).resolves.toEqual([declaration]);
+    threadExists.mockResolvedValue(false);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(() => service.renew("viewer", leaseId)).toThrow();
+    threadExists.mockResolvedValue(true);
+    await expect(service.list(thread)).resolves.toEqual([]);
+  } finally {
+    service.dispose();
+    vi.useRealTimers();
+  }
+});
 function routed(service: FederationServices, viaGateway: boolean) {
   const capabilities: FederationCapability[] = ["service_forward_v1", "gateway_relay"];
   const router = new FederationRouter({ localInstanceId: "owner", methodCapabilities: SERVICE_METHOD_CAPABILITIES,

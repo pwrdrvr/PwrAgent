@@ -301,6 +301,26 @@ function applyEventSubscription(params: {
 }
 
 describe("DesktopFederationRuntime", () => {
+  it("keeps repeated service watches intact and registers them again after stop", async () => {
+    const runtime = new DesktopFederationRuntime();
+    (runtime as unknown as RuntimeHarness).localInstanceId = "service-owner";
+    vi.spyOn(runtime, "threadServices").mockReturnValue({ list: async () => [] } as never);
+    const leave = vi.spyOn(runtime, "leaveThreadServices");
+    const watch = { action: "watch" as const, viewId: "mounted-view", backend: "codex" as const, threadId: "service-thread" };
+    try {
+      await runtime.threadServiceAction(1, watch);
+      await runtime.threadServiceAction(1, watch);
+      // Re-registering the same viewer must not tear down its active forwards.
+      expect(leave).toHaveBeenCalledTimes(1);
+      await runtime.stop();
+      await expect(runtime.threadServiceAction(1, { ...watch, action: "list" })).rejects.toThrow("Service viewer closed");
+      await expect(runtime.threadServiceAction(1, watch)).resolves.toEqual({ services: [], forwards: [] });
+      expect(leave).toHaveBeenCalledTimes(2);
+      await runtime.threadServiceAction(1, { ...watch, threadId: "different-thread" });
+      expect(leave).toHaveBeenCalledTimes(3);
+    } finally { await runtime.stop(); }
+  });
+
   it("runs incoming Agent and Token Miser changes through the owning registry", async () => {
     const agent = { name: "Manager", instructionLineCount: 0, instructionsTooLong: false, updatedAt: 1 };
     const setThreadAgent = vi.fn(async () => ({ agent }));
