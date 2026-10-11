@@ -55,7 +55,7 @@ export function readCodexEnvironmentActionRuns(
 }
 
 /**
- * The runs worth showing: for each action, every run still going plus only
+ * The runs worth showing: for each environment's action, every run still going plus only
  * its newest finished run. Re-running an action used to leave each earlier
  * result on screen until the operator dismissed them one by one, so coming
  * back to a thread meant clearing three stale "exited" rows to find the one
@@ -68,16 +68,21 @@ export function withoutSupersededCodexEnvironmentActionRuns(
   const newestFinishedByAction = new Map<string, CodexEnvironmentActionRun>();
   for (const run of runs) {
     if (run.status === "started") continue;
-    const newest = newestFinishedByAction.get(run.actionId);
+    const key = actionKey(run);
+    const newest = newestFinishedByAction.get(key);
     if (!newest || finishedAt(run) >= finishedAt(newest)) {
-      newestFinishedByAction.set(run.actionId, run);
+      newestFinishedByAction.set(key, run);
     }
   }
   return runs.filter(
     (run) =>
       run.status === "started"
-      || newestFinishedByAction.get(run.actionId) === run,
+      || newestFinishedByAction.get(actionKey(run)) === run,
   );
+}
+
+function actionKey(run: CodexEnvironmentActionRun): string {
+  return JSON.stringify([run.environmentId ?? "", run.actionId]);
 }
 
 function finishedAt(run: CodexEnvironmentActionRun): number {

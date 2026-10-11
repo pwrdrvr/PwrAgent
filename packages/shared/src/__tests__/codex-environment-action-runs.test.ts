@@ -167,6 +167,14 @@ describe("applyCodexEnvironmentActionRunUpdate", () => {
 describe("withoutSupersededCodexEnvironmentActionRuns", () => {
   const ids = (runs: CodexEnvironmentActionRun[]) => runs.map((run) => run.runId);
 
+  it("keeps results of identically named actions from different environments", () => {
+    const runs = [
+      { ...buildRun({ runId: "original", status: "exited", exitedAt: 2 }), environmentId: "original" },
+      { ...buildRun({ runId: "other", status: "exited", exitedAt: 3 }), environmentId: "other" },
+    ];
+    expect(ids(withoutSupersededCodexEnvironmentActionRuns(runs))).toEqual(["original", "other"]);
+  });
+
   it("keeps only the newest finished run of an action", () => {
     const runs = [
       buildRun({ runId: "old", status: "exited", startedAt: 1, exitedAt: 2 }),

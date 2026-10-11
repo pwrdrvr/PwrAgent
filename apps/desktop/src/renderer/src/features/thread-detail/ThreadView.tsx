@@ -1995,6 +1995,8 @@ export function ThreadView(props: ThreadViewProps) {
   }, [props.suppressBranchDriftDialog]);
   const selectedThreadSetupFailed =
     selectedThread?.codexEnvironmentRuntime?.setupStatus === "failed";
+  const selectedThreadEnvironmentId =
+    selectedThread?.codexEnvironmentRuntime?.environmentId;
   // The setup-failure dialog only surfaces during launchpad materialise
   // (messageCount === 0), where at most one auto-action runs. Look for
   // the most recent failed run in actionRuns to drive the action-phase
@@ -2004,7 +2006,10 @@ export function ThreadView(props: ThreadViewProps) {
   );
   const selectedThreadLatestFailedActionRun = [...selectedThreadActionRuns]
     .reverse()
-    .find((run) => run.status === "failed");
+    .find((run) =>
+      run.status === "failed"
+      && Boolean(selectedThreadEnvironmentId)
+      && (!run.environmentId || run.environmentId === selectedThreadEnvironmentId));
   const selectedThreadActionFailed = Boolean(selectedThreadLatestFailedActionRun);
   // `setupStatus: "failed"` and a failed action run are permanent history; the
   // prompt they raise is not. This is the record of the operator having
@@ -2184,8 +2189,6 @@ export function ThreadView(props: ThreadViewProps) {
   const selectedThreadProgressKey = selectedThread
     ? `thread:${selectedThread.source}:${selectedThread.id}`
     : undefined;
-  const selectedThreadEnvironmentId =
-    selectedThread?.codexEnvironmentRuntime?.environmentId;
   useEffect(() => {
     setLaunchpadSetupProgress((current) =>
       current

@@ -356,6 +356,9 @@ export type CodexEnvironmentActionRun = {
   /** Which configured action this is a run of (matches CodexEnvironmentAction.id). */
   actionId: string;
   actionName: string;
+  /** The environment this invocation started in, independent of later selections. */
+  environmentId?: string;
+  environmentName?: string;
   command: string;
   status: "started" | "exited" | "failed";
   pid?: number;
@@ -375,8 +378,9 @@ export type CodexEnvironmentActionRun = {
 };
 
 export type CodexThreadEnvironmentRuntime = {
-  environmentId: string;
-  environmentName: string;
+  /** Absent when no environment is selected but this thread retains action runs. */
+  environmentId?: string;
+  environmentName?: string;
   executionTarget: CodexEnvironmentExecutionTarget;
   selectedActionIdByEnvironmentId?: Record<string, string>;
   /**

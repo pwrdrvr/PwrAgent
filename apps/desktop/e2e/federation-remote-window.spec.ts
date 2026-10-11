@@ -2001,12 +2001,12 @@ test.describe("federation remote window", () => {
                 if (!child) return undefined;
                 const detail = await api.getNavigationSelectedDetail!({ protocol: 2, ref: child.ref });
                 const runtime = detail.thread?.codexEnvironmentRuntime;
-                return runtime && {
+                return runtime?.environmentId ? {
                   environmentId: runtime.environmentId,
                   setupDurationMs: runtime.setupDurationMs,
                   setupOutput: runtime.setupOutput?.slice(-2_000),
                   setupStatus: runtime.setupStatus,
-                };
+                } : undefined;
               },
               { parentThreadId: parent.threadId },
             );

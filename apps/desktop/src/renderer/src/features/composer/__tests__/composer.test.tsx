@@ -3043,6 +3043,37 @@ describe("Composer", () => {
     });
   });
 
+  it("shows No environment while retained action runs still expose logs and Stop", () => {
+    const onStopEnvActionRun = vi.fn();
+    const thread: NavigationThreadSummary = {
+      id: "thread-1", title: "Environment actions", titleSource: "explicit", source: "codex",
+      executionMode: "default", linkedDirectories: [], inbox: { inInbox: false },
+      codexEnvironmentRuntime: {
+        executionTarget: "local",
+        actionRuns: [{
+          runId: "retained-composer-action", actionId: "dev", actionName: "Dev", command: "pnpm dev",
+          environmentId: "original", environmentName: "Original", status: "started", startedAt: Date.now(),
+          output: "server ready", pid: 4242,
+        }],
+      },
+      codexEnvironmentOptions: [{
+        id: "original", name: "Original", sourcePath: "/fixture/environment.toml",
+        actions: [{ id: "dev", name: "Dev", command: "pnpm dev" }],
+      }],
+    };
+    render(<Composer backends={[backendSummary("codex")]} disabled={false} skills={[]}
+      thread={thread} onStopEnvActionRun={onStopEnvActionRun} />);
+
+    expect(screen.getByLabelText("Environment")).toHaveTextContent("No environment");
+    expect(screen.getByRole("button", { name: "Run" })).toBeDisabled();
+    const row = screen.getByLabelText("Env action running");
+    row.setAttribute("open", "");
+    expect(within(row).getByText(/Dev · Original/)).toBeInTheDocument();
+    expect(within(row).getByText("server ready")).toBeInTheDocument();
+    fireEvent.click(within(row).getByRole("button", { name: "Stop" }));
+    expect(onStopEnvActionRun).toHaveBeenCalledWith(thread.codexEnvironmentRuntime?.actionRuns?.[0], "stop");
+  });
+
   describe("environment selection in flight", () => {
     const buildEnvironmentThread = (
       codexEnvironmentRuntime?: NavigationThreadSummary["codexEnvironmentRuntime"],
