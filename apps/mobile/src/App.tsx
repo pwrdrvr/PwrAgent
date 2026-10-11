@@ -4,7 +4,7 @@ import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import * as Crypto from "expo-crypto";
 import { canonicalDurableTurnRequest, canonicalDurableSteerRequest } from "../../../packages/shared/src/durable-turn-request";
 import { mobileThreadKey, type MobileCredential, type MobilePage, type MobileSnapshot, type MobileThread } from "../../../packages/shared/src/mobile-gateway";
-import { Gateway } from "./gateway";
+import { createNativeWebSocket, Gateway } from "./gateway";
 import { Outbox, type OutboxEntry, type Receipt } from "./outbox";
 import { credentials, outboxStorage } from "./storage";
 import { LiveVoice } from "./live";
@@ -19,6 +19,7 @@ function Main() {
   const [credential, setCredential] = useState<MobileCredential>();
   const [status, setStatus] = useState("Offline");
   const [error, setError] = useState("");
+  const [connectionError, setConnectionError] = useState("");
   const [url, setUrl] = useState("");
   const [code, setCode] = useState("");
   const [demo, setDemo] = useState(false);
@@ -96,8 +97,7 @@ function Main() {
   }, []);
   useEffect(() => {
     if (!credential || demo) return;
-    // React Native supports the third WebSocket argument for native headers.
-    const client = new Gateway(credential, (endpoint, token) => new (WebSocket as unknown as { new(url: string, protocols: string[], options: { headers: Record<string, string> }): WebSocket })(endpoint, [], { headers: { Authorization: `Bearer ${token}` } }));
+    const client = new Gateway(credential, createNativeWebSocket);
     gateway.current = client;
     const live = new LiveVoice(client); voice.current = live;
     live.onStatus = setLiveStatus; live.onText = setLiveText;
@@ -118,6 +118,7 @@ function Main() {
       if (state === "Connected") { setError(""); update(); }
       else if (state !== "Connecting") void live.stop();
     };
+    client.onConnectionError = setConnectionError;
     client.onEvent = (event) => { live.event(event); if (event.event === "changed") update(); };
     client.connect();
     const lifecycle = AppState.addEventListener("change", (state) => {
@@ -160,6 +161,8 @@ function Main() {
   return <SafeAreaView style={s.safe}>
     <StatusBar barStyle="light-content" />
     <View style={s.header}><Text style={s.brand}>PWR<Text style={s.accent}>AGENT</Text></Text><Text style={s.caption}>{demo ? "DEMO · INVENTED DATA" : status.toUpperCase()}</Text></View>
+    {!!credential && !demo && <Text selectable style={s.connectionAddress}>{credential.url}</Text>}
+    {!!connectionError && !demo && !!credential && <Text accessibilityRole="alert" style={s.error}>{connectionError}</Text>}
     {!!error && <Text accessibilityRole="alert" style={s.error}>{error}</Text>}
     {licenses ? <ScrollView contentContainerStyle={s.transcript}><Button title="‹ Back" onPress={() => setLicenses(false)} /><Text style={s.title}>Open-source licenses</Text>{[...notices.packages, ...notices.native].map((notice, index) => <View key={index}><Text style={s.label}>{notice.name}</Text><Text selectable style={s.activity}>{notice.text}</Text></View>)}</ScrollView> : !credential && !demo ? <View key="pair" style={s.pair}>
       <Text style={s.hero}>Your threads.{"\n"}Every machine.</Text><Text style={s.subtitle}>Pair with your trusted PwrAgent gateway.</Text>
@@ -200,6 +203,7 @@ export default function App() { return <SafeAreaProvider><Main /></SafeAreaProvi
 const s = StyleSheet.create({
   safe: { flex: 1, backgroundColor: t.background }, flex: { flex: 1 }, header: { paddingHorizontal: 22, paddingVertical: 16, borderBottomWidth: 1, borderColor: t.border, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   brand: { color: t.text, fontSize: 18, fontWeight: "800", letterSpacing: 1 }, accent: { color: t.accent }, caption: { color: t.muted, fontSize: 10, fontWeight: "600", letterSpacing: 0.8 },
+  connectionAddress: { color: t.secondary, fontSize: 12, paddingHorizontal: 22, paddingVertical: 8 },
   pair: { padding: 24, gap: 14 }, hero: { color: t.text, fontSize: 34, fontWeight: "700", letterSpacing: -1 }, subtitle: { color: t.secondary, fontSize: 13, lineHeight: 20 }, label: { color: t.accent, fontSize: 10, fontWeight: "700", letterSpacing: 1.3, marginTop: 12, marginBottom: 6 },
   input: { color: t.text, backgroundColor: t.input, borderWidth: 1, borderColor: t.border, borderRadius: 8, padding: 14, fontSize: 16 }, button: { paddingHorizontal: 14, paddingVertical: 12, backgroundColor: t.elevated, borderRadius: 8, borderWidth: 1, borderColor: t.border }, buttonText: { color: t.accent, fontWeight: "600", fontSize: 14 }, disabled: { opacity: 0.4 },
   toolbar: { padding: 22, gap: 9 }, filters: { height: 60, flexGrow: 0, flexShrink: 0 }, filterContent: { paddingHorizontal: 22, gap: 8, alignItems: "center", paddingBottom: 8 }, row: { paddingHorizontal: 22, paddingVertical: 20, borderBottomWidth: 1, borderColor: t.border, gap: 7 }, rowTitle: { color: t.text, fontSize: 19, fontWeight: "600", lineHeight: 25 }, empty: { color: t.secondary, padding: 24 },
