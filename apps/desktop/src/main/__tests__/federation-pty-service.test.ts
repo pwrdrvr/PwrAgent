@@ -961,6 +961,35 @@ describe("Federation owner-thread read facade", () => {
     } finally { await service.disposeAll(); }
   });
 
+  it("revokes owner discovery and all output reads immediately on explicit close", async () => {
+    const { service, pty } = createHarness({ graceMs: 50 });
+    try {
+      const opened = await service.open("peer-a", OPEN_REQUEST);
+      pty.emitData("retained screen");
+      const context = { backend: "codex" as const, threadId: "thread-1" };
+      const reader = new TerminalOutputReader({
+        ownerInstanceId: () => "owner",
+        list: (ctx) => service.listForOwnerThread(ctx),
+        replay: (ctx, id) => service.outputForOwnerThread(ctx, id),
+        snapshot: (ctx, id) => service.snapshotForOwnerThread(ctx, id),
+      });
+      const address = { ownerInstanceId: "owner", terminalId: opened.sessionId };
+      const page = await reader.read(context, { ...address, format: "plain", maxChars: 3 });
+      expect(page.hasMore).toBe(true);
+      vi.useFakeTimers();
+      service.close("peer-a", { sessionId: opened.sessionId });
+      expect(pty.killed).toBe(false);
+      expect((await reader.list(context)).terminals).toEqual([]);
+      expect(service.outputForOwnerThread(context, opened.sessionId)).toBeUndefined();
+      expect(await service.snapshotForOwnerThread(context, opened.sessionId)).toBeUndefined();
+      await expect(reader.read(context, { ...address, format: "raw" })).rejects.toThrow("scope");
+      await expect(reader.read(context, { ...address, format: "plain", cursor: page.nextCursor! })).rejects.toThrow("scope");
+      await vi.advanceTimersByTimeAsync(51);
+      expect(pty.killed).toBe(true);
+      expect(pty.written).toEqual([]);
+    } finally { vi.useRealTimers(); await service.disposeAll(); }
+  });
+
   it("does not cancel disconnect reaping, ack output or extend terminal lifetime", async () => {
     const { service, pty, sent } = createHarness({ graceMs: 50 });
     try {
