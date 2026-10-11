@@ -2392,10 +2392,7 @@ export class DesktopFederationRuntime {
     this.services ??= new FederationServices({
       instanceId: this.ensureLocalInstanceId(),
       blockedPorts: () => [getDesktopSettingsService().readFederationConfig().listenPort ?? 47830],
-      threadExists: async ({ backend, threadId }) => {
-        const threads = await getDesktopBackendRegistry().listThreads({ backend, callerReason: "federation-services" });
-        return threads.some((thread) => thread.id === threadId && thread.archivedAt === undefined);
-      },
+      threadExists: async (thread) => await getDesktopBackendRegistry().isThreadActiveForService(thread),
     });
     return this.services;
   }
@@ -2409,7 +2406,10 @@ export class DesktopFederationRuntime {
     const thread = serviceThread(input);
     const instanceId = input.instanceId ?? this.ensureLocalInstanceId();
     const remote = instanceId !== this.ensureLocalInstanceId();
-    if (input.action === "watch") {
+    const previousView = this.serviceViews.get(windowId);
+    if (input.action === "watch" && (!previousView || previousView.viewId !== input.viewId
+      || previousView.instanceId !== instanceId || previousView.thread.backend !== thread.backend
+      || previousView.thread.threadId !== thread.threadId)) {
       this.leaveThreadServices(windowId);
       this.serviceViews.set(windowId, { viewId: input.viewId, instanceId, thread });
     }

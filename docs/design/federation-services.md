@@ -127,6 +127,11 @@ Implemented in `federation-services.ts` (owner),
 identity supplies the owner; a remote window keeps its selected thread's source
 instance rather than using the viewer's host. Window-scoped watch IDs prevent an
 in-flight Connect from creating a listener after navigation or window teardown.
+Inventory polling re-registers the same watch idempotently: a runtime restart
+restores discovery in mounted viewers, but never reconnects their forwards.
+Thread checks use complete provider inventory rather than the navigation cache.
+Lookup failures preserve advertisements and leases until their normal expiry;
+confirmed absence or archival revokes them.
 
 Start the checked-in fake-data HTTP/WebSocket demo on the owning instance:
 
