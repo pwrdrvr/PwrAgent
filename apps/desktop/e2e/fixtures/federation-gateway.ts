@@ -1,3 +1,5 @@
+import type { AdvertiseServiceArgs } from "@pwragent/shared";
+import { FederationServices, registerFederationServices, SERVICE_METHOD_CAPABILITIES } from "../../src/main/federation/federation-services";
 import { createHash, randomBytes } from "node:crypto";
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
@@ -164,6 +166,7 @@ export async function startInProcessFederationGateway(params: {
    * anywhere the Electron viewer can write.
    */
   remotePty?: { cwd: string };
+  threadServices?: Array<{ threadId: string; args: AdvertiseServiceArgs }>;
 }): Promise<InProcessFederationGateway> {
   const stateRoot = await mkdtemp(
     path.join(os.tmpdir(), "pwragent-e2e-federation-gateway-"),
@@ -571,10 +574,17 @@ export async function startInProcessFederationGateway(params: {
     methodCapabilities: {
       ...FEDERATION_BACKEND_METHOD_CAPABILITIES,
       ...FEDERATION_PTY_METHOD_CAPABILITIES,
+      ...SERVICE_METHOD_CAPABILITIES,
     },
     additionalRequiredCapabilities: additionalFederationBackendCapabilities,
   });
   registerFederationBackendHandlers({ router, backend });
+  const threadServices = new FederationServices({
+    instanceId: gatewayInstanceId,
+    threadExists: async ({ threadId }) => threads.some((thread) => thread.id === threadId),
+  });
+  registerFederationServices(router, threadServices);
+  for (const seed of params.threadServices ?? []) await threadServices.advertise({ backend: "codex", threadId: seed.threadId }, seed.args);
 
   let ptyService: FederationPtyService | undefined;
   if (params.remotePty) {
@@ -646,6 +656,7 @@ export async function startInProcessFederationGateway(params: {
         connectedPeerIds.delete(connection.peerId);
         router.unregisterConnection(connection.peerId);
         ptyService?.notifyPeerDisconnected(connection.peerId);
+        threadServices.disconnect(connection.peerId);
       },
       onEnvelope: (envelope, connection) => {
         void router.routeEnvelope({
@@ -746,6 +757,7 @@ export async function startInProcessFederationGateway(params: {
       await server.start();
     },
     close: async () => {
+      threadServices.dispose();
       ptyService?.disposeAll();
       await server.stop();
       stateDb.close();

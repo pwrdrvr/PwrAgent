@@ -1,4 +1,5 @@
 import { threadTodoThreadKey, parseRemoteOperatorItemKey } from "@pwragent/shared";
+import { ThreadServices } from "../federation/ThreadServices";
 import type { BackgroundTerminalsViewProps } from "./BackgroundTerminalsView";
 import type { AgentCommandsStatus } from "../../lib/useThreadSessionState";
 import { useEventCallback } from "../../lib/useEventCallback";
@@ -4455,6 +4456,8 @@ export function ThreadView(props: ThreadViewProps) {
         }
       : {};
 
+  const serviceTarget = selectedThread?.federation?.ref.target ?? props.activeFederationTarget;
+  const serviceInstanceId = serviceTarget?.scope === "remote" ? serviceTarget.instanceId : undefined;
   return (
     <section
       className={`thread-view${
@@ -4473,6 +4476,14 @@ export function ThreadView(props: ThreadViewProps) {
       }
     >
       {header}
+      {selectedThread && props.desktopApi?.threadServices ? <ThreadServices
+        key={`${serviceInstanceId ?? "local"}:${selectedThread.source}:${selectedThread.id}`}
+        api={props.desktopApi.threadServices}
+        backend={selectedThread.source}
+        threadId={selectedThread.id}
+        instanceId={serviceInstanceId}
+        ownerLabel={props.activeFederationOwnerLabel}
+      /> : null}
 
       {emptyView ? (
         <div className="thread-empty-state">
