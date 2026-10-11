@@ -10489,10 +10489,12 @@ export class DesktopBackendRegistry {
    * transcript, queue, and every listener record an interrupted turn with
    * the backend's own end time.
    *
-   * The requests go out together under one deadline. A turn that has not
-   * ended by then, or that started afterwards, keeps the shutdown stamp
-   * close() records. Runs once; close() waits for it too, so a close outside
-   * the quit sequence still asks before it kills.
+   * The requests go out together under one deadline, and the wait covers
+   * only the turns a backend was asked to stop: one no backend can stop has
+   * no terminal coming. A turn that has not ended by the deadline, that no
+   * backend could be asked to stop, or that started afterwards, keeps the
+   * shutdown stamp close() records. Runs once; close() waits for it too, so
+   * a close outside the quit sequence still asks before it kills.
    */
   stopRunningTurnsForShutdown(
     options: { timeoutMs?: number } = {},
@@ -10520,17 +10522,22 @@ export class DesktopBackendRegistry {
       timer = setTimeout(() => resolve("deadline"), Math.max(0, timeoutMs));
     });
     let unsubscribe: (() => void) | undefined;
+    // No backend could be asked to stop these, so no terminal is coming.
+    const unasked = new Set<string>();
+    let checkEnded = (): void => {};
     const ended = new Promise<void>((resolve) => {
-      const check = (): void => {
-        if (keys.every((key) => !this.activeTurnKeys.has(key))) {
+      checkEnded = () => {
+        if (keys.every((key) =>
+          unasked.has(key) || !this.activeTurnKeys.has(key)
+        )) {
           resolve();
         }
       };
-      unsubscribe = this.activeTurnKeys.onDelete(check);
-      check();
+      unsubscribe = this.activeTurnKeys.onDelete(checkEnded);
+      checkEnded();
     });
     const requests = { requested: 0, unsupported: 0, failed: 0 };
-    const sent = this.requestShutdownTurnStops(keys, requests);
+    const sent = this.requestShutdownTurnStops(keys, requests, unasked);
     // No backend could be asked, so no terminal is coming: skip the wait.
     const nothingSent = new Promise<"nothing-sent">((resolve) => {
       void sent.then(async () => {
@@ -10538,7 +10545,10 @@ export class DesktopBackendRegistry {
           // A turn that ended on its own meanwhile still reaches listeners.
           await Promise.all([...this.shutdownTerminalEmits]);
           resolve("nothing-sent");
+          return;
         }
+        // Only the turns a backend was asked to stop are worth waiting for.
+        checkEnded();
       });
     });
     try {
@@ -10576,36 +10586,46 @@ export class DesktopBackendRegistry {
 
   /**
    * Ask each backend to stop its turns, counting each request's outcome as it
-   * answers. The caller's deadline, not these requests, bounds the wait.
+   * answers and adding each turn no backend could be asked to `unasked`. The
+   * caller's deadline, not these requests, bounds the wait.
    */
   private async requestShutdownTurnStops(
     keys: string[],
     counts: Record<"requested" | "unsupported" | "failed", number>,
+    unasked: Set<string>,
   ): Promise<void> {
-    const cancelledAcpSessions = new Set<string>();
-    // One session/cancel stops whatever the session is running.
+    const acpSessionCancels = new Map<string, Promise<boolean>>();
+    // One session/cancel stops whatever the session is running. Each answer
+    // is counted once, by the turn that sent it.
     const cancelAcpSession = async (
       backend: AcpBackendId,
       sessionId: string,
-    ): Promise<void> => {
+    ): Promise<boolean> => {
       const session = buildThreadIdentityKey(backend, sessionId);
-      if (cancelledAcpSessions.has(session)) {
-        return;
+      const pending = acpSessionCancels.get(session);
+      if (pending) {
+        // A failed request leaves the deadline to decide, as below.
+        return await pending.catch(() => true);
       }
-      cancelledAcpSessions.add(session);
-      const sent = await this.acpBackend.cancelRunningSession(backend, sessionId);
+      const request = this.acpBackend.cancelRunningSession(backend, sessionId);
+      acpSessionCancels.set(session, request);
+      const sent = await request;
       counts[sent ? "requested" : "unsupported"] += 1;
+      return sent;
     };
     let codexInterruptSupported: Promise<boolean> | undefined;
     await Promise.all(keys.map(async (key) => {
       const turn = parseActiveTurnKey(key);
       if (!turn) {
         counts.unsupported += 1;
+        unasked.add(key);
         return;
       }
       try {
         if (isAcpBackendId(turn.backend)) {
-          await cancelAcpSession(turn.backend, turn.threadId);
+          if (!(await cancelAcpSession(turn.backend, turn.threadId))) {
+            unasked.add(key);
+          }
           return;
         }
         // interruptTurn reaches an ACP review through getClientForSession,
@@ -10616,7 +10636,9 @@ export class DesktopBackendRegistry {
           turnId: turn.turnId,
         });
         if (review && isAcpBackendId(review.backend)) {
-          await cancelAcpSession(review.backend, review.reviewThreadId);
+          if (!(await cancelAcpSession(review.backend, review.reviewThreadId))) {
+            unasked.add(key);
+          }
           return;
         }
         codexInterruptSupported ??= this.codexClient
@@ -10626,6 +10648,7 @@ export class DesktopBackendRegistry {
           );
         if (!(await codexInterruptSupported)) {
           counts.unsupported += 1;
+          unasked.add(key);
           return;
         }
         await this.interruptTurn(turn);
