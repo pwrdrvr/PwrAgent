@@ -67,8 +67,10 @@ export function sanitizer(secrets = []) {
   return redact;
 }
 export function assertReady(backend, settings, input, runtime) {
+  if (settings.configError) throw new Error("PwrAgent config parse failed");
+  if (settings.federation?.mode?.value !== "disabled") throw new Error("Federation must be disabled");
   if (!backend?.available || !backend.capabilities?.startTurn || !backend.capabilities?.interruptTurn) throw new Error("Codex backend unavailable or unsupported protocol");
-  if (backend.account?.requiresOpenaiAuth || !backend.account?.type) throw new Error("Codex authentication unavailable");
+  if (!backend.account?.type) throw new Error("Codex authentication unavailable");
   const model = backend.launchpadOptions?.models?.find((m) => m.id === input.model);
   if (!model?.reasoningEfforts?.includes(input.reasoningEffort)) throw new Error("Exact model/effort missing from live provider catalog");
   const managed = settings.runtime?.tokenMiser?.managedCodex;
@@ -85,10 +87,39 @@ export function terminalEvent(event, threadId, turnId) {
   if (method === "turn/interrupted") return "cancelled";
   return undefined;
 }
-export function observedBudget(lines = []) {
+export function observedBudget(lines = [], summaries) {
+  if (summaries?.length) return { costUsd: summaries.reduce((n, s) => n + s.totalCostMicros, 0) / 1e6, tokens: summaries.reduce((n, s) => n + s.totalTokens, 0), unpriced: summaries.some((s) => s.unpricedUsageLineCount > 0) };
+  lines = lines.filter((line) => line.status !== "superseded");
   // The IPC ledger has one row per usage identity, updated in place. Never add
   // successive snapshots (or cumulative* fields) together.
   return { costUsd: lines.reduce((n, l) => n + (l.totalCostMicros ?? 0), 0) / 1e6,
     tokens: lines.reduce((n, l) => n + (l.totalTokens ?? 0), 0),
     unpriced: lines.some((l) => l.priceStatus !== "priced") };
+}
+
+export function budgetStop(input, observed) {
+  if (input.maxObservedCostUsd && observed.unpriced) return "unpriced_usage";
+  if ((input.maxObservedCostUsd && observed.costUsd >= input.maxObservedCostUsd)
+    || (input.maxObservedTokens && observed.tokens >= input.maxObservedTokens)) return "budget_exceeded";
+  return undefined;
+}
+
+/** Provider-independent wait logic; the driver supplies only real IPC calls. */
+export async function waitForOutcome({ threadId, turnId, drain, read, onEvent, onUsage, stop, pause }) {
+  for (;;) {
+    if (stop()) return stop();
+    let terminal;
+    for (const event of await drain()) {
+      onEvent(event);
+      terminal ??= terminalEvent(event, threadId, turnId);
+      if (event.notification?.params?.threadId === threadId && /requestApproval|requestUserInput|elicitation/.test(event.notification.method)) return "input_required";
+    }
+    const view = await read();
+    if (view.pendingRequest) return "input_required";
+    const budget = await onUsage(view);
+    if (budget) return budget;
+    if (stop()) return stop();
+    if (terminal) return terminal;
+    await pause();
+  }
 }
