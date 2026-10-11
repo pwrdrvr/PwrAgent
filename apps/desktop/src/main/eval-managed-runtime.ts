@@ -4,7 +4,6 @@ import { access, readFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { ManagedCodexRuntime } from "./codex-managed-runtime";
 
 const execFileAsync = promisify(execFile);
 
@@ -12,7 +11,7 @@ const execFileAsync = promisify(execFile);
 export async function readEvalManagedRuntime(
   isPackaged: boolean,
   env: NodeJS.ProcessEnv = process.env,
-): Promise<ManagedCodexRuntime | undefined> {
+) {
   const manifestPath = env.PWRAGENT_DEV_EVAL_RUNTIME_MANIFEST;
   if (!manifestPath) return undefined;
   if (isPackaged) throw new Error("Eval runtime manifests require an unpackaged application");
@@ -47,7 +46,7 @@ export async function readEvalManagedRuntime(
     metadata: {
       asset: "eval-pinned-bundle",
       repository: "pwrdrvr/codex",
-      schemaVersion: 1,
+      schemaVersion: 1 as const,
       tag: manifest.version,
       version: manifest.version,
       sha256: manifest.sha256!.codex,
