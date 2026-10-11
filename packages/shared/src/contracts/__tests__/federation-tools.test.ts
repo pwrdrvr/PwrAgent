@@ -11,6 +11,9 @@ import {
 describe("federation tool contracts", () => {
   it("defines the federation tool operations", () => {
     expect(PWRAGENT_FEDERATION_OPERATION_NAMES).toEqual([
+      "advertise_service",
+      "list_services",
+      "remove_service",
       "list_federation_instances",
       "list_instance_projects",
       "create_instance_thread",

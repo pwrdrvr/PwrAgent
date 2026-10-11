@@ -99,7 +99,7 @@ function descriptionForOperation(
 ): string {
   switch (operation) {
     case "advertise_service":
-      return "Declare a service running on this thread's owning machine. Records a named literal loopback port, protocol, and expiry only; never starts forwarding, changes firewall rules, or enrolls peers. Users see it in the thread Services list and choose Connect and Open. HTTP/WebSockets and raw TCP are supported; HTTPS passes through without terminating TLS. Absolute URLs, HMR origins, CORS and cookies must be configured by the app for the viewer's assigned loopback port. Remove when stopped. No credentials in name or description.";
+      return "Declare a service running on this thread's owning machine. Records a named literal loopback port, protocol, and expiry only. Never starts forwarding, changes firewall rules, or enrolls peers. Users see it in the thread Services list and choose Connect and Open. HTTP/WebSockets and raw TCP are supported. HTTPS passes through without terminating TLS. Configure the app's absolute URLs, HMR origins, CORS and cookies for the viewer's assigned loopback port. Remove when stopped. No credentials in name or description.";
     case "list_services":
       return "List this calling thread's service declarations on its owning instance, including expiry. Does not activate forwarding.";
     case "remove_service":
@@ -132,9 +132,9 @@ function inputSchemaForOperation(
           port: { type: "integer", minimum: 1024, maximum: 65535 },
           name: { type: "string", minLength: 1, maxLength: 80 },
           protocol: { type: "string", enum: ["http", "https", "tcp"] },
-          address: { type: "string", enum: ["127.0.0.1", "::1"], description: "Literal owner loopback; defaults to 127.0.0.1." },
+          address: { type: "string", enum: ["127.0.0.1", "::1"], description: "Literal owner loopback. Defaults to 127.0.0.1." },
           description: { type: "string", maxLength: 240 },
-          ttlSeconds: { type: "integer", minimum: 60, maximum: 86400, description: "Defaults to one hour; re-advertise the same endpoint to renew." },
+          ttlSeconds: { type: "integer", minimum: 60, maximum: 86400, description: "Defaults to one hour. Re-advertise the same endpoint to renew." },
         },
       };
     case "list_services":
