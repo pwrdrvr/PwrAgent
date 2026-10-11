@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // The same real Electron/preload IPC path as lib/live-app.ts, without UI input.
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -139,7 +139,7 @@ try {
       discoveryError: settings.models?.codex?.discovery?.error,
     };
     atomicJson(path.join(output, "readiness-pending.json"), redact(result.readiness));
-    if (backend?.available && backend.launchpadOptions?.models?.length && settings.runtime?.tokenMiser?.managedCodex?.state === "ready"
+    if (backend?.available && backend.account?.type && backend.launchpadOptions?.models?.length && settings.runtime?.tokenMiser?.managedCodex?.state === "ready"
       && (!input.tokenMiser || settings.runtime?.tokenMiser?.activation?.state === "active")) break;
     if (Date.now() > readyDeadline || stopReason) throw new Error("Backend readiness deadline exceeded");
     await new Promise((r) => setTimeout(r, 1000));
@@ -225,8 +225,24 @@ try {
       try {
         writeFileSync(path.join(output, "patch.diff"), redact(git(["diff", "--binary", result.baseCommit])), { mode: 0o600 });
         const untracked = git(["ls-files", "--others", "--exclude-standard", "-z"]);
-        // Preserve new files in a separate archive; do not mutate the task index.
-        if (untracked) execFileSync("tar", ["-C", input.cwd, "--null", "-T", "-", "-czf", path.join(output, "untracked.tar.gz")], { input: untracked });
+        // Sanitize new files before archiving; do not mutate the task index or
+        // dereference symlinks into auth/profile/verifier mounts.
+        if (untracked) {
+          const staging = mkdtempSync(path.join(output, ".export-"));
+          try {
+            for (const name of untracked.split("\0").filter(Boolean)) {
+              const target = path.resolve(staging, name);
+              if (!target.startsWith(staging + path.sep)) throw new Error("Unsafe artifact path");
+              const source = path.join(input.cwd, name);
+              const info = lstatSync(source);
+              mkdirSync(path.dirname(target), { recursive: true });
+              if (info.isSymbolicLink()) symlinkSync(redact(readlinkSync(source)), target);
+              else if (info.isFile()) writeFileSync(target, Buffer.from(redact(readFileSync(source).toString("latin1")), "latin1"), { mode: info.mode & 0o777 });
+              else throw new Error("Unsupported artifact file type");
+            }
+            execFileSync("tar", ["-C", staging, "--null", "-T", "-", "-czf", path.join(output, "untracked.tar.gz")], { input: untracked });
+          } finally { rmSync(staging, { recursive: true, force: true }); }
+        }
       } catch (error) { result.artifactError = redact(error.message); }
     }
     result.finishedAt = new Date().toISOString();

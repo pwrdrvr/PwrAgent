@@ -56,7 +56,9 @@ Input schema (unknown fields fail closed):
 Models are exactly `gpt-6.1-sol` or `gpt-6-astra`. `/testbed` or another absolute
 cwd is supported. Each arm uses a fresh task, profile and Codex home. Within a
 model pair only `tokenMiser` changes (and identifying paths/runId). Optional
-`preflightOnly: true` checks startup/auth/model catalog/gates with **no turn**.
+`preflightOnly: true` checks startup/auth/model catalog/gates, creates an empty
+thread to verify effective settings, and probes interrupt IPC with an impossible
+turn ID. It starts **no turn** and makes no model inference request.
 Use separate fresh directories for preflight and a subsequent paid run.
 
 ```sh
@@ -76,7 +78,10 @@ docker run --rm --init --cpus 2 --memory 6g --shm-size 512m \
 
 The underlying portable command is:
 `node apps/desktop/eval/run-headless.mjs --input /eval/input.json --output /eval/output`.
-It must run non-root inside Linux with DISPLAY (normally `xvfb-run -a`). Never
+It must run non-root inside Linux with DISPLAY (normally `xvfb-run -a`). If the
+read-only auth file is mode 0600, use `--user HOST_UID:HOST_GID` and make the
+empty writable mounts owned by that same identity; do not copy credentials or
+broaden the auth file permissions. Never
 use `--no-sandbox`. A host/container security policy that prevents Electron's
 sandbox is a failed prerequisite, not permission to disable it. Default Docker
 outbound network is permitted consistently in every arm; no host Docker socket,
