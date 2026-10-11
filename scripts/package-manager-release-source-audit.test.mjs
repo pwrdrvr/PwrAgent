@@ -55,9 +55,8 @@ describe("published source integrity", () => {
 
   it.each(["Casks/pwragent.rb", manifest])("blocks same-version hash and mutable URL drift in %s before planning installers", async (path) => {
     const checksum = path.endsWith(".rb") ? hashes[names[0]] : hashes[names[2]];
-    for (const contents of [files[path].replace(checksum, "f".repeat(64)), files[path].replace(checksum.toUpperCase(), "f".repeat(64)),
+    for (const contents of [files[path].replace(checksum, "f".repeat(64)),
       files[path].replace("releases/download/", "releases/latest/download/")]) {
-      if (contents === files[path]) continue;
       const api = fixture({ sources: { ...files, [path]: contents } });
       const plan = await buildPlan({ event: "schedule", ref: "refs/heads/main", logic: "test" }, api);
       expect(plan.audit.status).toBe("blocked");
@@ -116,7 +115,7 @@ describe("published source integrity", () => {
 
 describe("literal metadata parsing", () => {
   it("accepts cask whitespace/quotes and YAML reordered/inherited fields without executing their source", () => {
-    expect(caskMetadata(files["Casks/pwragent.rb"].replaceAll('"', "'").replace("arch arm:", "arch   arm:")).installers).toHaveLength(2);
+    expect(caskMetadata(files["Casks/pwragent.rb"].replaceAll("\"", "'").replace("arch arm:", "arch   arm:")).installers).toHaveLength(2);
     const yaml = `PackageIdentifier: '${PACKAGE_ID}'\r\nPackageVersion: "${version}" # stable\r\nArchitecture: x64\r\nInstallerUrl: ${release.assets[2].browser_download_url}\r\nInstallerSha256: ${hashes[names[2]]}\r\nInstallers:\r\n- Scope: machine\r\n- Scope: user\r\nManifestType: installer\r\n`;
     expect(wingetMetadata(yaml, PACKAGE_ID, version).installers.map((item) => item.scope)).toEqual(["machine", "user"]);
   });
@@ -135,7 +134,7 @@ describe("literal metadata parsing", () => {
 
   it("refuses dynamic/ambiguous cask metadata and YAML aliases", () => {
     expect(() => caskMetadata(files["Casks/pwragent.rb"].replace(`version "${version}"`, "version ENV.fetch('VERSION')"))).toThrow(/literal/);
-    expect(() => caskMetadata(files["Casks/pwragent.rb"].replace('arch arm:', 'arch arm: "arm64", arm:'))).toThrow(/literal/);
+    expect(() => caskMetadata(files["Casks/pwragent.rb"].replace("arch arm:", "arch arm: \"arm64\", arm:"))).toThrow(/literal/);
     expect(() => wingetMetadata(files[manifest].replace("Architecture: x64", "Architecture: *arch"), PACKAGE_ID, version)).toThrow(/scalar/);
   });
 });
@@ -146,8 +145,8 @@ describe("optional identity discovery and structured failures", () => {
       if (endpoint.startsWith("search/code")) return search([
         { path: "README.md" }, { path: "Casks/pwragent-beta.rb" }, { path: "Casks/unrelated.rb" }, { path: "manifests/o/Other/Agent/1.0/Other.Agent.locale.en-US.yaml" },
       ]);
-      if (endpoint.includes("/contents/Casks/pwragent-beta.rb")) return encode('homepage "https://pwragent.ai/"');
-      if (endpoint.includes("/contents/Casks/unrelated.rb")) return encode('homepage "https://unrelated.example/"');
+      if (endpoint.includes("/contents/Casks/pwragent-beta.rb")) return encode("homepage \"https://pwragent.ai/\"");
+      if (endpoint.includes("/contents/Casks/unrelated.rb")) return encode("homepage \"https://unrelated.example/\"");
       if (endpoint.includes("/contents/manifests/o/")) return encode("PackageName: PwrAgent\n");
     } });
     const audit = auditChannels(api, { discover: true });
@@ -160,7 +159,48 @@ describe("optional identity discovery and structured failures", () => {
 
   it("keeps structured drift evidence when rejecting an audit", () => {
     const audit = auditChannels(fixture({ sources: { ...files, "Casks/pwragent.rb": "unsupported" } }));
+    expect(audit.homebrew.comparison).toBe("unverifiable");
     try { requireCompleteAudit(audit); } catch (error) { expect(auditFailure(error)).toBe(audit); }
+  });
+
+  it("refuses generation and submission on source drift before any binary acquisition or remote writes", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "source-drift-cli-"));
+    dirs.push(dir);
+    const api = fixture({ sources: {
+      ...files, "Casks/pwragent.rb": files["Casks/pwragent.rb"].replace(hashes[names[0]], "f".repeat(64)),
+      [manifest]: files[manifest].replaceAll(hashes[names[2]], "f".repeat(64)),
+    } });
+    auditChannels(api);
+    const reads = Object.fromEntries(api.mock.calls.map(([endpoint], index) => {
+      if (endpoint.startsWith("search/")) {
+        const url = new URL(endpoint, "https://api.github.com/");
+        url.searchParams.set("per_page", "100");
+        url.searchParams.set("page", "1");
+        endpoint = url.pathname.slice(1) + url.search;
+      }
+      return [endpoint, api.mock.results[index].value];
+    }));
+    const preload = join(dir, "read-fixture.cjs");
+    await writeFile(preload, `const reads = ${JSON.stringify(reads)};
+const child = require("node:child_process");
+child.spawnSync = (command, args) => {
+  const endpoint = args[args.indexOf("--include") + 1];
+  if (command !== "gh" || !Object.hasOwn(reads, endpoint)) throw new Error("Unexpected acquisition or write");
+  const body = reads[endpoint];
+  const status = body === null ? 404 : 200;
+  return { status: status === 200 ? 0 : 1, stdout: "HTTP/2.0 " + status + "\\r\\n\\r\\n" + JSON.stringify(body) };
+};
+require("node:module").syncBuiltinESMExports();
+`);
+    await writeFile(join(dir, "audit.json"), JSON.stringify({ stable: { version } }));
+    const env = { ...process.env, GH_TOKEN: "fixture", DISTRIBUTION_READ_TOKEN: "fixture" };
+    const generate = spawnSync(process.execPath, ["--require", preload, resolve("scripts/package-manager-release.mjs"), "--out", dir], { env, encoding: "utf8" });
+    expect(generate.status).toBe(1);
+    expect(JSON.parse(generate.stdout).status).toBe("blocked");
+    const submit = spawnSync(process.execPath, ["--require", preload, resolve("scripts/submit-package-manager-release.mjs"), dir], { env, encoding: "utf8" });
+    expect(submit.status).toBe(1);
+    expect(submit.stderr).toMatch(/Channel audit blocked: .*checksum differs/);
+    expect(generate.stdout + generate.stderr + submit.stdout + submit.stderr).not.toContain("Unexpected acquisition or write");
   });
 
   it("writes JSON incomplete results for CLI/API failures and planner preflight, with no raw subprocess error", async () => {

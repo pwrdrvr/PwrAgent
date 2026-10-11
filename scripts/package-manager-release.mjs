@@ -351,7 +351,7 @@ export function auditChannels(api = ghJson, { families = ["homebrew", "winget"],
     ];
     for (const repo of repos) {
       const matches = new Map();
-      for (const term of ["PwrAgent", '"pwragent.ai"']) {
+      for (const term of ["PwrAgent", "\"pwragent.ai\""]) {
         for (const item of completeSearchItems(api(`search/code?per_page=100&q=${encodeURIComponent(`repo:${repo} ${term}`)}`))) {
           if (typeof item.path !== "string") throw new Error("Incomplete package identity search: missing source path");
           matches.set(item.path, item);
@@ -372,7 +372,8 @@ export function auditChannels(api = ghJson, { families = ["homebrew", "winget"],
   for (const [family, channel] of [["homebrew", homebrew], ["winget", winget]]) {
     channel.status = !families.includes(family) ? "not-checked"
       : findings.some((item) => item.channel === family) ? "blocked" : "complete";
-    channel.comparison = !channel.version ? "not-published-at-known-path"
+    channel.comparison = !families.includes(family) ? "not-checked"
+      : !channel.version ? channel.status === "blocked" ? "unverifiable" : "not-published-at-known-path"
       : compareVersions(channel.version, version) === 0 ? "matches-github-latest"
         : compareVersions(channel.version, version) < 0 ? "behind-github-latest" : "ahead-of-github-latest";
   }
