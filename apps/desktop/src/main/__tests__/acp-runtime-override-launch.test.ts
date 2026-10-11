@@ -42,6 +42,7 @@ const describeExecutableAcp = process.platform === "win32"
   : describe;
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   for (const tempDir of tempDirs.splice(0)) {
     rmSync(tempDir, { recursive: true, force: true });
   }
@@ -56,7 +57,7 @@ describeExecutableAcp("ACP runtime path overrides", () => {
         rootDir: tempDir,
         registryId,
       });
-      const env = fixtureDiscoveryEnv(fixture);
+      const env = useFixturePath(fixture);
       const stateDb = openInMemoryStateDb();
       const agentStore = new AcpAgentStore(stateDb);
       const sessionStore = new AcpSessionStore(stateDb);
@@ -185,7 +186,7 @@ describeExecutableAcp("ACP runtime path overrides", () => {
       registryId: "grok",
       suffix: "second",
     });
-    const env = fixtureDiscoveryEnv(first);
+    const env = useFixturePath(first);
     const stateDb = openInMemoryStateDb();
     const agentStore = new AcpAgentStore(stateDb);
     const sessionStore = new AcpSessionStore(stateDb);
@@ -383,18 +384,24 @@ function expectInstancesInside(
   }
 }
 
-function fixtureDiscoveryEnv(
+/**
+ * The fixture `PATH` for discovery, also installed as this process's `PATH`
+ * for the test. The ACP transport launches agents from `process.env`, so the
+ * fixtures' `#!/usr/bin/env node` otherwise resolves through the operator's
+ * shell `PATH`: a version-manager shim there (mise, asdf) runs first and reads
+ * its config from the operator's home, and a broken one fails the launch.
+ */
+function useFixturePath(
   fixture: ExecutableAcpProviderFixture,
 ): NodeJS.ProcessEnv {
-  return {
-    ...process.env,
-    PATH: [
-      path.dirname(fixture.defaultCommand),
-      path.dirname(process.execPath),
-      "/usr/bin",
-      "/bin",
-    ].join(path.delimiter),
-  };
+  const fixturePath = [
+    path.dirname(fixture.defaultCommand),
+    path.dirname(process.execPath),
+    "/usr/bin",
+    "/bin",
+  ].join(path.delimiter);
+  vi.stubEnv("PATH", fixturePath);
+  return { ...process.env, PATH: fixturePath };
 }
 
 function acpLaunchMarkers(fixture: ExecutableAcpProviderFixture) {

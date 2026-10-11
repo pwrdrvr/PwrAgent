@@ -18,14 +18,23 @@
 // guard against a future reader resolving into `~/.config` and
 // `~/.local/state`. A guard nothing asserts on is one config edit from being
 // dropped, which is the case this file exists for.
+//
+// `PATH` is sandboxed on every project, not just the desktop ones: the running
+// Node first, then the repository's own pnpm bin directories, and no other
+// entry inside the operator's home, where version-manager shims and personal
+// bin directories live.
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import workspaceConfig from "../../../../../vitest.workspace";
 import { isPathWithin } from "../../shared/path-within";
 import { PWRAGENT_HOME_ENV, resolvePwragentRoot } from "../profile";
 
 const GUARDED_PROJECTS = ["desktop-main", "desktop-renderer"];
+const PATH_SANDBOXED_PROJECTS = ["messaging", "shared", ...GUARDED_PROJECTS];
+const POSIX_SYSTEM_PATH = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"];
+const REPOSITORY_ROOT = fileURLToPath(new URL("../../../../../", import.meta.url));
 const GUARDED_ENV_VARS = [
   PWRAGENT_HOME_ENV,
   "XDG_CONFIG_HOME",
@@ -80,6 +89,43 @@ describe("disposable PWRAGENT_HOME", () => {
     },
   );
 });
+
+describe("sandboxed PATH", () => {
+  it("resolves this worker's executables from the running Node and outside the operator's home", () => {
+    expectSandboxedPath(process.env.PATH ?? "");
+  });
+
+  it.each(PATH_SANDBOXED_PROJECTS)(
+    "declares a sandboxed PATH for the %s project",
+    (name) => {
+      const env = findProject(name)?.test?.env ?? {};
+      const key = Object.keys(env).find((variable) => variable.toUpperCase() === "PATH");
+
+      expect(key).toBeDefined();
+      expectSandboxedPath(env[key ?? ""] ?? "");
+    },
+  );
+});
+
+function expectSandboxedPath(searchPath: string): void {
+  const nodeDirectory = path.dirname(process.execPath);
+  const [first, ...rest] = searchPath.split(path.delimiter);
+  const outsideRepository = rest.filter((entry) => !isAtOrWithin(REPOSITORY_ROOT, entry));
+
+  expect(first).toBe(nodeDirectory);
+  expect(outsideRepository.filter((entry) => isAtOrWithin(os.homedir(), entry))).toEqual([]);
+  if (process.platform !== "win32") {
+    expect(outsideRepository).toEqual(POSIX_SYSTEM_PATH.filter((entry) => entry !== nodeDirectory));
+  }
+}
+
+/** The config's own containment rule: the root counts, and Windows ignores case. */
+function isAtOrWithin(root: string, entry: string): boolean {
+  const fold = (value: string) => (process.platform === "win32" ? value.toLowerCase() : value);
+  const resolvedRoot = fold(path.resolve(root));
+  const resolvedEntry = fold(path.resolve(entry));
+  return resolvedEntry === resolvedRoot || isPathWithin(resolvedRoot, resolvedEntry);
+}
 
 function findProject(name: string): ConfiguredProject | undefined {
   const projects = (workspaceConfig.test?.projects ?? []) as unknown[];

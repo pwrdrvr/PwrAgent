@@ -401,11 +401,15 @@ describe("directory enrichment invalidation", () => {
     expect(git).toHaveBeenCalledTimes(2);
   });
 
-  it("shares one Git worktree inventory across 216 cold sibling checkouts", async () => {
+  it("shares one Git worktree inventory across cold sibling checkouts", async () => {
     const generation = fixtureGeneration;
     const fixtureRoot = root;
     const fixtureRepo = repo;
-    const worktrees = Array.from({ length: 216 }, (_, index) => path.join(fixtureRoot, `linked-${index}`));
+    // Two full mapper batches of 8 and a partial third: the first coalesces
+    // pending discoveries, the later ones reuse the settled inventory. Each
+    // sibling costs one combined discovery, so the count only scales the sum
+    // (#2085 reported 216 siblings: 648 commands before the fix, 217 after).
+    const worktrees = Array.from({ length: 17 }, (_, index) => path.join(fixtureRoot, `linked-${index}`));
     for (const [index, cwd] of worktrees.entries()) {
       if (generation !== fixtureGeneration) return;
       const admin = path.join(fixtureRepo, ".git", "worktrees", `${index}`);
@@ -434,7 +438,7 @@ describe("directory enrichment invalidation", () => {
         }],
       }));
     }
-    expect(git).toHaveBeenCalledTimes(217);
+    expect(git).toHaveBeenCalledTimes(worktrees.length + 1);
     expect(git.mock.calls.filter(([, args]) => args.includes("--porcelain"))).toHaveLength(1);
   });
 

@@ -1,5 +1,6 @@
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
 // Windows CI runners are markedly slower at spawning child processes (git.exe,
@@ -55,10 +56,55 @@ const DISPOSABLE_XDG_ROOT = path.join(
 const DISPOSABLE_XDG_CONFIG_HOME = path.join(DISPOSABLE_XDG_ROOT, "config");
 const DISPOSABLE_XDG_STATE_HOME = path.join(DISPOSABLE_XDG_ROOT, "state");
 
+// The executable search path every project runs with. The operator's shell
+// PATH puts version-manager shims (mise, asdf, nvm, volta) and personal bin
+// directories first, so a test that launches `node`, or a fixture with a
+// `#!/usr/bin/env node` shebang, ran whatever those resolved to: a mise shim
+// read `~/.config/mise/config.toml`, and an unparseable one failed the
+// launch. PATH also reaches operator-authenticated tools such as `gh` and
+// `op`. The Node running the suite comes first, so `node` is always this
+// Node, followed by entries inside this repository: the `node_modules/.bin`
+// directories pnpm prepends, which hold the project's own pinned tools
+// (oxlint finds `tsgolint` there).
+//
+// POSIX keeps only the operating system's own directories after those; Git
+// and the Xcode tools the suite uses live there. Windows keeps every entry
+// outside the user's profile instead: Git for Windows and its MSYS tools are
+// installed system-wide in locations that vary by machine, and the code
+// finds `bash.exe` by those paths with PATH as the fallback.
+//
+// Windows spells the variable `Path`, and a threads worker's `process.env` is
+// case-sensitive there, so the sandbox replaces whichever key the host has.
+const PATH_KEY =
+  Object.keys(process.env).find((key) => key.toUpperCase() === "PATH")
+  ?? "PATH";
+const REPOSITORY_ROOT = path.dirname(fileURLToPath(import.meta.url));
+// Relative entries resolve against whatever directory a child runs in, so
+// none of them is kept.
+const HOST_PATH = (process.env[PATH_KEY] ?? "")
+  .split(path.delimiter)
+  .filter((entry) => path.isAbsolute(entry));
+const SANDBOX_PATH = [...new Set([
+  path.dirname(process.execPath),
+  ...HOST_PATH.filter((entry) => isWithin(REPOSITORY_ROOT, entry)),
+  ...(process.platform === "win32"
+    ? HOST_PATH.filter((entry) => !isWithin(os.homedir(), entry))
+    : ["/usr/bin", "/bin", "/usr/sbin", "/sbin"]),
+])].join(path.delimiter);
+const SANDBOX_ENV = { [PATH_KEY]: SANDBOX_PATH };
+
+function isWithin(parent: string, entry: string): boolean {
+  // Windows paths compare without case; POSIX paths are compared as written.
+  const fold = (value: string) => (process.platform === "win32" ? value.toLowerCase() : value);
+  const relative = path.relative(fold(path.resolve(parent)), fold(path.resolve(entry)));
+  return !relative.startsWith("..") && !path.isAbsolute(relative);
+}
+
 // Seeded on every desktop project so the root and the XDG homes always move
 // together; a test that overrides one and forgets the others is the bug this
 // pairing exists to prevent.
 const DISPOSABLE_DESKTOP_ENV = {
+  ...SANDBOX_ENV,
   PWRAGENT_HOME: DISPOSABLE_PWRAGENT_HOME,
   XDG_CONFIG_HOME: DISPOSABLE_XDG_CONFIG_HOME,
   XDG_STATE_HOME: DISPOSABLE_XDG_STATE_HOME,
@@ -70,6 +116,7 @@ export default defineConfig({
       {
         test: {
           name: "messaging",
+          env: SANDBOX_ENV,
           // Vitest 4 defaults to forks, which execs a fresh Node process for
           // every test file. With hundreds of files and many concurrent
           // worktrees, that executable churn overwhelms macOS provenance
@@ -85,6 +132,7 @@ export default defineConfig({
       {
         test: {
           name: "shared",
+          env: SANDBOX_ENV,
           pool: "threads",
           globals: true,
           testTimeout: TEST_TIMEOUT_MS,

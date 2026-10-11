@@ -8716,6 +8716,7 @@ export class DesktopBackendRegistry {
     string,
     AppServerTurnInputItem[]
   >();
+  private readonly titleGenerationWork = new Set<Promise<void>>();
   private readonly turnInputAttachments = new Map<
     string,
     { input: AppServerTurnInputItem[] }
@@ -34109,6 +34110,40 @@ export class DesktopBackendRegistry {
     return this.archiveCleanupQueue.whenCheckpointPending();
   }
 
+  /**
+   * Resolves once no thread-title generation is in flight. Generation is
+   * fire-and-forget, so nothing a caller awaits says when the title has been
+   * applied. It reads the thread listing, which probes each workspace's
+   * `.codex/environments` on the host filesystem, so a test that counted
+   * event-loop turns instead raced that I/O. Loop because a finished
+   * generation can be followed by another; the bound is a runaway guard.
+   */
+  async whenThreadTitleGenerationSettledForTests(): Promise<void> {
+    for (let pass = 0; pass < 10; pass += 1) {
+      if (this.titleGenerationWork.size === 0) {
+        return;
+      }
+      await Promise.all([...this.titleGenerationWork]);
+    }
+  }
+
+  /**
+   * Resolves once no queued execution-mode change is being applied. Turn end
+   * applies the queue fire-and-forget, so nothing a caller awaits says when
+   * the codex call, overlay flip, and transition log have landed. Loop
+   * because one flush can be followed by another; the bound is a runaway
+   * guard.
+   */
+  async whenQueuedExecutionModeFlushesSettledForTests(): Promise<void> {
+    for (let pass = 0; pass < 10; pass += 1) {
+      const flushes = [...this.queuedExecutionModeFlushes.values()];
+      if (flushes.length === 0) {
+        return;
+      }
+      await Promise.allSettled(flushes);
+    }
+  }
+
   private isCodexThreadKnownMissing(threadId: string): boolean {
     return this.missingCodexThreadIds.has(threadId);
   }
@@ -34339,12 +34374,16 @@ export class DesktopBackendRegistry {
       token,
     });
 
-    void this.generateAndApplyThreadTitle({
+    const work = this.generateAndApplyThreadTitle({
       backend: params.backend,
       threadId: params.threadId,
       prompt,
       key,
       token,
+    });
+    this.titleGenerationWork.add(work);
+    void work.finally(() => {
+      this.titleGenerationWork.delete(work);
     });
   }
 

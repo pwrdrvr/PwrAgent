@@ -1280,6 +1280,24 @@ read the operator's real `~/.config` and `~/.local/state` — and a developer
 carrying pre-1.0 files then ran a different code path than CI on every
 `initializeAppState`. Set all three together when a suite needs its own roots.
 
+`PATH` is sandboxed on every project, including messaging and shared. The
+directory of the Node running the suite comes first, so `node` and a fixture's
+`#!/usr/bin/env node` shebang are always that Node. The repository's own
+`node_modules/.bin` directories that pnpm prepends come next; they hold the
+project's pinned tools, such as the `tsgolint` that typed oxlint runs. On POSIX
+only `/usr/bin`, `/bin`, `/usr/sbin` and `/sbin` follow; on Windows every entry
+outside the user's profile does, because Git for Windows lives in system
+locations that vary by machine. It exists because the operator's shell `PATH` starts with
+version-manager shims: a mise shim read `~/.config/mise/config.toml` on every
+ACP fixture launch, and an unparseable one failed the suite on one Mac only.
+It also keeps operator-authenticated tools such as `gh` and `op` out of reach.
+Production code that appends search directories for agent launches still
+does; the agent-CLI spawn guard covers what that can reach. A test that needs
+another tool should resolve it by absolute path, as the deploy-isolation test
+does with `npm_execpath`, or supply it, as the manual Git LFS validation test
+does, rather than widen the sandbox. `disposable-pwragent-home.test.ts` pins
+the sandbox for every project and in the running worker.
+
 **Whether.** [`src/test-setup/outbound-fetch-guard.ts`](src/test-setup/outbound-fetch-guard.ts)
 replaces `globalThis.fetch` and fails any test that makes a real outbound
 request. It hooks the global rather than taking an injected `fetch` per caller
