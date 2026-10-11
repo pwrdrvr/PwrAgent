@@ -17,6 +17,8 @@ import {
   type OpenPathResponse,
   type ReadMarkdownFileRequest,
   type ReadMarkdownFileResponse,
+  type ResolveTranscriptFilesRequest,
+  type ResolveTranscriptFilesResponse,
   type ReadMarkdownFileViewerSnapshotRequest,
   type ReadMarkdownFileViewerSnapshotResponse,
 } from "@pwragent/shared";
@@ -24,6 +26,7 @@ import {
   APPLICATIONS_READ_CHANNEL,
   APPLICATION_OPEN_CHANNEL,
   MARKDOWN_FILE_READ_CHANNEL,
+  TRANSCRIPT_FILES_RESOLVE_CHANNEL,
   MARKDOWN_FILE_VIEWER_OPEN_CHANNEL,
   MARKDOWN_FILE_VIEWER_SNAPSHOT_READ_CHANNEL,
   PATH_OPEN_CHANNEL,
@@ -38,6 +41,9 @@ import {
   showMarkdownFileViewerWindow,
 } from "../markdown-files-window";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
+import { getDesktopBackendRegistry } from "../app-server/backend-registry";
+import { resolveFilePullThread } from "../federation/federation-file-pull";
+import { resolveTranscriptFiles, transcriptThreadDirectories } from "../transcript-files";
 import { showSubAgentTranscriptWindow } from "../subagent-transcript-window";
 import {
   showThreadFromToolOutputIncidentExplorer,
@@ -164,6 +170,27 @@ async function readApplications(
 }
 
 export function registerApplicationIpcHandlers(): void {
+  ipcMain.removeHandler(TRANSCRIPT_FILES_RESOLVE_CHANNEL);
+  ipcMain.handle(
+    TRANSCRIPT_FILES_RESOLVE_CHANNEL,
+    async (_event, request: ResolveTranscriptFilesRequest): Promise<ResolveTranscriptFilesResponse> => {
+      try {
+        if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+          return await getDesktopFederationRuntime().resolveTranscriptFiles(request.federationTarget, request);
+        }
+        const thread = request.thread
+          ? await resolveFilePullThread(getDesktopBackendRegistry(), request.thread.backend, request.thread.threadId)
+          : undefined;
+        // A missing thread must not fall back to a viewer-supplied root.
+        if (request.thread && !thread) return { files: [] };
+        const directories = thread ? transcriptThreadDirectories(thread) : request.projectPath ? [request.projectPath] : [];
+        return await resolveTranscriptFiles(request, directories);
+      } catch {
+        // Offline/older peers leave code literal and never fall back to local stat.
+        return { files: [] };
+      }
+    },
+  );
   ipcMain.removeHandler(APPLICATIONS_READ_CHANNEL);
   ipcMain.handle(
     APPLICATIONS_READ_CHANNEL,
@@ -265,6 +292,7 @@ export function registerApplicationIpcHandlers(): void {
 }
 
 export function disposeApplicationIpcHandlers(): void {
+  ipcMain.removeHandler(TRANSCRIPT_FILES_RESOLVE_CHANNEL);
   ipcMain.removeHandler(APPLICATION_OPEN_CHANNEL);
   ipcMain.removeHandler(PATH_OPEN_CHANNEL);
   ipcMain.removeHandler(PATH_REVEAL_CHANNEL);

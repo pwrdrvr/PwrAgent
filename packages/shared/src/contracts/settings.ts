@@ -2376,6 +2376,26 @@ export type ReadMarkdownFileResponse = {
   error?: string;
 };
 
+/** Stat inline-code references on the filesystem that owns the thread. */
+export type ResolveTranscriptFilesRequest = {
+  references: string[];
+  thread?: ReadMarkdownFileRequest["thread"];
+  projectPath?: string;
+  federationTarget?: FederationTarget;
+};
+
+export type ResolvedTranscriptFile = {
+  reference: string;
+  path: string;
+  line?: number;
+  column?: number;
+  previewable: boolean;
+};
+
+export type ResolveTranscriptFilesResponse = {
+  files: ResolvedTranscriptFile[];
+};
+
 export type MarkdownFileViewerFile = {
   path: string;
   label: string;

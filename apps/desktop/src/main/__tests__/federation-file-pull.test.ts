@@ -25,7 +25,8 @@ describe("Federation file pull", () => {
     await writeFile(path.join(directory, "report.md"), "# Owner report\n");
     permissions = { filePull: true, filePullOutsideThreadDirectories: false };
     thread = { id: "owner-thread", source: "codex", linkedDirectories: [], projectKey: directory } as unknown as AppServerThreadSummary;
-    resolveThread.mockClear();
+    resolveThread.mockReset();
+    resolveThread.mockImplementation(async () => thread);
     reader = new FederationFilePullReader({ permissions: () => permissions, resolveThread });
   });
   afterEach(async () => { await rm(root, { recursive: true, force: true }); });
@@ -33,6 +34,81 @@ describe("Federation file pull", () => {
   it("reads an owner-resolved thread file without writing a copy", async () => {
     expect(await pull(path.join(directory, "report.md"))).toEqual({ path: path.join(directory, "report.md"), content: "# Owner report\n" });
     expect(resolveThread).toHaveBeenCalledWith("codex", "owner-thread");
+  });
+
+  it("hydrates inline files using the owner thread root and ignores viewer-supplied roots", async () => {
+    await writeFile(path.join(directory, "code.ts"), "fixture");
+    const outside = path.join(root, "outside.md");
+    await writeFile(outside, "outside");
+    await symlink(outside, path.join(directory, "escape.md"));
+    const request = { references: ["report.md:7", "code.ts", "missing.md", "../outside.md", "escape.md"], thread: identity, projectPath: root };
+    expect(await reader.resolveTranscript(request)).toEqual({ files: [
+      { reference: "report.md:7", path: path.join(directory, "report.md"), line: 7, previewable: true },
+      { reference: "code.ts", path: path.join(directory, "code.ts"), previewable: false },
+    ] });
+    permissions.filePull = false;
+    await expect(reader.resolveTranscript(request)).rejects.toThrow("disabled");
+    permissions.filePull = true;
+    thread = undefined;
+    await expect(reader.resolveTranscript(request)).rejects.toThrow("not found");
+    await expect(reader.resolveTranscript({ references: ["report.md"] })).rejects.toThrow("owning thread");
+  });
+
+  it("queues hydration behind active previews without exceeding the shared owner limit", async () => {
+    let resume: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => { resume = resolve; });
+    resolveThread.mockImplementation(async () => {
+      await gate;
+      return thread;
+    });
+    const previews = Promise.all(Array.from({ length: 4 }, () => pull(path.join(directory, "report.md"))));
+    expect(resolveThread).toHaveBeenCalledTimes(4);
+    const hydration = reader.resolveTranscript({ references: ["report.md"], thread: identity });
+    await Promise.resolve();
+    expect(resolveThread).toHaveBeenCalledTimes(4);
+    resume();
+    await previews;
+    expect(await hydration).toEqual({ files: [
+      { reference: "report.md", path: path.join(directory, "report.md"), previewable: true },
+    ] });
+    expect(resolveThread).toHaveBeenCalledTimes(5);
+  });
+
+  it("releases failed slots and drains queued hydration in arrival order", async () => {
+    let resume: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => { resume = resolve; });
+    const started: string[] = [];
+    resolveThread.mockImplementation(async (_backend?: string, threadId?: string) => {
+      started.push(threadId ?? "");
+      await gate;
+      if (threadId === "message-0") throw new Error("Owner lookup failed");
+      return thread;
+    });
+    const results = Promise.allSettled(Array.from({ length: 12 }, (_, index) => reader.resolveTranscript({
+      references: ["report.md"], thread: { ...identity, threadId: `message-${index}` },
+    })));
+    await vi.waitFor(() => expect(started).toHaveLength(4));
+    expect(started).toEqual(["message-0", "message-1", "message-2", "message-3"]);
+    resume();
+    const settled = await results;
+    expect(settled[0]).toMatchObject({ status: "rejected", reason: new Error("Owner lookup failed") });
+    expect(settled.slice(1).every((result) => result.status === "fulfilled" && result.value.files.length === 1)).toBe(true);
+    expect(started).toEqual(Array.from({ length: 12 }, (_, index) => `message-${index}`));
+  });
+
+  it("checks current permissions when a queued resolution acquires its slot", async () => {
+    let resume: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => { resume = resolve; });
+    resolveThread.mockImplementation(async () => { await gate; return thread; });
+    const active = Promise.allSettled(Array.from({ length: 4 }, () => reader.resolveTranscript({ references: ["report.md"], thread: identity })));
+    await vi.waitFor(() => expect(resolveThread).toHaveBeenCalledTimes(4));
+    const queued = reader.resolveTranscript({ references: ["report.md"], thread: identity });
+    const rejected = expect(queued).rejects.toThrow("File pull is disabled");
+    permissions.filePull = false;
+    resume();
+    await active;
+    await rejected;
+    expect(resolveThread).toHaveBeenCalledTimes(4);
   });
 
   it("previews JSON with the same owner permission and size checks", async () => {

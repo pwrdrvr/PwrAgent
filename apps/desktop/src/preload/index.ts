@@ -462,6 +462,8 @@ import type {
   OpenPathResponse,
   ReadMarkdownFileRequest,
   ReadMarkdownFileResponse,
+  ResolveTranscriptFilesRequest,
+  ResolveTranscriptFilesResponse,
   ReadMarkdownFileViewerSnapshotRequest,
   ReadMarkdownFileViewerSnapshotResponse,
   OpenDesktopPwrAgentProfileRequest,
@@ -742,6 +744,7 @@ import {
   APPLICATIONS_READ_CHANNEL,
   APPLICATION_OPEN_CHANNEL,
   MARKDOWN_FILE_READ_CHANNEL,
+  TRANSCRIPT_FILES_RESOLVE_CHANNEL,
   MARKDOWN_FILE_VIEWER_OPEN_CHANNEL,
   MARKDOWN_FILE_VIEWER_SNAPSHOT_CHANGED_CHANNEL,
   MARKDOWN_FILE_VIEWER_SNAPSHOT_READ_CHANNEL,
@@ -1808,6 +1811,10 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(PATH_REVEAL_CHANNEL, request),
   receivingFolder: async (request: ReceivingFolderRequest): Promise<ReceivingFolderResponse> =>
     await ipcRenderer.invoke(SETTINGS_RECEIVING_FOLDER_CHANNEL, request),
+  resolveTranscriptFiles: async (
+    request: ResolveTranscriptFilesRequest,
+  ): Promise<ResolveTranscriptFilesResponse> =>
+    await ipcRenderer.invoke(TRANSCRIPT_FILES_RESOLVE_CHANNEL, request),
   readMarkdownFile: async (
     request: ReadMarkdownFileRequest,
   ): Promise<ReadMarkdownFileResponse> =>
