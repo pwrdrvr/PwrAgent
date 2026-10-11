@@ -17,7 +17,7 @@ export function launchNative(executable, { record = false } = {}) {
         if (inputReply) { reject(new Error("input_busy")); return; }
         const timer = setTimeout(() => { inputReply = undefined; reject(new Error("fixture_input_timeout")); }, 1000);
         inputReply = result => { clearTimeout(timer); inputReply = undefined; resolve(result); };
-        child.stdin.write(JSON.stringify({ kind: "input", ...command }) + "\n");
+        child.stdin.write(JSON.stringify({ ...command, kind: "input" }) + "\n");
       });
     },
     async close() {

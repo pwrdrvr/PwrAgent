@@ -120,6 +120,10 @@ export class LiveWindowSession {
   }
 }
 function validCommand(c) {
+  const fields = { text: ["action", "text"], key: ["action", "key"], click: ["action", "x", "y"],
+    scroll: ["action", "lines"], motion: ["action", "enabled"] };
+  if (typeof c !== "object" || Array.isArray(c) || !Object.hasOwn(fields, c.action)
+    || !Object.keys(c).every(key => fields[c.action].includes(key))) return false;
   if (c.action === "text") return typeof c.text === "string" && Buffer.byteLength(c.text) > 0
     && Buffer.byteLength(c.text) <= 128 && !/[\x00-\x1f\x7f]/.test(c.text);
   if (c.action === "key") return c.key === "Backspace";
