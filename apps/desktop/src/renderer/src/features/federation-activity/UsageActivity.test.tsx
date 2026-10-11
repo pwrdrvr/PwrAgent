@@ -9,16 +9,26 @@ import { chooseSelectOption, selectListbox, selectOptionLabels } from "../../tes
 
 const HOUR = 3_600_000;
 
-afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
 function choosePeriod(label: string) {
   fireEvent.click(within(screen.getByRole("group", { name: "Period" })).getByRole("button", { name: label }));
 }
 
-function chooseCustomRange(from: string, to: string) {
+/**
+ * Fakes the timeouts before render, so the custom-range debounce can be run
+ * rather than raced; they still advance with real time, so waitFor works.
+ */
+function fakeDebounce() {
+  vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ["setTimeout", "clearTimeout"] });
+}
+
+/** Enters a custom range and runs its 400 ms debounce, so the read has started. */
+async function chooseCustomRange(from: string, to: string) {
   choosePeriod("Custom");
   fireEvent.change(screen.getByLabelText("From"), { target: { value: from } });
   fireEvent.change(screen.getByLabelText("To"), { target: { value: to } });
+  await act(async () => { await vi.advanceTimersByTimeAsync(400); });
 }
 
 const peers = (list: Array<{ id: string; label: string; status: string; profileName?: string }>) =>
@@ -526,8 +536,9 @@ it("filters and ranks threads without rereading or launching analysis", async ()
   const later = { ...usageFixture({ threadId: "other", usageLineId: "other", completedAt: at + HOUR, createdAt: at, startedAt: at, totalCostMicros: 900, inputTokens: 20, uncachedInputTokens: 10, cachedInputTokens: 10, outputTokens: 10 }), title: "Later thread" };
   const readUsageActivity = vi.fn(async () => ({ rows: [row, later], readAt: at, rateLimits: [], truncated: false }));
   const analyzeUsageActivity = vi.fn();
+  fakeDebounce();
   render(<UsageActivity desktopApi={{ readUsageActivity, analyzeUsageActivity }} />);
-  chooseCustomRange("2026-09-28T09:00", "2026-09-28T12:00");
+  await chooseCustomRange("2026-09-28T09:00", "2026-09-28T12:00");
   await waitFor(() => expect(readUsageActivity).toHaveBeenLastCalledWith(expect.objectContaining({ from: new Date(2026, 8, 28, 9).getTime() })));
   await screen.findByRole("button", { name: "Inspect Later thread" });
   const reads = readUsageActivity.mock.calls.length;
@@ -626,8 +637,9 @@ it("reads a monthly credit limit from its start, once more, within the 31-day bo
 /** Turns over a 9 AM–noon custom range, which charts as quarter-hour bars. */
 async function renderSlices(rows: ReturnType<typeof usageFixture>[], desktopApi: Record<string, unknown> = {}) {
   const readUsageActivity = vi.fn(async () => ({ rows, readAt: new Date(2026, 8, 28, 12).getTime(), rateLimits: [], truncated: false }));
+  fakeDebounce();
   render(<UsageActivity desktopApi={{ readUsageActivity, ...desktopApi }} />);
-  chooseCustomRange("2026-09-28T09:00", "2026-09-28T12:00");
+  await chooseCustomRange("2026-09-28T09:00", "2026-09-28T12:00");
   await waitFor(() => expect(readUsageActivity).toHaveBeenLastCalledWith(expect.objectContaining({ from: new Date(2026, 8, 28, 9).getTime() })));
   await screen.findAllByRole("button", { name: /^Inspect / });
   const plot = screen.getByRole("group", { name: "Filter threads by completion time" });
