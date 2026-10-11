@@ -54,8 +54,12 @@ for (const focus of ["focused empty", "focused draft", "unfocused"] as const) {
       await expect(editor).toBeFocused();
       if (focus === "focused draft") {
         await editor.fill("Keep this unsent draft");
-        await editor.press(process.platform === "darwin" ? "Meta+ArrowLeft" : "Home");
         await expect(editor).toHaveText("Keep this unsent draft");
+        // Set the caret through the editor's input handle; CDP's macOS
+        // navigation keys do not reliably move the native contenteditable caret.
+        await editor.evaluate((element) => {
+          (element as HTMLElement & { setSelectionRange: (start: number) => void }).setSelectionRange(0);
+        });
         await expect.poll(() => editor.evaluate(() => window.getSelection()?.anchorOffset)).toBe(0);
       }
       if (focus === "unfocused") {
