@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.2.0-prerelease.5 - 2026-10-11
+
+- Keyboard Shortcuts - Customize thread-action shortcuts in Settings. Rename threads inline, and undo local thread archiving without losing your place in the sidebar.
+- To-dos - Assign or change a card's target project directly from the card, making it clear where its actions will run.
+- File Previews - Existing filenames in inline code become preview or editor links, including remote files when the owning instance permits access.
+- Federation and Worktrees - Copied threads appear immediately in their destination project and retain their source branch when available. Project moves preserve worktree isolation and detach threads from their previous group.
+- Archive Cleanup - Fix worktrees being left behind after archiving persisted threads, while protecting shared and externally owned checkouts.
+- Running Actions - Keep logs and Stop controls available when changing or clearing an environment, rather than losing visibility into processes still running.
+- Messaging and Grok - Keep delivery receipts in their correct transcript position. Unsupported Grok builds now queue follow-ups normally instead of attempting steering and failing.
+
 ## v1.2.0-prerelease.4 - 2026-10-09
 
 - MCP Approvals - Allow a tool once or for the conversation, reducing repeated prompts while keeping permission scoped to that connection and tool.
