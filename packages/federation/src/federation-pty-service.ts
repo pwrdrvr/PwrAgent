@@ -326,7 +326,7 @@ export class FederationPtyService {
     const threadKey = `${context.backend}:${context.threadId}`;
     return [
       ...[...this.sessionsById.values()].filter((session) => session.backend === context.backend
-        && session.threadId === context.threadId).map((session) => this.summary(session)),
+        && session.reapReason !== "close" && session.threadId === context.threadId).map((session) => this.summary(session)),
       ...[...this.archived.values()].filter((record) => record.summary.threadKey === threadKey).map((record) => ({ ...record.summary })),
     ];
   }
@@ -334,7 +334,8 @@ export class FederationPtyService {
   outputForOwnerThread(context: { backend: AppServerBackendKind; threadId: string }, sessionId: string): Pick<TerminalReplay, "range" | "read" | "readPlain" | "snapshot"> | undefined {
     if (this.options.allowOpen?.() === false) return undefined;
     const session = this.sessionsById.get(sessionId);
-    return session?.backend === context.backend && session.threadId === context.threadId ? session.replay : undefined;
+    return session?.backend === context.backend && session.threadId === context.threadId
+      && session.reapReason !== "close" ? session.replay : undefined;
   }
 
   async snapshotForOwnerThread(context: { backend: AppServerBackendKind; threadId: string }, sessionId: string) {
