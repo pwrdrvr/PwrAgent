@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline";
 import { createReadStream } from "node:fs";
-import { EXIT, assertReady, atomicJson, claimRun, cleanEnvironment, configToml, observedBudget, sanitizer, budgetStop, waitForOutcome, validateInput } from "./lib/headless-contract.mjs";
+import { EXIT, assertReady, atomicJson, claimRun, cleanEnvironment, configToml, observedBudget, sanitizer, budgetStop, waitForOutcome, probeInterrupt, validateInput } from "./lib/headless-contract.mjs";
 
 const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = process.argv.slice(2);
@@ -144,14 +144,10 @@ try {
     if (Date.now() > readyDeadline || stopReason) throw new Error("Backend readiness deadline exceeded");
     await new Promise((r) => setTimeout(r, 1000));
   } while (true);
-  assertReady(backend, settings, input, runtime);
+  assertReady(backend, settings, input, runtime, { deferInterruptProbe: true });
   result.readiness = { backend: { serverName: backend.serverName, serverVersion: backend.serverVersion, methods: backend.methods, launchpadOptions: backend.launchpadOptions, tokenMiser: backend.tokenMiser }, runtime: settings.runtime, selectedCommand: settings.models.codex.discovery.selectedCommand };
-  atomicJson(path.join(output, "ready.json"), redact(result.readiness));
   if (stopReason) throw new Error("Stopped before dispatch");
-  if (input.preflightOnly) {
-    result.status = "completed";
-    result.preflightOnly = true;
-  } else {
+  {
     if (stopReason) throw new Error("Stopped before dispatch");
     const registered = await call("registerDirectoryFromDisk", { path: input.cwd, preferredBackend: "codex" });
     if (!registered.ok) throw new Error("Task directory registration failed");
@@ -166,6 +162,14 @@ try {
     const summary = (await call("listThreads", { backend: "codex" })).threads.find((entry) => entry.id === result.threadId);
     if (summary?.model !== input.model || summary.reasoningEffort !== input.reasoningEffort || summary.executionMode !== "full-access" || summary.fastMode === true) throw new Error("Effective thread model/effort/access mismatch");
     result.effectiveModelSettings = { model: summary.model, reasoningEffort: summary.reasoningEffort, serviceTier: summary.serviceTier, fastMode: summary.fastMode, executionMode: summary.executionMode };
+    result.readiness.interruptProbe = await probeInterrupt(call, result.threadId);
+    assertReady(backend, settings, input, runtime, { interruptVerified: result.readiness.interruptProbe.supported });
+    atomicJson(path.join(output, "ready.json"), redact(result.readiness));
+    if (input.preflightOnly) {
+      result.status = "completed";
+      result.preflightOnly = true;
+    } else {
+    if (stopReason) throw new Error("Stopped before dispatch");
     // This fsynced marker precedes the ONLY paid dispatch. Crash recovery does
     // not assume a missing IPC response means the provider did not spend.
     result.status = "incomplete";
@@ -201,6 +205,7 @@ try {
     result.tokenMiserUsage = await call("readTokenMiserUsage");
     result.answer = finalView.replay?.lastAssistantMessage;
     atomicJson(path.join(output, "thread.json"), redact(finalView));
+    }
   }
 } catch (error) {
   result.status = stopReason ?? (result.dispatchIntentAt ? "failed" : "preflight_failed");
@@ -208,7 +213,7 @@ try {
 } finally {
   clearTimeout(watchdog);
   if (app) {
-    if (result.status !== "completed" && result.threadId && call) await call("interruptTurn", { backend: "codex", threadId: result.threadId, ...(result.turnId ? { turnId: result.turnId } : {}) }).catch(() => undefined);
+    if (result.status !== "completed" && result.threadId && result.turnId && call) await call("interruptTurn", { backend: "codex", threadId: result.threadId, ...(result.turnId ? { turnId: result.turnId } : {}) }).catch(() => undefined);
     try { await deadlineCall(app.close(), 15_000); result.cleanup = "graceful"; }
     catch { app.process().kill("SIGKILL"); result.cleanup = "forced"; if (result.status === "completed") result.status = "failed"; }
   }
