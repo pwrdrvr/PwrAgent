@@ -529,6 +529,69 @@ describe("AppNoticeToast", () => {
     expect(stackDismiss).not.toHaveBeenCalled();
   });
 
+  it("resumes the countdown from what the bar had left, not from the start", () => {
+    vi.useFakeTimers();
+    const onDismiss = vi.fn();
+    const { container } = render(<AppNoticeToast notice={notice} onDismiss={onDismiss} />);
+
+    const toast = screen.getByRole("status");
+    const timer = () => container.querySelector(".app-notice-toast__timer");
+    act(() => {
+      vi.advanceTimersByTime(6_000);
+    });
+    fireEvent.mouseEnter(toast);
+    expect(timer()).toHaveAttribute("data-paused", "true");
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+    fireEvent.mouseLeave(toast);
+    expect(timer()).not.toHaveAttribute("data-paused");
+
+    act(() => {
+      vi.advanceTimersByTime(2_999);
+    });
+    expect(onDismiss).not.toHaveBeenCalled();
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  it("holds the bar while a checked Don't show again holds the toast", () => {
+    vi.useFakeTimers();
+    const { container } = render(
+      <AppNoticeToast
+        notice={{ ...notice, skillQuestionsWarning: true }}
+        onDismiss={vi.fn()}
+        onSuppressSkillQuestionsWarning={vi.fn(async () => true)}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Don't show again" }));
+    expect(container.querySelector(".app-notice-toast__timer")).toHaveAttribute("data-paused", "true");
+  });
+
+  it("gives a replacement notice in the same slot a full countdown and a new bar", () => {
+    vi.useFakeTimers();
+    const onDismiss = vi.fn();
+    const { container, rerender } = render(<AppNoticeToast notice={notice} onDismiss={onDismiss} />);
+    const firstBar = container.querySelector(".app-notice-toast__timer");
+    act(() => {
+      vi.advanceTimersByTime(6_000);
+    });
+
+    rerender(<AppNoticeToast notice={{ ...notice, id: "notice-2" }} onDismiss={onDismiss} />);
+    expect(container.querySelector(".app-notice-toast__timer")).not.toBe(firstBar);
+    act(() => {
+      vi.advanceTimersByTime(8_999);
+    });
+    expect(onDismiss).not.toHaveBeenCalled();
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
   it("starts a hover-paused countdown when repair progress flips to success", () => {
     vi.useFakeTimers();
     const onDismiss = vi.fn();
