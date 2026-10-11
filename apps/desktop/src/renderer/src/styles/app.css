@@ -45833,7 +45833,7 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
 }
 
 .thread-terminal-panel {
-  height: var(--integrated-terminal-height);
+  height: var(--integrated-terminal-height, 260px);
   min-height: 140px;
   flex: 0 0 auto;
   border-top: 1px solid var(--border-subtle);

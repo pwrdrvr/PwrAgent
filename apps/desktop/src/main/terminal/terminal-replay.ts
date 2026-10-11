@@ -1,6 +1,7 @@
 import { TerminalControlTail } from "./terminal-control-tail";
-import { Terminal } from "@xterm/headless";
-import { SerializeAddon } from "@xterm/addon-serialize";
+import headless from "@xterm/headless";
+import serialize from "@xterm/addon-serialize";
+import type { Terminal } from "@xterm/headless";
 import type { TerminalSnapshot } from "../../shared/integrated-terminal";
 import { clampTerminalColumns, clampTerminalRows } from "./pty-resize";
 
@@ -13,7 +14,7 @@ export type TerminalOutputFrame = { seq: number; timestamp: number; data: string
  * Never wire headless onData to a PTY: parsing output can generate replies. */
 export class TerminalReplay {
   private readonly terminal: Terminal;
-  private readonly serializer = new SerializeAddon();
+  private readonly serializer = new serialize.SerializeAddon();
   private queue: Promise<void> = Promise.resolve();
   private frames: TerminalOutputFrame[] = [];
   private rawChars = 0;
@@ -27,7 +28,9 @@ export class TerminalReplay {
   whenDrained(): Promise<void> { return this.queue; }
 
   constructor(cols: number, rows: number) {
-    this.terminal = new Terminal({
+    // Both packages ship CommonJS. Default imports also work in the externalized
+    // production ESM bundle; named imports only worked through Vitest's loader.
+    this.terminal = new headless.Terminal({
       cols: clampTerminalColumns(cols),
       rows: clampTerminalRows(rows),
       scrollback: 2_000,
