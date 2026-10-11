@@ -10044,6 +10044,7 @@ describe("Sidebar thread shortcuts", () => {
 
   it.each([
     { isComposing: true },
+    { keyCode: 229 },
     { repeat: true },
   ])("leaves focused editor events alone for %j", (flags) => {
     const onArchiveThread = vi.fn(async () => undefined);
