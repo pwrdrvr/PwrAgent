@@ -100,12 +100,12 @@ They do not prove production Federation credentials or billed OpenAI audio.
 - After the owner accepted Apple's updated agreement, an iPhone Release build
   succeeded using the existing Harold Hunt team. Its signature was verified and
   `main.jsbundle` is present, so that build does not require Metro.
-- Xcode now sees the owner's PwrDrvr LLC membership with provisioning access;
-  the project and Expo config select that company team. The company signing
-  attempt reports no registered test devices. Connect, unlock and trust the
-  iPhone with Developer Mode enabled so Xcode can register it, create the company
-  development profile and install the app. The phone was unavailable to the Mac
-  during verification. No account enrollment or store action was performed.
+- After the phone was connected, Xcode registered it with PwrDrvr LLC and the
+  company-signed iPhone Release build succeeded. Its signature and phone inclusion
+  in the development profile were verified. `devicectl` installed and launched
+  `com.pwrdrvr.pwragent.mobile` on the physical iPhone and confirmed the process
+  remained running. JavaScript is bundled; Metro is not required. The project
+  and Expo config select the company team. No enrollment or store action occurred.
 - Production gateway pairing/Federation from the phone, billed Live audio/tool
   execution, and an Android native build remain unverified. Live is implemented
   against the existing Codex realtime backend, with mocked signaling/lifecycle
