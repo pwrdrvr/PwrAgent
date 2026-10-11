@@ -131,10 +131,18 @@ try {
     const backends = await call("listBackends", { includeUnavailable: true, refreshModels: "codex", discoveryIntent: "settings-user-action" });
     backend = backends.backends.find((b) => b.kind === "codex");
     settings = await call("readSettings");
+    result.readiness = {
+      backend: backend && { available: backend.available, discoveryPending: backend.discoveryPending, unavailableReason: backend.unavailableReason, accountType: backend.account?.type, serverName: backend.serverName, serverVersion: backend.serverVersion, modelCount: backend.launchpadOptions?.models?.length, modelIds: backend.launchpadOptions?.models?.map((model) => model.id), capabilities: backend.capabilities, tokenMiser: backend.tokenMiser },
+      configError: settings.configError,
+      runtime: settings.runtime,
+      selectedCommand: settings.models?.codex?.discovery?.selectedCommand,
+      discoveryError: settings.models?.codex?.discovery?.error,
+    };
+    atomicJson(path.join(output, "readiness-pending.json"), redact(result.readiness));
     if (backend?.available && backend.launchpadOptions?.models?.length && settings.runtime?.tokenMiser?.managedCodex?.state === "ready"
       && (!input.tokenMiser || settings.runtime?.tokenMiser?.activation?.state === "active")) break;
     if (Date.now() > readyDeadline || stopReason) throw new Error("Backend readiness deadline exceeded");
-    await new Promise((r) => setTimeout(r, 250));
+    await new Promise((r) => setTimeout(r, 1000));
   } while (true);
   assertReady(backend, settings, input, runtime);
   result.readiness = { backend: { serverName: backend.serverName, serverVersion: backend.serverVersion, methods: backend.methods, launchpadOptions: backend.launchpadOptions, tokenMiser: backend.tokenMiser }, runtime: settings.runtime, selectedCommand: settings.models.codex.discovery.selectedCommand };
