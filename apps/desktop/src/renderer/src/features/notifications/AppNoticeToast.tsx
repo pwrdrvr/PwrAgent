@@ -87,10 +87,15 @@ export function AppNoticeToast(props: {
   const [suppressionSaving, setSuppressionSaving] = useState(false);
   const [suppressionError, setSuppressionError] = useState(false);
   const timeoutRef = useRef<number | undefined>(undefined);
+  // What the bar has left to drain. A pause stops the timer and freezes the
+  // bar's animation, so a resume must continue from here, not from 9s.
+  const remainingRef = useRef(AUTO_DISMISS_MS);
   const onDismissRef = useRef(props.onDismiss);
   const noticeId = props.notice?.id;
   const noticePresent = props.notice !== undefined;
   const autoDismiss = props.notice?.autoDismiss !== false;
+  // Every reason the timer is stopped also holds the bar where it is.
+  const countdownHeld = paused || suppressOnDismiss || suppressionSaving;
 
   useEffect(() => {
     onDismissRef.current = props.onDismiss;
@@ -101,6 +106,7 @@ export function AppNoticeToast(props: {
       window.clearTimeout(timeoutRef.current);
       timeoutRef.current = undefined;
     }
+    remainingRef.current = AUTO_DISMISS_MS;
     setPaused(false);
     setSuppressOnDismiss(false);
     setSuppressionSaving(false);
@@ -110,28 +116,32 @@ export function AppNoticeToast(props: {
   useEffect(() => {
     // A checked "Don't show again" waits for the operator to close the toast;
     // the timer must neither drop that choice nor apply it unasked.
-    if (
-      !noticePresent
-      || !autoDismiss
-      || paused
-      || suppressOnDismiss
-      || suppressionSaving
-    ) {
+    if (!noticePresent || !autoDismiss) {
+      // The bar unmounts, so a later countdown starts over with a fresh bar.
+      remainingRef.current = AUTO_DISMISS_MS;
+      return;
+    }
+    if (countdownHeld) {
       return;
     }
 
+    const startedAt = Date.now();
     timeoutRef.current = window.setTimeout(() => {
       timeoutRef.current = undefined;
       onDismissRef.current();
-    }, AUTO_DISMISS_MS);
+    }, remainingRef.current);
 
     return () => {
       if (timeoutRef.current) {
         window.clearTimeout(timeoutRef.current);
         timeoutRef.current = undefined;
       }
+      remainingRef.current = Math.max(
+        0,
+        remainingRef.current - (Date.now() - startedAt),
+      );
     };
-  }, [autoDismiss, noticeId, noticePresent, paused, suppressOnDismiss, suppressionSaving]);
+  }, [autoDismiss, countdownHeld, noticeId, noticePresent]);
 
   if (!props.notice) {
     return null;
@@ -364,9 +374,11 @@ export function AppNoticeToast(props: {
       ) : null}
       {autoDismiss ? (
         <span
+          // A new notice in this slot drains a new bar.
+          key={noticeId}
           className="app-notice-toast__timer"
           aria-hidden="true"
-          data-paused={paused ? "true" : undefined}
+          data-paused={countdownHeld ? "true" : undefined}
         />
       ) : null}
     </aside>

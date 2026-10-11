@@ -12,7 +12,7 @@ export const STORAGE_MAINTENANCE_AUTO_CLOSE_MS = 5_000;
 
 /**
  * The toast countdown, for a whole window: it runs once the job is over and
- * pauses while the pointer or keyboard focus is inside. Unlike the toast, a
+ * pauses while the pointer or keyboard focus is inside. As in the toast, a
  * resume continues from what is left, so the bar and the close land together.
  */
 function useAutoClose(active: boolean, paused: boolean, close: () => void) {
