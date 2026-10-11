@@ -21,7 +21,16 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import { afterAll, describe, expect, it, onTestFinished, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import {
   applyNavigationLaunchpadProviderSettingsPatch,
   buildFederatedThreadRef,
@@ -1950,6 +1959,7 @@ class MockBackendClient {
       invalidIdRecoveryBlockingTurns?: Array<{ threadId: string; turnId?: string }>;
       invalidIdRecoveryWaitsForAbort?: boolean;
       steerTurnError?: Error;
+      interruptEndsTurn?: boolean;
       setThreadPermissionsError?: Error;
       setThreadPermissionsDelay?: Promise<unknown>;
       startReviewResult?: {
@@ -2365,6 +2375,20 @@ class MockBackendClient {
   }): Promise<{ threadId: string; turnId: string }> {
     this.interruptTurnCallCount += 1;
     this.lastInterruptTurnParams = params;
+    // Codex answers turn/interrupt by ending the turn with status
+    // interrupted. Without that answer, close() waits out the whole
+    // shutdown-stop deadline for each turn a test leaves running. Tests that
+    // script their own terminal after the interrupt leave this off.
+    if (this.options.interruptEndsTurn) {
+      await this.emit({
+        method: "turn/completed",
+        params: {
+          threadId: params.threadId,
+          turnId: params.turnId,
+          turn: { id: params.turnId, status: "interrupted", output: [] },
+        },
+      } as never);
+    }
     return params;
   }
 
@@ -2845,7 +2869,9 @@ function createKimiAcpRegistry(options?: {
     ensureSession: vi.fn(async () => undefined),
     loadSession: vi.fn(async (): Promise<AppServerThreadReplay> => replay),
     refreshSession: vi.fn(async () => undefined),
-    cancelSession: vi.fn(),
+    cancelSession: vi.fn(async (sessionId: string) => {
+      answerAcpSessionCancel(registry, acpBackendId, sessionId);
+    }),
     readReplay: vi.fn((): AppServerThreadReplay => replay),
     setRuntimeOption: vi.fn(async (params: {
       sessionId: string;
@@ -2975,6 +3001,48 @@ async function callRegistryMcpTool(params: {
   });
 }
 
+/**
+ * Answer session/cancel the way an ACP agent does: the agent settles the
+ * session's running prompt with stopReason cancelled, which the adapter
+ * reports as turn/cancelled after the cancel notification has gone out.
+ * Without that answer, close() waits out the whole shutdown-stop deadline
+ * for each turn a test leaves running.
+ */
+function answerAcpSessionCancel(
+  registry: DesktopBackendRegistry,
+  backend: AcpBackendId,
+  sessionId: string,
+): void {
+  const internal = registry as unknown as {
+    activeTurnKeys: ReadonlySet<string>;
+    emit(event: AgentEvent): Promise<void>;
+  };
+  const prefix = `${backend}:${sessionId}:`;
+  const turnIds = [...internal.activeTurnKeys].flatMap((key) => {
+    const turnId = key.slice(prefix.length);
+    // Any other suffix belongs to a longer session id, such as a helper's.
+    return key.startsWith(prefix)
+      && (!turnId.includes(":") || turnId.startsWith("pending:"))
+      ? [turnId]
+      : [];
+  });
+  void Promise.resolve().then(async () => {
+    for (const turnId of turnIds) {
+      await internal.emit({
+        backend,
+        notification: {
+          method: "turn/cancelled",
+          params: {
+            threadId: sessionId,
+            turnId,
+            turn: { id: turnId, status: "cancelled", completedAt: Date.now() },
+          },
+        },
+      });
+    }
+  });
+}
+
 async function emitCompletedTurn(
   registry: DesktopBackendRegistry,
   backend: AppServerBackendKind,
@@ -3082,6 +3150,22 @@ function rememberCollapsedDirectoryWithPinnedThread(params: {
     unchanged: false,
   }));
 }
+
+// close() asks each running turn to stop and waits up to 2s for its terminal.
+// A fake that accepts the stop and never ends the turn costs every test that
+// leaves one running the whole deadline, which is how this file once grew
+// from 10s to 106s on CI. Answer the stop the way the backend does
+// (`answerAcpSessionCancel`, `interruptEndsTurn`).
+beforeEach(() => {
+  mainLoggerMock.warn.mockClear();
+});
+afterEach(() => {
+  expect(
+    mainLoggerMock.warn.mock.calls.filter(([message]) =>
+      message === "running turns still unanswered at the shutdown deadline"
+    ),
+  ).toEqual([]);
+});
 
 describe("DesktopBackendRegistry", () => {
   it("exports the authoritative handoff workspace while provider cwd synchronization is pending", async () => {
@@ -11648,7 +11732,9 @@ describe("DesktopBackendRegistry", () => {
       ensureSession: vi.fn(async () => undefined),
       loadSession: vi.fn(),
       refreshSession: vi.fn(async () => undefined),
-      cancelSession: vi.fn(),
+      cancelSession: vi.fn(async (sessionId: string) => {
+        answerAcpSessionCancel(registry, acpBackendId, sessionId);
+      }),
       readReplay: vi.fn((): AppServerThreadReplay => ({
         entries: [],
         messages: [],
@@ -15310,7 +15396,9 @@ script = "echo setup"
       ensureSession: vi.fn(async () => await ensureSession.promise),
       loadSession: vi.fn(),
       refreshSession: vi.fn(async () => undefined),
-      cancelSession: vi.fn(),
+      cancelSession: vi.fn(async (sessionId: string) => {
+        answerAcpSessionCancel(registry, acpBackendId, sessionId);
+      }),
       readReplay: vi.fn((): AppServerThreadReplay => ({
         entries: [],
         messages: [],
@@ -28471,7 +28559,9 @@ command = "pnpm dev"
       ensureSession: vi.fn(async () => undefined),
       loadSession: vi.fn(),
       refreshSession: vi.fn(async () => undefined),
-      cancelSession: vi.fn(),
+      cancelSession: vi.fn(async (sessionId: string) => {
+        answerAcpSessionCancel(registry, acpBackendId, sessionId);
+      }),
       startPrompt: vi.fn(() => ({
         sessionId: "grok-session-1",
         turnId: "turn-1",
@@ -43110,6 +43200,7 @@ script = "printf setup"
 
   it("stops and steers another active local thread with distinct dispositions", async () => {
     const codexClient = new MockBackendClient({
+      interruptEndsTurn: true,
       initializeResult: {
         methods: ["thread/resume", "turn/interrupt", "turn/steer"],
       },
@@ -43346,6 +43437,7 @@ script = "printf setup"
 
   it("preserves idle and stale steers as follow-ups while rejecting invalid stops", async () => {
     const codexClient = new MockBackendClient({
+      interruptEndsTurn: true,
       initializeResult: {
         methods: [
           "thread/resume",
@@ -50943,6 +51035,7 @@ script = "printf setup"
 
   it("stops pending active task monitors without starting recovery", async () => {
     const codexClient = new MockBackendClient({
+      interruptEndsTurn: true,
       initializeResult: { methods: ["turn/start", "turn/interrupt"] },
       models: TEST_TASK_MONITOR_MODELS,
       startThreadResult: { threadId: "monitor-thread" },
@@ -51069,6 +51162,7 @@ script = "printf setup"
 
   it("keeps monitor failure navigation on the parent when recovery cannot read the helper", async () => {
     const codexClient = new MockBackendClient({
+      interruptEndsTurn: true,
       initializeResult: { methods: ["turn/start", "turn/interrupt"] },
       models: TEST_TASK_MONITOR_MODELS,
       startThreadResult: { threadId: "monitor-thread" },
@@ -51140,6 +51234,7 @@ script = "printf setup"
 
   it("stops a task monitor on its live recovery turn", async () => {
     const codexClient = new MockBackendClient({
+      interruptEndsTurn: true,
       initializeResult: { methods: ["turn/start", "turn/interrupt"] },
       models: TEST_TASK_MONITOR_MODELS,
       startThreadResult: { threadId: "monitor-thread" },
@@ -56234,7 +56329,9 @@ script = "printf setup"
       startSession,
       ensureSession,
       startPrompt,
-      cancelSession: vi.fn(),
+      cancelSession: vi.fn(async (sessionId: string) => {
+        answerAcpSessionCancel(registry, acpBackendId, sessionId);
+      }),
       readReplay: vi.fn(),
       loadSession: vi.fn(),
       refreshSession: vi.fn(async () => undefined),
@@ -56344,7 +56441,9 @@ script = "printf setup"
       startSession,
       ensureSession,
       startPrompt,
-      cancelSession: vi.fn(),
+      cancelSession: vi.fn(async (sessionId: string) => {
+        answerAcpSessionCancel(registry, acpBackendId, sessionId);
+      }),
       readReplay: vi.fn(),
       loadSession: vi.fn(),
       refreshSession: vi.fn(async () => undefined),
@@ -56455,7 +56554,9 @@ script = "printf setup"
       startSession,
       ensureSession,
       startPrompt,
-      cancelSession: vi.fn(),
+      cancelSession: vi.fn(async (sessionId: string) => {
+        answerAcpSessionCancel(registry, acpBackendId, sessionId);
+      }),
       readReplay: vi.fn(),
       loadSession: vi.fn(),
       refreshSession: vi.fn(async () => undefined),
@@ -56599,7 +56700,9 @@ script = "printf setup"
       startSession,
       ensureSession,
       startPrompt,
-      cancelSession: vi.fn(),
+      cancelSession: vi.fn(async (sessionId: string) => {
+        answerAcpSessionCancel(registry, acpBackendId, sessionId);
+      }),
       readReplay: vi.fn(),
       loadSession: vi.fn(),
       refreshSession: vi.fn(async () => undefined),

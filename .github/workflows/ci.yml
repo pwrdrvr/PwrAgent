@@ -361,6 +361,7 @@ jobs:
         run: >-
           pnpm exec vitest run --config vitest.workspace.ts
           --project desktop-renderer
+          --project desktop-renderer-node
           --project messaging
           --project shared
           --shard=${{ matrix.lane }}/2
