@@ -12,7 +12,8 @@
       "infoPlist": {
         "NSMicrophoneUsageDescription": "Talk to PwrAgent Live to inspect and direct your threads.",
         "NSLocalNetworkUsageDescription": "Connect to your development server and trusted PwrAgent gateway."
-      }
+      },
+      "appleTeamId": "T44CNHC4UH"
     },
     "android": {
       "package": "com.pwrdrvr.pwragent.mobile",

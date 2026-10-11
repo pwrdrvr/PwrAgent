@@ -19,8 +19,9 @@ pnpm --filter @pwragent/mobile ios --device
 pnpm --filter @pwragent/mobile start
 ```
 
-Use your existing Apple Development team in Xcode's Signing & Capabilities for
-`com.pwrdrvr.pwragent.mobile`. Do not substitute another installed app's bundle ID.
+The iOS config selects PwrDrvr LLC (`T44CNHC4UH`) for
+`com.pwrdrvr.pwragent.mobile`. Sign in to Xcode with a company team member that
+has Certificates, Identifiers & Profiles access. Do not substitute another installed app's bundle ID.
 The iPhone needs Developer Mode, a trusted/paired connection to Xcode, and a
 provisioning profile that includes the phone and this bundle. No new account or
 App Store submission is part of this workflow.
@@ -96,12 +97,15 @@ They do not prove production Federation credentials or billed OpenAI audio.
 - Full repository lint/typechecks and desktop production build passed. iOS
   production Metro/Hermes exports for iOS and Android passed. Runtime license audit covers 33 bundled
   JavaScript packages; native pod notices and a license viewer are included.
-- Physical signing was attempted with the existing Apple Development team.
-  Apple requires the account owner to accept its updated Program License
-  Agreement before provisioning `com.pwrdrvr.pwragent.mobile`. Then connect,
-  unlock and trust the phone with Developer Mode enabled and rebuild using that
-  team's profile. No account enrollment, agreement acceptance or store action was
-  performed on the owner's behalf.
+- After the owner accepted Apple's updated agreement, an iPhone Release build
+  succeeded using the existing Harold Hunt team. Its signature was verified and
+  `main.jsbundle` is present, so that build does not require Metro.
+- Xcode now sees the owner's PwrDrvr LLC membership with provisioning access;
+  the project and Expo config select that company team. The company signing
+  attempt reports no registered test devices. Connect, unlock and trust the
+  iPhone with Developer Mode enabled so Xcode can register it, create the company
+  development profile and install the app. The phone was unavailable to the Mac
+  during verification. No account enrollment or store action was performed.
 - Production gateway pairing/Federation from the phone, billed Live audio/tool
   execution, and an Android native build remain unverified. Live is implemented
   against the existing Codex realtime backend, with mocked signaling/lifecycle
