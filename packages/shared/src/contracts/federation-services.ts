@@ -52,5 +52,5 @@ export const FEDERATION_SERVICE_METHODS = {
   close: "services.v1.close",
   remove: "services.v1.remove",
 } as const;
-export type ServiceExchange = { streamId: string; seq: number; data: string; fin: boolean };
-export type ServiceExchangeResult = { seq: number; data: string; fin: boolean };
+export type ServiceExchange = { streamId: string; seq: number; data: string; fin: boolean; receive: boolean };
+export type ServiceExchangeResult = { seq: number; data: string; fin: boolean; writable: boolean };

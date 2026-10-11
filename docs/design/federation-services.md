@@ -71,8 +71,10 @@ and optional per-hop Noise apply; payloads must never enter diagnostic captures.
 Use one outstanding exchange per stream, a 16 KiB raw-byte quantum per direction,
 strict canonical base64 validation, monotonically increasing sequence numbers,
 bounded streams/leases globally and per peer, and bounded idle leases/streams.
-Stop-and-wait supplies credit: the next exchange waits for local socket writes
-to complete. Non-flowing socket reads propagate backpressure. An idle exchange
+Each direction has independent one-quantum credit: `receive` in requests and
+`writable` in responses. A pending socket write withholds that direction's next
+credit while the opposite direction can still drain. This avoids full-duplex
+write deadlocks. Non-flowing socket reads propagate backpressure. An idle exchange
 waits briefly for readable data; a busy exchange yields between quanta, with an
 aggregate owner scheduler limiting throughput so service traffic cannot enqueue
 unbounded frames ahead of agent events. Byte counters measure decoded TCP bytes,
