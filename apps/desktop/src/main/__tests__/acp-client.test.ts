@@ -163,6 +163,26 @@ describe("AcpAgentClient", () => {
       await client.dispose();
     },
   );
+  it("rejects unsupported Grok steering before sending the extension RPC", async () => {
+    const transport = new FakeAcpAgentTransport({
+      "_x.ai/session/steer": { result: { delivery: "currentTurn" } },
+    });
+    const client = new AcpAgentClient({ backendId: "acp:grok", store, transport });
+    await client.initialize();
+    const session = await client.startSession({ executionMode: "default", mcpServers: "none" });
+    try {
+      await expect(client.steerSession({
+        sessionId: session.sessionId,
+        text: "Add berries",
+        content: [{ type: "text", text: "Add berries" }],
+        interjectionId: "steer-unsupported",
+      })).rejects.toThrow("does not support turn steering over ACP");
+      expect(transport.requests.map((request) => request.method)).not.toContain("_x.ai/session/steer");
+    } finally {
+      await client.dispose();
+    }
+  });
+
   it("sends Grok steering and workflow-budget extension payloads", async () => {
     const transport = new FakeAcpAgentTransport({
       "session/new": { sessionId: "grok-session" },
@@ -175,6 +195,7 @@ describe("AcpAgentClient", () => {
     });
     const client = new AcpAgentClient({
       backendId: "acp:grok",
+      supportsTurnSteering: true,
       store,
       transport,
     });

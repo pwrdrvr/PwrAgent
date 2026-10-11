@@ -1,10 +1,13 @@
-name: Package manager distribution
+name: Winget distribution (artifact-backed)
 
 on:
   pull_request:
     paths:
       - .github/workflows/package-manager-distribution.yml
       - .github/actions/distribution-asset/**
+      - scripts/build-artifact.py
+      - scripts/ci-curl.py
+      - scripts/test_build_artifact.py
       - scripts/package-manager-release*
       - scripts/submit-package-manager-release.mjs
   # Releases are built as prereleases. Only explicit stable promotion qualifies.
@@ -13,7 +16,7 @@ on:
   workflow_dispatch:
     inputs:
       submit:
-        description: Open Homebrew and Winget PRs after platform validation
+        description: Open Winget PR after platform validation; Homebrew publishes in the tap
         type: boolean
         default: false
       force_validation:
@@ -53,6 +56,8 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
+      - name: Test build artifact acquisition without release requests
+        run: python3 -m unittest discover -s scripts -p test_build_artifact.py -v
       - id: plan
         name: Audit channels and resolve validation reuse before native runners
         env:
@@ -60,6 +65,7 @@ jobs:
           DISTRIBUTION_READ_TOKEN: ${{ secrets.DISTRIBUTION_READ_TOKEN || github.token }}
           EVENT_TAG: ${{ github.event.release.tag_name }}
           FORCE_VALIDATION: ${{ inputs.force_validation || false }}
+          WINGET_ONLY: "true"
           SUBMIT_REQUESTED: ${{ inputs.submit || false }}
         run: |
           set -euo pipefail
@@ -161,6 +167,7 @@ jobs:
     timeout-minutes: 30
     env:
       HOMEBREW_GITHUB_API_TOKEN: ${{ github.token }}
+      HOMEBREW_CURL_PATH: ${{ github.workspace }}/scripts/ci-curl.py
       HOMEBREW_NO_AUTO_UPDATE: "1"
       HOMEBREW_NO_INSTALL_CLEANUP: "1"
     steps:
@@ -239,7 +246,7 @@ jobs:
           if brew trust --help >/dev/null 2>&1; then brew trust --cask "$token"; fi
           brew style "$tap/Casks/pwragent.rb"
           seed_cache "$(jq -r .stable.version distribution/current/audit.json)" distribution/assets
-          brew audit --cask --online "$token"
+          brew audit --cask --online --except=url_https_availability "$token"
           brew install --cask "$token"
           test -d /Applications/PwrAgent.app
           test ! -L /Applications/PwrAgent.app
@@ -440,7 +447,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "$GH_TOKEN" ]; then
-            echo "::error::Configure DISTRIBUTION_TOKEN for the tap, Winget fork and upstream PR creation. Validated inputs are in package-manager-inputs."
+            echo "::error::Configure DISTRIBUTION_TOKEN for the Winget fork and upstream PR creation. Homebrew publication is independent. Validated inputs are in package-manager-inputs."
             exit 1
           fi
           node scripts/submit-package-manager-release.mjs distribution/current | tee -a "$GITHUB_STEP_SUMMARY"

@@ -6,10 +6,12 @@ import type {
   TerminateBackgroundTerminalResponse,
 } from "@pwragent/shared";
 import type {
+  ListThreadTodoProjectsResponse,
   ListThreadTodosRequest,
   ListThreadTodosResponse,
   ResolveThreadTodoRequest,
   RunThreadTodoActionRequest,
+  SetThreadTodoProjectRequest,
   ThreadTodoMutationResponse,
   ThreadTodosChangedEvent,
   DismissOperatorQuestionRequest,
@@ -27,6 +29,10 @@ import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryRespons
 import { useEffect, useState } from "react";
 import type { ReceivingFolderRequest, ReceivingFolderResponse } from "../../../shared/federation-receiving-folder";
 import type { RendererErrorReport } from "../../../shared/renderer-error";
+import type {
+  KeybindingWriteRequest,
+  KeybindingsSnapshot,
+} from "../../../shared/keybindings";
 import type { RendererDiagnosticLogRequest } from "../../../shared/renderer-diagnostic";
 import type {
   ImageUploadFallbackRequest,
@@ -493,6 +499,8 @@ import type {
   OpenPathResponse,
   ReadMarkdownFileRequest,
   ReadMarkdownFileResponse,
+  ResolveTranscriptFilesRequest,
+  ResolveTranscriptFilesResponse,
   ReadMarkdownFileViewerSnapshotRequest,
   ReadMarkdownFileViewerSnapshotResponse,
   OpenDesktopPwrAgentProfileRequest,
@@ -994,6 +1002,12 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   runThreadTodoAction?: (
     request: RunThreadTodoActionRequest,
   ) => Promise<ThreadTodoMutationResponse>;
+  /** The projects a card's project menu offers. */
+  listThreadTodoProjects?: () => Promise<ListThreadTodoProjectsResponse>;
+  /** The operator's pick from a card's project menu. */
+  setThreadTodoProject?: (
+    request: SetThreadTodoProjectRequest,
+  ) => Promise<ThreadTodoMutationResponse>;
   /** Marker event; refetch with `listThreadTodos`. Local windows only. */
   onThreadTodosChanged?: (
     callback: (event: ThreadTodosChangedEvent) => void,
@@ -1236,6 +1250,9 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   openPath?: (request: OpenPathRequest) => Promise<OpenPathResponse>;
   revealPath?: (request: OpenPathRequest) => Promise<OpenPathResponse>;
   receivingFolder?: (request: ReceivingFolderRequest) => Promise<ReceivingFolderResponse>;
+  resolveTranscriptFiles?: (
+    request: ResolveTranscriptFilesRequest
+  ) => Promise<ResolveTranscriptFilesResponse>;
   readMarkdownFile?: (
     request: ReadMarkdownFileRequest
   ) => Promise<ReadMarkdownFileResponse>;
@@ -1722,6 +1739,15 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
    * or presses the native `CmdOrCtrl+N` accelerator.
    */
   onOpenNewThreadRequested?: (callback: () => void) => () => void;
+  /** `~/.pwragent/keybindings.toml`: the operator's changed shortcuts. */
+  readKeybindings?: () => Promise<KeybindingsSnapshot>;
+  writeKeybindings?: (
+    request: KeybindingWriteRequest,
+  ) => Promise<KeybindingsSnapshot>;
+  /** Main → renderer push when the file changes, from any profile's window. */
+  onKeybindingsChanged?: (
+    callback: (snapshot: KeybindingsSnapshot) => void,
+  ) => () => void;
   /**
    * Main -> renderer push: focuses an existing thread from an
    * out-of-app surface such as a native notification.

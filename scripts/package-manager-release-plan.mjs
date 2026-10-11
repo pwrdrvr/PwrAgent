@@ -84,15 +84,17 @@ async function writePackages(out, files) {
   }
 }
 
-export async function buildPlan({ event, ref, tag = "", force = false, publication = true, logic }, api = ghJson) {
+export async function buildPlan({ event, ref, tag = "", force = false, publication = true, logic, families = ["homebrew", "winget"] }, api = ghJson) {
   const audit = auditChannels(api);
-  const needed = distributionNeeded(audit, event, tag);
+  const selectedAudit = families.includes("homebrew") ? audit :
+    { ...audit, homebrew: { ...audit.homebrew, version: audit.stable.version, pending: [] } };
+  const needed = distributionNeeded(selectedAudit, event, tag);
   const plan = { audit, needed, native: [], assets: [], submit: false };
   // Preserve the daily publication/pending-PR guard before asset/cache resolution.
   if (!needed) return plan;
   const current = api(`repos/${SOURCE_REPO}/releases/latest`);
   if (stableVersion(current) !== audit.stable.version) throw new Error("GitHub Latest changed during planning; retry");
-  for (const channel of [audit.homebrew, audit.winget]) {
+  for (const channel of families.map((family) => audit[family])) {
     if (channel.version && compareVersions(audit.stable.version, channel.version) < 0) throw new Error("Refusing channel downgrade");
   }
   const previous = previousRelease(stableVersion(current), api);
@@ -100,10 +102,13 @@ export async function buildPlan({ event, ref, tag = "", force = false, publicati
   const previousInputs = metadataPackages(previous);
   const images = api("repos/actions/runner-images/releases?per_page=100", false,
     'map({tag_name, draft, body: (.body | split("\\n") | map(select(contains("Image Version"))) | join("\\n"))})');
-  const brewRelease = api("repos/Homebrew/brew/releases/latest");
-  if (brewRelease.draft || brewRelease.prerelease) throw new Error("Homebrew validator must be stable");
-  const brew = api(`repos/Homebrew/brew/commits/${encodeURIComponent(brewRelease.tag_name)}`).sha;
-  if (!/^[a-f0-9]{40}$/.test(brew)) throw new Error("Cannot pin Homebrew validator");
+  let brew;
+  if (families.includes("homebrew")) {
+    const brewRelease = api("repos/Homebrew/brew/releases/latest");
+    if (brewRelease.draft || brewRelease.prerelease) throw new Error("Homebrew validator must be stable");
+    brew = api(`repos/Homebrew/brew/commits/${encodeURIComponent(brewRelease.tag_name)}`).sha;
+    if (!/^[a-f0-9]{40}$/.test(brew)) throw new Error("Cannot pin Homebrew validator");
+  }
   const winget = api("repos/microsoft/winget-cli/releases/latest");
   if (winget.draft || winget.prerelease) throw new Error("WinGet client must be stable");
   const wingetAssets = ["Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle", "DesktopAppInstaller_Dependencies.zip"].map((name) => {
@@ -113,7 +118,7 @@ export async function buildPlan({ event, ref, tag = "", force = false, publicati
     return { id, name: assetName, size, digest, browser_download_url };
   });
   const files = { current: currentInputs.files, previous: previousInputs.files };
-  for (const platform of PLATFORMS) {
+  for (const platform of PLATFORMS.filter((item) => families.includes(item.family))) {
     const inputs = {
       ...platform, image: selectImage(images, platform.imagePrefix),
       tool: platform.family === "homebrew" ? { brew } : { tag: winget.tag_name, assets: wingetAssets },
@@ -133,16 +138,16 @@ export async function buildPlan({ event, ref, tag = "", force = false, publicati
     const reuse = reusableValidation(result.actions_caches, key, { event, ref, tag: current.tag_name, force, publication });
     plan.native.push({ ...inputs, key, reuse });
   }
-  const families = new Set(plan.native.filter((platform) => !platform.reuse).map((platform) => platform.family));
+  const requiredFamilies = new Set(plan.native.filter((platform) => !platform.reuse).map((platform) => platform.family));
   for (const [role, release] of [["current", current], ["previous", previous]]) {
     for (const [index, asset] of releaseAssets(release).entries()) {
       const family = index === 2 || index === 4 ? "winget" : "homebrew";
-      if (!families.has(family)) continue;
+      if (!requiredFamilies.has(family)) continue;
       plan.assets.push({ role, asset, key: assetKey(release.tag_name, asset) });
     }
   }
   Object.assign(plan, { current, previous, files, hashes: currentInputs.hashes,
-    submit: event !== "pull_request" && [audit.homebrew, audit.winget].some((channel) =>
+    submit: event !== "pull_request" && families.map((family) => audit[family]).some((channel) =>
       channel.version !== audit.stable.version && channel.pending.length === 0),
   });
   return plan;
@@ -160,11 +165,11 @@ export async function prepare(plan, dir) {
   }, null, 2) + "\n");
 }
 
-export async function cachedAsset(plan, index, dir, cacheRoot = ".local/distribution-assets") {
+export async function cachedAsset(plan, index, dir, cacheRoot = ".local/distribution-assets", acquire) {
   const { role, asset, key } = plan.assets[index];
   const cache = resolve(cacheRoot, key);
   await mkdir(cache, { recursive: true });
-  const file = await download(asset, cache);
+  const file = await download(asset, cache, acquire);
   // A corrupt restore fails closed. Never save, copy or install unchecked bytes.
   await verifyFile(file, asset, asset.digest.slice(7));
   console.log(`Verified release asset: ${asset.name}`);
@@ -178,6 +183,7 @@ async function main(argv) {
   if (command === "plan") {
     const workflow = await readFile(".github/workflows/package-manager-distribution.yml", "utf8");
     const sources = {
+      artifact: await readFile("scripts/build-artifact.py", "utf8"),
       assetAction: await readFile(".github/actions/distribution-asset/action.yml", "utf8"),
       release: await readFile("scripts/package-manager-release.mjs", "utf8"),
       planner: await readFile("scripts/package-manager-release-plan.mjs", "utf8"),
@@ -186,7 +192,8 @@ async function main(argv) {
     const logic = Object.fromEntries(["homebrew", "winget"].map((family) => [family, validationCode(workflow, family, sources)]));
     const plan = await buildPlan({ event: process.env.GITHUB_EVENT_NAME, ref: process.env.GITHUB_REF,
       tag: process.env.EVENT_TAG, force: process.env.FORCE_VALIDATION === "true",
-      publication: process.env.GITHUB_EVENT_NAME !== "workflow_dispatch" || process.env.SUBMIT_REQUESTED === "true", logic });
+      publication: process.env.GITHUB_EVENT_NAME !== "workflow_dispatch" || process.env.SUBMIT_REQUESTED === "true",
+      families: process.env.WINGET_ONLY === "true" ? ["winget"] : ["homebrew", "winget"], logic });
     await prepare(plan, dir);
     const mac = plan.native.filter((p) => p.family === "homebrew" && !p.reuse);
     const windows = plan.native.find((p) => p.family === "winget");

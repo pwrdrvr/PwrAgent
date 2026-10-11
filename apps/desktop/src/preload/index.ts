@@ -26,10 +26,12 @@ import { USAGE_ACTIVITY_READ_CHANNEL } from "../shared/ipc";
 import { THREAD_FAMILY_PRICING_READ_CHANNEL } from "../shared/ipc";
 import { USAGE_ACTIVITY_OPEN_THREAD_CHANNEL, USAGE_ACTIVITY_OPEN_WINDOW_CHANNEL } from "../shared/ipc";
 import type {
+  ListThreadTodoProjectsResponse,
   ListThreadTodosRequest,
   ListThreadTodosResponse,
   ResolveThreadTodoRequest,
   RunThreadTodoActionRequest,
+  SetThreadTodoProjectRequest,
   ThreadTodoMutationResponse,
   ThreadTodosChangedEvent,
   DismissOperatorQuestionRequest,
@@ -43,6 +45,15 @@ import type { PrActivitySnapshot } from "@pwragent/shared";
 import { subscribeBundledGitLfsAdvisory } from "./bundled-git-lfs-advisory";
 import { subscribeGithubPrAuthenticationFailure } from "./github-pr-authentication-notice";
 import { unwrapNavigationRead } from "../shared/navigation-ipc-result";
+import {
+  KEYBINDINGS_CHANGED_CHANNEL,
+  KEYBINDINGS_READ_CHANNEL,
+  KEYBINDINGS_WRITE_CHANNEL,
+} from "../shared/ipc";
+import type {
+  KeybindingWriteRequest,
+  KeybindingsSnapshot,
+} from "../shared/keybindings";
 import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
 import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
 import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
@@ -451,6 +462,8 @@ import type {
   OpenPathResponse,
   ReadMarkdownFileRequest,
   ReadMarkdownFileResponse,
+  ResolveTranscriptFilesRequest,
+  ResolveTranscriptFilesResponse,
   ReadMarkdownFileViewerSnapshotRequest,
   ReadMarkdownFileViewerSnapshotResponse,
   OpenDesktopPwrAgentProfileRequest,
@@ -611,8 +624,10 @@ import {
   SCHEDULED_ACTIONS_UPDATE_CHANNEL,
   THREAD_TODOS_CHANGED_EVENT_CHANNEL,
   THREAD_TODOS_LIST_CHANNEL,
+  THREAD_TODOS_LIST_PROJECTS_CHANNEL,
   THREAD_TODOS_RESOLVE_CHANNEL,
   THREAD_TODOS_RUN_ACTION_CHANNEL,
+  THREAD_TODOS_SET_PROJECT_CHANNEL,
   OPERATOR_REQUESTS_CHANGED_EVENT_CHANNEL,
   OPERATOR_REQUESTS_DISMISS_QUESTION_CHANNEL,
   OPERATOR_REQUESTS_LIST_CHANNEL,
@@ -729,6 +744,7 @@ import {
   APPLICATIONS_READ_CHANNEL,
   APPLICATION_OPEN_CHANNEL,
   MARKDOWN_FILE_READ_CHANNEL,
+  TRANSCRIPT_FILES_RESOLVE_CHANNEL,
   MARKDOWN_FILE_VIEWER_OPEN_CHANNEL,
   MARKDOWN_FILE_VIEWER_SNAPSHOT_CHANGED_CHANNEL,
   MARKDOWN_FILE_VIEWER_SNAPSHOT_READ_CHANNEL,
@@ -1650,6 +1666,28 @@ const desktopApi = Object.freeze({
       SETTINGS_READ_CHANNEL,
       request,
     ),
+  readKeybindings: async (): Promise<KeybindingsSnapshot> =>
+    await invokeWithStartupProfileTiming(
+      "readKeybindings",
+      KEYBINDINGS_READ_CHANNEL,
+    ),
+  writeKeybindings: async (
+    request: KeybindingWriteRequest,
+  ): Promise<KeybindingsSnapshot> =>
+    await ipcRenderer.invoke(KEYBINDINGS_WRITE_CHANNEL, request),
+  onKeybindingsChanged: (
+    callback: (snapshot: KeybindingsSnapshot) => void,
+  ): (() => void) => {
+    // keybindings.toml changed: a save in any window, or a hand edit.
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      snapshot: KeybindingsSnapshot,
+    ) => callback(snapshot);
+    ipcRenderer.on(KEYBINDINGS_CHANGED_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(KEYBINDINGS_CHANGED_CHANNEL, listener);
+    };
+  },
   readConfigBootstrap: async (): Promise<ReadDesktopConfigBootstrapResponse> =>
     await invokeWithStartupProfileTiming(
       "readConfigBootstrap",
@@ -1773,6 +1811,10 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(PATH_REVEAL_CHANNEL, request),
   receivingFolder: async (request: ReceivingFolderRequest): Promise<ReceivingFolderResponse> =>
     await ipcRenderer.invoke(SETTINGS_RECEIVING_FOLDER_CHANNEL, request),
+  resolveTranscriptFiles: async (
+    request: ResolveTranscriptFilesRequest,
+  ): Promise<ResolveTranscriptFilesResponse> =>
+    await ipcRenderer.invoke(TRANSCRIPT_FILES_RESOLVE_CHANNEL, request),
   readMarkdownFile: async (
     request: ReadMarkdownFileRequest,
   ): Promise<ReadMarkdownFileResponse> =>
@@ -2119,6 +2161,12 @@ const desktopApi = Object.freeze({
     request: RunThreadTodoActionRequest,
   ): Promise<ThreadTodoMutationResponse> =>
     await ipcRenderer.invoke(THREAD_TODOS_RUN_ACTION_CHANNEL, request),
+  listThreadTodoProjects: async (): Promise<ListThreadTodoProjectsResponse> =>
+    await ipcRenderer.invoke(THREAD_TODOS_LIST_PROJECTS_CHANNEL),
+  setThreadTodoProject: async (
+    request: SetThreadTodoProjectRequest,
+  ): Promise<ThreadTodoMutationResponse> =>
+    await ipcRenderer.invoke(THREAD_TODOS_SET_PROJECT_CHANNEL, request),
   onThreadTodosChanged: (
     callback: (event: ThreadTodosChangedEvent) => void,
   ): (() => void) => {

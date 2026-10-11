@@ -124,7 +124,11 @@ import { useEditCommitStates } from "./useEditCommitStates";
 import type { HistoryNavControls } from "../chrome/HistoryNavButtons";
 import type { MastheadActionsProps } from "../chrome/MastheadActions";
 import { ThreadFindBar } from "./ThreadFindBar";
-import { ThreadHeader, type StarMapToggleControls } from "./ThreadHeader";
+import {
+  ThreadHeader,
+  type StarMapToggleControls,
+  type ThreadTitleRenameControls,
+} from "./ThreadHeader";
 import type { ThreadHeaderProject } from "./ThreadHeaderProjectCrumb";
 import type { FederationThreadTarget } from "../chrome/federation-thread-targets";
 import type {
@@ -951,7 +955,9 @@ export type ThreadViewProps = {
   /** Bumped on each ⌘F so an already-open bar pulls focus back to its field. */
   findFocusNonce?: number;
   onLoadOlder: () => Promise<void>;
-  onArchiveThread?: (thread: NavigationThreadSummary) => Promise<void>;
+  onArchiveThread?: (thread: NavigationThreadSummary) => Promise<unknown>;
+  /** Rename the open thread from its title strip. */
+  titleRename?: ThreadTitleRenameControls;
   onRefreshNavigation?: () => Promise<void>;
   onReloadThread?: () => Promise<void>;
   onLiveTranscriptEntry?: (entry: AppServerThreadEntry) => void;
@@ -1989,6 +1995,8 @@ export function ThreadView(props: ThreadViewProps) {
   }, [props.suppressBranchDriftDialog]);
   const selectedThreadSetupFailed =
     selectedThread?.codexEnvironmentRuntime?.setupStatus === "failed";
+  const selectedThreadEnvironmentId =
+    selectedThread?.codexEnvironmentRuntime?.environmentId;
   // The setup-failure dialog only surfaces during launchpad materialise
   // (messageCount === 0), where at most one auto-action runs. Look for
   // the most recent failed run in actionRuns to drive the action-phase
@@ -1998,7 +2006,10 @@ export function ThreadView(props: ThreadViewProps) {
   );
   const selectedThreadLatestFailedActionRun = [...selectedThreadActionRuns]
     .reverse()
-    .find((run) => run.status === "failed");
+    .find((run) =>
+      run.status === "failed"
+      && Boolean(selectedThreadEnvironmentId)
+      && (!run.environmentId || run.environmentId === selectedThreadEnvironmentId));
   const selectedThreadActionFailed = Boolean(selectedThreadLatestFailedActionRun);
   // `setupStatus: "failed"` and a failed action run are permanent history; the
   // prompt they raise is not. This is the record of the operator having
@@ -2178,8 +2189,6 @@ export function ThreadView(props: ThreadViewProps) {
   const selectedThreadProgressKey = selectedThread
     ? `thread:${selectedThread.source}:${selectedThread.id}`
     : undefined;
-  const selectedThreadEnvironmentId =
-    selectedThread?.codexEnvironmentRuntime?.environmentId;
   useEffect(() => {
     setLaunchpadSetupProgress((current) =>
       current
@@ -4016,6 +4025,7 @@ export function ThreadView(props: ThreadViewProps) {
       thread={selectedThread!}
       backends={props.backends}
       onRevealSelectedThreadInList={props.onRevealSelectedThreadInList}
+      titleRename={props.titleRename}
       layout={{
         ...headerChrome.layout,
         terminalOpen: selectedThreadTerminalOpen,

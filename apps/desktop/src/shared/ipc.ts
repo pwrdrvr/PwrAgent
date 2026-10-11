@@ -169,6 +169,8 @@ export const SCHEDULED_ACTIONS_SEND_NOW_CHANNEL = "scheduled-actions:send-now";
 export const THREAD_TODOS_LIST_CHANNEL = "thread-todos:list";
 export const THREAD_TODOS_RESOLVE_CHANNEL = "thread-todos:resolve";
 export const THREAD_TODOS_RUN_ACTION_CHANNEL = "thread-todos:run-action";
+export const THREAD_TODOS_LIST_PROJECTS_CHANNEL = "thread-todos:list-projects";
+export const THREAD_TODOS_SET_PROJECT_CHANNEL = "thread-todos:set-project";
 /**
  * Marker event: a thread's to-do cards changed. Listeners refetch with
  * `thread-todos:list`. Sent to local windows only; a peer's cards stay on
@@ -738,6 +740,7 @@ export const APPLICATION_OPEN_CHANNEL = "application:open";
 export const PATH_OPEN_CHANNEL = "path:open";
 export const PATH_REVEAL_CHANNEL = "path:reveal";
 export const MARKDOWN_FILE_READ_CHANNEL = "markdown-file:read";
+export const TRANSCRIPT_FILES_RESOLVE_CHANNEL = "transcript-files:resolve";
 export const MARKDOWN_FILE_VIEWER_OPEN_CHANNEL = "markdown-file-viewer:open";
 export const MARKDOWN_FILE_VIEWER_SNAPSHOT_READ_CHANNEL =
   "markdown-file-viewer:read-snapshot";
@@ -866,3 +869,11 @@ export const USAGE_ACTIVITY_ANALYZE_CHANNEL = "usage-activity:analyzeUsageActivi
 export const USAGE_ACTIVITY_OPEN_WINDOW_CHANNEL = "usage-activity:openWindow";
 /** From the Usage Activity window: focus the main window and open a thread there. */
 export const USAGE_ACTIVITY_OPEN_THREAD_CHANNEL = "usage-activity:openThreadInMainWindow";
+
+// Keyboard shortcuts (see shared/keybindings.ts). `read` returns the stored
+// overrides, `write` applies one change from Settings → Keyboard, and
+// `changed` pushes the new snapshot to every window whenever the file
+// changes, including from another profile's process.
+export const KEYBINDINGS_READ_CHANNEL = "keybindings:read";
+export const KEYBINDINGS_WRITE_CHANNEL = "keybindings:write";
+export const KEYBINDINGS_CHANGED_CHANNEL = "keybindings:changed";

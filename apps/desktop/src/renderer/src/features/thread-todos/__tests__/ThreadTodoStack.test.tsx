@@ -185,6 +185,138 @@ describe("ThreadTodoStack", () => {
     expect(screen.getByText("Merge #7 in PwrSnap? This cannot be undone here.")).toBeTruthy();
   });
 
+  describe("project menu", () => {
+    const handoff = (overrides: Partial<ThreadTodo> = {}) => todo({
+      id: "p",
+      kind: "handoff",
+      sourceProject: AGENT,
+      action: { type: "start_thread", prompt: "Add the retry" },
+      ...overrides,
+    });
+    const menu = () => ({
+      list: vi.fn(async () => [AGENT, SNAP, GIT]),
+      set: vi.fn(async (entry: ThreadTodo) => entry),
+    });
+    const renderCard = (card: ThreadTodo, projectMenu?: ReturnType<typeof menu>) =>
+      render(
+        <ThreadTodoStack
+          threadKey="codex:thread-a"
+          todos={[card]}
+          view={createView([card], projectMenu ? { projectMenu } : {})}
+          onStartReview={vi.fn()}
+        />,
+      );
+    const openMenu = async (name: RegExp) => {
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name }));
+      });
+    };
+
+    it("names the thread's own project and retags the card from its menu", async () => {
+      const projectMenu = menu();
+      const card = handoff();
+      renderCard(card, projectMenu);
+
+      await openMenu(/^To-do project: PwrAgent\./);
+      const options = screen.getAllByRole("option");
+      expect(options.map((option) => option.textContent)).toEqual([
+        "✓PwrAgentThis thread/src/pwragent",
+        "PwrSnap/src/pwrsnap",
+        "PwrGit/src/pwrgit",
+      ]);
+      expect(options[0]!.getAttribute("aria-selected")).toBe("true");
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("option", { name: /PwrSnap/ }));
+      });
+      expect(projectMenu.set).toHaveBeenCalledWith(card, SNAP.key);
+      expect(screen.queryByRole("dialog", { name: "Project for this to-do" })).toBeNull();
+      // The picked row is gone, so focus goes back to the line, not <body>.
+      expect(document.activeElement).toBe(
+        screen.getByRole("button", { name: /^To-do project: PwrAgent\./ }),
+      );
+    });
+
+    it("clears the tag when the thread's own project is picked", async () => {
+      const projectMenu = menu();
+      const card = handoff({ targetProject: SNAP });
+      renderCard(card, projectMenu);
+
+      await openMenu(/^To-do project: For PwrSnap\./);
+      expect(screen.getByRole("option", { name: /PwrSnap/ }).getAttribute("aria-selected"))
+        .toBe("true");
+      await act(async () => {
+        fireEvent.click(screen.getByRole("option", { name: /PwrAgent/ }));
+      });
+      expect(projectMenu.set).toHaveBeenCalledWith(card, null);
+    });
+
+    it("filters by name or path", async () => {
+      renderCard(handoff(), menu());
+      await openMenu(/^To-do project: PwrAgent\./);
+      fireEvent.change(screen.getByRole("textbox", { name: "Find a project" }), {
+        target: { value: "git" },
+      });
+      expect(screen.getAllByRole("option").map((option) => option.textContent))
+        .toEqual(["PwrGit/src/pwrgit"]);
+    });
+
+    it("keeps the menu open with the reason when the change fails", async () => {
+      const projectMenu = menu();
+      projectMenu.set.mockRejectedValueOnce(new Error(
+        "Error invoking remote method 'thread-todos:set-project': ThreadTodoError: That project is no longer in the sidebar.",
+      ));
+      renderCard(handoff(), projectMenu);
+      await openMenu(/^To-do project: PwrAgent\./);
+      await act(async () => {
+        fireEvent.click(screen.getByRole("option", { name: /PwrGit/ }));
+      });
+      expect(screen.getByRole("alert").textContent).toBe("That project is no longer in the sidebar.");
+      expect(screen.getByRole("dialog", { name: "Project for this to-do" })).toBeTruthy();
+    });
+
+    it("offers a thread with no directory a project, from a dashed line", async () => {
+      const projectMenu = menu();
+      const card = handoff({ sourceProject: undefined });
+      renderCard(card, projectMenu);
+      const trigger = screen.getByRole("button", { name: /^To-do project: No project\./ });
+      expect(trigger.className).toContain("is-empty");
+      await openMenu(/^To-do project: No project\./);
+      expect(screen.getAllByRole("option")).toHaveLength(3);
+    });
+
+    it("offers no pick while the card's action runs", async () => {
+      const card = handoff();
+      const projectMenu = menu();
+      const view = createView([card], { projectMenu });
+      const { rerender } = render(
+        <ThreadTodoStack threadKey="codex:thread-a" todos={[card]} view={view} onStartReview={vi.fn()} />,
+      );
+      await openMenu(/^To-do project: PwrAgent\./);
+      rerender(
+        <ThreadTodoStack
+          threadKey="codex:thread-a"
+          todos={[card]}
+          view={{ ...view, runningIds: new Set([card.id]) }}
+          onStartReview={vi.fn()}
+        />,
+      );
+      expect(screen.getAllByRole("option").every((option) => (option as HTMLButtonElement).disabled))
+        .toBe(true);
+    });
+
+    it("gives a review card no menu, and a window without one a static line", () => {
+      const projectMenu = menu();
+      renderCard(todo({ id: "r", kind: "review", sourceProject: AGENT, action: { type: "start_review" } }), projectMenu);
+      expect(screen.queryByRole("button", { name: /^To-do project:/ })).toBeNull();
+      cleanup();
+
+      renderCard(handoff({ targetProject: SNAP }));
+      expect(screen.queryByRole("button", { name: /^To-do project:/ })).toBeNull();
+      expect(screen.getByText("For PwrSnap")).toBeTruthy();
+    });
+  });
+
   it("offers a handoff here, on a peer, or as handled elsewhere", async () => {
     const handoff = todo({
       id: "h2",

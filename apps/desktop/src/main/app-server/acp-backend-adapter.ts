@@ -32,6 +32,7 @@ import {
 import { isBannedAcpRegistryId } from "../acp/acp-agent-allowlist";
 import {
   acpAgentCapabilitiesForRegistryId,
+  isPwrAgentGrokBuildVersion,
   type AcpAgentCapabilities,
 } from "../acp/acp-agent-capabilities";
 import {
@@ -172,6 +173,7 @@ export type AcpRuntimeClient = Pick<
       | "setRuntimeOption"
       | "steerSession"
       | "supportsSessionLoad"
+      | "supportsTurnSteering"
       | "rewindSession"
     >
   >;
@@ -567,6 +569,13 @@ function effectiveAcpAgentCapabilities(
   };
   return {
     ...configured,
+    // The extension is downstream-only. Ignore the unconditional steerTurn
+    // value persisted by older catalog/discovery records for vendor Grok.
+    steerTurn: agent.registryId === "grok"
+      && (isPwrAgentOwnedGrokRuntime(agent)
+        || isPwrAgentGrokBuildVersion(
+          agent.runtimeCapabilities?.agentInfo?.version ?? agent.version,
+        )),
     liveWorkspaceHandoff:
       configured.liveWorkspaceHandoff ||
       agent.runtimeCapabilities?.agentCapabilities?.loadSession === true,
@@ -1699,7 +1708,7 @@ export class AcpBackendAdapter {
       params.backend,
       params.sessionId,
     );
-    if (!client.steerSession) {
+    if (!client.steerSession || client.supportsTurnSteering?.() !== true) {
       throw new Error("Installed Grok Build does not support turn steering over ACP");
     }
     return await client.steerSession({
@@ -2745,6 +2754,7 @@ export class AcpBackendAdapter {
       backendId: agent.backendId,
       agentDisplayName: agent.name,
       initialRuntimeCapabilities: acpRuntimeCapabilitiesForAgent(agent),
+      supportsTurnSteering: effectiveAcpAgentCapabilities(agent).steerTurn,
       rolloutStore: this.acpRolloutStore,
       store: this.acpSessionStore as AcpSessionStoreContract,
       transport:

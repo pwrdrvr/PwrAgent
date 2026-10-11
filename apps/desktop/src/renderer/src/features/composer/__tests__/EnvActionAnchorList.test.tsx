@@ -4,7 +4,7 @@ import type {
   CodexEnvironmentActionRun,
   CodexThreadEnvironmentRuntime,
 } from "@pwragent/shared";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { EnvActionAnchorList } from "../Composer";
 
 afterEach(() => {
@@ -48,6 +48,30 @@ function buildRun(
 }
 
 describe("EnvActionAnchorList", () => {
+  it.each([undefined, "Other"])("keeps the running row, logs and controls when the environment changes to %s", (environmentName) => {
+    const run = Object.assign(buildRun({ output: "booting", pid: 4242 }), {
+      environmentId: "original", environmentName: "Original",
+    });
+    const onStopRun = vi.fn();
+    const view = (runtime: Parameters<typeof EnvActionAnchorList>[0]["runtime"]) => (
+      <EnvActionAnchorList runtime={runtime} onStopRun={onStopRun} />
+    );
+    const { rerender } = render(view(buildRuntime([run], "Original")));
+    const row = screen.getByLabelText("Env action running");
+    row.setAttribute("open", "");
+
+    rerender(view({ actionRuns: [{ ...run, output: "booting\nready" }], environmentName }));
+    expect(screen.getByLabelText("Env action running")).toBe(row);
+    expect(row).toHaveAttribute("open");
+    expect(screen.getByText(/Dev · Original/)).toBeInTheDocument();
+    expect(screen.getByText(/PID 4242/)).toBeInTheDocument();
+    expect(row.querySelector(".composer__queued-env-action-output")).toHaveTextContent("booting ready");
+    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+    expect(onStopRun).toHaveBeenLastCalledWith(expect.objectContaining({ runId: run.runId }), "stop");
+    fireEvent.click(screen.getByRole("button", { name: "Terminate now" }));
+    expect(onStopRun).toHaveBeenLastCalledWith(expect.objectContaining({ runId: run.runId }), "terminate");
+  });
+
   it("renders nothing when runtime is undefined", () => {
     const { container } = render(<EnvActionAnchorList runtime={undefined} />);
     expect(container.textContent).toBe("");

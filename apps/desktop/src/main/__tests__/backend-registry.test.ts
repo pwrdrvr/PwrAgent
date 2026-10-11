@@ -124,6 +124,7 @@ import {
   CodexEnvironmentCommandError,
   type CodexEnvironmentCommandRunner,
 } from "../app-server/codex-environment-runtime";
+import * as codexEnvironmentRuntime from "../app-server/codex-environment-runtime";
 import { GitDirectoryService } from "../app-server/git-directory-service";
 import gitSubprocessBudgets from "./fixtures/git-subprocess-budgets.json";
 import navigationListingBudgets from "./fixtures/navigation-listing-budgets.json";
@@ -136,6 +137,7 @@ import type { ProviderThreadSnapshot } from "../app-server/provider-thread-snaps
 import type { GitWorkingStateService } from "../app-server/git-working-state-service";
 import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
 import { WorktreeArchiveService } from "../app-server/worktree-archive-service";
+import { GitWorkspaceHandoffService } from "../app-server/git-workspace-handoff-service";
 import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
 import { AcpRolloutStore } from "../acp/acp-rollout-store";
 import { AcpSessionStore, type AcpSessionMetadata } from "../acp/acp-session-store";
@@ -2730,6 +2732,7 @@ type AcpConfigureWorkflowBudget = (params: {
 }) => Promise<{ defaultAgentBudget: number; maxAgentBudget: number }>;
 
 function createKimiAcpRegistry(options?: {
+  correspondenceStore?: ThreadCorrespondenceStore;
   acpBackendId?: AcpBackendId;
   installedAgent?: AcpInstalledAgentRecord;
   acpRolloutStore?: AcpRolloutStore;
@@ -2762,6 +2765,7 @@ function createKimiAcpRegistry(options?: {
   createScratchProjectDirectory?: () => Promise<string>;
   startSession?: KimiStartSession;
   steerSession?: AcpSteerSession;
+  supportsTurnSteering?: boolean;
   rewindSession?: AcpRewindSession;
   configureWorkflowBudget?: AcpConfigureWorkflowBudget;
   offersThoughtLevel?: (sessionId: string, level: string) => boolean;
@@ -2849,6 +2853,7 @@ function createKimiAcpRegistry(options?: {
       sessions.find((session) => session.sessionId === params.sessionId)?.acpRuntime
       ?? { updatedAt: 1000 }),
     steerSession,
+    supportsTurnSteering: () => options?.supportsTurnSteering === true,
     rewindSession,
     configureWorkflowBudget,
     ...(options?.offersThoughtLevel
@@ -2856,6 +2861,7 @@ function createKimiAcpRegistry(options?: {
       : {}),
   };
   const registry = new DesktopBackendRegistry({ getThreadArchivePolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "age" }),
+    correspondenceStore: options?.correspondenceStore,
     codexClient: options?.codexClient ?? new MockBackendClient({ threads: [] }),
     overlayStore: options?.overlayStore ?? createOverlayStoreMock(),
     acpAgentStore: createAcpAgentStoreMock([
@@ -11348,6 +11354,35 @@ describe("DesktopBackendRegistry", () => {
     ]);
 
     await registry.close();
+  });
+
+  it("preserves empty ACP history for unknown cursors and zero limits with stored receipts", async () => {
+    const source = { backend: "acp:grok" as const, threadId: "receipt-pagination" };
+    const correspondenceStore = new ThreadCorrespondenceStore();
+    correspondenceStore.record({
+      id: "correspondence:stored", source,
+      destination: { backend: "codex", threadId: "recipient" },
+      input: [{ type: "text", text: "Stored guidance" }], createdAt: 1_500, state: "started",
+    });
+    const { registry } = createKimiAcpRegistry({
+      correspondenceStore, acpBackendId: source.backend, sessionId: source.threadId,
+      sessions: [{
+        backendId: source.backend, sessionId: source.threadId, title: "Pagination fixture",
+        createdAt: 1_000, updatedAt: 2_000, executionMode: "default", status: "idle",
+      }],
+      replay: {
+        entries: [{ type: "message", id: "prompt", role: "user", text: "Prompt", createdAt: 1_000 }],
+        messages: [], pagination: { supportsPagination: false, hasPreviousPage: false },
+      },
+    });
+    onTestFinished(() => registry.close());
+    for (const pagination of [{ before: "unknown-cursor" }, { limit: 0 }]) {
+      const response = await registry.readThread({ ...source, ...pagination });
+      expect(response.replay.entries).toEqual([]);
+      expect(response.replay.messages).toEqual([]);
+      expect(response.replay.pagination.hasPreviousPage).toBe(false);
+    }
+    expect(correspondenceStore.message(source, "correspondence:stored")?.text).toContain("Stored guidance");
   });
 
   it("keeps managed review entries out of ACP pagination pages", async () => {
@@ -22203,6 +22238,156 @@ command = '''${expectedActionCommand}'''
     }
   });
 
+  it.each(["list", "legacy", "empty"])("clears the selection while preserving %s action data", async (format) => {
+    // Keep the schema-compatibility fixture outside prior-session zombie cleanup.
+    const startedAt = Date.now() + 60_000;
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          extraLinkedDirectories: [],
+          codexEnvironmentRuntime: {
+            environmentId: "original",
+            environmentName: "Original",
+            executionTarget: "local",
+            ...(format === "list" ? {
+              actionRuns: [{
+                runId: "old-run", actionId: "dev", actionName: "Dev", command: "pnpm dev",
+                status: "started" as const, startedAt, output: "ready",
+              }],
+            } : format === "legacy" ? {
+              actionId: "dev", actionName: "Dev", actionCommand: "pnpm dev",
+              actionStatus: "started" as const, actionStartedAt: startedAt, actionOutput: "ready",
+            } : {}),
+          },
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ initializeResult: { methods: ["thread/list"] }, threads: [] }),
+      overlayStore,
+    });
+    try {
+      const response = await registry.setCodexThreadEnvironment({ backend: "codex", threadId: "thread-1" });
+      if (format === "empty") {
+        expect(response.codexEnvironmentRuntime).toBeUndefined();
+      } else {
+        expect(response.codexEnvironmentRuntime?.environmentId).toBeUndefined();
+        expect(response.codexEnvironmentRuntime?.actionRuns).toEqual([
+          expect.objectContaining({
+            environmentId: "original", environmentName: "Original", status: "started", output: "ready",
+          }),
+        ]);
+      }
+      expect((await overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }))
+        ?.codexEnvironmentRuntime).toEqual(response.codexEnvironmentRuntime);
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it.each([undefined, "other", "broken"])("keeps action runs controllable after selecting environment %s", async (environmentId) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-thread-env-switch-"));
+    await mkdir(path.join(root, ".codex", "environments"), { recursive: true });
+    for (const id of ["other", "broken"]) {
+      await writeFile(path.join(root, ".codex", "environments", `${id}.toml`), `
+version = 1
+name = "${id}"
+${id === "broken" ? '[setup]\nscript = "fail-setup"' : ""}
+`, "utf8");
+    }
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-1": {
+          backend: "codex", threadId: "thread-1", extraLinkedDirectories: [],
+          codexEnvironmentRuntime: {
+            environmentId: "original", environmentName: "Original", executionTarget: "local", cwd: root,
+            shellEnvironment: { ORIGINAL_TOOLCHAIN: "enabled" },
+            setupStatus: "completed",
+            actions: [{ id: "dev", name: "Dev", command: "pnpm dev" }],
+          },
+        },
+      },
+    });
+    let commandParams: Parameters<CodexEnvironmentCommandRunner>[0] | undefined;
+    const stop = vi.spyOn(codexEnvironmentRuntime, "stopCodexEnvironmentDetachedCommand")
+      .mockReturnValue({ found: true, alreadyClosed: false });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/list"] },
+        threads: [{
+          id: "thread-1", title: "Thread", titleSource: "explicit", source: "codex", updatedAt: 1,
+          projectKey: root,
+          linkedDirectories: [{ id: root, kind: "local", label: "repo", path: root }],
+        }],
+      }),
+      overlayStore,
+      codexEnvironmentCommandRunner: vi.fn(async (params) => {
+        if (params.mode === "wait") throw new Error("setup failed");
+        commandParams = params;
+        return { pid: 12345 };
+      }),
+    });
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => { events.push(event); });
+    const readRuntime = async () => (await overlayStore.getThreadOverlayState({
+      backend: "codex", threadId: "thread-1",
+    }))?.codexEnvironmentRuntime;
+
+    try {
+      const started = await registry.runCodexEnvironmentAction({
+        backend: "codex", threadId: "thread-1", actionId: "dev",
+      });
+      const runId = started.codexEnvironmentRuntime?.actionRuns?.[0]?.runId;
+      expect(runId).toBeTruthy();
+      commandParams?.onDetachedOutput?.({ output: "booting" });
+      await expectEventually(async () => (await readRuntime())?.actionRuns?.[0]?.output, "booting");
+
+      const selection = registry.setCodexThreadEnvironment({ backend: "codex", threadId: "thread-1", environmentId });
+      if (environmentId === "broken") {
+        await expect(selection).rejects.toThrow("setup failed");
+      } else {
+        const response = await selection;
+        expect(response.codexEnvironmentRuntime?.actionRuns?.[0]).toMatchObject({ runId, status: "started", output: "booting" });
+      }
+      const selected = await readRuntime();
+      expect(selected?.environmentId).toBe(environmentId);
+      expect(selected?.shellEnvironment).toBeUndefined();
+      expect(selected?.actionRuns?.[0]).toMatchObject({
+        runId, status: "started", pid: 12345, output: "booting",
+        environmentId: "original", environmentName: "Original",
+      });
+      expect(events.at(-1)?.notification).toMatchObject({
+        method: "thread/codexEnvironment/updated",
+        params: { codexEnvironmentRuntime: selected },
+      });
+      if (!environmentId) {
+        expect(selected?.actions).toBeUndefined();
+        expect(selected?.setupStatus).toBeUndefined();
+        await expect(registry.runCodexEnvironmentAction({
+          backend: "codex", threadId: "thread-1", actionId: "dev",
+        })).rejects.toThrow("does not have a selected environment");
+      }
+
+      commandParams?.onDetachedOutput?.({ output: "booting\nready" });
+      await expectEventually(async () => (await readRuntime())?.actionRuns?.[0]?.output, "booting\nready");
+      await registry.stopCodexEnvironmentAction({
+        backend: "codex", threadId: "thread-1", runId: runId!, mode: "stop",
+      });
+      expect(stop).toHaveBeenCalledWith(runId, "stop");
+      expect((await readRuntime())?.actionRuns?.[0]?.terminationMode).toBe("stop");
+      commandParams?.onDetachedExit?.({ exitCode: 0, exitSignal: null, durationMs: 100, output: "booting\nready\nstopped" });
+      await expectEventually(async () => (await readRuntime())?.actionRuns?.[0]?.status, "exited");
+      expect((await readRuntime())?.actionRuns?.[0]).toMatchObject({ runId, output: "booting\nready\nstopped", exitCode: 0 });
+      expect((await readRuntime())?.environmentId).toBe(environmentId);
+    } finally {
+      stop.mockRestore();
+      await registry.close();
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+
   it("restores an ambiguously failed detached action to running when output continues", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-thread-env-live-output-"));
     const overlayStore = createOverlayStoreMock({
@@ -23452,6 +23637,62 @@ script = "printf setup-output"
     expect(response.codexEnvironmentRuntime?.actionRuns).toBeUndefined();
 
     await registry.close();
+  });
+
+  it.each(["local", "worktree"] as const)("forks into %s without environment setup after clearing a selection with running actions", async (workMode) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-fork-cleared-env-"));
+    const repoPath = path.join(root, "repo");
+    const forkPath = path.join(root, "fork");
+    await mkdir(repoPath, { recursive: true });
+    await mkdir(forkPath, { recursive: true });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-parent": {
+          backend: "codex",
+          threadId: "thread-parent",
+          extraLinkedDirectories: [],
+          codexEnvironmentRuntime: {
+            environmentId: "original",
+            environmentName: "Original",
+            executionTarget: "local",
+            cwd: repoPath,
+            actionRuns: [{
+              runId: "parent-live-run", actionId: "dev", actionName: "Dev", command: "pnpm dev",
+              status: "started", startedAt: Date.now() + 60_000, output: "ready",
+            }],
+          },
+        },
+      },
+    });
+    const codexClient = new MockBackendClient({ initializeResult: { methods: ["thread/fork"] } });
+    const commandRunner = vi.fn<CodexEnvironmentCommandRunner>();
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore,
+      codexEnvironmentCommandRunner: commandRunner,
+      gitDirectoryService: {
+        prepareLaunchpadWorkspace: vi.fn(async () => ({ cwd: forkPath, repositoryPath: repoPath, workMode })),
+        recordCodexWorktreeOwnerThread: vi.fn(async () => {}),
+      } as never,
+    });
+    try {
+      await registry.setCodexThreadEnvironment({ backend: "codex", threadId: "thread-parent" });
+      const response = await registry.forkThread({
+        backend: "codex", sourceThreadId: "thread-parent", parentThreadId: "thread-parent",
+        executionMode: "default", directoryKind: "directory", directoryLabel: "repo", directoryPath: repoPath, workMode,
+      });
+      expect(response.codexEnvironmentStartupFailure).toBeUndefined();
+      expect(response.codexEnvironmentRuntime).toBeUndefined();
+      expect(codexClient.lastForkThreadParams?.codexEnvironmentRuntime).toBeUndefined();
+      expect(commandRunner).not.toHaveBeenCalled();
+      expect((await overlayStore.getThreadOverlayState({ backend: "codex", threadId: response.threadId }))
+        ?.codexEnvironmentRuntime).toBeUndefined();
+      expect((await overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-parent" }))
+        ?.codexEnvironmentRuntime?.actionRuns?.[0]).toMatchObject({ runId: "parent-live-run", status: "started", output: "ready" });
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
   });
 
   it("reruns selected Codex environment setup when forking into a new worktree", async () => {
@@ -27041,11 +27282,13 @@ command = "pnpm dev"
       ...createKimiAgentRecord(backend),
       registryId: "grok",
       name: "Grok Build",
+      version: "1.0.50-pwragent.1",
     };
     const { registry, steerSession } = createKimiAcpRegistry({
       acpBackendId: backend,
       installedAgent,
       sessions,
+      supportsTurnSteering: true,
     });
     const pendingTurnId = "pending:grok-session-1:1000";
     await emitStartedTurn(
@@ -27092,11 +27335,13 @@ command = "pnpm dev"
       ...createKimiAgentRecord(backend),
       registryId: "grok",
       name: "Grok Build",
+      version: "1.0.50-pwragent.1",
     };
     const { registry, steerSession } = createKimiAcpRegistry({
       acpBackendId: backend,
       installedAgent,
       sessions,
+      supportsTurnSteering: true,
     });
     await emitStartedTurn(
       registry,
@@ -27145,11 +27390,13 @@ command = "pnpm dev"
       ...createKimiAgentRecord(backend),
       registryId: "grok",
       name: "Grok Build",
+      version: "1.0.50-pwragent.1",
     };
     const { registry } = createKimiAcpRegistry({
       acpBackendId: backend,
       installedAgent,
       sessions,
+      supportsTurnSteering: true,
       steerSession: vi.fn(async () => ({ delivery: "nextTurn" as const })),
     });
     const events: AgentEvent[] = [];
@@ -42398,6 +42645,14 @@ script = "printf setup"
       entries: [], messages: [], pagination: { supportsPagination: false, hasPreviousPage: false },
     });
     expect(replay.messages).toHaveLength(1);
+    expect(replay.entries[0]?.turn?.id).toBe("active:sender");
+    expect(events).toContainEqual(expect.objectContaining({ notification: {
+      method: "item/completed",
+      params: expect.objectContaining({
+        threadId: "sender", turnId: "active:sender",
+        item: expect.objectContaining({ id: replay.entries[0]?.id, createdAt: replay.entries[0]?.createdAt }),
+      }),
+    } }));
     expect(replay.messages[0]?.text).toContain("Complete consolidated findings");
     expect(replay.messages[0]?.text).not.toContain("Initial evidence");
     registry.cancelQueuedTurn(queueEntryId);
@@ -55565,6 +55820,108 @@ script = "printf setup"
     }
   });
 
+  it("archives the managed worktree after repeated project moves", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-repeated-project-move-"));
+    let registry: DesktopBackendRegistry | undefined;
+    try {
+      const repoPath = path.join(root, "PwrGit");
+      await mkdir(repoPath);
+      await git(repoPath, ["init", "-b", "main"]);
+      await writeFile(path.join(repoPath, "README.md"), "base\n", "utf8");
+      await git(repoPath, ["add", "README.md"]);
+      await git(repoPath, ["commit", "-m", "initial"]);
+      const handoffService = new GitWorkspaceHandoffService({ resolveWorktreeStorage: () => "in-repo" });
+      const created = await handoffService.handoff({
+        backend: "codex", threadId: "thread-1", direction: "to-project", targetPath: repoPath,
+        sourceWorkMode: "worktree", now: 1000,
+      });
+      const overlayStore = createOverlayStoreMock();
+      await overlayStore.replaceWorkspaceLinkedDirectory({
+        backend: "codex", threadId: "thread-1", directory: created.linkedDirectory,
+      });
+      const thread: AppServerThreadSummary = {
+        id: "thread-1", title: "Repeated project move", titleSource: "explicit", source: "codex",
+        projectKey: created.targetPath, linkedDirectories: [created.linkedDirectory], gitBranch: "HEAD", updatedAt: 2,
+      };
+      registry = new DesktopBackendRegistry({
+        codexClient: new MockBackendClient({ threads: [thread] }), overlayStore, gitWorkspaceHandoffService: handoffService,
+      });
+      for (let move = 0; move < 2; move += 1) {
+        const result = await registry.handoffThreadWorkspace({
+          backend: "codex", threadId: thread.id, direction: "to-project", targetPath: repoPath,
+        });
+        expect(result.targetPath).toBe(created.targetPath);
+      }
+      const archived = await registry.archiveThread({ backend: "codex", threadId: thread.id });
+      expect(archived.cleanup).toContainEqual(expect.objectContaining({ removedWorktree: true }));
+      expect(await pathExists(created.targetPath)).toBe(false);
+      expect(await git(repoPath, ["worktree", "list", "--porcelain"])).not.toContain(created.targetPath);
+    } finally {
+      await registry?.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["directory", "pr", "relinked-pr", "overlay"])("passes existing worktrees and source isolation to a project move: %s", async (provenance) => {
+    const directories: LinkedDirectorySummary[] = [{
+      id: "source", label: "Workspaces", path: "/repo/Workspaces", kind: "worktree", worktreePath: "/worktrees/Workspaces",
+    }, {
+      id: "target", label: "PwrGit", path: "/repo/PwrGit", kind: "worktree", worktreePath: "/worktrees/PwrGit",
+    }];
+    const thread: AppServerThreadSummary = {
+      id: "thread-1", title: "Move", titleSource: "explicit", source: "codex",
+      projectKey: provenance === "relinked-pr" ? "/repo/PwrGit" : "/worktrees/Workspaces",
+      linkedDirectories: provenance === "directory" ? directories : provenance === "relinked-pr" ? [] : directories.slice(0, 1), updatedAt: 2,
+    };
+    const handoff = vi.fn(async () => ({
+      backend: "codex" as const, threadId: thread.id, direction: "to-project" as const,
+      workMode: "worktree" as const, branch: "HEAD", repositoryPath: "/repo/PwrGit", targetPath: "/worktrees/new-PwrGit",
+      linkedDirectory: { id: "pwragent-handoff:codex:thread-1", label: "PwrGit", path: "/repo/PwrGit", kind: "worktree" as const, worktreePath: "/worktrees/new-PwrGit" },
+      warnings: [], completedAt: 1000,
+    }));
+    const recordCodexWorktreeOwnerThread = vi.fn();
+    const overlayDirectories = [
+      { ...directories[0]!, id: "pwragent-handoff:codex:thread-1" },
+      directories[1]!,
+    ];
+    const overlayStore = createOverlayStoreMock(provenance === "overlay" ? {
+      overlays: { "codex:thread-1": {
+        backend: "codex", threadId: thread.id, executionMode: "default", extraLinkedDirectories: overlayDirectories,
+      } },
+    } : undefined);
+    if (provenance === "pr" || provenance === "relinked-pr") await overlayStore.addThreadPullRequestReference({
+      backend: "codex", threadId: thread.id,
+      pr: { provider: "github.com", org: "example", repo: "PwrGit", number: 461, state: "passing", url: "https://github.com/example/PwrGit/pull/461", linkedDirectoryPaths: ["/worktrees/PwrGit"] },
+    });
+    await overlayStore.setThreadParent({ backend: "codex", threadId: thread.id, parentThreadId: "parent", parentThreadBackend: "acp:grok", parentThreadInstanceId: "remote-instance" });
+    const replaceWorkspace = vi.spyOn(overlayStore, "replaceWorkspaceLinkedDirectory");
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [thread] }), overlayStore,
+      gitDirectoryService: { recordCodexWorktreeOwnerThread } as never,
+      gitWorkspaceHandoffService: { handoff } as never,
+    });
+    const events: AgentEvent[] = [];
+    const unsubscribe = registry.onEvent((event) => { events.push(event); });
+    try {
+      await registry.handoffThreadWorkspace({ backend: "codex", threadId: thread.id, direction: "to-project", targetPath: "/repo/PwrGit" });
+      expect(handoff).toHaveBeenCalledWith(expect.objectContaining({
+        sourceWorkMode: provenance === "relinked-pr" ? "local" : "worktree",
+        workspacePaths: expect.arrayContaining(provenance === "relinked-pr" ? ["/worktrees/PwrGit"] : ["/worktrees/Workspaces", "/worktrees/PwrGit"]),
+      }));
+      if (provenance === "overlay") expect(handoff).toHaveBeenCalledWith(expect.objectContaining({
+        workspaceDirectories: expect.arrayContaining(overlayDirectories),
+      }));
+      expect(replaceWorkspace).toHaveBeenCalledWith(expect.objectContaining({ resetProjectState: true }));
+      expect(events).toContainEqual(expect.objectContaining({
+        backend: "codex", notification: { method: "thread/parent/cleared", params: { threadId: thread.id } },
+      }));
+      expect(recordCodexWorktreeOwnerThread).toHaveBeenCalledWith({ threadId: thread.id, worktreePath: "/worktrees/new-PwrGit" });
+    } finally {
+      unsubscribe();
+      await registry.close();
+    }
+  });
+
   it.each(["local", "worktree"] as const)("moves a scratch Codex conversation to another project and starts its next turn there: %s", async (workMode) => {
     const targetPath = workMode === "local" ? "/projects/demo" : "/worktrees/demo";
     const thread: AppServerThreadSummary = {
@@ -55579,7 +55936,7 @@ script = "printf setup"
       targetPath,
       linkedDirectory: {
         id: "pwragent-handoff:codex:thread-1", label: "demo", path: "/projects/demo", kind: workMode,
-        ...(workMode === "worktree" ? { worktreePath: targetPath } : {}),
+        ...(workMode === "worktree" ? { worktreePath: targetPath, worktreeOwnership: "external" as const } : {}),
       },
       warnings: [], completedAt: 1000,
     }));

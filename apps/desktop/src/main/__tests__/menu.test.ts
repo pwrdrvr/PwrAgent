@@ -13,6 +13,7 @@ function buildTemplate(
     actions?: Partial<ApplicationMenuActions>;
     federationPeers?: Array<{ instanceId: string; label: string }>;
     focusedRemoteWindow?: boolean;
+    keybindings?: Record<string, string[]>;
     openFederationWindow?: (peer: {
       instanceId: string;
       label: string;
@@ -31,6 +32,7 @@ function buildTemplate(
     isMac: options?.isMac ?? true,
     federationPeers: options?.federationPeers ?? [],
     focusedRemoteWindow: options?.focusedRemoteWindow,
+    keybindings: options?.keybindings,
     profiles: options?.profiles ?? [
       profile("default", { active: true, default: true }),
       profile("personal"),
@@ -324,6 +326,21 @@ describe("buildApplicationMenuTemplate", () => {
     expect(
       items.filter((item) => item.accelerator === "CmdOrCtrl+Shift+L"),
     ).toEqual([]);
+  });
+
+  it("shows the operator's own chords from keybindings.toml", () => {
+    const items = allItems(buildTemplate(false, {
+      keybindings: {
+        "threads.new": ["CmdOrCtrl+Alt+N"],
+        "navigation.search_threads": [],
+      },
+    }));
+    const accelerator = (label: string) =>
+      items.find((item) => item.label === label)?.accelerator;
+
+    expect(accelerator("New Thread")).toBe("CmdOrCtrl+Alt+N");
+    // An empty list unbinds the action, so the row shows no chord.
+    expect(accelerator("Search Threads")).toBeUndefined();
   });
 
   it("keeps Reload Window and Close Window on their roles", () => {

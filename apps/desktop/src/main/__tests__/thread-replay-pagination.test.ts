@@ -134,6 +134,19 @@ describe("thread replay pagination cursor id space", () => {
     });
   });
 
+  it("never names a sender delivery receipt as a provider pagination cursor", () => {
+    const replay = buildReplay([
+      legacyEntry("older-user", "user", "Older prompt"),
+      {
+        type: "message", id: "correspondence:send", role: "assistant", text: "Delivery receipt",
+        origin: { kind: "pwragent", systemReason: "thread-correspondence" },
+      },
+      legacyEntry("newer-user", "user", "Newer prompt"),
+    ]);
+    const page = pageNormalizedReplay(replay, { limit: 2 });
+    expect(page.pagination.previousCursor).toBe("newer-user");
+  });
+
   it("classifies cursor ownership by backend", () => {
     expect(threadReplayCursorIdSpace("acp:claude-code")).toBe("entry-id");
     expect(threadReplayCursorIdSpace("codex")).toBe("provider-cursor");

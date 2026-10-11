@@ -7284,6 +7284,51 @@ describe("ThreadView", () => {
     ).not.toBeInTheDocument();
   });
 
+  it.each([undefined, "other", "original"])("scopes retained environment action failures to selection %s", (environmentId) => {
+    render(
+      <ThreadView
+        backends={[]}
+        composerDisabled={false}
+        loading={false}
+        loadingMore={false}
+        messageCount={0}
+        selectedThread={{
+          id: `retained-failure-${environmentId ?? "none"}`,
+          title: "Environment actions",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: true },
+          codexEnvironmentRuntime: {
+            environmentId,
+            environmentName: environmentId,
+            executionTarget: "local",
+            actionRuns: [{
+              runId: `retained-failure-run-${environmentId ?? "none"}`,
+              actionId: "dev", actionName: "Dev", command: "pnpm dev",
+              environmentId: "original", environmentName: "Original",
+              status: "failed", startedAt: Date.now(), exitedAt: Date.now(), exitCode: 1,
+              output: "server failed",
+            }],
+          },
+        }}
+        skills={[]}
+        transcriptEntries={[]}
+        addOptimisticUserMessage={() => "optimistic-1"}
+        clearPendingRequest={() => undefined}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={() => undefined}
+      />,
+    );
+    expect(screen.getAllByLabelText("Env action failed")
+      .some((row) => row.textContent?.includes("server failed"))).toBe(true);
+    if (environmentId === "original") {
+      expect(screen.getByRole("button", { name: "Continue anyway" })).toBeInTheDocument();
+    } else {
+      expect(screen.queryByRole("button", { name: "Continue anyway" })).not.toBeInTheDocument();
+    }
+  });
+
   it("persists the environment failure dismissal when continuing anyway", async () => {
     const acknowledgeThreadEnvironmentFailure = vi.fn(async () => ({
       acknowledged: true,

@@ -6486,7 +6486,7 @@ function cloneCodexEnvironmentRuntimeForFork(
   } = runtime;
   const inheritedSelectedActionIdByEnvironmentId =
     selectedActionIdByEnvironmentId ??
-    (_actionId ? { [runtime.environmentId]: _actionId } : undefined);
+    (_actionId && runtime.environmentId ? { [runtime.environmentId]: _actionId } : undefined);
   const next: CodexThreadEnvironmentRuntime = {
     ...rest,
     ...(inheritedSelectedActionIdByEnvironmentId
@@ -6516,7 +6516,7 @@ function readSelectedActionIdByEnvironmentIdForFork(
   if (runtime.selectedActionIdByEnvironmentId) {
     return { ...runtime.selectedActionIdByEnvironmentId };
   }
-  if (runtime.actionId) {
+  if (runtime.actionId && runtime.environmentId) {
     return { [runtime.environmentId]: runtime.actionId };
   }
   return undefined;
@@ -11383,12 +11383,14 @@ export class DesktopBackendRegistry {
           method: "item/completed",
           params: {
             threadId: source.threadId,
+            ...(message.turn ? { turnId: message.turn.id } : {}),
             item: {
               id: message.id,
               type: "agentMessage",
               text: message.text,
               content: message.parts,
               origin: message.origin,
+              createdAt: message.createdAt,
             },
           },
         },
@@ -14954,9 +14956,11 @@ export class DesktopBackendRegistry {
     if (!thread && request.direction === "to-project") {
       throw new Error("Thread workspace metadata is unavailable for handoff.");
     }
+    const projectMoveOverlay = request.direction === "to-project"
+      ? await this.overlayStore.getThreadOverlayState(request)
+      : undefined;
     if (request.direction === "to-project") {
-      const overlay = await this.overlayStore.getThreadOverlayState(request);
-      const runtime = overlay?.codexEnvironmentRuntime;
+      const runtime = projectMoveOverlay?.codexEnvironmentRuntime;
       if (runtime && (
         runtime.executionTarget !== "local"
         || runtime.actionStatus === "started"
@@ -14968,8 +14972,38 @@ export class DesktopBackendRegistry {
     const candidate = request.direction === "to-project"
       ? {}
       : this.resolveHandoffWorkspaceCandidate(thread, request);
+    const workspaceDirectories = request.direction === "to-project"
+      ? [
+          ...(thread?.linkedDirectories ?? []),
+          ...(projectMoveOverlay?.extraLinkedDirectories ?? []),
+        ]
+      : undefined;
+    const sourceCwd = resolveThreadWorkspaceCwd(thread, projectMoveOverlay?.extraLinkedDirectories);
+    const sourceWorkMode: "local" | "worktree" = workspaceDirectories && mergeThreadLinkedDirectories(workspaceDirectories).some((directory) =>
+      directory.kind === "worktree"
+      && sourceCwd
+      && normalizeWorktreePathForComparison(directory.worktreePath ?? directory.path) === normalizeWorktreePathForComparison(sourceCwd),
+    ) ? "worktree" : "local";
+    // PR workspace provenance survives an earlier project relink that lost
+    // its directory. Git still validates every candidate against the target
+    // repository's registered worktrees before it can be reused.
+    const workspacePaths = workspaceDirectories ? [
+      ...workspaceDirectories.filter((directory) => directory.kind === "worktree")
+        .map((directory) => directory.worktreePath ?? directory.path),
+      ...(projectMoveOverlay?.prs ?? []).flatMap((pr) => pr.linkedDirectoryPaths ?? []),
+    ] : undefined;
     const result = await this.gitWorkspaceHandoffService.handoff({
       ...request,
+      ...(workspacePaths ? {
+        workspacePaths,
+        sourceWorkMode,
+        // Persisted links carry ownership. A provider-discovered worktree or
+        // PR path alone must not grant cleanup ownership to this thread.
+        workspaceDirectories: [
+          ...(projectMoveOverlay?.extraLinkedDirectories ?? []),
+          ...(workspaceDirectories ?? []).filter((directory) => directory.worktreeOwnership === "external"),
+        ],
+      } : {}),
       repositoryPath: request.repositoryPath ?? candidate.repositoryPath,
       sourcePath: request.sourcePath ?? candidate.sourcePath,
       sourceBranch: request.sourceBranch ?? candidate.sourceBranch,
@@ -15021,7 +15055,7 @@ export class DesktopBackendRegistry {
       threadId: request.threadId,
       cwd: result.linkedDirectory.worktreePath ?? result.targetPath,
     });
-    if (result.workMode === "worktree" && request.direction !== "to-project") {
+    if (result.workMode === "worktree" && result.linkedDirectory.worktreeOwnership !== "external") {
       await this.recordCodexWorktreeOwnerThread({
         backend: request.backend,
         threadId: request.threadId,
@@ -15041,6 +15075,15 @@ export class DesktopBackendRegistry {
     // Publish only after workspace replacement and CWD/branch synchronization
     // finish, so every selected-detail consumer can revalidate the new owner
     // configuration without depending on a full navigation refresh.
+    if (projectMoveOverlay?.parentThreadId) {
+      await this.emit({
+        backend: request.backend,
+        notification: {
+          method: "thread/parent/cleared",
+          params: { threadId: request.threadId },
+        },
+      });
+    }
     await this.publishLocalEvent({
       backend: request.backend,
       notification: {
@@ -15958,11 +16001,15 @@ export class DesktopBackendRegistry {
       const response = await this.readAcpThread(request, backend);
       return {
         ...response,
-        replay: request.includeTurns === false || request.before
+        replay: request.includeTurns === false
           ? response.replay
           : this.correspondenceStore.appendToReplay(
               { backend, threadId: request.threadId },
               response.replay,
+              undefined,
+              response.pricing?.lines.flatMap((line) => line.scope === "turn" && line.turnId
+                ? [{ id: line.turnId, startedAt: line.startedAt, completedAt: line.completedAt }] : []),
+              { before: request.before, limit: request.limit },
             ),
         readDurationMs: Math.max(0, Math.round(performance.now() - readStartedAt)),
       };
@@ -16161,11 +16208,15 @@ export class DesktopBackendRegistry {
       ...(replayWithReviewMetadata.threadStatus
         ? { threadStatus: replayWithReviewMetadata.threadStatus }
         : {}),
-      replay: request.includeTurns === false || request.before
+      replay: request.includeTurns === false
         ? replayWithReviewMetadata
         : this.correspondenceStore.appendToReplay(
             { backend, threadId: request.threadId },
             replayWithReviewMetadata,
+            undefined,
+            pricing.lines.flatMap((line) => line.scope === "turn" && line.turnId
+              ? [{ id: line.turnId, startedAt: line.startedAt, completedAt: line.completedAt }] : []),
+            { before: request.before, limit: request.limit },
           ),
     };
   }
@@ -17492,7 +17543,7 @@ export class DesktopBackendRegistry {
     workMode: LaunchpadWorkMode;
   }): Promise<CodexThreadEnvironmentRuntime | undefined> {
     const { cwd, onSetupProgress, sourceRuntime, workMode } = params;
-    if (!sourceRuntime) {
+    if (!sourceRuntime?.environmentId) {
       return undefined;
     }
     if (
@@ -24456,7 +24507,7 @@ export class DesktopBackendRegistry {
           threadId: request.threadId,
         });
         const runtime = overlay?.codexEnvironmentRuntime;
-        if (!runtime) {
+        if (!runtime?.environmentId) {
           throw new Error("This thread does not have a selected environment.");
         }
 
@@ -24475,7 +24526,7 @@ export class DesktopBackendRegistry {
           ...refreshedRuntimeForAction,
           selectedActionIdByEnvironmentId: {
             ...(refreshedRuntimeForAction.selectedActionIdByEnvironmentId ?? {}),
-            [refreshedRuntimeForAction.environmentId]: request.actionId,
+            [runtime.environmentId]: request.actionId,
           },
         };
         const runId = randomUUID();
@@ -24711,28 +24762,40 @@ export class DesktopBackendRegistry {
     request: SetCodexThreadEnvironmentRequest,
     onSetupProgress?: (event: CodexEnvironmentSetupProgressEvent) => void,
   ): Promise<SetCodexThreadEnvironmentResponse> {
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: request.backend,
+      threadId: request.threadId,
+    });
+    const previousRuntime = overlay?.codexEnvironmentRuntime;
+    // Runs belong to the thread, not its current environment selection. Fill
+    // provenance for older entries before replacing the selected environment.
+    const actionRuns = readCodexEnvironmentActionRuns(previousRuntime).map((run) => ({
+      ...run,
+      environmentId: run.environmentId ?? previousRuntime?.environmentId,
+      environmentName: run.environmentName ?? previousRuntime?.environmentName,
+    }));
     if (!request.environmentId) {
+      const codexEnvironmentRuntime: CodexThreadEnvironmentRuntime | undefined = actionRuns.length > 0
+        ? { executionTarget: "local", actionRuns }
+        : undefined;
       await this.overlayStore.setThreadCodexEnvironmentRuntime?.({
         backend: request.backend,
         threadId: request.threadId,
-        codexEnvironmentRuntime: undefined,
+        codexEnvironmentRuntime,
       });
       this.invalidateThreadListCache(request.backend);
       await this.emitCodexEnvironmentRuntimeUpdated({
         backend: request.backend,
         threadId: request.threadId,
-        codexEnvironmentRuntime: undefined,
+        codexEnvironmentRuntime,
       });
       return {
         backend: request.backend,
         threadId: request.threadId,
+        codexEnvironmentRuntime,
       };
     }
 
-    const overlay = await this.overlayStore.getThreadOverlayState({
-      backend: request.backend,
-      threadId: request.threadId,
-    });
     const cwd = await this.resolveThreadEnvironmentCwd(
       request.backend,
       request.threadId,
@@ -24797,6 +24860,7 @@ export class DesktopBackendRegistry {
     }
     const codexEnvironmentRuntime: CodexThreadEnvironmentRuntime = {
       ...(setupRuntime ?? {}),
+      actionRuns: actionRuns.length > 0 ? actionRuns : undefined,
       environmentId: environment.id,
       environmentName: environment.name,
       executionTarget: existingRuntime?.executionTarget ?? "local",
@@ -38385,6 +38449,8 @@ export class DesktopBackendRegistry {
         input,
         createdAt: Date.now(),
         state: "sending",
+        sourceTurnId: request.context.turnId ?? this.getActiveTurnForThread(source)?.turnId,
+        sourceItemId: request.context.callId,
       });
       let targetTitle: string | undefined;
       let targetInstanceId: string | undefined;

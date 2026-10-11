@@ -1470,6 +1470,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       observedGitBranch: params.gitBranch ?? current.observedGitBranch,
       extraLinkedDirectories: nextDirectories,
       ...(params.resetProjectState ? {
+        // The handoff origin remains historical provenance; these fields own
+        // the current group, which ends when the conversation moves projects.
+        parentThreadId: undefined,
+        parentThreadBackend: undefined,
+        parentThreadInstanceId: undefined,
         codexEnvironmentRuntime: undefined,
         retainedBranchDriftPairs: undefined,
         gitBranch: params.gitBranch,

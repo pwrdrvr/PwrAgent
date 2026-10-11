@@ -227,6 +227,17 @@ describe("thread to-do tool dispatch", () => {
     );
   });
 
+  it("points a card's project at list_instance_projects", () => {
+    const add = tool("add_todo", undefined);
+    expect(add.description).toContain("list_instance_projects");
+    for (const name of ["add_todo", "update_todo"] as const) {
+      const schema = tool(name, undefined).inputSchema as {
+        properties: { project: { description: string } };
+      };
+      expect(schema.properties.project.description).toContain("list_instance_projects");
+    }
+  });
+
   it("refuses to reopen through the tool", async () => {
     const result = await tool("resolve_todo", createHandler())
       .dispatch({ id: "todo-1", status: "open" }, CONTEXT);

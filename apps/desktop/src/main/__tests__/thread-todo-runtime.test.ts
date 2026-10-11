@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { HandoffSourceSettings } from "../app-server/backend-registry";
+import type { ThreadTodo, ThreadTodoProject } from "@pwragent/shared";
 import {
   createThreadTodoRunners,
+  setThreadTodoProject,
   type ThreadTodoRunnerRegistry,
 } from "../thread-todos/thread-todo-runtime";
 
@@ -161,5 +163,41 @@ describe("thread to-do Start thread", () => {
     expect(created?.args).toMatchObject({ executionMode: "full-access" });
     expect(created?.args).not.toHaveProperty("model");
     expect(created?.args).not.toHaveProperty("reasoningEffort");
+  });
+});
+
+describe("thread to-do project menu", () => {
+  const SNAP: ThreadTodoProject = { key: "directory:/src/pwrsnap", label: "PwrSnap", path: "/src/pwrsnap" };
+  const card = { id: "todo-1" } as ThreadTodo;
+  const deps = () => ({
+    todos: { update: vi.fn(() => card) },
+    listProjects: vi.fn(async () => [SNAP]),
+  });
+
+  it("files the card under the picked project, as the sidebar lists it", async () => {
+    const fake = deps();
+    await setThreadTodoProject({ id: "todo-1", projectKey: SNAP.key }, fake);
+    expect(fake.todos.update).toHaveBeenCalledWith({ id: "todo-1", targetProject: SNAP });
+  });
+
+  it("returns the card to its thread's project for null, without listing", async () => {
+    const fake = deps();
+    await setThreadTodoProject({ id: "todo-1", projectKey: null }, fake);
+    expect(fake.todos.update).toHaveBeenCalledWith({ id: "todo-1", targetProject: null });
+    expect(fake.listProjects).not.toHaveBeenCalled();
+  });
+
+  it("refuses a key the sidebar no longer lists", async () => {
+    const fake = deps();
+    await expect(setThreadTodoProject({ id: "todo-1", projectKey: "directory:/gone" }, fake))
+      .rejects.toThrow("That project is no longer in the sidebar.");
+    expect(fake.todos.update).not.toHaveBeenCalled();
+  });
+
+  it("lets a failed listing reject rather than read as a missing project", async () => {
+    const fake = deps();
+    fake.listProjects.mockRejectedValueOnce(new Error("navigation unavailable"));
+    await expect(setThreadTodoProject({ id: "todo-1", projectKey: SNAP.key }, fake))
+      .rejects.toThrow("navigation unavailable");
   });
 });
