@@ -245,7 +245,8 @@ export default defineConfig({
       {
         test: {
           name: "desktop-renderer-node",
-          runner: "apps/desktop/src/renderer/src/test/act-warning-runner.ts",
+          // No act-warning runner: its guard is installed by the jsdom
+          // project's setup.ts, and nothing here renders React.
           pool: "threads",
           globals: true,
           testTimeout: TEST_TIMEOUT_MS,

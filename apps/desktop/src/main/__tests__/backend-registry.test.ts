@@ -21,7 +21,16 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import { afterAll, describe, expect, it, onTestFinished, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import {
   applyNavigationLaunchpadProviderSettingsPatch,
   buildFederatedThreadRef,
@@ -3141,6 +3150,22 @@ function rememberCollapsedDirectoryWithPinnedThread(params: {
     unchanged: false,
   }));
 }
+
+// close() asks each running turn to stop and waits up to 2s for its terminal.
+// A fake that accepts the stop and never ends the turn costs every test that
+// leaves one running the whole deadline, which is how this file once grew
+// from 10s to 106s on CI. Answer the stop the way the backend does
+// (`answerAcpSessionCancel`, `interruptEndsTurn`).
+beforeEach(() => {
+  mainLoggerMock.warn.mockClear();
+});
+afterEach(() => {
+  expect(
+    mainLoggerMock.warn.mock.calls.filter(([message]) =>
+      message === "running turns still unanswered at the shutdown deadline"
+    ),
+  ).toEqual([]);
+});
 
 describe("DesktopBackendRegistry", () => {
   it("exports the authoritative handoff workspace while provider cwd synchronization is pending", async () => {

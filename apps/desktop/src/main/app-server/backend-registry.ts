@@ -10568,6 +10568,7 @@ export class DesktopBackendRegistry {
         requests: { ...requests },
         turns: keys.length,
         unanswered: keys.filter((key) => this.activeTurnKeys.has(key)).length,
+        unasked: unasked.size,
       };
       if (outcome === "ended") {
         backendRegistryLog.info("running turns stopped for shutdown", detail);
