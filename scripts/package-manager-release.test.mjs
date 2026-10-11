@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { candidateKey, distributionNeeded, materializeRelease, auditChannels, checksumFor, compareVersions, ghJson, releaseAssets, renderPackages, stableVersion, verifyFile, SOURCE_REPO, TAP_REPO, WINGET_REPO, WINGET_PATH } from "./package-manager-release.mjs";
+import { candidateKey, distributionNeeded, materializeRelease, auditChannels, checksumFor, compareVersions, ghJson, releaseAssets, renderPackages, stableVersion, verifyFile, previousRelease, publishedReleases, SOURCE_REPO, TAP_REPO, WINGET_REPO, WINGET_PATH } from "./package-manager-release.mjs";
 import { submitChannel } from "./submit-package-manager-release.mjs";
 
 const version = "1.1.4";
@@ -123,9 +123,21 @@ describe("package manager release inputs", () => {
 
   it("reports authoritative versions and pending links, and propagates API failures", () => {
     const api = (endpoint) => {
+      if (/^repos\/[^/]+\/[^/?]+$/.test(endpoint)) return { full_name: endpoint.slice(6), private: false, default_branch: "main" };
+      if (endpoint.includes("/commits/")) return { sha: "a".repeat(40) };
+      const sourceRelease = (target) => ({ ...release, tag_name: `v${target}`,
+        assets: release.assets.map((asset) => ({ ...asset, name: asset.name.replace(version, target),
+          browser_download_url: asset.browser_download_url.replaceAll(version, target), digest: `sha256:${hashes[asset.name] ?? "a".repeat(64)}` })),
+      });
+      const files = (target) => renderPackages(sourceRelease(target), Object.fromEntries(Object.entries(hashes).map(([name, hash]) => [name.replace(version, target), hash])));
+      const encode = (content) => ({ encoding: "base64", content: Buffer.from(content).toString("base64") });
       if (endpoint.endsWith("releases/latest")) return release;
-      if (endpoint.includes(`${TAP_REPO}/contents`)) return { content: Buffer.from('  version "1.1.3"\n').toString("base64") };
-      if (endpoint.includes(`${WINGET_REPO}/contents`)) return [{ type: "dir", name: "1.9.0" }, { type: "dir", name: "1.10.0" }];
+      if (endpoint.includes("releases/tags/")) return sourceRelease(endpoint.split("/tags/v")[1]);
+      if (endpoint.includes(`${TAP_REPO}/contents`)) return encode(files("1.1.3")["Casks/pwragent.rb"]);
+      if (endpoint.includes(`${WINGET_REPO}/contents`)) {
+        if (endpoint.includes(".installer.yaml")) return encode(files("1.10.0")[`${WINGET_PATH}/1.10.0/PwrDrvr.PwrAgent.installer.yaml`]);
+        return [{ type: "dir", name: "1.9.0" }, { type: "dir", name: "1.10.0" }];
+      }
       if (endpoint.startsWith("search/issues")) return { incomplete_results: false, total_count: 1, items: [{ html_url: "https://github.com/example/pull/1", title: "PwrAgent" }] };
       return null;
     };
@@ -134,7 +146,7 @@ describe("package manager release inputs", () => {
     expect(audit.winget.version).toBe("1.10.0");
     expect(audit.winget.pending[0].url).toContain("/pull/1");
     expect(() => auditChannels(() => { throw new Error("HTTP 403"); })).toThrow("HTTP 403");
-    expect(() => auditChannels((endpoint) => endpoint.includes("Homebrew/homebrew-cask") ? {} : api(endpoint))).toThrow(/reconcile ownership/);
+    expect(auditChannels((endpoint) => endpoint.includes("Homebrew/homebrew-cask/contents") ? {} : api(endpoint)).findings).toEqual(expect.arrayContaining([expect.objectContaining({ message: expect.stringMatching(/reconcile ownership/) })]));
     expect(() => auditChannels((endpoint) => endpoint.startsWith("search/")
       ? { incomplete_results: true, total_count: 0, items: [] } : api(endpoint))).toThrow(/Incomplete/);
   });
@@ -203,6 +215,56 @@ describe("public GitHub reads", () => {
     expect(ghJson("search/code?q=PwrAgent", false, null, runtime([
       response(200, { incomplete_results: false, total_count: 0, items: [] }),
     ])).total_count).toBe(0);
+  });
+
+  it("paginates complete searches and refuses changing counts, duplicates, caps and missing pages", () => {
+    const items = Array.from({ length: 100 }, (_, id) => ({ id }));
+    const page = (total_count, items) => ({ incomplete_results: false, total_count, items });
+    const io = runtime([response(200, page(101, items)), response(200, page(101, [{ id: 100 }]))]);
+    expect(ghJson("search/issues?q=PwrAgent&page=9", false, null, io).items).toHaveLength(101);
+    expect(io.calls[0][1].at(-1)).toContain("page=1");
+    expect(io.calls[1][1].at(-1)).toContain("page=2");
+    for (const pages of [
+      [page(101, items), page(102, [{ id: 100 }])],
+      [page(101, items), page(101, [{ id: 0 }])],
+      [page(101, items), page(101, [])],
+      [page(1001, items)],
+    ]) {
+      expect(() => ghJson("search/code?q=PwrAgent", false, null, runtime(pages.map((body) => response(200, body))))).toThrow(/Incomplete/);
+    }
+  });
+
+  it("suppresses API debug and sanitizes bounded subprocess failures", () => {
+    const io = runtime([{ status: 1, stdout: "", stderr: "private raw details", error: new Error("private raw details") }]);
+    io.env.GH_DEBUG = "api";
+    expect(() => ghJson("repos/public/source?private-query", false, null, io)).toThrow("HTTP unavailable");
+    expect(io.calls[0][2]).toMatchObject({ timeout: 45_000, env: { GH_DEBUG: "" } });
+    expect(() => ghJson("repos/public/source", false, null, runtime([{ status: 0, stdout: "HTTP/2.0 200\r\n\r\nnot-json" }]))).toThrow(/Malformed/);
+  });
+});
+
+describe("upgrade baseline release pagination", () => {
+  const first = Array.from({ length: 100 }, (_, index) => ({ id: index + 1, tag_name: `v1.1.4-beta.${index}`, prerelease: true, draft: false }));
+  const prior = { id: 101, tag_name: "v1.1.3", prerelease: false, draft: false };
+
+  it("selects the previous stable from a later page without fetching release bytes", () => {
+    const api = vi.fn((endpoint) => endpoint.includes("/tags/") ? prior : endpoint.endsWith("page=1") ? first : [prior]);
+    expect(previousRelease(version, api)).toBe(prior);
+    expect(api.mock.calls.filter(([endpoint]) => endpoint.endsWith("page=1"))).toHaveLength(2);
+    expect(api.mock.calls.some(([endpoint]) => endpoint.includes("releases/download"))).toBe(false);
+  });
+
+  it("rejects duplicated or changed pages and a full bounded traversal", () => {
+    expect(() => publishedReleases((endpoint) => endpoint.endsWith("page=1") ? first : [first[0]])).toThrow(/duplicate/);
+    let reads = 0;
+    expect(() => publishedReleases((endpoint) => {
+      if (endpoint.endsWith("page=1")) return reads++ === 0 ? first : first.slice(1);
+      return [prior];
+    })).toThrow(/changed/);
+    expect(() => publishedReleases((endpoint) => {
+      const page = Number(endpoint.split("page=").at(-1));
+      return first.map((item) => ({ ...item, id: item.id + page * 100 }));
+    })).toThrow(/limit/);
   });
 });
 
