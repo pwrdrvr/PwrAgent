@@ -9,6 +9,26 @@ export function launchHeadlessElectron(electron, desktopRoot, env) {
   return electron.launch({ chromiumSandbox: true, args: [path.join(desktopRoot, "out/main/index.js"), "--disable-messaging", "--disable-automations"], cwd: desktopRoot, env, timeout: 60_000 });
 }
 
+export async function captureLaunchRejections(launch) {
+  // Playwright 1.63 starts parallel stderr waiters before awaiting them. An
+  // early Electron exit can reject the unawaited waiters outside launch().
+  // During startup only, turn every such rejection into a caller-visible
+  // failure so the driver's catch/finally can persist and clean up normally.
+  let orphanFailure;
+  let launchFailure;
+  const onRejected = (reason) => { orphanFailure ??= reason instanceof Error ? reason : new Error(String(reason)); };
+  process.on("unhandledRejection", onRejected);
+  try {
+    try { await launch(); } catch (error) { launchFailure = error; }
+    // Allow rejections from sibling stderr waiters to be delivered before
+    // removing the startup-only listener. Never retain it during model work.
+    await new Promise((resolve) => setImmediate(resolve));
+  } finally {
+    process.off("unhandledRejection", onRejected);
+  }
+  if (launchFailure || orphanFailure) throw launchFailure ?? orphanFailure;
+}
+
 export async function dispatchTurn({ call, result, request, persist }) {
   // Persist before the only paid dispatch. A lost acknowledgement is not
   // evidence that the provider rejected the request or stopped spending.

@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { EXIT, assertReady, atomicJson, dispatchTurn, errorStatus, launchHeadlessElectron, observeFamilyBudget, sanitizedProtocolRecord, probeInterrupt, budgetStop, waitForOutcome, claimRun, cleanEnvironment, configToml, observedBudget, sanitizer, terminalEvent, validateInput } from "./headless-contract.mjs";
+import { EXIT, assertReady, atomicJson, captureLaunchRejections, dispatchTurn, errorStatus, launchHeadlessElectron, observeFamilyBudget, sanitizedProtocolRecord, probeInterrupt, budgetStop, waitForOutcome, claimRun, cleanEnvironment, configToml, observedBudget, sanitizer, terminalEvent, validateInput } from "./headless-contract.mjs";
 const input = { schemaVersion: 1, runId: "run-1", cwd: "/app", prompt: "Fix it", model: "gpt-6-astra", reasoningEffort: "high", serviceTier: "default", tokenMiser: true, timeoutMs: 1000, runtimeManifest: "/eval/runtime.json" };
 test("strict contract rejects implicit toggles, model substitutions and unknown inputs", () => {
   assert.equal(validateInput(input).codexHome, "/eval/codex");
@@ -118,18 +118,30 @@ test("real Playwright launch never disables sandboxing or retries a failed execu
     // No Electron or provider runs: record the actual Playwright spawn args,
     // then fail as a host with unsupported sandbox prerequisites would.
     writeFileSync(executable, '#!/usr/bin/env node\nrequire("node:fs").appendFileSync(process.env.ARG_LOG, JSON.stringify(process.argv.slice(2)) + "\\n");\nprocess.exit(1);\n', { mode: 0o700 });
-    // Playwright's early-exit listeners can also reject internally. Isolate
-    // the deliberately failing launcher while checking its real spawn args.
+    // Exercise the real early-exit listener failure in its own Node process,
+    // including the startup adapter that must make it catchable by the driver.
     const probe = spawnSync(process.execPath, ["--input-type=module", "-e", `
       import { _electron as electron } from ${JSON.stringify(import.meta.resolve("@playwright/test"))};
-      import { launchHeadlessElectron } from ${JSON.stringify(new URL("./headless-contract.mjs", import.meta.url).href)};
-      await launchHeadlessElectron({ launch: (options) => {
-        if (options.chromiumSandbox !== true) throw new Error("Sandbox option missing");
-        return electron.launch({ ...options, executablePath: ${JSON.stringify(executable)}, timeout: 5000 });
-      } }, ${JSON.stringify(dir)}, { PATH: process.env.PATH, ARG_LOG: ${JSON.stringify(log)} });
+      import { atomicJson, captureLaunchRejections, errorStatus, launchHeadlessElectron } from ${JSON.stringify(new URL("./headless-contract.mjs", import.meta.url).href)};
+      const before = process.listenerCount("unhandledRejection");
+      try {
+        await captureLaunchRejections(async () => {
+          await launchHeadlessElectron({ launch: (options) => {
+            if (options.chromiumSandbox !== true) throw new Error("Sandbox option missing");
+            return electron.launch({ ...options, executablePath: ${JSON.stringify(executable)}, timeout: 5000 });
+          } }, ${JSON.stringify(dir)}, { PATH: process.env.PATH, ARG_LOG: ${JSON.stringify(log)} });
+        });
+        throw new Error("Expected launch failure");
+      } catch (error) {
+        atomicJson(${JSON.stringify(path.join(dir, "result.json"))}, { status: errorStatus({}), error: error.message });
+      }
+      if (process.listenerCount("unhandledRejection") !== before) throw new Error("Leaked launch listener");
     `], { encoding: "utf8", timeout: 15_000 });
     assert.equal(probe.error, undefined);
-    assert.notEqual(probe.status, 0);
+    assert.equal(probe.status, 0, probe.stderr);
+    const result = JSON.parse(readFileSync(path.join(dir, "result.json"), "utf8"));
+    assert.equal(result.status, "preflight_failed");
+    assert.match(result.error, /Process failed to launch/);
     const launches = readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line));
     assert.equal(launches.length, 1);
     const [args] = launches;
@@ -148,6 +160,26 @@ test("sandbox prerequisite rejection propagates without a fallback launch", asyn
     throw failure;
   } }, "/opt/pwragent/apps/desktop", {}), (error) => error === failure);
   assert.equal(calls, 1);
+});
+
+test("startup rejection capture is removed before model work and never ignores orphan failures", async () => {
+  const before = process.listenerCount("unhandledRejection");
+  let launched = false;
+  await captureLaunchRejections(async () => { launched = true; });
+  assert.equal(launched, true);
+  assert.equal(process.listenerCount("unhandledRejection"), before);
+  // Isolate the synthetic orphan from node:test's own unhandled listener.
+  const probe = spawnSync(process.execPath, ["--input-type=module", "-e", `
+    import assert from "node:assert/strict";
+    import { captureLaunchRejections } from ${JSON.stringify(new URL("./headless-contract.mjs", import.meta.url).href)};
+    const before = process.listenerCount("unhandledRejection");
+    await assert.rejects(captureLaunchRejections(async () => {
+      void Promise.reject(new Error("orphan startup failure"));
+    }), /orphan startup failure/);
+    assert.equal(process.listenerCount("unhandledRejection"), before);
+  `], { encoding: "utf8", timeout: 5000 });
+  assert.equal(probe.error, undefined);
+  assert.equal(probe.status, 0, probe.stderr);
 });
 
 test("nested interrupted completion and normalized cancellation cannot report success", async () => {
