@@ -94,7 +94,7 @@ describe("TerminalReplay", () => {
   it("normalizes progress updates and distinguishes screen text from event deltas", async () => {
     const replay = new TerminalReplay(80, 4);
     replay.append("step 1\rstep 2\r\n\x1b[32mDone\x1b[0m", 42);
-    expect(await replay.readPlain()).toEqual({ data: "step 2\nDone", seq: 1, timestamp: 42 });
+    expect(await replay.readPlain()).toEqual({ data: "step 2\nDone", seq: 1, timestamp: 42, truncated: false });
     expect(replay.read().frames[0]?.data).toContain("\x1b[32m");
     await replay.dispose();
   });

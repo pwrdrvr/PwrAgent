@@ -143,12 +143,21 @@ export class TerminalReplay {
     return { frames, nextSeq, truncated, hasMore: nextSeq < this.seq };
   }
 
-  async readPlain(): Promise<{ data: string; seq: number; timestamp: number }> {
-    const result = this.queue.then(() => ({
-      data: this.plainText().slice(-64 * 1024),
-      seq: this.parsedSeq,
-      timestamp: this.updatedAt,
-    }));
+  range(): { firstSeq: number; lastSeq: number; firstTimestamp: number | null; lastTimestamp: number | null } {
+    return {
+      firstSeq: this.frames[0]?.seq ?? this.seq + 1, lastSeq: this.seq,
+      firstTimestamp: this.frames[0]?.timestamp ?? null,
+      lastTimestamp: this.frames.at(-1)?.timestamp ?? null,
+    };
+  }
+
+  async readPlain(): Promise<{ data: string; seq: number; timestamp: number; truncated: boolean }> {
+    const result = this.queue.then(() => {
+      const text = this.plainText();
+      let start = Math.max(0, text.length - 64 * 1024);
+      if (/[\uDC00-\uDFFF]/.test(text[start] ?? "")) start++;
+      return { data: text.slice(start), seq: this.parsedSeq, timestamp: this.updatedAt, truncated: start > 0 };
+    });
     this.queue = result.then(() => undefined);
     return result;
   }

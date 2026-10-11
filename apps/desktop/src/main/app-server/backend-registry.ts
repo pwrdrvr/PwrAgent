@@ -5,6 +5,7 @@ import type { ForgeReadHandler } from "../agent-tools/pwragent-forge-agent-tools
 import type { ForgePrRepositoryResolver, ForgePrToolHandler } from "../agent-tools/pwragent-forge-pr-agent-tools";
 import { ForgeReadError, repositoryKey, validateForgeReadArgs, type ForgeReadRequest, type ForgeRepository } from "../pr-status/forge-tool-contract";
 import { forgePrToolGroup, type ForgePrToolArgs, type ForgePrToolOperation } from "../pr-status/forge-pr-tool-contract";
+import type { TerminalOutputToolHandler } from "../agent-tools/pwragent-terminal-output-tools";
 import { sweepThreadArchiveRetention, archivedThreadFamily, archiveRetentionFamilyEligible } from "./thread-archive-retention";
 import { runGitCommand } from "./git-executable";
 import {
@@ -9481,6 +9482,7 @@ export class DesktopBackendRegistry {
   private appManagementHandler?: PwrAgentAppManagementHandler;
   private starMapHandler?: PwrAgentStarMapHandler;
   private threadTodoHandler?: PwrAgentThreadTodoHandler;
+  private terminalOutputHandler?: TerminalOutputToolHandler;
   private agentThreadActions?: AgentThreadActions;
   private messagingAgentToolService?: MessagingAgentToolService;
   private readonly changingCodexAgentThreadIds = new Set<string>();
@@ -10769,6 +10771,7 @@ export class DesktopBackendRegistry {
                 tokenMiserFocused: this.tokenMiserService?.focused,
                 starMapHandler: this.starMapHandler,
                 threadTodoHandler: this.threadTodoHandler,
+                terminalOutputHandler: this.terminalOutputHandler,
               }, { taskMonitorRole: "all" }),
             authorizeToolCall: (params) =>
               this.authorizeAgentToolMcpCall(params),
@@ -11732,6 +11735,10 @@ export class DesktopBackendRegistry {
     handler: PwrAgentStarMapHandler | null | undefined,
   ): void {
     this.starMapHandler = handler ?? undefined;
+  }
+
+  setTerminalOutputToolHandler(handler: TerminalOutputToolHandler | undefined): void {
+    this.terminalOutputHandler = handler;
   }
 
   setPwrAgentThreadTodoHandler(
@@ -19014,6 +19021,7 @@ export class DesktopBackendRegistry {
       ...(tokenMiserEnabled ? { tokenMiserStore: this.tokenMiserStore, tokenMiserFocused: this.tokenMiserService?.focused } : {}),
       starMapHandler: this.starMapHandler,
       threadTodoHandler: this.threadTodoHandler,
+      terminalOutputHandler: this.terminalOutputHandler,
     });
     const pdfMcpRegistration =
       backend === "codex" && this.resolvePdfAnalysisEnabledFn()
@@ -28853,6 +28861,7 @@ export class DesktopBackendRegistry {
         ...(tokenMiserEnabled ? { tokenMiserStore: this.tokenMiserStore, tokenMiserFocused: this.tokenMiserService?.focused } : {}),
         starMapHandler: this.starMapHandler,
         threadTodoHandler: this.threadTodoHandler,
+        terminalOutputHandler: this.terminalOutputHandler,
       }),
     ), discoveryEnabled, eagerTools);
   }
@@ -39539,6 +39548,7 @@ export class DesktopBackendRegistry {
         tokenMiserFocused: this.tokenMiserService?.focused,
         starMapHandler: this.starMapHandler,
         threadTodoHandler: this.threadTodoHandler,
+        terminalOutputHandler: this.terminalOutputHandler,
       }, { taskMonitorRole: "all" });
       const catalog = catalogs.find(({ router }) => router.acceptsDynamicToolCall(hostToolCall));
       // These adapters retain the historical namespace normalization and
