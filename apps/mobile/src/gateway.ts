@@ -4,6 +4,12 @@ export class GatewayRequestError extends Error {
   constructor(readonly code: string, message: string) { super(message); }
 }
 type SocketFactory = (url: string, token: string) => WebSocket;
+export function createNativeWebSocket(url: string, token: string): WebSocket {
+  // iOS SocketRocket and Android otherwise add a browser-style Origin. A
+  // native bearer client must override it so the gateway keeps rejecting browsers.
+  const NativeSocket = WebSocket as unknown as { new(url: string, protocols: string[], options: { headers: Record<string, string> }): WebSocket };
+  return new NativeSocket(url, [], { headers: { Authorization: `Bearer ${token}`, Origin: "" } });
+}
 export class Gateway {
   private socket?: WebSocket;
   private pending = new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
@@ -15,6 +21,7 @@ export class Gateway {
   private heartbeat?: ReturnType<typeof setInterval>;
   hello?: MobileHello;
   onState: (state: string) => void = () => {};
+  onConnectionError: (message: string) => void = () => {};
   onEvent: (event: MobileEvent) => void = () => {};
   constructor(readonly credential: MobileCredential, private readonly createSocket: SocketFactory) {}
   connect(): void {
@@ -31,15 +38,27 @@ export class Gateway {
     url.protocol = "wss:"; url.pathname = "/mobile/v1/socket"; url.search = ""; url.hash = "";
     const socket = this.createSocket(url.toString(), this.credential.token);
     this.socket = socket;
+    let issue: string | undefined;
+    const report = (message: string) => {
+      issue = this.credential.token ? message.split(this.credential.token).join("[redacted]") : message;
+      this.onConnectionError(issue);
+    };
     socket.onopen = () => {
       if (generation !== this.generation) return socket.close();
+      this.onState("Authenticating");
       void this.rpc<MobileHello>("hello", {}).then((hello) => {
+        if (generation !== this.generation || this.stopped || socket.readyState !== 1) return;
         if (hello.protocol !== 1 || hello.gatewayId !== this.credential.gatewayId || hello.deviceId !== this.credential.deviceId) {
           this.stop(); this.onState("Gateway identity changed. Pair again."); return;
         }
+        this.onConnectionError("");
         this.hello = hello; this.attempt = 0; this.onState("Connected");
         this.heartbeat = setInterval(() => { void this.rpc("ping", {}).catch(() => socket.close()); }, 15_000);
-      }).catch(() => socket.close());
+      }).catch((cause) => {
+        if (generation !== this.generation || this.stopped) return;
+        if (!issue) report(`Gateway authentication failed: ${cause instanceof Error ? cause.message : "No valid hello response"}`);
+        socket.close();
+      });
     };
     socket.onmessage = ({ data }) => {
       if (generation !== this.generation || typeof data !== "string") return;
@@ -50,17 +69,25 @@ export class Gateway {
         if (!pending) return;
         clearTimeout(pending.timer); this.pending.delete(message.id);
         if (message.error) pending.reject(new GatewayRequestError(message.error.code, message.error.message)); else pending.resolve(message.result);
-      } catch { socket.close(); }
+      } catch { report("The gateway sent an unreadable response."); socket.close(); }
     };
-    socket.onerror = () => socket.close();
+    socket.onerror = (event) => {
+      if (generation !== this.generation || this.stopped) return;
+      const message = (event as Event & { message?: unknown }).message;
+      report(typeof message === "string" && message ? `Secure WebSocket failed: ${message}` : "Secure WebSocket failed. Check the gateway address, LAN connection, and trusted certificate.");
+      socket.close();
+    };
     socket.onclose = (event) => {
       if (generation !== this.generation) return;
       this.hello = undefined; clearInterval(this.heartbeat);
       this.rejectPending();
       if (this.stopped) return;
-      if (event.code === 4001 || event.code === 4003) { this.stopped = true; this.onState("Pairing expired or revoked"); return; }
+      if (event.code === 4001 || event.code === 4003) { this.stopped = true; report("This phone's pairing was revoked. Disconnect and pair again with a new code."); this.onState("Pairing expired or revoked"); return; }
+      if (!issue) report(`Gateway connection closed (code ${event.code}${event.reason ? `: ${event.reason}` : ""}).`);
+      const delay = Math.min(30_000, 500 * 2 ** this.attempt++) + Math.random() * 500;
+      this.onConnectionError(`${issue} Retrying in ${Math.ceil(delay / 1000)}s.`);
       this.onState("Reconnecting");
-      this.retry = setTimeout(() => this.open(), Math.min(30_000, 500 * 2 ** this.attempt++) + Math.random() * 500);
+      this.retry = setTimeout(() => this.open(), delay);
     };
   }
   rpc<T>(method: string, params: unknown): Promise<T> {
