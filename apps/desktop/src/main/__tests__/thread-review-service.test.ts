@@ -126,6 +126,18 @@ describe("persistent thread reviews", () => {
     expect(completedThreadReview({ backend: "codex", notification: { method: "item/completed", params: { threadId: THREAD.threadId, turnId: "turn", item: { id: "started", type: "enteredReviewMode" } } } })).toBeUndefined();
   });
 
+  it("does not track an interrupted review that left an empty artifact", () => {
+    expect(service.importEntry(THREAD, { type: "review", id: "interrupted", review: "  " })).toBeUndefined();
+    expect(service.list({ ...THREAD, status: "all" })).toEqual([]);
+  });
+
+  it("keys a review's project the way every other card's project is keyed", () => {
+    const review = service.record(THREAD, {
+      ...INPUT, context: { workspacePath: "C:\\work\\atlas\\", projectLabel: "Atlas" },
+    });
+    expect(threadReviewTodo(review).sourceProject).toEqual({ key: "directory:C:/work/atlas", path: "C:/work/atlas", label: "Atlas" });
+  });
+
   it("tracks native plain-text findings using the transcript's same parser", () => {
     const review = service.importEntry(THREAD, {
       type: "review", id: "native-plain", review: "A cancellation regression.\n\nReview comments:\n- [P1] Handle cancellation — /repo/index.ts:10-12\n  Abort the pending operation.",

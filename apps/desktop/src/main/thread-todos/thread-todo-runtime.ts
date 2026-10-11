@@ -1,8 +1,10 @@
 import type {
   AppServerBackendKind,
+  AppServerThreadReviewEntry,
   CreateInstanceThreadResult,
   ListInstanceProjectsResult,
   PwrAgentFederationContext,
+  ThreadReviewIdentity,
   ThreadTodo,
   ThreadTodoMergeMethod,
   ThreadTodoProject,
@@ -115,6 +117,20 @@ export function installThreadTodoRuntime(params: {
   const reviews = getThreadReviewService();
   setThreadReviewBroadcast(params.broadcast);
   reviews.importStoredReviews();
+  // Tracking a review is a side effect of reading or finishing one. A review
+  // that cannot be recorded must not fail the thread read or the event.
+  const importReview = (
+    identity: ThreadReviewIdentity,
+    entry: AppServerThreadReviewEntry,
+  ): void => {
+    try {
+      reviews.importEntry(identity, entry);
+    } catch (error) {
+      threadTodoLog.warn("could not track a completed review", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
   readDefaultMergeMethod = params.readDefaultMergeMethod;
   todos.setOnChanged(params.broadcast);
   todos.setRunners(createThreadTodoRunners({ registry, federation }));
@@ -123,7 +139,7 @@ export function installThreadTodoRuntime(params: {
   unsubscribeArchive = registry.onEvent((event) => {
     if (event.federationTarget?.scope === "remote") return;
     const completed = completedThreadReview(event);
-    if (completed) reviews.importEntry(completed.identity, completed.entry);
+    if (completed) importReview(completed.identity, completed.entry);
     if (event.notification.method !== "thread/archived") return;
     try {
       todos.dismissOpenForThread({
@@ -225,7 +241,7 @@ export function installThreadTodoRuntime(params: {
       update: (identity, request) => reviews.update(request, "agent", identity),
     },
     importReviews: (identity, entries) => {
-      for (const entry of entries) reviews.importEntry(identity, entry);
+      for (const entry of entries) importReview(identity, entry);
     },
     update: async (context, target, input) => {
       const current = todos.findForThread({ ...context, ...target });

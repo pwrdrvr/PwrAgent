@@ -120,6 +120,9 @@ function TrackedReviewCard(props: ThreadTodoCardProps) {
   const { todo } = props;
   const tracking = useTrackedReview(todo, { id: todo.reviewId });
   const [expanded, setExpanded] = useState(false);
+  // One hand-off per click: a second click before the send settles would
+  // queue the same reply again.
+  const [sending, setSending] = useState(false);
   const titleId = `thread-todo-title-${todo.id}`;
   const review = tracking.review;
   const items = review ? orderReviewItems(review.items) : [];
@@ -135,8 +138,11 @@ function TrackedReviewCard(props: ThreadTodoCardProps) {
     else count = open === items.length ? `${open} open` : `${open} of ${items.length} open`;
   }
   // The explanation is the transcript's to show; the card repeats it only
-  // when there is no list to read instead.
-  const summary = items.length === 0 ? review?.summary : undefined;
+  // when there is no list to read instead. Until the review loads, the
+  // card's own detail stands in, clamped the same way.
+  const explanation = review
+    ? items.length === 0 ? review.summary : undefined
+    : todo.detail;
 
   const renderAction = () => {
     if (!review || review.status !== "open") return null;
@@ -157,7 +163,12 @@ function TrackedReviewCard(props: ThreadTodoCardProps) {
       <button
         type="button"
         className="button button--primary thread-todo-card__button"
-        onClick={() => void onDoHere(todo, addressReviewFindingsPrompt(review))}
+        disabled={sending}
+        onClick={() => {
+          setSending(true);
+          void Promise.resolve(onDoHere(todo, addressReviewFindingsPrompt(review)))
+            .finally(() => setSending(false));
+        }}
       >
         <ArrowUpIcon size={12} />
         Address findings
@@ -182,8 +193,8 @@ function TrackedReviewCard(props: ThreadTodoCardProps) {
       />
       <div className="thread-todo-card__body">
         <p className="review-todo__summary">
-          <span className="review-todo__count">{count ?? todo.detail ?? "Loading review…"}</span>
-          {summary ? <span className="review-todo__explanation">{summary}</span> : null}
+          {count ? <span className="review-todo__count">{count}</span> : null}
+          {explanation ? <span className="review-todo__explanation">{explanation}</span> : null}
         </p>
         {shown.length > 0 && review ? (
           <ul className="review-todo__findings" aria-label="Findings">

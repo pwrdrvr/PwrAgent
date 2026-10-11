@@ -121,9 +121,23 @@ describe("review To-do card", () => {
     expect(prompt).toContain("`update_review_item`");
     expect(prompt).toContain("1. [P1] Abort pending exports — /example/atlas/src/export-queue.ts:42-46 (finding `abort`)");
     expect(prompt).not.toContain("Drop the stale cursor");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Address findings" })).toBeEnabled());
 
     fireEvent.click(screen.getByRole("button", { name: "Dismiss review" }));
     expect(handlers.onResolve).toHaveBeenCalledWith(todo, "dismissed");
+  });
+
+  it("sends the hand-off once while the first send is still settling", async () => {
+    let settle: (sent: boolean) => void = () => {};
+    const onDoHere = vi.fn(() => new Promise<boolean>((resolve) => { settle = resolve; }));
+    renderCard({ ...review, items: [finding("abort", "Abort pending exports", 1)] }, onDoHere);
+    const button = await screen.findByRole("button", { name: "Address findings" });
+    fireEvent.click(button);
+    fireEvent.click(button);
+    expect(onDoHere).toHaveBeenCalledTimes(1);
+    expect(button).toBeDisabled();
+    settle(true);
+    await waitFor(() => expect(button).toBeEnabled());
   });
 
   it("settles a finding from its row", async () => {

@@ -123,7 +123,9 @@ export function registerThreadTodoIpcHandlers(options: {
           ? threadReviewTodo(getThreadReviewService().update({
               id: request.id.slice("review:".length),
               status: request.status === "done" ? "handled" : request.status,
-              note: request.status === "dismissed" ? "Dismissed by operator." : "Marked handled by operator.",
+              ...(request.status === "open" ? {} : {
+                note: request.status === "dismissed" ? "Dismissed by operator." : "Marked handled by operator.",
+              }),
             }, "user"))
           : getThreadTodoService().resolve({
               id: request.id,

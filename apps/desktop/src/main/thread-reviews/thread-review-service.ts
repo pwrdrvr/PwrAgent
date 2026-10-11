@@ -85,6 +85,9 @@ export class ThreadReviewService {
       || (entry.displayText !== undefined && !entry.output)) return undefined;
     const output = entry.output ?? parseReviewOutputText(entry.review);
     const plain = output ? undefined : parsePlainReview(entry.review);
+    // An interrupted review leaves an artifact with nothing in it: no verdict,
+    // no findings and no text. There is nothing to address.
+    if (!output && !entry.review.trim()) return undefined;
     return this.record(identity, {
       sourceKey: entry.id,
       title: "Code review",

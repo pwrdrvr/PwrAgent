@@ -3,7 +3,8 @@ import type {
   AppServerReviewContext,
   AppServerReviewFinding,
 } from "./normalized-app-server";
-import type { ThreadTodo } from "./thread-todos";
+import { classifyDirectory } from "../directory-navigation";
+import type { ThreadTodo, ThreadTodoProject } from "./thread-todos";
 
 export const PWRAGENT_THREAD_REVIEW_OPERATION_NAMES = [
   "record_review", "list_reviews", "update_review_item", "update_review",
@@ -99,10 +100,20 @@ export function threadReviewTodo(review: ThreadReview): ThreadTodo {
     createdAt: review.createdAt,
     updatedAt: review.updatedAt,
     ...(review.status === "open" ? {} : { resolvedAt: review.updatedAt }),
-    ...(projectPath ? { sourceProject: {
-      key: `directory:${projectPath}`,
-      path: projectPath,
-      label: review.context?.projectLabel ?? projectPath.split(/[\\/]/).pop() ?? projectPath,
-    } } : {}),
+    ...(projectPath ? { sourceProject: reviewProject(projectPath, review.context?.projectLabel) } : {}),
+  };
+}
+
+/**
+ * Keyed the way every other card's project is, so a review lands in the
+ * Project lens of the thread it belongs to: canonical separators, a scratch
+ * workspace under its `workspace:` root.
+ */
+function reviewProject(path: string, label: string | undefined): ThreadTodoProject {
+  const descriptor = classifyDirectory({ id: path, label: label ?? path, path, kind: "local" });
+  return {
+    key: descriptor.key,
+    path: descriptor.path ?? path,
+    label: label ?? descriptor.label,
   };
 }

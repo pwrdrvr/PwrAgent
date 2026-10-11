@@ -408,8 +408,11 @@ function TodoRow(props: {
             </button>
           ) : null}
           {/* A merge or a started thread happened; only a resolve can be
-              taken back, as the stack's Undo does. */}
-          {!todo.startedThread && (!todo.result || RESOLUTION_RESULTS.has(todo.result)) ? (
+              taken back, as the stack's Undo does. A handled review is
+              reopened through one of its findings, in the transcript. */}
+          {!todo.startedThread
+            && (!todo.result || RESOLUTION_RESULTS.has(todo.result))
+            && !(todo.reviewId && todo.status === "done") ? (
             <button
               type="button"
               className="thread-todos-panel__row-link"
