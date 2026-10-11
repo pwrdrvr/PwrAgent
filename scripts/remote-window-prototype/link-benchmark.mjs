@@ -1,4 +1,5 @@
 import net from "node:net";
+import { transmitPacket } from "./link-transmission.mjs";
 import { readFile, writeFile } from "node:fs/promises";
 import { once } from "node:events";
 import { performance } from "node:perf_hooks";
@@ -43,10 +44,9 @@ for (const scenario of [
     const header = Buffer.alloc(14);
     header.writeUInt32BE(chunk.length + 10); header[4] = kind; header.writeDoubleBE(created, 5); header[13] = final ? 1 : 0;
     const packet = Buffer.concat([header, chunk]);
-    if (!client.write(packet)) await once(client, "drain");
-    wireBytes += packet.length; payloadBytes += chunk.length;
     const stall = scenario.stallEvery && ++chunkIndex % scenario.stallEvery === 0 ? scenario.oneWayMs * 2 : 0;
-    await sleep(packet.length * 8 / (scenario.mbps * 1000) + stall);
+    await transmitPacket(client, packet, { mbps: scenario.mbps, stallMs: stall });
+    wireBytes += packet.length; payloadBytes += chunk.length;
   }
   while (!done || pending) {
     if (!pending) { await sleep(1); continue; }
@@ -67,5 +67,5 @@ for (const scenario of [
     frameAgeP50Ms: quantile(frames, .5), frameAgeP95Ms: quantile(frames, .95), eventDelayP50Ms: quantile(events, .5), eventDelayP95Ms: quantile(events, .95),
     pendingFrameCap: 1, inflightFrameCap: 1, snapshotBytes: bytes.length });
 }
-await writeFile(output, JSON.stringify({ note: "Measured loopback with application-level bandwidth/delay/stall injection; fixed real fixture snapshot; no capture/decode/photons; no actual packet loss", results }, null, 2) + "\n");
+await writeFile(output, JSON.stringify({ measurementRevision: 2, note: "Serialization and stalls precede delivery. Measured loopback with application-level bandwidth/delay/stall injection; fixed real fixture snapshot; no capture/decode/photons; no actual packet loss", results }, null, 2) + "\n");
 console.log(JSON.stringify(results.map(({ name, delivered, dropped, frameAgeP95Ms, eventDelayP95Ms }) => ({ name, delivered, dropped, frameAgeP95Ms, eventDelayP95Ms }))));

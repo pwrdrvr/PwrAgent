@@ -36,24 +36,26 @@ function validate(b) {
         ||t.x+t.width>b.width||t.y+t.height>b.height||!['image/png','image/webp'].includes(t.mime)
         ||typeof t.base64!=='string'||t.base64.length>2097152||!/^[A-Za-z0-9+/]*={0,2}$/.test(t.base64)) throw Error('Invalid tile');
     }
-    // First frame must cover the canvas exactly with a non-overlapping 128px grid.
-    if (previous===-1) {
-      const positions=new Set(f.tiles.map(t=>`${t.x},${t.y}`));
-      if (positions.size!==f.tiles.length || positions.size!==Math.ceil(b.width/128)*Math.ceil(b.height/128)
-        || f.tiles.some(t=>t.x%128||t.y%128||t.width!==Math.min(128,b.width-t.x)||t.height!==Math.min(128,b.height-t.y))) throw Error('Incomplete keyframe');
-    }
+    // Every frame uses unique grid cells, bounding retained decoded pixels to
+    // one canvas (at most 8 MP), including sparse delta frames.
+    const positions=new Set(f.tiles.map(t=>`${t.x},${t.y}`));
+    if (positions.size!==f.tiles.length
+      || f.tiles.some(t=>t.x%128||t.y%128||t.width!==Math.min(128,b.width-t.x)||t.height!==Math.min(128,b.height-t.y))) throw Error('Invalid tile grid');
+    if (previous===-1 && positions.size!==Math.ceil(b.width/128)*Math.ceil(b.height/128)) throw Error('Incomplete keyframe');
     previous=f.seq;
   }
   if (!b.frames.length) throw Error('Empty batch');
 }
 async function draw(f,g) {
+  if(g!==generation) return;
   const start=performance.now(), decoded=[];
   try {
     for (const t of f.tiles) {
       const bytes=Uint8Array.from(atob(t.base64),c=>c.charCodeAt(0));
       const bitmap=await createImageBitmap(new Blob([bytes],{type:t.mime}));
-      if(bitmap.width!==t.width||bitmap.height!==t.height) {bitmap.close();throw Error('Decoded dimensions differ');}
       decoded.push({bitmap,t});
+      if(g!==generation) return;
+      if(bitmap.width!==t.width||bitmap.height!==t.height) throw Error('Decoded dimensions differ');
     }
     const decodeEnd=performance.now();
     if(g!==generation) return;
@@ -61,20 +63,28 @@ async function draw(f,g) {
     const drawn=performance.now();
     // rAF is a presentation opportunity, not a photon measurement.
     await new Promise(requestAnimationFrame);
+    if(g!==generation) return;
     measurements.push({seq:f.seq,tiles:f.tiles.length,decodeMs:decodeEnd-start,drawMs:drawn-decodeEnd,presentationOpportunityMs:performance.now()-start});
   } finally { for(const {bitmap} of decoded) bitmap.close(); }
 }
 $('file').onchange=async event=>{
   const f=event.target.files[0]; if(!f)return;
-  generation++; batch=null; $('play').disabled=true; $('save').disabled=true;
+  const g=++generation;
+  batch=null; playing=false; result=undefined; measurements=[];
+  $('play').disabled=true; $('save').disabled=true;
+  $('status').textContent='Importing fixture batch'; $('metrics').textContent='';
   try {
     if(f.size>33554432)throw Error('Batch exceeds 32 MiB');
-    const b=JSON.parse(await f.text());validate(b);batch=b;
+    const text=await f.text();
+    if(g!==generation)return;
+    const b=JSON.parse(text);validate(b);
     canvas.width=b.width;canvas.height=b.height;measurements=[];
-    await draw(b.frames[0],generation);
+    await draw(b.frames[0],g);
+    if(g!==generation)return;
+    batch=b;
     $('status').textContent=`Imported ${b.frames.length} frames, ${b.width}×${b.height}; fixture owner ${b.ownerInstanceId}`;
     $('play').disabled=false;
-  }catch(e){$('status').textContent=e.message;}
+  }catch(e){if(g===generation)$('status').textContent=e.message;}
 };
 $('play').onclick=async()=>{
   if(!batch||playing)return;playing=true;$('play').disabled=true;
@@ -89,7 +99,8 @@ $('play').onclick=async()=>{
     result={version:1,sessionId:b.sessionId,userAgent:navigator.userAgent,width:b.width,height:b.height,frames:measurements.length,elapsedMs:performance.now()-start,decodeDrawP50Ms:sorted[Math.floor(sorted.length*.5)],decodeDrawP95Ms:sorted[Math.floor(sorted.length*.95)],note:'Offline playback after Federation transfer; rAF is not input-to-photon',measurements};
     $('metrics').textContent=JSON.stringify({...result,measurements:undefined},null,2);
     $('status').textContent='Playback complete';$('save').disabled=false;
-  }catch(e){$('status').textContent=e.message;}finally{playing=false;$('play').disabled=!batch;}
+  }catch(e){if(g===generation)$('status').textContent=e.message;}
+  finally{if(g===generation){playing=false;$('play').disabled=!batch;}}
 };
 $('save').onclick=()=>{
  const url=URL.createObjectURL(new Blob([JSON.stringify(result,null,2)],{type:'application/json'}));

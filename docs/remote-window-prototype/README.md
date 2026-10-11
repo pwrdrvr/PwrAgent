@@ -77,13 +77,15 @@ Windows Edge headless imported the scrolling batch in 454.2 ms, then played 90 f
 
 ![Verified changed fixture pixels rendered on Windows](artifacts/windows-visible-ack.png)
 
-The [loopback experiment](artifacts/link-benchmark.json) sends a fixed real 169,249-byte fixture packet through actual TCP in 16 KiB quanta, keeping one in-flight snapshot plus the newest pending snapshot. It injects application-level bandwidth limits, one-way delay and deterministic retransmission-like stalls. It is **not kernel packet loss**, WAN testing or a WebRTC congestion-control comparison.
+The [loopback experiment](artifacts/link-benchmark.json) sends a fixed real 169,249-byte fixture packet through actual TCP in 16 KiB quanta, keeping one in-flight snapshot plus the newest pending snapshot. It injects application-level bandwidth limits, one-way delay and deterministic retransmission-like stalls. Measurement revision 2 delays each packet before writing it to TCP, then adds propagation at the receiver. This corrects the original implementation, which could record delivery before paying the final chunk's serialization/stall cost; the table and artifact below have been regenerated. It is **not kernel packet loss**, WAN testing or a WebRTC congestion-control comparison.
 
 | Scenario | Delivered / dropped snapshots | Frame age p95 | Small event delay p95 |
 |---|---:|---:|---:|
-| Loopback, nominal 1000 Mbit/s | 90 / 0 | 18.8 ms | 19.5 ms |
-| Emulated 10 Mbit/s, 50 ms RTT | 21 / 66 | 207.2 ms | 40.7 ms |
-| Emulated 2 Mbit/s, 100 ms RTT, stall each 33 chunks | 5 / 82 | 855.5 ms | 117.2 ms |
+| Loopback, nominal 1000 Mbit/s | 87 / 2 | 26.6 ms | 22.0 ms |
+| Emulated 10 Mbit/s, 50 ms RTT | 21 / 66 | 243.9 ms | 41.6 ms |
+| Emulated 2 Mbit/s, 100 ms RTT, stall each 33 chunks | 5 / 72 | 996.0 ms | 172.3 ms |
+
+The review's 16,000-byte single-packet case was also rerun: median frame age was **148.5 ms** at 2 Mbit/s and 50 ms one-way propagation, above the 114.056 ms serialization-plus-propagation floor. See [the regression measurement](artifacts/link-single-packet-regression.json). This case uses synthetic zero bytes and is separate from the captured-window workload.
 
 The key finding is boundedness, not a claimed production latency: replacing queued snapshots prevents minutes of stale video, and interleaving small events avoids placing them behind the whole frame. Frame size still makes low-bandwidth latency unacceptable. At 2 Mbit/s, a 169 KB full snapshot takes roughly 0.68 s to serialize even before other delays. Adaptive resolution, sparse damage, motion codec bitrate and preemption are necessary. Timer granularity and Node instrumentation affect the loopback numbers.
 
@@ -108,7 +110,7 @@ These are productization requirements unless identified as implemented in the ex
 7. Never trust payload `ownerInstanceId` as authorization. `FederationRouter` validates origin and a configured relay hop; adapters must bind the validated origin. Current transport supports Noise IK, signing/enrollment, revocation and reconnect, but this report does not claim media is end-to-end encrypted against every gateway configuration. Document where the relay can decrypt. WebRTC signaling must inherit pairing/revocation without accepting arbitrary peer-supplied URLs or fingerprints.
 8. Input carries session/scene/geometry epoch, monotonic input sequence, displayed-frame sequence and source-issued freshness lease. Validate on the source clock, not unsynchronized viewer time. Reject stale geometry, unfocused/unavailable surfaces, denied control, replay and peer mismatch. Keep cursor movement coalescible; preserve ordered key/button transitions. No queued typing after reconnect. Provide an immediate source-local stop and an unmistakable control indicator.
 
-The browser prototype bounds batch bytes, pixels, frames and tiles, requires a complete first keyframe, checks sequences and decoded dimensions, replaces sessions by generation, releases image bitmaps, and has a network-denying CSP. It is a fixture viewer, not a hardened untrusted media service. Productization still needs decoder isolation, predecode dimension checks, malformed-image fuzzing, resource accounting, focus handling and accessible navigation. The canvas has an accessible label/status but does **not** expose remote text semantics to screen readers. A separately consented, minimized accessibility tree or app helper may improve that; do not silently export full AX/UIA trees.
+The browser prototype bounds batch bytes, pixels, frames and tiles, requires a complete first keyframe and unique 128-pixel-grid cells for every delta (at most one canvas of declared decoded pixels per frame), checks sequences and decoded dimensions, fences asynchronous imports/decode/presentation by their original generation, releases image bitmaps, and has a network-denying CSP. It is a fixture viewer, not a hardened untrusted media service. Productization still needs decoder isolation, predecode dimension checks, malformed-image fuzzing, resource accounting, focus handling and accessible navigation. The canvas has an accessible label/status but does **not** expose remote text semantics to screen readers. A separately consented, minimized accessibility tree or app helper may improve that; do not silently export full AX/UIA trees.
 
 ## Platform input and capture boundaries
 

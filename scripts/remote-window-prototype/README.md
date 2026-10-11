@@ -75,11 +75,11 @@ The optional timestamp comes from the source JSONL. If omitted it is `null`; pac
 
 ```sh
 pnpm install --frozen-lockfile
-pnpm test scripts/remote-window-prototype/session.test.mjs scripts/remote-window-prototype/federation.test.mjs scripts/remote-window-prototype/viewer.test.mjs
+pnpm test scripts/remote-window-prototype/session.test.mjs scripts/remote-window-prototype/federation.test.mjs scripts/remote-window-prototype/viewer.test.mjs scripts/remote-window-prototype/link-transmission.test.mjs
 node scripts/remote-window-prototype/link-benchmark.mjs .local/remote-window/pwrwin-visible.json .local/remote-window/link-benchmark.json
 ```
 
-`session.mjs` tests identity/epoch/revocation/input freshness and bounded newest-only snapshots. Its local fixture-control grant is not remotely callable. The integration test uses the repository's actual `FederationRouter` and `FederationRpcEndpoint`; it is an in-process test and does not imply deployment to live peers. `link-benchmark.mjs` uses actual loopback TCP with application-level delays/stalls and fixed captured packet bytes. It does not simulate true network packet loss, codec dependencies or decode. No port is bound beyond `127.0.0.1`, and the listener is closed afterward.
+`session.mjs` tests identity/epoch/revocation/input freshness and bounded newest-only snapshots. Its local fixture-control grant is not remotely callable. The integration test uses the repository's actual `FederationRouter` and `FederationRpcEndpoint`; it is an in-process test and does not imply deployment to live peers. `link-benchmark.mjs` uses actual loopback TCP with application-level delays/stalls and fixed captured packet bytes. Serialization and retransmission-like stalls occur before a packet is written; the receiver then adds propagation delay. It does not simulate true network packet loss, codec dependencies or decode. No port is bound beyond `127.0.0.1`, and the listener is closed afterward.
 
 ## Current gaps
 
