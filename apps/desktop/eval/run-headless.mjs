@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline";
 import { createReadStream } from "node:fs";
-import { EXIT, assertReady, atomicJson, claimRun, cleanEnvironment, configToml, dispatchTurn, errorStatus, launchHeadlessElectron, observeFamilyBudget, sanitizer, budgetStop, waitForOutcome, probeInterrupt, sanitizedProtocolRecord, validateInput } from "./lib/headless-contract.mjs";
+import { EXIT, assertReady, atomicJson, captureLaunchRejections, claimRun, cleanEnvironment, configToml, dispatchTurn, errorStatus, launchHeadlessElectron, observeFamilyBudget, sanitizer, budgetStop, waitForOutcome, probeInterrupt, sanitizedProtocolRecord, validateInput } from "./lib/headless-contract.mjs";
 
 const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = process.argv.slice(2);
@@ -99,7 +99,9 @@ try {
   // A bounded overall watchdog also covers a hung launch/IPC/cleanup. Container
   // --init owns orphan reaping; app.close handles the normal child shutdown.
   watchdog.unref();
-  app = await launchHeadlessElectron(electron, desktopRoot, env);
+  await captureLaunchRejections(async () => {
+    app = await launchHeadlessElectron(electron, desktopRoot, env);
+  });
   logFd = openSync(path.join(output, "app.log"), "w", 0o600);
   for (const stream of [app.process().stdout, app.process().stderr]) {
     if (!stream) continue;
