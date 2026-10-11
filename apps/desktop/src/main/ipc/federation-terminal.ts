@@ -34,6 +34,11 @@ import { federationWindowTargetForWebContents } from "../window";
 
 const log = getMainLogger("pwragent:federation-terminal");
 
+function isUnsupportedPtyMethod(error: unknown): boolean {
+  if (typeof error === "object" && error !== null && "code" in error) return error.code === "method_not_found";
+  return /\b(?:unknown|unsupported) method\b|\bmethod (?:not found|not supported)\b/i.test(String(error));
+}
+
 function logRemoteResizeFailure(error: unknown): void {
   log.warn("remote terminal resize failed", {
     error: error instanceof Error ? error.message : String(error),
@@ -136,12 +141,18 @@ export class FederationTerminalBridge {
       }
       const client = getDesktopFederationRuntime().remotePty(existing.target);
       if (client.snapshot) {
-        const response = await client.snapshot({ sessionId: existing.ownerSessionId });
-        existing.snapshot = response.snapshot;
-        existing.lastSeq = Math.max(existing.lastSeq, response.snapshot?.seq ?? 0);
-        existing.status = response.status;
-        existing.foregroundCommand = response.status && response.status !== "running"
-          ? false : response.foregroundCommand ?? existing.foregroundCommand;
+        try {
+          const response = await client.snapshot({ sessionId: existing.ownerSessionId });
+          existing.snapshot = response.snapshot;
+          existing.lastSeq = Math.max(existing.lastSeq, response.snapshot?.seq ?? 0);
+          existing.status = response.status;
+          existing.foregroundCommand = response.status && response.status !== "running"
+            ? false : response.foregroundCommand ?? existing.foregroundCommand;
+        } catch (error) {
+          // The client exposes all methods even when an older owner does not.
+          // Keep its existing buffer/stream attachment; never spawn a fallback.
+          if (!isUnsupportedPtyMethod(error)) throw error;
+        }
       }
       return this.toCreateResponse(existing);
     }
@@ -175,7 +186,7 @@ export class FederationTerminalBridge {
           ? await client.list({ backend, threadId }).catch((error: unknown) => {
               // Older owners do not implement discovery. A lost connection or
               // denied request must not silently turn attach into a new shell.
-              if (/method.*not found|unknown method|not supported/i.test(String(error))) return [];
+              if (isUnsupportedPtyMethod(error)) return [];
               throw error;
             }) : [];
         const first = recovered[0];
@@ -244,9 +255,9 @@ export class FederationTerminalBridge {
           resizes,
         };
         this.sessionsById.set(session.sessionId, session);
-        // Additional recovered tabs get stable owner-qualified viewer IDs.
+        // Each window has its own attachment to the canonical owner session.
         for (const summary of recovered.slice(1)) {
-          const alias = `remote:${target.instanceId}:${summary.sessionId}`;
+          const alias = `remote:${webContents.id}:${target.instanceId}:${summary.sessionId}`;
           if (this.sessionsById.has(alias)) continue;
           this.sessionsById.set(alias, { ...session, ...summary, sessionId: alias,
             ownerSessionId: summary.sessionId, snapshot: undefined, lastSeq: 0,
@@ -707,6 +718,7 @@ export class FederationTerminalBridge {
       cwd: session.cwd,
       shell: session.shell,
       buffer: session.snapshot ? undefined : session.buffer || undefined,
+      bufferSeq: session.snapshot ? undefined : session.lastSeq,
       snapshot: session.snapshot,
       status: session.status,
     };

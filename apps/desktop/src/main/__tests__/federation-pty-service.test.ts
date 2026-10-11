@@ -1,4 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { TerminalHistoryStore } from "../terminal/terminal-history-store";
 import type { FederationRequestEnvelope } from "@pwragent/shared";
 import { FEDERATION_PROTOCOL_VERSION } from "@pwragent/shared";
 import {
@@ -86,6 +90,7 @@ type SentNotification = {
 };
 
 function createHarness(options?: {
+  historyStore?: TerminalHistoryStore;
   allowOpen?: () => boolean;
   graceMs?: number;
   deliverable?: () => boolean;
@@ -102,6 +107,7 @@ function createHarness(options?: {
   const sent: SentNotification[] = [];
   const audits: { peerId: string; kind: string; detail: string }[] = [];
   const service = new FederationPtyService({
+    historyStore: options?.historyStore,
     allowOpen: options?.allowOpen,
     spawnPty:
       options?.spawnPty ??
@@ -802,6 +808,51 @@ describe("remote shell receiver permission", () => {
 });
 
 describe("remote terminal snapshots and ownership", () => {
+  it("retains exited history on viewer shutdown, but removes it on explicit close", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "remote-terminal-history-"));
+    const historyStore = new TerminalHistoryStore(directory);
+    const { service, pty } = createHarness({ historyStore });
+    try {
+      const opened = await service.open("peer-a", OPEN_REQUEST);
+      pty.emitData("finished output");
+      pty.emitExit(0);
+      await service.snapshot("peer-a", { sessionId: opened.sessionId });
+      service.close("peer-a", { sessionId: opened.sessionId, retainHistory: true });
+      expect(await service.list("peer-a", OPEN_REQUEST)).toHaveLength(1);
+      expect((await service.snapshot("peer-a", { sessionId: opened.sessionId })).snapshot?.data).toContain("finished output");
+      expect(await new TerminalHistoryStore(directory).load()).toHaveLength(1);
+      service.close("peer-a", { sessionId: opened.sessionId });
+      expect(await service.list("peer-a", OPEN_REQUEST)).toEqual([]);
+      await vi.waitFor(async () => expect(await new TerminalHistoryStore(directory).load()).toEqual([]));
+    } finally {
+      await service.disposeAll();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("does not archive a deliberately closed shell that exits before its reap timer", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "remote-terminal-history-"));
+    const historyStore = new TerminalHistoryStore(directory);
+    const save = vi.spyOn(historyStore, "save");
+    const { service, pty } = createHarness({ historyStore });
+    try {
+      const opened = await service.open("peer-a", OPEN_REQUEST);
+      pty.emitData("closed output");
+      // Queue a checkpoint before close as well as a natural exit after it.
+      service.rename("peer-a", { sessionId: opened.sessionId, name: "Closing" });
+      service.close("peer-a", { sessionId: opened.sessionId });
+      pty.emitExit(0);
+      await service.disposeAll();
+      expect(await service.list("peer-a", OPEN_REQUEST)).toEqual([]);
+      await expect(service.snapshot("peer-a", { sessionId: opened.sessionId })).rejects.toThrow("not found");
+      expect(save).not.toHaveBeenCalled();
+      expect(await new TerminalHistoryStore(directory).load()).toEqual([]);
+    } finally {
+      await service.disposeAll();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("lists only the authenticated peer's current thread and rejects foreign IDs", async () => {
     const { service, pty } = createHarness();
     const opened = await service.open("peer-a", OPEN_REQUEST);

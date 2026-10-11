@@ -309,7 +309,7 @@ export function IntegratedTerminal({
             : response.status === "exited" ? "Shell exited · saved output" : response.cwd);
           terminal.options.disableStdin = !writableRef.current;
           const snapshot = response.snapshot;
-          lastSeq = snapshot?.seq ?? 0;
+          lastSeq = snapshot?.seq ?? response.bufferSeq ?? 0;
           if (snapshot) terminal.resize(snapshot.cols, snapshot.rows);
           replayingBufferedOutputRef.current = true;
           terminal.reset();

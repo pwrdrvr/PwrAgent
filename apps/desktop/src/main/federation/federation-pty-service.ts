@@ -363,6 +363,7 @@ export class FederationPtyService {
 
   private checkpoint(session: FederationPtySession, status: "exited" | "restored" = "restored", exitCode?: number): void {
     const saving = session.replay.snapshot().then(async (snapshot) => {
+      if (session.reapReason === "close") return;
       const record: TerminalHistoryRecord = { version: 1, peerId: session.peerId,
         summary: { ...this.summary(session), status, exitCode }, snapshot: { ...snapshot, pendingEscape: undefined }, savedAt: this.now() };
       if (!this.sessionsById.has(session.sessionId)) {
@@ -531,8 +532,10 @@ export class FederationPtyService {
   close(peerId: FederationInstanceId, request: FederationPtyCloseRequest): void {
     const record = this.archived.get(request.sessionId);
     if (record?.peerId === peerId) {
-      this.archived.delete(request.sessionId);
-      void this.options.historyStore?.remove(request.sessionId).catch(() => undefined);
+      if (!request.retainHistory) {
+        this.archived.delete(request.sessionId);
+        void this.options.historyStore?.remove(request.sessionId).catch(() => undefined);
+      }
       if (!this.sessionsById.has(request.sessionId)) return;
     }
     const session = this.requireSession(peerId, request.sessionId);
@@ -798,7 +801,12 @@ export class FederationPtyService {
       exitCode: exitCode ?? null,
       signal: signal ?? null,
     } satisfies FederationPtyExitParams);
-    this.checkpoint(session, "exited", exitCode);
+    if (session.reapReason === "close") {
+      this.archived.delete(session.sessionId);
+      void this.options.historyStore?.remove(session.sessionId).catch(() => undefined);
+    } else {
+      this.checkpoint(session, "exited", exitCode);
+    }
     this.deleteSession(session, "exit");
   }
 

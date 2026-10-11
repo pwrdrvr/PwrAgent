@@ -105,6 +105,8 @@ export type IntegratedTerminalCreateResponse = {
   shell: string;
   pid?: number;
   buffer?: string;
+  /** Watermark for legacy buffered replay when the owner has no snapshot RPC. */
+  bufferSeq?: number;
   snapshot?: TerminalSnapshot;
   status?: "running" | "exited" | "restored";
 };
