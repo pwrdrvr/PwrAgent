@@ -30,6 +30,8 @@ Repeat with a fresh output directory and `PWRWIN_REQUEST_DELAY_MS=40` for a dete
 
 The implementation for this path exists, but installed peers do not have it yet. Both participating Electron **main processes** must run this reviewed development build, retaining their existing profiles and identities. Do not run a second app with a cloned identity or create a new enrollment. A renderer reload cannot install the adapter. The existing gateway can relay these ordinary, bounded request envelopes without a new frame kind or capability. Its `gateway_relay` negotiation and the existing peer identities remain required. No service-forwarding permission is repurposed.
 
+Rollout compatibility checked on 2026-10-11: the complete `7ddb2c97f` prototype bundle has schema version 72 and no differences from installed `v1.2.0-prerelease.5` in `apps/desktop/src/main/state`, `apps/desktop/src/main/config`, or `federation-store.ts`. The release-only commit `5f7fb567e` changes the package version and changelog. The original Windows `c1cbc6c4d` base is older and must not be used against that live profile. Use the complete updated branch, including the subsequent malformed-token authentication regression fix. This check establishes source/schema compatibility; it does not establish runtime permission or successful reconnection after a binary switch.
+
 Only after choosing an appropriate existing-profile deployment/restart window, create explicit config files in each owned checkout's `.local` directory:
 
 Source:
