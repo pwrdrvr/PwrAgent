@@ -19294,8 +19294,11 @@ describe("MessagingController", () => {
         vi.useFakeTimers();
         const harness = await monitorHarness(mode);
         try {
-          // Reproduce the reported one-minute cadence for more than six hours.
-          for (let index = 0; index < 361; index += 1) {
+          // The reported one-minute cadence. Every window that could release
+          // a notice (tool-update batching, monitor interval, slow-mode
+          // recovery) is at most five minutes, so eleven heartbeats cross the
+          // longest of them twice; more minutes only repeat the same state.
+          for (let index = 0; index < 11; index += 1) {
             await harness.controller.handleBackendEvent(monitorEvent("agentMessage", `heartbeat-${index}`, { transient: true }));
             await harness.controller.handleBackendEvent({
               backend: "codex",

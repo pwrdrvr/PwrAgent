@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { copyFile, mkdtemp, rm, symlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { bundledGitExecutable, configureBundledGit } from "../bundled-git";
+import { bundledGitExecutable, bundledGitLfsExecutable, configureBundledGit } from "../bundled-git";
 import { discoverGitCommands, parseGitVersionOutput, validateGitCommand } from "../settings/git-discovery";
 
 afterEach(() => configureBundledGit());
@@ -73,10 +73,23 @@ describe("Git discovery", () => {
   });
 
   it("validates Git and LFS for a manually selected executable", async () => {
-    expect(await validateGitCommand({ command: bundledGitExecutable() })).toMatchObject({
-      executable: true, version: expect.any(String), lfsVersion: expect.any(String),
-    });
-    expect(await validateGitCommand({ command: "/missing/manual/git" })).toMatchObject({ executable: false });
+    // A selected Git finds git-lfs on PATH, never inside PwrAgent's bundle, so
+    // supply one rather than depend on whatever the machine has installed.
+    const lfsRoot = await mkdtemp(path.join(os.tmpdir(), "pwragent-manual-lfs-"));
+    try {
+      const lfs = path.join(lfsRoot, path.basename(bundledGitLfsExecutable()));
+      if (process.platform === "win32") await copyFile(bundledGitLfsExecutable(), lfs);
+      else await symlink(bundledGitLfsExecutable(), lfs);
+      // Replace the key the host uses: Windows spells it `Path`.
+      const pathKey = Object.keys(process.env).find((key) => key.toUpperCase() === "PATH") ?? "PATH";
+      const env = { ...process.env, [pathKey]: [lfsRoot, process.env[pathKey]].join(path.delimiter) };
+      expect(await validateGitCommand({ command: bundledGitExecutable(), env })).toMatchObject({
+        executable: true, version: expect.any(String), lfsVersion: expect.any(String),
+      });
+      expect(await validateGitCommand({ command: "/missing/manual/git", env })).toMatchObject({ executable: false });
+    } finally {
+      await rm(lfsRoot, { force: true, recursive: true });
+    }
   });
 
   it("parses both upstream and Windows Git versions", () => {

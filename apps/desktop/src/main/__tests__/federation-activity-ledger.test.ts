@@ -211,7 +211,13 @@ it("caps all numeric storage at 28.73 MB even when every peer and size histogram
     if (value && typeof value === "object") return Object.values(value).reduce<number>((sum, item) => sum + retainedBytes(item), 0);
     return 0;
   }
-  for (let second = 0; second < 7_200; second += 1) {
+  // Storage is allocated on a series' first record, so one second of every
+  // peer (past the 32-peer attribution cap) reaches the ceiling. Seconds
+  // 3595-3604 straddle the first wrap and overwrite slots 0-4; 7190-7199 end
+  // the second hour and leave seconds 5-9 stale. Neither may grow storage or
+  // count.
+  const seconds = [0, 3_595, 7_190].flatMap((start) => Array.from({ length: 10 }, (_, index) => start + index));
+  for (const second of seconds) {
     for (let peer = 0; peer < 40; peer += 1) {
       for (const direction of ["sent", "received"] as const) {
         for (const kind of ["request", "response"] as const) ledger.record({ ...base, at: second * 1_000,
@@ -221,12 +227,18 @@ it("caps all numeric storage at 28.73 MB even when every peer and size histogram
         });
       }
     }
-    if (second === 0 || second === 3_599 || second === 7_199) expect(retainedBytes(ledger)).toBe(28_725_312);
+    if (second === 0 || second === 3_604 || second === 7_199) expect(retainedBytes(ledger)).toBe(28_725_312);
   }
   const snapshot = ledger.snapshot(7_199_000);
-  expect(snapshot.physical.lifetime.sent.requests).toBe(7_200 * 40);
-  expect(snapshot.physical.windows["1h"].sent.requests).toBe(3_600 * 40);
-  expect(snapshot.physical.history.every((bucket) => bucket.totals.sent.requests === 40)).toBe(true);
+  // The last hour holds 3600-3604 and 7190-7199; 0-9 and 3595-3599 expired.
+  const live = seconds.filter((second) => second > 3_599);
+  expect(snapshot.physical.lifetime.sent.requests).toBe(seconds.length * 40);
+  expect(snapshot.physical.windows["1h"].sent.requests).toBe(live.length * 40);
+  expect(snapshot.physical.history).toHaveLength(3_600);
+  expect(snapshot.physical.history
+    .filter((bucket) => bucket.totals.sent.requests !== 0)
+    .map((bucket) => [bucket.at / 1_000, bucket.totals.sent.requests]))
+    .toEqual(live.map((second) => [second, 40]));
   ledger.reset();
   expect(retainedBytes(ledger)).toBe(0);
 });

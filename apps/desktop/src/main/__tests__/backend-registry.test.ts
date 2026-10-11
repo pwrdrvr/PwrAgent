@@ -422,6 +422,13 @@ async function pathExists(filePath: string): Promise<boolean> {
   }
 }
 
+/**
+ * Waits a bounded number of macrotask turns for in-memory or test-double work.
+ * Never use it for work that can reach host I/O (filesystem, git, child
+ * processes): no turn count bounds that on a slow runner. Await the owned
+ * promise or a registry `...ForTests()` hook instead. Fails here, rather than
+ * at a later assertion that would misreport the cause.
+ */
 async function waitForCondition(predicate: () => boolean): Promise<void> {
   for (let index = 0; index < 20; index += 1) {
     if (predicate()) {
@@ -429,6 +436,7 @@ async function waitForCondition(predicate: () => boolean): Promise<void> {
     }
     await flushAsync();
   }
+  expect(predicate(), "waitForCondition predicate never held").toBe(true);
 }
 
 async function expectEventually<T>(
@@ -12812,7 +12820,7 @@ describe("DesktopBackendRegistry", () => {
         state: "scheduled",
       },
     });
-    await waitForCondition(() => codexClient.lastRenameThreadParams !== undefined);
+    await registry.whenThreadTitleGenerationSettledForTests();
     expect(titleService.generateTitle).toHaveBeenCalledWith({
       backend: "codex",
       threadId: "thread-1",
@@ -16935,7 +16943,9 @@ script = "echo setup"
       const last = await registry.acquireNativeVoiceBackend("sample-voice-last");
       try {
         await fail();
-        await waitForCondition(() => recoveryUpdates().some((update) => update.status === "waiting"));
+        // fail() awaits the queued report. A voice lease is not a thread, so
+        // the report names no waiting thread and is never `waiting`.
+        expect(recoveryUpdates()).toHaveLength(1);
         first.release();
         first.release();
         await flushAsync();
@@ -16967,7 +16977,6 @@ script = "echo setup"
       });
 
       await fail();
-      await waitForCondition(() => recoveryUpdates().length > 0);
       await flushAsync();
       expect(recoveryUpdates()).toEqual([
         expect.objectContaining({
@@ -21236,7 +21245,7 @@ command = "pnpm grok"
       },
     });
 
-    await waitForCondition(() => titleService.generateTitle.mock.calls.length > 0);
+    await registry.whenThreadTitleGenerationSettledForTests();
     expect(titleService.generateTitle).toHaveBeenCalledWith({
       backend: acpBackendId,
       threadId: "grok-review-launch",
@@ -26088,7 +26097,7 @@ command = "pnpm dev"
       threadId: "thread-1",
       input: [{ type: "text", text: prompt }],
     });
-    await waitForCondition(() => codexClient.lastRenameThreadParams !== undefined);
+    await registry.whenThreadTitleGenerationSettledForTests();
 
     expect(titleService.generateTitle).toHaveBeenCalledWith({
       backend: "codex",
@@ -26118,9 +26127,15 @@ command = "pnpm dev"
   });
 
   it("starts one Codex title helper for every concurrent explicit placeholder", async () => {
+    const titleGenerationsStarted = createDeferred<void>();
     const titleGenerationRelease = createDeferred<void>();
+    let startedTitleGenerations = 0;
     const titleService = {
       generateTitle: vi.fn(async ({ threadId }: { threadId?: string }) => {
+        startedTitleGenerations += 1;
+        if (startedTitleGenerations === threadIds.length) {
+          titleGenerationsStarted.resolve();
+        }
         await titleGenerationRelease.promise;
         return {
           status: "generated" as const,
@@ -26173,9 +26188,7 @@ command = "pnpm dev"
       }),
     );
 
-    await waitForCondition(
-      () => titleService.generateTitle.mock.calls.length === threadIds.length,
-    );
+    await titleGenerationsStarted.promise;
     for (const threadId of threadIds) {
       await expect(
         overlayStore.getThreadOverlayState({
@@ -26198,9 +26211,11 @@ command = "pnpm dev"
   });
 
   it("preserves an explicit Untitled thread rename while its title helper finishes", async () => {
+    const titleGenerationStarted = createDeferred<void>();
     const titleGenerationRelease = createDeferred<void>();
     const titleService = {
       generateTitle: vi.fn(async () => {
+        titleGenerationStarted.resolve();
         await titleGenerationRelease.promise;
         return {
           status: "generated" as const,
@@ -26240,7 +26255,7 @@ command = "pnpm dev"
       threadId,
       input: [{ type: "text", text: "Name this work" }],
     });
-    await waitForCondition(() => titleService.generateTitle.mock.calls.length === 1);
+    await titleGenerationStarted.promise;
 
     await registry.renameThread({
       backend: "codex",
@@ -26248,11 +26263,10 @@ command = "pnpm dev"
       name: "Untitled thread",
     });
     titleGenerationRelease.resolve();
-    await waitForCondition(() =>
-      upsertSubAgent.mock.calls.some(
-        ([params]) => params.subAgent.status === "success",
-      ),
-    );
+    await registry.whenThreadTitleGenerationSettledForTests();
+    expect(upsertSubAgent).toHaveBeenCalledWith(expect.objectContaining({
+      subAgent: expect.objectContaining({ status: "success" }),
+    }));
 
     expect(renameThread).toHaveBeenCalledTimes(1);
     expect(renameThread).toHaveBeenCalledWith({
@@ -26370,11 +26384,6 @@ command = "pnpm dev"
       },
     });
     await titleGenerationStarted.promise;
-    await waitForCondition(() =>
-      upsertSubAgentSpy.mock.calls.some(
-        ([call]) => call.subAgent.status === "running",
-      ),
-    );
 
     expect(upsertSubAgentSpy).toHaveBeenCalledWith({
       backend: "codex",
@@ -28494,8 +28503,12 @@ command = "pnpm dev"
         totalTokens: number;
       };
     }>();
+    const titleGenerationStarted = createDeferred<void>();
     const titleService = {
-      generateTitle: vi.fn(async () => await titleGeneration.promise),
+      generateTitle: vi.fn(async () => {
+        titleGenerationStarted.resolve();
+        return await titleGeneration.promise;
+      }),
     };
     const sessions: AcpSessionMetadata[] = [
       {
@@ -28565,7 +28578,7 @@ command = "pnpm dev"
       threadId: "grok-session-1",
       input: [{ type: "text", text: prompt }],
     });
-    await waitForCondition(() => titleService.generateTitle.mock.calls.length === 1);
+    await titleGenerationStarted.promise;
 
     sessions[0] = {
       ...sessions[0]!,
@@ -28597,16 +28610,10 @@ command = "pnpm dev"
         totalTokens: 110,
       },
     });
-    await waitForCondition(() =>
-      upsertSubAgentSpy.mock.calls.some(
-        ([call]) => call.subAgent.status === "success",
-      ),
-    );
-    await waitForCondition(() =>
-      events.some(
-        (event) => event.notification.method === "thread/pricing/updated",
-      ),
-    );
+    await registry.whenThreadTitleGenerationSettledForTests();
+    expect(events).toContainEqual(expect.objectContaining({
+      notification: expect.objectContaining({ method: "thread/pricing/updated" }),
+    }));
 
     expect(sessions[0]).toMatchObject({
       title: "Favorite Cereal Preference Personal Question",
@@ -42357,7 +42364,7 @@ script = "printf setup"
     expect(steers.mock.calls[0]![0].input).toEqual([{ type: "text", text: "Already dispatching" }]);
     release();
     await waitForCondition(() => steers.mock.calls.length === 2);
-    await waitForCondition(() => registry.getQueuedTurnsSnapshot()[buildThreadIdentityKey("codex", "recipient")]?.length === 0);
+    await waitForCondition(() => registry.getQueuedTurnsSnapshot()[buildThreadIdentityKey("codex", "recipient")] === undefined);
     expect(codexClient.startTurnCallCount).toBe(0);
     const delivered = steers.mock.calls[1]![0].input.flatMap((item) => item.type === "text" ? [item.text] : []).join("\n");
     expect(delivered).toContain("Sender 7 consolidated evidence");
@@ -55249,10 +55256,10 @@ script = "printf setup"
     const registry = new DesktopBackendRegistry({ codexClient, messagingStore, overlayStore: createOverlayStoreMock() });
     onTestFinished(async () => { transport.releaseListings(); await registry.close(); await provider.close(); });
     const listing = registry.listThreads({ backend: "codex", archived: true, enrichDirectories: false });
-    await waitForCondition(() => transport.listings.some((rpc) => rpc.archived));
+    await transport.whenListing(true);
     transport.releaseListings(true);
     // Archived-list filtering also captured a pre-restore active snapshot.
-    await waitForCondition(() => transport.listings.some((rpc) => !rpc.archived));
+    await transport.whenListing(false);
     transport.archivedIds = [];
     transport.activeIds = ["restored"];
     await codexClient.emit({ method: "thread/unarchived", params: { threadId: "restored" } });
@@ -58824,16 +58831,7 @@ script = "printf setup"
       // entire applyThreadExecutionMode path to complete (codex call,
       // overlay flip, audit-log append, both notifications) — polling
       // on setThreadPermissions alone is too early.
-      const waitForApplied = async () => {
-        for (let attempt = 0; attempt < 50; attempt += 1) {
-          const log = await getLog(overlayStore, "thread-1");
-          if (log.some((entry) => entry.status === "applied")) {
-            return;
-          }
-          await new Promise((resolve) => setTimeout(resolve, 0));
-        }
-      };
-      await waitForApplied();
+      await registry.whenQueuedExecutionModeFlushesSettledForTests();
 
       expect(codexClient.lastSetThreadPermissionsParams).toEqual({
         threadId: "thread-1",
@@ -59022,13 +59020,7 @@ script = "printf setup"
       await Promise.all([turnEndPromise, startTurnPromise]);
 
       // Wait for any deferred flush completion.
-      for (let attempt = 0; attempt < 50; attempt += 1) {
-        const log = await getLog(overlayStore, "thread-1");
-        if (log.filter((entry) => entry.status === "applied").length >= 1) {
-          break;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 0));
-      }
+      await registry.whenQueuedExecutionModeFlushesSettledForTests();
 
       const log = await getLog(overlayStore, "thread-1");
       const appliedEntries = log.filter(
