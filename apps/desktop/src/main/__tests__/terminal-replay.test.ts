@@ -95,6 +95,16 @@ describe("TerminalHistoryStore", () => {
       panelHidden: true, name: "Build", status: "restored",
     }, snapshot: { data: "safe", seq: 3, timestamp: 4, cols: 80, rows: 24, truncated: false } };
   }
+  it("does not materialize a missing profile when reading history during onboarding", async () => {
+    const { directory } = await setup();
+    const profile = path.join(directory, "profiles", "default");
+    const history = path.join(profile, "state", "terminal-history", "local");
+    const store = new TerminalHistoryStore(history);
+    expect(await store.load()).toEqual([]);
+    await expect(stat(profile)).rejects.toMatchObject({ code: "ENOENT" });
+    await store.save(record());
+    expect(await store.load()).toHaveLength(1);
+  });
   it("round trips bounded metadata in private atomic files and removes only the named record", async () => {
     const { directory, store } = await setup();
     await store.save(record());

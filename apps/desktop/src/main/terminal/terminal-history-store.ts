@@ -30,8 +30,16 @@ export class TerminalHistoryStore {
   } = {}) {}
 
   async load(): Promise<TerminalHistoryRecord[]> {
-    await mkdir(this.directory, { recursive: true, mode: 0o700 });
-    const files = (await readdir(this.directory)).filter((name) => /^[a-f0-9]{64}\.json$/.test(name));
+    let entries: string[];
+    try {
+      entries = await readdir(this.directory);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
+    }
+    // A startup read must not provision a profile before onboarding selects it.
+    // Only saving an actual terminal checkpoint creates the directory.
+    const files = entries.filter((name) => /^[a-f0-9]{64}\.json$/.test(name));
     const records: TerminalHistoryRecord[] = [];
     for (const name of files) {
       const file = path.join(this.directory, name);

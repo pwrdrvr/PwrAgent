@@ -165,7 +165,7 @@ test("recovers a running terminal after the thread view unmounts", async () => {
   }
 });
 
-test("removes the integrated terminal pane when the shell exits", async () => {
+test("retains exited output until the terminal tab is explicitly closed", async () => {
   const app = await launchElectronApp({
     fixturePath: path.resolve(
       integratedTerminalSpecDir,
@@ -184,6 +184,15 @@ test("removes the integrated terminal pane when the shell exits", async () => {
     );
     await typeTerminalCommand(app.window, "exit");
 
+    const panel = app.window.getByRole("region", { name: "Thread terminals", exact: true });
+    await expect(panel.getByRole("tab")).toContainText("Exited");
+    await expect(terminalRows(app.window)).toContainText("PWRAGENT_TERMINAL_EXIT_READY");
+    await expect(panel.getByText("Shell exited. Create a new terminal to start a shell.")).toBeVisible();
+    await expect(app.window.getByRole("button", { name: "Hide integrated terminal" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await panel.getByRole("tab").press("Delete");
     await expect(app.window.getByLabel("Integrated terminal", { exact: true })).toHaveCount(0, {
       timeout: 10_000,
     });
