@@ -27,6 +27,7 @@ export const FEDERATION_CAPABILITIES = [
   "pwrsnap_connection",
   "gateway_relay",
   "remote_pty",
+  "service_forward_v1",
   "file_push",
   "thread_handoff",
   "file_pull",

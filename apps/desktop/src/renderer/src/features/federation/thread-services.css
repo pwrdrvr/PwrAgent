@@ -1,0 +1,14 @@
+.thread-services {
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.thread-services__toggle { margin: 4px 12px; }
+.thread-services__body { padding: 0 16px 12px; max-height: 240px; overflow: auto; }
+.thread-services__row { display: flex; align-items: center; gap: 16px; padding: 8px 0; border-bottom: 1px solid var(--border-subtle); }
+.thread-services__identity { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 4px; overflow-wrap: anywhere; }
+.thread-services__identity strong { color: var(--text-primary); }
+.thread-services__actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.thread-services__note { color: var(--text-muted); margin: 8px 0 0; }
