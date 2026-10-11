@@ -1,3 +1,6 @@
+import { buildTerminalOutputToolDefinitions } from "../pwragent-terminal-output-tools";
+import { TerminalOutputReader } from "../../terminal/terminal-output-reader";
+import { TerminalReplay } from "../../terminal/terminal-replay";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import {
   StreamableHTTPClientTransport,
@@ -444,3 +447,40 @@ function registrationHeaders(
     registration.server.headers.map((header) => [header.name, header.value]),
   );
 }
+
+
+it("binds terminal reads to the authenticated MCP registration, never argument thread IDs", async () => {
+  const replay = new TerminalReplay(80, 24);
+  replay.append("current thread output");
+  const reader = new TerminalOutputReader({
+    ownerInstanceId: () => "owner",
+    list: async (context) => context.threadId === "thread-a" ? [{
+      sessionId: "canonical", threadKey: "acp:kimi:thread-a", cwd: "/repo", shell: "/bin/sh", createdAt: 1, panelHidden: false,
+    }] : [],
+    replay: () => replay,
+    snapshot: async () => undefined,
+  });
+  let active = true;
+  const server = new AgentToolMcpServer({
+    resolveCallContext: (context) => context.threadId && active
+      ? { backend: context.backend, threadId: context.threadId, turnId: "turn" } : undefined,
+    resolveCatalogs: () => [buildCatalog(new AgentToolRouter(buildTerminalOutputToolDefinitions(reader)))],
+  });
+  const first = await server.registerClient({ backend: "acp:kimi", threadId: "thread-a" });
+  const second = await server.registerClient({ backend: "acp:kimi", threadId: "thread-b" });
+  const clientA = await connectClient(first);
+  const clientB = await connectClient(second);
+  const request = { name: "read_terminal_output", arguments: { ownerInstanceId: "owner", terminalId: "canonical", format: "plain" } };
+  try {
+    expect(await clientA.callTool(request)).toMatchObject({ structuredContent: { threadId: "thread-a", data: "current thread output" } });
+    expect(await clientB.callTool(request)).toMatchObject({ isError: true });
+    expect(await clientB.callTool({ ...request, arguments: { ...request.arguments, threadId: "thread-a" } })).toMatchObject({ isError: true });
+    active = false;
+    expect(await clientA.callTool(request)).toMatchObject({ isError: true });
+  } finally {
+    await clientA.close();
+    await clientB.close();
+    await server.close();
+    await replay.dispose();
+  }
+});

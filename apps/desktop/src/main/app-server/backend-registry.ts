@@ -2,6 +2,7 @@ import { ClaudeBackend, type ClaudeBackendOptions } from "../claude/claude-backe
 import { inspectClaudeInstallation } from "../claude/claude-executable";
 import type { ForgeReadHandler } from "../agent-tools/pwragent-forge-agent-tools";
 import { ForgeReadError, validateForgeReadArgs, type ForgeReadRequest } from "../pr-status/forge-tool-contract";
+import { buildTerminalOutputToolDefinitions, type TerminalOutputToolHandler } from "../agent-tools/pwragent-terminal-output-tools";
 import { sweepThreadArchiveRetention, archivedThreadFamily, archiveRetentionFamilyEligible } from "./thread-archive-retention";
 import { runGitCommand } from "./git-executable";
 import {
@@ -9228,6 +9229,7 @@ export class DesktopBackendRegistry {
   private appManagementHandler?: PwrAgentAppManagementHandler;
   private starMapHandler?: PwrAgentStarMapHandler;
   private threadTodoHandler?: PwrAgentThreadTodoHandler;
+  private terminalOutputHandler?: TerminalOutputToolHandler;
   private agentThreadActions?: AgentThreadActions;
   private messagingAgentToolService?: MessagingAgentToolService;
   private readonly changingCodexAgentThreadIds = new Set<string>();
@@ -10227,6 +10229,7 @@ export class DesktopBackendRegistry {
                 tokenMiserFocused: this.tokenMiserService?.focused,
                 starMapHandler: this.starMapHandler,
                 threadTodoHandler: this.threadTodoHandler,
+                terminalOutputHandler: this.terminalOutputHandler,
               }, { taskMonitorRole: "all" }),
             authorizeToolCall: (params) =>
               this.authorizeAgentToolMcpCall(params),
@@ -11062,6 +11065,10 @@ export class DesktopBackendRegistry {
     handler: PwrAgentStarMapHandler | null | undefined,
   ): void {
     this.starMapHandler = handler ?? undefined;
+  }
+
+  setTerminalOutputToolHandler(handler: TerminalOutputToolHandler | undefined): void {
+    this.terminalOutputHandler = handler;
   }
 
   setPwrAgentThreadTodoHandler(
@@ -17749,6 +17756,7 @@ export class DesktopBackendRegistry {
       ...(tokenMiserEnabled ? { tokenMiserStore: this.tokenMiserStore, tokenMiserFocused: this.tokenMiserService?.focused } : {}),
       starMapHandler: this.starMapHandler,
       threadTodoHandler: this.threadTodoHandler,
+      terminalOutputHandler: this.terminalOutputHandler,
     });
     const pdfMcpRegistration =
       backend === "codex" && this.resolvePdfAnalysisEnabledFn()
@@ -26958,6 +26966,7 @@ export class DesktopBackendRegistry {
         ...(tokenMiserEnabled ? { tokenMiserStore: this.tokenMiserStore, tokenMiserFocused: this.tokenMiserService?.focused } : {}),
         starMapHandler: this.starMapHandler,
         threadTodoHandler: this.threadTodoHandler,
+        terminalOutputHandler: this.terminalOutputHandler,
       }),
     ), discoveryEnabled, eagerTools);
   }
@@ -37786,6 +37795,17 @@ export class DesktopBackendRegistry {
         call: starMapToolCall,
         handler: this.starMapHandler,
       });
+    }
+
+    const terminalOutputRouter = new AgentToolRouter(buildTerminalOutputToolDefinitions(this.terminalOutputHandler));
+    if (hostToolCall && terminalOutputRouter.acceptsDynamicToolCall(hostToolCall)) {
+      if (!this.isLiveDynamicToolCall(backend, hostToolCall)) {
+        return toDynamicToolResponse({ ok: false, code: "forbidden",
+          message: "Terminal output tools require an active turn on the owning thread." });
+      }
+      const denied = this.dynamicToolPermissionDenied(backend, "thread_inspection", hostToolCall);
+      if (denied) return toDynamicToolResponse({ ok: false, code: "forbidden", message: `Terminal read permission denied (${denied}).` });
+      return await terminalOutputRouter.handleDynamicToolCall({ backend, call: hostToolCall });
     }
 
     const threadTodoRouter = buildPwrAgentThreadTodoToolRouter(

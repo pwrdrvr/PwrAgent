@@ -6,6 +6,7 @@ import { FEDERATION_OPERATOR_QUESTION_CAPABILITIES, FEDERATION_OPERATOR_QUESTION
 import { localThreadTodoOperations } from "../thread-todos/thread-todo-operations";
 import { FEDERATION_THREAD_TODO_CAPABILITIES, FEDERATION_THREAD_TODO_METHODS, registerFederationThreadTodoHandlers,
   type ThreadTodoOperation, type ThreadTodoOperationRequest, type ThreadTodoOperationResponse } from "./federation-thread-todos";
+import type { TerminalOutputSource } from "../terminal/terminal-output-reader";
 import { createTerminalHistoryStore } from "../terminal/terminal-history";
 import type { ServiceThread, ServiceUiRequest, ServiceUiResponse } from "@pwragent/shared";
 import { FEDERATION_SERVICE_METHODS, FEDERATION_SERVICE_CAPABILITY } from "@pwragent/shared";
@@ -2746,6 +2747,16 @@ export class DesktopFederationRuntime {
     return await this.rpcFor({ scope: "remote", instanceId: sourceInstanceId }).request<HandoffInstanceThreadResult>({
       method: THREAD_HANDOFF_METHODS.send, params: request, timeoutMs: null,
     });
+  }
+
+  /** Local owner reads only; no peer routing or viewer control capability. */
+  ownerTerminalOutputSource(): TerminalOutputSource {
+    return {
+      ownerInstanceId: () => this.localFederationInstanceId(),
+      list: async (context) => await this.ptyService?.listForOwnerThread(context) ?? [],
+      replay: (context, terminalId) => this.ptyService?.outputForOwnerThread(context, terminalId),
+      snapshot: async (context, terminalId) => await this.ptyService?.snapshotForOwnerThread(context, terminalId),
+    };
   }
 
   /**

@@ -1647,6 +1647,13 @@ describe("terminal history lifecycle", () => {
     expect(spawn).toHaveBeenCalledTimes(1);
     expect(await historyStore.load()).toHaveLength(1);
     const restarted = new IntegratedTerminalService({ historyStore, loadNodePty: async () => { throw new Error("must not spawn"); } });
+    // Owner tools must await history readiness even before any renderer attaches.
+    expect(await restarted.listForOwnerThread("codex:one")).toMatchObject([{ status: "restored", sessionId: "saved-one" }]);
+    expect(await restarted.listForOwnerThread("codex:other")).toEqual([]);
+    expect(await restarted.listForOwnerThread("acp:kimi:one")).toEqual([]);
+    expect(restarted.outputForThread("codex:one", "saved-one")).toBeUndefined();
+    expect(await restarted.snapshotForThread("codex:one", "saved-one")).toMatchObject({ data: expect.stringContaining("retained output") });
+    expect(await restarted.snapshotForThread("codex:other", "saved-one")).toBeUndefined();
     expect(await restarted.createOrAttach({ ...request, attachOnly: true }, fakeWebContents())).toMatchObject({ status: "restored", sessionId: "saved-one" });
     await expect(restarted.createOrAttach({ ...request, threadKey: "codex:other" }, fakeWebContents())).rejects.toThrow("mismatch");
     const removed = vi.spyOn(historyStore, "remove");
