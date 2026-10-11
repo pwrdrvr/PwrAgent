@@ -111,10 +111,11 @@ const EMPTY_STACKS: HistoryStacks = { back: [], cursor: undefined, forward: [] }
  * creation) lands in the back stack automatically, and a new navigation
  * clears the forward stack, exactly like a browser.
  *
- * `restore` is invoked from goBack/goForward and must synchronously set
- * the shell state that derives `current`; the hook moves its cursor
- * first, so the resulting `current` change is recognized as its own
- * restore and not re-pushed.
+ * `restore` is invoked from goBack/goForward to set the shell state that
+ * derives `current`; the hook moves its cursor first, so the resulting
+ * `current` change is recognized as its own restore and not re-pushed.
+ * Only a change of the observed location records a hop, so the page being
+ * left can keep re-rendering until the restore lands.
  */
 export function useNavigationHistory(args: {
   /** The tracked location now showing, or undefined on untracked surfaces. */
@@ -156,6 +157,7 @@ export function useNavigationHistory(args: {
 
   const current = args.current;
   useEffect(() => {
+    const observed = currentRef.current;
     currentRef.current = current;
     if (current === undefined) {
       // Untracked surface in front; the cursor holds its place.
@@ -171,6 +173,14 @@ export function useNavigationHistory(args: {
         stacksRef.current = next;
         setStacks(next);
       }
+      return;
+    }
+    if (observed !== undefined && sameLocation(observed, current)) {
+      // Only a change of location is a navigation. goBack/goForward move the
+      // cursor before their restore commits, so the page being left can
+      // still re-derive here: a commit whose effect was pending when Back
+      // was clicked, or a restore that settles asynchronously. Recording it
+      // would push the page being left and clear Forward.
       return;
     }
     const baseBack =

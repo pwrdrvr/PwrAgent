@@ -182,6 +182,49 @@ describe("useNavigationHistory", () => {
     expect(restore).toHaveBeenLastCalledWith(thread("codex:a"));
   });
 
+  it("does not record the page being left when it re-renders before Back lands", () => {
+    const { hook, navigate, restore, settle } =
+      renderHistory({ ...thread("codex:a"), label: "A" });
+    navigate({ ...launchpad("directory:/repo"), label: "Launchpad" });
+    navigate(thread("codex:b"));
+
+    act(() => hook.result.current.goBack());
+    expect(restore).toHaveBeenLastCalledWith({
+      ...launchpad("directory:/repo"),
+      label: "Launchpad",
+    });
+    // Thread b derives a new location object (its title arrives) before the
+    // restore commits: a commit whose effect was still pending when Back was
+    // clicked, or a restore that settles asynchronously. It is still the
+    // place being left, not a new navigation.
+    navigate({ ...thread("codex:b"), label: "B" });
+    settle();
+
+    expect(hook.result.current.backLabel).toBe("A");
+    expect(hook.result.current.canGoForward).toBe(true);
+    act(() => hook.result.current.goForward());
+    expect(restore).toHaveBeenLastCalledWith(thread("codex:b"));
+  });
+
+  it("does not record the page being left when it re-renders before Forward lands", () => {
+    const { hook, navigate, restore, settle } =
+      renderHistory({ ...thread("codex:a"), label: "A" });
+    navigate({ ...thread("codex:b"), label: "B" });
+    act(() => hook.result.current.goBack());
+    settle();
+
+    act(() => hook.result.current.goForward());
+    expect(restore).toHaveBeenLastCalledWith({ ...thread("codex:b"), label: "B" });
+    navigate({ ...thread("codex:a"), label: "A, renamed" });
+    settle();
+
+    expect(hook.result.current.canGoForward).toBe(false);
+    expect(hook.result.current.backLabel).toBe("A");
+    act(() => hook.result.current.goBack());
+    settle();
+    expect(hook.result.current.canGoBack).toBe(false);
+  });
+
   it("keeps only the newest history position for each project launchpad", () => {
     const { hook, navigate, restore, settle } =
       renderHistory(thread("codex:a"));
