@@ -45863,3 +45863,4 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
 
 .thread-terminal-panel__history-note { padding: 5px 10px; color: var(--text-secondary); background: var(--bg-panel); font-size: 11px; }
 .thread-terminal-panel__history-note + .integrated-terminal { height: 0; }
+.thread-terminal-panel__screens > [role="tabpanel"][hidden] { display: none; }
