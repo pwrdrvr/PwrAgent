@@ -11,6 +11,7 @@ import {
   resolveThreadTodoMergeMethod,
 } from "@pwragent/shared";
 import {
+  ArrowUpIcon,
   CheckIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
@@ -31,7 +32,12 @@ import type {
   ThreadTodoProjectMenu,
   ThreadTodoRunOptions,
 } from "./thread-todos-view";
-import { ReviewStatusControls, useTrackedReview } from "./review-tracking";
+import {
+  addressReviewFindingsPrompt,
+  openReviewItems,
+  orderReviewItems,
+  useTrackedReview,
+} from "./review-tracking";
 
 const KIND_ICONS: Record<ThreadTodoKind, ComponentType<IconProps> | undefined> = {
   reminder: undefined,
@@ -63,10 +69,11 @@ export type ThreadTodoCardHandlers = {
     resolution?: ThreadTodoResolution,
   ) => void;
   /**
-   * Sends a handoff's prompt to the card's own thread as a reply. Only the
-   * thread on screen can take one, so other surfaces leave it out.
+   * Sends a handoff's prompt, or the review card's `prompt`, to the card's
+   * own thread as a reply. Only the thread on screen can take one, so other
+   * surfaces leave it out.
    */
-  onDoHere?: (todo: ThreadTodo) => void | Promise<unknown>;
+  onDoHere?: (todo: ThreadTodo, prompt?: string) => void | Promise<unknown>;
 };
 
 export type ThreadTodoCardProps = ThreadTodoCardHandlers & {
@@ -101,35 +108,234 @@ export function ThreadTodoCard(props: ThreadTodoCardProps) {
   return props.todo.reviewId ? <TrackedReviewCard {...props} /> : <ActionThreadTodoCard {...props} />;
 }
 
+/** Rows a review card shows before "Show N more". */
+const REVIEW_CARD_ROWS = 4;
+
+/**
+ * A completed review still waiting on its findings. The body is a checklist
+ * settled in place, one row per finding; the footer hands what is open to
+ * the agent in this thread.
+ */
 function TrackedReviewCard(props: ThreadTodoCardProps) {
-  const tracking = useTrackedReview(props.todo, { id: props.todo.reviewId });
+  const { todo } = props;
+  const tracking = useTrackedReview(todo, { id: todo.reviewId });
+  const [expanded, setExpanded] = useState(false);
+  const titleId = `thread-todo-title-${todo.id}`;
+  const review = tracking.review;
+  const items = review ? orderReviewItems(review.items) : [];
+  const open = review ? openReviewItems(review).length : 0;
+  const shown = expanded ? items : items.slice(0, REVIEW_CARD_ROWS);
+  const hidden = items.length - shown.length;
+  const onDoHere = props.onDoHere;
+
+  let count: string | undefined;
+  if (review) {
+    if (items.length === 0) count = "No findings to settle";
+    else if (open === 0) count = "No findings left open";
+    else count = open === items.length ? `${open} open` : `${open} of ${items.length} open`;
+  }
+  // The explanation is the transcript's to show; the card repeats it only
+  // when there is no list to read instead.
+  const summary = items.length === 0 ? review?.summary : undefined;
+
+  const renderAction = () => {
+    if (!review || review.status !== "open") return null;
+    if (open === 0) {
+      return (
+        <button
+          type="button"
+          className="button button--primary thread-todo-card__button"
+          disabled={tracking.busy}
+          onClick={() => void tracking.update({ status: "handled" })}
+        >
+          <CheckIcon size={12} />
+          Mark handled
+        </button>
+      );
+    }
+    return onDoHere ? (
+      <button
+        type="button"
+        className="button button--primary thread-todo-card__button"
+        onClick={() => void onDoHere(todo, addressReviewFindingsPrompt(review))}
+      >
+        <ArrowUpIcon size={12} />
+        Address findings
+      </button>
+    ) : null;
+  };
+
   return (
-    <section className="thread-todo-card" aria-label="Review awaiting resolution">
-      <p className="thread-todo-card__title">{props.todo.title}</p>
-      <p>{props.todo.detail}</p>
-      {props.pager ? (
-        <div className="review-tracking">
-          <button type="button" onClick={props.pager.onPrevious} aria-label="Previous to-do">Previous</button>
-          <span>{props.pager.position} / {props.pager.total}</span>
-          <button type="button" onClick={props.pager.onNext} aria-label="Next to-do">Next</button>
-        </div>
-      ) : null}
-      {tracking.review ? (
-        <>
-          <ReviewStatusControls review={tracking.review} busy={tracking.busy} update={tracking.update} />
-          <ul>
-            {tracking.review.items.map((item) => (
-              <li key={item.id}>
-                <span>{item.title}</span>
-                <ReviewStatusControls review={tracking.review!} item={item} busy={tracking.busy} update={tracking.update} />
+    <article
+      className="thread-todo-card"
+      data-kind={todo.kind}
+      data-todo-id={todo.id}
+      aria-labelledby={titleId}
+    >
+      <ThreadTodoCardHead
+        todo={todo}
+        titleId={titleId}
+        now={props.now}
+        onCollapse={props.onCollapse}
+        dismissLabel="Dismiss review"
+        onDismiss={() => props.onResolve(todo, "dismissed")}
+      />
+      <div className="thread-todo-card__body">
+        <p className="review-todo__summary">
+          <span className="review-todo__count">{count ?? todo.detail ?? "Loading review…"}</span>
+          {summary ? <span className="review-todo__explanation">{summary}</span> : null}
+        </p>
+        {shown.length > 0 && review ? (
+          <ul className="review-todo__findings" aria-label="Findings">
+            {shown.map((item) => (
+              <li key={item.id} className="review-todo__finding" data-status={item.status}>
+                <span
+                  className={`review-todo__priority${
+                    typeof item.priority === "number" && item.priority >= 0 && item.priority <= 3
+                      ? ` review-todo__priority--p${item.priority}`
+                      : ""
+                  }`}
+                >
+                  {typeof item.priority === "number" ? `P${item.priority}` : "–"}
+                </span>
+                <span className="review-todo__finding-title tooltip-target" data-tooltip={item.title}>
+                  {item.title}
+                </span>
+                <span className="review-todo__finding-actions">
+                  {item.status === "open" ? (
+                    <>
+                      <button
+                        type="button"
+                        className="thread-todo-card__icon-button"
+                        aria-label={`Mark addressed: ${item.title}`}
+                        title="Mark addressed"
+                        disabled={tracking.busy}
+                        onClick={() => void tracking.update({ itemId: item.id, status: "addressed" })}
+                      >
+                        <CheckIcon size={13} />
+                      </button>
+                      <button
+                        type="button"
+                        className="thread-todo-card__icon-button"
+                        aria-label={`Dismiss finding: ${item.title}`}
+                        title="Do not address"
+                        disabled={tracking.busy}
+                        onClick={() => void tracking.update({ itemId: item.id, status: "dismissed" })}
+                      >
+                        <CloseIcon size={13} />
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      className="review-todo__reopen"
+                      aria-label={`Reopen finding: ${item.title}`}
+                      disabled={tracking.busy}
+                      onClick={() => void tracking.update({ itemId: item.id, status: "open" })}
+                    >
+                      Reopen
+                    </button>
+                  )}
+                </span>
               </li>
             ))}
           </ul>
-        </>
-      ) : <p>Loading review…</p>}
-      {tracking.error ? <p role="alert">{tracking.error}</p> : null}
-      {props.onCollapse ? <button type="button" className="thread-todos-panel__row-link" onClick={props.onCollapse}>Collapse</button> : null}
-    </section>
+        ) : null}
+        {hidden > 0 || expanded ? (
+          <button
+            type="button"
+            className="review-todo__more"
+            aria-expanded={expanded}
+            onClick={() => setExpanded((current) => !current)}
+          >
+            {expanded ? "Show fewer" : `Show ${hidden} more`}
+          </button>
+        ) : null}
+        {tracking.error ? (
+          <p className="thread-todo-card__error" role="alert">{tracking.error}</p>
+        ) : null}
+      </div>
+      <div className="thread-todo-card__footer">
+        {props.pager ? <ThreadTodoCardPager pager={props.pager} /> : null}
+        <div className="thread-todo-card__actions">{renderAction()}</div>
+      </div>
+    </article>
+  );
+}
+
+/** The title row every card shares: kind glyph, title, age, then the tools. */
+function ThreadTodoCardHead(props: {
+  todo: ThreadTodo;
+  titleId: string;
+  now?: number;
+  onCollapse?: () => void;
+  dismissLabel: string;
+  onDismiss: () => void;
+}) {
+  const { todo } = props;
+  const KindIcon = KIND_ICONS[todo.kind];
+  return (
+    <div className="thread-todo-card__head">
+      <span className="thread-todo-card__kind" aria-hidden="true">
+        {KindIcon ? <KindIcon size={13} /> : <span className="thread-todo-card__ring" />}
+      </span>
+      <h3 id={props.titleId} className="thread-todo-card__title">{todo.title}</h3>
+      <span className="thread-todo-card__age">
+        {formatTodoAge(todo.createdAt, props.now)}
+      </span>
+      <div className="thread-todo-card__tools">
+        {props.onCollapse ? (
+          <button
+            type="button"
+            className="thread-todo-card__icon-button"
+            aria-label="Collapse to-dos"
+            title="Collapse to-dos"
+            onClick={props.onCollapse}
+          >
+            <ChevronUpIcon size={13} />
+          </button>
+        ) : null}
+        <button
+          type="button"
+          className="thread-todo-card__icon-button"
+          aria-label={props.dismissLabel}
+          title="Dismiss"
+          onClick={props.onDismiss}
+        >
+          <CloseIcon size={13} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ThreadTodoCardPager(props: { pager: NonNullable<ThreadTodoCardProps["pager"]> }) {
+  const { pager } = props;
+  if (pager.total <= 1) return null;
+  return (
+    <nav className="thread-todo-card__pager" aria-label="To-do pages">
+      <button
+        type="button"
+        className="thread-todo-card__icon-button"
+        aria-label="Previous to-do"
+        disabled={pager.position <= 1}
+        onClick={pager.onPrevious}
+      >
+        <ChevronLeftIcon size={13} />
+      </button>
+      <span className="thread-todo-card__position">
+        {pager.position}/{pager.total}
+      </span>
+      <button
+        type="button"
+        className="thread-todo-card__icon-button"
+        aria-label="Next to-do"
+        disabled={pager.position >= pager.total}
+        onClick={pager.onNext}
+      >
+        <ChevronRightIcon size={13} />
+      </button>
+    </nav>
   );
 }
 
@@ -140,7 +346,6 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
   const [copied, setCopied] = useState(false);
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(copiedTimerRef.current), []);
-  const KindIcon = KIND_ICONS[todo.kind];
   const action = todo.action;
   const titleId = `thread-todo-title-${todo.id}`;
   const prompt = action?.type === "start_thread" ? action.prompt : undefined;
@@ -305,37 +510,14 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
       data-todo-id={todo.id}
       aria-labelledby={titleId}
     >
-      <div className="thread-todo-card__head">
-        <span className="thread-todo-card__kind" aria-hidden="true">
-          {KindIcon ? <KindIcon size={13} /> : <span className="thread-todo-card__ring" />}
-        </span>
-        <h3 id={titleId} className="thread-todo-card__title">{todo.title}</h3>
-        <span className="thread-todo-card__age">
-          {formatTodoAge(todo.createdAt, props.now)}
-        </span>
-        <div className="thread-todo-card__tools">
-          {props.onCollapse ? (
-            <button
-              type="button"
-              className="thread-todo-card__icon-button"
-              aria-label="Collapse to-dos"
-              title="Collapse to-dos"
-              onClick={props.onCollapse}
-            >
-              <ChevronUpIcon size={13} />
-            </button>
-          ) : null}
-          <button
-            type="button"
-            className="thread-todo-card__icon-button"
-            aria-label={`Dismiss to-do: ${todo.title}`}
-            title="Dismiss"
-            onClick={() => props.onResolve(todo, "dismissed")}
-          >
-            <CloseIcon size={13} />
-          </button>
-        </div>
-      </div>
+      <ThreadTodoCardHead
+        todo={todo}
+        titleId={titleId}
+        now={props.now}
+        onCollapse={props.onCollapse}
+        dismissLabel={`Dismiss to-do: ${todo.title}`}
+        onDismiss={() => props.onResolve(todo, "dismissed")}
+      />
 
       {/* A review starts on the card's own thread, so it has no project to change. */}
       <TodoProjectPicker
@@ -392,31 +574,7 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
       ) : null}
 
       <div className="thread-todo-card__footer">
-        {props.pager && props.pager.total > 1 ? (
-          <nav className="thread-todo-card__pager" aria-label="To-do pages">
-            <button
-              type="button"
-              className="thread-todo-card__icon-button"
-              aria-label="Previous to-do"
-              disabled={props.pager.position <= 1}
-              onClick={props.pager.onPrevious}
-            >
-              <ChevronLeftIcon size={13} />
-            </button>
-            <span className="thread-todo-card__position">
-              {props.pager.position}/{props.pager.total}
-            </span>
-            <button
-              type="button"
-              className="thread-todo-card__icon-button"
-              aria-label="Next to-do"
-              disabled={props.pager.position >= props.pager.total}
-              onClick={props.pager.onNext}
-            >
-              <ChevronRightIcon size={13} />
-            </button>
-          </nav>
-        ) : null}
+        {props.pager ? <ThreadTodoCardPager pager={props.pager} /> : null}
         <div className="thread-todo-card__actions">{renderAction()}</div>
       </div>
     </article>

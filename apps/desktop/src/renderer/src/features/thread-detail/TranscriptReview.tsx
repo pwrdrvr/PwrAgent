@@ -24,7 +24,13 @@ import {
 } from "./review-clipboard";
 import { ThreadMarkdown } from "./ThreadMarkdown";
 import { TranscriptCopyButton } from "./TranscriptCopyButton";
-import { ReviewStatusControls, useTrackedReview } from "../thread-todos/review-tracking";
+import {
+  ReviewFindingActions,
+  ReviewFindingResolution,
+  ReviewFindingState,
+  ReviewStatusRow,
+  useTrackedReview,
+} from "../thread-todos/review-tracking";
 
 type TranscriptReviewProps = {
   applications?: DesktopApplicationsSnapshot;
@@ -120,7 +126,6 @@ function shouldHideReviewBody(summary: string, review: string): boolean {
     normalizeReviewDisplayText(trimmedReview) === summary.trim()
   );
 }
-
 
 /**
  * The transcript scrolls, so the CSS pseudo-element tooltip would be clipped
@@ -349,13 +354,17 @@ export function TranscriptReview(props: TranscriptReviewProps) {
       ) : null}
 
       {tracking.review ? (
-        <ReviewStatusControls review={tracking.review} busy={tracking.busy} update={tracking.update} />
+        <ReviewStatusRow review={tracking.review} busy={tracking.busy} update={tracking.update} />
       ) : null}
-      {tracking.error ? <p role="alert">{tracking.error}</p> : null}
+      {tracking.error ? (
+        <p className="review-status__error" role="alert">{tracking.error}</p>
+      ) : null}
 
       {findings.length > 0 ? (
         <ol className="transcript-review__findings">
           {findings.map((finding, index) => {
+            // Tracked findings are recorded from this same list, in order.
+            const item = tracking.review?.items[index];
             const range = finding.code_location.line_range;
             const absoluteFilePath = normalizePath(finding.code_location.absolute_file_path);
             const displayPath = formatPath(absoluteFilePath, props.directoryPaths);
@@ -371,6 +380,9 @@ export function TranscriptReview(props: TranscriptReviewProps) {
                   <span className="transcript-review__finding-title">
                     {finding.title}
                   </span>
+                  {tracking.review && item ? (
+                    <ReviewFindingState review={tracking.review} item={item} />
+                  ) : null}
                   <TranscriptCopyButton
                     className="transcript-copy-button--review-finding"
                     copiedLabel="Copied finding"
@@ -392,29 +404,39 @@ export function TranscriptReview(props: TranscriptReviewProps) {
                   text={finding.body}
                   threadLinkSource={props.threadLinkSource}
                 />
-                <div className="transcript-review__location">
-                  <a
-                    className="transcript-review__location-path"
-                    href={fileHref(absoluteFilePath, range.start)}
-                    onClick={(event) => {
-                      openLocalFile(event, absoluteFilePath, range.start);
-                    }}
-                    rel="noopener noreferrer"
-                    target="_blank"
-                    title={`${absoluteFilePath}:${range.start}`}
-                  >
-                    {displayPath}
-                  </a>
-                  <span className="transcript-review__location-line">
-                    {range.start === range.end
-                      ? `Line ${range.start}`
-                      : `Lines ${range.start}-${range.end}`}
-                  </span>
+                <div className="transcript-review__finding-foot">
+                  <div className="transcript-review__location">
+                    <a
+                      className="transcript-review__location-path"
+                      href={fileHref(absoluteFilePath, range.start)}
+                      onClick={(event) => {
+                        openLocalFile(event, absoluteFilePath, range.start);
+                      }}
+                      rel="noopener noreferrer"
+                      target="_blank"
+                      title={`${absoluteFilePath}:${range.start}`}
+                    >
+                      {displayPath}
+                    </a>
+                    <span className="transcript-review__location-line">
+                      {range.start === range.end
+                        ? `Line ${range.start}`
+                        : `Lines ${range.start}-${range.end}`}
+                    </span>
+                  </div>
+                  {tracking.review && item ? (
+                    <ReviewFindingActions
+                      review={tracking.review}
+                      item={item}
+                      busy={tracking.busy}
+                      update={tracking.update}
+                    />
+                  ) : null}
                 </div>
-                {tracking.review?.items[index] ? (
-                  <ReviewStatusControls
+                {tracking.review && item ? (
+                  <ReviewFindingResolution
                     review={tracking.review}
-                    item={tracking.review.items[index]}
+                    item={item}
                     busy={tracking.busy}
                     update={tracking.update}
                   />

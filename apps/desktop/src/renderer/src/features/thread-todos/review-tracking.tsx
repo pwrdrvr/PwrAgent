@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ThreadReview, ThreadReviewIdentity, ThreadReviewItem, UpdateThreadReviewRequest } from "@pwragent/shared";
+import type {
+  ThreadReview,
+  ThreadReviewIdentity,
+  ThreadReviewItem,
+  ThreadReviewResolution,
+  UpdateThreadReviewRequest,
+} from "@pwragent/shared";
+import { BanIcon, CheckIcon } from "../../icons";
 import { useDesktopApi, type DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 
@@ -21,6 +28,8 @@ function readReviews(api: DesktopApi, identity: ThreadReviewIdentity): Promise<T
   pending.set(key, request);
   return request;
 }
+
+export type ReviewUpdate = (request: Omit<UpdateThreadReviewRequest, "id">) => Promise<void>;
 
 export function useTrackedReview(
   identity: ThreadReviewIdentity | undefined,
@@ -72,7 +81,7 @@ export function useTrackedReview(
       unsubscribe?.();
     };
   }, [api, backend, threadId, id, sourceKey]);
-  const update = useCallback(async (request: Omit<UpdateThreadReviewRequest, "id">): Promise<void> => {
+  const update = useCallback<ReviewUpdate>(async (request) => {
     if (!review || !api?.updateThreadReview) return;
     const startedGeneration = generation.current;
     setBusy(true);
@@ -89,35 +98,252 @@ export function useTrackedReview(
   return { review, update, busy, error };
 }
 
-export function ReviewStatusControls(props: {
-  review: ThreadReview;
-  item?: ThreadReviewItem;
-  busy: boolean;
-  update: (request: Omit<UpdateThreadReviewRequest, "id">) => Promise<void>;
-}) {
-  const target = props.item ?? props.review;
-  const dismissed = target.status === "dismissed" || props.review.status === "dismissed";
-  const label = dismissed ? "Do not address" : target.status === "open" ? "Waiting for resolution" : "Addressed";
-  const change = (status: UpdateThreadReviewRequest["status"]): void => {
-    void props.update({ status, ...(props.item ? { itemId: props.item.id } : {}) });
-  };
+/** Open findings first, then by priority; ties keep the reviewer's order. */
+export function orderReviewItems(items: readonly ThreadReviewItem[]): ThreadReviewItem[] {
+  const rank = (item: ThreadReviewItem): number => item.priority ?? 9;
+  return items
+    .map((item, index) => ({ item, index }))
+    .sort((a, b) =>
+      Number(a.item.status !== "open") - Number(b.item.status !== "open")
+      || rank(a.item) - rank(b.item)
+      || a.index - b.index)
+    .map(({ item }) => item);
+}
+
+export function openReviewItems(review: ThreadReview): ThreadReviewItem[] {
+  return review.items.filter((item) => item.status === "open");
+}
+
+/**
+ * The reply "Address findings" sends to the review's own thread. It names the
+ * review and each finding by id so the agent can settle them without a lookup.
+ */
+export function addressReviewFindingsPrompt(review: ThreadReview): string {
+  const findings = orderReviewItems(openReviewItems(review)).map((item, index) => {
+    const location = item.codeLocation
+      ? ` — ${item.codeLocation.absolute_file_path}:${formatLineRange(item.codeLocation.line_range)}`
+      : "";
+    const priority = typeof item.priority === "number" ? `[P${item.priority}] ` : "";
+    const body = item.body?.trim() ? `\n   ${item.body.trim().replace(/\n/g, "\n   ")}` : "";
+    return `${index + 1}. ${priority}${item.title}${location} (finding \`${item.id}\`)${body}`;
+  });
+  return [
+    `Address the open findings from code review \`${review.id}\`. Fix each one, or decide it should not be fixed. Then record the outcome with PwrAgent's \`update_review_item\` tool: status \`addressed\` or \`dismissed\`, a short note saying what changed or why not, and a commit or pull request link when there is one.`,
+    "",
+    ...findings,
+  ].join("\n");
+}
+
+function formatLineRange(range: { start: number; end: number }): string {
+  return range.start === range.end ? `${range.start}` : `${range.start}-${range.end}`;
+}
+
+const timeFormat = new Intl.DateTimeFormat(undefined, {
+  month: "short",
+  day: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+});
+
+/**
+ * Names the evidence a resolution links to. A commit or pull request reads as
+ * one; anything else as its host, with the whole URL in the tooltip.
+ */
+export function formatEvidenceLabel(url: string): string {
+  try {
+    const parsed = new URL(url);
+    const commit = /\/commit\/([0-9a-f]{7,40})\b/i.exec(parsed.pathname);
+    if (commit) return `Commit ${commit[1]!.slice(0, 7)}`;
+    const pull = /\/(?:pull|merge_requests)\/(\d+)\b/.exec(parsed.pathname);
+    if (pull) return `PR #${pull[1]}`;
+    return parsed.hostname.replace(/^www\./, "");
+  } catch {
+    return "Link";
+  }
+}
+
+/**
+ * Who settled it, then the documented reason. An operator's own click carries
+ * a stock note that only restates the outcome, so it is left out.
+ */
+function describeResolution(outcome: string, resolution: ThreadReviewResolution): string {
+  switch (resolution.actor) {
+    case "user":
+      return `${outcome} by you`;
+    case "agent":
+      return `${outcome} by the agent · ${resolution.note}`;
+    case "system":
+      return resolution.note;
+  }
+}
+
+function ResolutionDetails(props: { outcome: string; resolution: ThreadReviewResolution }) {
+  const { resolution } = props;
   return (
-    <div className="review-tracking" data-status={dismissed ? "dismissed" : target.status}>
-      <span>{label}</span>
-      {target.resolution ? <span title={new Date(target.updatedAt).toLocaleString()}>{target.resolution.note}</span> : null}
-      {target.resolution?.url ? <a href={target.resolution.url} target="_blank" rel="noopener noreferrer">Resolution</a> : null}
-      {target.status !== "open" ? (
-        <button type="button" disabled={props.busy} aria-label={props.item ? `Reopen finding: ${props.item.title}` : "Reopen review"} onClick={() => change("open")}>Reopen</button>
-      ) : props.review.status === "open" ? (
-        <>
-          {props.item || props.review.items.length === 0 ? (
-            <button type="button" disabled={props.busy} aria-label={props.item ? `Mark addressed: ${props.item.title}` : "Mark review addressed"} onClick={() => change(props.item ? "addressed" : "handled")}>Mark addressed</button>
-          ) : null}
-          <button type="button" disabled={props.busy} aria-label={props.item ? `Dismiss finding: ${props.item.title}` : "Dismiss review"} onClick={() => change("dismissed")}>
-            {props.item ? "Dismiss finding" : "Dismiss review"}
-          </button>
-        </>
+    <>
+      <span className="review-status__note">{describeResolution(props.outcome, resolution)}</span>
+      {resolution.url ? (
+        <a
+          className="review-status__link"
+          href={resolution.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          title={resolution.url}
+        >
+          {formatEvidenceLabel(resolution.url)}
+        </a>
       ) : null}
+      <time className="review-status__time" dateTime={new Date(resolution.at).toISOString()}>
+        {timeFormat.format(resolution.at)}
+      </time>
+    </>
+  );
+}
+
+/** The whole review's standing, under the transcript card's verdict. */
+export function ReviewStatusRow(props: { review: ThreadReview; busy: boolean; update: ReviewUpdate }) {
+  const { review, busy, update } = props;
+  const open = openReviewItems(review).length;
+  const total = review.items.length;
+  if (review.status === "open") {
+    return (
+      <div className="review-status" data-status="open">
+        <span className="review-status__state" data-status="open">
+          <span className="review-status__dot" aria-hidden="true" />
+          {open > 0
+            ? `${open} of ${total} ${total === 1 ? "finding" : "findings"} open`
+            : "Waiting for resolution"}
+        </span>
+        <span className="review-status__note">
+          {open > 0
+            ? "Tracked in To-dos until each finding is addressed or dismissed."
+            : "No findings left open. Mark it handled once you are done with it."}
+        </span>
+        <div className="review-status__actions">
+          <button
+            type="button"
+            className="button review-status__button review-status__button--quiet"
+            disabled={busy}
+            onClick={() => void update({ status: "dismissed" })}
+          >
+            Dismiss review
+          </button>
+          {open === 0 ? (
+            <button
+              type="button"
+              className="button button--secondary review-status__button"
+              disabled={busy}
+              onClick={() => void update({ status: "handled" })}
+            >
+              <CheckIcon size={12} />
+              Mark handled
+            </button>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
+  const dismissed = review.status === "dismissed";
+  // A handled review reopens through its findings; only one with none to
+  // reopen, or a dismissed one, offers the whole review.
+  const reopenable = dismissed || total === 0;
+  return (
+    <div className="review-status" data-status={review.status}>
+      <span className="review-status__state" data-status={review.status}>
+        {dismissed ? <BanIcon size={12} /> : <CheckIcon size={12} />}
+        {dismissed ? "Do not address" : "Handled"}
+      </span>
+      {review.resolution ? (
+        <ResolutionDetails outcome={dismissed ? "Dismissed" : "Handled"} resolution={review.resolution} />
+      ) : null}
+      {reopenable ? (
+        <div className="review-status__actions">
+          <button
+            type="button"
+            className="button review-status__button review-status__button--quiet"
+            disabled={busy}
+            onClick={() => void update({ status: "open" })}
+          >
+            Reopen review
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** A settled finding's label in its head; a whole-review dismissal labels every finding. */
+export function ReviewFindingState(props: { review: ThreadReview; item: ThreadReviewItem }) {
+  const status = props.review.status === "dismissed" ? "dismissed" : props.item.status;
+  if (status === "open") return null;
+  return (
+    <span className="review-finding-state" data-status={status}>
+      {status === "addressed" ? <CheckIcon size={12} /> : <BanIcon size={12} />}
+      {status === "addressed" ? "Addressed" : "Do not address"}
+    </span>
+  );
+}
+
+/** The two ways to settle an open finding, beside its location. */
+export function ReviewFindingActions(props: {
+  review: ThreadReview;
+  item: ThreadReviewItem;
+  busy: boolean;
+  update: ReviewUpdate;
+}) {
+  const { review, item, busy, update } = props;
+  if (review.status === "dismissed" || item.status !== "open") return null;
+  return (
+    <div className="review-status__actions">
+      <button
+        type="button"
+        className="button review-status__button review-status__button--quiet"
+        aria-label={`Dismiss finding: ${item.title}`}
+        disabled={busy}
+        onClick={() => void update({ itemId: item.id, status: "dismissed" })}
+      >
+        Do not address
+      </button>
+      <button
+        type="button"
+        className="button button--secondary review-status__button"
+        aria-label={`Mark addressed: ${item.title}`}
+        disabled={busy}
+        onClick={() => void update({ itemId: item.id, status: "addressed" })}
+      >
+        <CheckIcon size={12} />
+        Mark addressed
+      </button>
+    </div>
+  );
+}
+
+/** How a settled finding was settled: who, why, the evidence, and when. */
+export function ReviewFindingResolution(props: {
+  review: ThreadReview;
+  item: ThreadReviewItem;
+  busy: boolean;
+  update: ReviewUpdate;
+}) {
+  const { review, item, busy, update } = props;
+  if (review.status === "dismissed" || item.status === "open" || !item.resolution) return null;
+  return (
+    <div className="review-status" data-status={item.status}>
+      <ResolutionDetails
+        outcome={item.status === "addressed" ? "Addressed" : "Dismissed"}
+        resolution={item.resolution}
+      />
+      <div className="review-status__actions">
+        <button
+          type="button"
+          className="button review-status__button review-status__button--quiet"
+          aria-label={`Reopen finding: ${item.title}`}
+          disabled={busy}
+          onClick={() => void update({ itemId: item.id, status: "open" })}
+        >
+          Reopen
+        </button>
+      </div>
     </div>
   );
 }

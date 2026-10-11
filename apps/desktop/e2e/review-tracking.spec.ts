@@ -46,7 +46,7 @@ test("tracks an older review, retains dismissals, and clears To-dos after every 
     const card = transcript.getByRole("group", { name: "Code review" });
     await expect(card.getByRole("button", { name: /^Dismiss finding:/ })).toHaveCount(2);
     await app.window.getByRole("region", { name: "To-dos for this thread" })
-      .getByRole("button", { name: "Collapse", exact: true }).click();
+      .getByRole("button", { name: "Collapse to-dos", exact: true }).click();
     const readReviews = () => app.window.evaluate(async (identity) => {
       const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
       return (await api.listThreadReviews!({ ...identity, status: "all" })).reviews;

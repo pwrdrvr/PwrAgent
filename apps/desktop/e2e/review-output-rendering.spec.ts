@@ -67,7 +67,7 @@ test("renders captured Codex review findings once in the review card", async () 
     await expect(app.window.getByTestId("composer-stop-turn")).toBeHidden();
     // Completed reviews now open a To-do overlay above the transcript.
     await app.window.getByRole("region", { name: "To-dos for this thread" })
-      .getByRole("button", { name: "Collapse", exact: true }).click();
+      .getByRole("button", { name: "Collapse to-dos", exact: true }).click();
 
     // Replay advancement acknowledges main-process events, not renderer commits.
     // Wait for the finished review above, then observe visibility and geometry

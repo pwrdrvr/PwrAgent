@@ -73,7 +73,7 @@ export type ThreadTodosPanelProps = {
   /** Directory key of that thread's project, when it has one. */
   projectKey?: string;
   onStartReview: (todo: ThreadTodo) => void;
-  onDoHere?: (todo: ThreadTodo) => void | Promise<unknown>;
+  onDoHere?: (todo: ThreadTodo, prompt?: string) => void | Promise<unknown>;
 };
 
 /**

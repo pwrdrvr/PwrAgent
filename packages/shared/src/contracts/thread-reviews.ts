@@ -67,6 +67,20 @@ export type ListThreadReviewsRequest = Partial<ThreadReviewIdentity> & {
   status?: ThreadReviewStatus | "all";
 };
 
+/**
+ * What a review card is called. Stored titles are generic ("Code review"), so
+ * the reviewed pull request or branch names it when the context recorded one;
+ * deriving it here leaves existing records as they are.
+ */
+export function threadReviewDisplayTitle(review: Pick<ThreadReview, "title" | "context">): string {
+  // An agent's own title for a recorded review says more than either.
+  if (review.title !== "Code review") return review.title;
+  const pullRequest = review.context?.pullRequest;
+  if (pullRequest) return `Review of PR #${pullRequest.number}`;
+  const branch = review.context?.gitBranch;
+  return branch ? `Review of ${branch}` : review.title;
+}
+
 /** Review cards share scope, counts, seen markers, and sorting with to-dos. */
 export function threadReviewTodo(review: ThreadReview): ThreadTodo {
   const remaining = review.items.filter((item) => item.status === "open").length;
@@ -78,7 +92,7 @@ export function threadReviewTodo(review: ThreadReview): ThreadTodo {
     threadId: review.threadId,
     kind: "review",
     status: review.status === "handled" ? "done" : review.status,
-    title: review.title,
+    title: threadReviewDisplayTitle(review),
     detail: review.status === "open"
       ? `${remaining} open ${remaining === 1 ? "finding" : "findings"}${review.summary ? ` · ${review.summary}` : ""}`
       : review.resolution?.note,

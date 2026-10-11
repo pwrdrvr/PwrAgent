@@ -2564,11 +2564,15 @@ export function ThreadView(props: ThreadViewProps) {
   // The card resolves only once the composer has taken it.
   // Resolves false when the composer would not take it (disabled, or
   // another answer still sending), so the card can say so.
-  const doTodoHere = useEventCallback(async (todo: ThreadTodo): Promise<boolean> => {
-    if (todo.action?.type !== "start_thread") return false;
+  // A review card passes its own prompt and stays open: the agent settles
+  // the findings, and the review leaves To-dos when the last one is.
+  const doTodoHere = useEventCallback(async (todo: ThreadTodo, prompt?: string): Promise<boolean> => {
+    const handoff = todo.action?.type === "start_thread" ? todo.action.prompt : undefined;
+    const text = prompt ?? handoff;
+    if (!text) return false;
     try {
-      const accepted = await handleAnswerAsyncQuestions(todo.action.prompt);
-      if (accepted) {
+      const accepted = await handleAnswerAsyncQuestions(text);
+      if (accepted && prompt === undefined) {
         await props.threadTodos?.resolve(todo, "done", "sent_here");
       }
       return accepted;

@@ -48,6 +48,28 @@ is an ordinary To-do card; a completed review awaiting resolution is a review.
 The same predicates filter scope counts and resolved rows. No filter picker
 is introduced in this change.
 
+## Controls
+
+An open review's To-do card lists its findings, open ones first by priority,
+four rows before **Show N more**. Each open row has **Mark addressed** and
+**Do not address**; a settled row dims in place and offers **Reopen**. The
+head's dismiss control dismisses the whole review, and the stack's **Undo**
+reopens it. **Address findings** sends one reply to the review's thread that
+lists the open findings by id and asks the agent to settle each with
+`update_review_item`. The card stays open until the last finding is settled.
+A review with nothing left open offers **Mark handled** instead.
+
+The transcript review keeps the record. A status row under the verdict gives
+the open count, or how the review was handled or dismissed. Each finding's
+footer holds its two actions, or a resolution line naming the outcome, the
+actor, the agent's note, the evidence link, and the time. An operator's own
+click shows "by you" without its stock note. Status tone is carried on the
+glyph and label only.
+
+The card's title derives from the stored context with
+`threadReviewDisplayTitle`: the pull request, then the branch, then the stored
+title. An agent's own title for a recorded review is kept.
+
 Review controls use `listThreadReviews`, `updateThreadReview`, and the existing
 To-do change event. `threadReviewTodo` projects review metadata into the card
 list without duplicating persisted card state. Status changes are atomic,

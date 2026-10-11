@@ -28,10 +28,10 @@ export type ThreadTodoStackProps = {
   view: ThreadTodosView;
   onStartReview: (todo: ThreadTodo) => void;
   /**
-   * Sends a handoff's prompt to this thread as a reply. Resolves false when
-   * the composer would not take it.
+   * Sends a handoff's prompt, or the given one, to this thread as a reply.
+   * Resolves false when the composer would not take it.
    */
-  onDoHere?: (todo: ThreadTodo) => Promise<boolean>;
+  onDoHere?: (todo: ThreadTodo, prompt?: string) => Promise<boolean>;
   /** Moves the stack below the find bar while it is open. */
   findOpen?: boolean;
 };
@@ -108,8 +108,8 @@ export function ThreadTodoStack(props: ThreadTodoStackProps) {
   };
   const onDoHere = props.onDoHere;
   const doHere = onDoHere
-    ? (target: ThreadTodo): void => {
-        void onDoHere(target).then((sent) => {
+    ? (target: ThreadTodo, prompt?: string): void => {
+        void onDoHere(target, prompt).then((sent) => {
           if (!sent) {
             showNotice({
               todo: target,

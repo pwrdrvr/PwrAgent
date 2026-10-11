@@ -339,7 +339,7 @@ describe("ThreadTodoStack", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Handoff options" }));
     fireEvent.click(screen.getByRole("menuitem", { name: "Do it here" }));
-    expect(onDoHere).toHaveBeenCalledWith(handoff);
+    expect(onDoHere).toHaveBeenCalledWith(handoff, undefined);
 
     fireEvent.click(screen.getByRole("button", { name: "Handoff options" }));
     fireEvent.click(screen.getByRole("menuitem", { name: "Start thread on" }));
@@ -395,7 +395,7 @@ describe("ThreadTodoStack", () => {
     await act(async () => {
       fireEvent.click(screen.getByRole("menuitem", { name: "Do it here" }));
     });
-    expect(onDoHere).toHaveBeenCalledWith(handoff);
+    expect(onDoHere).toHaveBeenCalledWith(handoff, undefined);
     expect(screen.getByRole("status").textContent).toContain("The composer is busy.");
   });
 
