@@ -34,7 +34,7 @@ test("remote thread services explicitly connect real HTTP and WS and release on 
     await window.getByRole("button", { name: "Browse remote threads" }).click();
     const remote = await opened;
     await remote.waitForLoadState("domcontentloaded");
-    await remote.locator(".thread-row__title", { hasText: "Preview development app" }).click();
+    await remote.getByRole("button", { name: "Preview development app", exact: true }).click();
     const services = remote.getByRole("region", { name: "Thread services" });
     await services.getByRole("button", { name: "Services · 1" }).click();
     await expect(services.getByText("Development preview", { exact: true })).toBeVisible();

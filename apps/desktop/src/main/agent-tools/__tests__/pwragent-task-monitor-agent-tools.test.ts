@@ -43,8 +43,8 @@ describe("PwrAgent task monitor agent tools", () => {
     // 47 with mark_project_read, 50 with the three thread to-do tools,
     // 52 with rename_current_thread, 59 with the seven forge read tools,
     // 63 with the four review-tracking tools, 64 with manage_thread_dependencies,
-    // 65 with read_tool_guide.
-    expect(dynamicTools).toHaveLength(65);
+    // 65 with read_tool_guide, 68 with the three Federation service tools.
+    expect(dynamicTools).toHaveLength(68);
     expect(dynamicTools.map((tool) => tool.name))
       .toContain("manage_thread_dependencies");
     expect(mcpTools).toEqual(expect.arrayContaining(
@@ -69,6 +69,11 @@ describe("PwrAgent task monitor agent tools", () => {
       .toContain("send_messaging_file");
     expect(mcpTools.map((tool) => tool.name))
       .toContain("push_instance_file");
+    expect(mcpTools.map((tool) => tool.name)).toEqual(expect.arrayContaining([
+      "advertise_service",
+      "list_services",
+      "remove_service",
+    ]));
     expect(mcpTools.map((tool) => tool.name))
       .toContain("handoff_instance_thread");
     expect(mcpTools.map((tool) => tool.name))
