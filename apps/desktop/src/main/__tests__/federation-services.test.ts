@@ -162,8 +162,8 @@ describe("service boundaries and lifecycle", () => {
     const lease = await service.lease("viewer", thread, declaration.serviceId);
     const streams = await Promise.all(Array.from({ length: 8 }, () => service.open("viewer", lease.leaseId)));
     await expect(service.open("viewer", lease.leaseId)).rejects.toThrow("limit");
-    await expect(service.exchange("intruder", { ...streams[0]!, seq: 0, data: "", fin: false })).rejects.toThrow("revoked");
-    await expect(service.exchange("viewer", { ...streams[0]!, seq: 99, data: "", fin: false })).rejects.toThrow("sequence");
+    await expect(service.exchange("intruder", { ...streams[0]!, seq: 0, data: "", fin: false, receive: true })).rejects.toThrow("revoked");
+    await expect(service.exchange("viewer", { ...streams[0]!, seq: 99, data: "", fin: false, receive: true })).rejects.toThrow("sequence");
     service.disconnect("viewer");
     await expect(service.open("viewer", lease.leaseId)).rejects.toThrow("revoked");
     const nextLease = await service.lease("viewer", thread, declaration.serviceId);
@@ -171,4 +171,70 @@ describe("service boundaries and lifecycle", () => {
     service.remove(thread, declaration.serviceId);
     await expect(service.open("viewer", nextLease.leaseId)).rejects.toThrow("revoked");
   });
+});
+
+it("cancels a pending activation and releases a late lease without opening a listener", async () => {
+  const service = owner();
+  const declaration = await service.advertise(thread, { port: 3000, name: "Fixture", protocol: "http" });
+  const forwarder = new FederationServiceForwarder();
+  cleanups.push(() => forwarder.dispose());
+  const { rpc } = routed(service, false);
+  let resolveLease!: (value: { leaseId: string }) => void;
+  const lateLease = new Promise<{ leaseId: string }>((resolve) => { resolveLease = resolve; });
+  const wrapped = { request: <T>(params: Parameters<typeof rpc.request>[0]): Promise<T> => params.method === METHODS.lease
+    ? lateLease as Promise<T> : rpc.request<T>(params) };
+  const pending = forwarder.connect(1, declaration, wrapped);
+  const outcome = expect(pending).rejects.toThrow("cancelled");
+  forwarder.leave(1);
+  const lease = await service.lease("viewer", thread, declaration.serviceId);
+  resolveLease(lease);
+  await outcome;
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  expect(forwarder.list(1, "owner", thread)).toEqual([]);
+  expect(() => service.renew("viewer", lease.leaseId)).toThrow("revoked");
+});
+
+it("supports declared IPv6 loopback without DNS and refuses stopped services", async () => {
+  const server = createServer((socket) => { socket.on("error", () => undefined); socket.end("ipv6 fixture"); });
+  const port = await listen(server, "::1");
+  const service = owner();
+  const declaration = await service.advertise(thread, { port, address: "::1", name: "IPv6", protocol: "tcp" });
+  const lease = await service.lease("viewer", thread, declaration.serviceId);
+  const stream = await service.open("viewer", lease.leaseId);
+  const response = await service.exchange("viewer", { ...stream, seq: 0, data: "", fin: true, receive: true });
+  expect(Buffer.from(response.data, "base64").toString()).toBe("ipv6 fixture");
+  service.close("viewer", stream.streamId);
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  await expect(service.open("viewer", lease.leaseId)).rejects.toThrow("not accepting");
+});
+
+it("streams a multi-quantum upload/download while unrelated Federation control requests run", async () => {
+  const payload = Buffer.alloc(512 * 1024, "f");
+  const server = createHttpServer((request, response) => {
+    let received = 0;
+    request.on("data", (data: Buffer) => { received += data.length; });
+    request.on("end", () => { response.setHeader("X-Fixture-Received", received); response.end(payload); });
+  });
+  const port = await listen(server);
+  const service = owner();
+  const declaration = await service.advertise(thread, { port, name: "bulk", protocol: "http" });
+  const { rpc, router } = routed(service, true);
+  router.registerHandler("fixture.control", () => ({ responsive: true }));
+  const forwarder = new FederationServiceForwarder();
+  cleanups.push(() => forwarder.dispose());
+  const forward = await forwarder.connect(1, declaration, rpc);
+  let finished = false;
+  const transfer = fetch(forward.url!, { method: "POST", body: payload }).then(async (response) => {
+    expect(response.headers.get("x-fixture-received")).toBe(String(payload.length));
+    expect(Buffer.from(await response.arrayBuffer())).toEqual(payload);
+    finished = true;
+  });
+  for (let i = 0; i < 4; i += 1) {
+    expect(await rpc.request({ method: "fixture.control", params: {}, timeoutMs: 1000 })).toEqual({ responsive: true });
+  }
+  expect(finished).toBe(false);
+  await transfer;
+  const stats = forwarder.list(1, "owner", thread)[0]!;
+  expect(stats.sentBytes).toBeGreaterThanOrEqual(payload.length);
+  expect(stats.receivedBytes).toBeGreaterThanOrEqual(payload.length);
 });

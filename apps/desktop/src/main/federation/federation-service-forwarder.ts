@@ -128,21 +128,32 @@ export class FederationServiceForwarder {
         params: { leaseId: forward.leaseId }, timeoutMs: 6000 });
       streamId = opened.streamId;
       let remoteFin = false;
+      let ownerWritable = true;
+      let writing = false;
+      let writeError: unknown;
       while (!abort.signal.aborted) {
-        const data = readServiceData(socket);
-        const fin = socket.readableEnded;
+        if (writeError) throw writeError;
+        const data = ownerWritable ? readServiceData(socket) : Buffer.alloc(0);
+        const fin = ownerWritable && socket.readableEnded;
         const result = await forward.rpc.request<ServiceExchangeResult>({ method: METHODS.exchange,
-          params: { streamId, seq, data: data.toString("base64"), fin }, timeoutMs: 10_000, signal: abort.signal });
-        if (result.seq !== seq || typeof result.fin !== "boolean" || (remoteFin && !result.fin)) throw new Error("Invalid service response sequence.");
+          params: { streamId, seq, data: data.toString("base64"), fin, receive: !writing }, timeoutMs: 10_000, signal: abort.signal });
+        if (result.seq !== seq || typeof result.fin !== "boolean" || typeof result.writable !== "boolean" || (remoteFin && !result.fin)) throw new Error("Invalid service response sequence.");
         const received = decodeServiceData(result.data);
         if (remoteFin && received.length) throw new Error("Service sent data after FIN.");
-        await writeServiceData(socket, received, result.fin);
+        if (received.length || (result.fin && !socket.writableEnded && !writing)) {
+          if (writing) throw new Error("Service exceeded viewer receive credit.");
+          writing = true;
+          void writeServiceData(socket, received, result.fin)
+            .catch((error: unknown) => { writeError = error; })
+            .finally(() => { writing = false; });
+        }
         if (received.length) forward.view.error = undefined;
         forward.view.sentBytes += data.length;
         forward.view.receivedBytes += received.length;
         remoteFin = result.fin;
+        ownerWritable = result.writable;
         seq += 1;
-        if (fin && remoteFin) break;
+        if (fin && remoteFin && !writing) break;
         // Even an ended remote readable must not cause an idle busy loop.
         if (!data.length && !received.length) await new Promise<void>((resolve) => setTimeout(resolve, 10));
       }

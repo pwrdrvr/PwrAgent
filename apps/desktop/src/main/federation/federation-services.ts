@@ -18,7 +18,7 @@ export const SERVICE_METHOD_CAPABILITIES = Object.fromEntries(
 type Lease = { leaseId: string; peerId: string; service: ThreadService; expiresAt: number };
 type Stream = {
   streamId: string; lease: Lease; socket: Socket; seq: number; busy: boolean;
-  touchedAt: number; error?: string;
+  touchedAt: number; writing: boolean; error?: string;
 };
 
 export function serviceThread(value: unknown): ServiceThread {
@@ -143,7 +143,7 @@ export class FederationServices {
       throw new Error("Service stream limit reached.");
     }
     const socket = new Socket({ allowHalfOpen: true });
-    const stream: Stream = { streamId: randomUUID(), lease, socket, seq: 0, busy: false, touchedAt: this.now() };
+    const stream: Stream = { streamId: randomUUID(), lease, socket, seq: 0, busy: false, writing: false, touchedAt: this.now() };
     this.streams.set(stream.streamId, stream);
     socket.on("error", () => { stream.error = "Service connection failed or stopped."; });
     try {
@@ -173,7 +173,7 @@ export class FederationServices {
     if (stream.busy) throw new Error("Concurrent service exchanges are forbidden.");
     stream.busy = true;
     try {
-      if (input.seq !== stream.seq || !Number.isSafeInteger(input.seq) || typeof input.fin !== "boolean") {
+      if (input.seq !== stream.seq || !Number.isSafeInteger(input.seq) || typeof input.fin !== "boolean" || typeof input.receive !== "boolean") {
         throw new Error("Invalid service exchange sequence.");
       }
       const bytes = decodeServiceData(input.data);
@@ -184,14 +184,22 @@ export class FederationServices {
       await new Promise<void>((resolve) => setTimeout(resolve, Math.max(1, at - Date.now())));
       this.getLease(peerId, stream.lease.leaseId);
       if (stream.error) throw new Error(stream.error);
-      await writeServiceData(stream.socket, bytes, input.fin);
-      await waitServiceReadable(stream.socket);
+      if (bytes.length || (input.fin && !stream.socket.writableEnded)) {
+        if (stream.writing) throw new Error("Service write credit exceeded.");
+        stream.writing = true;
+        // Independent directional credit prevents full-duplex deadlocks: keep
+        // draining the opposite direction while a socket write is blocked.
+        void writeServiceData(stream.socket, bytes, input.fin)
+          .catch(() => { stream.error = "Service socket write failed or stalled."; })
+          .finally(() => { stream.writing = false; });
+      }
+      if (input.receive) await waitServiceReadable(stream.socket);
       if (stream.error) throw new Error(stream.error);
-      const data = readServiceData(stream.socket);
+      const data = input.receive ? readServiceData(stream.socket) : Buffer.alloc(0);
       const fin = stream.socket.readableEnded;
       stream.seq += 1;
       stream.touchedAt = this.now();
-      return { seq: input.seq, data: data.toString("base64"), fin };
+      return { seq: input.seq, data: data.toString("base64"), fin, writable: !stream.writing };
     } catch (error) {
       this.close(peerId, stream.streamId);
       throw error;
