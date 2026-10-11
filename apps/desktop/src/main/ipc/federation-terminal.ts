@@ -12,6 +12,7 @@ import {
   INTEGRATED_TERMINAL_SESSIONS_CHANNEL,
 } from "../../shared/ipc";
 import type {
+  TerminalSnapshot,
   IntegratedTerminalCloseRequest,
   IntegratedTerminalCreateRequest,
   IntegratedTerminalCreateResponse,
@@ -45,6 +46,10 @@ const OUTPUT_BUFFER_LIMIT = 128 * 1024;
 
 type RemoteTerminalSession = {
   sessionId: string;
+  ownerSessionId: string;
+  snapshot?: TerminalSnapshot;
+  name?: string;
+  status?: "running" | "exited" | "restored";
   threadKey: string;
   target: FederationRemoteTarget;
   cwd: string;
@@ -105,6 +110,8 @@ export class FederationTerminalBridge {
   private readonly pendingOpens = new Map<string, PendingRemoteOpen>();
   private readonly watchedWebContents = new Set<WebContents>();
   private unsubscribeStreamEvents?: () => void;
+  private earlyEvents: FederationPtyStreamEvent[] = [];
+  private earlyChars = 0;
 
   async createOrAttach(
     request: IntegratedTerminalCreateRequest,
@@ -123,13 +130,21 @@ export class FederationTerminalBridge {
       ? this.ownedSession(webContents, requestedId)
       : this.sessionsForThread(webContents, threadKey)[0];
     if (existing) {
-      if (existing.threadKey !== threadKey) {
+      if (existing.threadKey !== threadKey
+        || (request.federationTarget && request.federationTarget.instanceId !== existing.target.instanceId)) {
         throw new Error("That terminal belongs to a different thread.");
+      }
+      const client = getDesktopFederationRuntime().remotePty(existing.target);
+      if (client.snapshot) {
+        const response = await client.snapshot({ sessionId: existing.ownerSessionId });
+        existing.snapshot = response.snapshot;
+        existing.lastSeq = Math.max(existing.lastSeq, response.snapshot?.seq ?? 0);
+        existing.status = response.status;
       }
       return this.toCreateResponse(existing);
     }
     const target = this.requireTarget(webContents, request);
-    const pendingKey = this.pendingKey(webContents, threadKey);
+    const pendingKey = this.pendingKey(webContents, requestedId || threadKey);
     const inFlight = this.pendingOpens.get(pendingKey);
     if (inFlight) {
       return await inFlight.promise;
@@ -150,9 +165,18 @@ export class FederationTerminalBridge {
       try {
         // The viewer sends only the thread identity and dimensions. Shell and
         // cwd are resolved by the owning instance from ITS thread state.
-        const opened = await getDesktopFederationRuntime()
-          .remotePty(target)
-          .open({
+        this.ensureStreamSubscription();
+        const client = getDesktopFederationRuntime().remotePty(target);
+        // Discover owner-held sessions when first opening a thread after viewer
+        // restart. New explicitly skips discovery and creates another shell.
+        const recovered = !request.newSession && !request.attachOnly && client.list
+          ? await client.list({ backend, threadId }).catch(() => []) : [];
+        const first = recovered[0];
+        const opened = first && client.snapshot
+          ? await client.snapshot({ sessionId: first.sessionId })
+          : request.attachOnly
+            ? await Promise.reject(new Error("Remote terminal is unavailable. Create a new terminal to start a shell."))
+            : await client.open({
             backend,
             threadId,
             cols: request.cols,
@@ -193,7 +217,11 @@ export class FederationTerminalBridge {
           spawnedRows: request.rows,
         });
         const session: RemoteTerminalSession = {
-          sessionId: opened.sessionId,
+          sessionId: requestedId || opened.sessionId,
+          ownerSessionId: opened.sessionId,
+          snapshot: opened.snapshot,
+          status: opened.status,
+          name: first?.name,
           threadKey,
           target,
           cwd: opened.cwd,
@@ -202,13 +230,29 @@ export class FederationTerminalBridge {
           panelHidden: false,
           createdAt: Date.now(),
           webContents,
-          lastSeq: 0,
+          lastSeq: opened.snapshot?.seq ?? 0,
           consumedBytes: 0,
           // An owner that predates `pty.state` omits this; stay conservative.
           foregroundCommand: opened.foregroundCommand ?? true,
           resizes,
         };
         this.sessionsById.set(session.sessionId, session);
+        // Additional recovered tabs get stable owner-qualified viewer IDs.
+        for (const summary of recovered.slice(1)) {
+          const alias = `remote:${target.instanceId}:${summary.sessionId}`;
+          if (this.sessionsById.has(alias)) continue;
+          this.sessionsById.set(alias, { ...session, ...summary, sessionId: alias,
+            ownerSessionId: summary.sessionId, snapshot: undefined, lastSeq: 0,
+            resizes: new PtyResizeCoalescer({
+              apply: (cols, rows) => { void client.resize({ sessionId: summary.sessionId, cols, rows }).catch(() => undefined); },
+              spawnedCols: request.cols, spawnedRows: request.rows,
+            }),
+          });
+        }
+        const queued = this.earlyEvents;
+        this.earlyEvents = [];
+        this.earlyChars = 0;
+        for (const event of queued) this.handleStreamEvent(event);
         this.ensureStreamSubscription();
         this.watchWebContents(webContents);
         this.broadcastSessions(webContents);
@@ -223,11 +267,11 @@ export class FederationTerminalBridge {
 
   write(request: IntegratedTerminalWriteRequest, webContents: WebContents): void {
     const session = this.ownedSession(webContents, request.sessionId);
-    if (!session) return;
+    if (!session || (session.status && session.status !== "running")) return;
     void getDesktopFederationRuntime()
       .remotePty(session.target)
       .input({
-        sessionId: session.sessionId,
+        sessionId: session.ownerSessionId,
         dataBase64: Buffer.from(request.data, "utf8").toString("base64"),
       })
       .catch((error) => {
@@ -265,6 +309,10 @@ export class FederationTerminalBridge {
         ? this.sessionsForThread(webContents, request.threadKey.trim())
         : [];
     if (sessions.length === 0) {
+      if (request.sessionId) {
+        const pending = this.pendingOpens.get(this.pendingKey(webContents, request.sessionId));
+        if (pending) pending.closeRequested = true;
+      }
       // Nothing registered yet. If the open is still in flight, mark it so
       // the session is closed the moment it exists instead of the close
       // being silently lost. Only for a close that named no terminal: a
@@ -287,7 +335,7 @@ export class FederationTerminalBridge {
     for (const session of sessions) {
       void getDesktopFederationRuntime()
         .remotePty(session.target)
-        .close({ sessionId: session.sessionId })
+        .close({ sessionId: session.ownerSessionId })
         .catch((error) => {
           // The owner's disconnect reap covers an undeliverable close.
           log.warn("remote terminal close failed", {
@@ -295,6 +343,15 @@ export class FederationTerminalBridge {
           });
         });
     }
+  }
+
+  rename(sessionId: string, name: string, webContents: WebContents): void {
+    const session = this.ownedSession(webContents, sessionId);
+    if (!session) return;
+    session.name = name.trim().replace(/[\x00-\x1f\x7f]/g, "").slice(0, 80);
+    void getDesktopFederationRuntime().remotePty(session.target)
+      .rename?.({ sessionId: session.ownerSessionId, name: session.name }).catch((error) => this.sendError(session, error));
+    this.broadcastSessions(webContents);
   }
 
   setPanelHidden(
@@ -445,7 +502,8 @@ export class FederationTerminalBridge {
 
   /** Whether this bridge owns the given session for this window. */
   hasSession(webContents: WebContents, sessionId: string): boolean {
-    return this.ownedSession(webContents, sessionId) !== undefined;
+    return this.ownedSession(webContents, sessionId) !== undefined
+      || this.pendingOpens.has(this.pendingKey(webContents, sessionId));
   }
 
   /**
@@ -467,13 +525,26 @@ export class FederationTerminalBridge {
   }
 
   private handleStreamEvent(event: FederationPtyStreamEvent): void {
-    const session = this.sessionsById.get(event.params.sessionId);
-    // Only the owning peer may stream into a session it opened for us.
-    if (!session || session.target.instanceId !== event.peerId) return;
+    const sessions = [...this.sessionsById.values()].filter((candidate) =>
+      candidate.ownerSessionId === event.params.sessionId && candidate.target.instanceId === event.peerId);
+    if (!sessions.length && this.pendingOpens.size > 0 && this.earlyChars < 1024 * 1024) {
+      this.earlyEvents.push(event);
+      this.earlyChars += event.kind === "output" ? event.params.dataBase64.length : 256;
+    }
+    sessions.forEach((session, index) => this.handleSessionStreamEvent(session, event, index === 0));
+  }
+
+  private handleSessionStreamEvent(session: RemoteTerminalSession, event: FederationPtyStreamEvent, acknowledge: boolean): void {
     if (event.kind === "output") {
+      if (event.params.snapshot) {
+        session.snapshot = event.params.snapshot;
+        session.lastSeq = event.params.snapshot.seq;
+        this.send(session, INTEGRATED_TERMINAL_OUTPUT_CHANNEL, { sessionId: session.sessionId, data: "", snapshot: session.snapshot });
+        return;
+      }
+      if (event.params.seq <= session.lastSeq) return;
       const data = Buffer.from(event.params.dataBase64, "base64").toString("utf8");
       if (event.params.seq !== session.lastSeq + 1) {
-        // The transport is ordered, so a gap means a bug — surface it.
         this.send(session, INTEGRATED_TERMINAL_ERROR_CHANNEL, {
           sessionId: session.sessionId,
           message: `Remote terminal stream skipped from frame ${session.lastSeq} to ${event.params.seq}.`,
@@ -484,14 +555,16 @@ export class FederationTerminalBridge {
       this.send(session, INTEGRATED_TERMINAL_OUTPUT_CHANNEL, {
         sessionId: session.sessionId,
         data,
+        seq: event.params.seq,
+        timestamp: Date.now(),
       });
       session.consumedBytes += Buffer.byteLength(data, "utf8");
-      if (session.consumedBytes >= FEDERATION_PTY_ACK_INTERVAL_BYTES) {
+      if (acknowledge && session.consumedBytes >= FEDERATION_PTY_ACK_INTERVAL_BYTES) {
         const bytes = session.consumedBytes;
         session.consumedBytes = 0;
         void getDesktopFederationRuntime()
           .remotePty(session.target)
-          .ack({ sessionId: session.sessionId, bytes })
+          .ack({ sessionId: session.ownerSessionId, bytes })
           .catch((error) => {
             log.warn("remote terminal ack failed", {
               error: error instanceof Error ? error.message : String(error),
@@ -514,7 +587,9 @@ export class FederationTerminalBridge {
         exitCode: event.params.exitCode ?? null,
         signal: event.params.signal ?? null,
       });
-      this.dropSession(session);
+      session.status = "exited";
+      session.foregroundCommand = false;
+      session.resizes.dispose();
       this.broadcastSessions(session.webContents);
       return;
     }
@@ -540,7 +615,7 @@ export class FederationTerminalBridge {
         // Closing the remote window ends the PTY (owner applies its grace).
         void getDesktopFederationRuntime()
           .remotePty(session.target)
-          .close({ sessionId: session.sessionId })
+          .close({ sessionId: session.ownerSessionId, retainHistory: true })
           .catch(() => {
             // Peer unreachable — the owner's disconnect reap covers it.
           });
@@ -629,7 +704,9 @@ export class FederationTerminalBridge {
       threadKey: session.threadKey,
       cwd: session.cwd,
       shell: session.shell,
-      buffer: session.buffer || undefined,
+      buffer: session.snapshot ? undefined : session.buffer || undefined,
+      snapshot: session.snapshot,
+      status: session.status,
     };
   }
 
@@ -644,6 +721,8 @@ export class FederationTerminalBridge {
       shell: session.shell,
       panelHidden: session.panelHidden,
       createdAt: session.createdAt,
+      name: session.name,
+      status: session.status,
       remote: identities.get(session.target.instanceId) ?? {
         instanceId: session.target.instanceId,
         instanceLabel: session.target.instanceId,

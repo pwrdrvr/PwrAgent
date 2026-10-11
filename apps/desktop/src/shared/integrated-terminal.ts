@@ -23,6 +23,9 @@ export type IntegratedTerminalCreateRequest = {
    * looking at one shell instead of two.
    */
   sessionId?: string;
+  /** Refuse to spawn when reattaching a vanished session. */
+  attachOnly?: boolean;
+  newSession?: boolean;
   /** Grouping attribute, not identity: a thread can own several terminals. */
   threadKey: string;
   cwd?: string;
@@ -66,6 +69,9 @@ export type IntegratedTerminalSessionSummary = {
   pid?: number;
   panelHidden: boolean;
   createdAt: number;
+  name?: string;
+  status?: "running" | "exited" | "restored";
+  exitCode?: number | null;
   /** Present when the shell runs on another instance over federation. */
   remote?: IntegratedTerminalRemoteInfo;
 };
@@ -99,6 +105,8 @@ export type IntegratedTerminalCreateResponse = {
   shell: string;
   pid?: number;
   buffer?: string;
+  snapshot?: TerminalSnapshot;
+  status?: "running" | "exited" | "restored";
 };
 
 export type IntegratedTerminalWriteRequest = {
@@ -128,6 +136,9 @@ export type IntegratedTerminalCloseRequest = {
 export type IntegratedTerminalOutputEvent = {
   sessionId: string;
   data: string;
+  snapshot?: TerminalSnapshot;
+  seq?: number;
+  timestamp?: number;
 };
 
 export type IntegratedTerminalExitEvent = {
@@ -140,3 +151,14 @@ export type IntegratedTerminalErrorEvent = {
   sessionId?: string;
   message: string;
 };
+
+export type TerminalSnapshot = {
+  data: string;
+  seq: number;
+  timestamp: number;
+  cols: number;
+  rows: number;
+  truncated: boolean;
+};
+
+export type IntegratedTerminalRenameRequest = { sessionId: string; name: string };

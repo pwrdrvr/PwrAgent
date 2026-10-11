@@ -43,6 +43,8 @@ vi.mock("@xterm/xterm", () => ({
     hasSelection = () => this.selection.length > 0;
     getSelection = () => this.selection;
     open = vi.fn();
+    reset = vi.fn();
+    resize = vi.fn();
     write = vi.fn((data: string, callback?: () => void) => {
       const responses = xtermState.replayDataEvents.get(data) ?? [];
       for (const response of responses) {
@@ -715,6 +717,7 @@ describe("IntegratedTerminal", () => {
     expect(writeIntegratedTerminal).not.toHaveBeenCalled();
 
     act(() => {
+      xtermState.pendingWriteCallbacks.shift()?.();
       xtermState.pendingWriteCallbacks.shift()?.();
     });
 

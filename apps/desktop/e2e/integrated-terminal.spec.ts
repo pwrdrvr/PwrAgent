@@ -194,3 +194,47 @@ test("removes the integrated terminal pane when the shell exits", async () => {
     await app.close();
   }
 });
+
+test("isolates terminal side tabs, renames, restores a renderer and retains exited output", async () => {
+  const app = await launchElectronApp({ fixturePath: path.resolve(integratedTerminalSpecDir, "fixtures/smoke/replay.fixture.json") });
+  try {
+    await openSmokeThread(app.window);
+    await openIntegratedTerminal(app.window);
+    const panel = app.window.getByRole("region", { name: "Thread terminals", exact: true });
+    const visibleTerminal = () => panel.locator('.integrated-terminal:visible');
+    const run = async (command: string) => {
+      await visibleTerminal().locator(".integrated-terminal__viewport").click();
+      await app.window.keyboard.type(command);
+      await app.window.keyboard.press("Enter");
+    };
+    await run("echo FIRST_TAB_ONLY");
+    await expect(visibleTerminal().locator(".xterm-rows")).toContainText("FIRST_TAB_ONLY");
+    await panel.getByRole("button", { name: "Rename terminal", exact: true }).click();
+    await panel.getByRole("textbox", { name: "Terminal name" }).fill("Build");
+    await panel.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(panel.getByRole("tab", { name: /Build/ })).toHaveAttribute("aria-selected", "true");
+    await panel.getByRole("button", { name: "New terminal", exact: true }).click();
+    await expect(panel.getByRole("tab")).toHaveCount(2);
+    await expect(visibleTerminal().locator(".integrated-terminal__status")).not.toHaveText("Starting shell...");
+    await run("echo SECOND_TAB_ONLY");
+    await expect(visibleTerminal().locator(".xterm-rows")).toContainText("SECOND_TAB_ONLY");
+    await expect(visibleTerminal().locator(".xterm-rows")).not.toContainText("FIRST_TAB_ONLY");
+    await panel.getByRole("tab", { name: /Build/ }).click();
+    await expect(visibleTerminal().locator(".xterm-rows")).toContainText("FIRST_TAB_ONLY");
+    await expect(visibleTerminal().locator(".xterm-rows")).not.toContainText("SECOND_TAB_ONLY");
+    await panel.getByRole("tab", { name: /Build/ }).press("ArrowDown");
+    await expect(panel.getByRole("tab").nth(1)).toHaveAttribute("aria-selected", "true");
+    await app.window.reload();
+    await openSmokeThread(app.window);
+    await expect(panel.getByRole("tab")).toHaveCount(2);
+    await panel.getByRole("tab").nth(1).click();
+    await expect(visibleTerminal().locator(".xterm-rows")).toContainText("SECOND_TAB_ONLY");
+    await run("exit 7");
+    await expect(panel.getByRole("tab").nth(1)).toContainText("Exited");
+    await expect(visibleTerminal().locator(".xterm-rows")).toContainText("SECOND_TAB_ONLY");
+    await app.window.screenshot({ path: test.info().outputPath("terminal-tabs.png") });
+    await panel.getByRole("tab").nth(1).press("Delete");
+    await expect(panel.getByRole("tab")).toHaveCount(1);
+    await expect(visibleTerminal().locator(".xterm-rows")).toContainText("FIRST_TAB_ONLY");
+  } finally { await app.close(); }
+});

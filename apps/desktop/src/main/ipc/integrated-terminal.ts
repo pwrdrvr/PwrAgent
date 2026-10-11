@@ -1,5 +1,10 @@
+import path from "node:path";
+import { createHash } from "node:crypto";
+import { resolveActiveProfileDir } from "../profile";
+import { TerminalHistoryStore } from "../terminal/terminal-history-store";
 import { app, BrowserWindow, ipcMain, Menu, type WebContents } from "electron";
 import {
+  INTEGRATED_TERMINAL_RENAME_CHANNEL,
   INTEGRATED_TERMINAL_CLOSE_CHANNEL,
   INTEGRATED_TERMINAL_CONTEXT_MENU_CHANNEL,
   INTEGRATED_TERMINAL_CREATE_CHANNEL,
@@ -11,6 +16,7 @@ import {
   INTEGRATED_TERMINAL_WRITE_CHANNEL,
 } from "../../shared/ipc";
 import type {
+  IntegratedTerminalRenameRequest,
   IntegratedTerminalCloseRequest,
   IntegratedTerminalContextMenuRequest,
   IntegratedTerminalCreateRequest,
@@ -85,6 +91,8 @@ export function registerIntegratedTerminalIpcHandlers(): void {
   if (!service) {
     service = new IntegratedTerminalService({
       onSessionsChanged: broadcastSessions,
+      historyStore: new TerminalHistoryStore(path.join(resolveActiveProfileDir(), "state", "terminal-history",
+        createHash("sha256").update(process.env.PWRAGENT_INSTANCE_ROOT || "default").digest("hex"))),
     });
     serviceDisposalPromise = undefined;
   }
@@ -95,6 +103,14 @@ export function registerIntegratedTerminalIpcHandlers(): void {
     globalThis.__PWRAGENT_E2E_GET_INTEGRATED_TERMINAL_QUIT_SNAPSHOT__ =
       getIntegratedTerminalQuitSnapshot;
   }
+
+  ipcMain.removeHandler(INTEGRATED_TERMINAL_RENAME_CHANNEL);
+  ipcMain.handle(INTEGRATED_TERMINAL_RENAME_CHANNEL, (event, request: IntegratedTerminalRenameRequest) => {
+    if (typeof request?.sessionId !== "string" || typeof request.name !== "string") throw new Error("Invalid terminal name.");
+    if (isFederationWindowWebContents(event.sender) || federationBridge?.hasSession(event.sender, request.sessionId)) {
+      federationBridge?.rename(request.sessionId, request.name, event.sender);
+    } else service?.rename(request.sessionId, request.name);
+  });
 
   ipcMain.removeHandler(INTEGRATED_TERMINAL_CREATE_CHANNEL);
   ipcMain.handle(

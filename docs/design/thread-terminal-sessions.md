@@ -1,0 +1,71 @@
+# Thread terminal sessions
+
+Terminal tabs belong inside the thread's bottom terminal panel. They do not
+change conversation navigation. A compact vertical list shows shell/name,
+running/exited/restored status, selection and owner. New, rename and close act
+on one terminal ID. Hiding the panel and switching threads preserve PTYs.
+Keyboard navigation uses a vertical tablist; resize and focus stay accessible.
+
+Main/owning service owns identity, lifetime and output. An explicit session ID
+attaches only to its original thread and instance. Creation is deduplicated
+before asynchronous spawn; closing during spawn cannot leak a process. Remote
+operations retain `remote_pty` authorization and the opening peer identity.
+
+A bounded headless xterm at the owner parses output. Snapshot replay uses its
+serializer, not an arbitrary substring of ANSI. A snapshot carries dimensions
+and a sequence watermark; the renderer subscribes before attach, queues events,
+then applies only events after the watermark. Input is disabled while replaying.
+Headless-generated replies are never sent to the PTY. No command is replayed.
+
+Private, bounded PwrAgent-owned files retain rendered scrollback and terminal
+metadata at lifecycle boundaries (collapse, exit, shutdown), not per output
+chunk or on a timer. Raw output and input are not persisted. Closing a tab
+removes its history. Restored records are read-only and explicitly say the
+process is gone; New terminal starts a new shell using the saved launch cwd.
+Shell history files are owned by the shell and are neither read nor rewritten.
+The saved cwd is the launch directory, not an inferred current directory.
+An abrupt crash can lose output since the last lifecycle checkpoint.
+
+## Agent output contract (stacked implementation)
+
+The base supplies owner-side capture and bounded reads; a separate stacked PR
+exposes `list_thread_terminals` and `read_terminal_output` through existing tool
+search. Authentication supplies CURRENT THREAD, backend and owning instance;
+callers cannot widen scope by passing another thread ID. A terminal address is
+(owner instance ID, terminal ID), never a bare thread key across instances.
+
+List returns ID, owner, thread identity, name, launch cwd, shell, status,
+createdAt, available cursor range. Read accepts ID, opaque cursor, format
+(`raw` or `plain`), and capped character budget. It returns owner/terminal
+identity, sequence and timestamps, next cursor, truncation/gap and continuation.
+Raw is bounded in-memory PTY output; plain is normalized rendered screen text.
+A screen snapshot is labeled as such, not claimed to be an event delta. Raw
+history is unavailable after restart; restored screen reads say so. Output is
+untrusted data and must not be treated as instructions. No input/write/execute
+capability is added. No subscriptions initially: bounded pull is sufficient.
+
+The stacked child owns tool schemas, search registration and auth adapters;
+base owns terminal UI, IPC, capture, history and Federation PTY protocol. Forge
+tools owns backend-registry.ts, ipc/app-server.ts and Federation registrations;
+coordinate any overlap with thread 01a12c08-cbfd-70b0-9465-6899de103bb5. Port
+forwarding is thread 01a12c10-fb8f-7da0-94e1-ed26782025ed. Stack starts only from
+the reviewed base PR commit and uses its own worktree. No merge or release.
+
+## Bounds and validation
+
+Each owner keeps 2,000 scrollback lines and at most 256 Ki characters / 4,096
+raw frames in memory. Snapshot serialization reduces whole scrollback lines to
+fit 512 KiB; an extreme per-cell-style screen falls back to bounded plain text
+and reports truncation. PTYs pause when the headless parser falls behind.
+History retains at most 64 records per instance for seven days, under hashed
+filenames with 0600 file permissions and a 0700 directory. The launch cwd is
+metadata only; no OSC directory claim is trusted. A close removes its record.
+No SQLite commits are introduced; idle persistence cost is 0 MB/day. At the
+512 KiB snapshot ceiling, 100 changed lifecycle checkpoints cost up to 50 MiB
+of payload per day. There is no periodic journal or command-input capture.
+
+The implementation uses xterm's headless parser and serialize addon as described
+in the [upstream README](https://github.com/xtermjs/xterm.js#nodejs-support).
+Tests cover split escape sequences, progress-line replacement, Unicode,
+query/clipboard escape exclusion, an atomic snapshot watermark, raw eviction,
+private-file round trips, exited/restarted tabs, and peer/thread authorization.

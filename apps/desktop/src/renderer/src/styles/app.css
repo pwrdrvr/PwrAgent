@@ -45831,3 +45831,35 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   line-height: 17px;
   white-space: nowrap;
 }
+
+.thread-terminal-panel {
+  height: var(--integrated-terminal-height);
+  min-height: 140px;
+  flex: 0 0 auto;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--terminal-bg);
+}
+.thread-terminal-panel[hidden], .thread-terminal-panel [hidden] { display: none; }
+.thread-terminal-panel__body { display: flex; height: calc(100% - 10px); min-height: 0; }
+.thread-terminal-panel__screens { flex: 1; min-width: 0; }
+.thread-terminal-panel__screens > [role="tabpanel"] { height: 100%; display: flex; flex-direction: column; }
+.thread-terminal-panel__sidebar { width: clamp(120px, 22%, 200px); flex-shrink: 0; overflow: auto; border-left: 1px solid var(--border-subtle); background: var(--bg-panel); }
+.thread-terminal-panel__actions { display: flex; align-items: center; gap: 4px; padding: 5px 8px; color: var(--text-muted); font-size: 10px; }
+.thread-terminal-panel__actions > span { flex: 1; }
+.thread-terminal-panel button { border: 0; border-radius: 3px; background: transparent; color: var(--text-secondary); cursor: pointer; }
+.thread-terminal-panel button:hover { background: var(--bg-panel-hover); color: var(--text-primary); }
+.thread-terminal-panel button:focus-visible, .thread-terminal-panel input:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+.thread-terminal-panel__actions button { width: 24px; height: 24px; font-size: 18px; }
+.thread-terminal-panel__row { display: flex; align-items: center; }
+.thread-terminal-panel__row [role="tab"] { display: flex; flex-direction: column; flex: 1; min-width: 0; text-align: left; padding: 6px 8px; border-left: 2px solid transparent; border-radius: 0; }
+.thread-terminal-panel__row [role="tab"][aria-selected="true"] { background: var(--bg-row-active); border-left-color: var(--accent); color: var(--text-primary); }
+.thread-terminal-panel__row span, .thread-terminal-panel__row small { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.thread-terminal-panel__row span { font-family: var(--font-mono); font-size: 12px; }
+.thread-terminal-panel__row small { font-size: 10px; color: var(--text-muted); }
+.thread-terminal-panel__close { width: 24px; height: 28px; margin-right: 3px; }
+.thread-terminal-panel__rename-button { margin: 6px; padding: 4px; font-size: 11px; }
+.thread-terminal-panel__rename { display: flex; flex-wrap: wrap; gap: 4px; padding: 6px; }
+.thread-terminal-panel__rename input { width: 100%; min-width: 0; padding: 4px; border: 1px solid var(--border-strong); border-radius: 3px; background: var(--bg-input); color: var(--text-primary); font: inherit; }
+
+.thread-terminal-panel__history-note { padding: 5px 10px; color: var(--text-secondary); background: var(--bg-panel); font-size: 11px; }
+.thread-terminal-panel__history-note + .integrated-terminal { height: 0; }

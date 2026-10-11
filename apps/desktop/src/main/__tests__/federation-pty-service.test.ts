@@ -142,7 +142,7 @@ const OPEN_REQUEST = {
 describe("FederationPtyService capability map", () => {
   it("requires remote_pty for every control method", () => {
     const methods = Object.values(FEDERATION_PTY_METHODS);
-    expect(methods).toHaveLength(5);
+    expect(methods).toHaveLength(8);
     for (const method of methods) {
       expect(FEDERATION_PTY_METHOD_CAPABILITIES[method]).toBe("remote_pty");
     }
@@ -766,5 +766,44 @@ describe("remote shell receiver permission", () => {
     expect(spawnPty).not.toHaveBeenCalled();
     expect(resolveThreadCwd).not.toHaveBeenCalled();
     service.disposeAll();
+  });
+});
+
+describe("remote terminal snapshots and ownership", () => {
+  it("lists only the authenticated peer's current thread and rejects foreign IDs", async () => {
+    const { service, pty } = createHarness();
+    const opened = await service.open("peer-a", OPEN_REQUEST);
+    pty.emitData("owner output\r\n");
+    expect(await service.list("peer-a", OPEN_REQUEST)).toHaveLength(1);
+    expect(await service.list("peer-b", OPEN_REQUEST)).toEqual([]);
+    expect(await service.list("peer-a", { ...OPEN_REQUEST, threadId: "other" })).toEqual([]);
+    await expect(service.snapshot("peer-b", { sessionId: opened.sessionId })).rejects.toThrow("not found");
+    expect((await service.snapshot("peer-a", { sessionId: opened.sessionId })).snapshot).toMatchObject({ seq: 1, data: expect.stringContaining("owner output") });
+    pty.emitExit(7);
+    const saved = await service.snapshot("peer-a", { sessionId: opened.sessionId });
+    expect(saved.status).toBe("exited");
+    expect(saved.snapshot?.data).toContain("owner output");
+    expect(pty.written).toEqual([]);
+    service.close("peer-a", { sessionId: opened.sessionId });
+    expect(await service.list("peer-a", OPEN_REQUEST)).toEqual([]);
+  });
+
+  it("recovers missed output from its owner on reconnect without spawning or replaying commands", async () => {
+    let connected = true;
+    const { service, pty, sent } = createHarness({ deliverable: () => connected });
+    const opened = await service.open("peer-a", OPEN_REQUEST);
+    pty.emitData("before\r\n");
+    connected = false;
+    service.notifyPeerDisconnected("peer-a");
+    pty.emitData("while disconnected\r\n");
+    connected = true;
+    service.notifyPeerConnected("peer-a");
+    await vi.waitFor(() => expect(sent.some((frame) => (frame.params as FederationPtyOutputParams).snapshot?.seq === 2)).toBe(true));
+    const snapshot = sent.find((frame) => (frame.params as FederationPtyOutputParams).snapshot)?.params as FederationPtyOutputParams;
+    expect(snapshot.snapshot?.data).toContain("while disconnected");
+    expect((await service.snapshot("peer-a", { sessionId: opened.sessionId })).status).toBe("running");
+    expect(pty.killed).toBe(false);
+    expect(pty.written).toEqual([]);
+    await service.disposeAll();
   });
 });

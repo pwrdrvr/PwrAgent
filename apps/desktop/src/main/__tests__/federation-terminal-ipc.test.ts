@@ -453,14 +453,14 @@ describe("integrated terminal IPC federation branch", () => {
       // An id the viewer does not hold opens a second shell on the owner. The
       // owner still mints the id it answers to — the viewer's registry is
       // keyed by the owner's, which is what `pty.attach` will have to name.
-      await open("not-a-live-terminal");
+      await open("viewer-session-b");
       const sessions = (await invoke(
         INTEGRATED_TERMINAL_LIST_CHANNEL,
         sender,
       )) as Array<{ sessionId: string }>;
       expect(sessions.map((session) => session.sessionId)).toEqual([
         "remote-session-a",
-        "remote-session-b",
+        "viewer-session-b",
       ]);
     }
 
@@ -469,7 +469,7 @@ describe("integrated terminal IPC federation branch", () => {
       await openTwo(sender);
 
       await invoke(INTEGRATED_TERMINAL_CLOSE_CHANNEL, sender, {
-        sessionId: "remote-session-b",
+        sessionId: "viewer-session-b",
       });
 
       expect(mocks.remotePtyClose).toHaveBeenCalledTimes(1);

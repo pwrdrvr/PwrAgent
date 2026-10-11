@@ -61,6 +61,7 @@ import type {
   GithubPrSamlEnforcementEvent,
 } from "../../../shared/github-pr-access";
 import type {
+  IntegratedTerminalRenameRequest,
   IntegratedTerminalCloseRequest,
   IntegratedTerminalContextMenuRequest,
   IntegratedTerminalCreateRequest,
@@ -1277,6 +1278,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   showThreadFromToolOutputIncidentExplorer?: (
     request: WindowShowThreadRequest
   ) => Promise<void>;
+  renameIntegratedTerminal?: (request: IntegratedTerminalRenameRequest) => Promise<void>;
   createIntegratedTerminal?: (
     request: IntegratedTerminalCreateRequest,
   ) => Promise<IntegratedTerminalCreateResponse>;

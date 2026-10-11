@@ -27,6 +27,9 @@ const TERMINAL_RESIZE_STEP = 16;
 type IntegratedTerminalProps = {
   desktopApi?: DesktopApi;
   threadKey: string;
+  sessionId?: string;
+  attachOnly?: boolean;
+  newSession?: boolean;
   cwd?: string;
   /**
    * Present when this shell runs on another instance: the create request
@@ -53,6 +56,9 @@ type IntegratedTerminalProps = {
 export function IntegratedTerminal({
   desktopApi,
   threadKey,
+  sessionId: requestedSessionId,
+  attachOnly,
+  newSession,
   cwd,
   remote,
   height,
@@ -68,6 +74,7 @@ export function IntegratedTerminal({
   const sessionIdRef = useRef<string | undefined>(undefined);
   const pendingInputRef = useRef<string[]>([]);
   const replayingBufferedOutputRef = useRef(false);
+  const writableRef = useRef(true);
   const fitAndResizeRef = useRef<() => void>(() => undefined);
   const visibleRef = useRef(visible);
   // `cwd` is a create-time hint only — main resolves it (falling back to the
@@ -77,6 +84,8 @@ export function IntegratedTerminal({
   // lands (undefined -> "/Users/…" for a thread with no directory), and with
   // `cwd` in the deps that tore down the freshly built xterm and rebuilt it,
   // discarding anything the user had typed during the spawn.
+  const attachOnlyRef = useRef(attachOnly);
+  const newSessionRef = useRef(newSession);
   const cwdRef = useRef(cwd);
   cwdRef.current = cwd;
   // Same rationale as cwdRef: the owning target is a create-time input and
@@ -89,6 +98,7 @@ export function IntegratedTerminal({
   const minimumContrastRef = useRef(minimumContrast);
   minimumContrastRef.current = minimumContrast;
   const [status, setStatus] = useState<string>("Starting shell...");
+  const [error, setError] = useState<string>();
 
   useEffect(() => {
     visibleRef.current = visible;
@@ -158,7 +168,7 @@ export function IntegratedTerminal({
         });
         terminal.loadAddon(fitAddon);
         terminal.open(container);
-        terminal.focus();
+        if (visibleRef.current) terminal.focus();
         terminalRef.current = terminal;
 
         let resizeFrame: number | undefined;
@@ -194,6 +204,7 @@ export function IntegratedTerminal({
         fitAndResizeRef.current = scheduleFitAndResize;
 
         const dataDisposable = terminal.onData((data) => {
+          if (!writableRef.current) return;
           if (replayingBufferedOutputRef.current) {
             if (isReplayGeneratedTerminalReply(data)) {
               return;
@@ -240,49 +251,104 @@ export function IntegratedTerminal({
           });
         }
 
+        let attached = false;
+        let lastSeq = 0;
+        let queuedChars = 0;
+        let overflow = false;
+        const queued: { sessionId: string; data: string; seq?: number }[] = [];
+        // Subscribe before attach. Main may emit while its snapshot parses or
+        // while the IPC response is in flight; the watermark removes duplicates.
+        const unsubscribeOutput = desktopApi.onIntegratedTerminalOutput?.((event) => {
+          const expectedId = sessionIdRef.current ?? requestedSessionId;
+          if (expectedId && event.sessionId !== expectedId) return;
+          if (!attached) {
+            queuedChars += event.data.length;
+            if (queuedChars > 1024 * 1024) { overflow = true; queued.length = 0; }
+            if (!overflow) queued.push(event);
+            return;
+          }
+          if (event.snapshot) {
+            replayingBufferedOutputRef.current = true;
+            terminal.reset();
+            terminal.resize(event.snapshot.cols, event.snapshot.rows);
+            lastSeq = event.snapshot.seq;
+            terminal.write(event.snapshot.data, () => {
+              replayingBufferedOutputRef.current = false;
+              scheduleFitAndResize();
+            });
+            return;
+          }
+          if (event.seq !== undefined && event.seq <= lastSeq) return;
+          if (event.seq !== undefined && event.seq !== lastSeq + 1) {
+            attached = false;
+            queued.push(event);
+            void attach().then(applyResponse).catch(reportError);
+            return;
+          }
+          lastSeq = event.seq ?? lastSeq;
+          terminal.write(event.data);
+        });
         const dimensions = fitAddon.proposeDimensions();
-        void createIntegratedTerminal({
+        const attach = () => createIntegratedTerminal({
+          sessionId: requestedSessionId,
+          attachOnly: attachOnlyRef.current,
+          newSession: newSessionRef.current,
           threadKey,
           cwd: cwdRef.current,
           cols: dimensions?.cols ?? terminal.cols,
           rows: dimensions?.rows ?? terminal.rows,
           federationTarget: remoteTargetRef.current,
-        })
-          .then((response) => {
+        });
+        const applyResponse = (response: Awaited<ReturnType<typeof createIntegratedTerminal>>) => {
+          if (disposed) return;
+          sessionIdRef.current = response.sessionId;
+          writableRef.current = !response.status || response.status === "running";
+          setStatus(response.status === "restored"
+            ? "Saved output · process ended when the app closed"
+            : response.status === "exited" ? "Shell exited · saved output" : response.cwd);
+          terminal.options.disableStdin = !writableRef.current;
+          const snapshot = response.snapshot;
+          lastSeq = snapshot?.seq ?? 0;
+          if (snapshot) terminal.resize(snapshot.cols, snapshot.rows);
+          replayingBufferedOutputRef.current = true;
+          terminal.reset();
+          terminal.write(snapshot?.data ?? response.buffer ?? "", () => {
             if (disposed) return;
-            sessionIdRef.current = response.sessionId;
-            setStatus(response.cwd);
-            const finishAttach = () => {
-              if (disposed) return;
+            if (overflow) {
+              overflow = false;
+              queuedChars = 0;
+              queued.length = 0;
+              void attach().then(applyResponse).catch(reportError);
+              return;
+            }
+            for (const event of queued) {
+              if (event.sessionId !== response.sessionId) continue;
+              if (event.seq !== undefined && event.seq <= lastSeq) continue;
+              lastSeq = event.seq ?? lastSeq;
+              terminal.write(event.data);
+            }
+            queued.length = 0;
+            attached = true;
+            // Keep replies suppressed until every queued write was parsed.
+            terminal.write("", () => {
+              replayingBufferedOutputRef.current = false;
               const pendingInput = pendingInputRef.current.join("");
               pendingInputRef.current = [];
-              if (pendingInput && desktopApi.writeIntegratedTerminal) {
-                void desktopApi.writeIntegratedTerminal({
-                  sessionId: response.sessionId,
-                  data: pendingInput,
-                });
+              if (pendingInput && writableRef.current) {
+                void desktopApi.writeIntegratedTerminal?.({ sessionId: response.sessionId, data: pendingInput });
               }
               scheduleFitAndResize();
-              if (visibleRef.current) {
-                terminal.focus();
-              }
-            };
-            if (response.buffer) {
-              replayingBufferedOutputRef.current = true;
-              terminal.write(response.buffer, () => {
-                replayingBufferedOutputRef.current = false;
-                finishAttach();
-              });
-            } else {
-              finishAttach();
-            }
-          })
-          .catch((error) => {
-            if (disposed) return;
-            setStatus(error instanceof Error ? error.message : String(error));
+              if (visibleRef.current) terminal.focus();
+            });
           });
+        };
+        const reportError = (error: unknown) => {
+          if (!disposed) setError(error instanceof Error ? error.message : String(error));
+        };
+        void attach().then(applyResponse).catch(reportError);
 
         cleanupTerminal = () => {
+          unsubscribeOutput?.();
           resizeObserver.disconnect();
           themeObserver.disconnect();
           if (resizeFrame !== undefined) window.cancelAnimationFrame(resizeFrame);
@@ -305,7 +371,7 @@ export function IntegratedTerminal({
       cleanupTerminal?.();
     };
     // `cwd` is intentionally not a dependency — see `cwdRef` above.
-  }, [desktopApi, threadKey]);
+  }, [desktopApi, threadKey, requestedSessionId]);
 
   useEffect(() => {
     if (!visible) {
@@ -359,21 +425,14 @@ export function IntegratedTerminal({
   };
 
   useEffect(() => {
-    if (!desktopApi?.onIntegratedTerminalOutput) return;
-    return desktopApi.onIntegratedTerminalOutput((event) => {
-      if (event.sessionId !== sessionIdRef.current) return;
-      terminalRef.current?.write(event.data);
-    });
-  }, [desktopApi]);
-
-  useEffect(() => {
     if (!desktopApi?.onIntegratedTerminalExit) return;
     return desktopApi.onIntegratedTerminalExit((event) => {
       if (event.sessionId !== sessionIdRef.current) return;
       const suffix =
         event.exitCode === null ? "" : ` with exit code ${event.exitCode}`;
       setStatus(`Shell exited${suffix}`);
-      sessionIdRef.current = undefined;
+      writableRef.current = false;
+      if (terminalRef.current) terminalRef.current.options.disableStdin = true;
       onExit();
     });
   }, [desktopApi, onExit]);
@@ -382,7 +441,7 @@ export function IntegratedTerminal({
     if (!desktopApi?.onIntegratedTerminalError) return;
     return desktopApi.onIntegratedTerminalError((event) => {
       if (event.sessionId && event.sessionId !== sessionIdRef.current) return;
-      setStatus(event.message);
+      setError(event.message);
     });
   }, [desktopApi]);
 
@@ -401,6 +460,7 @@ export function IntegratedTerminal({
         } as CSSProperties
       }
     >
+      {error ? <div className="thread-terminal-panel__history-note" role="alert">{error}</div> : null}
       {hosted ? null : (
         <div
           aria-label="Resize terminal"

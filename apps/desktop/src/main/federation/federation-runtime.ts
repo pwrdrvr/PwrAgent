@@ -1,3 +1,4 @@
+import { TerminalHistoryStore } from "../terminal/terminal-history-store";
 import type {
   ListBackgroundTerminalsRequest,
   ListBackgroundTerminalsResponse,
@@ -1463,7 +1464,7 @@ export class DesktopFederationRuntime {
     this.filePushReceiver = undefined;
     this.threadHandoffService = undefined;
     this.handoffFileReceipts.clear();
-    this.ptyService?.disposeAll();
+    await this.ptyService?.disposeAll();
     this.ptyService = undefined;
     this.client?.close();
     this.client = undefined;
@@ -3235,6 +3236,7 @@ export class DesktopFederationRuntime {
     router.registerHandler(FILE_PULL_MARKDOWN_METHOD, (envelope) => filePullReader.readMarkdown(envelope.params));
     router.registerHandler(FILE_RESOLVE_TRANSCRIPT_METHOD, (envelope) => filePullReader.resolveTranscript(envelope.params));
     this.ptyService = new FederationPtyService({
+      historyStore: new TerminalHistoryStore(path.join(resolveActiveProfileDir(), "state", "terminal-history", this.ensureLocalInstanceId())),
       allowOpen: () => this.receiverPermissions().remoteShells,
       spawnPty: async (params) => await spawnTerminalPty(params),
       resolveThreadCwd: async ({ backend, threadId }) => {

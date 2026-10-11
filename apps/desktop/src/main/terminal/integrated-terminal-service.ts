@@ -34,7 +34,9 @@ import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { resolvePwragentRoot } from "../profile";
 import { terminalHasForegroundCommand } from "./terminal-foreground-command";
 
-const OUTPUT_BUFFER_LIMIT = 128 * 1024;
+import { TerminalReplay } from "./terminal-replay";
+import { TerminalHistoryStore, type TerminalHistoryRecord } from "./terminal-history-store";
+
 const PTY_SHUTDOWN_FORCE_KILL_MS = 500;
 const RUNTIME_PATH_PREFIX_ENV =
   "PWRAGENT_INTEGRATED_TERMINAL_RUNTIME_PATH_PREFIX";
@@ -189,7 +191,10 @@ type TerminalSession = {
   pty: IPty;
   cwd: string;
   shell: string;
-  buffer: string;
+  replay: TerminalReplay;
+  name?: string;
+  closing?: boolean;
+  outputPaused?: boolean;
   /** User collapsed the panel; the PTY keeps running. Owned here so the
    *  preference outlives any renderer remount. */
   panelHidden: boolean;
@@ -276,6 +281,7 @@ export function byQuitTerminal(
 }
 
 type IntegratedTerminalServiceOptions = {
+  historyStore?: TerminalHistoryStore;
   loadNodePty?: () => Promise<Pick<NodePtyModule, "spawn">>;
   now?: () => number;
   onSessionsChanged?: (sessions: IntegratedTerminalSessionSummary[]) => void;
@@ -308,10 +314,23 @@ export class IntegratedTerminalService {
   /** One `destroyed` listener per WebContents, not per session — 10 terminals
    *  in one window used to install 10 and trip Node's max-listeners warning. */
   private readonly subscribedWebContents = new Set<WebContents>();
+  private readonly archived = new Map<string, TerminalHistoryRecord>();
+  private readonly pendingCreates = new Map<string, Promise<IntegratedTerminalCreateResponse>>();
+  private readonly historyStore?: TerminalHistoryStore;
+  private readonly ready: Promise<void>;
   private disposing = false;
   private disposePromise: Promise<void> | undefined;
 
   constructor(options: IntegratedTerminalServiceOptions = {}) {
+    this.historyStore = options.historyStore;
+    this.ready = this.historyStore?.load().then((records) => {
+      for (const record of records) {
+        if (record.peerId) continue;
+        record.summary = { ...record.summary, status: "restored", pid: undefined };
+        this.archived.set(record.summary.sessionId, record);
+      }
+      this.emitSessionsChanged();
+    }).catch((error) => this.logger.warn("history-load-failed", { error: String(error) })) ?? Promise.resolve();
     this.loadNodePty = options.loadNodePty ?? loadNodePty;
     this.now = options.now ?? Date.now;
     this.onSessionsChanged = options.onSessionsChanged;
@@ -323,6 +342,27 @@ export class IntegratedTerminalService {
     request: IntegratedTerminalCreateRequest,
     webContents: WebContents,
   ): Promise<IntegratedTerminalCreateResponse> {
+    if (this.disposing) throw new Error("Terminal service is shutting down.");
+    const key = request.sessionId || `thread:${request.threadKey}`;
+    const pending = this.pendingCreates.get(key);
+    if (pending) {
+      const response = await pending;
+      const session = this.sessionsById.get(response.sessionId);
+      if (session?.threadKey !== request.threadKey) throw new Error("Terminal thread mismatch.");
+      this.subscribe(session, webContents);
+      return this.toCreateResponse(session);
+    }
+    const creation = this.createSession(request, webContents);
+    this.pendingCreates.set(key, creation);
+    try { return await creation; }
+    finally { this.pendingCreates.delete(key); }
+  }
+
+  private async createSession(
+    request: IntegratedTerminalCreateRequest,
+    webContents: WebContents,
+  ): Promise<IntegratedTerminalCreateResponse> {
+    await this.ready;
     const threadKey = request.threadKey.trim();
     if (!threadKey) {
       throw new Error("A thread key is required to start a terminal.");
@@ -348,6 +388,15 @@ export class IntegratedTerminalService {
       this.subscribe(existing, webContents);
       return this.toCreateResponse(existing);
     }
+
+    const archived = requestedId ? this.archived.get(requestedId) : undefined;
+    if (archived) {
+      if (archived.summary.threadKey !== threadKey) throw new Error("Terminal thread mismatch.");
+      return { ...archived.summary, snapshot: archived.snapshot };
+    }
+    if (request.attachOnly) throw new Error("This terminal is no longer available. Create a new terminal to start a shell.");
+    if (this.sessionsById.size + this.spawningThreadKeyBySessionId.size >= 64
+      || this.sessionsForThread(threadKey).length >= 16) throw new Error("Terminal session limit reached.");
 
     // Settle identity before the spawn, not after it. Everything the spawn
     // window has to coordinate — a close arriving mid-flight, above all — is
@@ -389,7 +438,10 @@ export class IntegratedTerminalService {
       // Seeded with the grid `spawnTerminalPty` just sized this PTY to, from
       // this same request.
       resizes: new PtyResizeCoalescer({
-        apply: (cols, rows) => ptyProcess.resize(cols, rows),
+        apply: (cols, rows) => {
+          ptyProcess.resize(cols, rows);
+          session.replay.resize(cols, rows);
+        },
         now: () => this.now(),
         onDeferredError: (error) => {
           this.logger.warn("resize-failed", {
@@ -402,7 +454,7 @@ export class IntegratedTerminalService {
       }),
       cwd,
       shell: shell.file,
-      buffer: "",
+      replay: new TerminalReplay(request.cols, request.rows),
       panelHidden: false,
       createdAt: this.now(),
       subscribers: new Set(),
@@ -426,10 +478,11 @@ export class IntegratedTerminalService {
     // silently no-op — leaving a live shell the user had already dismissed,
     // which the renderer then re-adopted from the sessions broadcast. Honor the
     // close now that we finally have something to kill.
-    if (this.pendingCloseSessionIds.delete(sessionId)) {
+    if (this.pendingCloseSessionIds.delete(sessionId)
+      || this.pendingCloseSessionIds.delete(`thread:${threadKey}`) || this.disposing) {
       this.logger.info("closing-on-spawn", { sessionId, threadKey });
       this.killSession(session);
-      return this.toCreateResponse(session);
+      return { sessionId, threadKey, cwd, shell: shell.file, status: "exited" };
     }
 
     this.emitSessionsChanged();
@@ -438,17 +491,22 @@ export class IntegratedTerminalService {
 
   /** Every live PTY, oldest first. The renderer's only source of terminal truth. */
   listSessions(): IntegratedTerminalSessionSummary[] {
-    return [...this.sessionsById.values()]
-      .sort((left, right) => left.createdAt - right.createdAt)
-      .map((session) => this.toSummary(session));
+    return [
+      ...[...this.sessionsById.values()].map((session) => this.toSummary(session)),
+      ...[...this.archived.values()].map((record) => record.summary),
+    ].sort((left, right) => left.createdAt - right.createdAt);
   }
 
   setPanelHidden(request: IntegratedTerminalSetPanelHiddenRequest): void {
     const session = this.sessionsById.get(request.sessionId);
-    if (!session || session.panelHidden === request.hidden) {
+    if (!session) {
+      const record = this.archived.get(request.sessionId);
+      if (record) { record.summary.panelHidden = request.hidden; this.emitSessionsChanged(); }
       return;
     }
+    if (session.panelHidden === request.hidden) return;
     session.panelHidden = request.hidden;
+    if (request.hidden) void this.checkpoint(session);
     this.emitSessionsChanged();
   }
 
@@ -486,7 +544,33 @@ export class IntegratedTerminalService {
       ?.resizes.request(request.cols, request.rows);
   }
 
+  rename(sessionId: string, name: string): void {
+    const clean = name.trim().replace(/[\x00-\x1f\x7f]/g, "").slice(0, 80);
+    const session = this.sessionsById.get(sessionId);
+    if (session) { session.name = clean; void this.checkpoint(session); }
+    const record = this.archived.get(sessionId);
+    if (record) { record.summary.name = clean; void this.historyStore?.save(record).catch(() => undefined); }
+    this.emitSessionsChanged();
+  }
+
+  /** Thread-bound owner API for the read-only tool stack. */
+  outputForThread(threadKey: string, sessionId: string): TerminalReplay | undefined {
+    const session = this.sessionsById.get(sessionId);
+    return session?.threadKey === threadKey ? session.replay : undefined;
+  }
+
   close(request: IntegratedTerminalCloseRequest): void {
+    const pendingKey = request.sessionId || `thread:${request.threadKey}`;
+    if (this.pendingCreates.has(pendingKey)) this.pendingCloseSessionIds.add(pendingKey);
+    let removedHistory = false;
+    for (const [id, record] of this.archived) {
+      if (request.sessionId ? id === request.sessionId : record.summary.threadKey === request.threadKey) {
+        this.archived.delete(id);
+        removedHistory = true;
+        void this.historyStore?.remove(id).catch(() => undefined);
+      }
+    }
+    if (removedHistory) this.emitSessionsChanged();
     // An explicit id NEVER widens to the thread. A request naming a terminal
     // that has already exited means "that one is gone", not "take the rest of
     // the thread with it" — and since a thread can now own several, falling
@@ -523,11 +607,13 @@ export class IntegratedTerminalService {
       return this.disposePromise;
     }
     this.disposing = true;
-    this.disposePromise = Promise.all(
-      Array.from(this.sessionsById.values()).map((session) =>
+    this.disposePromise = Promise.all([
+      ...this.pendingCreates.values(),
+      ...Array.from(this.sessionsById.values()).map((session) => Promise.all([
+        this.checkpoint(session),
         this.disposeSessionForShutdown(session),
-      ),
-    ).then(() => undefined);
+      ])),
+    ]).then(() => undefined);
     this.subscribedWebContents.clear();
     return this.disposePromise;
   }
@@ -570,16 +656,18 @@ export class IntegratedTerminalService {
     );
   }
 
-  private toCreateResponse(
+  private async toCreateResponse(
     session: TerminalSession,
-  ): IntegratedTerminalCreateResponse {
+  ): Promise<IntegratedTerminalCreateResponse> {
+    const snapshot = await session.replay.snapshot();
     return {
       sessionId: session.sessionId,
       threadKey: session.threadKey,
       cwd: session.cwd,
       shell: session.shell,
       pid: session.pty.pid,
-      buffer: session.buffer || undefined,
+      snapshot,
+      status: "running",
     };
   }
 
@@ -592,6 +680,8 @@ export class IntegratedTerminalService {
       pid: session.pty.pid,
       panelHidden: session.panelHidden,
       createdAt: session.createdAt,
+      name: session.name,
+      status: "running",
     };
   }
 
@@ -628,10 +718,20 @@ export class IntegratedTerminalService {
     if (this.disposing || this.sessionsById.get(session.sessionId) !== session) {
       return;
     }
-    session.buffer = trimBufferedOutput(session.buffer + data);
+    const frame = session.replay.append(data, this.now());
+    if (!session.outputPaused && session.replay.pendingCharacters >= 256 * 1024) {
+      session.outputPaused = true;
+      session.pty.pause();
+      void session.replay.whenDrained().then(() => {
+        session.outputPaused = false;
+        if (this.sessionsById.get(session.sessionId) === session && !this.disposing) session.pty.resume();
+      });
+    }
     this.send(session, INTEGRATED_TERMINAL_OUTPUT_CHANNEL, {
       sessionId: session.sessionId,
       data,
+      seq: frame.seq,
+      timestamp: frame.timestamp,
     });
   }
 
@@ -648,10 +748,37 @@ export class IntegratedTerminalService {
       exitCode: exitCode ?? null,
       signal: signal ?? null,
     });
-    this.deleteSession(session);
+    if (session.closing) {
+      this.deleteSession(session);
+      void this.historyStore?.remove(session.sessionId).catch(() => undefined);
+    } else {
+      // Preserve the screen after natural exit; never silently start a shell.
+      void this.checkpoint(session, exitCode ?? null);
+      this.deleteSession(session);
+    }
+  }
+
+  private async checkpoint(session: TerminalSession, exitCode?: number | null): Promise<void> {
+    try {
+      const record: TerminalHistoryRecord = {
+        version: 1,
+        summary: { ...this.toSummary(session), status: exitCode === undefined ? "restored" : "exited", pid: undefined, exitCode },
+        snapshot: await session.replay.snapshot(),
+        savedAt: this.now(),
+      };
+      if (session.closing) return;
+      if (exitCode !== undefined) {
+        this.archived.set(session.sessionId, record);
+        while (this.archived.size > 64) this.archived.delete(this.archived.keys().next().value!);
+        this.emitSessionsChanged();
+      }
+      await this.historyStore?.save(record);
+    } catch (error) { this.logger.warn("history-save-failed", { error: String(error) }); }
   }
 
   private killSession(session: TerminalSession): void {
+    session.closing = true;
+    void this.historyStore?.remove(session.sessionId).catch(() => undefined);
     try {
       session.pty.kill();
     } catch (error) {
@@ -673,6 +800,7 @@ export class IntegratedTerminalService {
     this.disposeSessionListeners(session);
     this.sessionsById.delete(session.sessionId);
     session.subscribers.clear();
+    void session.replay.dispose();
     this.emitSessionsChanged();
   }
 
@@ -1118,11 +1246,4 @@ function commandExistsOnPath(
     }
   }
   return false;
-}
-
-function trimBufferedOutput(value: string): string {
-  if (value.length <= OUTPUT_BUFFER_LIMIT) {
-    return value;
-  }
-  return value.slice(value.length - OUTPUT_BUFFER_LIMIT);
 }

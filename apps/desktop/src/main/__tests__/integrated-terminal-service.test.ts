@@ -1,3 +1,4 @@
+import { TerminalHistoryStore } from "../terminal/terminal-history-store";
 import {
   chmodSync,
   existsSync,
@@ -1068,6 +1069,7 @@ describe("resolveTerminalShell", () => {
         pid: pty.pid,
         panelHidden: false,
         createdAt: 1_000,
+        status: "running",
       },
     ]);
     expect(onSessionsChanged).toHaveBeenCalledTimes(1);
@@ -1447,6 +1449,48 @@ describe("resolveTerminalShell", () => {
 
     expect(disposed).toBe(true);
     expect(shutdownExitDisposable.dispose).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("terminal history lifecycle", () => {
+  it("restores an exited tab without spawning or accepting input and keeps sibling history isolated", async () => {
+    const root = createTemporaryRoot("terminal-history-service-");
+    const historyStore = new TerminalHistoryStore(path.join(root, "history"));
+    const pty = fakePty();
+    const spawn = vi.fn(() => pty);
+    const service = new IntegratedTerminalService({ historyStore,
+      loadNodePty: async () => ({ spawn: spawn as unknown as typeof import("node-pty").spawn }),
+    });
+    const request = { sessionId: "saved-one", threadKey: "codex:one", cwd: os.tmpdir(), cols: 80, rows: 24 };
+    await service.createOrAttach(request, fakeWebContents());
+    vi.mocked(pty.onData).mock.calls[0]![0]("retained output\r\n");
+    service.rename("saved-one", "Build");
+    vi.mocked(pty.onExit).mock.calls[0]![0]({ exitCode: 7 });
+    await vi.waitFor(() => expect(service.listSessions()[0]?.status).toBe("exited"));
+    const restored = await service.createOrAttach({ ...request, attachOnly: true }, fakeWebContents());
+    expect(restored.snapshot?.data).toContain("retained output");
+    service.write({ sessionId: "saved-one", data: "do not run" });
+    expect(pty.write).not.toHaveBeenCalled();
+    expect(spawn).toHaveBeenCalledTimes(1);
+    await vi.waitFor(async () => expect(await historyStore.load()).toHaveLength(1));
+    const restarted = new IntegratedTerminalService({ historyStore, loadNodePty: async () => { throw new Error("must not spawn"); } });
+    expect(await restarted.createOrAttach({ ...request, attachOnly: true }, fakeWebContents())).toMatchObject({ status: "restored", sessionId: "saved-one" });
+    await expect(restarted.createOrAttach({ ...request, threadKey: "codex:other" }, fakeWebContents())).rejects.toThrow("mismatch");
+    restarted.close({ sessionId: "saved-one" });
+    await vi.waitFor(async () => expect(await historyStore.load()).toEqual([]));
+  });
+
+  it("deduplicates concurrent attaches by terminal ID and rejects cross-thread reuse", async () => {
+    const pty = fakePty();
+    const spawn = vi.fn(() => pty);
+    const service = new IntegratedTerminalService({ loadNodePty: async () => ({ spawn: spawn as unknown as typeof import("node-pty").spawn }) });
+    const request = { sessionId: "one", threadKey: "codex:one", cols: 80, rows: 24 };
+    const [first, second] = await Promise.all([service.createOrAttach(request, fakeWebContents()), service.createOrAttach(request, fakeWebContents())]);
+    expect(first.sessionId).toBe(second.sessionId);
+    expect(spawn).toHaveBeenCalledTimes(1);
+    await expect(service.createOrAttach({ ...request, threadKey: "codex:two" }, fakeWebContents())).rejects.toThrow("different thread");
+    expect(service.outputForThread("codex:two", "one")).toBeUndefined();
+    service.close({ sessionId: "one" });
   });
 });
 
