@@ -4418,15 +4418,6 @@ export function ThreadView(props: ThreadViewProps) {
       }
     >
       {header}
-      {selectedThread && props.desktopApi?.threadServices ? <ThreadServices
-        key={`${serviceInstanceId ?? "local"}:${selectedThread.source}:${selectedThread.id}`}
-        api={props.desktopApi.threadServices}
-        backend={selectedThread.source}
-        threadId={selectedThread.id}
-        instanceId={serviceInstanceId}
-        ownerLabel={props.activeFederationOwnerLabel}
-      /> : null}
-
       {emptyView ? (
         <div className="thread-empty-state">
           <div className="thread-empty-state__content">
@@ -4448,6 +4439,14 @@ export function ThreadView(props: ThreadViewProps) {
             <CelestialWatermark
               icon={threadView ? celestialWatermarkIcon : launchpadWatermarkIcon}
             />
+            {selectedThread && props.desktopApi?.threadServices ? <ThreadServices
+              key={`${serviceInstanceId ?? "local"}:${selectedThread.source}:${selectedThread.id}`}
+              api={props.desktopApi.threadServices}
+              backend={selectedThread.source}
+              threadId={selectedThread.id}
+              instanceId={serviceInstanceId}
+              ownerLabel={props.activeFederationOwnerLabel}
+            /> : null}
             {primaryContent}
             {composerSlotElement}
             {threadLock ? (
