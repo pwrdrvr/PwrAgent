@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { assertReady, atomicJson, probeInterrupt, budgetStop, waitForOutcome, claimRun, cleanEnvironment, configToml, observedBudget, sanitizer, terminalEvent, validateInput } from "./headless-contract.mjs";
+import { assertReady, atomicJson, sanitizedProtocolRecord, probeInterrupt, budgetStop, waitForOutcome, claimRun, cleanEnvironment, configToml, observedBudget, sanitizer, terminalEvent, validateInput } from "./headless-contract.mjs";
 const input = { schemaVersion: 1, runId: "run-1", cwd: "/app", prompt: "Fix it", model: "gpt-6-astra", reasoningEffort: "high", serviceTier: "default", tokenMiser: true, timeoutMs: 1000, runtimeManifest: "/eval/runtime.json" };
 test("strict contract rejects implicit toggles, model substitutions and unknown inputs", () => {
   assert.equal(validateInput(input).codexHome, "/eval/codex");
@@ -35,7 +35,7 @@ test("pair configuration differs only in the two Token Miser gates", () => {
   assert.match(on.join("\n"), /managed_builds = true/);
 });
 function ready() {
-  return { backend: { available: true, capabilities: { startTurn: true, interruptTurn: true }, account: { type: "chatgpt" }, launchpadOptions: { models: [{ id: input.model, reasoningEfforts: ["high"] }] }, tokenMiser: { enabled: true, defaultEnabled: true } }, settings: { federation: { mode: { value: "disabled" } }, runtime: { tokenMiser: { managedCodex: { state: "ready", version: "1-pwragent" }, activation: { state: "active" } }, messaging: { disabled: true } }, models: { codex: { discovery: { selectedCommand: "/opt/managed/codex" } } } }, runtime: { directory: "/opt/managed", version: "1-pwragent" } };
+  return { backend: { available: true, capabilities: { startTurn: true, interruptTurn: true }, account: { type: "chatgpt" }, launchpadOptions: { models: [{ id: input.model, reasoningEfforts: ["high"] }] }, tokenMiser: { enabled: true, defaultEnabled: true } }, settings: { experimental: { tokenMiserEnabled: { value: true }, tokenMiserDefaultEnabled: { value: true } }, federation: { mode: { value: "disabled" } }, runtime: { tokenMiser: { managedCodex: { state: "ready", version: "1-pwragent" }, activation: { state: "active" } }, messaging: { disabled: true } }, models: { codex: { discovery: { selectedCommand: "/opt/managed/codex" } } } }, runtime: { directory: "/opt/managed", version: "1-pwragent" } };
 }
 test("readiness fails closed for auth, catalog, managed pin and gate activation", () => {
   const ok = ready();
@@ -91,4 +91,20 @@ test("empty-thread interrupt probe proves method support without starting a turn
   assert.deepEqual(calls, ["interruptTurn"]);
   assert.equal((await probeInterrupt(async () => { throw new Error("no active turn"); }, "empty")).supported, true);
   for (const message of ["method not found: turn/interrupt", "turn/interrupt deadline exceeded", "unsupported method", "Unexpected interrupt probe response"]) await assert.rejects(probeInterrupt(async () => { throw new Error(message); }, "empty"));
+});
+
+test("real capture-store raw envelope preserves usage while removing credentials", () => {
+  const record = { sequence: 1, direction: "inbound", raw: JSON.stringify({ method: "thread/tokenUsage/updated", params: { usage: { inputTokens: 42, cachedInputTokens: 20, reasoningOutputTokens: 10 }, access_token: "credential" } }) };
+  const clean = sanitizedProtocolRecord(record, sanitizer());
+  assert.equal(clean.raw, undefined);
+  assert.equal(clean.envelope.params.usage.reasoningOutputTokens, 10);
+  assert.equal(clean.envelope.params.access_token, "[REDACTED]");
+});
+
+test("local readiness uses settings snapshot when optional federated composer projection is absent", () => {
+  const v = ready();
+  delete v.backend.tokenMiser;
+  assert.doesNotThrow(() => assertReady(v.backend, v.settings, input, v.runtime));
+  v.settings.experimental.tokenMiserEnabled.value = false;
+  assert.throws(() => assertReady(v.backend, v.settings, input, v.runtime), /settings mismatch/);
 });
