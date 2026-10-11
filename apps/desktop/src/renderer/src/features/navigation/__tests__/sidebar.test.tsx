@@ -26,6 +26,8 @@ import { HOVER_TRANSITION_GRACE_MS } from "../../../lib/useHoverTransitionGrace"
 import { threadSummaryIdentityKey } from "../../../lib/federated-thread-events";
 import { FixtureSidebar as Sidebar } from "../../../test/navigation-presentation-fixture";
 import type { ComponentProps } from "react";
+import type { Editor } from "@tiptap/react";
+import { ComposerTiptapInput } from "../../composer/ComposerTiptapInput";
 import {
   documentTabStops,
   pressEscape,
@@ -9978,6 +9980,137 @@ describe("Sidebar thread shortcuts", () => {
       title: "Cross-project cleanup",
       reopenKey: "codex:thread-1",
     }));
+  });
+
+  it.each(["", "Keep this unsent draft"])(
+    "archives once from the real focused prompt editor without changing draft %j",
+    async (draft) => {
+      const onArchiveThread = vi.fn(async () => undefined);
+      renderShortcutSidebar({ onArchiveThread });
+      const onChange = vi.fn();
+      render(<form className="composer">
+        <ComposerTiptapInput id="reply" label="Reply" value={draft} skillTokens={[]}
+          placeholder="Ask anything" onChange={onChange} />
+      </form>);
+      const field = screen.getByRole("textbox", { name: "Reply" });
+      expect(field).toHaveAttribute("contenteditable", "true");
+      // jsdom does not implement this browser property on contenteditables.
+      Object.defineProperty(field, "isContentEditable", { value: true });
+      const editor = (field as HTMLElement & { editor: Editor }).editor;
+      act(() => {
+        editor.commands.setTextSelection(1);
+        field.focus();
+      });
+      expect(field).toHaveFocus();
+      const documentBefore = editor.getJSON();
+      const selectionBefore = editor.state.selection.toJSON();
+      // Real Chromium Backspace carries keyCode 8. ProseMirror's native
+      // deletion guard consumes it at the start of a block, even with Shift.
+      press(field, { key: "Backspace", code: "Backspace", keyCode: 8,
+        ctrlKey: true, shiftKey: true });
+      await waitFor(() => expect(onArchiveThread).toHaveBeenCalledTimes(1));
+      expect(onArchiveThread).toHaveBeenCalledWith(sharedThread, {
+        nextSelectionKey: "codex:thread-2",
+      });
+      expect(editor.getJSON()).toEqual(documentBefore);
+      expect(editor.state.selection.toJSON()).toEqual(selectionBefore);
+      expect(onChange).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["inert", "unsupported"])(
+    "does not consume focused composer archive when the action is %s",
+    (guard) => {
+      const onArchiveThread = vi.fn(async () => undefined);
+      renderShortcutSidebar({
+        onArchiveThread,
+        inert: guard === "inert",
+        ...(guard === "unsupported" ? {
+          backends: backends.map((backend) => ({
+            ...backend, capabilities: { ...backend.capabilities, archiveThread: false },
+          })),
+        } : {}),
+      });
+      render(<form className="composer"><textarea aria-label="Guarded prompt" /></form>);
+      const field = screen.getByRole("textbox", { name: "Guarded prompt" });
+      field.focus();
+      const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true,
+        key: "Backspace", code: "Backspace", keyCode: 8, ctrlKey: true, shiftKey: true });
+      act(() => field.dispatchEvent(event));
+      expect(onArchiveThread).not.toHaveBeenCalled();
+      expect(event.defaultPrevented).toBe(false);
+    },
+  );
+
+  it.each([
+    { isComposing: true },
+    { keyCode: 229 },
+    { repeat: true },
+  ])("leaves focused editor events alone for %j", (flags) => {
+    const onArchiveThread = vi.fn(async () => undefined);
+    renderShortcutSidebar({ onArchiveThread });
+    render(<form className="composer">
+      <ComposerTiptapInput id="reply" label="Reply" value="" skillTokens={[]}
+        placeholder="Ask anything" onChange={() => undefined} />
+    </form>);
+    const field = screen.getByRole("textbox", { name: "Reply" });
+    Object.defineProperty(field, "isContentEditable", { value: true });
+    field.focus();
+    press(field, { key: "Backspace", code: "Backspace", keyCode: 8,
+      ctrlKey: true, shiftKey: true, ...flags });
+    expect(onArchiveThread).not.toHaveBeenCalled();
+  });
+
+  it.each(["search", "rename", "dialog", "terminal"])(
+    "does not capture archive from a %s field",
+    (context) => {
+      const onArchiveThread = vi.fn(async () => undefined);
+      renderShortcutSidebar({ onArchiveThread });
+      const host = document.createElement("div");
+      if (context === "dialog") {
+        host.className = "composer";
+        host.setAttribute("role", "dialog");
+      }
+      if (context === "terminal") host.className = "xterm";
+      const field = document.createElement("textarea");
+      host.append(field);
+      document.body.append(host);
+      const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true,
+        key: "Backspace", code: "Backspace", keyCode: 8, ctrlKey: true, shiftKey: true });
+      try {
+        field.focus();
+        act(() => field.dispatchEvent(event));
+        expect(onArchiveThread).not.toHaveBeenCalled();
+        expect(event.defaultPrevented).toBe(false);
+      } finally {
+        host.remove();
+      }
+    },
+  );
+
+  it("keeps a rebound text-deletion chord in the focused editor", async () => {
+    const { _resetKeybindingsStoreForTests } = await import("../../../lib/keybindings-store");
+    _resetKeybindingsStoreForTests({
+      overrides: { "threads.archive": ["CmdOrCtrl+Backspace"] },
+      filePath: "/tmp/keybindings.toml",
+    });
+    try {
+      const onArchiveThread = vi.fn(async () => undefined);
+      renderShortcutSidebar({ onArchiveThread });
+      render(<form className="composer">
+        <ComposerTiptapInput id="reply" label="Reply" value="Keep editing" skillTokens={[]}
+          placeholder="Ask anything" onChange={() => undefined} />
+      </form>);
+      const field = screen.getByRole("textbox", { name: "Reply" });
+      Object.defineProperty(field, "isContentEditable", { value: true });
+      field.focus();
+      press(field, { key: "Backspace", code: "Backspace", keyCode: 8, ctrlKey: true });
+      expect(onArchiveThread).not.toHaveBeenCalled();
+      press(document.body, { key: "Backspace", code: "Backspace", keyCode: 8, ctrlKey: true });
+      expect(onArchiveThread).toHaveBeenCalledTimes(1);
+    } finally {
+      act(() => _resetKeybindingsStoreForTests());
+    }
   });
 
   it("leaves text fields other than the composer alone", () => {
