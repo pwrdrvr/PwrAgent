@@ -77,7 +77,7 @@ export class FederationServices {
     const thread = serviceThread(threadInput);
     const args = parseServiceAdvertisement(argsInput);
     if (!await this.options.threadExists(thread) || this.disposed) throw new Error("Service thread is unavailable.");
-    if (this.options.blockedPorts?.().includes(args.port)) throw new Error("PwrAgent control ports cannot be advertised.");
+    if (this.options.blockedPorts?.().includes(args.port)) throw new Error("Federation control ports cannot be advertised.");
     const address = args.address ?? "127.0.0.1";
     const previous = [...this.services.values()].find((entry) => sameThread(entry, thread)
       && entry.port === args.port && entry.address === address);
@@ -194,6 +194,7 @@ export class FederationServices {
           .finally(() => { stream.writing = false; });
       }
       if (input.receive) await waitServiceReadable(stream.socket);
+      this.getLease(peerId, stream.lease.leaseId);
       if (stream.error) throw new Error(stream.error);
       const data = input.receive ? readServiceData(stream.socket) : Buffer.alloc(0);
       const fin = stream.socket.readableEnded;

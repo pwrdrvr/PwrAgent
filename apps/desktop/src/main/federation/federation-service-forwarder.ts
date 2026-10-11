@@ -55,11 +55,17 @@ export class FederationServiceForwarder {
       forward.leaseId = lease.leaseId;
       if (forward.abort.signal.aborted) throw new Error("Forwarding was cancelled.");
       await new Promise<void>((resolve, reject) => {
-        server.once("error", reject);
-        server.listen({ host: "127.0.0.1", port: 0, exclusive: true }, () => {
-          server.off("error", reject);
-          resolve();
-        });
+        const finish = (error?: Error): void => {
+          server.off("error", failed);
+          forward.abort.signal.removeEventListener("abort", cancelled);
+          if (error) reject(error);
+          else resolve();
+        };
+        const failed = (error: Error): void => finish(error);
+        const cancelled = (): void => finish(new Error("Forwarding was cancelled."));
+        server.once("error", failed);
+        forward.abort.signal.addEventListener("abort", cancelled, { once: true });
+        server.listen({ host: "127.0.0.1", port: 0, exclusive: true }, () => finish());
       });
       if (forward.abort.signal.aborted) throw new Error("Forwarding was cancelled.");
       server.on("error", () => this.disconnect(windowId, forward.view.forwardId));
@@ -128,14 +134,14 @@ export class FederationServiceForwarder {
         params: { leaseId: forward.leaseId }, timeoutMs: 6000 });
       streamId = opened.streamId;
       let remoteFin = false;
-      let ownerWritable = true;
+      let ownerWritable: boolean = true;
       let writing = false;
       let writeError: unknown;
       while (!abort.signal.aborted) {
         if (writeError) throw writeError;
-        const data = ownerWritable ? readServiceData(socket) : Buffer.alloc(0);
-        const fin = ownerWritable && socket.readableEnded;
-        const result = await forward.rpc.request<ServiceExchangeResult>({ method: METHODS.exchange,
+        const data: Buffer = ownerWritable ? readServiceData(socket) : Buffer.alloc(0);
+        const fin: boolean = ownerWritable && socket.readableEnded;
+        const result: ServiceExchangeResult = await forward.rpc.request<ServiceExchangeResult>({ method: METHODS.exchange,
           params: { streamId, seq, data: data.toString("base64"), fin, receive: !writing }, timeoutMs: 10_000, signal: abort.signal });
         if (result.seq !== seq || typeof result.fin !== "boolean" || typeof result.writable !== "boolean" || (remoteFin && !result.fin)) throw new Error("Invalid service response sequence.");
         const received = decodeServiceData(result.data);
