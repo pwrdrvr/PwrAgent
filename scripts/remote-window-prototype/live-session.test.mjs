@@ -42,6 +42,7 @@ test("input requires origin, grant, acknowledged scene, fresh challenge and exac
   session.ack("viewer", { ...open, seq: value.seq });
   await expect(session.input("intruder", input)).rejects.toThrow("stale_or_unauthorized");
   await expect(session.input("viewer", { ...input, command: { action: "shell", text: "bad" } })).rejects.toThrow("invalid_command");
+  await expect(session.input("viewer", { ...input, command: { action: "text", text: "fixture", kind: "stop" } })).rejects.toThrow("invalid_command");
   expect((await session.input("viewer", input)).revision).toBe(1);
   await expect(session.input("viewer", input)).rejects.toThrow("input_rejected");
   advance(1201);
