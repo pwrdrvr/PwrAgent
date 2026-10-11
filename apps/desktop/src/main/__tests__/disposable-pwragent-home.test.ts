@@ -25,7 +25,11 @@ import workspaceConfig from "../../../../../vitest.workspace";
 import { isPathWithin } from "../../shared/path-within";
 import { PWRAGENT_HOME_ENV, resolvePwragentRoot } from "../profile";
 
-const GUARDED_PROJECTS = ["desktop-main", "desktop-renderer"];
+const GUARDED_PROJECTS = [
+  "desktop-main",
+  "desktop-renderer",
+  "desktop-renderer-node",
+];
 const GUARDED_ENV_VARS = [
   PWRAGENT_HOME_ENV,
   "XDG_CONFIG_HOME",

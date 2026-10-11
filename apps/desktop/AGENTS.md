@@ -1250,7 +1250,7 @@ Two more suite-wide guards, both pure test infrastructure. Production code has
 no test-awareness and behaves identically either way — the seams are in
 `vitest.workspace.ts`.
 
-**Where.** Both desktop projects set `PWRAGENT_HOME` to
+**Where.** Every desktop project sets `PWRAGENT_HOME` to
 `<os.tmpdir()>/pwragent-vitest-home-<pid>`. `resolvePwragentRoot` otherwise
 falls back to `~/.pwragent`, and only about a dozen main tests override it
 themselves, so every other test that touches a root-relative path was reading
@@ -1271,7 +1271,7 @@ deliberately `os.homedir()`-anchored; no test has ever created it, and
 `git-directory-service` takes an injected `homeDir`.
 
 `XDG_CONFIG_HOME` and `XDG_STATE_HOME` travel with it, pinned to
-`<os.tmpdir()>/pwragent-vitest-xdg-<pid>/{config,state}` on both projects and
+`<os.tmpdir()>/pwragent-vitest-xdg-<pid>/{config,state}` on each project and
 guarded by the same test. Nothing in the app reads them today; the pre-profile
 migration that searched them for `pwragnt/` state is gone. They stay because
 `PWRAGENT_HOME` never covered them: those roots came from `os.homedir()` and
@@ -1313,7 +1313,7 @@ those have no host to classify, and reading an inline fixture is not egress.
 The allowance is pinned by the self-test, including that a remote host merely
 *containing* "localhost" is still blocked.
 
-The renderer project loads the fetch guard too. It has no `fetch` call site
+Both renderer projects load the fetch guard too. It has no `fetch` call site
 today and reaches the network through IPC, but `lint:boundaries` reads imports
 and cannot see a `globalThis.fetch`, and jsdom inherits a live one from Node —
 so this is the only thing here that would catch a renderer reaching a remote
