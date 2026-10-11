@@ -31,6 +31,31 @@ history before returning or re-writing the row. Preserve only metadata that is
 needed for behavior, such as deriving `hasConversationHistory` from a legacy
 user-message update.
 
+## Tracked review findings
+
+`thread_reviews` (see [thread-reviews.md](thread-reviews.md)) is the one
+sqlite table that keeps review text. A tracked review is a work-queue record:
+its To-do card must render, and its open findings must reach an agent, after
+the transcript that produced it has scrolled out of the loaded history or the
+agent's context. It is not a copy of the thread, and two rules keep it that
+way.
+
+- **Excerpts only.** Each record keeps the review title, a summary, and each
+  finding's title, body, priority, and code location, capped by
+  `THREAD_REVIEW_TEXT_LIMITS` in
+  `apps/desktop/src/main/thread-reviews/thread-review-service.ts`: 300
+  characters per title, 1,000 for the summary, and 4,000 per finding body.
+  No other transcript content is stored: no prompts, no surrounding
+  messages, and no tool output.
+- **The transcript never renders from it.** The transcript's review card
+  draws every finding's text from the transcript entry. It reads only state
+  from the record: status, the resolution note, the actor, the evidence link,
+  and the time. The To-do card, the "Address findings" reply, and the agent's
+  `list_reviews` tool are the only consumers of the stored text.
+
+Extend this exception only by updating this section. Any other table that
+stores history text needs its own documented exception.
+
 ## Future Fallback Storage
 
 An ACP fallback may use a narrowly scoped desktop-local append-only JSONL store

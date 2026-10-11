@@ -1016,7 +1016,10 @@ sqlite database. Store only desktop metadata there. For the full rule and the
 ACP fallback direction, read
 [../../docs/thread-history-persistence.md](../../docs/thread-history-persistence.md)
 before changing ACP session storage, thread replay restoration, or rollout
-persistence.
+persistence. Its one exception is tracked review findings (`thread_reviews`):
+capped excerpts that only To-dos and the review agent tools read. The
+transcript renders a review from its own entry and reads only status from that
+table.
 
 ## Pull-Request Status Source of Truth
 

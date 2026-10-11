@@ -284,21 +284,29 @@ export function ReviewFindingState(props: { review: ThreadReview; item: ThreadRe
   );
 }
 
-/** The two ways to settle an open finding, beside its location. */
-export function ReviewFindingActions(props: {
+/**
+ * The transcript's per-finding controls carry only state from the record.
+ * `title` is the finding's title as the transcript renders it, so the
+ * accessible names match the text on screen rather than the stored excerpt.
+ */
+type TranscriptFindingControlsProps = {
   review: ThreadReview;
   item: ThreadReviewItem;
+  title: string;
   busy: boolean;
   update: ReviewUpdate;
-}) {
-  const { review, item, busy, update } = props;
+};
+
+/** The two ways to settle an open finding, beside its location. */
+export function ReviewFindingActions(props: TranscriptFindingControlsProps) {
+  const { review, item, title, busy, update } = props;
   if (review.status === "dismissed" || item.status !== "open") return null;
   return (
     <div className="review-status__actions">
       <button
         type="button"
         className="button review-status__button review-status__button--quiet"
-        aria-label={`Dismiss finding: ${item.title}`}
+        aria-label={`Dismiss finding: ${title}`}
         disabled={busy}
         onClick={() => void update({ itemId: item.id, status: "dismissed" })}
       >
@@ -307,7 +315,7 @@ export function ReviewFindingActions(props: {
       <button
         type="button"
         className="button button--secondary review-status__button"
-        aria-label={`Mark addressed: ${item.title}`}
+        aria-label={`Mark addressed: ${title}`}
         disabled={busy}
         onClick={() => void update({ itemId: item.id, status: "addressed" })}
       >
@@ -319,13 +327,8 @@ export function ReviewFindingActions(props: {
 }
 
 /** How a settled finding was settled: who, why, the evidence, and when. */
-export function ReviewFindingResolution(props: {
-  review: ThreadReview;
-  item: ThreadReviewItem;
-  busy: boolean;
-  update: ReviewUpdate;
-}) {
-  const { review, item, busy, update } = props;
+export function ReviewFindingResolution(props: TranscriptFindingControlsProps) {
+  const { review, item, title, busy, update } = props;
   if (review.status === "dismissed" || item.status === "open" || !item.resolution) return null;
   return (
     <div className="review-status" data-status={item.status}>
@@ -337,7 +340,7 @@ export function ReviewFindingResolution(props: {
         <button
           type="button"
           className="button review-status__button review-status__button--quiet"
-          aria-label={`Reopen finding: ${item.title}`}
+          aria-label={`Reopen finding: ${title}`}
           disabled={busy}
           onClick={() => void update({ itemId: item.id, status: "open" })}
         >

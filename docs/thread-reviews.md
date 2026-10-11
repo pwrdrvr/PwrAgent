@@ -11,6 +11,11 @@ source URL and workspace/PR provenance. Findings have stable ids and their own
 status, last update, and resolution. A resolution records its reason, optional
 HTTP(S) evidence link, actor, and date.
 
+The stored text is capped excerpts kept so To-dos and the agent tools work
+without the transcript. The transcript's review card renders from its own
+entry and reads only state from this table. This is a documented exception to
+[thread-history-persistence.md](thread-history-persistence.md#tracked-review-findings).
+
 Findings are `open`, `addressed`, or `dismissed`. Reviews are `open`, `handled`,
 or `dismissed`. Settling the last open finding automatically handles its review.
 An agent cannot mark a review handled while findings are still open. It can

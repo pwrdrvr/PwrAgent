@@ -12,6 +12,18 @@ import type {
 import type { StateDb } from "../state/state-db";
 import { parsePlainReview, parseReviewOutputText } from "../../shared/review-output";
 
+/**
+ * A review is a work-queue record, not a transcript copy: it keeps enough of
+ * each finding to show the card and hand the work to an agent after the
+ * transcript has scrolled away. These caps hold that copy to excerpts. See
+ * "Tracked review findings" in docs/thread-history-persistence.md.
+ */
+export const THREAD_REVIEW_TEXT_LIMITS = { title: 300, summary: 1_000, body: 4_000 } as const;
+
+function excerpt(text: string, limit: number): string {
+  return text.length > limit ? `${text.slice(0, limit - 1).trimEnd()}…` : text;
+}
+
 export class ThreadReviewError extends Error {
   constructor(readonly code: "not_found" | "invalid_arguments" | "conflict", message: string) {
     super(message);
@@ -59,12 +71,17 @@ export class ThreadReviewService {
       const createdAt = input.createdAt ?? now;
       const review: ThreadReview = {
         backend: identity.backend, threadId: identity.threadId,
-        id, sourceKey: input.sourceKey, title: input.title,
+        id, sourceKey: input.sourceKey, title: excerpt(input.title, THREAD_REVIEW_TEXT_LIMITS.title),
         ...(input.sourceUrl ? { sourceUrl: input.sourceUrl } : {}),
-        ...(input.summary ? { summary: input.summary } : {}),
+        ...(input.summary ? { summary: excerpt(input.summary, THREAD_REVIEW_TEXT_LIMITS.summary) } : {}),
         ...(input.context ? { context: input.context } : {}),
         status: input.clean && input.items.length === 0 ? "handled" : "open",
-        items: input.items.map((item) => ({ ...item, id: randomUUID(), status: "open", createdAt, updatedAt: createdAt })),
+        items: input.items.map((item) => ({
+          ...item,
+          title: excerpt(item.title, THREAD_REVIEW_TEXT_LIMITS.title),
+          ...(item.body === undefined ? {} : { body: excerpt(item.body, THREAD_REVIEW_TEXT_LIMITS.body) }),
+          id: randomUUID(), status: "open", createdAt, updatedAt: createdAt,
+        })),
         createdAt, updatedAt: createdAt,
         ...(input.clean && input.items.length === 0 ? { resolution: {
           note: "Review completed with no findings.", actor: "system", at: createdAt,
@@ -91,7 +108,7 @@ export class ThreadReviewService {
     return this.record(identity, {
       sourceKey: entry.id,
       title: "Code review",
-      summary: output?.overall_explanation ?? entry.review.slice(0, 1_000),
+      summary: output?.overall_explanation ?? entry.review,
       context: entry.context,
       createdAt: entry.createdAt,
       clean: output?.findings.length === 0,

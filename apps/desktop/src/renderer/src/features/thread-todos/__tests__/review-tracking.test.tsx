@@ -74,6 +74,15 @@ describe("review status controls", () => {
     await waitFor(() => expect(api.updateThreadReview).toHaveBeenLastCalledWith({ id: "review", status: "open" }));
   });
 
+  it("renders what a finding says from the transcript and reads only its state from the record", async () => {
+    installApi(review, { ...review, items: [{ ...review.items[0]!, title: "Stored excerpt…", body: "Stored body" }] });
+    render(<TranscriptReview entry={entry} parentThreadId="owner" />);
+    await screen.findByRole("button", { name: "Mark addressed: Abort pending exports" });
+    expect(screen.getByText("Stop the export when its owner closes.")).toBeVisible();
+    expect(screen.queryByText("Stored excerpt…")).not.toBeInTheDocument();
+    expect(screen.queryByText("Stored body")).not.toBeInTheDocument();
+  });
+
   it("never looks up peer reviews in the local database", () => {
     const api = installApi(review);
     Object.assign(window, { __pwragentFederationTarget: { scope: "remote", instanceId: "peer" } });

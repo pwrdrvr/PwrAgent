@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AgentEvent, AppServerThreadReviewEntry, ThreadTodosChangedEvent } from "@pwragent/shared";
 import { threadReviewTodo } from "@pwragent/shared";
-import { ThreadReviewService } from "../thread-reviews/thread-review-service";
+import { THREAD_REVIEW_TEXT_LIMITS, ThreadReviewService } from "../thread-reviews/thread-review-service";
 import { completedThreadReview } from "../thread-reviews/thread-review-events";
 import { StateDb } from "../state/state-db";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
@@ -129,6 +129,18 @@ describe("persistent thread reviews", () => {
   it("does not track an interrupted review that left an empty artifact", () => {
     expect(service.importEntry(THREAD, { type: "review", id: "interrupted", review: "  " })).toBeUndefined();
     expect(service.list({ ...THREAD, status: "all" })).toEqual([]);
+  });
+
+  it("keeps excerpts of review text, not whole transcript copies", () => {
+    const review = service.record(THREAD, {
+      sourceKey: "long", title: "T".repeat(1_000), summary: "S".repeat(5_000),
+      items: [{ title: "F".repeat(1_000), body: "B".repeat(50_000) }],
+    });
+    expect(review.title).toHaveLength(THREAD_REVIEW_TEXT_LIMITS.title);
+    expect(review.summary).toHaveLength(THREAD_REVIEW_TEXT_LIMITS.summary);
+    expect(review.items[0]!.title).toHaveLength(THREAD_REVIEW_TEXT_LIMITS.title);
+    expect(review.items[0]!.body).toHaveLength(THREAD_REVIEW_TEXT_LIMITS.body);
+    expect(review.items[0]!.body!.endsWith("…")).toBe(true);
   });
 
   it("keys a review's project the way every other card's project is keyed", () => {

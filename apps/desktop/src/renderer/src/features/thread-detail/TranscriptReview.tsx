@@ -364,6 +364,8 @@ export function TranscriptReview(props: TranscriptReviewProps) {
         <ol className="transcript-review__findings">
           {findings.map((finding, index) => {
             // Tracked findings are recorded from this same list, in order.
+            // Only their state is read from the record; what a finding says
+            // is always rendered from the transcript entry.
             const item = tracking.review?.items[index];
             const range = finding.code_location.line_range;
             const absoluteFilePath = normalizePath(finding.code_location.absolute_file_path);
@@ -428,6 +430,7 @@ export function TranscriptReview(props: TranscriptReviewProps) {
                     <ReviewFindingActions
                       review={tracking.review}
                       item={item}
+                      title={finding.title}
                       busy={tracking.busy}
                       update={tracking.update}
                     />
@@ -437,6 +440,7 @@ export function TranscriptReview(props: TranscriptReviewProps) {
                   <ReviewFindingResolution
                     review={tracking.review}
                     item={item}
+                    title={finding.title}
                     busy={tracking.busy}
                     update={tracking.update}
                   />
