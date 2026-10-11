@@ -93,9 +93,15 @@ JSON `status: complete` means the requested metadata checks completed.
 digests and unsupported/dynamic source layouts cannot pass integrity checks.
 `status: incomplete` means an API read, repository identity, or pagination check
 failed. Blocked/incomplete CLI checks exit nonzero, and preparation retains
-`preflight.json`. Cask parsing supports literal version/URL and arm/intel maps;
-Winget parsing supports literal scalar mappings, including reordered/inherited
-installer fields. Neither parser executes source code or resolves YAML tags.
+`preflight.json`. Cask parsing supports direct two-space declarations of literal
+version/URL and arm/intel maps, plus the `url :url` / `strategy :github_latest`
+livecheck block. Conditional/nested declarations, escaped strings and other
+Ruby layouts remain unverifiable. URL interpolation applies only to
+double-quoted Ruby strings; single-quoted expressions stay literal. Winget
+parsing supports literal scalar mappings, including reordered/inherited fields,
+and derives each installer's mapping column from its first key. Unrecognized
+indentation cannot silently fall back to inherited fields. Neither parser
+executes source code or resolves YAML tags.
 
 Add `--discover` to `--audit` for optional name/homepage searches across the tap,
 Winget, and official Homebrew cask/core repositories. Only actual package files

@@ -115,9 +115,59 @@ describe("published source integrity", () => {
 
 describe("literal metadata parsing", () => {
   it("accepts cask whitespace/quotes and YAML reordered/inherited fields without executing their source", () => {
-    expect(caskMetadata(files["Casks/pwragent.rb"].replaceAll("\"", "'").replace("arch arm:", "arch   arm:")).installers).toHaveLength(2);
+    const cask = files["Casks/pwragent.rb"].replaceAll("\"", "'")
+      .replace(/^  url '(.*)'$/m, "  url \"$1\"").replace("arch arm:", "arch   arm:");
+    expect(caskMetadata(cask).installers).toHaveLength(2);
     const yaml = `PackageIdentifier: '${PACKAGE_ID}'\r\nPackageVersion: "${version}" # stable\r\nArchitecture: x64\r\nInstallerUrl: ${release.assets[2].browser_download_url}\r\nInstallerSha256: ${hashes[names[2]]}\r\nInstallers:\r\n- Scope: machine\r\n- Scope: user\r\nManifestType: installer\r\n`;
     expect(wingetMetadata(yaml, PACKAGE_ID, version).installers.map((item) => item.scope)).toEqual(["machine", "user"]);
+  });
+
+  it("preserves literal interpolation expressions in single-quoted Ruby URLs", () => {
+    const cask = files["Casks/pwragent.rb"].replace(/^  url "(.*)"$/m, "  url '$1'");
+    const audit = auditChannels(fixture({ sources: { ...files, "Casks/pwragent.rb": cask } }));
+    expect(audit.status).toBe("blocked");
+    expect(audit.findings[0].kind).toBe("drift");
+    expect(audit.homebrew.installers[0].url).toContain("v#{version}/PwrAgent-#{version}-#{arch}");
+  });
+
+  it.each(["  if false", "if false", "  on_arm do"])("rejects metadata wrapped in unsupported Ruby control flow: %s", (opening) => {
+    const cask = files["Casks/pwragent.rb"].replace("  arch arm:", `${opening}\n  arch arm:`)
+      .replace("  name \"PwrAgent\"", "  end\n  name \"PwrAgent\"");
+    const audit = auditChannels(fixture({ sources: { ...files, "Casks/pwragent.rb": cask } }));
+    expect(audit.status).toBe("blocked");
+    expect(audit.findings[0].kind).toBe("unverifiable");
+  });
+
+  const spacedInstaller = (override) => `PackageIdentifier: ${PACKAGE_ID}
+PackageVersion: ${version}
+Architecture: x64
+InstallerUrl: ${release.assets[2].browser_download_url}
+InstallerSha256: ${hashes[names[2]]}
+Installers:
+  -   Scope: user
+      ${override}
+  - Scope: machine
+`;
+
+  it.each([
+    ["Architecture: arm64", "unverifiable"],
+    ["InstallerUrl: https://example.com/other.exe", "drift"],
+    [`InstallerSha256: ${"f".repeat(64)}`, "drift"],
+  ])("reads installer overrides at the actual first-key column: %s", (override, kind) => {
+    const audit = auditChannels(fixture({ sources: { ...files, [manifest]: spacedInstaller(override) } }));
+    expect(audit.status).toBe("blocked");
+    expect(audit.findings[0].kind).toBe(kind);
+  });
+
+  it("accepts variable spaces after YAML sequence markers when the fields match", () => {
+    const audit = auditChannels(fixture({ sources: { ...files, [manifest]: spacedInstaller("Architecture: x64") } }));
+    expect(audit.status).toBe("complete");
+    expect(audit.winget.installers[0].architecture).toBe("x64");
+  });
+
+  it("rejects unrecognized indentation rather than silently inheriting root metadata", () => {
+    const yaml = spacedInstaller("Architecture: arm64").replace("  -   Scope:", "  - Scope:");
+    expect(() => wingetMetadata(yaml, PACKAGE_ID, version)).toThrow(/layout|indentation/);
   });
 
   it.each([

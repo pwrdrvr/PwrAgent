@@ -2,13 +2,57 @@
 // Unknown/dynamic layouts remain unverifiable rather than passing a partial read.
 const stable = (value) => /^\d+\.\d+\.\d+$/.test(value ?? "");
 const quoted = (value) => {
-  const match = /^(["'])(.*?)\1\s*(?:#.*)?$/.exec(value.trim());
+  const match = /^(?:"([^"\\]*)"|'([^'\\]*)')\s*(?:#.*)?$/.exec(value.trim());
   if (!match) throw new Error("Expected literal quoted package metadata");
-  return match[2];
+  return match[1] ?? match[2];
 };
+
+function literalCaskScope(text) {
+  let scope = "outside";
+  let continuation;
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.trim() || /^\s*#/.test(line)) continue;
+    if (scope === "outside" && /^cask ["']pwragent["'] do\s*(?:#.*)?$/.test(line)) {
+      scope = "cask";
+      continue;
+    }
+    if (scope === "livecheck") {
+      if (/^  end\s*(?:#.*)?$/.test(line)) scope = "cask";
+      else if (!/^    (?:url :url|strategy :github_latest)\s*(?:#.*)?$/.test(line)) {
+        throw new Error("Unsupported cask livecheck layout");
+      }
+      continue;
+    }
+    if (scope !== "cask") throw new Error("Unsupported cask scope or control flow");
+    if (/^end\s*(?:#.*)?$/.test(line)) {
+      scope = "closed";
+      continue;
+    }
+    if (/^  livecheck do\s*(?:#.*)?$/.test(line)) {
+      scope = "livecheck";
+      continuation = undefined;
+      continue;
+    }
+    const statement = /^  (arch|version|sha256|url|name|desc|homepage|auto_updates|depends_on|app)[ \t]+(.+)$/.exec(line);
+    if (!statement) {
+      if (["arch", "sha256"].includes(continuation) && /^ {3,}(?:arm|intel):[ \t]+/.test(line)) continue;
+      throw new Error("Unsupported cask declaration scope or control flow");
+    }
+    continuation = statement[1];
+    if (["name", "desc", "homepage", "app"].includes(statement[1])) {
+      if (quoted(statement[2]).includes("#{")) throw new Error("Unsupported cask interpolation");
+    } else if (statement[1] === "auto_updates" && !/^(?:true|false)\s*(?:#.*)?$/.test(statement[2])) {
+      throw new Error("Unsupported cask auto_updates declaration");
+    } else if (statement[1] === "depends_on" && !/^macos:\s*:[a-z_]+\s*(?:#.*)?$/.test(statement[2])) {
+      throw new Error("Unsupported cask dependency declaration");
+    }
+  }
+  if (scope !== "closed") throw new Error("Incomplete literal cask scope");
+}
 
 export function caskMetadata(text) {
   if (!/^\s*cask ["']pwragent["'] do\s*(?:#.*)?$/m.test(text)) throw new Error("Unexpected cask identity");
+  literalCaskScope(text);
   const field = (name) => {
     const values = [...text.matchAll(new RegExp(`^[ \\t]+${name}[ \\t]+([^\\n]+(?:\\n[ \\t]+(?:arm|intel):[^\\n]+)*)`, "gm"))];
     if (values.length !== 1) throw new Error(`Expected one literal cask ${name} stanza`);
@@ -32,9 +76,10 @@ export function caskMetadata(text) {
     throw new Error("Unsupported cask version, URL or architectures");
   }
   const url = quoted(urls[0][1]);
+  const interpolated = urls[0][1].trim().startsWith("\"");
   return { version, installers: ["arm", "intel"].map((key) => ({
     architecture: arch[key], sha256: hashes[key].toLowerCase(),
-    url: url.replaceAll("#{version}", version).replaceAll("#{arch}", arch[key]),
+    url: interpolated ? url.replaceAll("#{version}", version).replaceAll("#{arch}", arch[key]) : url,
   })) };
 }
 
@@ -44,6 +89,8 @@ export function wingetMetadata(text, identifier, version) {
   const installers = [];
   let inInstallers = false;
   let listIndent;
+  let mappingIndent;
+  let nestedMapping = false;
   const assign = (target, key, value) => {
     if (!fields.has(key)) return;
     if (Object.hasOwn(target, key)) throw new Error(`Duplicate Winget ${key}`);
@@ -58,12 +105,14 @@ export function wingetMetadata(text, identifier, version) {
       inInstallers = true;
       continue;
     }
-    const item = /^( *)- +([A-Za-z][A-Za-z0-9]*):\s*(.*)$/.exec(line);
+    const item = /^( *)(- +)([A-Za-z][A-Za-z0-9]*):\s*(.*)$/.exec(line);
     if (inInstallers && item && (listIndent === undefined || item[1].length === listIndent)) {
       listIndent ??= item[1].length;
+      mappingIndent = item[1].length + item[2].length;
       const installer = {};
       installers.push(installer);
-      assign(installer, item[2], item[3]);
+      assign(installer, item[3], item[4]);
+      nestedMapping = !fields.has(item[3]) && /^\s*(?:#.*)?$/.test(item[4]);
       continue;
     }
     const field = /^( *)([A-Za-z][A-Za-z0-9]*):\s*(.*)$/.exec(line);
@@ -71,8 +120,11 @@ export function wingetMetadata(text, identifier, version) {
     if (field[1].length === 0) {
       inInstallers = false;
       assign(root, field[2], field[3]);
-    } else if (inInstallers && installers.length && field[1].length === listIndent + 2) {
+    } else if (inInstallers && installers.length && field[1].length === mappingIndent) {
       assign(installers.at(-1), field[2], field[3]);
+      nestedMapping = !fields.has(field[2]) && /^\s*(?:#.*)?$/.test(field[3]);
+    } else if (!(inInstallers && nestedMapping && field[1].length > mappingIndent)) {
+      throw new Error("Unsupported Winget mapping indentation");
     }
   }
   if (root.PackageIdentifier !== identifier || root.PackageVersion !== version || !stable(version)) {
