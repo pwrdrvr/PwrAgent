@@ -511,6 +511,38 @@ describe("FederationPtyService reaping", () => {
     }
   });
 
+  it("does not rediscover or reattach an explicitly closed shell during its reap grace", async () => {
+    vi.useFakeTimers();
+    const processes: FakePty[] = [];
+    const { service } = createHarness({
+      graceMs: 10_000,
+      spawnPty: async () => {
+        const pty = new FakePty();
+        processes.push(pty);
+        return { pty, cwd: "/owner/worktree", shell: { file: "/bin/zsh", args: ["-l"] } };
+      },
+    });
+    try {
+      const first = await service.open("peer-a", OPEN_REQUEST);
+      expect(await service.list("peer-a", OPEN_REQUEST)).toHaveLength(1);
+      service.close("peer-a", { sessionId: first.sessionId });
+      expect(processes[0]!.killed).toBe(false);
+      expect(await service.list("peer-a", OPEN_REQUEST)).toEqual([]);
+      await expect(service.snapshot("peer-a", { sessionId: first.sessionId })).rejects.toThrow("not found");
+      service.notifyPeerConnected("peer-a");
+      expect(await service.list("peer-a", OPEN_REQUEST)).toEqual([]);
+      const next = await service.open("peer-a", OPEN_REQUEST);
+      expect(next.sessionId).not.toBe(first.sessionId);
+      expect((await service.list("peer-a", OPEN_REQUEST)).map((session) => session.sessionId)).toEqual([next.sessionId]);
+      vi.advanceTimersByTime(10_000);
+      expect(processes[0]!.killed).toBe(true);
+      expect(processes[1]!.killed).toBe(false);
+    } finally {
+      await service.disposeAll();
+      vi.useRealTimers();
+    }
+  });
+
   it("does not leak a shell when the peer disconnects during spawn", async () => {
     const pty = new FakePty();
     let releaseSpawn: (() => void) | undefined;

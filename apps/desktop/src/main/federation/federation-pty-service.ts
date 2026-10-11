@@ -309,6 +309,7 @@ export class FederationPtyService {
     const threadKey = `${request.backend}:${request.threadId}`;
     return [
       ...[...this.sessionsById.values()].filter((session) => session.peerId === peerId
+        && session.reapReason !== "close"
         && session.backend === request.backend && session.threadId === request.threadId).map((session) => this.summary(session)),
       ...[...this.archived.values()].filter((record) => record.peerId === peerId
         && record.summary.threadKey === threadKey).map((record) => record.summary),
@@ -322,6 +323,7 @@ export class FederationPtyService {
     const record = this.archived.get(request.sessionId);
     if (record?.peerId === peerId) return { ...record.summary, snapshot: record.snapshot };
     const session = this.requireSession(peerId, request.sessionId);
+    if (session.reapReason === "close") throw new Error("Remote terminal session not found for this peer.");
     if (session.reapReason === "disconnect" && session.reapTimer) {
       clearTimeout(session.reapTimer);
       session.reapTimer = undefined;
