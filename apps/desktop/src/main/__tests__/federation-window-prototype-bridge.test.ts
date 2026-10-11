@@ -1,4 +1,5 @@
 import { mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
+import { request as httpRequest } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
@@ -28,7 +29,7 @@ async function fixture(role: "source" | "viewer") {
     kind: "request", id: "fixture-request", protocolVersion: 1, createdAt: Date.now(),
     sourceInstanceId, targetInstanceId: "pwr_fixture_local", method: "window.prototype.v1.open", params,
   } });
-  return { bridge: bridge!, readyFile, post, route, requestPeer, disconnect: () => { connected = false; } };
+  return { bridge: bridge!, readyFile, url: ready.url, post, route, requestPeer, disconnect: () => { connected = false; } };
 }
 
 test("packaged app ignores the opt-in without reading its path", async () => {
@@ -64,6 +65,19 @@ test("source requires a live helper and authenticated configured origin; shutdow
   await f.bridge.dispose();
   expect((await pending).status).toBe("rejected");
   await expect(readFile(f.readyFile)).rejects.toThrow();
+});
+test("non-ASCII token headers cannot throw through the HTTP authentication guard", async () => {
+  const f = await fixture("viewer");
+  const status = await new Promise<number | undefined>((resolve, reject) => {
+    const req = httpRequest(`${f.url}/rpc`, { method: "POST", headers: {
+      "X-Pwrwin-Runtime-Token": "\u00e9".repeat(64),
+    } }, res => { res.resume(); res.once("end", () => resolve(res.statusCode)); });
+    req.once("error", reject);
+    req.end("{}");
+  });
+  expect(status).toBe(403);
+  expect(f.requestPeer).not.toHaveBeenCalled();
+  expect((await f.post("rpc", { method: "open", params: {} })).status).toBe(200);
 });
 test("source does not turn the loopback bridge into a general outbound RPC proxy", async () => {
   const f = await fixture("source");

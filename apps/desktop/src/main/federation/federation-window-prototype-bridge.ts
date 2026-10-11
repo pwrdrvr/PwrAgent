@@ -51,7 +51,7 @@ export async function startWindowPrototypeBridge(options: {
     if (disposed || activeRequests >= MAX_PENDING) { res.writeHead(503).end(); return; }
     const supplied = req.headers["x-pwrwin-runtime-token"];
     if (req.method !== "POST" || req.headers.origin !== undefined
-      || typeof supplied !== "string" || supplied.length !== token.length
+      || typeof supplied !== "string" || !/^[0-9a-f]{64}$/.test(supplied)
       || !timingSafeEqual(Buffer.from(supplied), Buffer.from(token))) { res.writeHead(403).end(); return; }
     activeRequests++;
     try {
