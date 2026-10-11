@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline";
 import { createReadStream } from "node:fs";
-import { EXIT, assertReady, atomicJson, claimRun, cleanEnvironment, configToml, observedBudget, sanitizer, budgetStop, waitForOutcome, probeInterrupt, sanitizedProtocolRecord, validateInput } from "./lib/headless-contract.mjs";
+import { EXIT, assertReady, atomicJson, claimRun, cleanEnvironment, configToml, dispatchTurn, errorStatus, launchHeadlessElectron, observeFamilyBudget, sanitizer, budgetStop, waitForOutcome, probeInterrupt, sanitizedProtocolRecord, validateInput } from "./lib/headless-contract.mjs";
 
 const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = process.argv.slice(2);
@@ -99,7 +99,7 @@ try {
   // A bounded overall watchdog also covers a hung launch/IPC/cleanup. Container
   // --init owns orphan reaping; app.close handles the normal child shutdown.
   watchdog.unref();
-  app = await electron.launch({ args: [path.join(desktopRoot, "out/main/index.js"), "--disable-messaging", "--disable-automations"], cwd: desktopRoot, env, timeout: 60_000 });
+  app = await launchHeadlessElectron(electron, desktopRoot, env);
   logFd = openSync(path.join(output, "app.log"), "w", 0o600);
   for (const stream of [app.process().stdout, app.process().stderr]) {
     if (!stream) continue;
@@ -170,25 +170,13 @@ try {
       result.preflightOnly = true;
     } else {
       if (stopReason) throw new Error("Stopped before dispatch");
-      // This fsynced marker precedes the ONLY paid dispatch. Crash recovery does
-      // not assume a missing IPC response means the provider did not spend.
-      result.status = "incomplete";
-      result.dispatchIntentAt = new Date().toISOString();
-      persist();
-      const turn = await call("startTurn", { ...common, threadId: result.threadId, input: [{ type: "text", text: input.prompt }] });
-      result.turnId = turn.turnId;
-      persist();
+      await dispatchTurn({ call, result, persist, request: { ...common, threadId: result.threadId, input: [{ type: "text", text: input.prompt }] } });
       const outcome = await waitForOutcome({
         threadId: result.threadId, turnId: result.turnId, drain,
         read: () => call("readThread", { backend: "codex", threadId: result.threadId }),
         onEvent: (event) => appendFileSync(path.join(output, "rollout.jsonl"), JSON.stringify(redact(event)) + "\n", { mode: 0o600 }),
         onUsage: async (current) => {
-          result.observed = observedBudget(current.pricing?.lines, current.pricing?.summaries);
-          // Family includes separately billed delegated work as well as the
-          // parent's native helper usage. Never add it to the parent twice.
-          result.familyPricing = await call("readThreadFamilyPricing", { backend: "codex", threadId: result.threadId });
-          result.observed.costUsd = Math.max(result.observed.costUsd, result.familyPricing.members.reduce((sum, member) => sum + member.totalCostMicros, 0) / 1e6);
-          result.observed.unpriced ||= result.familyPricing.members.some((member) => member.unpricedUsageLineCount > 0);
+          Object.assign(result, await observeFamilyBudget(call, { backend: "codex", threadId: result.threadId }, current));
           return budgetStop(input, result.observed);
         },
         stop: () => stopReason,
@@ -208,7 +196,8 @@ try {
     }
   }
 } catch (error) {
-  result.status = stopReason ?? (result.dispatchIntentAt ? "failed" : "preflight_failed");
+  result.status = errorStatus(result, stopReason);
+  if (stopReason) result.stopReason ??= stopReason;
   result.error = redact(error.message);
 } finally {
   clearTimeout(watchdog);

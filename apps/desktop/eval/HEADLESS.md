@@ -99,11 +99,16 @@ copied and cannot be refreshed onto the readonly mount; expired auth fails.
 returns the recorded outcome without launching or spending; mismatched input
 fails. An incomplete attempt exits 6 and MUST be reconciled by the spend owner;
 there is deliberately no automatic paid retry. A new attempt needs a fresh
-runId, output, profile and Codex state.
+runId, output, profile and Codex state. Lost dispatch acknowledgements and
+transport failures before a known outcome retain `incomplete`, including when
+a timeout or cancellation was requested locally.
 
 `result.json` includes status, IDs, actual pricing ledger (cache/reasoning/helper
 rows), tool accounting and Token Miser totals. `thread.json` preserves the final
-IPC projection. `rollout.jsonl` is PwrAgent's normalized event stream;
+IPC projection. `familyUsage` records tokens, cost and unpriced status for each
+distinct delegated thread; `observed` sums the family. Native helper usage is
+already attributed to its owning thread and is not added a second time.
+`rollout.jsonl` is PwrAgent's normalized event stream;
 `protocol.jsonl` is sanitized **PwrAgent-owned** App Server protocol capture,
 not a read of Codex's private rollout storage. Credentials/account fields are
 redacted; raw duplicate wire strings are omitted. Profile-local captures are
@@ -112,10 +117,11 @@ changes against initial HEAD; `untracked.tar.gz` preserves new task files. The
 mounted task itself remains the authoritative grading artifact.
 
 Exit codes: 0 completed (or preflight passed), 1 failed, 2 preflight/config/auth
-failure, 3 timeout, 4 signal cancellation, 5 observed budget threshold, 6 prior
-attempt incomplete. A terminal event must match both thread and turn; idle
+failure, 3 timeout, 4 signal/provider cancellation, 5 observed budget threshold,
+6 current or prior attempt incomplete. A terminal event must match both thread and turn; idle
 state alone never means success. Approval/user-input requests fail unattended
-runs instead of receiving invented answers. Timeout/cancellation interrupts the
+runs instead of receiving invented answers. A provider `turn/completed` with
+status `interrupted` is cancellation, not successful completion. Timeout/cancellation interrupts the
 turn, closes the app and its managed children, then exports artifacts. The
 controller should retain an outer timeout and stop the task container after
 reading the result; tini reaps orphan children.
@@ -123,6 +129,6 @@ reading the result; tini reaps orphan children.
 Observed cost/token thresholds are **not hard billing limits**: usage lands
 after a model request. The execution owner reserves in-flight headroom (including
 Token Miser helpers, cached-input uncertainty, and retries) under the current
-**$250 total stage cap**, and pauses after the stage for user review. The driver
+**$500 cumulative evaluation cap**, and pauses after the authorized cohort for user review. The driver
 makes no independent budget authorization. Do not assume an output/context cap
 unless the actual provider protocol proves it is honored.

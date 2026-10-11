@@ -1,9 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { assertReady, atomicJson, sanitizedProtocolRecord, probeInterrupt, budgetStop, waitForOutcome, claimRun, cleanEnvironment, configToml, observedBudget, sanitizer, terminalEvent, validateInput } from "./headless-contract.mjs";
+import { EXIT, assertReady, atomicJson, dispatchTurn, errorStatus, launchHeadlessElectron, observeFamilyBudget, sanitizedProtocolRecord, probeInterrupt, budgetStop, waitForOutcome, claimRun, cleanEnvironment, configToml, observedBudget, sanitizer, terminalEvent, validateInput } from "./headless-contract.mjs";
 const input = { schemaVersion: 1, runId: "run-1", cwd: "/app", prompt: "Fix it", model: "gpt-6-astra", reasoningEffort: "high", serviceTier: "default", tokenMiser: true, timeoutMs: 1000, runtimeManifest: "/eval/runtime.json" };
 test("strict contract rejects implicit toggles, model substitutions and unknown inputs", () => {
   assert.equal(validateInput(input).codexHome, "/eval/codex");
@@ -107,4 +108,142 @@ test("local readiness uses settings snapshot when optional federated composer pr
   assert.doesNotThrow(() => assertReady(v.backend, v.settings, input, v.runtime));
   v.settings.experimental.tokenMiserEnabled.value = false;
   assert.throws(() => assertReady(v.backend, v.settings, input, v.runtime), /settings mismatch/);
+});
+
+test("real Playwright launch never disables sandboxing or retries a failed executable", { skip: process.platform === "win32" }, () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "headless-launch-"));
+  try {
+    const executable = path.join(dir, "fake-electron");
+    const log = path.join(dir, "args.json");
+    // No Electron or provider runs: record the actual Playwright spawn args,
+    // then fail as a host with unsupported sandbox prerequisites would.
+    writeFileSync(executable, '#!/usr/bin/env node\nrequire("node:fs").appendFileSync(process.env.ARG_LOG, JSON.stringify(process.argv.slice(2)) + "\\n");\nprocess.exit(1);\n', { mode: 0o700 });
+    // Playwright's early-exit listeners can also reject internally. Isolate
+    // the deliberately failing launcher while checking its real spawn args.
+    const probe = spawnSync(process.execPath, ["--input-type=module", "-e", `
+      import { _electron as electron } from ${JSON.stringify(import.meta.resolve("@playwright/test"))};
+      import { launchHeadlessElectron } from ${JSON.stringify(new URL("./headless-contract.mjs", import.meta.url).href)};
+      await launchHeadlessElectron({ launch: (options) => {
+        if (options.chromiumSandbox !== true) throw new Error("Sandbox option missing");
+        return electron.launch({ ...options, executablePath: ${JSON.stringify(executable)}, timeout: 5000 });
+      } }, ${JSON.stringify(dir)}, { PATH: process.env.PATH, ARG_LOG: ${JSON.stringify(log)} });
+    `], { encoding: "utf8", timeout: 15_000 });
+    assert.equal(probe.error, undefined);
+    assert.notEqual(probe.status, 0);
+    const launches = readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    assert.equal(launches.length, 1);
+    const [args] = launches;
+    assert.ok(args.includes(path.join(dir, "out/main/index.js")));
+    assert.ok(!args.includes("--no-sandbox"));
+    assert.ok(!args.includes("--disable-setuid-sandbox"));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("sandbox prerequisite rejection propagates without a fallback launch", async () => {
+  let calls = 0;
+  const failure = new Error("sandbox unavailable");
+  await assert.rejects(launchHeadlessElectron({ launch: async (options) => {
+    calls++;
+    assert.equal(options.chromiumSandbox, true);
+    throw failure;
+  } }, "/opt/pwragent/apps/desktop", {}), (error) => error === failure);
+  assert.equal(calls, 1);
+});
+
+test("nested interrupted completion and normalized cancellation cannot report success", async () => {
+  for (const [method, status, expected] of [
+    ["turn/completed", "interrupted", "cancelled"],
+    ["turn/completed", "cancelled", "cancelled"],
+    ["turn/completed", "failed", "failed"],
+    ["turn/completed", "completed", "completed"],
+    ["turn/cancelled", undefined, "cancelled"],
+    ["turn/interrupted", undefined, "cancelled"],
+  ]) {
+    const event = { backend: "codex", notification: { method, params: { threadId: "p", turnId: "t", turn: { id: "t", status } } } };
+    const result = await waitForOutcome({ threadId: "p", turnId: "t", drain: async () => [event], read: async () => ({}), onEvent: () => {}, onUsage: async () => {}, stop: () => {}, pause: async () => { throw new Error("terminal event must end wait"); } });
+    assert.equal(result, expected);
+    assert.equal(EXIT[result], expected === "completed" ? 0 : expected === "cancelled" ? 4 : 1);
+    assert.equal(terminalEvent(event, "p", "another-turn"), undefined);
+    event.notification.params.turn.id = "another-turn";
+    assert.equal(terminalEvent(event, "p", "t"), undefined);
+  }
+  assert.equal(terminalEvent({ backend: "codex", notification: { method: "turn/completed", params: { threadId: "p", turnId: "t", turn: { status: "inProgress" } } } }, "p", "t"), undefined);
+});
+
+test("delegated tokens stop the run, counting each thread and its native helpers once per snapshot", async () => {
+  const root = { backend: "codex", threadId: "p" };
+  const child = { backend: "codex", threadId: "child", totalCostMicros: 200000, usageLineCount: 2 };
+  const grandchild = { backend: "codex", threadId: "grandchild", totalCostMicros: 100000, usageLineCount: 1 };
+  const parent = { pricing: { lines: [
+    { totalTokens: 100, totalCostMicros: 200000, priceStatus: "priced" },
+    { totalTokens: 20, totalCostMicros: 50000, priceStatus: "priced" }, // native helper
+  ] } };
+  const reads = [];
+  const call = async (method, request) => {
+    if (method === "readThreadFamilyPricing") return { members: [{ ...root, self: true, totalCostMicros: 250000 }, child, grandchild, child] };
+    assert.equal(method, "readThread");
+    reads.push(request.threadId);
+    return { pricing: { summaries: [{ totalTokens: request.threadId === "child" ? 1000 : 300, totalCostMicros: request.threadId === "child" ? 200000 : 100000, unpricedUsageLineCount: 0 }] } };
+  };
+  for (let poll = 0; poll < 2; poll++) {
+    const result = await observeFamilyBudget(call, root, parent);
+    assert.deepEqual(result.observed, { tokens: 1420, costUsd: 0.55, unpriced: false });
+    assert.equal(result.familyUsage.length, 3);
+    assert.equal(budgetStop({ maxObservedTokens: 1000 }, result.observed), "budget_exceeded");
+  }
+  assert.deepEqual(reads.sort(), ["child", "child", "grandchild", "grandchild"]);
+});
+
+test("family accounting fails closed when delegated pricing cannot be read", async () => {
+  const root = { backend: "codex", threadId: "p" };
+  for (const missing of [false, true]) {
+    await assert.rejects(observeFamilyBudget(async (method) => {
+      if (method === "readThreadFamilyPricing") return { members: [{ backend: "codex", threadId: "child", usageLineCount: 1 }] };
+      if (missing) return {};
+      throw new Error("delegated read disconnected");
+    }, root, { pricing: { lines: [] } }), /Missing pricing|disconnected/);
+  }
+});
+
+test("lost or invalid dispatch acknowledgement stays incomplete on disk and repeated invocation", async () => {
+  for (const response of ["timeout", "disconnect", "missing-id"]) {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "headless-dispatch-"));
+    try {
+      const claim = claimRun(dir, input);
+      const result = { status: "preflight_failed", threadId: "p" };
+      const persist = () => atomicJson(claim.file, { ...result, inputHash: claim.hash });
+      let calls = 0;
+      await assert.rejects(dispatchTurn({ result, persist, request: { threadId: "p" }, call: async (method) => {
+        assert.equal(method, "startTurn");
+        calls++;
+        const marker = JSON.parse(readFileSync(claim.file, "utf8"));
+        assert.equal(marker.status, "incomplete");
+        assert.equal(marker.exitCode, 6);
+        assert.ok(marker.dispatchIntentAt);
+        // Provider may already be executing before either transport failure.
+        if (response === "missing-id") return {};
+        throw new Error(response);
+      } }));
+      result.status = errorStatus(result, "timeout");
+      result.exitCode = EXIT[result.status];
+      persist();
+      const repeated = claimRun(dir, input);
+      assert.equal(repeated.prior.status, "incomplete");
+      assert.equal(EXIT[repeated.prior.status], 6);
+      assert.equal(calls, 1);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }
+});
+
+test("acknowledged dispatch stays uncertain until outcome is known; artifact failures preserve stop classifications", async () => {
+  const result = {};
+  const snapshots = [];
+  await dispatchTurn({ result, persist: () => snapshots.push({ ...result }), request: {}, call: async () => ({ turnId: "t" }) });
+  assert.equal(snapshots.length, 2);
+  assert.equal(snapshots[1].turnId, "t");
+  assert.equal(errorStatus(result), "incomplete");
+  for (const status of ["cancelled", "timeout", "budget_exceeded", "failed"]) assert.equal(errorStatus({ ...result, status }), status);
+  assert.equal(errorStatus({ ...result, status: "completed" }), "failed");
+  assert.equal(errorStatus({}), "preflight_failed");
+  assert.equal(errorStatus({}, "cancelled"), "cancelled");
 });
