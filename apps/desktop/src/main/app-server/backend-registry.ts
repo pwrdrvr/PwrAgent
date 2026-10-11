@@ -17491,7 +17491,7 @@ export class DesktopBackendRegistry {
     workMode: LaunchpadWorkMode;
   }): Promise<CodexThreadEnvironmentRuntime | undefined> {
     const { cwd, onSetupProgress, sourceRuntime, workMode } = params;
-    if (!sourceRuntime) {
+    if (!sourceRuntime?.environmentId) {
       return undefined;
     }
     if (

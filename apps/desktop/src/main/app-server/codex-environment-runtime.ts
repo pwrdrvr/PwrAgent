@@ -685,7 +685,13 @@ export async function startLocalCodexEnvironmentAction(params: {
     status: "started",
     startedAt,
   };
-  const existingRuns = readCodexEnvironmentActionRuns(params.runtime);
+  // Persisted entries from before per-run provenance must share the new run's
+  // supersession key. Preserve the origin of runs from another environment.
+  const existingRuns = readCodexEnvironmentActionRuns(params.runtime).map((existing) => ({
+    ...existing,
+    environmentId: existing.environmentId ?? params.runtime.environmentId,
+    environmentName: existing.environmentName ?? params.runtime.environmentName,
+  }));
 
   try {
     const actionEnv = buildPwrAgentChildProcessEnv(

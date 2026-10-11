@@ -23598,6 +23598,62 @@ script = "printf setup-output"
     await registry.close();
   });
 
+  it.each(["local", "worktree"] as const)("forks into %s without environment setup after clearing a selection with running actions", async (workMode) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-fork-cleared-env-"));
+    const repoPath = path.join(root, "repo");
+    const forkPath = path.join(root, "fork");
+    await mkdir(repoPath, { recursive: true });
+    await mkdir(forkPath, { recursive: true });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-parent": {
+          backend: "codex",
+          threadId: "thread-parent",
+          extraLinkedDirectories: [],
+          codexEnvironmentRuntime: {
+            environmentId: "original",
+            environmentName: "Original",
+            executionTarget: "local",
+            cwd: repoPath,
+            actionRuns: [{
+              runId: "parent-live-run", actionId: "dev", actionName: "Dev", command: "pnpm dev",
+              status: "started", startedAt: Date.now() + 60_000, output: "ready",
+            }],
+          },
+        },
+      },
+    });
+    const codexClient = new MockBackendClient({ initializeResult: { methods: ["thread/fork"] } });
+    const commandRunner = vi.fn<CodexEnvironmentCommandRunner>();
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore,
+      codexEnvironmentCommandRunner: commandRunner,
+      gitDirectoryService: {
+        prepareLaunchpadWorkspace: vi.fn(async () => ({ cwd: forkPath, repositoryPath: repoPath, workMode })),
+        recordCodexWorktreeOwnerThread: vi.fn(async () => {}),
+      } as never,
+    });
+    try {
+      await registry.setCodexThreadEnvironment({ backend: "codex", threadId: "thread-parent" });
+      const response = await registry.forkThread({
+        backend: "codex", sourceThreadId: "thread-parent", parentThreadId: "thread-parent",
+        executionMode: "default", directoryKind: "directory", directoryLabel: "repo", directoryPath: repoPath, workMode,
+      });
+      expect(response.codexEnvironmentStartupFailure).toBeUndefined();
+      expect(response.codexEnvironmentRuntime).toBeUndefined();
+      expect(codexClient.lastForkThreadParams?.codexEnvironmentRuntime).toBeUndefined();
+      expect(commandRunner).not.toHaveBeenCalled();
+      expect((await overlayStore.getThreadOverlayState({ backend: "codex", threadId: response.threadId }))
+        ?.codexEnvironmentRuntime).toBeUndefined();
+      expect((await overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-parent" }))
+        ?.codexEnvironmentRuntime?.actionRuns?.[0]).toMatchObject({ runId: "parent-live-run", status: "started", output: "ready" });
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+
   it("reruns selected Codex environment setup when forking into a new worktree", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-fork-env-setup-"));
     const repoPath = path.join(root, "repo");
