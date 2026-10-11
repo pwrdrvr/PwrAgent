@@ -1,0 +1,187 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Live Federation window fixture</title>
+<style>
+body { background:#10151e; color:#e3e9f0; font:16px system-ui; margin:24px; }
+button { font:inherit; padding:8px 12px; margin:4px; } canvas { display:block; max-width:100%; border:1px solid #526075; outline-offset:3px; }
+#status { min-height:24px; } pre { white-space:pre-wrap; }
+</style>
+<h1>Live window fixture</h1>
+<p>Native synthetic app → signed, encrypted Federation → live canvas. Local experiment.</p>
+<button id="start">Start viewing</button><button id="stop" disabled>Stop</button>
+<button id="motion" disabled>Toggle motion</button><button id="save">Save measurements</button>
+<p id="status" role="status" aria-live="polite">Stopped. Control requires the source launch flag.</p>
+<canvas id="canvas" width="800" height="548" tabindex="0" aria-label="Remote fixture. Click, type or use the arrow keys to scroll when control is granted."></canvas>
+<pre id="stats"></pre>
+<script>
+const $ = id => document.getElementById(id);
+const token = location.hash.slice(1); history.replaceState(null, "", "/");
+const canvas = $("canvas"), ctx = canvas.getContext("2d", { willReadFrequently: true });
+let generation = 0, session, decoder, displayedSeq = -1, nonce, inputSeq = 0, moving = false;
+let sending = false;
+let pending = [], inputTimes = new Map(), decoderWait, active = false;
+const metrics = { frames: [], inputs: [], acceptedInputs: [], pings: [], errors: [], sessions: [] };
+async function rpc(method, params) {
+  const response = await fetch("/" + method, { method: "POST", headers: { "Content-Type": "application/json", "X-Pwrwin-Token": token }, body: JSON.stringify(params) });
+  const value = await response.json();
+  if (!response.ok) throw new Error(value.error || "RPC failed");
+  return value;
+}
+const address = () => ({ sessionId: session.sessionId, scene: session.scene, epoch: session.epoch });
+function bytes(text) { return Uint8Array.from(atob(text), c => c.charCodeAt(0)); }
+function revision() {
+  let result = 0;
+  for (let bit = 0; bit < 12; bit++) {
+    const pixel = ctx.getImageData(28 + bit * 16, 538, 1, 1).data;
+    if (pixel[0] + pixel[1] + pixel[2] > 384) result |= 1 << bit;
+  }
+  return result;
+}
+function boundedPush(list, value) { if (list.length < 10000) list.push(value); }
+function fail(error) { boundedPush(metrics.errors, String(error)); $("status").textContent = String(error); }
+async function run() {
+  const g = ++generation;
+  active = true; sending = false; pending = []; inputTimes.clear(); inputSeq = 0; displayedSeq = -1;
+  $("start").disabled = true; $("stop").disabled = false;
+  try {
+    session = await rpc("open", {});
+    if (g !== generation) return;
+    boundedPush(metrics.sessions, { ...session, started: performance.now() });
+    $("motion").disabled = !session.control;
+    $("status").textContent = session.control ? "LIVE • fixture control granted. Click the canvas to type." : "LIVE • viewing only";
+    let lastPing = 0;
+    while (g === generation) {
+      let packet = await rpc("pull", { ...address(), offset: 0 });
+      if (g !== generation) return;
+      nonce = packet.nonce;
+      void sendInputs();
+      if (packet.idle && packet.paused) $("status").textContent = "Source paused. Last frame is stale; input unavailable.";
+      if (!packet.idle) {
+        $("status").textContent = session.control ? "LIVE • fixture control granted" : "LIVE • viewing only";
+        const first = packet, start = performance.now(), parts = [], seq = packet.seq;
+        if (packet.epoch !== session.epoch || seq <= displayedSeq || packet.total <= 0 || packet.total > 2097152
+          || packet.width !== 800 || packet.height !== 548) throw new Error("Invalid frame metadata");
+        let received = 0;
+        while (true) {
+          const part = bytes(packet.data);
+          if (packet.seq !== seq || packet.epoch !== session.epoch || packet.total !== first.total
+            || packet.offset !== received || !part.length || part.length > 16384 || received + part.length > first.total) throw new Error("Invalid chunk");
+          parts.push(part); received += part.length;
+          if (received === first.total) break;
+          packet = await rpc("pull", { ...address(), offset: received });
+          if (g !== generation) return;
+          nonce = packet.nonce;
+        }
+        const data = new Uint8Array(received);
+        let offset = 0; for (const part of parts) { data.set(part, offset); offset += part.length; }
+        const decodeStart = performance.now();
+        if (first.format === "png") {
+          const header = new DataView(data.buffer);
+          if (data.length < 24 || header.getUint32(0) !== 0x89504e47 || header.getUint32(4) !== 0x0d0a1a0a
+            || header.getUint32(12) !== 0x49484452 || header.getUint32(16) !== 800 || header.getUint32(20) !== 548) throw new Error("Invalid PNG repair dimensions");
+          const bitmap = await createImageBitmap(new Blob([data], { type: "image/png" }));
+          try {
+            if (g !== generation) return;
+            if (bitmap.width !== 800 || bitmap.height !== 548) throw new Error("Invalid decoded repair");
+            ctx.drawImage(bitmap, 0, 0);
+          } finally { bitmap.close(); }
+        } else if (first.format === "h264") {
+        if (!decoder) {
+          if (!first.key || !/^avc1\.[\dA-Fa-f]{6}$/.test(first.codec)) throw new Error("First frame must configure H264");
+          const config = { codec: first.codec, codedWidth: 800, codedHeight: 548, optimizeForLatency: true, hardwareAcceleration: "prefer-software" };
+          const support = await VideoDecoder.isConfigSupported(config);
+          metrics.decoderConfig = config;
+          if (g !== generation) return;
+          if (!support.supported) throw new Error("H264 WebCodecs decoder unsupported");
+          decoder = new VideoDecoder({ output(frame) {
+            if (g !== generation) { frame.close(); return; }
+            if (frame.displayWidth !== 800 || frame.displayHeight !== 548) {
+              frame.close(); decoderWait?.reject(new Error("Invalid decoded video dimensions")); decoderWait = null; return;
+            }
+            ctx.drawImage(frame, 0, 0); frame.close();
+            decoderWait?.resolve(); decoderWait = null;
+          }, error(error) { decoderWait?.reject(error); decoderWait = null; } });
+          decoder.configure(config);
+        }
+        await new Promise((resolve, reject) => {
+          const timer = setTimeout(() => { decoderWait = null; reject(new Error("Decode timeout")); }, 2000);
+          decoderWait = { resolve: () => { clearTimeout(timer); resolve(); }, reject: error => { clearTimeout(timer); reject(error); } };
+          decoder.decode(new EncodedVideoChunk({ type: first.key ? "key" : "delta", timestamp: seq * 33333, data }));
+        });
+        } else { throw new Error("Unsupported frame format"); }
+        if (g !== generation) return;
+        await new Promise(requestAnimationFrame);
+        if (g !== generation) return;
+        const presented = performance.now(), pixelRevision = revision();
+        for (const [rev, inputAt] of inputTimes) {
+          if (presented - inputAt > 5000) { inputTimes.delete(rev); continue; }
+          if (rev === pixelRevision) {
+            boundedPush(metrics.inputs, { revision: rev, inputToCanvasMs: presented - inputAt, seq });
+            inputTimes.delete(rev);
+          }
+        }
+        boundedPush(metrics.frames, { seq, format: first.format, epoch: first.epoch, bytes: received, time: presented,
+          transferAndPresentMs: presented - start, decodeAndPresentMs: presented - decodeStart,
+          encodeMs: first.encodeMs, callbackToCanvasSameHostMs: Date.now() - first.captureMs, pixelRevision });
+        await rpc("ack", { ...address(), seq });
+        if (g !== generation) return;
+        displayedSeq = seq;
+        void sendInputs();
+        $("stats").textContent = `${metrics.frames.length} live frames • input revision ${pixelRevision} • latest ${received} media bytes`;
+      }
+      if (performance.now() - lastPing > 200) {
+        const at = performance.now(); await rpc("ping", address());
+        boundedPush(metrics.pings, performance.now() - at); lastPing = performance.now();
+      }
+    }
+  } catch (error) { if (g === generation) { fail(error); await stop(); } }
+}
+async function stop() {
+  ++generation; active = false;
+  decoderWait?.reject(new Error("Stopped")); decoderWait = null;
+  if (decoder && decoder.state !== "closed") decoder.close(); decoder = null;
+  const previous = session; session = null; pending = []; inputTimes.clear();
+  $("start").disabled = false; $("stop").disabled = true; $("motion").disabled = true;
+  $("status").textContent = "Stopped. Last frame is stale.";
+  if (previous) await rpc("close", { sessionId: previous.sessionId, epoch: previous.epoch, scene: previous.scene }).catch(() => {});
+}
+function enqueue(command) {
+  if (!active || !session?.control || pending.length >= 16) return;
+  pending.push({ command, start: performance.now() });
+  void sendInputs();
+}
+async function sendInputs() {
+  if (sending || displayedSeq < 0 || !nonce) return;
+  const g = generation;
+  sending = true;
+  try {
+    while (pending.length && g === generation) {
+      const item = pending.shift();
+      const accepted = await rpc("input", { ...address(), displayedSeq, nonce, inputSeq: inputSeq++, command: item.command });
+      if (g !== generation) return;
+      boundedPush(metrics.acceptedInputs, { revision: accepted.revision, inputSeq: inputSeq - 1, action: item.command.action });
+      inputTimes.set(accepted.revision, item.start);
+      while (inputTimes.size > 64) inputTimes.delete(inputTimes.keys().next().value);
+    }
+  } catch (error) { if (g === generation) fail(error); }
+  finally { if (g === generation) sending = false; }
+}
+canvas.addEventListener("pointerdown", event => {
+  canvas.focus(); const bounds = canvas.getBoundingClientRect();
+  enqueue({ action: "click", x: (event.clientX - bounds.left) / bounds.width, y: (event.clientY - bounds.top) / bounds.height });
+});
+canvas.addEventListener("keydown", event => {
+  if (event.ctrlKey || event.metaKey || event.altKey || event.isComposing) return;
+  if (event.key === "Backspace") { event.preventDefault(); enqueue({ action: "key", key: event.key }); }
+  else if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); enqueue({ action: "scroll", lines: event.key === "ArrowDown" ? 3 : -3 }); }
+  else if (event.key.length === 1) { event.preventDefault(); enqueue({ action: "text", text: event.key }); }
+});
+canvas.addEventListener("wheel", event => { event.preventDefault(); enqueue({ action: "scroll", lines: event.deltaY >= 0 ? 3 : -3 }); }, { passive: false });
+$("start").onclick = run;
+$("stop").onclick = stop;
+$("motion").onclick = () => { moving = !moving; enqueue({ action: "motion", enabled: moving }); };
+async function save() { await rpc("metrics", metrics); $("status").textContent = "Measurements saved to the running harness."; }
+$("save").onclick = () => save().catch(fail);
+window.pwrwin = { metrics, enqueue, stop, save, get active() { return active; } };
+</script>

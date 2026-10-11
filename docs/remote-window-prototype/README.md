@@ -4,14 +4,42 @@
 
 The recommended direction is a consented native window-capture helper with two visual modes: pixel-exact, damage-driven tiles for settled text; hardware low-delay video for scrolling and motion, followed by a lossless repair. Keep viewing and control as separate grants. Use Federation for ownership, consent, signaling and initial bounded tile transport; evaluate WebRTC media for sustained motion before committing to a production transport. This is an engineering decision to advance that experiment, not a claim that the current prototype meets RDP/NoMachine quality.
 
-The actual prototype completed **macOS ScreenCaptureKit → lossless tiles → existing enrolled Federation → Windows browser canvas**, plus a reverse Federation command to the fixture app and a recaptured, visually verified response. The cross-machine leg is explicitly **store-and-forward** through `file_push`. There is no new live network video protocol in the running product. Separately, a live native SCK → hardware VideoToolbox benchmark, real Router/RPC integration test, bounded session state machine, and shaped loopback experiment test important parts of the intended implementation. There is no VNC/RFB implementation or dependency.
+The prototype now has a **continuous native macOS capture → hardware H.264 → real signed/Noise-encrypted Federation → WebCodecs canvas loop**, with a lossless PNG repair after settling and fixture typing, scrolling and clicking on the return path. The latest measured run uses separate source/helper/viewer/browser processes and the actual opt-in development runtime adapters on **one Mac**. The adapters can use already-enrolled instances without exporting keys or changing the gateway; the cross-machine live run is still outstanding. The earlier Mac→Windows transfer remains a separate, explicitly store-and-forward experiment. No VNC/RFB implementation or dependency is used.
+
+## Continuous live prototype, added after the initial review
+
+See [the runnable live instructions](../../scripts/remote-window-prototype/LIVE.md). The source captures only its own authored native window. A real gateway relays two authenticated Noise clients; the same development adapter intended for enrolled peers carries the requests. Frames are produced in response to bounded viewer credit and decoded immediately, not imported from a recording. No existing enrolled process has yet been upgraded/restarted for this path.
+
+| Live measurement | No added delay | 40 ms added before each viewer RPC |
+|---|---:|---:|
+| Motion video frames / approximately 4 s | 117 | 29 |
+| Input→canvas p50 / p95 | 41.3 / 55.0 ms | 105.5 / 173.8 ms |
+| Pixel-observed input revisions | 24 | 20 of 24 accepted actions |
+| Stable idle image bytes/s | 0 | 0 |
+| No-delay idle control traffic, both directions at viewer | 3,812 B/s | See raw counters |
+| No-delay motion media, including repair overlap | 125,600 B/s | 99,175 B/s |
+| No-delay motion traffic at viewer, both directions | 191,515 B/s | See raw counters |
+
+These are **same-host**, real encrypted-protocol observations, not cross-host/WAN claims. The delay is an application perturbation, not physical RTT or packet loss. Timing ends at canvas drawing plus an animation callback, not physical photons. A 12-bit luminance beacon is drawn by the native app; only decoded pixels matching an accepted input revision produce a timing sample. With delay, newer captured states can replace intermediate revisions; the 20 samples must not be represented as all 24 actions individually observed.
+
+The delayed run establishes a concrete failure of this compatibility transport: one-frame credit plus stop-and-wait chunk/ACK RPCs becomes RTT-bound. Its 16 KiB media chunks are base64 inside unchanged RPC envelopes; measured counters include envelope and Noise bytes, excluding WebSocket/TCP headers and handshake. This is a working initial transport, **not the efficient final binary/media design**. A credit-driven push path or WebRTC trial is required before claiming RDP-like responsiveness over a WAN. Input is independent of a pending idle pull; serializing input behind that poll initially cost about 400 ms and was fixed.
+
+Hardware VideoToolbox encoding is used. A headless Chrome hardware-decode support query succeeded but the first frame timed out; the working viewer explicitly uses software WebCodecs decoding. The Windows child independently found `avc1.42E01F` software support and no hardware support in its disconnected-session Edge context; actual live Windows decoding is not yet measured. “Supported” is not treated as proof of frames or low latency.
+
+Settled-text PNG repair restores the captured image, but costs roughly 250–320 KB per full repair in this fixture. It can dominate a short typing/settling phase and needs damage tiling or a better lossless encoding before product use. Repeated identical native buffers send no media; idle control traffic is still too chatty. The lossless-repair image below is an actual remote-protocol canvas. The native process in the no-delay run consumed 1.77 user + 0.99 system CPU seconds over 125.09 wall seconds, with 100,466,688 bytes maximum RSS; that whole run includes substantial idle/operator time, not just the motion phase. No GPU/energy or physical-display measurements were obtained.
+
+![Live fixture after typing, scrolling and settled-text repair](artifacts/live-fixture.png)
+
+Numeric results: [no-delay summary](artifacts/live-loopback.json), [no-delay raw](artifacts/live-loopback-raw.json), [delayed summary](artifacts/live-delay40.json), [delayed raw](artifacts/live-delay40-raw.json). Reconnection creates a new epoch and forces a keyframe; fixture control is not automatically restored. The adapter is disabled by default, ignored by packaged apps, pinned to one configured peer, token-protected on loopback, method/body/concurrency bounded, and disposed with the runtime. Its tests cover peer spoofing, browser-origin rejection, wrong tokens/methods, missing helpers, disconnect and shutdown. It makes no per-frame SQLite writes.
+
+
 
 ## Evidence and boundaries
 
 | Path | Actual result | Limit |
 |---|---|---|
 | macOS single own window, SCK | Visible, fully covered by another owned window, offscreen, minimize/restore and resize exercised | One AppKit fixture on macOS 26.6.2/M2 Max; not a promise for every app |
-| Native SCK → VideoToolbox | Hardware-required H.264, asynchronous callback timing and encoded byte counts measured at 1×/2× | No remote live video decoder or photon measurement |
+| Native SCK → VideoToolbox | Hardware-required H.264 capture/encode measured at 1×/2×; live WebCodecs loop at 1× | Live loop is same-host; no photon measurement |
 | macOS → Windows Federation | Real 4,191,302-byte batch delivered; 90 frames replayed on Windows | File transfer, JSON/base64 overhead, setup and batch delay; not interactive streaming |
 | Windows → macOS helper → Windows | 159-byte command transferred, own app changed text, recaptured response rendered and visually checked | App helper action; **not** general OS keyboard/mouse injection |
 | Windows WGC | API supported, capture start succeeded, **zero frames** in initial probe | Agent session was disconnected; final probe refuses it before capture |
@@ -95,7 +123,7 @@ The key finding is boundedness, not a claimed production latency: replacing queu
 
 **QUIC/WebTransport:** possible later transport with independent streams/datagrams, but certificate/origin support, discovery and Electron integration add work. It is not justified before the native capture/input contract and WebRTC trial. **RDP/RemoteApp/NX:** useful quality references and possible platform-specific integrations under their deployment/licensing constraints; this work does not recreate those protocol ecosystems. Cropping a desktop-sharing stream is not single-window isolation.
 
-Service forwarding is deliberately independent. The sibling's `service_forward_v1` and user-connected advertised loopback services are not an implicit transport or permission grant for window capture. This PR does not modify its modules, the Forge bridge, backend registry, runtime registration, gateway dedupe or mobile work.
+Service forwarding is deliberately independent. The sibling's `service_forward_v1` and user-connected advertised loopback services are not an implicit transport or permission grant for window capture. This PR does not modify its modules, the Forge bridge, backend registry, gateway dedupe or mobile work. Runtime changes are additive startup/disposal for the explicit development adapter; no default capability or product UI is enabled.
 
 ## Proposed protocol and security contract
 

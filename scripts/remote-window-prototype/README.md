@@ -1,6 +1,10 @@
 # Remote-window experiment
 
-Read the [decision and measured limitations](../../docs/remote-window-prototype/README.md) before interpreting these scripts as a product feature. The source is hardwired to its own fake-data AppKit window. No arbitrary window IDs, display capture, audio, clipboard or OS-wide input are accepted. Nothing is registered in PwrAgent's live runtime.
+Read the [decision and measured limitations](../../docs/remote-window-prototype/README.md) before interpreting these scripts as a product feature. The source is hardwired to its own fake-data AppKit window. No arbitrary window IDs, display capture, audio, clipboard or OS-wide input are accepted. The [live prototype](LIVE.md) now adds an explicit development-only runtime adapter; no installed peer has been enabled or restarted.
+
+## Continuous live capture and interaction
+
+Use [LIVE.md](LIVE.md) for the runnable native capture → real Noise-encrypted Federation → WebCodecs viewer, separate source/viewer helper processes, fixture input, lossless settled-text repair, benchmark commands and the opt-in adapter for existing enrolled peers. The measured live path is same-host; cross-machine live validation remains outstanding. The older file-transfer and offline measurements below retain their original limits.
 
 ## macOS capture
 
@@ -83,4 +87,4 @@ node scripts/remote-window-prototype/link-benchmark.mjs .local/remote-window/pwr
 
 ## Current gaps
 
-No production integration, live cross-machine video, real WAN loss experiment, general remote OS input, clipboard, app-modal scene management, Linux execution, macOS lock/Space validation, or measured photons. Windows active-desktop WGC is blocked until the operator reconnects the authorized session and the readiness guard passes. Pixel-exact saved-frame verification and headless canvas timing do not establish accessibility, actual monitor fidelity or a seamless remote-app experience.
+No enabled production capability, validated live cross-machine video, real WAN loss experiment, general remote OS input, clipboard, app-modal scene management, Linux execution, macOS lock/Space validation, or measured photons. Windows active-desktop WGC is blocked until the operator reconnects the authorized session and the readiness guard passes. Pixel-exact saved-frame verification and headless canvas timing do not establish accessibility, actual monitor fidelity or a seamless remote-app experience.

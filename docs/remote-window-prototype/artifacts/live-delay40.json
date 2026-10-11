@@ -1,0 +1,279 @@
+{
+  "schema": 1,
+  "measuredAt": "2026-10-11T23:19:01.774Z",
+  "path": "live native source helper -> runtime source adapter -> Noise source client -> loopback gateway -> Noise viewer client -> runtime viewer adapter -> browser WebCodecs",
+  "crossMachine": false,
+  "requestDelayMs": 40,
+  "decoderConfig": {
+    "codec": "avc1.42001F",
+    "codedWidth": 800,
+    "codedHeight": 548,
+    "optimizeForLatency": true,
+    "hardwareAcceleration": "prefer-software"
+  },
+  "phases": [
+    {
+      "name": "idle",
+      "durationSeconds": 3.0005999994277954,
+      "frames": 0,
+      "videoFrames": 0,
+      "mediaBytesPerSecond": 0.0,
+      "videoBytesPerSecond": 0.0,
+      "gatewayToViewerBytesPerSecond": 1625.6748653370055,
+      "viewerToGatewayBytesPerSecond": 1673.665267265773,
+      "videoCallbackToCanvasMs": null,
+      "encodeMs": null,
+      "decodeAndPresentationMs": null
+    },
+    {
+      "name": "typing",
+      "durationSeconds": 2.632,
+      "frames": 7,
+      "videoFrames": 7,
+      "mediaBytesPerSecond": 13590.805471124619,
+      "videoBytesPerSecond": 13590.805471124619,
+      "gatewayToViewerBytesPerSecond": 210536.85410334344,
+      "viewerToGatewayBytesPerSecond": 8020.516717325228,
+      "videoCallbackToCanvasMs": {
+        "count": 7,
+        "p50": 23.5498046875,
+        "p95": 33.142822265625,
+        "max": 39.673095703125
+      },
+      "encodeMs": {
+        "count": 7,
+        "p50": 3.0018333345651627,
+        "p95": 3.5964995622634888,
+        "max": 3.7388335913419724
+      },
+      "decodeAndPresentationMs": {
+        "count": 7,
+        "p50": 5.600000381469727,
+        "p95": 11,
+        "max": 15
+      }
+    },
+    {
+      "name": "scroll",
+      "durationSeconds": 3.025699999809265,
+      "frames": 12,
+      "videoFrames": 11,
+      "mediaBytesPerSecond": 128337.90528620766,
+      "videoBytesPerSecond": 7821.661103708849,
+      "gatewayToViewerBytesPerSecond": 175158.80623770002,
+      "viewerToGatewayBytesPerSecond": 10062.464884793359,
+      "videoCallbackToCanvasMs": {
+        "count": 11,
+        "p50": 31.64697265625,
+        "p95": 48.31591796875,
+        "max": 56.56787109375
+      },
+      "encodeMs": {
+        "count": 11,
+        "p50": 3.007875755429268,
+        "p95": 3.1058331951498985,
+        "max": 3.6312080919742584
+      },
+      "decodeAndPresentationMs": {
+        "count": 11,
+        "p50": 8.699999809265137,
+        "p95": 16.800000190734863,
+        "max": 17.199999809265137
+      }
+    },
+    {
+      "name": "motion",
+      "durationSeconds": 4.001400000572205,
+      "frames": 30,
+      "videoFrames": 29,
+      "mediaBytesPerSecond": 99175.0387222601,
+      "videoBytesPerSecond": 7796.271303928359,
+      "gatewayToViewerBytesPerSecond": 26632.928471225197,
+      "viewerToGatewayBytesPerSecond": 8023.19188169368,
+      "videoCallbackToCanvasMs": {
+        "count": 29,
+        "p50": 38.482177734375,
+        "p95": 56.014892578125,
+        "max": 57.2919921875
+      },
+      "encodeMs": {
+        "count": 29,
+        "p50": 3.1117508187890053,
+        "p95": 3.655041567981243,
+        "max": 3.7126243114471436
+      },
+      "decodeAndPresentationMs": {
+        "count": 29,
+        "p50": 11.100000381469727,
+        "p95": 17.100000381469727,
+        "max": 17.899999618530273
+      }
+    },
+    {
+      "name": "settled",
+      "durationSeconds": 3.0018999996185305,
+      "frames": 5,
+      "videoFrames": 3,
+      "mediaBytesPerSecond": 206765.3819510559,
+      "videoBytesPerSecond": 1762.550384980299,
+      "gatewayToViewerBytesPerSecond": 285741.3638392357,
+      "viewerToGatewayBytesPerSecond": 7562.210600914338,
+      "videoCallbackToCanvasMs": {
+        "count": 3,
+        "p50": 30.10693359375,
+        "p95": 30.10693359375,
+        "max": 49.07373046875
+      },
+      "encodeMs": {
+        "count": 3,
+        "p50": 2.947874367237091,
+        "p95": 2.947874367237091,
+        "max": 2.975666895508766
+      },
+      "decodeAndPresentationMs": {
+        "count": 3,
+        "p50": 4,
+        "p95": 4,
+        "max": 16.600000381469727
+      }
+    }
+  ],
+  "inputToCanvasMs": {
+    "count": 20,
+    "p50": 105.5,
+    "p95": 173.79999923706055,
+    "max": 253.10000038146973
+  },
+  "rpcPingMs": {
+    "count": 101,
+    "p50": 45.30000019073486,
+    "p95": 51.39999961853027,
+    "max": 92.69999980926514
+  },
+  "errors": [],
+  "cpu": {
+    "user": 1345644,
+    "system": 282536
+  },
+  "nodeMaxRssKiB": 110688,
+  "nativeLog": [
+    {
+      "hardware": "Optional(1)",
+      "kind": "encoder"
+    },
+    {
+      "height": 548,
+      "kind": "ready",
+      "width": 800
+    },
+    {
+      "kind": "input",
+      "revision": 1
+    },
+    {
+      "kind": "input",
+      "revision": 2
+    },
+    {
+      "kind": "input",
+      "revision": 3
+    },
+    {
+      "kind": "input",
+      "revision": 4
+    },
+    {
+      "kind": "input",
+      "revision": 5
+    },
+    {
+      "kind": "input",
+      "revision": 6
+    },
+    {
+      "kind": "input",
+      "revision": 7
+    },
+    {
+      "kind": "input",
+      "revision": 8
+    },
+    {
+      "kind": "input",
+      "revision": 9
+    },
+    {
+      "kind": "input",
+      "revision": 10
+    },
+    {
+      "kind": "input",
+      "revision": 11
+    },
+    {
+      "kind": "input",
+      "revision": 12
+    },
+    {
+      "kind": "input",
+      "revision": 13
+    },
+    {
+      "kind": "input",
+      "revision": 14
+    },
+    {
+      "kind": "input",
+      "revision": 15
+    },
+    {
+      "kind": "input",
+      "revision": 16
+    },
+    {
+      "kind": "input",
+      "revision": 17
+    },
+    {
+      "kind": "input",
+      "revision": 18
+    },
+    {
+      "kind": "input",
+      "revision": 19
+    },
+    {
+      "kind": "input",
+      "revision": 20
+    },
+    {
+      "kind": "input",
+      "revision": 21
+    },
+    {
+      "kind": "input",
+      "revision": 22
+    },
+    {
+      "kind": "input",
+      "revision": 23
+    },
+    {
+      "kind": "input",
+      "revision": 24
+    },
+    {
+      "kind": "done"
+    },
+    {
+      "stderr": "      181.90 real         2.15 user         1.18 sys\n           104497152  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n               17198  page reclaims\n                  33  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                 166  messages sent\n                  82  messages received\n                   0  signals received\n                 391  voluntary context switches\n               35787  involuntary context switches\n         10668911094  instructions retired\n          8374231115  cycles elapsed\n            70452184  peak memory footprint\n"
+    }
+  ],
+  "limits": [
+    "Same-host real encrypted Federation, not cross-host/WAN",
+    "Canvas callback and RAF, not photons",
+    "Gateway wire tap excludes WebSocket/TCP headers and handshake",
+    "Request delay is an application perturbation, not packet loss",
+    "Fixture app helper, not OS-wide input"
+  ]
+}
