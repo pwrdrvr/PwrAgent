@@ -1,0 +1,502 @@
+{
+  "schema": 1,
+  "method": "offline encode of real SCK PNG callbacks; sequential 30fps replay; not live latency",
+  "phases": [
+    {
+      "phase": "idle",
+      "width": 1600,
+      "height": 1096,
+      "frames": 90,
+      "uniquePixels": 3,
+      "statuses": {
+        "0": 163
+      },
+      "captureCallbackWithPNGMsP50": 58.00481280311942,
+      "captureCallbackWithPNGMsP95": 64.61504194885492,
+      "encodings": [
+        {
+          "codec": "PNG",
+          "options": {
+            "compress_level": 3
+          },
+          "fullFrameBytes": 92002095,
+          "tileBytes": 5163184,
+          "tileBytesPerReplaySecond": 1721061.3333333333,
+          "steadyBytesPerReplaySecond": 931733.294117647,
+          "fullFrameBytesPerReplaySecond": 30667365.0,
+          "encodeFullPlusTilesMsP50": 50.74608325958252,
+          "encodeFullPlusTilesMsP95": 60.90974994003773
+        },
+        {
+          "codec": "WEBP",
+          "options": {
+            "lossless": true,
+            "method": 1
+          },
+          "fullFrameBytes": 43018884,
+          "tileBytes": 2899116,
+          "tileBytesPerReplaySecond": 966372.0,
+          "steadyBytesPerReplaySecond": 515027.29411764705,
+          "fullFrameBytesPerReplaySecond": 14339628.0,
+          "encodeFullPlusTilesMsP50": 317.4250419251621,
+          "encodeFullPlusTilesMsP95": 486.55145801603794
+        },
+        {
+          "codec": "WEBP",
+          "options": {
+            "quality": 85,
+            "method": 0
+          },
+          "fullFrameBytes": 9867672,
+          "tileBytes": 654484,
+          "tileBytesPerReplaySecond": 218161.33333333334,
+          "steadyBytesPerReplaySecond": 140484.0,
+          "fullFrameBytesPerReplaySecond": 3289224.0,
+          "encodeFullPlusTilesMsP50": 31.323020346462727,
+          "encodeFullPlusTilesMsP95": 36.02666687220335
+        }
+      ]
+    },
+    {
+      "phase": "typing",
+      "width": 1600,
+      "height": 1096,
+      "frames": 90,
+      "uniquePixels": 7,
+      "statuses": {
+        "0": 90
+      },
+      "captureCallbackWithPNGMsP50": 56.53818743303418,
+      "captureCallbackWithPNGMsP95": 61.643500812351704,
+      "encodings": [
+        {
+          "codec": "PNG",
+          "options": {
+            "compress_level": 3
+          },
+          "fullFrameBytes": 90089768,
+          "tileBytes": 6209634,
+          "tileBytesPerReplaySecond": 2069878.0,
+          "steadyBytesPerReplaySecond": 1674347.6470588234,
+          "fullFrameBytesPerReplaySecond": 30029922.666666668,
+          "encodeFullPlusTilesMsP50": 49.23272877931595,
+          "encodeFullPlusTilesMsP95": 59.654165990650654
+        },
+        {
+          "codec": "WEBP",
+          "options": {
+            "lossless": true,
+            "method": 1
+          },
+          "fullFrameBytes": 42511416,
+          "tileBytes": 3422498,
+          "tileBytesPerReplaySecond": 1140832.6666666667,
+          "steadyBytesPerReplaySecond": 923263.0588235294,
+          "fullFrameBytesPerReplaySecond": 14170472.0,
+          "encodeFullPlusTilesMsP50": 352.97268722206354,
+          "encodeFullPlusTilesMsP95": 622.8569578379393
+        },
+        {
+          "codec": "WEBP",
+          "options": {
+            "quality": 85,
+            "method": 0
+          },
+          "fullFrameBytes": 9997366,
+          "tileBytes": 811264,
+          "tileBytesPerReplaySecond": 270421.3333333333,
+          "steadyBytesPerReplaySecond": 236941.41176470587,
+          "fullFrameBytesPerReplaySecond": 3332455.3333333335,
+          "encodeFullPlusTilesMsP50": 35.91549955308437,
+          "encodeFullPlusTilesMsP95": 83.7218752130866
+        }
+      ]
+    },
+    {
+      "phase": "scroll",
+      "width": 1600,
+      "height": 1096,
+      "frames": 90,
+      "uniquePixels": 6,
+      "statuses": {
+        "0": 92
+      },
+      "captureCallbackWithPNGMsP50": 56.42289575189352,
+      "captureCallbackWithPNGMsP95": 62.7122912555933,
+      "encodings": [
+        {
+          "codec": "PNG",
+          "options": {
+            "compress_level": 3
+          },
+          "fullFrameBytes": 87818802,
+          "tileBytes": 6101009,
+          "tileBytesPerReplaySecond": 2033669.6666666667,
+          "steadyBytesPerReplaySecond": 1433505.8823529412,
+          "fullFrameBytesPerReplaySecond": 29272934.0,
+          "encodeFullPlusTilesMsP50": 51.26599967479706,
+          "encodeFullPlusTilesMsP95": 64.51062485575676
+        },
+        {
+          "codec": "WEBP",
+          "options": {
+            "lossless": true,
+            "method": 1
+          },
+          "fullFrameBytes": 41469810,
+          "tileBytes": 3365742,
+          "tileBytesPerReplaySecond": 1121914.0,
+          "steadyBytesPerReplaySecond": 790833.1764705882,
+          "fullFrameBytesPerReplaySecond": 13823270.0,
+          "encodeFullPlusTilesMsP50": 429.6674788929522,
+          "encodeFullPlusTilesMsP95": 1956.880415789783
+        },
+        {
+          "codec": "WEBP",
+          "options": {
+            "quality": 85,
+            "method": 0
+          },
+          "fullFrameBytes": 9879424,
+          "tileBytes": 795602,
+          "tileBytesPerReplaySecond": 265200.6666666667,
+          "steadyBytesPerReplaySecond": 186834.35294117645,
+          "fullFrameBytesPerReplaySecond": 3293141.3333333335,
+          "encodeFullPlusTilesMsP50": 39.199728053063154,
+          "encodeFullPlusTilesMsP95": 95.9286242723465
+        }
+      ]
+    },
+    {
+      "phase": "motion",
+      "width": 1600,
+      "height": 1096,
+      "frames": 76,
+      "uniquePixels": 4,
+      "statuses": {
+        "0": 76
+      },
+      "captureCallbackWithPNGMsP50": 35.72495840489864,
+      "captureCallbackWithPNGMsP95": 67.09099933505058,
+      "encodings": [
+        {
+          "codec": "PNG",
+          "options": {
+            "compress_level": 3
+          },
+          "fullFrameBytes": 67072755,
+          "tileBytes": 4089936,
+          "tileBytesPerReplaySecond": 1614448.4210526317,
+          "steadyBytesPerReplaySecond": 1123598.8732394367,
+          "fullFrameBytesPerReplaySecond": 26476087.5,
+          "encodeFullPlusTilesMsP50": 47.12885385379195,
+          "encodeFullPlusTilesMsP95": 66.65020808577538
+        },
+        {
+          "codec": "WEBP",
+          "options": {
+            "lossless": true,
+            "method": 1
+          },
+          "fullFrameBytes": 32839940,
+          "tileBytes": 2277470,
+          "tileBytesPerReplaySecond": 899001.3157894737,
+          "steadyBytesPerReplaySecond": 626960.2816901408,
+          "fullFrameBytesPerReplaySecond": 12963134.210526315,
+          "encodeFullPlusTilesMsP50": 495.4904792830348,
+          "encodeFullPlusTilesMsP95": 1067.2570411115885
+        },
+        {
+          "codec": "WEBP",
+          "options": {
+            "quality": 85,
+            "method": 0
+          },
+          "fullFrameBytes": 8638858,
+          "tileBytes": 531294,
+          "tileBytesPerReplaySecond": 209721.31578947368,
+          "steadyBytesPerReplaySecond": 168387.88732394367,
+          "fullFrameBytesPerReplaySecond": 3410075.5263157897,
+          "encodeFullPlusTilesMsP50": 40.32116662710905,
+          "encodeFullPlusTilesMsP95": 64.53858315944672
+        }
+      ]
+    },
+    {
+      "phase": "obscured",
+      "width": 1600,
+      "height": 1096,
+      "frames": 90,
+      "uniquePixels": 7,
+      "statuses": {
+        "0": 92
+      },
+      "captureCallbackWithPNGMsP50": 56.9278122857213,
+      "captureCallbackWithPNGMsP95": 62.45050020515919,
+      "encodings": [
+        {
+          "codec": "PNG",
+          "options": {
+            "compress_level": 3
+          },
+          "fullFrameBytes": 90106330,
+          "tileBytes": 6746640,
+          "tileBytesPerReplaySecond": 2248880.0,
+          "steadyBytesPerReplaySecond": 1660079.294117647,
+          "fullFrameBytesPerReplaySecond": 30035443.333333332,
+          "encodeFullPlusTilesMsP50": 60.33852091059089,
+          "encodeFullPlusTilesMsP95": 117.2268744558096
+        },
+        {
+          "codec": "WEBP",
+          "options": {
+            "lossless": true,
+            "method": 1
+          },
+          "fullFrameBytes": 42657990,
+          "tileBytes": 3753098,
+          "tileBytesPerReplaySecond": 1251032.6666666667,
+          "steadyBytesPerReplaySecond": 923937.8823529411,
+          "fullFrameBytesPerReplaySecond": 14219330.0,
+          "encodeFullPlusTilesMsP50": 350.5891468375921,
+          "encodeFullPlusTilesMsP95": 1101.8055835738778
+        },
+        {
+          "codec": "WEBP",
+          "options": {
+            "quality": 85,
+            "method": 0
+          },
+          "fullFrameBytes": 10191092,
+          "tileBytes": 927140,
+          "tileBytesPerReplaySecond": 309046.6666666667,
+          "steadyBytesPerReplaySecond": 233685.17647058822,
+          "fullFrameBytesPerReplaySecond": 3397030.6666666665,
+          "encodeFullPlusTilesMsP50": 33.748624846339226,
+          "encodeFullPlusTilesMsP95": 77.61604059487581
+        }
+      ]
+    },
+    {
+      "phase": "offscreen",
+      "width": 1600,
+      "height": 1096,
+      "frames": 90,
+      "uniquePixels": 8,
+      "statuses": {
+        "0": 92
+      },
+      "captureCallbackWithPNGMsP50": 58.09670779854059,
+      "captureCallbackWithPNGMsP95": 65.49233384430408,
+      "encodings": [
+        {
+          "codec": "PNG",
+          "options": {
+            "compress_level": 3
+          },
+          "fullFrameBytes": 88782842,
+          "tileBytes": 6250678,
+          "tileBytesPerReplaySecond": 2083559.3333333333,
+          "steadyBytesPerReplaySecond": 1701656.4705882352,
+          "fullFrameBytesPerReplaySecond": 29594280.666666668,
+          "encodeFullPlusTilesMsP50": 51.465416327118874,
+          "encodeFullPlusTilesMsP95": 105.6942492723465
+        },
+        {
+          "codec": "WEBP",
+          "options": {
+            "lossless": true,
+            "method": 1
+          },
+          "fullFrameBytes": 42224498,
+          "tileBytes": 3476912,
+          "tileBytesPerReplaySecond": 1158970.6666666667,
+          "steadyBytesPerReplaySecond": 947436.7058823529,
+          "fullFrameBytesPerReplaySecond": 14074832.666666666,
+          "encodeFullPlusTilesMsP50": 363.72906202450395,
+          "encodeFullPlusTilesMsP95": 688.9921249821782
+        },
+        {
+          "codec": "WEBP",
+          "options": {
+            "quality": 85,
+            "method": 0
+          },
+          "fullFrameBytes": 10187702,
+          "tileBytes": 801760,
+          "tileBytesPerReplaySecond": 267253.3333333333,
+          "steadyBytesPerReplaySecond": 236318.11764705883,
+          "fullFrameBytesPerReplaySecond": 3395900.6666666665,
+          "encodeFullPlusTilesMsP50": 31.336603220552206,
+          "encodeFullPlusTilesMsP95": 72.20766693353653
+        }
+      ]
+    },
+    {
+      "phase": "minimized",
+      "width": 1600,
+      "height": 1096,
+      "frames": 1,
+      "uniquePixels": 1,
+      "statuses": {
+        "0": 1,
+        "3": 1
+      },
+      "captureCallbackWithPNGMsP50": 31.41416609287262,
+      "captureCallbackWithPNGMsP95": 31.41416609287262,
+      "encodings": [
+        {
+          "codec": "PNG",
+          "options": {
+            "compress_level": 3
+          },
+          "fullFrameBytes": 569376,
+          "tileBytes": 615476,
+          "tileBytesPerReplaySecond": 18464280.0,
+          "steadyBytesPerReplaySecond": 0.0,
+          "fullFrameBytesPerReplaySecond": 17081280.0,
+          "encodeFullPlusTilesMsP50": 53.372000344097614,
+          "encodeFullPlusTilesMsP95": 53.372000344097614
+        },
+        {
+          "codec": "WEBP",
+          "options": {
+            "lossless": true,
+            "method": 1
+          },
+          "fullFrameBytes": 322948,
+          "tileBytes": 344400,
+          "tileBytesPerReplaySecond": 10332000.0,
+          "steadyBytesPerReplaySecond": 0.0,
+          "fullFrameBytesPerReplaySecond": 9688440.0,
+          "encodeFullPlusTilesMsP50": 722.8435827419162,
+          "encodeFullPlusTilesMsP95": 722.8435827419162
+        },
+        {
+          "codec": "WEBP",
+          "options": {
+            "quality": 85,
+            "method": 0
+          },
+          "fullFrameBytes": 113218,
+          "tileBytes": 132200,
+          "tileBytesPerReplaySecond": 3966000.0,
+          "steadyBytesPerReplaySecond": 0.0,
+          "fullFrameBytesPerReplaySecond": 3396540.0,
+          "encodeFullPlusTilesMsP50": 91.79308265447617,
+          "encodeFullPlusTilesMsP95": 91.79308265447617
+        }
+      ]
+    },
+    {
+      "phase": "restored",
+      "width": 1600,
+      "height": 1096,
+      "frames": 79,
+      "uniquePixels": 5,
+      "statuses": {
+        "0": 79
+      },
+      "captureCallbackWithPNGMsP50": 32.91737474501133,
+      "captureCallbackWithPNGMsP95": 65.75766671448946,
+      "encodings": [
+        {
+          "codec": "PNG",
+          "options": {
+            "compress_level": 3
+          },
+          "fullFrameBytes": 68579209,
+          "tileBytes": 4100789,
+          "tileBytesPerReplaySecond": 1557261.6455696202,
+          "steadyBytesPerReplaySecond": 1075957.2972972973,
+          "fullFrameBytesPerReplaySecond": 26042737.59493671,
+          "encodeFullPlusTilesMsP50": 38.80908340215683,
+          "encodeFullPlusTilesMsP95": 70.54904196411371
+        },
+        {
+          "codec": "WEBP",
+          "options": {
+            "lossless": true,
+            "method": 1
+          },
+          "fullFrameBytes": 33729632,
+          "tileBytes": 2276504,
+          "tileBytesPerReplaySecond": 864495.1898734177,
+          "steadyBytesPerReplaySecond": 598167.5675675676,
+          "fullFrameBytesPerReplaySecond": 12808721.012658227,
+          "encodeFullPlusTilesMsP50": 500.6009992212057,
+          "encodeFullPlusTilesMsP95": 1289.4214587286115
+        },
+        {
+          "codec": "WEBP",
+          "options": {
+            "quality": 85,
+            "method": 0
+          },
+          "fullFrameBytes": 8914638,
+          "tileBytes": 530462,
+          "tileBytesPerReplaySecond": 201441.2658227848,
+          "steadyBytesPerReplaySecond": 160673.5135135135,
+          "fullFrameBytesPerReplaySecond": 3385305.569620253,
+          "encodeFullPlusTilesMsP50": 35.68354155868292,
+          "encodeFullPlusTilesMsP95": 80.04133403301239
+        }
+      ]
+    },
+    {
+      "phase": "resized",
+      "width": 1600,
+      "height": 1096,
+      "frames": 86,
+      "uniquePixels": 3,
+      "statuses": {
+        "0": 86
+      },
+      "captureCallbackWithPNGMsP50": 36.794708110392094,
+      "captureCallbackWithPNGMsP95": 68.32445785403252,
+      "encodings": [
+        {
+          "codec": "PNG",
+          "options": {
+            "compress_level": 3
+          },
+          "fullFrameBytes": 29664397,
+          "tileBytes": 1521144,
+          "tileBytesPerReplaySecond": 530631.6279069767,
+          "steadyBytesPerReplaySecond": 118057.4074074074,
+          "fullFrameBytesPerReplaySecond": 10348045.46511628,
+          "encodeFullPlusTilesMsP50": 27.964229229837656,
+          "encodeFullPlusTilesMsP95": 38.1783340126276
+        },
+        {
+          "codec": "WEBP",
+          "options": {
+            "lossless": true,
+            "method": 1
+          },
+          "fullFrameBytes": 9605520,
+          "tileBytes": 730160,
+          "tileBytesPerReplaySecond": 254706.97674418605,
+          "steadyBytesPerReplaySecond": 49683.7037037037,
+          "fullFrameBytesPerReplaySecond": 3350762.7906976743,
+          "encodeFullPlusTilesMsP50": 85.1466883905232,
+          "encodeFullPlusTilesMsP95": 112.50095907598734
+        },
+        {
+          "codec": "WEBP",
+          "options": {
+            "quality": 85,
+            "method": 0
+          },
+          "fullFrameBytes": 10029244,
+          "tileBytes": 407986,
+          "tileBytesPerReplaySecond": 142320.6976744186,
+          "steadyBytesPerReplaySecond": 50010.370370370365,
+          "fullFrameBytesPerReplaySecond": 3498573.488372093,
+          "encodeFullPlusTilesMsP50": 33.17343816161156,
+          "encodeFullPlusTilesMsP95": 44.85429171472788
+        }
+      ]
+    }
+  ]
+}

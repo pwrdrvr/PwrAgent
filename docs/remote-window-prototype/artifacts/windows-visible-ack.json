@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "sessionId": "451d1cf9-d9c9-4e20-81f6-b62d411bb9e0",
+  "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0",
+  "width": 800,
+  "height": 548,
+  "frames": 1,
+  "elapsedMs": 75.5,
+  "decodeDrawP50Ms": 66,
+  "decodeDrawP95Ms": 66,
+  "note": "Decode/draw uses browser performance.now. rAF is not a photon measurement. Transfer time measured by sender separately.",
+  "measurements": [
+    {
+      "seq": 0,
+      "tiles": 35,
+      "decodeMs": 66,
+      "drawMs": 0,
+      "presentationOpportunityMs": 66.80000019073486
+    }
+  ],
+  "batchFile": "pwrwin-input-visible.json",
+  "batchBytes": 225112,
+  "importMs": 170.88930000000005,
+  "environment": "Windows Edge headless, isolated profile; desktop session disconnected",
+  "transport": "Already received through enrolled Federation file_push; store-and-forward, not streaming",
+  "captureToDisplayLatency": null
+}

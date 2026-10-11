@@ -1,0 +1,650 @@
+{
+  "version": 1,
+  "sessionId": "103e7725-4815-4c35-9a15-38284decfffe",
+  "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0",
+  "width": 800,
+  "height": 548,
+  "frames": 90,
+  "elapsedMs": 2996.7000002861023,
+  "decodeDrawP50Ms": 12,
+  "decodeDrawP95Ms": 14.900000095367432,
+  "note": "Decode/draw uses browser performance.now. rAF is not a photon measurement. Transfer time measured by sender separately.",
+  "measurements": [
+    {
+      "seq": 0,
+      "tiles": 35,
+      "decodeMs": 59.5,
+      "drawMs": 0,
+      "presentationOpportunityMs": 73.30000019073486
+    },
+    {
+      "seq": 1,
+      "tiles": 4,
+      "decodeMs": 11.599999904632568,
+      "drawMs": 0.09999990463256836,
+      "presentationOpportunityMs": 16.699999809265137
+    },
+    {
+      "seq": 2,
+      "tiles": 4,
+      "decodeMs": 10.5,
+      "drawMs": 0.09999990463256836,
+      "presentationOpportunityMs": 15.699999809265137
+    },
+    {
+      "seq": 3,
+      "tiles": 4,
+      "decodeMs": 9.800000190734863,
+      "drawMs": 0,
+      "presentationOpportunityMs": 15.100000381469727
+    },
+    {
+      "seq": 4,
+      "tiles": 4,
+      "decodeMs": 11.900000095367432,
+      "drawMs": 0,
+      "presentationOpportunityMs": 22.90000009536743
+    },
+    {
+      "seq": 5,
+      "tiles": 4,
+      "decodeMs": 12.300000190734863,
+      "drawMs": 0,
+      "presentationOpportunityMs": 22.90000009536743
+    },
+    {
+      "seq": 6,
+      "tiles": 4,
+      "decodeMs": 14.5,
+      "drawMs": 0,
+      "presentationOpportunityMs": 22.59999990463257
+    },
+    {
+      "seq": 7,
+      "tiles": 4,
+      "decodeMs": 12.400000095367432,
+      "drawMs": 0.09999990463256836,
+      "presentationOpportunityMs": 24.200000286102295
+    },
+    {
+      "seq": 8,
+      "tiles": 4,
+      "decodeMs": 12.5,
+      "drawMs": 0,
+      "presentationOpportunityMs": 23.300000190734863
+    },
+    {
+      "seq": 9,
+      "tiles": 4,
+      "decodeMs": 12.900000095367432,
+      "drawMs": 0,
+      "presentationOpportunityMs": 22.59999990463257
+    },
+    {
+      "seq": 10,
+      "tiles": 4,
+      "decodeMs": 9.5,
+      "drawMs": 0.09999990463256836,
+      "presentationOpportunityMs": 23.59999990463257
+    },
+    {
+      "seq": 11,
+      "tiles": 4,
+      "decodeMs": 9.900000095367432,
+      "drawMs": 0,
+      "presentationOpportunityMs": 22.799999713897705
+    },
+    {
+      "seq": 12,
+      "tiles": 4,
+      "decodeMs": 13.5,
+      "drawMs": 0,
+      "presentationOpportunityMs": 26.199999809265137
+    },
+    {
+      "seq": 13,
+      "tiles": 4,
+      "decodeMs": 11.5,
+      "drawMs": 0,
+      "presentationOpportunityMs": 23.5
+    },
+    {
+      "seq": 14,
+      "tiles": 4,
+      "decodeMs": 9.699999809265137,
+      "drawMs": 0,
+      "presentationOpportunityMs": 23.5
+    },
+    {
+      "seq": 15,
+      "tiles": 4,
+      "decodeMs": 12.699999809265137,
+      "drawMs": 0,
+      "presentationOpportunityMs": 25
+    },
+    {
+      "seq": 16,
+      "tiles": 4,
+      "decodeMs": 11.600000381469727,
+      "drawMs": 0,
+      "presentationOpportunityMs": 24.600000381469727
+    },
+    {
+      "seq": 17,
+      "tiles": 4,
+      "decodeMs": 9.400000095367432,
+      "drawMs": 0,
+      "presentationOpportunityMs": 24.40000009536743
+    },
+    {
+      "seq": 18,
+      "tiles": 4,
+      "decodeMs": 10.300000190734863,
+      "drawMs": 0,
+      "presentationOpportunityMs": 26
+    },
+    {
+      "seq": 19,
+      "tiles": 4,
+      "decodeMs": 13.300000190734863,
+      "drawMs": 0,
+      "presentationOpportunityMs": 25.200000286102295
+    },
+    {
+      "seq": 20,
+      "tiles": 4,
+      "decodeMs": 11.100000381469727,
+      "drawMs": 0,
+      "presentationOpportunityMs": 23.5
+    },
+    {
+      "seq": 21,
+      "tiles": 4,
+      "decodeMs": 11.299999713897705,
+      "drawMs": 0,
+      "presentationOpportunityMs": 23.699999809265137
+    },
+    {
+      "seq": 22,
+      "tiles": 4,
+      "decodeMs": 13,
+      "drawMs": 0,
+      "presentationOpportunityMs": 24.600000381469727
+    },
+    {
+      "seq": 23,
+      "tiles": 4,
+      "decodeMs": 12.599999904632568,
+      "drawMs": 0,
+      "presentationOpportunityMs": 25.09999990463257
+    },
+    {
+      "seq": 24,
+      "tiles": 4,
+      "decodeMs": 13.199999809265137,
+      "drawMs": 0,
+      "presentationOpportunityMs": 24.90000009536743
+    },
+    {
+      "seq": 25,
+      "tiles": 4,
+      "decodeMs": 13.400000095367432,
+      "drawMs": 0,
+      "presentationOpportunityMs": 25.100000381469727
+    },
+    {
+      "seq": 26,
+      "tiles": 4,
+      "decodeMs": 11,
+      "drawMs": 0,
+      "presentationOpportunityMs": 22.799999713897705
+    },
+    {
+      "seq": 27,
+      "tiles": 0,
+      "decodeMs": 0,
+      "drawMs": 0,
+      "presentationOpportunityMs": 7.399999618530273
+    },
+    {
+      "seq": 28,
+      "tiles": 4,
+      "decodeMs": 11.5,
+      "drawMs": 0,
+      "presentationOpportunityMs": 24.100000381469727
+    },
+    {
+      "seq": 29,
+      "tiles": 4,
+      "decodeMs": 13.099999904632568,
+      "drawMs": 0,
+      "presentationOpportunityMs": 25.399999618530273
+    },
+    {
+      "seq": 30,
+      "tiles": 4,
+      "decodeMs": 14.5,
+      "drawMs": 0.20000028610229492,
+      "presentationOpportunityMs": 24.700000286102295
+    },
+    {
+      "seq": 31,
+      "tiles": 4,
+      "decodeMs": 9.700000286102295,
+      "drawMs": 0,
+      "presentationOpportunityMs": 22.700000286102295
+    },
+    {
+      "seq": 32,
+      "tiles": 4,
+      "decodeMs": 14.900000095367432,
+      "drawMs": 0,
+      "presentationOpportunityMs": 25.199999809265137
+    },
+    {
+      "seq": 33,
+      "tiles": 4,
+      "decodeMs": 13.5,
+      "drawMs": 0,
+      "presentationOpportunityMs": 24.800000190734863
+    },
+    {
+      "seq": 34,
+      "tiles": 4,
+      "decodeMs": 14.800000190734863,
+      "drawMs": 0.19999980926513672,
+      "presentationOpportunityMs": 24.800000190734863
+    },
+    {
+      "seq": 35,
+      "tiles": 4,
+      "decodeMs": 9.800000190734863,
+      "drawMs": 0,
+      "presentationOpportunityMs": 24.09999990463257
+    },
+    {
+      "seq": 36,
+      "tiles": 0,
+      "decodeMs": 0.10000038146972656,
+      "drawMs": 0,
+      "presentationOpportunityMs": 8.100000381469727
+    },
+    {
+      "seq": 37,
+      "tiles": 4,
+      "decodeMs": 16.09999990463257,
+      "drawMs": 0.09999990463256836,
+      "presentationOpportunityMs": 25.199999809265137
+    },
+    {
+      "seq": 38,
+      "tiles": 4,
+      "decodeMs": 10.5,
+      "drawMs": 0.09999990463256836,
+      "presentationOpportunityMs": 23.90000009536743
+    },
+    {
+      "seq": 39,
+      "tiles": 4,
+      "decodeMs": 10,
+      "drawMs": 0.09999990463256836,
+      "presentationOpportunityMs": 24.90000009536743
+    },
+    {
+      "seq": 40,
+      "tiles": 4,
+      "decodeMs": 13.400000095367432,
+      "drawMs": 0.09999990463256836,
+      "presentationOpportunityMs": 23.40000009536743
+    },
+    {
+      "seq": 41,
+      "tiles": 4,
+      "decodeMs": 13.900000095367432,
+      "drawMs": 0,
+      "presentationOpportunityMs": 26.200000286102295
+    },
+    {
+      "seq": 42,
+      "tiles": 4,
+      "decodeMs": 12.5,
+      "drawMs": 0,
+      "presentationOpportunityMs": 24
+    },
+    {
+      "seq": 43,
+      "tiles": 4,
+      "decodeMs": 9.399999618530273,
+      "drawMs": 0,
+      "presentationOpportunityMs": 23.09999990463257
+    },
+    {
+      "seq": 44,
+      "tiles": 4,
+      "decodeMs": 13.300000190734863,
+      "drawMs": 0,
+      "presentationOpportunityMs": 24.300000190734863
+    },
+    {
+      "seq": 45,
+      "tiles": 4,
+      "decodeMs": 11.300000190734863,
+      "drawMs": 0,
+      "presentationOpportunityMs": 23.800000190734863
+    },
+    {
+      "seq": 46,
+      "tiles": 4,
+      "decodeMs": 11.700000286102295,
+      "drawMs": 0,
+      "presentationOpportunityMs": 25.100000381469727
+    },
+    {
+      "seq": 47,
+      "tiles": 4,
+      "decodeMs": 12,
+      "drawMs": 0,
+      "presentationOpportunityMs": 22.90000009536743
+    },
+    {
+      "seq": 48,
+      "tiles": 4,
+      "decodeMs": 9.900000095367432,
+      "drawMs": 0,
+      "presentationOpportunityMs": 24.100000381469727
+    },
+    {
+      "seq": 49,
+      "tiles": 4,
+      "decodeMs": 9.100000381469727,
+      "drawMs": 0,
+      "presentationOpportunityMs": 24.700000286102295
+    },
+    {
+      "seq": 50,
+      "tiles": 4,
+      "decodeMs": 12.400000095367432,
+      "drawMs": 0,
+      "presentationOpportunityMs": 24.199999809265137
+    },
+    {
+      "seq": 51,
+      "tiles": 4,
+      "decodeMs": 14.300000190734863,
+      "drawMs": 0,
+      "presentationOpportunityMs": 25.700000286102295
+    },
+    {
+      "seq": 52,
+      "tiles": 4,
+      "decodeMs": 8.899999618530273,
+      "drawMs": 0.10000038146972656,
+      "presentationOpportunityMs": 24.299999713897705
+    },
+    {
+      "seq": 53,
+      "tiles": 4,
+      "decodeMs": 12.700000286102295,
+      "drawMs": 0,
+      "presentationOpportunityMs": 23.5
+    },
+    {
+      "seq": 54,
+      "tiles": 4,
+      "decodeMs": 13.399999618530273,
+      "drawMs": 0,
+      "presentationOpportunityMs": 24
+    },
+    {
+      "seq": 55,
+      "tiles": 4,
+      "decodeMs": 13.400000095367432,
+      "drawMs": 0.09999990463256836,
+      "presentationOpportunityMs": 24
+    },
+    {
+      "seq": 56,
+      "tiles": 4,
+      "decodeMs": 12.099999904632568,
+      "drawMs": 0,
+      "presentationOpportunityMs": 24.5
+    },
+    {
+      "seq": 57,
+      "tiles": 4,
+      "decodeMs": 11.400000095367432,
+      "drawMs": 0.09999990463256836,
+      "presentationOpportunityMs": 23
+    },
+    {
+      "seq": 58,
+      "tiles": 4,
+      "decodeMs": 12.100000381469727,
+      "drawMs": 0,
+      "presentationOpportunityMs": 24
+    },
+    {
+      "seq": 59,
+      "tiles": 4,
+      "decodeMs": 13.099999904632568,
+      "drawMs": 0.09999990463256836,
+      "presentationOpportunityMs": 23.699999809265137
+    },
+    {
+      "seq": 60,
+      "tiles": 4,
+      "decodeMs": 14.200000286102295,
+      "drawMs": 0.09999990463256836,
+      "presentationOpportunityMs": 24.40000009536743
+    },
+    {
+      "seq": 61,
+      "tiles": 4,
+      "decodeMs": 13.099999904632568,
+      "drawMs": 0,
+      "presentationOpportunityMs": 23.800000190734863
+    },
+    {
+      "seq": 62,
+      "tiles": 4,
+      "decodeMs": 13.200000286102295,
+      "drawMs": 0,
+      "presentationOpportunityMs": 25.09999990463257
+    },
+    {
+      "seq": 63,
+      "tiles": 4,
+      "decodeMs": 13,
+      "drawMs": 0.10000038146972656,
+      "presentationOpportunityMs": 26.300000190734863
+    },
+    {
+      "seq": 64,
+      "tiles": 4,
+      "decodeMs": 11.300000190734863,
+      "drawMs": 0,
+      "presentationOpportunityMs": 24.199999809265137
+    },
+    {
+      "seq": 65,
+      "tiles": 4,
+      "decodeMs": 13.099999904632568,
+      "drawMs": 0,
+      "presentationOpportunityMs": 24.90000009536743
+    },
+    {
+      "seq": 66,
+      "tiles": 4,
+      "decodeMs": 12.900000095367432,
+      "drawMs": 0,
+      "presentationOpportunityMs": 24.800000190734863
+    },
+    {
+      "seq": 67,
+      "tiles": 4,
+      "decodeMs": 11.700000286102295,
+      "drawMs": 0,
+      "presentationOpportunityMs": 24.90000009536743
+    },
+    {
+      "seq": 68,
+      "tiles": 4,
+      "decodeMs": 11.099999904632568,
+      "drawMs": 0.10000038146972656,
+      "presentationOpportunityMs": 24.59999990463257
+    },
+    {
+      "seq": 69,
+      "tiles": 4,
+      "decodeMs": 12.099999904632568,
+      "drawMs": 0.09999990463256836,
+      "presentationOpportunityMs": 23.199999809265137
+    },
+    {
+      "seq": 70,
+      "tiles": 4,
+      "decodeMs": 11.599999904632568,
+      "drawMs": 0,
+      "presentationOpportunityMs": 23.5
+    },
+    {
+      "seq": 71,
+      "tiles": 4,
+      "decodeMs": 12.599999904632568,
+      "drawMs": 0,
+      "presentationOpportunityMs": 23.90000009536743
+    },
+    {
+      "seq": 72,
+      "tiles": 4,
+      "decodeMs": 9.300000190734863,
+      "drawMs": 0,
+      "presentationOpportunityMs": 22.199999809265137
+    },
+    {
+      "seq": 73,
+      "tiles": 0,
+      "decodeMs": 0,
+      "drawMs": 0,
+      "presentationOpportunityMs": 7.300000190734863
+    },
+    {
+      "seq": 74,
+      "tiles": 0,
+      "decodeMs": 0.09999990463256836,
+      "drawMs": 0,
+      "presentationOpportunityMs": 6.800000190734863
+    },
+    {
+      "seq": 75,
+      "tiles": 4,
+      "decodeMs": 15.5,
+      "drawMs": 0,
+      "presentationOpportunityMs": 25.09999990463257
+    },
+    {
+      "seq": 76,
+      "tiles": 4,
+      "decodeMs": 11.5,
+      "drawMs": 0,
+      "presentationOpportunityMs": 23.59999990463257
+    },
+    {
+      "seq": 77,
+      "tiles": 4,
+      "decodeMs": 9.5,
+      "drawMs": 0,
+      "presentationOpportunityMs": 23.800000190734863
+    },
+    {
+      "seq": 78,
+      "tiles": 4,
+      "decodeMs": 9.5,
+      "drawMs": 0.10000038146972656,
+      "presentationOpportunityMs": 23.300000190734863
+    },
+    {
+      "seq": 79,
+      "tiles": 4,
+      "decodeMs": 11.699999809265137,
+      "drawMs": 0,
+      "presentationOpportunityMs": 24
+    },
+    {
+      "seq": 80,
+      "tiles": 4,
+      "decodeMs": 13.400000095367432,
+      "drawMs": 0.09999990463256836,
+      "presentationOpportunityMs": 24.59999990463257
+    },
+    {
+      "seq": 81,
+      "tiles": 4,
+      "decodeMs": 13.300000190734863,
+      "drawMs": 0,
+      "presentationOpportunityMs": 24.800000190734863
+    },
+    {
+      "seq": 82,
+      "tiles": 4,
+      "decodeMs": 11.199999809265137,
+      "drawMs": 0,
+      "presentationOpportunityMs": 24.699999809265137
+    },
+    {
+      "seq": 83,
+      "tiles": 4,
+      "decodeMs": 9.900000095367432,
+      "drawMs": 0.09999990463256836,
+      "presentationOpportunityMs": 23.100000381469727
+    },
+    {
+      "seq": 84,
+      "tiles": 4,
+      "decodeMs": 12.700000286102295,
+      "drawMs": 0,
+      "presentationOpportunityMs": 24.700000286102295
+    },
+    {
+      "seq": 85,
+      "tiles": 4,
+      "decodeMs": 13.699999809265137,
+      "drawMs": 0,
+      "presentationOpportunityMs": 24
+    },
+    {
+      "seq": 86,
+      "tiles": 4,
+      "decodeMs": 10,
+      "drawMs": 0.09999990463256836,
+      "presentationOpportunityMs": 24.09999990463257
+    },
+    {
+      "seq": 87,
+      "tiles": 4,
+      "decodeMs": 10.799999713897705,
+      "drawMs": 0,
+      "presentationOpportunityMs": 23.699999809265137
+    },
+    {
+      "seq": 88,
+      "tiles": 4,
+      "decodeMs": 9.400000095367432,
+      "drawMs": 0,
+      "presentationOpportunityMs": 23.5
+    },
+    {
+      "seq": 89,
+      "tiles": 4,
+      "decodeMs": 10.299999713897705,
+      "drawMs": 0,
+      "presentationOpportunityMs": 26.59999990463257
+    }
+  ],
+  "batchFile": "pwrwin-scroll-800.json",
+  "batchBytes": 4191302,
+  "importMs": 454.1836000000003,
+  "environment": "Windows Edge headless, isolated profile; desktop session disconnected",
+  "transport": "Already received through enrolled Federation file_push; store-and-forward, not streaming",
+  "captureToDisplayLatency": null
+}

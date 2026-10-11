@@ -1,0 +1,644 @@
+{
+  "version": 1,
+  "sessionId": "103e7725-4815-4c35-9a15-38284decfffe",
+  "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/152.0.0.0 Safari/537.36",
+  "width": 800,
+  "height": 548,
+  "frames": 90,
+  "elapsedMs": 2970.800000190735,
+  "decodeDrawP50Ms": 4,
+  "decodeDrawP95Ms": 6.399999618530273,
+  "note": "Offline playback after Federation transfer; rAF is not input-to-photon",
+  "measurements": [
+    {
+      "seq": 0,
+      "tiles": 35,
+      "decodeMs": 48.39999961853027,
+      "drawMs": 0.10000038146972656,
+      "presentationOpportunityMs": 49.39999961853027
+    },
+    {
+      "seq": 1,
+      "tiles": 4,
+      "decodeMs": 4.100000381469727,
+      "drawMs": 0,
+      "presentationOpportunityMs": 16.800000190734863
+    },
+    {
+      "seq": 2,
+      "tiles": 4,
+      "decodeMs": 6.399999618530273,
+      "drawMs": 0,
+      "presentationOpportunityMs": 16.5
+    },
+    {
+      "seq": 3,
+      "tiles": 4,
+      "decodeMs": 4.800000190734863,
+      "drawMs": 0,
+      "presentationOpportunityMs": 5
+    },
+    {
+      "seq": 4,
+      "tiles": 4,
+      "decodeMs": 5.899999618530273,
+      "drawMs": 0,
+      "presentationOpportunityMs": 15
+    },
+    {
+      "seq": 5,
+      "tiles": 4,
+      "decodeMs": 15.09999942779541,
+      "drawMs": 0,
+      "presentationOpportunityMs": 15.199999809265137
+    },
+    {
+      "seq": 6,
+      "tiles": 4,
+      "decodeMs": 6,
+      "drawMs": 0,
+      "presentationOpportunityMs": 16.600000381469727
+    },
+    {
+      "seq": 7,
+      "tiles": 4,
+      "decodeMs": 4,
+      "drawMs": 0,
+      "presentationOpportunityMs": 4.200000762939453
+    },
+    {
+      "seq": 8,
+      "tiles": 4,
+      "decodeMs": 6.899999618530273,
+      "drawMs": 0,
+      "presentationOpportunityMs": 16.800000190734863
+    },
+    {
+      "seq": 9,
+      "tiles": 4,
+      "decodeMs": 4.899999618530273,
+      "drawMs": 0,
+      "presentationOpportunityMs": 5.100000381469727
+    },
+    {
+      "seq": 10,
+      "tiles": 4,
+      "decodeMs": 4.199999809265137,
+      "drawMs": 0,
+      "presentationOpportunityMs": 16.899999618530273
+    },
+    {
+      "seq": 11,
+      "tiles": 4,
+      "decodeMs": 4.600000381469727,
+      "drawMs": 0.09999942779541016,
+      "presentationOpportunityMs": 4.800000190734863
+    },
+    {
+      "seq": 12,
+      "tiles": 4,
+      "decodeMs": 5.299999237060547,
+      "drawMs": 0,
+      "presentationOpportunityMs": 15.59999942779541
+    },
+    {
+      "seq": 13,
+      "tiles": 4,
+      "decodeMs": 7.199999809265137,
+      "drawMs": 0,
+      "presentationOpportunityMs": 7.300000190734863
+    },
+    {
+      "seq": 14,
+      "tiles": 4,
+      "decodeMs": 4.699999809265137,
+      "drawMs": 0,
+      "presentationOpportunityMs": 15.699999809265137
+    },
+    {
+      "seq": 15,
+      "tiles": 4,
+      "decodeMs": 5.899999618530273,
+      "drawMs": 0,
+      "presentationOpportunityMs": 6
+    },
+    {
+      "seq": 16,
+      "tiles": 4,
+      "decodeMs": 4.300000190734863,
+      "drawMs": 0,
+      "presentationOpportunityMs": 15.600000381469727
+    },
+    {
+      "seq": 17,
+      "tiles": 4,
+      "decodeMs": 4.300000190734863,
+      "drawMs": 0.10000038146972656,
+      "presentationOpportunityMs": 4.5
+    },
+    {
+      "seq": 18,
+      "tiles": 4,
+      "decodeMs": 4.899999618530273,
+      "drawMs": 0,
+      "presentationOpportunityMs": 16.399999618530273
+    },
+    {
+      "seq": 19,
+      "tiles": 4,
+      "decodeMs": 4.5,
+      "drawMs": 0,
+      "presentationOpportunityMs": 4.699999809265137
+    },
+    {
+      "seq": 20,
+      "tiles": 4,
+      "decodeMs": 4.199999809265137,
+      "drawMs": 0.10000038146972656,
+      "presentationOpportunityMs": 16.300000190734863
+    },
+    {
+      "seq": 21,
+      "tiles": 4,
+      "decodeMs": 6.100000381469727,
+      "drawMs": 0,
+      "presentationOpportunityMs": 6.100000381469727
+    },
+    {
+      "seq": 22,
+      "tiles": 4,
+      "decodeMs": 4.100000381469727,
+      "drawMs": 0.09999942779541016,
+      "presentationOpportunityMs": 16.5
+    },
+    {
+      "seq": 23,
+      "tiles": 4,
+      "decodeMs": 3.8999996185302734,
+      "drawMs": 0,
+      "presentationOpportunityMs": 4
+    },
+    {
+      "seq": 24,
+      "tiles": 4,
+      "decodeMs": 4.5,
+      "drawMs": 0,
+      "presentationOpportunityMs": 15.399999618530273
+    },
+    {
+      "seq": 25,
+      "tiles": 4,
+      "decodeMs": 5.199999809265137,
+      "drawMs": 0,
+      "presentationOpportunityMs": 5.300000190734863
+    },
+    {
+      "seq": 26,
+      "tiles": 4,
+      "decodeMs": 4.100000381469727,
+      "drawMs": 0,
+      "presentationOpportunityMs": 16.40000057220459
+    },
+    {
+      "seq": 27,
+      "tiles": 0,
+      "decodeMs": 0,
+      "drawMs": 0,
+      "presentationOpportunityMs": 0
+    },
+    {
+      "seq": 28,
+      "tiles": 4,
+      "decodeMs": 5.100000381469727,
+      "drawMs": 0.09999942779541016,
+      "presentationOpportunityMs": 15.800000190734863
+    },
+    {
+      "seq": 29,
+      "tiles": 4,
+      "decodeMs": 4.59999942779541,
+      "drawMs": 0,
+      "presentationOpportunityMs": 4.799999237060547
+    },
+    {
+      "seq": 30,
+      "tiles": 4,
+      "decodeMs": 6,
+      "drawMs": 0,
+      "presentationOpportunityMs": 17.200000762939453
+    },
+    {
+      "seq": 31,
+      "tiles": 4,
+      "decodeMs": 4.899999618530273,
+      "drawMs": 0,
+      "presentationOpportunityMs": 5
+    },
+    {
+      "seq": 32,
+      "tiles": 4,
+      "decodeMs": 4.699999809265137,
+      "drawMs": 0,
+      "presentationOpportunityMs": 15.300000190734863
+    },
+    {
+      "seq": 33,
+      "tiles": 4,
+      "decodeMs": 4.399999618530273,
+      "drawMs": 0.10000038146972656,
+      "presentationOpportunityMs": 4.600000381469727
+    },
+    {
+      "seq": 34,
+      "tiles": 4,
+      "decodeMs": 4.40000057220459,
+      "drawMs": 0,
+      "presentationOpportunityMs": 15.199999809265137
+    },
+    {
+      "seq": 35,
+      "tiles": 4,
+      "decodeMs": 4.800000190734863,
+      "drawMs": 0,
+      "presentationOpportunityMs": 4.90000057220459
+    },
+    {
+      "seq": 36,
+      "tiles": 0,
+      "decodeMs": 0,
+      "drawMs": 0,
+      "presentationOpportunityMs": 15.300000190734863
+    },
+    {
+      "seq": 37,
+      "tiles": 4,
+      "decodeMs": 4,
+      "drawMs": 0,
+      "presentationOpportunityMs": 4.100000381469727
+    },
+    {
+      "seq": 38,
+      "tiles": 4,
+      "decodeMs": 3.8000001907348633,
+      "drawMs": 0.09999942779541016,
+      "presentationOpportunityMs": 16.300000190734863
+    },
+    {
+      "seq": 39,
+      "tiles": 4,
+      "decodeMs": 3.6999998092651367,
+      "drawMs": 0,
+      "presentationOpportunityMs": 3.8000001907348633
+    },
+    {
+      "seq": 40,
+      "tiles": 4,
+      "decodeMs": 3.8000001907348633,
+      "drawMs": 0,
+      "presentationOpportunityMs": 15.300000190734863
+    },
+    {
+      "seq": 41,
+      "tiles": 4,
+      "decodeMs": 3.8999996185302734,
+      "drawMs": 0,
+      "presentationOpportunityMs": 4
+    },
+    {
+      "seq": 42,
+      "tiles": 4,
+      "decodeMs": 4.59999942779541,
+      "drawMs": 0.10000038146972656,
+      "presentationOpportunityMs": 15.399999618530273
+    },
+    {
+      "seq": 43,
+      "tiles": 4,
+      "decodeMs": 4.600000381469727,
+      "drawMs": 0,
+      "presentationOpportunityMs": 4.699999809265137
+    },
+    {
+      "seq": 44,
+      "tiles": 4,
+      "decodeMs": 5.100000381469727,
+      "drawMs": 0,
+      "presentationOpportunityMs": 15.40000057220459
+    },
+    {
+      "seq": 45,
+      "tiles": 4,
+      "decodeMs": 3.8999996185302734,
+      "drawMs": 0,
+      "presentationOpportunityMs": 3.8999996185302734
+    },
+    {
+      "seq": 46,
+      "tiles": 4,
+      "decodeMs": 4.199999809265137,
+      "drawMs": 0,
+      "presentationOpportunityMs": 15.300000190734863
+    },
+    {
+      "seq": 47,
+      "tiles": 4,
+      "decodeMs": 4,
+      "drawMs": 0,
+      "presentationOpportunityMs": 4.09999942779541
+    },
+    {
+      "seq": 48,
+      "tiles": 4,
+      "decodeMs": 3.8000001907348633,
+      "drawMs": 0,
+      "presentationOpportunityMs": 15.300000190734863
+    },
+    {
+      "seq": 49,
+      "tiles": 4,
+      "decodeMs": 3.6999998092651367,
+      "drawMs": 0,
+      "presentationOpportunityMs": 3.8000001907348633
+    },
+    {
+      "seq": 50,
+      "tiles": 4,
+      "decodeMs": 3.700000762939453,
+      "drawMs": 0,
+      "presentationOpportunityMs": 15.40000057220459
+    },
+    {
+      "seq": 51,
+      "tiles": 4,
+      "decodeMs": 3.5,
+      "drawMs": 0,
+      "presentationOpportunityMs": 3.6999998092651367
+    },
+    {
+      "seq": 52,
+      "tiles": 4,
+      "decodeMs": 3.59999942779541,
+      "drawMs": 0,
+      "presentationOpportunityMs": 15.399999618530273
+    },
+    {
+      "seq": 53,
+      "tiles": 4,
+      "decodeMs": 3.5,
+      "drawMs": 0,
+      "presentationOpportunityMs": 3.6000003814697266
+    },
+    {
+      "seq": 54,
+      "tiles": 4,
+      "decodeMs": 4,
+      "drawMs": 0.09999942779541016,
+      "presentationOpportunityMs": 16.399999618530273
+    },
+    {
+      "seq": 55,
+      "tiles": 4,
+      "decodeMs": 3.3999996185302734,
+      "drawMs": 0,
+      "presentationOpportunityMs": 3.5
+    },
+    {
+      "seq": 56,
+      "tiles": 4,
+      "decodeMs": 3.8000001907348633,
+      "drawMs": 0,
+      "presentationOpportunityMs": 15.40000057220459
+    },
+    {
+      "seq": 57,
+      "tiles": 4,
+      "decodeMs": 3.5,
+      "drawMs": 0.10000038146972656,
+      "presentationOpportunityMs": 3.700000762939453
+    },
+    {
+      "seq": 58,
+      "tiles": 4,
+      "decodeMs": 3.8999996185302734,
+      "drawMs": 0.10000038146972656,
+      "presentationOpportunityMs": 15.299999237060547
+    },
+    {
+      "seq": 59,
+      "tiles": 4,
+      "decodeMs": 3.5,
+      "drawMs": 0,
+      "presentationOpportunityMs": 3.6000003814697266
+    },
+    {
+      "seq": 60,
+      "tiles": 4,
+      "decodeMs": 3.5,
+      "drawMs": 0,
+      "presentationOpportunityMs": 15.300000190734863
+    },
+    {
+      "seq": 61,
+      "tiles": 4,
+      "decodeMs": 4.199999809265137,
+      "drawMs": 0,
+      "presentationOpportunityMs": 4.300000190734863
+    },
+    {
+      "seq": 62,
+      "tiles": 4,
+      "decodeMs": 3.6999998092651367,
+      "drawMs": 0.09999942779541016,
+      "presentationOpportunityMs": 16.699999809265137
+    },
+    {
+      "seq": 63,
+      "tiles": 4,
+      "decodeMs": 3.8000001907348633,
+      "drawMs": 0,
+      "presentationOpportunityMs": 3.8999996185302734
+    },
+    {
+      "seq": 64,
+      "tiles": 4,
+      "decodeMs": 3.6999998092651367,
+      "drawMs": 0,
+      "presentationOpportunityMs": 16.09999942779541
+    },
+    {
+      "seq": 65,
+      "tiles": 4,
+      "decodeMs": 3.8999996185302734,
+      "drawMs": 0,
+      "presentationOpportunityMs": 3.8999996185302734
+    },
+    {
+      "seq": 66,
+      "tiles": 4,
+      "decodeMs": 3.8000001907348633,
+      "drawMs": 0,
+      "presentationOpportunityMs": 15.300000190734863
+    },
+    {
+      "seq": 67,
+      "tiles": 4,
+      "decodeMs": 3.5,
+      "drawMs": 0.09999942779541016,
+      "presentationOpportunityMs": 3.6999998092651367
+    },
+    {
+      "seq": 68,
+      "tiles": 4,
+      "decodeMs": 3.5,
+      "drawMs": 0.10000038146972656,
+      "presentationOpportunityMs": 16.800000190734863
+    },
+    {
+      "seq": 69,
+      "tiles": 4,
+      "decodeMs": 3.3999996185302734,
+      "drawMs": 0,
+      "presentationOpportunityMs": 3.6000003814697266
+    },
+    {
+      "seq": 70,
+      "tiles": 4,
+      "decodeMs": 3.59999942779541,
+      "drawMs": 0.10000038146972656,
+      "presentationOpportunityMs": 16.399999618530273
+    },
+    {
+      "seq": 71,
+      "tiles": 4,
+      "decodeMs": 4.199999809265137,
+      "drawMs": 0.09999942779541016,
+      "presentationOpportunityMs": 4.299999237060547
+    },
+    {
+      "seq": 72,
+      "tiles": 4,
+      "decodeMs": 4.399999618530273,
+      "drawMs": 0,
+      "presentationOpportunityMs": 17.199999809265137
+    },
+    {
+      "seq": 73,
+      "tiles": 0,
+      "decodeMs": 0,
+      "drawMs": 0,
+      "presentationOpportunityMs": 0
+    },
+    {
+      "seq": 74,
+      "tiles": 0,
+      "decodeMs": 0,
+      "drawMs": 0,
+      "presentationOpportunityMs": 15.90000057220459
+    },
+    {
+      "seq": 75,
+      "tiles": 4,
+      "decodeMs": 4,
+      "drawMs": 0,
+      "presentationOpportunityMs": 4.199999809265137
+    },
+    {
+      "seq": 76,
+      "tiles": 4,
+      "decodeMs": 3.6000003814697266,
+      "drawMs": 0.09999942779541016,
+      "presentationOpportunityMs": 15.300000190734863
+    },
+    {
+      "seq": 77,
+      "tiles": 4,
+      "decodeMs": 3.299999237060547,
+      "drawMs": 0,
+      "presentationOpportunityMs": 3.5
+    },
+    {
+      "seq": 78,
+      "tiles": 4,
+      "decodeMs": 3.5,
+      "drawMs": 0,
+      "presentationOpportunityMs": 16.09999942779541
+    },
+    {
+      "seq": 79,
+      "tiles": 4,
+      "decodeMs": 3.3000001907348633,
+      "drawMs": 0,
+      "presentationOpportunityMs": 3.3999996185302734
+    },
+    {
+      "seq": 80,
+      "tiles": 4,
+      "decodeMs": 3.09999942779541,
+      "drawMs": 0.10000038146972656,
+      "presentationOpportunityMs": 16.300000190734863
+    },
+    {
+      "seq": 81,
+      "tiles": 4,
+      "decodeMs": 3.3999996185302734,
+      "drawMs": 0,
+      "presentationOpportunityMs": 3.59999942779541
+    },
+    {
+      "seq": 82,
+      "tiles": 4,
+      "decodeMs": 3.8000001907348633,
+      "drawMs": 0,
+      "presentationOpportunityMs": 15.300000190734863
+    },
+    {
+      "seq": 83,
+      "tiles": 4,
+      "decodeMs": 3.8000001907348633,
+      "drawMs": 0,
+      "presentationOpportunityMs": 3.90000057220459
+    },
+    {
+      "seq": 84,
+      "tiles": 4,
+      "decodeMs": 3.8999996185302734,
+      "drawMs": 0,
+      "presentationOpportunityMs": 15.299999237060547
+    },
+    {
+      "seq": 85,
+      "tiles": 4,
+      "decodeMs": 3.5,
+      "drawMs": 0,
+      "presentationOpportunityMs": 3.6999998092651367
+    },
+    {
+      "seq": 86,
+      "tiles": 4,
+      "decodeMs": 4.199999809265137,
+      "drawMs": 0,
+      "presentationOpportunityMs": 15.5
+    },
+    {
+      "seq": 87,
+      "tiles": 4,
+      "decodeMs": 3.1999998092651367,
+      "drawMs": 0.10000038146972656,
+      "presentationOpportunityMs": 3.3999996185302734
+    },
+    {
+      "seq": 88,
+      "tiles": 4,
+      "decodeMs": 3.40000057220459,
+      "drawMs": 0,
+      "presentationOpportunityMs": 16.40000057220459
+    },
+    {
+      "seq": 89,
+      "tiles": 4,
+      "decodeMs": 3.700000762939453,
+      "drawMs": 0,
+      "presentationOpportunityMs": 3.8000001907348633
+    }
+  ]
+}

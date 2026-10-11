@@ -1,0 +1,101 @@
+{
+  "note": "First decoded frame comparison only; text-region RMSE is not a readability or motion score. Color conversion affects this number.",
+  "results": [
+    {
+      "phase": "idle",
+      "codec": "h264-videotoolbox",
+      "firstFrameRGBPSNR": 37.447494277507005,
+      "textRegionRGBRMSE": 4.265790599610857
+    },
+    {
+      "phase": "idle",
+      "codec": "h264-software",
+      "firstFrameRGBPSNR": 42.665546773595395,
+      "textRegionRGBRMSE": 2.2996828722586553
+    },
+    {
+      "phase": "idle",
+      "codec": "vp9-realtime",
+      "firstFrameRGBPSNR": 43.15442597111013,
+      "textRegionRGBRMSE": 2.161462122254812
+    },
+    {
+      "phase": "idle",
+      "codec": "av1-svt",
+      "firstFrameRGBPSNR": 44.85351591453921,
+      "textRegionRGBRMSE": 1.7643702173080982
+    },
+    {
+      "phase": "typing",
+      "codec": "h264-videotoolbox",
+      "firstFrameRGBPSNR": 37.514758160887226,
+      "textRegionRGBRMSE": 4.256389052303927
+    },
+    {
+      "phase": "typing",
+      "codec": "h264-software",
+      "firstFrameRGBPSNR": 42.69215868991122,
+      "textRegionRGBRMSE": 2.3009704898686074
+    },
+    {
+      "phase": "typing",
+      "codec": "vp9-realtime",
+      "firstFrameRGBPSNR": 43.17438236796357,
+      "textRegionRGBRMSE": 2.161950376028491
+    },
+    {
+      "phase": "typing",
+      "codec": "av1-svt",
+      "firstFrameRGBPSNR": 44.851603514138645,
+      "textRegionRGBRMSE": 1.7589008825563797
+    },
+    {
+      "phase": "scroll",
+      "codec": "h264-videotoolbox",
+      "firstFrameRGBPSNR": 37.47717083870445,
+      "textRegionRGBRMSE": 4.273380377740549
+    },
+    {
+      "phase": "scroll",
+      "codec": "h264-software",
+      "firstFrameRGBPSNR": 42.69535025927955,
+      "textRegionRGBRMSE": 2.296311108832067
+    },
+    {
+      "phase": "scroll",
+      "codec": "vp9-realtime",
+      "firstFrameRGBPSNR": 43.16544832074772,
+      "textRegionRGBRMSE": 2.161648993796766
+    },
+    {
+      "phase": "scroll",
+      "codec": "av1-svt",
+      "firstFrameRGBPSNR": 44.632093012658174,
+      "textRegionRGBRMSE": 1.84374161293211
+    },
+    {
+      "phase": "motion",
+      "codec": "h264-videotoolbox",
+      "firstFrameRGBPSNR": 37.191687740982516,
+      "textRegionRGBRMSE": 4.309200026339718
+    },
+    {
+      "phase": "motion",
+      "codec": "h264-software",
+      "firstFrameRGBPSNR": 41.8430560415119,
+      "textRegionRGBRMSE": 2.4124687892923227
+    },
+    {
+      "phase": "motion",
+      "codec": "vp9-realtime",
+      "firstFrameRGBPSNR": 42.25407282259388,
+      "textRegionRGBRMSE": 2.282257914534422
+    },
+    {
+      "phase": "motion",
+      "codec": "av1-svt",
+      "firstFrameRGBPSNR": 43.45590405026415,
+      "textRegionRGBRMSE": 1.94582687268147
+    }
+  ]
+}

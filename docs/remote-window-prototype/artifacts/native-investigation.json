@@ -1,0 +1,15 @@
+{
+  "date": "2026-10-11",
+  "attempts": [
+    {
+      "run": "native-2x",
+      "concurrentWith": "native-1x",
+      "result": "SCK stream stopped: application connection interrupted; 423 encoded frames. Excluded from primary sequential results."
+    },
+    {
+      "run": "native-clean-2x",
+      "result": "Process aborted after 296 encoded frames with NSInvalidArgumentException in CoreText/FixtureView.draw (nil dictionary object). Excluded from primary results. Exact root cause not established."
+    }
+  ],
+  "change": "Fixture drawing attributes/font retained for view lifetime instead of recreating system monospaced font attributes on each draw; subsequent native-final runs use Menlo. This is a fixture change, not proof of OS bug root cause."
+}
