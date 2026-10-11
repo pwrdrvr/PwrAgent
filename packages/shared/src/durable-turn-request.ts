@@ -1,4 +1,4 @@
-import type { SubmitDurableTurnRequest } from "./contracts/durable-turn-requests";
+import type { SubmitDurableTurnRequest, SubmitDurableSteerRequest } from "./contracts/durable-turn-requests";
 
 /** V1 canonical JSON: sorted object keys, ordered arrays, JSON scalar encoding.
  * Only JSON data is accepted. Optional undefined object fields are omitted.
@@ -10,10 +10,27 @@ export function canonicalDurableTurnRequest(
     clientRequest: Pick<SubmitDurableTurnRequest["clientRequest"], "version" | "createdAt">;
   },
 ): string {
+  return canonicalRequest(ownerInstanceId, submission, "startTurn");
+}
+
+export function canonicalDurableSteerRequest(
+  ownerInstanceId: string,
+  submission: Omit<SubmitDurableSteerRequest, "clientRequest"> & {
+    clientRequest: Pick<SubmitDurableSteerRequest["clientRequest"], "version" | "createdAt">;
+  },
+): string {
+  return canonicalRequest(ownerInstanceId, submission, "steerTurn");
+}
+
+function canonicalRequest(
+  ownerInstanceId: string,
+  submission: { clientRequest: { version: 1; createdAt: number }; request: SubmitDurableTurnRequest["request"] },
+  operation: "startTurn" | "steerTurn",
+): string {
   return canonicalJson({
     version: submission.clientRequest.version,
     createdAt: submission.clientRequest.createdAt,
-    operation: "startTurn",
+    operation,
     destination: {
       instanceId: ownerInstanceId,
       backend: submission.request.backend,

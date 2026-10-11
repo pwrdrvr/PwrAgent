@@ -262,7 +262,7 @@ import { getDesktopSettingsService } from "../settings/desktop-settings-singleto
 import { getAppStateDb, isAppStateInitialized } from "../state/app-state";
 import { DurableTurnRequestService, DurableTurnRequestError } from "./durable-turn-request-service";
 import { durableFederationCallerScope, authenticateMessageOrigin } from "./federation-backend-bridge";
-import type { SubmitDurableTurnRequest, GetDurableTurnRequest, DurableTurnReceipt } from "@pwragent/shared";
+import type { SubmitDurableTurnRequest, GetDurableTurnRequest, DurableTurnReceipt, SubmitDurableSteerRequest, DurableSteerReceipt } from "@pwragent/shared";
 import {
   getExistingRuntimeFederationLeaseCoordinator,
   getRuntimeFederationLeaseCoordinator,
@@ -547,6 +547,7 @@ const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "thread_detail",
   "turn_control",
   "durable_turn_requests_v1",
+  "durable_steer_requests_v1",
   "scheduled_actions",
   "pending_request_control",
   "environment_actions",
@@ -992,9 +993,33 @@ export class DesktopFederationRuntime {
     return this.durableTurnRequestService().get(durableFederationCallerScope(this.ensureLocalInstanceId(), callerScope), request);
   }
 
-  private assertDurableTurnPeer(target: FederationRemoteTarget): void {
+  async submitDurableSteerRequest(
+    callerScope: string,
+    request: SubmitDurableSteerRequest,
+    target?: FederationRemoteTarget,
+  ): Promise<DurableSteerReceipt> {
+    if (target) {
+      this.assertDurableTurnPeer(target, "durable_steer_requests_v1");
+      return this.remoteBackend(target).submitSteerRequest({ ...request, callerScope });
+    }
+    return this.durableTurnRequestService().submitSteer(durableFederationCallerScope(this.ensureLocalInstanceId(), callerScope), request);
+  }
+
+  async getDurableSteerRequest(
+    callerScope: string,
+    request: GetDurableTurnRequest,
+    target?: FederationRemoteTarget,
+  ): Promise<DurableSteerReceipt | null> {
+    if (target) {
+      this.assertDurableTurnPeer(target, "durable_steer_requests_v1");
+      return this.remoteBackend(target).getSteerRequest({ ...request, callerScope });
+    }
+    return this.durableTurnRequestService().getSteer(durableFederationCallerScope(this.ensureLocalInstanceId(), callerScope), request);
+  }
+
+  private assertDurableTurnPeer(target: FederationRemoteTarget, capability: FederationCapability = "durable_turn_requests_v1"): void {
     const peer = this.connectedPeerTargets().find((candidate) => candidate.target.instanceId === target.instanceId);
-    if (!peer?.capabilities.includes("durable_turn_requests_v1") || !peer.capabilities.includes("turn_control")) {
+    if (!peer?.capabilities.includes(capability) || !peer.capabilities.includes("turn_control")) {
       throw new DurableTurnRequestError("request_unsupported");
     }
   }
@@ -1021,6 +1046,7 @@ export class DesktopFederationRuntime {
           await backend.readQueuedTurn({ backend: receipt.backend, threadId: receipt.threadId, queueEntryId: receipt.queueEntryId });
           return true;
         },
+        steer: (request) => backend.controlActiveTurn!({ ...request, operation: "steer" }),
       });
       const service = this.durableTurnRequests;
       this.unsubscribeDurableTurnEvents = getDesktopBackendRegistry().onEvent((event) => {

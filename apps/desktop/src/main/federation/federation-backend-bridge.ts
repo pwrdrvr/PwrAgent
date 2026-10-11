@@ -210,6 +210,8 @@ import type {
   DurableTurnReceipt,
   FederationSubmitDurableTurnRequest,
   FederationGetDurableTurnRequest,
+  DurableSteerReceipt,
+  FederationSubmitDurableSteerRequest,
 } from "@pwragent/shared";
 import { DurableTurnRequestError, type DurableTurnRequestService } from "./durable-turn-request-service";
 
@@ -467,6 +469,8 @@ export const FEDERATION_BACKEND_METHODS = {
   startTurn: "backend.startTurn",
   submitTurnRequest: "backend.submitTurnRequest",
   getTurnRequest: "backend.getTurnRequest",
+  submitSteerRequest: "backend.submitSteerRequest",
+  getSteerRequest: "backend.getSteerRequest",
   replaceQueuedMessage: "backend.replaceQueuedMessage",
   readQueuedTurn: "backend.readQueuedTurn",
   cancelQueuedTurn: "backend.cancelQueuedTurn",
@@ -601,6 +605,8 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.startTurn]: "turn_control",
   [FEDERATION_BACKEND_METHODS.submitTurnRequest]: "turn_control",
   [FEDERATION_BACKEND_METHODS.getTurnRequest]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.submitSteerRequest]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.getSteerRequest]: "turn_control",
   [FEDERATION_BACKEND_METHODS.replaceQueuedMessage]: "turn_control",
   [FEDERATION_BACKEND_METHODS.readQueuedTurn]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.cancelQueuedTurn]: "turn_control",
@@ -685,6 +691,8 @@ export function additionalFederationBackendCapabilities(
 ): readonly FederationCapability[] {
   if (envelope.method === FEDERATION_BACKEND_METHODS.submitTurnRequest
     || envelope.method === FEDERATION_BACKEND_METHODS.getTurnRequest) return ["durable_turn_requests_v1"];
+  if (envelope.method === FEDERATION_BACKEND_METHODS.submitSteerRequest
+    || envelope.method === FEDERATION_BACKEND_METHODS.getSteerRequest) return ["durable_steer_requests_v1"];
   if (envelope.method !== FEDERATION_BACKEND_METHODS.steerTurn) return [];
   const request = envelope.params as Partial<SteerTurnRequest> | undefined;
   return request?.fallback ? ["scheduled_actions"] : [];
@@ -988,6 +996,14 @@ export function registerFederationBackendHandlers(params: {
     params.router.registerHandler(FEDERATION_BACKEND_METHODS.getTurnRequest, async (envelope) => {
       const request = envelope.params as FederationGetDurableTurnRequest;
       return service.get(durableFederationCallerScope(envelope.sourceInstanceId, request?.callerScope), request);
+    });
+    params.router.registerHandler(FEDERATION_BACKEND_METHODS.submitSteerRequest, async (envelope) => {
+      const request = envelope.params as FederationSubmitDurableSteerRequest;
+      return service.submitSteer(durableFederationCallerScope(envelope.sourceInstanceId, request?.callerScope), request);
+    });
+    params.router.registerHandler(FEDERATION_BACKEND_METHODS.getSteerRequest, async (envelope) => {
+      const request = envelope.params as FederationGetDurableTurnRequest;
+      return service.getSteer(durableFederationCallerScope(envelope.sourceInstanceId, request?.callerScope), request);
     });
   }
   const forwardEnvironmentSetupProgress = (
@@ -2335,6 +2351,14 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
 
   async getTurnRequest(request: FederationGetDurableTurnRequest): Promise<DurableTurnReceipt | null> {
     return this.rpc.request({ method: FEDERATION_BACKEND_METHODS.getTurnRequest, params: request });
+  }
+
+  async submitSteerRequest(request: FederationSubmitDurableSteerRequest): Promise<DurableSteerReceipt> {
+    return this.rpc.request({ method: FEDERATION_BACKEND_METHODS.submitSteerRequest, params: request });
+  }
+
+  async getSteerRequest(request: FederationGetDurableTurnRequest): Promise<DurableSteerReceipt | null> {
+    return this.rpc.request({ method: FEDERATION_BACKEND_METHODS.getSteerRequest, params: request });
   }
 
   async replaceQueuedMessage(

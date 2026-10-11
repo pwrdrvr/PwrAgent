@@ -1,4 +1,4 @@
-import type { StartTurnRequest, StartTurnResponse } from "./agent";
+import type { StartTurnRequest, StartTurnResponse, ControlActiveTurnResponse } from "./agent";
 import type { AppServerThreadMessageOrigin } from "./normalized-app-server";
 
 export const DURABLE_TURN_REQUEST_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
@@ -33,3 +33,17 @@ export type DurableTurnReceipt = {
 /** Delegation is namespaced under the authenticated Federation origin. */
 export type FederationSubmitDurableTurnRequest = SubmitDurableTurnRequest & { callerScope?: string };
 export type FederationGetDurableTurnRequest = GetDurableTurnRequest & { callerScope?: string };
+
+export type DurableSteerPayload = Pick<DurableTurnPayload, "backend" | "threadId" | "input"> & {
+  expectedTurnId: string;
+};
+export type SubmitDurableSteerRequest = {
+  clientRequest: SubmitDurableTurnRequest["clientRequest"];
+  request: DurableSteerPayload;
+};
+export type DurableSteerReceipt = Omit<DurableTurnReceipt, "result"> & {
+  operation: "steerTurn";
+  /** Result of accepting the interjection, not the eventual turn output. */
+  result?: ControlActiveTurnResponse;
+};
+export type FederationSubmitDurableSteerRequest = SubmitDurableSteerRequest & { callerScope?: string };
