@@ -316,6 +316,37 @@ export class FederationPtyService {
     }).catch((error) => options.log?.warn("terminal history load failed", { error: String(error) })) ?? Promise.resolve();
   }
 
+  /** Local owning-agent reads are scoped to its authenticated thread, not an
+   * opening peer. These methods MUST NOT call snapshot(peerId), which cancels
+   * disconnect reaping. They grant no control, ack, lease or process lifetime. */
+  async listForOwnerThread(context: { backend: AppServerBackendKind; threadId: string }): Promise<IntegratedTerminalSessionSummary[]> {
+    await this.ready;
+    await Promise.all([...this.checkpoints]);
+    if (this.options.allowOpen?.() === false) return [];
+    const threadKey = `${context.backend}:${context.threadId}`;
+    return [
+      ...[...this.sessionsById.values()].filter((session) => session.backend === context.backend
+        && session.threadId === context.threadId).map((session) => this.summary(session)),
+      ...[...this.archived.values()].filter((record) => record.summary.threadKey === threadKey).map((record) => ({ ...record.summary })),
+    ];
+  }
+
+  outputForOwnerThread(context: { backend: AppServerBackendKind; threadId: string }, sessionId: string): Pick<TerminalReplay, "range" | "read" | "readPlain" | "snapshot"> | undefined {
+    if (this.options.allowOpen?.() === false) return undefined;
+    const session = this.sessionsById.get(sessionId);
+    return session?.backend === context.backend && session.threadId === context.threadId ? session.replay : undefined;
+  }
+
+  async snapshotForOwnerThread(context: { backend: AppServerBackendKind; threadId: string }, sessionId: string) {
+    await this.ready;
+    await Promise.all([...this.checkpoints]);
+    if (this.options.allowOpen?.() === false) return undefined;
+    const replay = this.outputForOwnerThread(context, sessionId);
+    if (replay) return replay.snapshot();
+    const record = this.archived.get(sessionId);
+    return record?.summary.threadKey === `${context.backend}:${context.threadId}` ? { ...record.snapshot } : undefined;
+  }
+
   async list(peerId: FederationInstanceId, request: { backend: AppServerBackendKind; threadId: string }): Promise<IntegratedTerminalSessionSummary[]> {
     await this.ready;
     if (this.options.allowOpen?.() === false) throw new Error("Remote shells are disabled.");

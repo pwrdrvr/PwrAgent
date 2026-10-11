@@ -2,6 +2,9 @@ import { THREAD_MERGE_HOLDS_CHANNEL, type ManageThreadMergeHoldsRequest } from "
 import { type ForgeReadArgs, type ForgeReadOperation } from "../pr-status/forge-tool-contract";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import { createOwnerRoutedForgeReadHandler } from "../federation/federated-forge-read-service";
+import { integratedTerminalOutputSource } from "./integrated-terminal";
+import { TerminalOutputReader } from "../terminal/terminal-output-reader";
+import { combineTerminalOutputSources } from "../terminal/terminal-output-source";
 import { THREAD_PR_WATCHES_CHANNEL, type ThreadPrWatchesRequest, type ThreadPrWatchesResponse } from "@pwragent/shared";
 import { THREAD_DEPENDENCIES_CHANNEL, type ManageThreadDependenciesRequest } from "@pwragent/shared";
 import { THREAD_PENDING_WAKES_CHANNEL, type ThreadPendingWakesRequest, type ThreadPendingWakesResponse } from "@pwragent/shared";
@@ -496,6 +499,15 @@ export function registerAppServerIpcHandlers(): void {
   getDesktopBackendRegistry().setForgeProjectLabelResolver(
     async (repository) => forgeRuleProjectLabel(await readLocalNavigationDirectoryIndex(), repository),
   );
+  const terminalOwnerInstanceId = getDesktopFederationRuntime().localFederationInstanceId();
+  const terminalOwnerId = () => terminalOwnerInstanceId;
+  getDesktopBackendRegistry().setTerminalOutputToolHandler(new TerminalOutputReader(
+    combineTerminalOutputSources(terminalOwnerId, [
+      integratedTerminalOutputSource(terminalOwnerId),
+      getDesktopFederationRuntime().ownerTerminalOutputSource(),
+    ]),
+  ));
+
   getDesktopBackendRegistry().setThreadPullRequestStatusToolHandler(
     async (args, context) =>
       await appServerService.checkThreadPullRequestStatusForTool(args, context),
@@ -2038,6 +2050,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   registry?.setThreadMergeHoldToolHandler(undefined);
   registry?.setMergeHoldReminderDelivery(undefined);
   registry?.setThreadMaintenanceToolHandler(undefined);
+  registry?.setTerminalOutputToolHandler(undefined);
   registry?.setThreadPullRequestStatusToolHandler(undefined);
   registry?.setThreadPullRequestCanonicalizer(undefined);
   registry?.setPullRequestReferenceResolver(undefined);
