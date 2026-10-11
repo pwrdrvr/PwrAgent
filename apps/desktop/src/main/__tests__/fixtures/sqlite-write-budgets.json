@@ -220,6 +220,8 @@
     "rowsChanged": 0,
     "statements": 0
   },
+  "durable-turn-request": {"commits": 4, "note": "One prompt: admission, dispatch claim, dispatch receipt and terminal receipt; no payload persistence.", "observedWalBytes": 28840, "rowsChanged": 4, "statements": 5},
+  "durable-turn-request-through-queue": {"commits": 5, "note": "One prompt through the gateway and real turn queue: admission, claim, start proof, result and terminal proof.", "observedWalBytes": 32960, "rowsChanged": 5, "statements": 6},
   "existing-thread-environment-setup": {
     "commits": 2,
     "note": "one existing-thread environment selection, including setup hydration and runtime persistence; no per-event writes",
