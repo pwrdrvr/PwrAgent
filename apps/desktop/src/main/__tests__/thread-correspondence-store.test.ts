@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it, onTestFinished } from "vitest";
 import type { AppServerThreadMessageEntry, AppServerThreadReplay } from "@pwragent/shared";
 import { ThreadCorrespondenceStore, type CorrespondenceRecord } from "../app-server/thread-correspondence-store";
+import { extractThreadReplayFromReadResult } from "../codex-app-server/client";
 
 const emptyReplay: AppServerThreadReplay = {
   entries: [], messages: [], pagination: { supportsPagination: false, hasPreviousPage: false },
@@ -25,6 +26,133 @@ function record(): CorrespondenceRecord {
 }
 
 describe("PwrAgent correspondence persistence", () => {
+  it("bounds legacy receipts on older pages without pricing for newer turns", () => {
+    const store = new ThreadCorrespondenceStore();
+    const message = record();
+    store.record({ ...message, id: "older-send", createdAt: 1_500 });
+    store.record({ ...message, id: "newer-send", createdAt: 3_500 });
+    const page = (id: string, startedAt: number, completedAt?: number): AppServerThreadReplay => {
+      const turn = { id, startedAt, completedAt };
+      const entries: AppServerThreadMessageEntry[] = [
+        { type: "message", id: `${id}-prompt`, role: "user", text: "Prompt", turn },
+        { type: "message", id: `${id}-response`, role: "assistant", text: "Response", turn },
+      ];
+      return { entries, messages: entries, pagination: { supportsPagination: true, hasPreviousPage: false } };
+    };
+    const older = page("older", 1_000, 2_000);
+    const merged = store.appendToReplay(message.source, older, undefined, [], { before: "newer-page" });
+    expect(merged.entries.map((entry) => entry.id)).toEqual(["older-prompt", "older-response", "older-send"]);
+    expect(merged.messages.map((entry) => entry.id)).toEqual(merged.entries.map((entry) => entry.id));
+
+    const withoutBoundary = new ThreadCorrespondenceStore();
+    withoutBoundary.record({ ...message, id: "older-send", createdAt: 1_500 });
+    withoutBoundary.record({ ...message, id: "newer-send", createdAt: 3_500 });
+    const undatedEnd = page("older", 1_000);
+    expect(withoutBoundary.appendToReplay(message.source, undatedEnd, undefined, [], { before: "newer-page" })).toEqual(undatedEnd);
+    // Reading the newer page supplies an upper boundary even when pricing and
+    // provider completion times are both absent.
+    withoutBoundary.appendToReplay(message.source, page("newer", 3_000));
+    const bounded = withoutBoundary.appendToReplay(message.source, undatedEnd, undefined, [], { before: "newer-page" });
+    expect(bounded.entries.map((entry) => entry.id)).toEqual(["older-prompt", "older-response", "older-send"]);
+  });
+
+  it("places legacy sends after earlier request usage and before the turn total", () => {
+    const store = new ThreadCorrespondenceStore();
+    const message = { ...record(), createdAt: 3_000 };
+    store.record(message);
+    const turn = { id: "source-turn", startedAt: 1_000, completedAt: 5_000 };
+    const prompt: AppServerThreadMessageEntry = { type: "message", id: "prompt", role: "user", text: "Prompt", turn };
+    const response: AppServerThreadMessageEntry = { type: "message", id: "response", role: "assistant", text: "Response", createdAt: 4_000, turn };
+    const replay: AppServerThreadReplay = {
+      ...emptyReplay,
+      entries: [
+        prompt,
+        { type: "activity", id: "live-token-usage-request", summary: "Latest request usage: 100 tokens", details: [], createdAt: 2_000, turn },
+        response,
+        { type: "activity", id: "live-turn-usage-source-turn", summary: "Turn usage: 200 tokens", details: [], createdAt: 5_000, turn },
+      ],
+      messages: [prompt, response],
+    };
+    const merged = store.appendToReplay(message.source, replay);
+    expect(merged.entries.map((entry) => entry.id)).toEqual([
+      "prompt", "live-token-usage-request", message.id, "response", "live-turn-usage-source-turn",
+    ]);
+    expect(merged.messages.map((entry) => entry.id)).toEqual(["prompt", message.id, "response"]);
+  });
+
+  it("preserves exhausted and zero-limit pages while supporting standalone receipt lookup", () => {
+    const store = new ThreadCorrespondenceStore();
+    const message = record();
+    store.record(message);
+    const exhausted: AppServerThreadReplay = { ...emptyReplay, pagination: { supportsPagination: true, hasPreviousPage: false } };
+    expect(store.appendToReplay(message.source, exhausted, undefined, [], { before: "unknown-cursor" })).toEqual(exhausted);
+    expect(store.appendToReplay(message.source, exhausted, undefined, [], { limit: 0 })).toEqual(exhausted);
+    expect(store.message(message.source, message.id)?.id).toBe(message.id);
+  });
+
+  it("weaves legacy deliveries through undated Codex turns across days and pages after reload", () => {
+    const directory = mkdtempSync(path.join(os.tmpdir(), "pwragent-correspondence-"));
+    onTestFinished(() => rmSync(directory, { recursive: true, force: true }));
+    const store = new ThreadCorrespondenceStore(directory);
+    const source = { backend: "codex" as const, threadId: "sender" };
+    const starts = [7, 8, 9, 10].map((day) => Date.UTC(2026, 9, day, 12));
+    const turns = starts.map((startedAt, index) => {
+      const hex = startedAt.toString(16).padStart(12, "0");
+      return {
+        id: `${hex.slice(0, 8)}-${hex.slice(8)}-7000-8000-000000000000`,
+        status: "completed",
+        items: [
+          { type: "userMessage", id: `user-${index}`, content: [{ type: "text", text: "Prompt" }] },
+          { type: "agentMessage", id: `response-${index}`, text: `Response ${index}`, phase: "final" },
+        ],
+      };
+    });
+    starts.forEach((startedAt, index) => store.record({
+      ...record(), source, id: `delivery-${index}`, createdAt: startedAt + 60_000,
+    }));
+    const restored = new ThreadCorrespondenceStore(directory);
+    const replay = extractThreadReplayFromReadResult({ thread: { id: source.threadId, turns } });
+    expect(replay.entries.every((entry) => entry.createdAt === undefined)).toBe(true);
+    const merged = restored.appendToReplay(source, replay);
+    expect(merged.entries.map((entry) => entry.id)).toEqual(turns.flatMap((_turn, index) => [
+      `user-${index}`, `response-${index}`, `delivery-${index}`,
+    ]));
+    expect(merged.messages.map((entry) => entry.id)).toEqual(merged.entries.map((entry) => entry.id));
+    expect(restored.appendToReplay(source, merged)).toEqual(merged);
+
+    const knownTurns = turns.map((turn, index) => ({ id: turn.id, startedAt: starts[index] }));
+    for (let index = turns.length - 1; index >= 0; index -= 1) {
+      const page = extractThreadReplayFromReadResult({ thread: { id: source.threadId, turns: [turns[index]] } });
+      page.pagination = { supportsPagination: true, hasPreviousPage: index > 0 };
+      const result = restored.appendToReplay(source, page, undefined, knownTurns);
+      expect(result.entries.map((entry) => entry.id)).toEqual([
+        `user-${index}`, `response-${index}`, `delivery-${index}`,
+      ]);
+      expect(result.messages.map((entry) => entry.id)).toEqual(result.entries.map((entry) => entry.id));
+    }
+  });
+
+  it("anchors a send to its source tool call within a multi-day turn without item timestamps", () => {
+    const store = new ThreadCorrespondenceStore();
+    const message = { ...record(), sourceTurnId: "source-turn", sourceItemId: "send-call" };
+    store.record(message);
+    const replay = extractThreadReplayFromReadResult({ thread: { turns: [{
+      id: "source-turn", status: "completed", items: [
+        { type: "userMessage", id: "prompt", content: [{ type: "text", text: "Prompt" }] },
+        { type: "dynamicToolCall", id: "send-call", tool: "send_message_to_thread", arguments: {} },
+        { type: "agentMessage", id: "response", text: "Response", phase: "final" },
+      ],
+    }] } });
+    const merged = store.appendToReplay(message.source, replay);
+    expect(merged.entries.map((entry) => entry.id)).toEqual([
+      "prompt", "activity-send-call", message.id, "response",
+    ]);
+    expect(merged.messages.map((entry) => entry.id)).toEqual(["prompt", message.id, "response"]);
+    expect(store.appendToReplay(message.source, merged)).toEqual(merged);
+    const otherPage = { ...replay, entries: replay.entries.map((entry) => ({ ...entry, turn: { id: "other-turn" } })) };
+    expect(store.appendToReplay(message.source, otherPage).entries.map((entry) => entry.id)).not.toContain(message.id);
+  });
+
   it("writes the body once, retains terminal evidence over a late queued receipt, and reloads after rollup", () => {
     const directory = mkdtempSync(path.join(os.tmpdir(), "pwragent-correspondence-"));
     onTestFinished(() => rmSync(directory, { recursive: true, force: true }));
@@ -92,6 +220,27 @@ describe("PwrAgent correspondence persistence", () => {
     store.update({ ...message.source, instanceId: "peer-instance" }, message.id, { state: "cancelled" });
     expect(store.message(message.source, message.id)?.text).toContain("Send outcome unknown");
     expect(store.message({ ...message.source, instanceId: "peer-instance" }, message.id)).toBeUndefined();
+  });
+
+  it("keeps message-only replays in timestamp order and leaves arbitrary provider turn ids opaque", () => {
+    const store = new ThreadCorrespondenceStore();
+    const message = record();
+    store.record(message);
+    const messages: AppServerThreadMessageEntry[] = [
+      { type: "message", id: "before", role: "user", text: "Before", createdAt: 500 },
+      { type: "message", id: "after", role: "assistant", text: "After", createdAt: 1_500 },
+    ];
+    const replay = { ...emptyReplay, messages };
+    const merged = store.appendToReplay(message.source, replay);
+    expect(merged.messages.map((entry) => entry.id)).toEqual(["before", message.id, "after"]);
+    expect(store.appendToReplay(message.source, merged)).toEqual(merged);
+    const codexSource = { ...message.source, backend: "codex" as const };
+    store.record({ ...message, source: codexSource });
+    const opaque = store.appendToReplay(codexSource, {
+      ...emptyReplay, entries: messages.map((entry) => ({ ...entry, turn: { id: "ffffffff-ffff-4000-8000-000000000000" } })), messages,
+    });
+    expect(opaque.entries.map((entry) => entry.id)).toEqual(["before", message.id, "after"]);
+    expect(opaque.entries.find((entry) => entry.id === message.id)?.turn).toBeUndefined();
   });
 
   it("reports unknown send outcomes, held and failed states without calling a queue delivered", () => {

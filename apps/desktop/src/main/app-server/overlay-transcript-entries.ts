@@ -26,6 +26,8 @@ const OVERLAY_OWNED_ENTRY_ID_PREFIXES = [
   "managed-review:",
   // Setup activity rebuilt from the overlay's Codex environment runtime.
   "codex-environment-setup-",
+  // Sender-side delivery receipts have no provider item id.
+  "correspondence:",
 ] as const;
 
 export function isUsageActivityEntry(
@@ -76,5 +78,6 @@ export function isOverlayOwnedTranscriptEntry(
   return (
     OVERLAY_OWNED_ENTRY_ID_PREFIXES.some((prefix) => entry.id.startsWith(prefix))
     || isUsageActivityEntry(entry)
+    || (entry.type === "message" && entry.origin?.systemReason === "thread-correspondence")
   );
 }
