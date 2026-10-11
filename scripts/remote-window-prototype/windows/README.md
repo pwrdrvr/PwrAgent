@@ -1,5 +1,7 @@
 # Windows single-window experiment
 
+The operator subsequently restored the desktop. See [active-desktop.md](active-desktop.md) for successful guarded WGC and separate local input measurements. The disconnected-session results below are retained as measured.
+
 This standalone fixture experiment changes no PwrAgent product code, lab configuration, session ownership, network, or enrollment. It uses no VNC/RFB. All authored files and build outputs belong to this worktree. The remote source and common browser viewer are owned by the parent experiment.
 
 ## Observed result, 2026-10-11
