@@ -26,6 +26,8 @@ import { HOVER_TRANSITION_GRACE_MS } from "../../../lib/useHoverTransitionGrace"
 import { threadSummaryIdentityKey } from "../../../lib/federated-thread-events";
 import { FixtureSidebar as Sidebar } from "../../../test/navigation-presentation-fixture";
 import type { ComponentProps } from "react";
+import type { Editor } from "@tiptap/react";
+import { ComposerTiptapInput } from "../../composer/ComposerTiptapInput";
 import {
   documentTabStops,
   pressEscape,
@@ -9979,6 +9981,37 @@ describe("Sidebar thread shortcuts", () => {
       reopenKey: "codex:thread-1",
     }));
   });
+
+  it.each(["", "Keep this unsent draft"])(
+    "archives once from the real focused prompt editor without changing draft %j",
+    async (draft) => {
+      const onArchiveThread = vi.fn(async () => undefined);
+      renderShortcutSidebar({ onArchiveThread });
+      const onChange = vi.fn();
+      render(<form className="composer">
+        <ComposerTiptapInput id="reply" label="Reply" value={draft} skillTokens={[]}
+          placeholder="Ask anything" onChange={onChange} />
+      </form>);
+      const field = screen.getByRole("textbox", { name: "Reply" });
+      const editor = (field as HTMLElement & { editor: Editor }).editor;
+      act(() => {
+        editor.commands.setTextSelection(1);
+        field.focus();
+      });
+      expect(field).toHaveFocus();
+      const documentBefore = editor.getJSON();
+      // Real Chromium Backspace carries keyCode 8. ProseMirror's native
+      // deletion guard consumes it at the start of a block, even with Shift.
+      press(field, { key: "Backspace", code: "Backspace", keyCode: 8,
+        ctrlKey: true, shiftKey: true });
+      await waitFor(() => expect(onArchiveThread).toHaveBeenCalledTimes(1));
+      expect(onArchiveThread).toHaveBeenCalledWith(sharedThread, {
+        nextSelectionKey: "codex:thread-2",
+      });
+      expect(editor.getJSON()).toEqual(documentBefore);
+      expect(onChange).not.toHaveBeenCalled();
+    },
+  );
 
   it("leaves text fields other than the composer alone", () => {
     const onSetThreadPin = vi.fn(async () => undefined);
