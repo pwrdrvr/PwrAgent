@@ -26,6 +26,70 @@ function record(): CorrespondenceRecord {
 }
 
 describe("PwrAgent correspondence persistence", () => {
+  it("bounds legacy receipts on older pages without pricing for newer turns", () => {
+    const store = new ThreadCorrespondenceStore();
+    const message = record();
+    store.record({ ...message, id: "older-send", createdAt: 1_500 });
+    store.record({ ...message, id: "newer-send", createdAt: 3_500 });
+    const page = (id: string, startedAt: number, completedAt?: number): AppServerThreadReplay => {
+      const turn = { id, startedAt, completedAt };
+      const entries: AppServerThreadMessageEntry[] = [
+        { type: "message", id: `${id}-prompt`, role: "user", text: "Prompt", turn },
+        { type: "message", id: `${id}-response`, role: "assistant", text: "Response", turn },
+      ];
+      return { entries, messages: entries, pagination: { supportsPagination: true, hasPreviousPage: false } };
+    };
+    const older = page("older", 1_000, 2_000);
+    const merged = store.appendToReplay(message.source, older, undefined, [], { before: "newer-page" });
+    expect(merged.entries.map((entry) => entry.id)).toEqual(["older-prompt", "older-response", "older-send"]);
+    expect(merged.messages.map((entry) => entry.id)).toEqual(merged.entries.map((entry) => entry.id));
+
+    const withoutBoundary = new ThreadCorrespondenceStore();
+    withoutBoundary.record({ ...message, id: "older-send", createdAt: 1_500 });
+    withoutBoundary.record({ ...message, id: "newer-send", createdAt: 3_500 });
+    const undatedEnd = page("older", 1_000);
+    expect(withoutBoundary.appendToReplay(message.source, undatedEnd, undefined, [], { before: "newer-page" })).toEqual(undatedEnd);
+    // Reading the newer page supplies an upper boundary even when pricing and
+    // provider completion times are both absent.
+    withoutBoundary.appendToReplay(message.source, page("newer", 3_000));
+    const bounded = withoutBoundary.appendToReplay(message.source, undatedEnd, undefined, [], { before: "newer-page" });
+    expect(bounded.entries.map((entry) => entry.id)).toEqual(["older-prompt", "older-response", "older-send"]);
+  });
+
+  it("places legacy sends after earlier request usage and before the turn total", () => {
+    const store = new ThreadCorrespondenceStore();
+    const message = { ...record(), createdAt: 3_000 };
+    store.record(message);
+    const turn = { id: "source-turn", startedAt: 1_000, completedAt: 5_000 };
+    const prompt: AppServerThreadMessageEntry = { type: "message", id: "prompt", role: "user", text: "Prompt", turn };
+    const response: AppServerThreadMessageEntry = { type: "message", id: "response", role: "assistant", text: "Response", createdAt: 4_000, turn };
+    const replay: AppServerThreadReplay = {
+      ...emptyReplay,
+      entries: [
+        prompt,
+        { type: "activity", id: "live-token-usage-request", summary: "Latest request usage: 100 tokens", details: [], createdAt: 2_000, turn },
+        response,
+        { type: "activity", id: "live-turn-usage-source-turn", summary: "Turn usage: 200 tokens", details: [], createdAt: 5_000, turn },
+      ],
+      messages: [prompt, response],
+    };
+    const merged = store.appendToReplay(message.source, replay);
+    expect(merged.entries.map((entry) => entry.id)).toEqual([
+      "prompt", "live-token-usage-request", message.id, "response", "live-turn-usage-source-turn",
+    ]);
+    expect(merged.messages.map((entry) => entry.id)).toEqual(["prompt", message.id, "response"]);
+  });
+
+  it("preserves exhausted and zero-limit pages while supporting standalone receipt lookup", () => {
+    const store = new ThreadCorrespondenceStore();
+    const message = record();
+    store.record(message);
+    const exhausted: AppServerThreadReplay = { ...emptyReplay, pagination: { supportsPagination: true, hasPreviousPage: false } };
+    expect(store.appendToReplay(message.source, exhausted, undefined, [], { before: "unknown-cursor" })).toEqual(exhausted);
+    expect(store.appendToReplay(message.source, exhausted, undefined, [], { limit: 0 })).toEqual(exhausted);
+    expect(store.message(message.source, message.id)?.id).toBe(message.id);
+  });
+
   it("weaves legacy deliveries through undated Codex turns across days and pages after reload", () => {
     const directory = mkdtempSync(path.join(os.tmpdir(), "pwragent-correspondence-"));
     onTestFinished(() => rmSync(directory, { recursive: true, force: true }));

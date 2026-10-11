@@ -13,7 +13,7 @@ import type {
   AppServerTurnInputItem,
 } from "@pwragent/shared";
 import { buildThreadMarkdownLink } from "@pwragent/shared";
-import { isUsageActivityEntry } from "./overlay-transcript-entries";
+import { isUsageActivityEntry, usageActivityScope } from "./overlay-transcript-entries";
 
 type ThreadRef = { backend: AppServerBackendKind; threadId: string; instanceId?: string; title?: string };
 export type CorrespondenceRecord = {
@@ -40,6 +40,9 @@ function codexTurnStartedAt(id: string): number | undefined {
 /** PwrAgent-owned supplemental correspondence, never provider history or SQLite. */
 export class ThreadCorrespondenceStore {
   private readonly records = new Map<string, Map<string, CorrespondenceRecord>>();
+  // Retain only turn timing metadata across page reads, never transcript rows.
+  // A newer page's turn start bounds the last turn of the next older page.
+  private readonly turnTimings = new Map<string, Map<string, AppServerThreadTurnMetadata>>();
   constructor(private readonly directory?: string) {}
 
   private key(source: ThreadRef): string {
@@ -127,7 +130,11 @@ export class ThreadCorrespondenceStore {
     replay: AppServerThreadReplay,
     onlyId?: string,
     knownTurns: AppServerThreadTurnMetadata[] = [],
+    page: { before?: string; limit?: number } = {},
   ): AppServerThreadReplay {
+    if (!onlyId && (page.limit === 0
+      || (replay.entries.length === 0 && replay.messages.length === 0
+        && (replay.pagination.supportsPagination || page.before !== undefined)))) return replay;
     const stored = this.load(source);
     const selected = onlyId ? stored.get(onlyId) : undefined;
     const records = onlyId ? (selected ? [selected] : []) : [...stored.values()];
@@ -171,7 +178,10 @@ export class ThreadCorrespondenceStore {
       ? replay.entries
       : replay.messages.map((message) => ({ ...message, type: "message" as const })))
       .filter((entry) => !storedIds.has(entry.id));
-    const turns = new Map<string, AppServerThreadTurnMetadata>();
+    const sourceKey = this.key(source);
+    const turns = onlyId ? new Map<string, AppServerThreadTurnMetadata>()
+      : this.turnTimings.get(sourceKey) ?? new Map<string, AppServerThreadTurnMetadata>();
+    if (!onlyId) this.turnTimings.set(sourceKey, turns);
     for (const turn of knownTurns) {
       const previous = turns.get(turn.id);
       turns.set(turn.id, {
@@ -203,7 +213,7 @@ export class ThreadCorrespondenceStore {
       ?? (source.backend === "codex" ? codexTurnStartedAt(turn.id) : undefined);
     const timedTurns = [...turns.values()].flatMap((turn) => {
       const time = startedAt(turn);
-      return time === undefined ? [] : [{ id: turn.id, time }];
+      return time === undefined ? [] : [{ id: turn.id, time, completedAt: turn.completedAt }];
     }).sort((left, right) => left.time - right.time);
     const timestamp = (entry: AppServerThreadEntry) => entry.createdAt
       ?? (entry.turn ? startedAt(turns.get(entry.turn.id) ?? entry.turn) : undefined);
@@ -221,6 +231,15 @@ export class ThreadCorrespondenceStore {
       // history to the newest page, where provider rows may have no dates.
       if (!onlyId && indexesByTurn.size > 0 && sourceTurnId && !turnIndexes) continue;
       if (!onlyId && replay.pagination.hasPreviousPage && turnIndex < 0 && !sourceTurnId && timedTurns.length > 0) continue;
+      if (!onlyId && !record.sourceTurnId && sourceTurnId) {
+        const inferredTurn = timedTurns[turnIndex]!;
+        if (inferredTurn.completedAt !== undefined && record.createdAt > inferredTurn.completedAt) continue;
+        // An older page's final turn cannot own arbitrary later receipts.
+        // Without a completion time or a newer turn boundary, leave legacy
+        // ownership unresolved rather than duplicate newer message bodies.
+        if (page.before !== undefined && turnIndex === timedTurns.length - 1
+          && inferredTurn.completedAt === undefined) continue;
+      }
       if (sourceTurnId) message.turn = { id: sourceTurnId };
       const itemIndex = sourceTurnId && record.sourceItemId
         ? indexesByItem.get(`${sourceTurnId}:${record.sourceItemId}`) : undefined;
@@ -235,7 +254,7 @@ export class ThreadCorrespondenceStore {
           const time = timestamp(entry);
           if (time !== undefined && time > record.createdAt) break;
           // A turn total follows all its messages, including undated sends.
-          if (turnIndexes && isUsageActivityEntry(entry)) break;
+          if (turnIndexes && isUsageActivityEntry(entry) && usageActivityScope(entry) === "turn") break;
           cursor += 1;
         }
         cursors.set(sourceTurnId, cursor);

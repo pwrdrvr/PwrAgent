@@ -15967,6 +15967,7 @@ export class DesktopBackendRegistry {
               undefined,
               response.pricing?.lines.flatMap((line) => line.scope === "turn" && line.turnId
                 ? [{ id: line.turnId, startedAt: line.startedAt, completedAt: line.completedAt }] : []),
+              { before: request.before, limit: request.limit },
             ),
         readDurationMs: Math.max(0, Math.round(performance.now() - readStartedAt)),
       };
@@ -16173,6 +16174,7 @@ export class DesktopBackendRegistry {
             undefined,
             pricing.lines.flatMap((line) => line.scope === "turn" && line.turnId
               ? [{ id: line.turnId, startedAt: line.startedAt, completedAt: line.completedAt }] : []),
+            { before: request.before, limit: request.limit },
           ),
     };
   }

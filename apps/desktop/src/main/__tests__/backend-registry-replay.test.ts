@@ -47,13 +47,14 @@ describe("DesktopBackendRegistry replay integration", () => {
     const source = { backend: "codex" as const, threadId: "sender" };
     const correspondenceStore = new ThreadCorrespondenceStore();
     const pages = ["newer", "older"].map((id) => {
-      const turn = { id, startedAt: id === "older" ? 1_000 : 3_000 };
+      const startedAt = id === "older" ? 1_000 : 3_000;
+      const turn = { id, startedAt, completedAt: startedAt + 500 };
       const entries = [
         { type: "message" as const, id: `${id}-user`, role: "user" as const, text: `${id} prompt`, turn },
         { type: "message" as const, id: `${id}-response`, role: "assistant" as const, text: `${id} response`, turn },
       ];
       correspondenceStore.record({
-        id: `${id}-delivery`, source, sourceTurnId: id,
+        id: `${id}-delivery`, source,
         destination: { backend: "codex", threadId: "recipient" },
         input: [{ type: "text", text: `${id} guidance` }],
         createdAt: turn.startedAt + 100, state: "started",

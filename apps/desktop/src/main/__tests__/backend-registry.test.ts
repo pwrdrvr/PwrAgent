@@ -2722,6 +2722,7 @@ type AcpConfigureWorkflowBudget = (params: {
 }) => Promise<{ defaultAgentBudget: number; maxAgentBudget: number }>;
 
 function createKimiAcpRegistry(options?: {
+  correspondenceStore?: ThreadCorrespondenceStore;
   acpBackendId?: AcpBackendId;
   installedAgent?: AcpInstalledAgentRecord;
   acpRolloutStore?: AcpRolloutStore;
@@ -2850,6 +2851,7 @@ function createKimiAcpRegistry(options?: {
       : {}),
   };
   const registry = new DesktopBackendRegistry({ getThreadArchivePolicy: () => ({ ...DEFAULT_THREAD_ARCHIVE_POLICY, mode: "age" }),
+    correspondenceStore: options?.correspondenceStore,
     codexClient: options?.codexClient ?? new MockBackendClient({ threads: [] }),
     overlayStore: options?.overlayStore ?? createOverlayStoreMock(),
     acpAgentStore: createAcpAgentStoreMock([
@@ -11342,6 +11344,35 @@ describe("DesktopBackendRegistry", () => {
     ]);
 
     await registry.close();
+  });
+
+  it("preserves empty ACP history for unknown cursors and zero limits with stored receipts", async () => {
+    const source = { backend: "acp:grok" as const, threadId: "receipt-pagination" };
+    const correspondenceStore = new ThreadCorrespondenceStore();
+    correspondenceStore.record({
+      id: "correspondence:stored", source,
+      destination: { backend: "codex", threadId: "recipient" },
+      input: [{ type: "text", text: "Stored guidance" }], createdAt: 1_500, state: "started",
+    });
+    const { registry } = createKimiAcpRegistry({
+      correspondenceStore, acpBackendId: source.backend, sessionId: source.threadId,
+      sessions: [{
+        backendId: source.backend, sessionId: source.threadId, title: "Pagination fixture",
+        createdAt: 1_000, updatedAt: 2_000, executionMode: "default", status: "idle",
+      }],
+      replay: {
+        entries: [{ type: "message", id: "prompt", role: "user", text: "Prompt", createdAt: 1_000 }],
+        messages: [], pagination: { supportsPagination: false, hasPreviousPage: false },
+      },
+    });
+    onTestFinished(() => registry.close());
+    for (const pagination of [{ before: "unknown-cursor" }, { limit: 0 }]) {
+      const response = await registry.readThread({ ...source, ...pagination });
+      expect(response.replay.entries).toEqual([]);
+      expect(response.replay.messages).toEqual([]);
+      expect(response.replay.pagination.hasPreviousPage).toBe(false);
+    }
+    expect(correspondenceStore.message(source, "correspondence:stored")?.text).toContain("Stored guidance");
   });
 
   it("keeps managed review entries out of ACP pagination pages", async () => {
