@@ -222,6 +222,9 @@ at 100 prompts (33 MB/day at 1000). No heartbeat is introduced. The test fixture
 owns its SQLite files.
 Steering's checked-in budget is three commits (admission, claim, receipt),
 ~24 KiB per accepted interjection; repeated submit/status adds zero writes.
+The new inbox schema adds five pages (~20 KiB) to a full explicit database
+compaction. Its checked-in page budget reflects that increase; compaction's
+two commits and the row-sliced deletion budget are unchanged.
 
 ## Migration and validation
 
