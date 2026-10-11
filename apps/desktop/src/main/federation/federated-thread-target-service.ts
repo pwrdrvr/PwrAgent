@@ -59,6 +59,7 @@ export async function resolveFederatedThreadTarget(params: {
   runtime: FederatedThreadTargetRuntime;
   targetStore?: RemoteThreadTargetStore;
   request: FederatedThreadTargetRequest;
+  remember?: boolean;
 }): Promise<ResolvedFederatedThreadTarget | undefined> {
   const { request, runtime, targetStore } = params;
   const rpcOptions = { deadlineAt: Date.now() + 10_000 };
@@ -110,7 +111,7 @@ export async function resolveFederatedThreadTarget(params: {
       }
       return undefined;
     }
-    await rememberTarget(targetStore, match, request);
+    if (params.remember !== false) await rememberTarget(targetStore, match, request);
     return match;
   }
 
@@ -159,7 +160,7 @@ export async function resolveFederatedThreadTarget(params: {
     }
     return undefined;
   }
-  await rememberTarget(targetStore, match, request);
+  if (params.remember !== false) await rememberTarget(targetStore, match, request);
   return match;
 }
 

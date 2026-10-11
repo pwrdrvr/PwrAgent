@@ -1,3 +1,5 @@
+import type { ForgeReadHandler } from "../agent-tools/pwragent-forge-agent-tools";
+import { ForgeReadError, validateForgeReadArgs, type ForgeReadRequest } from "../pr-status/forge-tool-contract";
 import { sweepThreadArchiveRetention, archivedThreadFamily, archiveRetentionFamilyEligible } from "./thread-archive-retention";
 import { runGitCommand } from "./git-executable";
 import {
@@ -9184,6 +9186,21 @@ export class DesktopBackendRegistry {
     return await this.messagingAgentToolService.handlePwrAgentMessagingRequest(request);
   }
 
+  private forgeReadHandler?: ForgeReadHandler;
+  private localForgeReadHandler?: ForgeReadHandler;
+
+  setForgeReadHandlers(local: ForgeReadHandler, routed: ForgeReadHandler): void {
+    this.localForgeReadHandler = local;
+    this.forgeReadHandler = routed;
+  }
+
+  async readForgeForPeer(request: ForgeReadRequest, signal?: AbortSignal): Promise<unknown> {
+    validateForgeReadArgs(request.operation, request.args);
+    if (!isAppServerBackendKind(request.backend) || !request.threadId || request.args.instanceId) throw new ForgeReadError("invalid_arguments", "Federated forge reads require a local thread target.");
+    if (!this.localForgeReadHandler) throw new ForgeReadError("unavailable", "Forge read tools are unavailable on this owner.");
+    return this.localForgeReadHandler(request.operation, { ...request.args, backend: request.backend, threadId: request.threadId }, { backend: request.backend, threadId: request.threadId, transport: "mcp", signal });
+  }
+
   private readonly threadInspectionHandler: PwrAgentThreadInspectionHandler =
     async (request) => await this.handleThreadInspectionRequest(request);
   private federatedThreadInspectionHandler:
@@ -10078,6 +10095,7 @@ export class DesktopBackendRegistry {
                 taskMonitorHandler: async (request) =>
                   await this.handleAgentTaskMonitorRequest(request),
                 threadInspectionHandler: this.threadInspectionHandler,
+                forgeReadHandler: this.forgeReadHandler,
                 threadOrchestrationHandler: this.threadOrchestrationHandler,
                 tokenMiserStore: this.tokenMiserStore,
                 tokenMiserFocused: this.tokenMiserService?.focused,
@@ -17209,6 +17227,7 @@ export class DesktopBackendRegistry {
       taskMonitorHandler: async (request) =>
         await this.handleAgentTaskMonitorRequest(request),
       threadInspectionHandler: this.threadInspectionHandler,
+      forgeReadHandler: this.forgeReadHandler,
       threadOrchestrationHandler: this.threadOrchestrationHandler,
       // Gated on the setting, not merely on the store existing: the store is
       // constructed for any live Codex client, so passing it unconditionally
@@ -26150,6 +26169,7 @@ export class DesktopBackendRegistry {
         taskMonitorHandler: async (request) =>
           await this.handleAgentTaskMonitorRequest(request),
         threadInspectionHandler: this.threadInspectionHandler,
+        forgeReadHandler: this.forgeReadHandler,
         threadOrchestrationHandler: this.threadOrchestrationHandler,
         ...(tokenMiserEnabled ? { tokenMiserStore: this.tokenMiserStore, tokenMiserFocused: this.tokenMiserService?.focused } : {}),
         starMapHandler: this.starMapHandler,

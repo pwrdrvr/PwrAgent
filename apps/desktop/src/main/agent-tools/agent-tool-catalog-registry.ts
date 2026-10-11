@@ -1,3 +1,4 @@
+import { buildForgeReadToolDefinitions, type ForgeReadHandler } from "./pwragent-forge-agent-tools";
 import type { TokenMiserFocusedSummaries } from "../token-miser/token-miser-focused";
 import type {
   AgentToolCatalogId,
@@ -67,6 +68,7 @@ export function resolveAgentToolCatalogs(params: {
   messagingHandler?: PwrAgentMessagingHandler;
   taskMonitorHandler?: PwrAgentTaskMonitorHandler;
   threadInspectionHandler?: PwrAgentThreadInspectionHandler;
+  forgeReadHandler?: ForgeReadHandler;
   threadOrchestrationHandler?: PwrAgentThreadOrchestrationHandler;
   tokenMiserStore?: TokenMiserStore;
   tokenMiserFocused?: TokenMiserFocusedSummaries;
@@ -81,7 +83,7 @@ export function resolveAgentToolCatalogs(params: {
   const automationDynamicTools = automationRouter.buildDynamicToolSpecs();
   const appRouter = buildPwrAgentAppToolRouter(params.appManagementHandler);
   const appDynamicTools = appRouter.buildDynamicToolSpecs();
-  const threadRouter = buildPwrAgentThreadToolRouter(params.threadInspectionHandler);
+  const threadRouter = buildPwrAgentThreadToolRouter(params.threadInspectionHandler, { additionalDefinitions: buildForgeReadToolDefinitions(params.forgeReadHandler) });
   const threadDynamicTools = threadRouter.buildDynamicToolSpecs();
   const messagingRouter = buildPwrAgentMessagingToolRouter(params.messagingHandler);
   const messagingDynamicTools = messagingRouter.buildDynamicToolSpecs();

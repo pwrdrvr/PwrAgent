@@ -6613,6 +6613,11 @@ function localBackendOperations(): FederationBackendOperations {
       // "no platforms configured", which renders as no MSG chip.
       return await (messagingPlatformStatusReader?.() ?? []);
     },
+    async readForge(request, options) {
+      const deadline = options?.deadlineAt ?? Date.now() + 60_000;
+      if (deadline <= Date.now()) throw new Error("Forge read deadline expired.");
+      return await getDesktopBackendRegistry().readForgeForPeer(request, AbortSignal.timeout(Math.min(60_000, deadline - Date.now())));
+    },
     async detachThreadPullRequest(
       request: DetachThreadPullRequestRequest,
     ): Promise<DetachThreadPullRequestResponse> {
