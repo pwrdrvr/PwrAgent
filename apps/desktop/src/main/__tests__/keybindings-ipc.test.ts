@@ -191,17 +191,48 @@ describe("keybindings store", () => {
     expect(fs.existsSync(filePath)).toBe(false);
   });
 
-  it("sees an atomic replace of the file", async () => {
-    const { watchKeybindingsFile } = await import("../keybindings/keybindings-store");
-    const onChange = vi.fn();
-    const watcher = watchKeybindingsFile(filePath, onChange, { debounceMs: 10 });
-    try {
+  it.each([false, true])("loads immediate and successive atomic saves (existing file: %s)", async (existing) => {
+    const { readKeybindingsFile, watchKeybindingsFile } = await import(
+      "../keybindings/keybindings-store"
+    );
+    if (existing) fs.writeFileSync(filePath, '[threads]\nrename = ["F1"]\n');
+    // Independent owners model the processes of two profiles sharing the root.
+    const firstChange = vi.fn(() => readKeybindingsFile(filePath).overrides);
+    const secondChange = vi.fn(() => readKeybindingsFile(filePath).overrides);
+    const first = watchKeybindingsFile(filePath, firstChange, { debounceMs: 10 });
+    const second = watchKeybindingsFile(filePath, secondChange, { debounceMs: 10 });
+    const replace = (chord: string): void => {
       const tmp = `${filePath}.tmp`;
-      fs.writeFileSync(tmp, '[threads]\nrename = ["F2"]\n');
+      fs.writeFileSync(tmp, `[threads]\nrename = ["${chord}"]\n`);
       fs.renameSync(tmp, filePath);
-      await vi.waitFor(() => expect(onChange).toHaveBeenCalled(), { timeout: 2000 });
+    };
+    const expectLoaded = async (overrides: Record<string, string[]>): Promise<void> => {
+      await vi.waitFor(() => {
+        expect(firstChange).toHaveLastReturnedWith(overrides);
+        expect(secondChange).toHaveLastReturnedWith(overrides);
+      }, { timeout: 2000 });
+    };
+    try {
+      replace("F2");
+      await expectLoaded({ "threads.rename": ["F2"] });
+      // A startup reconciliation alone cannot satisfy this subsequent save.
+      replace("F3");
+      await expectLoaded({ "threads.rename": ["F3"] });
+      fs.unlinkSync(filePath);
+      await expectLoaded({});
+      replace("F4");
+      await expectLoaded({ "threads.rename": ["F4"] });
+
+      const firstCalls = firstChange.mock.calls.length;
+      first.close();
+      replace("F5");
+      await vi.waitFor(() => {
+        expect(secondChange).toHaveLastReturnedWith({ "threads.rename": ["F5"] });
+      }, { timeout: 2000 });
+      expect(firstChange).toHaveBeenCalledTimes(firstCalls);
     } finally {
-      watcher.close();
+      first.close();
+      second.close();
     }
   });
 });
@@ -235,6 +266,32 @@ describe("keybindings ipc", () => {
     expect(written).toEqual(expected);
     expect(sent).toEqual([{ channel: KEYBINDINGS_CHANGED_CHANNEL, payload: expected }]);
     expect(listener).toHaveBeenCalledWith(expected);
+    expect(await handlers.get(KEYBINDINGS_READ_CHANNEL)?.({})).toEqual(expected);
+  });
+
+  it("reloads and broadcasts an immediate external atomic save after caching a snapshot", async () => {
+    const { registerKeybindingsIpcHandlers, onKeybindingsChanged } = await import(
+      "../ipc/keybindings"
+    );
+    const { KEYBINDINGS_CHANGED_CHANNEL, KEYBINDINGS_READ_CHANNEL } = await import(
+      "../../shared/ipc"
+    );
+    fs.writeFileSync(filePath, '[threads]\nrename = ["F2"]\n');
+    registerKeybindingsIpcHandlers({ filePath });
+    const listener = vi.fn();
+    onKeybindingsChanged(listener);
+    expect(await handlers.get(KEYBINDINGS_READ_CHANNEL)?.({})).toEqual({
+      overrides: { "threads.rename": ["F2"] },
+      filePath,
+    });
+
+    fs.writeFileSync(`${filePath}.tmp`, '[threads]\nrename = ["F3"]\n');
+    fs.renameSync(`${filePath}.tmp`, filePath);
+    const expected = { overrides: { "threads.rename": ["F3"] }, filePath };
+    await vi.waitFor(() => {
+      expect(listener).toHaveBeenCalledWith(expected);
+      expect(sent).toEqual([{ channel: KEYBINDINGS_CHANGED_CHANNEL, payload: expected }]);
+    }, { timeout: 2000 });
     expect(await handlers.get(KEYBINDINGS_READ_CHANNEL)?.({})).toEqual(expected);
   });
 
