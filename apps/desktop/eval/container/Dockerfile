@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /opt/pwragent
 COPY . .
-RUN corepack enable && pnpm install --frozen-lockfile \
+RUN corepack enable pnpm && pnpm install --frozen-lockfile \
     && node apps/desktop/scripts/ensure-electron-runtime.mjs \
     && pnpm --filter @pwragent/desktop build \
     && node scripts/linux-sandbox.mjs --fix

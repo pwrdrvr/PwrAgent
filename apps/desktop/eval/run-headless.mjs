@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline";
 import { createReadStream } from "node:fs";
-import { EXIT, assertReady, atomicJson, claimRun, cleanEnvironment, configToml, observedBudget, sanitizer, terminalEvent, validateInput } from "./lib/headless-contract.mjs";
+import { EXIT, assertReady, atomicJson, claimRun, cleanEnvironment, configToml, observedBudget, sanitizer, budgetStop, waitForOutcome, validateInput } from "./lib/headless-contract.mjs";
 
 const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = process.argv.slice(2);
@@ -24,6 +24,7 @@ let redact = sanitizer();
 let stopReason;
 let watchdog;
 let logFd;
+const logSubscriptions = [];
 const deadlineCall = (promise, ms = 30_000) => {
   let timer;
   return Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("IPC deadline exceeded")), ms); })]).finally(() => clearTimeout(timer));
@@ -101,9 +102,19 @@ try {
   watchdog.unref();
   app = await electron.launch({ args: [path.join(desktopRoot, "out/main/index.js"), "--disable-messaging", "--disable-automations"], cwd: desktopRoot, env, timeout: 60_000 });
   logFd = openSync(path.join(output, "app.log"), "w", 0o600);
-  for (const stream of [app.process().stdout, app.process().stderr]) stream?.on("data", (chunk) => writeFileSync(logFd, redact(chunk.toString())));
+  for (const stream of [app.process().stdout, app.process().stderr]) {
+    if (!stream) continue;
+    let pending = "";
+    const listener = (chunk) => {
+      pending += chunk.toString();
+      const end = pending.lastIndexOf("\n");
+      if (end >= 0) { writeFileSync(logFd, redact(pending.slice(0, end + 1))); pending = pending.slice(end + 1); }
+    };
+    stream.on("data", listener);
+    logSubscriptions.push(() => { stream.off("data", listener); if (pending) writeFileSync(logFd, redact(pending)); });
+  }
   const page = await app.firstWindow({ timeout: 60_000 });
-  await page.waitForFunction(() => Boolean(window.pwragent?.listBackends), { timeout: 60_000 });
+  await page.waitForFunction(() => Boolean(window.pwragent?.listBackends), undefined, { timeout: 60_000 });
   call = (method, arg) => deadlineCall(page.evaluate(({ method, arg }) => {
     if (typeof window.pwragent[method] !== "function") throw new Error(`Unsupported IPC: ${method}`);
     return window.pwragent[method](arg);
@@ -120,13 +131,15 @@ try {
     const backends = await call("listBackends", { includeUnavailable: true, refreshModels: "codex", discoveryIntent: "settings-user-action" });
     backend = backends.backends.find((b) => b.kind === "codex");
     settings = await call("readSettings");
-    if (backend?.available && backend.launchpadOptions?.models?.length && settings.runtime?.tokenMiser?.managedCodex?.state === "ready") break;
+    if (backend?.available && backend.launchpadOptions?.models?.length && settings.runtime?.tokenMiser?.managedCodex?.state === "ready"
+      && (!input.tokenMiser || settings.runtime?.tokenMiser?.activation?.state === "active")) break;
     if (Date.now() > readyDeadline || stopReason) throw new Error("Backend readiness deadline exceeded");
     await new Promise((r) => setTimeout(r, 250));
   } while (true);
   assertReady(backend, settings, input, runtime);
   result.readiness = { backend: { serverName: backend.serverName, serverVersion: backend.serverVersion, methods: backend.methods, launchpadOptions: backend.launchpadOptions, tokenMiser: backend.tokenMiser }, runtime: settings.runtime, selectedCommand: settings.models.codex.discovery.selectedCommand };
   atomicJson(path.join(output, "ready.json"), redact(result.readiness));
+  if (stopReason) throw new Error("Stopped before dispatch");
   if (input.preflightOnly) {
     result.status = "completed";
     result.preflightOnly = true;
@@ -142,6 +155,9 @@ try {
     const view = await call("readThread", { backend: "codex", threadId: result.threadId });
     if (toggle.tokenMiserEnabled !== input.tokenMiser || view.tokenMiserEnabled !== input.tokenMiser) throw new Error("Thread Token Miser mismatch");
     result.effectiveTokenMiser = view.tokenMiserEnabled;
+    const summary = (await call("listThreads", { backend: "codex" })).threads.find((entry) => entry.id === result.threadId);
+    if (summary?.model !== input.model || summary.reasoningEffort !== input.reasoningEffort || summary.executionMode !== "full-access" || summary.fastMode === true) throw new Error("Effective thread model/effort/access mismatch");
+    result.effectiveModelSettings = { model: summary.model, reasoningEffort: summary.reasoningEffort, serviceTier: summary.serviceTier, fastMode: summary.fastMode, executionMode: summary.executionMode };
     // This fsynced marker precedes the ONLY paid dispatch. Crash recovery does
     // not assume a missing IPC response means the provider did not spend.
     result.status = "incomplete";
@@ -150,22 +166,27 @@ try {
     const turn = await call("startTurn", { ...common, threadId: result.threadId, input: [{ type: "text", text: input.prompt }] });
     result.turnId = turn.turnId;
     persist();
-    let terminal;
-    while (!terminal && !stopReason) {
-      for (const event of await drain()) {
-        appendFileSync(path.join(output, "rollout.jsonl"), JSON.stringify(redact(event)) + "\n", { mode: 0o600 });
-        terminal ??= terminalEvent(event, result.threadId, result.turnId);
-        if (event.notification?.params?.threadId === result.threadId && /requestApproval|requestUserInput|elicitation/.test(event.notification.method)) requestStop("failed");
-      }
-      const current = await call("readThread", { backend: "codex", threadId: result.threadId });
-      result.observed = observedBudget(current.pricing?.lines);
-      if ((input.maxObservedCostUsd && result.observed.costUsd >= input.maxObservedCostUsd)
-        || (input.maxObservedTokens && result.observed.tokens >= input.maxObservedTokens)) requestStop("budget_exceeded");
-      if (current.pendingRequest) requestStop("failed");
-      if (!terminal && !stopReason) await new Promise((r) => setTimeout(r, 500));
+    const outcome = await waitForOutcome({
+      threadId: result.threadId, turnId: result.turnId, drain,
+      read: () => call("readThread", { backend: "codex", threadId: result.threadId }),
+      onEvent: (event) => appendFileSync(path.join(output, "rollout.jsonl"), JSON.stringify(redact(event)) + "\n", { mode: 0o600 }),
+      onUsage: async (current) => {
+        result.observed = observedBudget(current.pricing?.lines, current.pricing?.summaries);
+        // Family includes separately billed delegated work as well as the
+        // parent's native helper usage. Never add it to the parent twice.
+        result.familyPricing = await call("readThreadFamilyPricing", { backend: "codex", threadId: result.threadId });
+        result.observed.costUsd = Math.max(result.observed.costUsd, result.familyPricing.members.reduce((sum, member) => sum + member.totalCostMicros, 0) / 1e6);
+        result.observed.unpriced ||= result.familyPricing.members.some((member) => member.unpricedUsageLineCount > 0);
+        return budgetStop(input, result.observed);
+      },
+      stop: () => stopReason,
+      pause: () => new Promise((resolve) => setTimeout(resolve, 500)),
+    });
+    result.status = ["input_required", "unpriced_usage"].includes(outcome) ? "failed" : outcome;
+    if (result.status !== "completed") {
+      result.stopReason = outcome;
+      await call("interruptTurn", { backend: "codex", threadId: result.threadId, turnId: result.turnId }).catch(() => undefined);
     }
-    result.status = stopReason ?? terminal;
-    if (stopReason) await call("interruptTurn", { backend: "codex", threadId: result.threadId, turnId: result.turnId }).catch(() => undefined);
     const finalView = await call("readThread", { backend: "codex", threadId: result.threadId });
     result.pricing = finalView.pricing;
     result.toolAccounting = finalView.toolAccounting;
@@ -183,6 +204,7 @@ try {
     try { await deadlineCall(app.close(), 15_000); result.cleanup = "graceful"; }
     catch { app.process().kill("SIGKILL"); result.cleanup = "forced"; if (result.status === "completed") result.status = "failed"; }
   }
+  for (const unsubscribe of logSubscriptions) unsubscribe();
   if (logFd !== undefined) closeSync(logFd);
   if (input && claim && !claim.prior) {
     try { await exportProtocol(path.join(input.profileDir, "protocol")); } catch (error) { result.artifactError = redact(error.message); }
@@ -195,6 +217,7 @@ try {
       } catch (error) { result.artifactError = redact(error.message); }
     }
     result.finishedAt = new Date().toISOString();
+    if (result.artifactError && result.status === "completed") result.status = "failed";
     result.exitCode = EXIT[result.status] ?? 1;
     persist();
     atomicJson(path.join(output, "result.json"), redact(result));
