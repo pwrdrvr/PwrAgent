@@ -32,6 +32,7 @@ import {
   type KeybindingsSnapshot,
 } from "../../shared/keybindings";
 import { getMainLogger } from "../log";
+import { watchConfigFile } from "../settings/config-store/config-file-watcher";
 import {
   applyTomlEdits,
   parseTomlTables,
@@ -174,43 +175,28 @@ export function writeKeybindingsFile(
 export type KeybindingsWatcher = { close: () => void };
 
 /**
- * Call `onChange` when the file changes on disk, from this process or another.
- * The directory is watched rather than the file, because an atomic save
- * replaces the file and a watch on the old inode would go quiet.
+ * Reconcile once after registration and when the file changes on disk, from
+ * this process or another. Poll the path through the shared config watcher:
+ * atomic saves replace the inode, and macOS directory FSEvents registration
+ * returns before its stream is ready, so an immediate save can emit no event.
+ * The initial reconciliation also covers watchFile's asynchronous stat baseline.
  */
 export function watchKeybindingsFile(
   filePath: string,
   onChange: () => void,
   options: { debounceMs?: number } = {},
 ): KeybindingsWatcher {
-  const debounceMs = options.debounceMs ?? 120;
-  const dir = path.dirname(filePath);
-  const base = path.basename(filePath);
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let watcher: fs.FSWatcher | undefined;
   try {
-    fs.mkdirSync(dir, { recursive: true });
-    watcher = fs.watch(dir, { persistent: false }, (_event, changed) => {
-      // Some platforms report no file name; a re-read is cheap.
-      if (changed !== null && changed.toString() !== base) return;
-      if (timer !== undefined) clearTimeout(timer);
-      timer = setTimeout(() => {
-        timer = undefined;
-        onChange();
-      }, debounceMs);
-    });
-    watcher.on("error", (error) => {
-      mainLog.warn("keybindings: file watch failed", { error: errorMessage(error) });
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    return watchConfigFile({
+      configPath: filePath,
+      onChange,
+      coalesceMs: options.debounceMs ?? 120,
     });
   } catch (error) {
     mainLog.warn("keybindings: could not watch the file", { error: errorMessage(error) });
+    return { close: () => {} };
   }
-  return {
-    close: () => {
-      if (timer !== undefined) clearTimeout(timer);
-      watcher?.close();
-    },
-  };
 }
 
 function errorMessage(error: unknown): string {
