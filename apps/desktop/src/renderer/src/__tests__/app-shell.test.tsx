@@ -2690,7 +2690,7 @@ describe("App", () => {
     expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps a context-rail tab chosen while the startup settings snapshot is being adopted", async () => {
+  it("keeps layout choices made while the startup settings snapshot is being adopted", async () => {
     // The bootstrap projection opens navigation before the live settings
     // read answers, so the rail is clickable first. A click that lands after
     // the read resolves but before App adopts the stored layout prefs must
@@ -2801,12 +2801,18 @@ describe("App", () => {
       // Let the read land in state; React has not rendered it yet.
       await new Promise((resolve) => setTimeout(resolve, 0));
       fireEvent.click(within(context).getByRole("tab", { name: "Linked projects" }));
+      fireEvent.click(screen.getAllByRole("button", { name: "Hide sidebar" })[0]!);
     });
     await flushReactUpdates();
 
     expect(writeSettingsConfig).toHaveBeenCalledWith({
       patch: { ui: { activeContextTab: "projects" } },
     });
+    expect(writeSettingsConfig).toHaveBeenCalledWith({
+      patch: { ui: { sidebarHidden: true } },
+    });
+    expect(screen.queryByRole("button", { name: "Hide sidebar" })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Show sidebar" }).length).toBeGreaterThan(0);
     expect(
       within(context).getByRole("tab", { name: "Linked projects" }),
     ).toHaveAttribute("aria-selected", "true");
