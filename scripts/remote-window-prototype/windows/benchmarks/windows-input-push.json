@@ -1,0 +1,12 @@
+{
+  "startedMs": 1791741374404,
+  "finishedMs": 1791741374592,
+  "wallMs": 188,
+  "result": {
+    "path": "/Users/huntharo/Downloads/pwrwin-input-20261011-a.json",
+    "sizeBytes": 159,
+    "sha256": "8643b2e4ecc068a125cac30b86805bcb06519580ee32b4154d8a80a9918659fd",
+    "instanceId": "pwr_490f7727-674e-43d9-b9ee-be8387f39819"
+  },
+  "interpretation": "Tool wall time for store-and-forward fixture command; not input-to-photon latency."
+}

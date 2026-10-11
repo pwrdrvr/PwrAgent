@@ -1,0 +1,100 @@
+﻿{
+    "schema":  1,
+    "session_id":  1,
+    "input_desktop_open":  false,
+    "default_input_desktop":  false,
+    "per_monitor_v2_set":  true,
+    "dwm_enabled":  true,
+    "display_count":  1,
+    "wgc_supported":  true,
+    "stages":  [
+                   {
+                       "state":  "visible",
+                       "duration_ms":  2204.63,
+                       "frames":  0,
+                       "dpi":  192,
+                       "pool_recreates":  0,
+                       "saved_width":  0,
+                       "saved_height":  0,
+                       "readback_png_ms":  0,
+                       "png_bytes":  0,
+                       "arrival_ms":  [
+
+                                      ],
+                       "fallback":  {
+                                        "api":  "PrintWindow(PW_CLIENTONLY)",
+                                        "success":  true,
+                                        "call_ms":  85.0387,
+                                        "width":  694,
+                                        "height":  349,
+                                        "png_bytes":  3643
+                                    }
+                   },
+                   {
+                       "state":  "obscured",
+                       "duration_ms":  2205.77,
+                       "frames":  0,
+                       "dpi":  192,
+                       "pool_recreates":  0,
+                       "saved_width":  0,
+                       "saved_height":  0,
+                       "readback_png_ms":  0,
+                       "png_bytes":  0,
+                       "arrival_ms":  [
+
+                                      ],
+                       "fallback":  {
+                                        "api":  "PrintWindow(PW_CLIENTONLY)",
+                                        "success":  true,
+                                        "call_ms":  11.7806,
+                                        "width":  694,
+                                        "height":  349,
+                                        "png_bytes":  3638
+                                    }
+                   },
+                   {
+                       "state":  "resized",
+                       "duration_ms":  2213.03,
+                       "frames":  0,
+                       "dpi":  192,
+                       "pool_recreates":  0,
+                       "saved_width":  0,
+                       "saved_height":  0,
+                       "readback_png_ms":  0,
+                       "png_bytes":  0,
+                       "arrival_ms":  [
+
+                                      ],
+                       "fallback":  {
+                                        "api":  "PrintWindow(PW_CLIENTONLY)",
+                                        "success":  true,
+                                        "call_ms":  4.4802,
+                                        "width":  934,
+                                        "height":  469,
+                                        "png_bytes":  4672
+                                    }
+                   },
+                   {
+                       "state":  "minimized",
+                       "duration_ms":  2200.59,
+                       "frames":  0,
+                       "dpi":  192,
+                       "pool_recreates":  0,
+                       "saved_width":  0,
+                       "saved_height":  0,
+                       "readback_png_ms":  0,
+                       "png_bytes":  0,
+                       "arrival_ms":  [
+
+                                      ],
+                       "fallback":  {
+                                        "success":  false,
+                                        "reason":  "Initial probe stopped: minimized client had zero dimensions"
+                                    }
+                   }
+               ],
+    "input":  {
+                  "attempted":  false
+              },
+    "note":  "Pre-guard exploratory run in a disconnected session. Reconstructed JSON closure after exception; observed values unchanged. No WGC frames or interactive visibility proven."
+}
