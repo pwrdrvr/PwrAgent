@@ -54,8 +54,9 @@ for (const focus of ["focused empty", "focused draft", "unfocused"] as const) {
       await expect(editor).toBeFocused();
       if (focus === "focused draft") {
         await editor.fill("Keep this unsent draft");
-        await editor.press("Home");
+        await editor.press(process.platform === "darwin" ? "Meta+ArrowLeft" : "Home");
         await expect(editor).toHaveText("Keep this unsent draft");
+        await expect.poll(() => editor.evaluate(() => window.getSelection()?.anchorOffset)).toBe(0);
       }
       if (focus === "unfocused") {
         await editor.evaluate((element) => (element as HTMLElement).blur());

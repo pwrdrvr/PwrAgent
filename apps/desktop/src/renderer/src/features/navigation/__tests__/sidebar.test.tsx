@@ -9993,6 +9993,9 @@ describe("Sidebar thread shortcuts", () => {
           placeholder="Ask anything" onChange={onChange} />
       </form>);
       const field = screen.getByRole("textbox", { name: "Reply" });
+      expect(field).toHaveAttribute("contenteditable", "true");
+      // jsdom does not implement this browser property on contenteditables.
+      Object.defineProperty(field, "isContentEditable", { value: true });
       const editor = (field as HTMLElement & { editor: Editor }).editor;
       act(() => {
         editor.commands.setTextSelection(1);
@@ -10012,6 +10015,76 @@ describe("Sidebar thread shortcuts", () => {
       expect(onChange).not.toHaveBeenCalled();
     },
   );
+
+  it.each([
+    { isComposing: true },
+    { repeat: true },
+  ])("leaves focused editor events alone for %j", (flags) => {
+    const onArchiveThread = vi.fn(async () => undefined);
+    renderShortcutSidebar({ onArchiveThread });
+    render(<form className="composer">
+      <ComposerTiptapInput id="reply" label="Reply" value="" skillTokens={[]}
+        placeholder="Ask anything" onChange={() => undefined} />
+    </form>);
+    const field = screen.getByRole("textbox", { name: "Reply" });
+    Object.defineProperty(field, "isContentEditable", { value: true });
+    field.focus();
+    press(field, { key: "Backspace", code: "Backspace", keyCode: 8,
+      ctrlKey: true, shiftKey: true, ...flags });
+    expect(onArchiveThread).not.toHaveBeenCalled();
+  });
+
+  it.each(["search", "rename", "dialog", "terminal"])(
+    "does not capture archive from a %s field",
+    (context) => {
+      const onArchiveThread = vi.fn(async () => undefined);
+      renderShortcutSidebar({ onArchiveThread });
+      const host = document.createElement("div");
+      if (context === "dialog") {
+        host.className = "composer";
+        host.setAttribute("role", "dialog");
+      }
+      if (context === "terminal") host.className = "xterm";
+      const field = document.createElement("textarea");
+      host.append(field);
+      document.body.append(host);
+      const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true,
+        key: "Backspace", code: "Backspace", keyCode: 8, ctrlKey: true, shiftKey: true });
+      try {
+        field.focus();
+        act(() => field.dispatchEvent(event));
+        expect(onArchiveThread).not.toHaveBeenCalled();
+        expect(event.defaultPrevented).toBe(false);
+      } finally {
+        host.remove();
+      }
+    },
+  );
+
+  it("keeps a rebound text-deletion chord in the focused editor", async () => {
+    const { _resetKeybindingsStoreForTests } = await import("../../../lib/keybindings-store");
+    _resetKeybindingsStoreForTests({
+      overrides: { "threads.archive": ["CmdOrCtrl+Backspace"] },
+      filePath: "/tmp/keybindings.toml",
+    });
+    try {
+      const onArchiveThread = vi.fn(async () => undefined);
+      renderShortcutSidebar({ onArchiveThread });
+      render(<form className="composer">
+        <ComposerTiptapInput id="reply" label="Reply" value="Keep editing" skillTokens={[]}
+          placeholder="Ask anything" onChange={() => undefined} />
+      </form>);
+      const field = screen.getByRole("textbox", { name: "Reply" });
+      Object.defineProperty(field, "isContentEditable", { value: true });
+      field.focus();
+      press(field, { key: "Backspace", code: "Backspace", keyCode: 8, ctrlKey: true });
+      expect(onArchiveThread).not.toHaveBeenCalled();
+      press(document.body, { key: "Backspace", code: "Backspace", keyCode: 8, ctrlKey: true });
+      expect(onArchiveThread).toHaveBeenCalledTimes(1);
+    } finally {
+      act(() => _resetKeybindingsStoreForTests());
+    }
+  });
 
   it("leaves text fields other than the composer alone", () => {
     const onSetThreadPin = vi.fn(async () => undefined);
