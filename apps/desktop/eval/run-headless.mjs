@@ -130,7 +130,7 @@ try {
   do {
     const backends = await call("listBackends", { includeUnavailable: true, refreshModels: "codex", discoveryIntent: "settings-user-action" });
     backend = backends.backends.find((b) => b.kind === "codex");
-    settings = await call("readSettings");
+    settings = (await call("readSettings")).snapshot;
     result.readiness = {
       backend: backend && { available: backend.available, discoveryPending: backend.discoveryPending, unavailableReason: backend.unavailableReason, accountType: backend.account?.type, serverName: backend.serverName, serverVersion: backend.serverVersion, modelCount: backend.launchpadOptions?.models?.length, modelIds: backend.launchpadOptions?.models?.map((model) => model.id), capabilities: backend.capabilities, tokenMiser: backend.tokenMiser },
       configError: settings.configError,
