@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { assertReady, atomicJson, budgetStop, waitForOutcome, claimRun, cleanEnvironment, configToml, observedBudget, sanitizer, terminalEvent, validateInput } from "./headless-contract.mjs";
+import { assertReady, atomicJson, probeInterrupt, budgetStop, waitForOutcome, claimRun, cleanEnvironment, configToml, observedBudget, sanitizer, terminalEvent, validateInput } from "./headless-contract.mjs";
 const input = { schemaVersion: 1, runId: "run-1", cwd: "/app", prompt: "Fix it", model: "gpt-6-astra", reasoningEffort: "high", serviceTier: "default", tokenMiser: true, timeoutMs: 1000, runtimeManifest: "/eval/runtime.json" };
 test("strict contract rejects implicit toggles, model substitutions and unknown inputs", () => {
   assert.equal(validateInput(input).codexHome, "/eval/codex");
@@ -82,4 +82,13 @@ test("budget fails closed on unpriced usage and stops at observed thresholds", (
   assert.equal(budgetStop({ maxObservedCostUsd: 1 }, { unpriced: true, costUsd: 0, tokens: 10 }), "unpriced_usage");
   assert.equal(budgetStop({ maxObservedCostUsd: 1 }, { unpriced: false, costUsd: 1, tokens: 10 }), "budget_exceeded");
   assert.equal(budgetStop({ maxObservedTokens: 10 }, { unpriced: false, costUsd: 0, tokens: 10 }), "budget_exceeded");
+});
+
+test("empty-thread interrupt probe proves method support without starting a turn", async () => {
+  const calls = [];
+  const evidence = await probeInterrupt(async (method, request) => { calls.push(method); return request; }, "empty");
+  assert.equal(evidence.supported, true);
+  assert.deepEqual(calls, ["interruptTurn"]);
+  assert.equal((await probeInterrupt(async () => { throw new Error("no active turn"); }, "empty")).supported, true);
+  for (const message of ["method not found: turn/interrupt", "turn/interrupt deadline exceeded", "unsupported method", "Unexpected interrupt probe response"]) await assert.rejects(probeInterrupt(async () => { throw new Error(message); }, "empty"));
 });

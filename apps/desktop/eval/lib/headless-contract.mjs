@@ -66,10 +66,10 @@ export function sanitizer(secrets = []) {
   };
   return redact;
 }
-export function assertReady(backend, settings, input, runtime) {
+export function assertReady(backend, settings, input, runtime, { interruptVerified = false, deferInterruptProbe = false } = {}) {
   if (settings.configError) throw new Error("PwrAgent config parse failed");
   if (settings.federation?.mode?.value !== "disabled") throw new Error("Federation must be disabled");
-  if (!backend?.available || !backend.capabilities?.startTurn || !backend.capabilities?.interruptTurn) throw new Error("Codex backend unavailable or unsupported protocol");
+  if (!backend?.available || !backend.capabilities?.startTurn || (!backend.capabilities?.interruptTurn && !interruptVerified && !deferInterruptProbe)) throw new Error("Codex backend unavailable or unsupported protocol");
   if (!backend.account?.type) throw new Error("Codex authentication unavailable");
   const model = backend.launchpadOptions?.models?.find((m) => m.id === input.model);
   if (!model?.reasoningEfforts?.includes(input.reasoningEffort)) throw new Error("Exact model/effort missing from live provider catalog");
@@ -121,5 +121,23 @@ export async function waitForOutcome({ threadId, turnId, drain, read, onEvent, o
     if (stop()) return stop();
     if (terminal) return terminal;
     await pause();
+  }
+}
+
+export async function probeInterrupt(call, threadId) {
+  const turnId = "00000000-0000-4000-8000-000000000000";
+  try {
+    const reply = await call("interruptTurn", { backend: "codex", threadId, turnId });
+    if (reply?.threadId !== threadId || reply?.turnId !== turnId) throw new Error("Unexpected interrupt probe response");
+    return { supported: true, evidence: "empty-thread-interrupt-accepted" };
+  } catch (error) {
+    const message = String(error.message);
+    // Method-not-found and transport errors are not capability evidence. A
+    // semantic no-active-turn response proves this exact method was handled.
+    if (!/method not found|unsupported|timed? out|deadline|unknown method|-32601/i.test(message)
+      && /no active turn|turn not found|turn .*not found|no turn.*(?:active|running)/i.test(message)) {
+      return { supported: true, evidence: "empty-thread-interrupt-rejected-semantically", message };
+    }
+    throw new Error(`Interrupt capability probe failed: ${message}`);
   }
 }
