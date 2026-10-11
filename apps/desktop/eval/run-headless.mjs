@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline";
 import { createReadStream } from "node:fs";
-import { EXIT, assertReady, atomicJson, claimRun, cleanEnvironment, configToml, observedBudget, sanitizer, budgetStop, waitForOutcome, probeInterrupt, validateInput } from "./lib/headless-contract.mjs";
+import { EXIT, assertReady, atomicJson, claimRun, cleanEnvironment, configToml, observedBudget, sanitizer, budgetStop, waitForOutcome, probeInterrupt, sanitizedProtocolRecord, validateInput } from "./lib/headless-contract.mjs";
 
 const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = process.argv.slice(2);
@@ -50,11 +50,10 @@ async function exportProtocol(root) {
         const lines = createInterface({ input: createReadStream(file), crlfDelay: Infinity });
         for await (const line of lines) {
           if (!line.trim()) continue;
-          // raw duplicates the envelope as a string. Redact parsed envelopes,
-          // never preserve a second, unstructured copy of credential fields.
-          const record = JSON.parse(line);
-          if (record.raw !== undefined) delete record.raw;
-          appendFileSync(destination, JSON.stringify(redact(record)) + "\n");
+          // CaptureStore keeps the wire payload only in raw. Parse it before
+          // redacting so usage/capability evidence survives without an unsafe
+          // second copy of serialized credential fields.
+          appendFileSync(destination, JSON.stringify(sanitizedProtocolRecord(JSON.parse(line), redact)) + "\n");
         }
       }
     }
@@ -134,6 +133,7 @@ try {
     result.readiness = {
       backend: backend && { available: backend.available, discoveryPending: backend.discoveryPending, unavailableReason: backend.unavailableReason, accountType: backend.account?.type, serverName: backend.serverName, serverVersion: backend.serverVersion, modelCount: backend.launchpadOptions?.models?.length, modelIds: backend.launchpadOptions?.models?.map((model) => model.id), capabilities: backend.capabilities, tokenMiser: backend.tokenMiser },
       configError: settings.configError,
+      tokenMiserSettings: { enabled: settings.experimental?.tokenMiserEnabled, defaultEnabled: settings.experimental?.tokenMiserDefaultEnabled },
       runtime: settings.runtime,
       selectedCommand: settings.models?.codex?.discovery?.selectedCommand,
       discoveryError: settings.models?.codex?.discovery?.error,
@@ -145,7 +145,7 @@ try {
     await new Promise((r) => setTimeout(r, 1000));
   } while (true);
   assertReady(backend, settings, input, runtime, { deferInterruptProbe: true });
-  result.readiness = { backend: { serverName: backend.serverName, serverVersion: backend.serverVersion, methods: backend.methods, launchpadOptions: backend.launchpadOptions, tokenMiser: backend.tokenMiser }, runtime: settings.runtime, selectedCommand: settings.models.codex.discovery.selectedCommand };
+  result.readiness = { backend: { serverName: backend.serverName, serverVersion: backend.serverVersion, methods: backend.methods, launchpadOptions: backend.launchpadOptions, tokenMiser: backend.tokenMiser }, runtime: settings.runtime, tokenMiserSettings: { enabled: settings.experimental?.tokenMiserEnabled, defaultEnabled: settings.experimental?.tokenMiserDefaultEnabled }, selectedCommand: settings.models.codex.discovery.selectedCommand };
   if (stopReason) throw new Error("Stopped before dispatch");
   {
     if (stopReason) throw new Error("Stopped before dispatch");
@@ -160,7 +160,7 @@ try {
     if (toggle.tokenMiserEnabled !== input.tokenMiser || view.tokenMiserEnabled !== input.tokenMiser) throw new Error("Thread Token Miser mismatch");
     result.effectiveTokenMiser = view.tokenMiserEnabled;
     const summary = (await call("listThreads", { backend: "codex" })).threads.find((entry) => entry.id === result.threadId);
-    if (summary?.model !== input.model || summary.reasoningEffort !== input.reasoningEffort || summary.executionMode !== "full-access" || summary.fastMode === true) throw new Error("Effective thread model/effort/access mismatch");
+    if (summary?.model !== input.model || summary.reasoningEffort !== input.reasoningEffort || summary.executionMode !== "full-access" || summary.fastMode === true || (summary.serviceTier && !["default", "standard"].includes(summary.serviceTier))) throw new Error("Effective thread model/effort/access mismatch");
     result.effectiveModelSettings = { model: summary.model, reasoningEffort: summary.reasoningEffort, serviceTier: summary.serviceTier, fastMode: summary.fastMode, executionMode: summary.executionMode };
     result.readiness.interruptProbe = await probeInterrupt(call, result.threadId);
     assertReady(backend, settings, input, runtime, { interruptVerified: result.readiness.interruptProbe.supported });
@@ -169,42 +169,42 @@ try {
       result.status = "completed";
       result.preflightOnly = true;
     } else {
-    if (stopReason) throw new Error("Stopped before dispatch");
-    // This fsynced marker precedes the ONLY paid dispatch. Crash recovery does
-    // not assume a missing IPC response means the provider did not spend.
-    result.status = "incomplete";
-    result.dispatchIntentAt = new Date().toISOString();
-    persist();
-    const turn = await call("startTurn", { ...common, threadId: result.threadId, input: [{ type: "text", text: input.prompt }] });
-    result.turnId = turn.turnId;
-    persist();
-    const outcome = await waitForOutcome({
-      threadId: result.threadId, turnId: result.turnId, drain,
-      read: () => call("readThread", { backend: "codex", threadId: result.threadId }),
-      onEvent: (event) => appendFileSync(path.join(output, "rollout.jsonl"), JSON.stringify(redact(event)) + "\n", { mode: 0o600 }),
-      onUsage: async (current) => {
-        result.observed = observedBudget(current.pricing?.lines, current.pricing?.summaries);
-        // Family includes separately billed delegated work as well as the
-        // parent's native helper usage. Never add it to the parent twice.
-        result.familyPricing = await call("readThreadFamilyPricing", { backend: "codex", threadId: result.threadId });
-        result.observed.costUsd = Math.max(result.observed.costUsd, result.familyPricing.members.reduce((sum, member) => sum + member.totalCostMicros, 0) / 1e6);
-        result.observed.unpriced ||= result.familyPricing.members.some((member) => member.unpricedUsageLineCount > 0);
-        return budgetStop(input, result.observed);
-      },
-      stop: () => stopReason,
-      pause: () => new Promise((resolve) => setTimeout(resolve, 500)),
-    });
-    result.status = ["input_required", "unpriced_usage"].includes(outcome) ? "failed" : outcome;
-    if (result.status !== "completed") {
-      result.stopReason = outcome;
-      await call("interruptTurn", { backend: "codex", threadId: result.threadId, turnId: result.turnId }).catch(() => undefined);
-    }
-    const finalView = await call("readThread", { backend: "codex", threadId: result.threadId });
-    result.pricing = finalView.pricing;
-    result.toolAccounting = finalView.toolAccounting;
-    result.tokenMiserUsage = await call("readTokenMiserUsage");
-    result.answer = finalView.replay?.lastAssistantMessage;
-    atomicJson(path.join(output, "thread.json"), redact(finalView));
+      if (stopReason) throw new Error("Stopped before dispatch");
+      // This fsynced marker precedes the ONLY paid dispatch. Crash recovery does
+      // not assume a missing IPC response means the provider did not spend.
+      result.status = "incomplete";
+      result.dispatchIntentAt = new Date().toISOString();
+      persist();
+      const turn = await call("startTurn", { ...common, threadId: result.threadId, input: [{ type: "text", text: input.prompt }] });
+      result.turnId = turn.turnId;
+      persist();
+      const outcome = await waitForOutcome({
+        threadId: result.threadId, turnId: result.turnId, drain,
+        read: () => call("readThread", { backend: "codex", threadId: result.threadId }),
+        onEvent: (event) => appendFileSync(path.join(output, "rollout.jsonl"), JSON.stringify(redact(event)) + "\n", { mode: 0o600 }),
+        onUsage: async (current) => {
+          result.observed = observedBudget(current.pricing?.lines, current.pricing?.summaries);
+          // Family includes separately billed delegated work as well as the
+          // parent's native helper usage. Never add it to the parent twice.
+          result.familyPricing = await call("readThreadFamilyPricing", { backend: "codex", threadId: result.threadId });
+          result.observed.costUsd = Math.max(result.observed.costUsd, result.familyPricing.members.reduce((sum, member) => sum + member.totalCostMicros, 0) / 1e6);
+          result.observed.unpriced ||= result.familyPricing.members.some((member) => member.unpricedUsageLineCount > 0);
+          return budgetStop(input, result.observed);
+        },
+        stop: () => stopReason,
+        pause: () => new Promise((resolve) => setTimeout(resolve, 500)),
+      });
+      result.status = ["input_required", "unpriced_usage"].includes(outcome) ? "failed" : outcome;
+      if (result.status !== "completed") {
+        result.stopReason = outcome;
+        await call("interruptTurn", { backend: "codex", threadId: result.threadId, turnId: result.turnId }).catch(() => undefined);
+      }
+      const finalView = await call("readThread", { backend: "codex", threadId: result.threadId });
+      result.pricing = finalView.pricing;
+      result.toolAccounting = finalView.toolAccounting;
+      result.tokenMiserUsage = await call("readTokenMiserUsage");
+      result.answer = finalView.replay?.lastAssistantMessage;
+      atomicJson(path.join(output, "thread.json"), redact(finalView));
     }
   }
 } catch (error) {

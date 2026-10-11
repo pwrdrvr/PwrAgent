@@ -75,7 +75,8 @@ export function assertReady(backend, settings, input, runtime, { interruptVerifi
   if (!model?.reasoningEfforts?.includes(input.reasoningEffort)) throw new Error("Exact model/effort missing from live provider catalog");
   const managed = settings.runtime?.tokenMiser?.managedCodex;
   if (managed?.state !== "ready" || managed.version !== runtime.version || settings.models?.codex?.discovery?.selectedCommand !== path.join(runtime.directory, "codex")) throw new Error("Managed runtime pin not effective");
-  if (backend.tokenMiser?.enabled !== input.tokenMiser || backend.tokenMiser?.defaultEnabled !== input.tokenMiser) throw new Error("Token Miser settings mismatch");
+  if (settings.experimental?.tokenMiserEnabled?.value !== input.tokenMiser || settings.experimental?.tokenMiserDefaultEnabled?.value !== input.tokenMiser) throw new Error("Token Miser settings mismatch");
+  if (backend.tokenMiser && (backend.tokenMiser.enabled !== input.tokenMiser || backend.tokenMiser.defaultEnabled !== input.tokenMiser)) throw new Error("Backend Token Miser settings mismatch");
   if (input.tokenMiser && settings.runtime?.tokenMiser?.activation?.state !== "active") throw new Error("Token Miser interception not active");
   if (!settings.runtime?.messaging?.disabled) throw new Error("Messaging must be disabled");
 }
@@ -140,4 +141,9 @@ export async function probeInterrupt(call, threadId) {
     }
     throw new Error(`Interrupt capability probe failed: ${message}`);
   }
+}
+
+export function sanitizedProtocolRecord(record, redact) {
+  const { raw, ...metadata } = record;
+  return redact({ ...metadata, envelope: typeof raw === "string" ? JSON.parse(raw) : record.envelope });
 }
