@@ -107,6 +107,16 @@ describe("TerminalHistoryStore", () => {
     await store.remove("../untrusted-id");
     expect((await store.load()).map((item) => item.summary.sessionId)).toEqual(["second"]);
   });
+  it("does not present another live profile instance's checkpoint as a restored process", async () => {
+    const { directory } = await setup();
+    const runtime = { instanceId: "runtime-one", processId: 42, startedAt: 100 };
+    await new TerminalHistoryStore(directory, { runtime }).save(record());
+    const live = new TerminalHistoryStore(directory, { isRuntimeLive: (identity) => identity.instanceId === "runtime-one" });
+    expect(await live.load()).toEqual([]);
+    const restarted = new TerminalHistoryStore(directory, { isRuntimeLive: () => false });
+    expect(await restarted.load()).toHaveLength(1);
+  });
+
   it("rejects invalid/oversized snapshots and limits retention while running", async () => {
     const { directory, store } = await setup();
     for (let i = 0; i < 66; i++) await store.save(record(String(i)));

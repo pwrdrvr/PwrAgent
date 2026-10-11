@@ -1,7 +1,5 @@
-import path from "node:path";
 import { createHash } from "node:crypto";
-import { resolveActiveProfileDir } from "../profile";
-import { TerminalHistoryStore } from "../terminal/terminal-history-store";
+import { createTerminalHistoryStore } from "../terminal/terminal-history";
 import { app, BrowserWindow, ipcMain, Menu, type WebContents } from "electron";
 import {
   INTEGRATED_TERMINAL_RENAME_CHANNEL,
@@ -91,8 +89,8 @@ export function registerIntegratedTerminalIpcHandlers(): void {
   if (!service) {
     service = new IntegratedTerminalService({
       onSessionsChanged: broadcastSessions,
-      historyStore: new TerminalHistoryStore(path.join(resolveActiveProfileDir(), "state", "terminal-history",
-        createHash("sha256").update(process.env.PWRAGENT_INSTANCE_ROOT || "default").digest("hex"))),
+      historyStore: createTerminalHistoryStore(
+        createHash("sha256").update(process.env.PWRAGENT_INSTANCE_ROOT || "default").digest("hex")),
     });
     serviceDisposalPromise = undefined;
   }

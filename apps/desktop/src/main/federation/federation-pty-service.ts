@@ -332,6 +332,7 @@ export class FederationPtyService {
   }
 
   rename(peerId: FederationInstanceId, request: { sessionId: string; name: string }): void {
+    if (this.options.allowOpen?.() === false) throw new Error("Remote shells are disabled.");
     if (typeof request.name !== "string") throw new Error("Invalid terminal name.");
     const name = request.name.trim().replace(/[\x00-\x1f\x7f]/g, "").slice(0, 80);
     const record = this.archived.get(request.sessionId);
@@ -343,6 +344,13 @@ export class FederationPtyService {
     const session = this.requireSession(peerId, request.sessionId);
     session.name = name;
     this.checkpoint(session);
+  }
+
+  /** Plumbing for the separately authorized read-only output-tool stack. */
+  outputForThread(peerId: FederationInstanceId, backend: AppServerBackendKind, threadId: string, sessionId: string): TerminalReplay | undefined {
+    if (this.options.allowOpen?.() === false) throw new Error("Remote shells are disabled.");
+    const session = this.requireSession(peerId, sessionId);
+    return session.backend === backend && session.threadId === threadId ? session.replay : undefined;
   }
 
   private summary(session: FederationPtySession): IntegratedTerminalSessionSummary {

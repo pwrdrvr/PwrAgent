@@ -560,6 +560,14 @@ export class IntegratedTerminalService {
     return session?.threadKey === threadKey ? session.replay : undefined;
   }
 
+  async snapshotForThread(threadKey: string, sessionId: string) {
+    await this.ready;
+    const live = this.sessionsById.get(sessionId);
+    if (live?.threadKey === threadKey) return live.replay.snapshot();
+    const record = this.archived.get(sessionId);
+    return record?.summary.threadKey === threadKey ? { ...record.snapshot } : undefined;
+  }
+
   close(request: IntegratedTerminalCloseRequest): void {
     const pendingKey = request.sessionId || `thread:${request.threadKey}`;
     if (this.pendingCreates.has(pendingKey)) this.pendingCloseSessionIds.add(pendingKey);

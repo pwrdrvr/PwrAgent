@@ -4,7 +4,10 @@ import path from "node:path";
 import type { IntegratedTerminalSessionSummary, TerminalSnapshot } from "../../shared/integrated-terminal";
 import { TERMINAL_SNAPSHOT_LIMIT } from "./terminal-replay";
 
+type HistoryRuntime = { instanceId: string; processId: number; startedAt: number };
+
 export type TerminalHistoryRecord = {
+  runtime?: HistoryRuntime;
   version: 1;
   summary: IntegratedTerminalSessionSummary;
   snapshot: TerminalSnapshot;
@@ -21,7 +24,10 @@ const MAX_FILE_BYTES = TERMINAL_SNAPSHOT_LIMIT * 2 + 16_384;
 export class TerminalHistoryStore {
   private queue: Promise<void> = Promise.resolve();
   private readonly saved = new Map<string, number>();
-  constructor(private readonly directory: string) {}
+  constructor(private readonly directory: string, private readonly options: {
+    runtime?: HistoryRuntime;
+    isRuntimeLive?: (runtime: HistoryRuntime) => boolean;
+  } = {}) {}
 
   async load(): Promise<TerminalHistoryRecord[]> {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
@@ -38,6 +44,10 @@ export class TerminalHistoryStore {
         }
         const value: unknown = JSON.parse(await readFile(file, "utf8"));
         if (!isRecord(value)) continue;
+        // Shared-profile instances must not claim another live process's
+        // checkpoint as a dead/restored shell. PID plus runtime identity
+        // prevents PID reuse from reviving old ownership.
+        if (value.runtime && this.options.isRuntimeLive?.(value.runtime)) continue;
         value.snapshot.pendingEscape = undefined;
         records.push(value);
         this.saved.set(value.summary.sessionId, value.savedAt);
@@ -50,7 +60,7 @@ export class TerminalHistoryStore {
 
   save(record: TerminalHistoryRecord): Promise<void> {
     return this.enqueue(async () => {
-      const data = JSON.stringify({ ...record, snapshot: { ...record.snapshot, pendingEscape: undefined } });
+      const data = JSON.stringify({ ...record, runtime: this.options.runtime, snapshot: { ...record.snapshot, pendingEscape: undefined } });
       if (Buffer.byteLength(data) > MAX_FILE_BYTES) throw new Error("Terminal history exceeds its byte budget.");
       await mkdir(this.directory, { recursive: true, mode: 0o700 });
       const destination = this.file(record.summary.sessionId);

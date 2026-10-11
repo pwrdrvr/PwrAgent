@@ -140,6 +140,8 @@ export class FederationTerminalBridge {
         existing.snapshot = response.snapshot;
         existing.lastSeq = Math.max(existing.lastSeq, response.snapshot?.seq ?? 0);
         existing.status = response.status;
+        existing.foregroundCommand = response.status && response.status !== "running"
+          ? false : response.foregroundCommand ?? existing.foregroundCommand;
       }
       return this.toCreateResponse(existing);
     }
@@ -170,7 +172,12 @@ export class FederationTerminalBridge {
         // Discover owner-held sessions when first opening a thread after viewer
         // restart. New explicitly skips discovery and creates another shell.
         const recovered = !request.newSession && !request.attachOnly && client.list
-          ? await client.list({ backend, threadId }).catch(() => []) : [];
+          ? await client.list({ backend, threadId }).catch((error: unknown) => {
+              // Older owners do not implement discovery. A lost connection or
+              // denied request must not silently turn attach into a new shell.
+              if (/method.*not found|unknown method|not supported/i.test(String(error))) return [];
+              throw error;
+            }) : [];
         const first = recovered[0];
         const opened = first && client.snapshot
           ? await client.snapshot({ sessionId: first.sessionId })
@@ -228,12 +235,12 @@ export class FederationTerminalBridge {
           shell: opened.shell,
           buffer: "",
           panelHidden: false,
-          createdAt: Date.now(),
+          createdAt: first?.createdAt ?? Date.now(),
           webContents,
           lastSeq: opened.snapshot?.seq ?? 0,
           consumedBytes: 0,
           // An owner that predates `pty.state` omits this; stay conservative.
-          foregroundCommand: opened.foregroundCommand ?? true,
+          foregroundCommand: opened.status && opened.status !== "running" ? false : opened.foregroundCommand ?? true,
           resizes,
         };
         this.sessionsById.set(session.sessionId, session);
@@ -243,6 +250,7 @@ export class FederationTerminalBridge {
           if (this.sessionsById.has(alias)) continue;
           this.sessionsById.set(alias, { ...session, ...summary, sessionId: alias,
             ownerSessionId: summary.sessionId, snapshot: undefined, lastSeq: 0,
+            foregroundCommand: !summary.status || summary.status === "running",
             resizes: new PtyResizeCoalescer({
               apply: (cols, rows) => { void client.resize({ sessionId: summary.sessionId, cols, rows }).catch(() => undefined); },
               spawnedCols: request.cols, spawnedRows: request.rows,
@@ -624,15 +632,8 @@ export class FederationTerminalBridge {
     });
   }
 
-  /**
-   * In-flight opens stay THREAD-keyed even though a thread now owns several
-   * terminals: the owner mints the id, so a viewer has nothing else to name a
-   * terminal by until its open resolves. The cost is that two id-less opens on
-   * one thread in one window collapse into a single shell — right for "attach
-   * to this thread's terminal", wrong for "give me another one". No caller can
-   * ask for the second today (a window renders one pane per thread), so a tab
-   * strip that does has to carry its own intent here.
-   */
+  /** Explicit new tabs deduplicate by their viewer ID; legacy id-less mounts
+   * still deduplicate by thread while the owner allocates its process ID. */
   private pendingKey(webContents: WebContents, threadKey: string): string {
     return `${webContents.id}:${threadKey}`;
   }

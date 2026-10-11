@@ -1,3 +1,4 @@
+import AxeBuilder from "@axe-core/playwright";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test, type Page } from "@playwright/test";
@@ -232,6 +233,11 @@ test("isolates terminal side tabs, renames, restores a renderer and retains exit
     await run("exit 7");
     await expect(panel.getByRole("tab").nth(1)).toContainText("Exited");
     await expect(visibleTerminal().locator(".xterm-rows")).toContainText("SECOND_TAB_ONLY");
+    const audit = await new AxeBuilder({ page: app.window }).withRules(["aria-required-children", "aria-valid-attr-value"]).setLegacyMode(true).analyze();
+    expect(audit.violations).toEqual([]);
+    await panel.getByRole("tab", { name: /Build/ }).click();
+    await expect(panel.getByText("Shell exited. Create a new terminal to start a shell.")).toBeHidden();
+    await panel.getByRole("tab").nth(1).click();
     await app.window.screenshot({ path: test.info().outputPath("terminal-tabs.png") });
     await panel.getByRole("tab").nth(1).press("Delete");
     await expect(panel.getByRole("tab")).toHaveCount(1);
