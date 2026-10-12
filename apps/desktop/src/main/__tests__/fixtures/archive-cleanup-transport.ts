@@ -6,7 +6,7 @@ export class ArchiveCleanupTransport implements JsonRpcTransport {
   static latest: ArchiveCleanupTransport;
   activeIds = ["active", "transition"];
   archivedIds = ["archive-one", "archive-two", "archive-three"];
-  readonly listings: Array<{ archived: boolean; cursor?: string }> = [];
+  readonly listings: Array<{ archived: boolean; cursor?: string; sortKey?: string }> = [];
   private readonly heldKinds = new Set<boolean>();
   private readonly replies: Array<{ archived: boolean; reply: () => void }> = [];
   private readonly listingWaiters: Array<{ archived: boolean; resolve: () => void }> = [];
@@ -51,7 +51,7 @@ export class ArchiveCleanupTransport implements JsonRpcTransport {
     const request = JSON.parse(message) as {
       id?: number;
       method?: string;
-      params?: { archived?: boolean; cursor?: string };
+      params?: { archived?: boolean; cursor?: string; sortKey?: string };
     };
     if (request.id === undefined) return;
     let result: unknown = {};
@@ -60,7 +60,7 @@ export class ArchiveCleanupTransport implements JsonRpcTransport {
     } else if (request.method === "thread/list") {
       const archived = request.params?.archived === true;
       const cursor = request.params?.cursor;
-      this.listings.push({ archived, cursor });
+      this.listings.push({ archived, cursor, sortKey: request.params?.sortKey });
       for (const waiter of this.listingWaiters.splice(0)) {
         if (waiter.archived === archived) waiter.resolve();
         else this.listingWaiters.push(waiter);

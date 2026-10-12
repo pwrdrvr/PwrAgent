@@ -230,6 +230,28 @@ describe("archive worktrees across a desktop restart", () => {
     await expect(stat(fixture.worktree)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it.each([
+    { method: "thread/name/updated", params: { threadId: "unrelated", threadName: "Updated title" } },
+    { method: "thread/status/changed", params: { threadId: "unrelated", status: { type: "notLoaded" } } },
+  ] as const)("archives and restores real work despite an unrelated $method notification during removal admission", async (notification) => {
+    const fixture = await createFixture();
+    ArchiveWorktreeTransport.threads = [{ id: "old-target", cwd: fixture.worktree, source: "cli" }];
+    await writeFile(path.join(fixture.worktree, "file.txt"), "work retained by the snapshot\n");
+    let activeReads = 0;
+    ArchiveWorktreeTransport.onList = (params, transport) => {
+      if (!params.archived && ++activeReads === 2) transport.emitNotification(notification);
+    };
+    const instance = fixture.reopen();
+
+    const result = await instance.registry.archiveThread({ backend: "codex", threadId: "old-target" });
+
+    expect(result.cleanup).toEqual([expect.objectContaining({ removedWorktree: true, worktreePath: fixture.worktree })]);
+    await expect(stat(fixture.worktree)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await fixture.git(fixture.repo, ["worktree", "list", "--porcelain"])).not.toContain(fixture.worktree);
+    await instance.registry.restoreThread({ backend: "codex", threadId: "old-target" });
+    expect(await readFile(path.join(fixture.worktree, "file.txt"), "utf8")).toBe("work retained by the snapshot\n");
+  });
+
   it("keeps a worktree with an external ownership marker on a navigation-hidden archived user", async () => {
     const fixture = await createFixture();
     ArchiveWorktreeTransport.threads = [
