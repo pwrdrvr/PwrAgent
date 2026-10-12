@@ -60,8 +60,8 @@ four rows before **Show N more**. Each open row has **Mark addressed** and
 **Do not address**; a settled row dims in place and offers **Reopen**. The
 head's dismiss control dismisses the whole review, and the stack's **Undo**
 reopens it. **Address findings** sends one reply to the review's thread that
-lists the open findings by id and asks the agent to settle each with
-`update_review_item`. The card stays open until the last finding is settled.
+names the open findings by title and asks the agent to read their details
+with `list_reviews` and settle each with `update_review_item`. The card stays open until the last finding is settled.
 A review with nothing left open offers **Mark handled** instead.
 
 The transcript review keeps the record. A status row under the verdict gives

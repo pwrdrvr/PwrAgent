@@ -116,26 +116,19 @@ export function openReviewItems(review: ThreadReview): ThreadReviewItem[] {
 
 /**
  * The reply "Address findings" sends to the review's own thread. It names the
- * review and each finding by id so the agent can settle them without a lookup.
+ * open findings by title only: the agent reads their details and ids with
+ * `list_reviews`, so the transcript does not repeat what the review said.
  */
 export function addressReviewFindingsPrompt(review: ThreadReview): string {
   const findings = orderReviewItems(openReviewItems(review)).map((item, index) => {
-    const location = item.codeLocation
-      ? ` — ${item.codeLocation.absolute_file_path}:${formatLineRange(item.codeLocation.line_range)}`
-      : "";
     const priority = typeof item.priority === "number" ? `[P${item.priority}] ` : "";
-    const body = item.body?.trim() ? `\n   ${item.body.trim().replace(/\n/g, "\n   ")}` : "";
-    return `${index + 1}. ${priority}${item.title}${location} (finding \`${item.id}\`)${body}`;
+    return `${index + 1}. ${priority}${item.title}`;
   });
   return [
-    `Address the open findings from code review \`${review.id}\`. Fix each one, or decide it should not be fixed. Then record the outcome with PwrAgent's \`update_review_item\` tool: status \`addressed\` or \`dismissed\`, a short note saying what changed or why not, and a commit or pull request link when there is one.`,
+    `Address these open findings from code review \`${review.id}\`. Read their details with PwrAgent's \`list_reviews\` tool. Fix each one, or decide it should not be fixed. Then record the outcome with \`update_review_item\`: status \`addressed\` or \`dismissed\`, a short note saying what changed or why not, and a commit or pull request link when there is one.`,
     "",
     ...findings,
   ].join("\n");
-}
-
-function formatLineRange(range: { start: number; end: number }): string {
-  return range.start === range.end ? `${range.start}` : `${range.start}-${range.end}`;
 }
 
 const timeFormat = new Intl.DateTimeFormat(undefined, {

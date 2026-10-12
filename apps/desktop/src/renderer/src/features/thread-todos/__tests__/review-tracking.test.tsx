@@ -127,9 +127,12 @@ describe("review To-do card", () => {
     fireEvent.click(screen.getByRole("button", { name: "Address findings" }));
     expect(handlers.onDoHere).toHaveBeenCalledWith(todo, addressReviewFindingsPrompt(current));
     const prompt = handlers.onDoHere.mock.calls[0]![1] as string;
+    expect(prompt).toContain("`list_reviews`");
     expect(prompt).toContain("`update_review_item`");
-    expect(prompt).toContain("1. [P1] Abort pending exports — /example/atlas/src/export-queue.ts:42-46 (finding `abort`)");
-    expect(prompt).not.toContain("Drop the stale cursor");
+    // Titles only: the agent reads bodies, locations, and ids from list_reviews.
+    expect(prompt.split("\n\n")[1]).toBe("1. [P1] Abort pending exports\n2. [P2] Keep the selected output format");
+    expect(prompt).not.toContain("matters");
+    expect(prompt).not.toContain("export-queue.ts");
     await waitFor(() => expect(screen.getByRole("button", { name: "Address findings" })).toBeEnabled());
 
     fireEvent.click(screen.getByRole("button", { name: "Dismiss review" }));

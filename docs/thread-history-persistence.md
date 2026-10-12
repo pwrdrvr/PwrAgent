@@ -50,8 +50,9 @@ way.
 - **The transcript never renders from it.** The transcript's review card
   draws every finding's text from the transcript entry. It reads only state
   from the record: status, the resolution note, the actor, the evidence link,
-  and the time. The To-do card, the "Address findings" reply, and the agent's
-  `list_reviews` tool are the only consumers of the stored text.
+  and the time. The To-do card, the finding titles in the "Address findings"
+  reply, and the agent's `list_reviews` tool are the only consumers of the
+  stored text.
 
 Extend this exception only by updating this section. Any other table that
 stores history text needs its own documented exception.
