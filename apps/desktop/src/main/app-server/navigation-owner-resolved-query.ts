@@ -10,6 +10,8 @@ import type {
 import { NAVIGATION_QUERY_MAX_PAGE_ROWS } from "@pwragent/shared";
 import { isFederationPeerUnavailableError } from "../federation/federation-peer-unavailable-error";
 import {
+  identityKey,
+  navigationIdentity,
   projectNavigationQuery,
   type NavigationQueryIndex,
   type NavigationQueryMaterialization,
@@ -33,15 +35,6 @@ type OwnerReadOptions = { signal: AbortSignal; deadlineAt: number };
 type ReadOwnerPage = (target: FederationRemoteTarget, request: NavigationQueryRequest,
   options: OwnerReadOptions) => Promise<NavigationQueryPage>;
 
-function identityKey(ref: NavigationIdentity): string {
-  return JSON.stringify([ref.ownerInstanceId ?? null, ref.backend, ref.threadId]);
-}
-
-function summaryIdentity(thread: NavigationThreadSummary): NavigationIdentity {
-  return { backend: thread.source, threadId: thread.id,
-    ...(thread.federation?.ref.target.scope === "remote" ? { ownerInstanceId: thread.federation.ref.target.instanceId } : {}) };
-}
-
 /** The parent a peer's row names, when that parent belongs to the same peer. */
 function sameOwnerParent(thread: NavigationThreadSummary, instanceId: string): NavigationIdentity | undefined {
   if (!thread.parentThreadId || (thread.parentThreadInstanceId && thread.parentThreadInstanceId !== instanceId)) return undefined;
@@ -50,8 +43,8 @@ function sameOwnerParent(thread: NavigationThreadSummary, instanceId: string): N
 
 /** A held row for an owner that cannot answer: dimmed, and never a live turn. */
 function heldRow<T extends NavigationThreadSummary | NavigationRow>(row: T, peerStatus: PeerStatus): T {
-  // A saved running flag is not evidence of a live turn in this process.
-  const { threadStatus, ...rest } = row;
+  // A saved running flag or sub-agent is not evidence of live work in this process.
+  const { threadStatus, hasActiveSubAgent: _hasActiveSubAgent, ...rest } = row;
   return { ...rest, ...(threadStatus && threadStatus !== "active" ? { threadStatus } : {}),
     ...(row.federation ? { federation: { ...row.federation, peerStatus } } : {}) } as T;
 }
@@ -187,7 +180,7 @@ export async function materializeOwnerResolvedNavigation(params: {
   ]);
   params.signal?.throwIfAborted();
 
-  const threads = new Map(index.threads.map((thread) => [identityKey(summaryIdentity(thread)), thread]));
+  const threads = new Map(index.threads.map((thread) => [identityKey(navigationIdentity(thread)), thread]));
   const ownerRows = new Map<string, NavigationRow>();
   const place = (row: NavigationRow): void => {
     const key = identityKey(row.ref);
@@ -220,7 +213,7 @@ export async function materializeOwnerResolvedNavigation(params: {
           continue;
         }
         cached ??= new Map(params.cachedOwnerThreads(owner.instanceId)
-          .map((thread) => [identityKey(summaryIdentity(thread)), thread]));
+          .map((thread) => [identityKey(navigationIdentity(thread)), thread]));
         const snapshot = cached.get(key);
         if (!snapshot) break;
         const { pinnedRank: _ownerRank, ...summary } = heldRow(snapshot, owner.peerStatus);

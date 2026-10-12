@@ -2771,7 +2771,7 @@ describe("app server ipc", () => {
 
     it("serves an offline peer's draft from its cached row, dimmed and without a live turn", async () => {
       const local = localThread("draft-local-b");
-      const cached = await peerRow("draft-peer-b", "draft-remote-b", { threadStatus: "active" });
+      const cached = await peerRow("draft-peer-b", "draft-remote-b", { threadStatus: "active", hasActiveSubAgent: true });
       const { ref: _ref, rowRevision: _revision, ...summary } = cached;
       listThreads.mockResolvedValueOnce([]);
       readNavigationQueryIndex.mockReturnValueOnce({ threads: [local], directories: [] });
@@ -2784,7 +2784,20 @@ describe("app server ipc", () => {
       const held = page.entries[1]!.row;
       expect(held.federation?.peerStatus).toBe("disconnected");
       expect(held.threadStatus).toBeUndefined();
+      expect(held.hasActiveSubAgent).toBeUndefined();
       expect(page.counts.active).toBe(0);
+    });
+
+    it("places a peer's draft under its local parent when nothing is mounted", async () => {
+      const parent = localThread("draft-local-parent");
+      const child = await peerRow("draft-peer-f", "draft-remote-child", { parentThreadId: parent.id,
+        parentThreadBackend: "codex", parentThreadInstanceId: "pwr_local" });
+      listThreads.mockResolvedValueOnce([]);
+      readNavigationQueryIndex.mockReturnValueOnce({ threads: [parent], directories: [] });
+      federationMock.runtime.remoteNavigationQueryPage.mockResolvedValueOnce(ownerPage([child]));
+      const page = await draftRead(90317, [child.ref]);
+      expect(page.entries.map(({ row }) => row.id)).toEqual([parent.id, child.id]);
+      expect(page.entries[1]!.placement).toEqual({ kind: "child", parent: { backend: "codex", threadId: parent.id } });
     });
 
     it("omits an offline peer's draft that this viewer holds no row for", async () => {

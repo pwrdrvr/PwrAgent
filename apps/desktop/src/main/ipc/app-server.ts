@@ -2118,7 +2118,12 @@ class DesktopAppServerService {
       return await getDesktopNavigationQueryStore().readPage({
         loadMaterialization: () => materializeOwnerResolvedNavigation({
           request,
-          loadViewerIndex: () => this.loadViewerNavigationQueryIndex(request, rpcOptions),
+          loadViewerIndex: async () => {
+            // Without mounts the viewer index omits this machine's id, and a
+            // peer's row could not name a local parent through it.
+            const index = await this.loadViewerNavigationQueryIndex(request, rpcOptions);
+            return index.localInstanceId ? index : { ...index, localInstanceId: (await runtime.health()).instanceId };
+          },
           readOwnerPage: (target, ownerRequest, owner) => this.readRemoteNavigationQueryPage(target, ownerRequest, owner),
           cachedOwnerThreads: (instanceId) => runtime.remoteThreadSummaries().cachedThreads(instanceId),
           memory: this.ownerResolvedNavigationRows,

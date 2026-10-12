@@ -54,3 +54,19 @@ it("serves this machine's rows when a connected owner stops answering within its
   expect(held.entries[2]!.placement).toEqual({ kind: "child", parent: parent.ref });
   expect(signals.map((signal) => signal.aborted)).toEqual([false, true]);
 });
+
+it("forgets a held row once its owner answers without it", async () => {
+  const row = peerRow("archived");
+  const memory = new OwnerResolvedRowMemory();
+  const readOwnerPage = vi.fn(async () => ownerPage([row]));
+  const read = () => materializeOwnerResolvedNavigation({ request: request([row.ref]),
+    loadViewerIndex: async () => ({ threads: [], directories: [] }), readOwnerPage, cachedOwnerThreads: () => [], memory });
+  expect((await read()).entries.map(({ row: entry }) => entry.id)).toEqual(["archived"]);
+  readOwnerPage.mockRejectedValueOnce(new Error("owner failed"));
+  expect((await read()).entries.map(({ row: entry }) => entry.id)).toEqual(["archived"]);
+  // The owner no longer has it, so a later outage must not resurrect it.
+  readOwnerPage.mockResolvedValueOnce(ownerPage([]));
+  expect((await read()).entries).toEqual([]);
+  readOwnerPage.mockRejectedValueOnce(new Error("owner failed"));
+  expect((await read()).entries).toEqual([]);
+});
