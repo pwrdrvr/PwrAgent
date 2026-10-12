@@ -440,6 +440,21 @@ describe("NavigationQueryStore", () => {
     })).rejects.toMatchObject({ code: "navigation_invalid_request" });
   });
 
+  it("rejects a lens split other than pinned or unpinned", async () => {
+    const store = new NavigationQueryStore();
+    const loadIndex = async () => snapshot([thread("1")]);
+    await expect(store.readPage({
+      loadIndex,
+      request: request({ query: { kind: "lens", lens: "inbox", roots: "all" as "pinned" } }),
+      scopeKey: "owner",
+    })).rejects.toMatchObject({ code: "navigation_invalid_request" });
+    await expect(store.readPage({
+      loadIndex,
+      request: request({ query: { kind: "lens", lens: "inbox", roots: "pinned" } }),
+      scopeKey: "owner",
+    })).resolves.toMatchObject({ collectionSize: 0 });
+  });
+
   it("fits a continuation in the same byte budget as its rows", async () => {
     const load = (titleLength: number) => snapshot([
       thread("2", "x".repeat(titleLength)),

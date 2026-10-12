@@ -181,6 +181,10 @@ function validateRequest(request: NavigationQueryRequest): void {
     && !["all", "pinned", "unpinned"].includes(request.query.roots)) {
     throw new NavigationQueryError("navigation_invalid_request", "Invalid directory root disclosure.");
   }
+  if (request.query.kind === "lens" && request.query.roots !== undefined
+    && !["pinned", "unpinned"].includes(request.query.roots)) {
+    throw new NavigationQueryError("navigation_invalid_request", "Invalid lens root split.");
+  }
   if (request.query.kind === "exact" && request.query.identities.length > 100) {
     throw new NavigationQueryError(
       "navigation_invalid_request",

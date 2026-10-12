@@ -183,6 +183,8 @@ import {
   type AcknowledgeThreadSpendAlertResponse,
   type SetNavigationBrowseModeRequest,
   type SetNavigationBrowseModeResponse,
+  type SetPinnedGroupCollapsedRequest,
+  type SetPinnedGroupCollapsedResponse,
   type ListThreadMigrationSourceThreadsRequest,
   type ListThreadMigrationSourceThreadsResponse,
   type ListThreadMigrationSourcesResponse,
@@ -358,6 +360,7 @@ import {
   NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL,
   NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
   NAVIGATION_SET_BROWSE_MODE_CHANNEL,
+  NAVIGATION_SET_PINNED_GROUP_COLLAPSED_CHANNEL,
   NAVIGATION_QUERY_PAGE_CHANNEL,
   NAVIGATION_QUERY_RELEASE_CHANNEL,
   NAVIGATION_ATTENTION_VIEW_RELEASE_CHANNEL,
@@ -2266,6 +2269,15 @@ class DesktopAppServerService {
     logDebug("setNavigationBrowseMode", { browseMode });
 
     return { browseMode };
+  }
+
+  async setPinnedGroupCollapsed(
+    request: SetPinnedGroupCollapsedRequest,
+  ): Promise<SetPinnedGroupCollapsedResponse> {
+    const collapsed = await this.getOverlayStore().setPinnedGroupCollapsed?.(
+      request.collapsed === true,
+    ) ?? request.collapsed === true;
+    return { collapsed };
   }
 
   private async readNavigationSnapshot(
@@ -8746,6 +8758,16 @@ export function registerAppServerIpcHandlers(): void {
       return await appServerService.setNavigationBrowseMode(request);
     },
   );
+  ipcMain.removeHandler(NAVIGATION_SET_PINNED_GROUP_COLLAPSED_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_SET_PINNED_GROUP_COLLAPSED_CHANNEL,
+    async (
+      _event,
+      request: SetPinnedGroupCollapsedRequest,
+    ): Promise<SetPinnedGroupCollapsedResponse> => {
+      return await appServerService.setPinnedGroupCollapsed(request);
+    },
+  );
   ipcMain.removeHandler(NAVIGATION_MARK_THREAD_SEEN_CHANNEL);
   ipcMain.handle(
     NAVIGATION_MARK_THREAD_SEEN_CHANNEL,
@@ -9524,6 +9546,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(NAVIGATION_SELECTED_DETAIL_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_QUEUE_PROJECTION_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SET_BROWSE_MODE_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_SET_PINNED_GROUP_COLLAPSED_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_MARK_THREAD_SEEN_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SET_THREAD_REACTION_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SET_THREAD_LOCK_CHANNEL);

@@ -560,6 +560,15 @@ describe("Tangerine Terminal theme contract", () => {
     }
   });
 
+  it("starts the Pinned group's sticky header where it sticks", () => {
+    // A sticky header stops at its scroller's content edge. Any top pad on
+    // the lane or the group leaves a strip above the stuck header where
+    // scrolled rows show through, and the header jumps on the first scroll.
+    expect(extractRuleBody(css, ".sidebar-list--pinned-group")).toMatch(/\bpadding-top:\s*0;/);
+    expect(extractRuleBody(css, ".pinned-group")).toMatch(/\bpadding:\s*0 0 4px;/);
+    expect(extractRuleBody(css, ".directory-row__header")).toMatch(/\btop:\s*0;/);
+  });
+
   it("does not leave unresolved theme token references in app.css", () => {
     const localTokens = new Set([
       "thinking-scanner-beam-width",

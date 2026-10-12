@@ -2050,7 +2050,7 @@ describe("Sidebar", () => {
     expect(onCreateSubthread).toHaveBeenCalledWith(sharedThread, "same-worktree");
   });
 
-  it("offers viewer-owned pin, pin removal, and copy actions for a remote-pinned row", () => {
+  it("offers viewer-owned pin, pin removal, and copy actions for a remote-pinned row", async () => {
     const onRemoveRemoteThreadPin = vi.fn(async () => undefined);
     const onSetThreadPin = vi.fn(async () => undefined);
     const remotePinnedThread: NavigationThreadSummary = {
@@ -2103,8 +2103,11 @@ describe("Sidebar", () => {
     ).toBeNull();
 
     // …the VIEWER-owned pin is offered (rank lives on the pin row, never
-    // the owner's list)…
-    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "Pinned" }));
+    // the owner's list). Inbox gathers pins into its Pinned group, so the pin
+    // settles through the group's reveal.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "Pinned" }));
+    });
     expect(onSetThreadPin).toHaveBeenCalledWith(remotePinnedThread, true);
 
     // …and the viewer-side removal dispatches even while disconnected.
@@ -5561,7 +5564,7 @@ describe("Sidebar", () => {
     });
   });
 
-  it("pins from the row menu and leaves pinned threads in sort order", () => {
+  it("pins from the row menu and leaves pinned threads in sort order in Inbox when pins stay in place", () => {
     const onSetThreadPin = vi.fn(async () => undefined);
     const pinnedThread = {
       ...updatedSinceSeenThread,
@@ -5571,11 +5574,12 @@ describe("Sidebar", () => {
     render(
       <Sidebar
         backends={backends}
-        browseMode="recents"
+        browseMode="inbox"
         directories={directories}
         inboxThreads={[sharedThread]}
         loading={false}
         creatingThread={undefined}
+        pinnedThreadsOnTop={false}
         selectedItemKey={undefined}
         threads={[sharedThread, pinnedThread]}
         onBrowseModeChange={() => undefined}
@@ -5590,12 +5594,13 @@ describe("Sidebar", () => {
     const rows = within(browseSection as HTMLElement).getAllByRole("button", {
       name: /Cross-project cleanup|Updated thread/i,
     });
-    // Created is a pure sort order: the pinned thread keeps the position the
-    // caller's ordering gave it instead of floating to a pinned section.
+    // With pinned threads kept in place, Inbox is a pure sort order: the
+    // pinned thread keeps the position the owner's ordering gave it.
     expect(rows.map((row) => threadCard(row).textContent)).toEqual([
       expect.stringContaining("Cross-project cleanup"),
       expect.stringContaining("Updated thread"),
     ]);
+    expect(screen.queryByRole("button", { name: /^Pinned,/ })).not.toBeInTheDocument();
     expect(
       within(
         rows[1]!.closest(".thread-row-shell") as HTMLElement,
@@ -6822,9 +6827,9 @@ describe("Sidebar", () => {
   });
 
   it("shows directory drop targets for pinned row edges and the append slot", async () => {
-    // Pin reorder-by-drag lives only where a pinned section is rendered, which
-    // after the Updated/Created lenses became pure sort orders means the
-    // Directories lens alone.
+    // Pin reorder-by-drag lives only where a pinned section is rendered: each
+    // project in Directories, and the Pinned group of Updated and Created
+    // (pinned-group.test.tsx).
     const firstPinnedThread = {
       ...sharedThread,
       pinnedRank: "1024",
@@ -6919,7 +6924,7 @@ describe("Sidebar", () => {
     });
   });
 
-  it("renders no pinned section or drag affordance in the Created lens", () => {
+  it("renders no pinned section or drag affordance in the Inbox lens when pins stay in place", () => {
     const pinnedThread = {
       ...updatedSinceSeenThread,
       pinnedRank: "1024",
@@ -6928,11 +6933,12 @@ describe("Sidebar", () => {
     render(
       <Sidebar
         backends={backends}
-        browseMode="recents"
+        browseMode="inbox"
         directories={directories}
         inboxThreads={[sharedThread]}
         loading={false}
         creatingThread={undefined}
+        pinnedThreadsOnTop={false}
         selectedItemKey="codex:thread-1"
         threads={[sharedThread, pinnedThread]}
         onBrowseModeChange={() => undefined}
@@ -6946,11 +6952,13 @@ describe("Sidebar", () => {
     expect(
       screen.queryByRole("separator", { name: /Unpinned threads/ }),
     ).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Pinned,/ })).not.toBeInTheDocument();
     for (const title of [/Cross-project cleanup/i, /Updated thread/i]) {
       const shell = screen
         .getByRole("button", { name: title })
         .closest(".thread-row-shell");
       expect(shell).not.toHaveAttribute("draggable", "true");
+      expect(shell).not.toHaveClass("is-draggable");
     }
   });
 
@@ -7546,7 +7554,7 @@ describe("Sidebar", () => {
     },
   );
 
-  it("forwards double-clicks on row padding and status but excludes row actions and modified clicks", () => {
+  it("forwards double-clicks on row padding and status but excludes row actions and modified clicks", async () => {
     const onSelectThread = vi.fn();
     const onSetThreadPin = vi.fn(async () => undefined);
     const onOpenPullRequest = vi.fn();
@@ -7584,8 +7592,11 @@ describe("Sidebar", () => {
     }
     expect(screen.queryByRole("textbox", { name: "Thread name" })).toBeNull();
     expect(onSelectThread).not.toHaveBeenCalled();
-    // The action's own click still performs its existing operation.
-    fireEvent.click(within(card).getByRole("button", { name: "Pin thread" }));
+    // The action's own click still performs its existing operation. A pin
+    // moves the row into Created's Pinned group, so it settles a reveal.
+    await act(async () => {
+      fireEvent.click(within(card).getByRole("button", { name: "Pin thread" }));
+    });
     expect(onSetThreadPin).toHaveBeenCalledWith(pullRequestThread, true);
     fireEvent.click(within(card).getByRole("button", { name: "Open thread actions" }));
     expect(screen.getByRole("menuitem", { name: "Rename Thread" })).toBeInTheDocument();
@@ -9282,9 +9293,9 @@ describe("Sidebar directory pinning", () => {
 });
 
 describe("Sidebar thread pinning Move items", () => {
-  // Move Up / Move Down only surface in the Directories lens — the only lens
-  // that still renders a pinned section, and therefore the only one where a
-  // reorder visibly moves the row. Updated and Created are pure sort orders.
+  // Move Up / Move Down only surface where a pinned section renders, so a
+  // reorder visibly moves the row: Directories, and the Pinned group of
+  // Updated and Created (pinned-group.test.tsx).
   const pinnedThreadsDirectory = (
     threadKeys: string[],
   ): NavigationDirectorySummary => ({
@@ -9585,7 +9596,7 @@ describe("Sidebar menus from the keyboard", () => {
     expect(document.activeElement).toBe(stops[at - 1]);
   });
 
-  it("keeps the menu open on a pin toggle and returns focus to ⋮ on Return", () => {
+  it("keeps the menu open on a pin toggle and returns focus to ⋮ on Return", async () => {
     const onSetThreadPin = vi.fn(async () => undefined);
     renderThreadSidebar({ onSetThreadPin });
     const actions = openThreadActions();
@@ -9597,8 +9608,10 @@ describe("Sidebar menus from the keyboard", () => {
     }
     expect(pin).toHaveFocus();
 
-    // A checkable item toggles in place, so both checks can be set.
-    act(() => pin.click());
+    // A checkable item toggles in place, so both checks can be set. A pin
+    // moves a Created row into the Pinned group, so the list reveals the
+    // write's result once it settles.
+    await act(async () => pin.click());
     expect(onSetThreadPin).toHaveBeenCalledWith(
       expect.objectContaining({ id: sharedThread.id }),
       true,

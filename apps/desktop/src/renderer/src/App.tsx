@@ -1792,6 +1792,7 @@ function DesktopAppShell(props: {
     composerDraftStore,
     providerModelDefaults,
     attentionPromoteOnTurnEnd: settings.snapshot?.general.attentionPromoteOnTurnEnd?.value ?? true,
+    pinnedThreadsOnTop: settings.snapshot?.general.pinnedThreadsOnTop?.value,
     onThreadActionError: handleThreadActionError,
     progressiveInitialRefresh: true,
     threadViewVisible: mainView === "thread",
@@ -3901,6 +3902,9 @@ function DesktopAppShell(props: {
           backends={backendSummaries.backends}
           onRefreshRateLimits={backendSummaries.refreshRateLimits}
           browseMode={navigation.browseMode}
+          pinnedThreadsOnTop={navigation.pinnedThreadsOnTop}
+          pinnedGroupCollapsed={navigation.pinnedGroupCollapsed}
+          onSetPinnedGroupCollapsed={navigation.setPinnedGroupCollapsed}
           threadLensesEmpty={navigation.threadLensesEmpty}
           creatingThread={navigation.creatingThread}
           pagedNavigation={navigation.pagedNavigation}

@@ -552,6 +552,8 @@ import type {
   SetDefaultDesktopPwrAgentProfileResponse,
   SetNavigationBrowseModeRequest,
   SetNavigationBrowseModeResponse,
+  SetPinnedGroupCollapsedRequest,
+  SetPinnedGroupCollapsedResponse,
   StartDesktopCodexAuthProfileLoginRequest,
   StartDesktopCodexAuthProfileLoginResponse,
   UpdateDirectoryLaunchpadRequest,
@@ -1134,6 +1136,9 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   setNavigationBrowseMode?: (
     request: SetNavigationBrowseModeRequest,
   ) => Promise<SetNavigationBrowseModeResponse>;
+  setPinnedGroupCollapsed?: (
+    request: SetPinnedGroupCollapsedRequest,
+  ) => Promise<SetPinnedGroupCollapsedResponse>;
   listBackends?: (
     request?: ListBackendsRequest
   ) => Promise<ListBackendsResponse>;
