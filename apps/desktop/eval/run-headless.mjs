@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 // The same real Electron/preload IPC path as lib/live-app.ts, without UI input.
-import { appendFileSync, closeSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline";
 import { createReadStream } from "node:fs";
 import { EXIT, assertReady, atomicJson, captureLaunchRejections, claimRun, cleanEnvironment, configToml, deadlineCall, dispatchTurn, errorStatus, launchHeadlessElectron, observeFamilyBudget, readBudgetThread, retainUsageSnapshot, sanitizer, budgetStop, waitForOutcome, probeInterrupt, sanitizedProtocolRecord, validateInput } from "./lib/headless-contract.mjs";
+import { stageTaskExports } from "./lib/task-export.mjs";
 
 const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = process.argv.slice(2);
@@ -218,17 +219,9 @@ try {
         if (untracked) {
           const staging = mkdtempSync(path.join(output, ".export-"));
           try {
-            for (const name of untracked.split("\0").filter(Boolean)) {
-              const target = path.resolve(staging, name);
-              if (!target.startsWith(staging + path.sep)) throw new Error("Unsafe artifact path");
-              const source = path.join(input.cwd, name);
-              const info = lstatSync(source);
-              mkdirSync(path.dirname(target), { recursive: true });
-              if (info.isSymbolicLink()) symlinkSync(redact(readlinkSync(source)), target);
-              else if (info.isFile()) writeFileSync(target, Buffer.from(redact(readFileSync(source).toString("latin1")), "latin1"), { mode: info.mode & 0o777 });
-              else throw new Error("Unsupported artifact file type");
-            }
-            execFileSync("tar", ["-C", staging, "--null", "-T", "-", "-czf", path.join(output, "untracked.tar.gz")], { input: untracked });
+            const manifest = stageTaskExports(input.cwd, staging, untracked.split("\0").filter(Boolean), redact);
+            atomicJson(path.join(output, "untracked-manifest.json"), redact(manifest));
+            execFileSync("tar", ["-C", staging, "--null", "-T", "-", "-czf", path.join(output, "untracked.tar.gz")], { input: manifest.entries.map((name) => name + "\0").join("") });
           } finally { rmSync(staging, { recursive: true, force: true }); }
         }
       } catch (error) { result.artifactError = redact(error.message); }
