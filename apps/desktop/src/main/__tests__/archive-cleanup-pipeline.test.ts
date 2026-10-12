@@ -115,6 +115,32 @@ function build(active: AppServerThreadSummary[], target = codexThread({ id: "tar
 }
 
 describe("archive cleanup pipeline", () => {
+  it("discovers more than 500 archived worktrees in bounded pages without mutating them", async () => {
+    vi.useFakeTimers();
+    const fixture = build([]);
+    const archived = Array.from({ length: 501 }, (_, index) => codexThread({ id: `archived-${index}`, linkedDirectories: [{
+      id: String(index), kind: "worktree", label: "repo", path: "/contrived/repo", worktreePath: `/contrived/worktree-${index}`,
+    }] }));
+    const pages: number[] = [];
+    fixture.client.listArchiveCleanupThreadsPage.mockImplementation(async (params) => {
+      const rows = params.archived ? archived : [];
+      const offset = Number(params.cursor ?? 0);
+      const threads = rows.slice(offset, offset + params.limit);
+      pages.push(threads.length);
+      return { threads, nextCursor: offset + threads.length < rows.length ? String(offset + threads.length) : undefined };
+    });
+    vi.mocked(stat).mockImplementation(async () => ({ isDirectory: () => true }) as Awaited<ReturnType<typeof stat>>);
+    const scan = fixture.registry.repairArchivedThreadWorktrees({ dryRun: true });
+    await vi.advanceTimersByTimeAsync(100_000);
+    const result = await scan;
+    expect(result.archivedThreads).toBe(501);
+    expect(result.candidates).toHaveLength(501);
+    expect(pages).toHaveLength(22);
+    expect(Math.max(...pages)).toBe(25);
+    expect(fixture.archiveWorktree).not.toHaveBeenCalled();
+    expect(fixture.client.archiveThread).not.toHaveBeenCalled();
+  });
+
   it("acknowledges before discovery and bounds each provider/overlay slice for 1000 active threads", async () => {
     vi.useFakeTimers();
     const fixture = build(Array.from({ length: 1000 }, (_, id) => codexThread({ id: `active-${id}` })));

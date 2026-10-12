@@ -8,6 +8,9 @@ import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { CodexAppServerClient } from "../codex-app-server/client";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
+import { runOneTimeArchivedWorktreeRepair } from "../state/archived-worktree-repair";
+import { measureSqliteWrites } from "../state/sqlite-write-metrics";
+import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { ArchiveWorktreeTransport, type ArchiveWorktreeThread } from "./fixtures/archive-worktree-transport";
 
 vi.mock("../log", () => ({ getMainLogger: () => ({ debug() {}, info() {}, warn() {}, error() {} }) }));
@@ -20,6 +23,7 @@ const registries: DesktopBackendRegistry[] = [];
 const databases: StateDb[] = [];
 const roots: string[] = [];
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await Promise.all(registries.splice(0).map((registry) => registry.close()));
   for (const db of databases.splice(0)) db.close();
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
@@ -57,6 +61,89 @@ async function createFixture() {
 }
 
 describe("archive worktrees across a desktop restart", () => {
+  it("repairs an already archived checkout once, preserves non-ignored edits, and restores every archived owner after restart", async () => {
+    vi.stubEnv("PWRAGENT_DEV_SQLITE_WRITE_METRICS", "1");
+    const fixture = await createFixture();
+    ArchiveWorktreeTransport.threads = [
+      { id: "old-target", cwd: fixture.worktree, source: "cli", archived: true },
+      { id: "shared-archive", cwd: fixture.worktree, source: "appServer", archived: true },
+    ];
+    await writeFile(path.join(fixture.worktree, "file.txt"), "previously abandoned edit\n");
+    await writeFile(path.join(fixture.worktree, ".gitignore"), "ignored.txt\n");
+    await writeFile(path.join(fixture.worktree, "untracked.txt"), "new non-ignored work\n");
+    await writeFile(path.join(fixture.worktree, "ignored.txt"), "ignored build output\n");
+    const instance = fixture.reopen();
+    const dryRun = await instance.registry.repairArchivedThreadWorktrees({ dryRun: true });
+    expect(dryRun.candidates).toHaveLength(1);
+    expect(await fixture.git(fixture.repo, ["for-each-ref", "refs/codex/snapshots/"])).toBe("");
+    const { result, writes } = await measureSqliteWrites(async () => await runOneTimeArchivedWorktreeRepair({
+      db: instance.db.raw, repair: async () => await instance.registry.repairArchivedThreadWorktrees(),
+    }));
+    expect(result?.cleanup).toEqual([expect.objectContaining({ removedWorktree: true })]);
+    expectSqliteWriteBudget({ scenario: "archived-worktree-repair-shared-snapshot", note: "One-time repair of one dirty checkout shared by two archived threads, including the profile claim and completion; no timer or idle writes.", writes });
+    await expect(stat(fixture.worktree)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(ArchiveWorktreeTransport.requests.filter((request) => request.method === "thread/archive")).toEqual([]);
+    const snapshots = (await instance.store.getThreadOverlayState({ backend: "codex", threadId: "old-target" }))!.worktreeSnapshots!;
+    expect(snapshots).toHaveLength(1);
+    expect(await fixture.git(fixture.repo, ["show", `${snapshots[0]!.snapshotRef}:untracked.txt`])).toBe("new non-ignored work\n");
+    expect(await fixture.git(fixture.repo, ["ls-tree", "--name-only", snapshots[0]!.snapshotRef])).not.toContain("ignored.txt");
+    await instance.registry.close();
+    instance.db.close();
+    databases.splice(databases.indexOf(instance.db), 1);
+    const restarted = fixture.reopen();
+    const repair = vi.fn(async () => await restarted.registry.repairArchivedThreadWorktrees());
+    expect(await runOneTimeArchivedWorktreeRepair({ db: restarted.db.raw, repair })).toBeUndefined();
+    expect(repair).not.toHaveBeenCalled();
+    await restarted.registry.restoreThread({ backend: "codex", threadId: "old-target" });
+    expect(await readFile(path.join(fixture.worktree, "file.txt"), "utf8")).toBe("previously abandoned edit\n");
+    expect(await readFile(path.join(fixture.worktree, "untracked.txt"), "utf8")).toBe("new non-ignored work\n");
+    await expect(stat(path.join(fixture.worktree, "ignored.txt"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it.each(["active", "external"])("keeps an archived checkout protected by %s ownership during repair", async (protection) => {
+    const fixture = await createFixture();
+    ArchiveWorktreeTransport.threads = [{ id: "old-target", cwd: fixture.worktree, source: "cli", archived: true }];
+    if (protection === "active") ArchiveWorktreeTransport.threads.push({ id: "hidden-user", cwd: fixture.worktree, source: "subAgentOther" });
+    const instance = fixture.reopen();
+    if (protection === "external") await instance.store.addLinkedDirectory({
+      backend: "codex", threadId: "old-target", directory: { ...fixture.directory, worktreeOwnership: "external" },
+    });
+    const result = await instance.registry.repairArchivedThreadWorktrees();
+    expect(result.protectedWorktrees).toBe(1);
+    expect(result.candidates).toEqual([]);
+    expect((await stat(fixture.worktree)).isDirectory()).toBe(true);
+  });
+
+  it("keeps an archived checkout if an owner appears after repair discovery", async () => {
+    const fixture = await createFixture();
+    ArchiveWorktreeTransport.threads = [{ id: "old-target", cwd: fixture.worktree, source: "cli", archived: true }];
+    let activeReads = 0;
+    ArchiveWorktreeTransport.onList = (params) => {
+      if (!params.archived && ++activeReads === 3) ArchiveWorktreeTransport.threads.push({ id: "new-owner", cwd: fixture.worktree, source: "appServer" });
+    };
+    const instance = fixture.reopen();
+    const result = await instance.registry.repairArchivedThreadWorktrees();
+    expect(result.cleanup[0]?.removedWorktree).toBe(false);
+    expect((await stat(fixture.worktree)).isDirectory()).toBe(true);
+  });
+
+  it("does not remove the primary checkout or invent a snapshot for an absent worktree", async () => {
+    const fixture = await createFixture();
+    ArchiveWorktreeTransport.threads = [{ id: "old-target", cwd: fixture.repo, source: "cli", archived: true }];
+    const primary = { ...fixture.directory, path: fixture.repo, worktreePath: fixture.repo };
+    const instance = fixture.reopen(primary);
+    const result = await instance.registry.repairArchivedThreadWorktrees();
+    expect(result.cleanup[0]?.removedWorktree).toBe(false);
+    expect(result.cleanup[0]?.error).toContain("primary checkout");
+    expect((await stat(fixture.repo)).isDirectory()).toBe(true);
+    ArchiveWorktreeTransport.threads[0]!.cwd = fixture.worktree;
+    await fixture.git(fixture.repo, ["worktree", "remove", fixture.worktree]);
+    const restarted = fixture.reopen();
+    const missing = await restarted.registry.repairArchivedThreadWorktrees();
+    expect(missing.missingWorktrees).toBe(1);
+    expect(missing.cleanup).toEqual([]);
+  });
+
   it.each(["cli", "vscode", "appServer", "exec", "unknown"])("archives and restores an old %s thread after closing and reopening the registry and SQLite store", async (source) => {
     const fixture = await createFixture();
     const first = fixture.reopen();

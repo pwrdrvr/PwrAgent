@@ -16,7 +16,7 @@ import type {
   CodexBackgroundTerminal,
 } from "@pwragent/shared";
 import { ArchiveCleanupReadPool } from "./archive-cleanup-read-pool";
-import { ArchiveCleanupQueue, ArchiveCleanupCancelledError, ARCHIVE_CLEANUP_SLICE_SIZE, type ArchiveCleanupContext } from "./archive-cleanup-queue";
+import { ArchiveCleanupQueue, ArchiveCleanupCancelledError, ARCHIVE_CLEANUP_SLICE_SIZE, ARCHIVE_CLEANUP_PAUSE_MS, type ArchiveCleanupContext } from "./archive-cleanup-queue";
 import { supportsNativeVoice, type NativeVoiceBackend, type NativeVoiceToolCall } from "../codex-app-server/native-voice-protocol";
 import type { NativeVoiceCapability } from "../../shared/native-voice";
 import { analyzeUsageActivity, usageAnalysisModelBackend } from "./usage-activity-analysis";
@@ -2020,6 +2020,23 @@ type ArchiveCleanupMetadata = {
     activeByPath: Map<string, AppServerThreadSummary[]>;
     archivedByPath: Map<string, AppServerThreadSummary[]>;
   };
+};
+
+type ArchiveCleanupDiscoveryRequest = {
+  backend: AppServerBackendKind;
+  threadId: string;
+  context?: ArchiveCleanupContext;
+  targetThread?: AppServerThreadSummary;
+  codexRolloutMissing?: boolean;
+};
+
+export type ArchivedWorktreeRepairReport = {
+  archivedThreads: number;
+  discoveredWorktrees: number;
+  missingWorktrees: number;
+  protectedWorktrees: number;
+  candidates: Array<{ backend: AppServerBackendKind; threadId: string; worktreePath: string }>;
+  cleanup: ArchiveThreadCleanupResult[];
 };
 
 type WorktreeRestoreCandidate = {
@@ -33142,11 +33159,102 @@ export class DesktopBackendRegistry {
     throw new Error("Thread metadata was not found.");
   }
 
-  private async readPacedArchiveCleanupMetadata(params: {
-    backend: AppServerBackendKind; threadId: string; context?: ArchiveCleanupContext;
-    targetThread?: AppServerThreadSummary;
-    codexRolloutMissing?: boolean;
-  }): Promise<ArchiveCleanupMetadata> {
+  /** Backfill only archived checkouts; never archive the provider thread again.
+   * Discovery is one complete read, while each removal retains fresh ownership
+   * admission and the ordinary snapshot/restore persistence boundary. */
+  async repairArchivedThreadWorktrees(options: {
+    dryRun?: boolean;
+    onProgress?: (completed: number, total: number) => void;
+  } = {}): Promise<ArchivedWorktreeRepairReport> {
+    await this.subAgentStartupReconciliation;
+    if (this.isBootstrapModeFn() || this.isCodexBootstrapDeferredFn() || !this.codexClient.listArchiveCleanupThreadsPage) {
+      throw new Error("Complete archived worktree discovery is unavailable.");
+    }
+    const assertCurrent = () => {
+      if (this.closed || this.stoppingRunningTurnsForShutdown) throw new ArchiveCleanupCancelledError();
+    };
+    const checkpoint = async () => {
+      assertCurrent();
+      await new Promise<void>((resolve) => setTimeout(resolve, ARCHIVE_CLEANUP_PAUSE_MS));
+      assertCurrent();
+    };
+    const inventory = await this.readPacedArchiveCleanupInventory({
+      backend: "codex", threadId: "", context: { assertCurrent, checkpoint, settleCheckpoint: checkpoint },
+    });
+    const report: ArchivedWorktreeRepairReport = {
+      archivedThreads: inventory.archivedThreads.length, discoveredWorktrees: 0,
+      missingWorktrees: 0, protectedWorktrees: 0, candidates: [], cleanup: [],
+    };
+    const ownersByPath = new Map<string, AppServerThreadSummary>();
+    for (const thread of inventory.archivedThreads) {
+      for (const directory of thread.linkedDirectories) {
+        const worktreePath = linkedDirectoryWorktreePath(directory);
+        if (worktreePath) ownersByPath.set(normalizeWorktreePathForComparison(worktreePath), thread);
+      }
+    }
+    report.discoveredWorktrees = ownersByPath.size;
+    for (const [worktreePath, thread] of ownersByPath) {
+      await checkpoint();
+      try {
+        if (!(await stat(worktreePath)).isDirectory()) throw new Error(`Worktree path is not a directory: ${worktreePath}`);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        report.missingWorktrees += 1;
+        continue;
+      }
+      if (inventory.worktreeEvidence?.externalPaths.has(worktreePath)
+        || inventory.worktreeEvidence?.activeByPath.has(worktreePath)) {
+        report.protectedWorktrees += 1;
+        continue;
+      }
+      report.candidates.push({ backend: thread.source, threadId: thread.id, worktreePath });
+    }
+    if (options.dryRun) return report;
+    for (const candidate of report.candidates) {
+      assertCurrent();
+      const key = buildThreadIdentityKey(candidate.backend, candidate.threadId);
+      const completion = this.archiveCleanupQueue.enqueue(key, async (context) => {
+        const current = await this.findThreadForArchiveCleanup({ ...candidate, context });
+        const thread = { ...current.thread, linkedDirectories: current.thread.linkedDirectories.filter((directory) => {
+          const worktreePath = linkedDirectoryWorktreePath(directory);
+          return worktreePath !== undefined && normalizeWorktreePathForComparison(worktreePath) === candidate.worktreePath;
+        }) };
+        if (thread.linkedDirectories.length === 0) throw new Error("Archived thread no longer owns the repair candidate; the worktree was kept.");
+        return {
+          backend: candidate.backend, threadId: candidate.threadId, archivedAt: Date.now(),
+          cleanup: await this.archiveThreadWorktrees({
+            ...current, backend: candidate.backend, thread, context,
+          }),
+        };
+      });
+      try {
+        const result = await this.observeArchiveCleanupCompletion(completion, {
+          backend: candidate.backend, threadId: candidate.threadId, archivedAt: Date.now(),
+        });
+        report.cleanup.push(...result.cleanup);
+      } catch (error) {
+        assertCurrent();
+        report.cleanup.push({ worktreePath: candidate.worktreePath, removedWorktree: false, deletedBranch: false,
+          error: error instanceof Error ? error.message : String(error) });
+      }
+      options.onProgress?.(report.cleanup.length, report.candidates.length);
+    }
+    return report;
+  }
+
+  private async readPacedArchiveCleanupMetadata(params: ArchiveCleanupDiscoveryRequest): Promise<ArchiveCleanupMetadata> {
+    const { thread, activeTarget, targetIsActive, ...inventory } = await this.readPacedArchiveCleanupInventory(params);
+    const missingRollout = params.backend === "codex" && params.codexRolloutMissing === true;
+    const archivedTarget = thread ?? (missingRollout ? activeTarget : undefined);
+    if (!archivedTarget || (targetIsActive && !missingRollout)) {
+      throw new Error("Archived thread metadata was not found or the thread is active again; the worktree was kept.");
+    }
+    return { ...inventory, thread: archivedTarget };
+  }
+
+  private async readPacedArchiveCleanupInventory(params: ArchiveCleanupDiscoveryRequest): Promise<
+    Omit<ArchiveCleanupMetadata, "thread"> & { thread?: AppServerThreadSummary; activeTarget?: AppServerThreadSummary; targetIsActive: boolean }
+  > {
     if (this.isBootstrapModeFn()) throw new Error("Archive discovery is unavailable in bootstrap mode.");
     const context = params.context;
     const activeThreads: AppServerThreadSummary[] = [];
@@ -33267,12 +33375,7 @@ export class DesktopBackendRegistry {
     // A confirmed missing rollout can leave retained metadata in the active
     // provider listing. Use that exact identity for recovery while still
     // scanning every checkout user. Actual restore intent cancels this job.
-    const missingRollout = params.backend === "codex" && params.codexRolloutMissing === true;
-    if (missingRollout) archivedTarget ??= activeTarget;
-    if (!archivedTarget || (targetIsActive && !missingRollout)) {
-      throw new Error("Archived thread metadata was not found or the thread is active again; the worktree was kept.");
-    }
-    return { activeThreads, archivedThreads, thread: archivedTarget, overlaysByThreadKey, activeChildren, legacyParentBackends, worktreeEvidence };
+    return { activeThreads, archivedThreads, thread: archivedTarget, activeTarget, targetIsActive, overlaysByThreadKey, activeChildren, legacyParentBackends, worktreeEvidence };
   }
 
   private async findThreadForRestoreWorktrees(params: {

@@ -14,6 +14,7 @@ import {
 import { interruptStartupStorageMaintenance, runStartupStorageMaintenance } from "./storage-maintenance";
 import { hadExistingAppStateDatabase, getAppStateDb } from "./state/app-state";
 import { observeStorageArchive } from "./state/storage-maintenance";
+import { runOneTimeArchivedWorktreeRepair } from "./state/archived-worktree-repair";
 import { getDesktopOverlayStore } from "./app-server/desktop-overlay-store";
 import { createPwrAgentAppManagementHandler } from "./agent-tools/pwragent-app-management-service";
 import type {
@@ -520,6 +521,22 @@ function prewarmInitialThreadList(permit: ProviderDiscoveryPermit): void {
     mainLog.warn("startup thread archive sweeper initialization failed", {
       error: error instanceof Error ? error.message : String(error),
     });
+  });
+  void startupProviderRefresh.then(async () => {
+    const registry = getExistingDesktopBackendRegistry();
+    if (!registry) return;
+    const report = await runOneTimeArchivedWorktreeRepair({
+      db: getAppStateDb().raw,
+      repair: async () => await registry.repairArchivedThreadWorktrees(),
+    });
+    if (report) mainLog.info("archived worktree repair completed", {
+      archivedThreads: report.archivedThreads, candidates: report.candidates.length,
+      removed: report.cleanup.filter((item) => item.removedWorktree).length,
+      protected: report.protectedWorktrees, missing: report.missingWorktrees,
+      retained: report.cleanup.filter((item) => !item.removedWorktree),
+    });
+  }).catch((error) => {
+    mainLog.warn("archived worktree repair interrupted", { error: error instanceof Error ? error.message : String(error) });
   });
   void startupProviderRefresh
     .then(async () =>
