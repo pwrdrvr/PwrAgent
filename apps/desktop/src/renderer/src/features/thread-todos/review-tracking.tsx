@@ -116,8 +116,8 @@ export function openReviewItems(review: ThreadReview): ThreadReviewItem[] {
 
 /**
  * The reply the review card's Fix button sends to the review's own thread:
- * the findings the operator picked, by title. The agent reads their details
- * with `list_reviews`. The closing line is what clears the To-do.
+ * the findings the operator picked, by title. `list_reviews` returns their
+ * details and ids, and with them how to mark each one addressed.
  */
 export function fixReviewFindingsPrompt(reviewTitle: string, items: readonly ThreadReviewItem[]): string {
   const findings = items.map((item, index) => {
@@ -131,7 +131,7 @@ export function fixReviewFindingsPrompt(reviewTitle: string, items: readonly Thr
     "",
     ...findings,
     "",
-    "Mark each one addressed with `update_review_item` once it is fixed.",
+    "Use PwrAgent's `list_reviews` tool for their details and how to record each fix.",
   ].join("\n");
 }
 

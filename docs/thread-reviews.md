@@ -29,7 +29,7 @@ The shared dynamic-tool and MCP catalog exposes four thread-scoped tools:
 | Tool | Purpose |
 | --- | --- |
 | `record_review` | Track external or manually written findings using a stable `sourceKey`. |
-| `list_reviews` | Read reviews and findings with ids and resolutions; defaults to open. Use `status: "all"` to inspect dismissals. |
+| `list_reviews` | Read reviews and findings with ids and resolutions; defaults to open. Use `status: "all"` to inspect dismissals. While a finding is open, the result carries `guidance`: work on findings only when the operator asks, and mark a fixed one addressed with `update_review_item`. |
 | `update_review_item` | Set a finding's status, with a `note` and optional `url` documenting its outcome. |
 | `update_review` | Dismiss, reopen, or document a handled review with a `note` and optional `url`. |
 
@@ -61,9 +61,9 @@ default, and **Do not address**; a settled row dims in place with its
 outcome's glyph and offers **Reopen**. The head's dismiss control dismisses
 the whole review, and the stack's **Undo** reopens it. **Fix N findings**
 sends one reply to the review's thread: "Fix these N findings from <review>",
-the ticked findings by priority and title, and one line asking the agent to
-mark each addressed with `update_review_item`. The agent reads their details
-with `list_reviews`. Unticked findings stay open. The card stays open until
+the ticked findings by priority and title, and one line pointing the agent
+at `list_reviews`. That result holds the details, the ids, and how to record
+each fix, so no per-turn note repeats it. Unticked findings stay open. The card stays open until
 the last finding is settled. A review with nothing left open offers
 **Mark handled** instead.
 

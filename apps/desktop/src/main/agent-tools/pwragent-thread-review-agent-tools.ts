@@ -52,6 +52,14 @@ const schemas: Record<(typeof PWRAGENT_THREAD_REVIEW_OPERATION_NAMES)[number], R
   },
 };
 
+/**
+ * How to settle a finding, carried in the list_reviews result: the agent
+ * reads it where it reads the findings, once per lookup, instead of a note
+ * repeated every turn that would pull its attention to reviews.
+ */
+export const OPEN_FINDINGS_GUIDANCE =
+  "Work on these findings only when the operator asks you to. When you fix one, mark it addressed with update_review_item: a short note on what changed, and a commit or pull request link when there is one.";
+
 const descriptions = {
   record_review: "Track an external or manually written code review on this thread. Native and managed reviews are tracked automatically. Use a stable sourceKey. Findings remain on the operator's To-do list until addressed or dismissed. Do not use this for progress updates.",
   list_reviews: "List this thread's tracked reviews and findings, including stable ids, statuses, last update dates, and resolution notes/links. Defaults to open reviews. Read dismissed reviews with status all: do not address them unless the operator asks to reopen them.",
@@ -75,7 +83,10 @@ export function buildPwrAgentThreadReviewToolDefinitions(
         if (operation === "list_reviews") {
           const status = args.status ?? "open";
           if (!["open", "handled", "dismissed", "all"].includes(String(status))) throw new ThreadReviewError("invalid_arguments", "Invalid review status.");
-          return agentToolSuccess({ reviews: handler.list(identity, status as ListThreadReviewsRequest["status"]) });
+          const reviews = handler.list(identity, status as ListThreadReviewsRequest["status"]);
+          const hasOpenFindings = reviews.some((review) =>
+            review.status === "open" && review.items.some((item) => item.status === "open"));
+          return agentToolSuccess({ reviews, ...(hasOpenFindings ? { guidance: OPEN_FINDINGS_GUIDANCE } : {}) });
         }
         if (operation === "record_review") {
           const sourceKey = requiredString(args.sourceKey);

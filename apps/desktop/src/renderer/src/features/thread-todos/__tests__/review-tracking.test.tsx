@@ -134,7 +134,7 @@ describe("review To-do card", () => {
       "",
       "1. [P1] Abort pending exports",
       "",
-      "Mark each one addressed with `update_review_item` once it is fixed.",
+      "Use PwrAgent's `list_reviews` tool for their details and how to record each fix.",
     ].join("\n"));
     await waitFor(() => expect(screen.getByRole("button", { name: "Fix 1 finding" })).toBeEnabled());
 

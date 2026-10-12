@@ -2,7 +2,7 @@ import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { PWRAGENT_THREAD_REVIEW_OPERATION_NAMES } from "@pwragent/shared";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import { AgentToolRouter } from "../agent-tools/agent-tool-router";
-import { buildPwrAgentThreadReviewToolDefinitions, type PwrAgentThreadReviewHandler } from "../agent-tools/pwragent-thread-review-agent-tools";
+import { OPEN_FINDINGS_GUIDANCE, buildPwrAgentThreadReviewToolDefinitions, type PwrAgentThreadReviewHandler } from "../agent-tools/pwragent-thread-review-agent-tools";
 import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-registry";
 import { ThreadReviewService } from "../thread-reviews/thread-review-service";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
@@ -41,6 +41,18 @@ describe("review tools", () => {
     } });
     expect(response.isError).not.toBe(true);
     expect(service.get(review.id)).toMatchObject({ status: "handled", items: [{ resolution: { actor: "agent", url: "https://example.com/commit/fix" } }] });
+  });
+
+  it("says how to settle findings where it lists them, and only while one is open", async () => {
+    const review = service.record({ backend: "codex", threadId: "owner" }, {
+      sourceKey: "artifact", title: "Review", items: [{ title: "Abort pending requests" }],
+    });
+    const tool = buildPwrAgentThreadReviewToolDefinitions(handler).find((entry) => entry.name === "list_reviews")!;
+    expect(await tool.dispatch({}, context)).toMatchObject({ ok: true, data: { guidance: OPEN_FINDINGS_GUIDANCE } });
+    service.update({ id: review.id, itemId: review.items[0]!.id, status: "addressed", note: "Done." }, "agent", { backend: "codex", threadId: "owner" });
+    const settled = await tool.dispatch({ status: "all" }, context);
+    expect(settled).toMatchObject({ ok: true, data: { reviews: [{ status: "handled" }] } });
+    expect((settled as { data: object }).data).not.toHaveProperty("guidance");
   });
 
   it("rejects guessed review ids from another calling thread even with spoofed arguments", async () => {
