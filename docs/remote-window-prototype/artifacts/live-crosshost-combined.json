@@ -409,5 +409,21 @@
     "m2DefaultInstalledMainPid": 88599,
     "bothM2AppsStillRunning": true,
     "windowsRestoration": "Coordinated separately by parent and existing Windows child; no claim of completion in this evidence"
+  },
+  "environment": {
+    "source": "M2 Max, macOS, hardware VideoToolbox encoding",
+    "receiverPhysicalHostOperatorReported": "2018 Intel MacBook Pro with Touch Bar and 16 GB physical RAM; not independently inspected",
+    "receiverFederationHostFacts": {
+      "platform": "win32",
+      "osVersion": "10.0.26200",
+      "arch": "x64",
+      "cpuModel": "Intel(R) Core(TM) i7-8559U CPU @ 2.70GHz",
+      "guestLogicalCpuCount": 4,
+      "guestMemoryBytes": 10736128000,
+      "virtualMachine": true
+    },
+    "receiverMode": "Headless Edge; WebCodecs prefer-software",
+    "hostFactsSampledAfterRunAt": "2026-10-12T02:36:38.298Z",
+    "limit": "Guest facts are post-run Federation metadata, not physical host capacity or benchmark-phase CPU/load measurements. Do not generalize this receiver result to current Windows hardware."
   }
 }

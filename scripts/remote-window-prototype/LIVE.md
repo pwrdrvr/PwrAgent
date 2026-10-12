@@ -1,8 +1,8 @@
 # Live owned-window prototype
 
-This is running code, not saved-frame playback: a native AppKit fixture is captured with ScreenCaptureKit, hardware-encoded as H.264, sent through two real signed/Noise-encrypted Federation clients and a gateway, decoded with WebCodecs, and drawn live. Typing, scrolling and clicking travel back to the fixture. A PNG repairs settled text. The measured development-adapter run uses separate native/source-helper/viewer-helper/browser processes on **one Mac**. A cross-machine live run is still outstanding.
+This is running code, not saved-frame playback: a native AppKit fixture is captured with ScreenCaptureKit, hardware-encoded as H.264, sent through real signed/Noise-encrypted Federation, decoded with WebCodecs, and drawn live. Typing and scrolling were exercised on the return path. A PNG repairs settled text. The measured path now includes **M2/dev → Windows/dev**, with 16 first-run frames, 24 accepted fixture commands, and five pixel-observed input revisions. Motion reached only 1.25 video FPS; this is a working experiment with poor responsiveness, not an RDP-quality implementation. See [the measured report](../../docs/remote-window-prototype/README.md).
 
-No VNC/RFB, service forwarding, remote PTY, arbitrary window capture, audio, clipboard, OS input injection, new production enrollment, or production credential export is involved. `LiveFixture.swift` can select only its own PID/window. Its screen-recording permission preflight fails explicitly. It never clicks an OS permission prompt.
+No VNC/RFB, service forwarding, remote PTY, arbitrary window capture, audio, clipboard, OS input injection, agent-created enrollment, or production credential export is involved. The operator personally enrolled the source dev profile before the cross-machine test. `LiveFixture.swift` can select only its own PID/window. Its screen-recording permission preflight fails explicitly. It never clicks an OS permission prompt.
 
 ## Run the complete live path locally
 
@@ -28,7 +28,7 @@ Repeat with a fresh output directory and `PWRWIN_REQUEST_DELAY_MS=40` for a dete
 
 ## Run across already-enrolled peers
 
-The implementation for this path exists, but installed peers do not have it yet. Both participating Electron **main processes** must run this reviewed development build, retaining their existing profiles and identities. Do not run a second app with a cloned identity or create a new enrollment. A renderer reload cannot install the adapter. The existing gateway can relay these ordinary, bounded request envelopes without a new frame kind or capability. Its `gateway_relay` negotiation and the existing peer identities remain required. No service-forwarding permission is repurposed.
+Both participating Electron **main processes** must run this reviewed development build, retaining their selected profiles and identities. Prefer a suitable dev profile and leave unrelated default-profile work running. Do not run a second app with a cloned identity or create an enrollment without explicit operator direction. A renderer reload cannot install the adapter. The cross-machine run confirmed that existing Federation routing can carry these ordinary, bounded request envelopes without a new frame kind or capability. Its `gateway_relay` negotiation and the existing peer identities remain required. No service-forwarding permission is repurposed.
 
 Rollout compatibility checked on 2026-10-11: the complete `7ddb2c97f` prototype bundle has schema version 72 and no differences from installed `v1.2.0-prerelease.5` in `apps/desktop/src/main/state`, `apps/desktop/src/main/config`, or `federation-store.ts`. The release-only commit `5f7fb567e` changes the package version and changelog. The original Windows `c1cbc6c4d` base is older and must not be used against that live profile. Use the complete updated branch, including the subsequent malformed-token authentication regression fix. This check establishes source/schema compatibility; it does not establish runtime permission or successful reconnection after a binary switch.
 
@@ -58,7 +58,22 @@ Launch the viewer helper on Windows or macOS:
 node scripts/remote-window-prototype/live-enrolled.mjs --runtime-ready /exact/pwrwin-runtime-file.json --output /absolute/owned/output-directory
 ```
 
-Open the viewer URL from its output `ready.json`. Headless Windows Edge can run this viewer even while its Windows desktop session is disconnected; that does not enable WGC or OS input. This path has **not yet been run across hosts**. The selected Windows Federation instance is connected again; its installed main process still needs the reviewed adapter. No installed app has been restarted or upgraded for this experiment.
+Open the viewer URL from its output `ready.json`. Headless Windows Edge can run this viewer even while its Windows desktop session is disconnected; that does not enable WGC or OS input. The cross-machine test used the source dev profile and a temporary Windows dev build; M2/default stayed running. Confirm the descriptor's actual owner/viewer IDs after any configuration change, before the first controlled viewer session.
+
+The prototype config is read when the Federation runtime starts. The existing per-app Federation Off/On control can reload it without restarting Electron; this was established from code, but Windows UI automation was unavailable during this run. The measured Windows handoff instead used a tested independent launcher that waited for the exact main process and its supervisors to exit before launching the replacement, and preserved the identity. A bare `app.relaunch()` is insufficiently established for `electron-vite dev`: its supervisor exits when the original Electron child's pipes close, which can remove the renderer server. Do not assume a detached child survives the hosted tool process; the original Windows launcher did not reconnect automatically, and a later independent-launch canary was required.
+
+Use [the saved cross-machine browser results](windows/benchmarks/windows-live-crosshost-browser.json) and [summary](windows/benchmarks/windows-live-crosshost-summary.json) for this run. The `live-summary.py` command above expects the separate same-host harness and its gateway wire counters; it must not be applied to enrolled-peer results. Cross-machine media counts exclude wire overhead. `transferAndPresentMs` starts **after the first pull response** and includes remaining chunk pulls, reconstruction, decode, draw, and animation callback; it excludes the initial pull/wait and final ACK. Do not interpret it as total delivery or network latency.
+
+Recompute the cross-machine numeric results from the checked-in raw records:
+
+```sh
+python3 scripts/remote-window-prototype/live-crosshost-summary.py \
+  docs/remote-window-prototype/artifacts/live-crosshost-source-raw.json \
+  scripts/remote-window-prototype/windows/benchmarks/windows-live-crosshost-browser.json \
+  .local/remote-window/cross-host-recomputed.json
+```
+
+The [combined artifact](../../docs/remote-window-prototype/artifacts/live-crosshost-combined.json) additionally records visual review, host context, resource interpretation, cleanup, and the separate logical resync. Its numeric groups were checked against this recomputation. The Windows receiver was an older i7-8559U virtual machine with four exposed logical CPUs and about 10 GiB guest RAM on an operator-reported 2018 MacBook Pro; software decoding and host age must remain part of comparisons.
 
 ## Protocol and limits
 
