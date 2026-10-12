@@ -60,6 +60,7 @@ function requestGateway(
   return new Promise((resolve, reject) => {
     const request = http.get({ host: "127.0.0.1", port, headers, agent: false }, (incoming) => {
       incoming.on("end", () => resolve({ status: incoming.statusCode, headers: incoming.headers }));
+      incoming.on("error", reject);
       incoming.resume();
     });
     request.on("error", reject);
