@@ -422,7 +422,7 @@
       "guestMemoryBytes": 10736128000,
       "virtualMachine": true
     },
-    "receiverMode": "Headless Edge; WebCodecs prefer-software",
+    "receiverMode": "Headless Edge; WebCodecs configured prefer-software; actual decoder backend not instrumented",
     "hostFactsSampledAfterRunAt": "2026-10-12T02:36:38.298Z",
     "limit": "Guest facts are post-run Federation metadata, not physical host capacity or benchmark-phase CPU/load measurements. Do not generalize this receiver result to current Windows hardware."
   }

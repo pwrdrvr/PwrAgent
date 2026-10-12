@@ -12,7 +12,7 @@ See [the runnable live instructions](../../scripts/remote-window-prototype/LIVE.
 
 ### Cross-machine result
 
-The receiver ran on an aging Intel machine: the operator identifies the physical host as a 2018 MacBook Pro with Touch Bar and 16 GB RAM. Post-run Federation metadata reports a Windows virtual machine exposing an i7-8559U at 2.70 GHz, four logical CPUs, and 10,736,128,000 bytes of guest RAM (about 10 GiB). Headless Edge used software decoding. The physical host was not independently inspected, and guest resources are not the host's full capacity. These results characterize this particular receiver and routing path; they must not be generalized to current Windows hardware.
+The receiver ran on an aging Intel machine: the operator identifies the physical host as a 2018 MacBook Pro with Touch Bar and 16 GB RAM. Post-run Federation metadata reports a Windows virtual machine exposing an i7-8559U at 2.70 GHz, four logical CPUs, and 10,736,128,000 bytes of guest RAM (about 10 GiB). Headless Edge requested WebCodecs `prefer-software`; the actual decoder backend was not instrumented. The physical host was not independently inspected, and guest resources are not the host's full capacity. These results characterize this particular receiver and routing path; they must not be generalized to current Windows hardware.
 
 | Measurement | Observed result | Scope |
 |---|---:|---|
@@ -20,7 +20,7 @@ The receiver ran on an aging Intel machine: the operator identifies the physical
 | Stable idle | 0 image bytes over 3.0048 s | Control traffic was not counted in this run |
 | Motion | 5 H.264 frames over 4.0009 s: **1.25 video FPS** | Plus one PNG repair; 396,817 total media bytes, of which 33,084 were H.264 |
 | Input→canvas p50 / p95 | **445.9 / 2,176.9 ms** | Only five exact pixel-beacon matches; 24 commands were accepted |
-| Decode + presentation p50 / p95 | 11.3 / 198.5 ms | 16 frames, including the cold first decode; software WebCodecs, no photon measurement |
+| Decode + presentation p50 / p95 | 11.3 / 198.5 ms | 16 frames, including the cold first decode; `prefer-software` WebCodecs configuration, no photon measurement |
 | RPC ping p50 / p95 | 51.6 / 540.9 ms | 187 samples across the viewer run, including operator wait; not an isolated benchmark-phase RTT |
 
 The reviewed Windows canvas contains `LIVE123`, rows 15–29, and input revision 24. The three-second scrolling phase presented no frames; its final state arrived later. Accepted input commands are therefore not equivalent to promptly displayed states. No viewer errors were recorded. Cross-host wall-clock capture-to-canvas values were excluded because the machines' clocks were not synchronized.
@@ -49,7 +49,7 @@ These are **same-host**, real encrypted-protocol observations, not cross-host/WA
 
 The delayed run establishes a concrete failure of this compatibility transport: one-frame credit plus stop-and-wait chunk/ACK RPCs becomes RTT-bound. Its 16 KiB media chunks are base64 inside unchanged RPC envelopes; measured counters include envelope and Noise bytes, excluding WebSocket/TCP headers and handshake. This is a working initial transport, **not the efficient final binary/media design**. A credit-driven push path or WebRTC trial is required before claiming RDP-like responsiveness over a WAN. Input is independent of a pending idle pull; serializing input behind that poll initially cost about 400 ms and was fixed.
 
-Hardware VideoToolbox encoding is used. A headless Chrome hardware-decode support query succeeded but the first frame timed out; the working viewer explicitly uses software WebCodecs decoding. Windows likewise used software decoding for the successful cross-machine run. Its earlier `avc1.42E01F` support query alone was not treated as proof of frames or hardware use.
+Hardware VideoToolbox encoding is used. A headless Chrome hardware-decode support query succeeded but the first frame timed out; the working viewer requests software WebCodecs decoding. Windows likewise used `prefer-software` for the successful cross-machine run; the actual decoder backend was not instrumented. Its earlier `avc1.42E01F` support query alone was not treated as proof of frames or hardware use.
 
 Settled-text PNG repair restores the captured image, but costs roughly 250–320 KB per full repair in this fixture. It can dominate a short typing/settling phase and needs damage tiling or a better lossless encoding before product use. Repeated identical native buffers send no media; idle control traffic is still too chatty. The lossless-repair image below is an actual remote-protocol canvas. The native process in the no-delay run consumed 1.77 user + 0.99 system CPU seconds over 125.09 wall seconds, with 100,466,688 bytes maximum RSS; that whole run includes substantial idle/operator time, not just the motion phase. No GPU/energy or physical-display measurements were obtained.
 
@@ -65,7 +65,7 @@ Numeric results: [no-delay summary](artifacts/live-loopback.json), [no-delay raw
 |---|---|---|
 | macOS single own window, SCK | Visible, fully covered by another owned window, offscreen, minimize/restore and resize exercised | One AppKit fixture on macOS 26.6.2/M2 Max; not a promise for every app |
 | Native SCK → VideoToolbox | Hardware-required H.264 capture/encode measured at 1×/2×; live Mac→Windows WebCodecs loop at 1× | Live motion only 1.25 video FPS in the cross-machine run; no photon measurement |
-| macOS → Windows live Federation | 16 first-run frames; 24 accepted helper commands; five pixel-matched input samples | Slow serial RPC transport; software decode; fixture interaction only |
+| macOS → Windows live Federation | 16 first-run frames; 24 accepted helper commands; five pixel-matched input samples | Slow serial RPC transport; software-preferred decode; fixture interaction only |
 | macOS → Windows Federation | Real 4,191,302-byte batch delivered; 90 frames replayed on Windows | File transfer, JSON/base64 overhead, setup and batch delay; not interactive streaming |
 | Windows → macOS helper → Windows | 159-byte command transferred, own app changed text, recaptured response rendered and visually checked | App helper action; **not** general OS keyboard/mouse injection |
 | Windows WGC | Initial disconnected probe: zero frames. Active-desktop follow-up: 47 visible, 44 obscured, 47 resized, 48 restored frames in about 2.2 s per stage | Minimized: two transition frames, then no settled output. One owned GDI fixture at 192 DPI; not arbitrary-app proof |
