@@ -960,7 +960,7 @@ test.describe("federation remote window", () => {
       // on to the dedicated-remote-window coverage below.
       await setQuitConfirmation(window, false);
       await window.getByRole("region", { name: "Thread terminals", exact: true })
-        .getByRole("button", { name: /^Close / }).click();
+        .getByRole("tab").press("Delete");
       await expect(
         window.getByLabel("Integrated terminal", { exact: true }),
       ).toHaveCount(0);
@@ -1043,7 +1043,7 @@ test.describe("federation remote window", () => {
       // Closing the pane releases the remote session (the owner reaps it
       // after its grace period).
       await remote.getByRole("region", { name: "Thread terminals", exact: true })
-        .getByRole("button", { name: /^Close / }).click();
+        .getByRole("tab").press("Delete");
       await expect(
         remote.getByLabel("Integrated terminal", { exact: true }),
       ).toHaveCount(0);

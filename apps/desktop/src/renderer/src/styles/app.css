@@ -46054,3 +46054,78 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   color: var(--text-secondary);
   font-size: 11px;
 }
+.thread-terminal-panel button.thread-terminal-panel__end-close {
+  flex-shrink: 0;
+  height: 24px;
+  padding: 0 9px;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font: 600 11px var(--font-sans);
+}
+.thread-terminal-panel button.thread-terminal-panel__end-close:hover {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+/* The strip: the rail's default. One tile per terminal (initial plus status
+   dot) so the shell keeps the width; names live in the tooltip, the
+   accessible name, and the expanded list. */
+.thread-terminal-panel__tile { display: none; }
+.thread-terminal-panel__sidebar.is-compact { width: 40px; overflow-x: hidden; }
+.is-compact .thread-terminal-panel__actions {
+  flex-direction: column;
+  height: auto;
+  padding: 4px 0;
+}
+.is-compact .thread-terminal-panel__actions > button:first-of-type { margin-left: 0; }
+.is-compact .thread-terminal-panel__eyebrow,
+.is-compact .thread-terminal-panel__count,
+.is-compact .thread-terminal-panel__instance,
+.is-compact .thread-terminal-panel__close-list,
+.is-compact .thread-terminal-panel__row > .thread-terminal-panel__dot { display: none; }
+.is-compact .thread-terminal-panel__row[role="tab"] {
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: center;
+  height: 34px;
+  padding: 0;
+}
+.is-compact .thread-terminal-panel__text {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.is-compact .thread-terminal-panel__tile {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 3px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font: 500 11px var(--font-mono);
+}
+.is-compact .thread-terminal-panel__row[aria-selected="true"] .thread-terminal-panel__tile {
+  border-color: var(--accent-border);
+  color: var(--text-primary);
+}
+.thread-terminal-panel__tile > .thread-terminal-panel__dot {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  width: 7px;
+  height: 7px;
+  box-shadow: 0 0 0 1.5px var(--terminal-bg);
+}
+.thread-terminal-panel__tile > .thread-terminal-panel__dot:is(.is-exited, .is-saved, .is-starting) {
+  background: var(--terminal-bg);
+}
+.thread-terminal-panel__tile > .thread-terminal-panel__dot.is-unseen {
+  box-shadow: 0 0 0 1.5px var(--terminal-bg), 0 0 0 4px color-mix(in srgb, var(--accent) 30%, transparent);
+}

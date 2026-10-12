@@ -53,6 +53,9 @@ type IntegratedTerminalProps = {
   onExit: () => void;
   /** Live output arrived while this pane was not on screen. */
   onHiddenOutput?: () => void;
+  /** Bumped by a host that wants keyboard focus in the shell, such as a
+   *  pointer click on this terminal's tab. */
+  focusRequest?: number;
 };
 
 export function IntegratedTerminal({
@@ -70,6 +73,7 @@ export function IntegratedTerminal({
   onClose,
   onExit,
   onHiddenOutput,
+  focusRequest,
 }: IntegratedTerminalProps) {
   const hosted = chrome === "hosted";
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -394,6 +398,11 @@ export function IntegratedTerminal({
       terminalRef.current?.focus();
     }
   }, [height, hosted, visible]);
+
+  useEffect(() => {
+    // A pane that has not opened yet focuses itself on open when visible.
+    if (visible && focusRequest) terminalRef.current?.focus();
+  }, [focusRequest, visible]);
 
   const resizeBy = (delta: number) => {
     onHeightChange?.(clampTerminalHeight(height + delta));
