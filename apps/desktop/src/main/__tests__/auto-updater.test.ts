@@ -360,7 +360,10 @@ describe("auto updater", () => {
     expect(windowSendMock).not.toHaveBeenCalled();
   });
 
-  it("does not check again when an update is already downloaded for the selected channel", async () => {
+  // A downloaded update keeps reading the feed so a newer release can replace
+  // it (auto-updater-supersede.test.ts), but it is only replaced by something
+  // newer than itself.
+  it("keeps a downloaded update when the selected release is not newer", async () => {
     const updater = await importAutoUpdater();
 
     updater.initAutoUpdater();
@@ -369,6 +372,7 @@ describe("auto updater", () => {
     });
     updateEventHandlers.get("update-downloaded")?.({ version: "1.0.0-beta.8" });
     checkForUpdatesMock.mockClear();
+    fetchMock.mockClear();
 
     const manualResult = await updater.checkForAppUpdatesNow("manual");
 
@@ -376,6 +380,7 @@ describe("auto updater", () => {
       status: "downloaded",
       version: "1.0.0-beta.8",
     });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(checkForUpdatesMock).not.toHaveBeenCalled();
   });
 

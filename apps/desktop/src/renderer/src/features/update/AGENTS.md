@@ -100,6 +100,33 @@ than sniffing the error. Keep that flag the discriminator. That handler is
 also the only thing observing `downloadPromise` at all — without it a cancel
 would be an unhandled rejection in main.
 
+## A newer release replaces a downloaded one
+
+A downloaded update does not end the check. Main still reads the feed, and
+when the selected track has a release newer than the held download, it
+downloads that release and moves the Restart offer to it. Before this, someone
+who left the app open across two releases restarted into the older one and was
+offered the newer one straight away. So the status can move `downloaded` →
+`available` → `downloading` → `downloaded` for a higher version. The banner
+keys dismissal on the version, so the newer `downloaded` brings back an offer
+the operator dismissed for the older one.
+
+What can be installed while that runs depends on the platform. Main owns that
+(`supersedingDownload` in
+[auto-updater.ts](../../../../main/auto-updater.ts)), and the renderer only
+follows the status:
+
+- **macOS** shows the newer build as ready only after Squirrel.Mac has staged
+  it, because until then `quitAndInstall` still installs the older build. If
+  the newer download fails or is canceled, or Squirrel does not stage it
+  within five minutes, the older offer comes back.
+- **Windows and Linux** drop the older offer when the newer download starts,
+  because electron-updater deletes the older installer at that point. A
+  failed newer download does not bring it back.
+
+A held switch back (`direction: "downgrade"`) is never replaced this way, and
+neither is a held version that does not parse as semver.
+
 ## The dev fake is the only way to see any of this
 
 Real auto-update runs in packaged production builds only, so
