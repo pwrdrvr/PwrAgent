@@ -498,6 +498,17 @@ const browseModeLabels = {
   directories: "Directories",
 } satisfies Record<BrowseMode, string>;
 
+// The label over a ⌘K-jumped thread's visiting row (see RecentsList). Updated
+// and Created hold every thread but load a page at a time, so a thread with
+// no row there is further down, not absent.
+const visitingThreadLabels = {
+  attention: "Not in Attention",
+  drafts: "Not in Drafts",
+  inbox: "Further down",
+  recents: "Further down",
+  directories: undefined,
+} satisfies Record<BrowseMode, string | undefined>;
+
 // Attention is absent: it renders its two live indicators instead of an icon.
 // Typed as `ComponentType`, not `(props) => ReactElement`: every icon is a
 // `memo(...)` exotic component, which is a valid element type but not a
@@ -789,6 +800,21 @@ export function Sidebar(props: SidebarProps) {
   const canStartFromList = !props.loading
     && props.backends.some((backend) => backend.available)
     && Boolean(onCreateThreadWithoutDirectory || onAddProjectDirectory);
+  const lensEmptyMessage = (
+    <p className="sidebar-empty">
+      {props.browseMode === "attention"
+        ? "Nothing running, nothing to review."
+        : props.browseMode === "drafts"
+          // "replies", not "drafts": launchpad (new-thread) composer
+          // text is equally unsent but belongs to a directory rather
+          // than a thread, so this lens cannot show it and must not
+          // claim there is nothing to find.
+          ? props.unassignedThreadDraftCount
+            ? "Older drafts are available. Use Recover Draft in a composer to choose one."
+            : "No unsent replies."
+          : "No threads yet."}
+    </p>
+  );
   // Handed to whichever list renders, which places it after its last row,
   // inside the scrolling lane; an empty lens shows it under its empty line.
   const startActions = canStartFromList ? (
@@ -918,6 +944,27 @@ export function Sidebar(props: SidebarProps) {
   );
   const setSubthreadsCollapsed = props.onSetSubthreadsCollapsed;
   const browseMode = props.browseMode;
+
+  // The thread a ⌘K pick landed on, for as long as it stays selected. A jump
+  // never changes the lens: when the thread is not among the lens's rows,
+  // RecentsList gives it a visiting row instead (Directories needs none — its
+  // reveal opens the folder that holds the thread). Only jumps do this. A
+  // thread that leaves Attention while it is open (a reply) still leaves.
+  const [jumpedThread, setJumpedThread] = useState<NavigationThreadSummary>();
+  const jumpedThreadKey = jumpedThread ? threadSummaryIdentityKey(jumpedThread) : undefined;
+  // The jump ends when the selection moves anywhere but the jumped thread. A
+  // remote pick selects only after its pin round-trips, so the selection
+  // standing still meanwhile does not end it; one that never lands ends at
+  // the next selection, as a repeat jump to the same thread does.
+  const jumpSelectionRef = useRef(selectedItemKey);
+  useEffect(() => {
+    if (jumpSelectionRef.current === selectedItemKey) return;
+    jumpSelectionRef.current = selectedItemKey;
+    if (jumpedThreadKey && selectedItemKey !== jumpedThreadKey) setJumpedThread(undefined);
+  }, [jumpedThreadKey, selectedItemKey]);
+  const visitingThread = browseMode !== "directories" && jumpedThreadKey && jumpedThreadKey === selectedItemKey
+    ? navigationThreadByKey.get(jumpedThreadKey) ?? jumpedThread
+    : undefined;
 
   // A direct navigation change (history, search, a thread link, etc.) starts a
   // fresh selection. Modified clicks deliberately do not navigate, so they can
@@ -2669,8 +2716,14 @@ export function Sidebar(props: SidebarProps) {
             if (props.onJumpToProject) props.onJumpToProject(directory);
             else void props.onOpenLaunchpad(directory);
           }}
-          onJumpToThread={props.onJumpToThread ?? props.onSelectThread}
-          onJumpToRemoteThread={props.onJumpToRemoteThread}
+          onJumpToThread={(thread) => {
+            setJumpedThread(thread);
+            (props.onJumpToThread ?? props.onSelectThread)(thread);
+          }}
+          onJumpToRemoteThread={props.onJumpToRemoteThread ? (thread) => {
+            setJumpedThread(thread);
+            props.onJumpToRemoteThread?.(thread);
+          } : undefined}
           onClose={() => props.onThreadJumpOpenChange?.(false)}
         />
       ) : null}
@@ -3007,26 +3060,17 @@ export function Sidebar(props: SidebarProps) {
               onUnbindMessagingBinding={forwardedUnbindMessagingBinding}
             />
           ) : (
-            renderedThreads.length === 0 && startingThreads.length === 0 ? (
+            renderedThreads.length === 0 && startingThreads.length === 0 && !visitingThread ? (
               <>
-                <p className="sidebar-empty">
-                  {props.browseMode === "attention"
-                    ? "Nothing running, nothing to review."
-                    : props.browseMode === "drafts"
-                      // "replies", not "drafts": launchpad (new-thread) composer
-                      // text is equally unsent but belongs to a directory rather
-                      // than a thread, so this lens cannot show it and must not
-                      // claim there is nothing to find.
-                      ? props.unassignedThreadDraftCount
-                        ? "Older drafts are available. Use Recover Draft in a composer to choose one."
-                        : "No unsent replies."
-                      : "No threads yet."}
-                </p>
+                {lensEmptyMessage}
                 {startActions}
               </>
             ) : (
               <RecentsList
                 footer={startActions}
+                emptyMessage={lensEmptyMessage}
+                visitingThread={visitingThread}
+                visitingLabel={visitingThreadLabels[props.browseMode]}
                 startingThreads={startingThreads}
                 onSelectStartingThread={props.onSelectPendingLaunchpad}
                 onOpenSubthreadDraftContextMenu={openSubthreadDraftMenu}

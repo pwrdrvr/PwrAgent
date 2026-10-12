@@ -961,6 +961,76 @@ describe("project destinations", () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
+  // `pwr` is a prefix of every repository under ~/pwrdrvr. Leading with those
+  // rows made Enter open a project launchpad, and switch the sidebar to
+  // Directories, when the operator had typed part of a thread title.
+  it("lists prefix and path project matches after the threads, so Enter opens the thread", async () => {
+    const onJumpToProject = vi.fn();
+    const onJumpToThread = vi.fn();
+    const thread = localThread({ title: "PwrSuite release notes" });
+    const pathOnly = { ...project, key: "docs", label: "docs", path: "/repos/pwrdrvr/docs" };
+    render(<SidebarSearchPopup
+      projects={[project, pathOnly]}
+      threads={[thread]}
+      onJumpToProject={onJumpToProject} onJumpToThread={onJumpToThread} onClose={vi.fn()}
+    />);
+    const input = screen.getByRole("textbox");
+    fireEvent.change(input, { target: { value: "pwr" } });
+    await settleRemoteSearch();
+    const rows = screen.getAllByRole("option");
+    expect(rows.map((row) => row.textContent)).toEqual([
+      expect.stringContaining("PwrSuite release notes"),
+      expect.stringContaining("/repos/PwrAgnt"),
+      expect.stringContaining("/repos/pwrdrvr/docs"),
+    ]);
+    // The divider is presentation, outside the options, as "Other instances" is.
+    expect(screen.getByText("Projects")).toHaveAttribute("role", "presentation");
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onJumpToThread).toHaveBeenCalledWith(thread);
+    expect(onJumpToProject).not.toHaveBeenCalled();
+
+    // The trailing projects stay reachable from the keyboard.
+    fireEvent.change(input, { target: { value: "pwr " } });
+    await settleRemoteSearch();
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onJumpToProject).toHaveBeenCalledWith(project);
+  });
+
+  // A thread the current lens does not hold is not in the loaded rows, so only
+  // the debounced owner search finds it. Until that answers, the path-matching
+  // projects would be the only rows, and an early Enter would open one.
+  it("holds trailing projects until the owner search can offer a thread", async () => {
+    const thread = localThread({ id: "off-lens", title: "PwrSuite release notes" });
+    const row = { ...thread, ref: { backend: "codex" as const, threadId: thread.id }, rowRevision: "revision",
+      ordinaryChildCount: 0, nativeSubAgentGroupPresent: false, queueCount: 0, queueState: "unknown" as const };
+    const empty = await getNavigationQueryPage();
+    getNavigationQueryPage.mockImplementation((async (request: { query: { kind: string } }) => request.query.kind === "search"
+      ? { ...empty, entries: [{ row, orderKey: "one", placement: { kind: "root" } }] }
+      : empty) as never);
+    const onJumpToProject = vi.fn();
+    const onJumpToThread = vi.fn();
+    render(<SidebarSearchPopup projects={[project]} threads={[]}
+      onJumpToProject={onJumpToProject} onJumpToThread={onJumpToThread} onClose={vi.fn()} />);
+    const input = screen.getByRole("textbox");
+    fireEvent.change(input, { target: { value: "pwr" } });
+
+    expect(screen.queryAllByRole("option")).toHaveLength(0);
+    expect(screen.queryByText("No threads or projects match")).toBeNull();
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onJumpToProject).not.toHaveBeenCalled();
+
+    await settleRemoteSearch();
+    await settleRemoteSearch();
+    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
+      expect.stringContaining("PwrSuite release notes"),
+      expect.stringContaining("/repos/PwrAgnt"),
+    ]);
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onJumpToThread).toHaveBeenCalledWith(expect.objectContaining({ id: thread.id }));
+    expect(onJumpToProject).not.toHaveBeenCalled();
+  });
+
   it("finds an owner project absent from loaded sidebar rows and keeps thread keyboard navigation", async () => {
     getNavigationQueryPage.mockResolvedValue({ protocol: 2, queryKey: "projects", generation: "generation", ownerEpoch: "owner",
       countsRevision: "counts", counts: { total: 0, active: 0, unread: 0, review: 0 }, coverage: { state: "complete" },
