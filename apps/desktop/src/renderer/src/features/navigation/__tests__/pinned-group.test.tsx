@@ -119,6 +119,14 @@ describe("Pinned group", () => {
     expect(groupHeader()).toHaveAttribute("aria-expanded", "true");
   });
 
+  it("drops the lane's top pad only while the group is drawn", () => {
+    const view = renderRecents();
+    expect(pinnedGroup()!.parentElement).toHaveClass("sidebar-list--pinned-group");
+    view.unmount();
+    renderRecents({ threads: population.map(({ pinnedRank: _rank, ...rest }) => rest) });
+    expect(document.querySelector(".sidebar-list--pinned-group")).toBeNull();
+  });
+
   it("returns an unpinned thread to its creation-time slot without moving its neighbours", () => {
     const view = renderRecents();
     view.rerender(
