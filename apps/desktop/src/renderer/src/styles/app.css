@@ -45957,11 +45957,44 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
 
 .review-todo__finding {
   display: grid;
-  grid-template-columns: 22px minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   min-height: 28px;
   align-items: center;
   gap: 6px;
   border-top: 1px solid var(--border-subtle);
+}
+
+/* The whole row left of its action picks the finding: the label is the
+   target, the checkbox only shows it. A settled row keeps the same columns
+   with its outcome's glyph where the checkbox was. */
+.review-todo__pick {
+  display: grid;
+  grid-template-columns: 14px 22px minmax(0, 1fr);
+  min-height: 28px;
+  align-items: center;
+  gap: 6px;
+}
+
+label.review-todo__pick {
+  cursor: pointer;
+}
+
+.review-todo__check {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.review-todo__check:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.review-todo__settled {
+  display: inline-flex;
+  justify-content: center;
+  color: var(--text-muted);
 }
 
 .review-todo__priority {
@@ -46000,11 +46033,6 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
 .review-todo__finding:not([data-status="open"]) .review-todo__finding-title,
 .review-todo__finding:not([data-status="open"]) .review-todo__priority {
   color: var(--text-muted);
-}
-
-.review-todo__finding-actions {
-  display: flex;
-  align-items: center;
 }
 
 /* 24px tall: WCAG 2.2 target-size, which a11y.spec.ts gates on. */

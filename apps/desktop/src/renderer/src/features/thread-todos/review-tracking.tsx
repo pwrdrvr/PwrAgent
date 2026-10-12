@@ -115,19 +115,23 @@ export function openReviewItems(review: ThreadReview): ThreadReviewItem[] {
 }
 
 /**
- * The reply "Address findings" sends to the review's own thread. It names the
- * open findings by title only: the agent reads their details and ids with
- * `list_reviews`, so the transcript does not repeat what the review said.
+ * The reply the review card's Fix button sends to the review's own thread:
+ * the findings the operator picked, by title. The agent reads their details
+ * with `list_reviews`. The closing line is what clears the To-do.
  */
-export function addressReviewFindingsPrompt(review: ThreadReview): string {
-  const findings = orderReviewItems(openReviewItems(review)).map((item, index) => {
+export function fixReviewFindingsPrompt(reviewTitle: string, items: readonly ThreadReviewItem[]): string {
+  const findings = items.map((item, index) => {
     const priority = typeof item.priority === "number" ? `[P${item.priority}] ` : "";
     return `${index + 1}. ${priority}${item.title}`;
   });
   return [
-    `Address these open findings from code review \`${review.id}\`. Read their details with PwrAgent's \`list_reviews\` tool. Fix each one, or decide it should not be fixed. Then record the outcome with \`update_review_item\`: status \`addressed\` or \`dismissed\`, a short note saying what changed or why not, and a commit or pull request link when there is one.`,
+    items.length === 1
+      ? `Fix this finding from ${reviewTitle}:`
+      : `Fix these ${items.length} findings from ${reviewTitle}:`,
     "",
     ...findings,
+    "",
+    "Mark each one addressed with `update_review_item` once it is fixed.",
   ].join("\n");
 }
 

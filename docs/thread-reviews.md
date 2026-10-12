@@ -56,13 +56,16 @@ is introduced in this change.
 ## Controls
 
 An open review's To-do card lists its findings, open ones first by priority,
-four rows before **Show N more**. Each open row has **Mark addressed** and
-**Do not address**; a settled row dims in place and offers **Reopen**. The
-head's dismiss control dismisses the whole review, and the stack's **Undo**
-reopens it. **Address findings** sends one reply to the review's thread that
-names the open findings by title and asks the agent to read their details
-with `list_reviews` and settle each with `update_review_item`. The card stays open until the last finding is settled.
-A review with nothing left open offers **Mark handled** instead.
+four rows before **Show N more**. Each open row has a checkbox, ticked by
+default, and **Do not address**; a settled row dims in place with its
+outcome's glyph and offers **Reopen**. The head's dismiss control dismisses
+the whole review, and the stack's **Undo** reopens it. **Fix N findings**
+sends one reply to the review's thread: "Fix these N findings from <review>",
+the ticked findings by priority and title, and one line asking the agent to
+mark each addressed with `update_review_item`. The agent reads their details
+with `list_reviews`. Unticked findings stay open. The card stays open until
+the last finding is settled. A review with nothing left open offers
+**Mark handled** instead.
 
 The transcript review keeps the record. A status row under the verdict gives
 the open count, or how the review was handled or dismissed. Each finding's

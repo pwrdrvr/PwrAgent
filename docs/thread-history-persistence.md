@@ -50,7 +50,7 @@ way.
 - **The transcript never renders from it.** The transcript's review card
   draws every finding's text from the transcript entry. It reads only state
   from the record: status, the resolution note, the actor, the evidence link,
-  and the time. The To-do card, the finding titles in the "Address findings"
+  and the time. The To-do card, the finding titles in the "Fix N findings"
   reply, and the agent's `list_reviews` tool are the only consumers of the
   stored text.
 

@@ -6,7 +6,7 @@ import { threadReviewDisplayTitle, threadReviewTodo } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { TranscriptReview } from "../../thread-detail/TranscriptReview";
 import { ThreadTodoCard } from "../ThreadTodoCard";
-import { addressReviewFindingsPrompt, formatEvidenceLabel } from "../review-tracking";
+import { formatEvidenceLabel } from "../review-tracking";
 
 const entry: AppServerThreadReviewEntry = {
   type: "review", id: "artifact", review: "A cancellation regression.",
@@ -107,7 +107,7 @@ function renderCard(current: ThreadReview, onDoHere = vi.fn()) {
 }
 
 describe("review To-do card", () => {
-  it("lists open findings first by priority and hands them to the agent in one reply", async () => {
+  it("lists open findings first by priority and asks the agent to fix the picked ones", async () => {
     const current: ThreadReview = {
       ...review,
       items: [
@@ -123,17 +123,30 @@ describe("review To-do card", () => {
     expect(rows[1]).toContain("Keep the selected output format");
     expect(rows[2]).toContain("Drop the stale cursor");
     expect(screen.getByRole("button", { name: "Reopen finding: Drop the stale cursor" })).toBeVisible();
+    expect(screen.queryByRole("checkbox", { name: "Fix finding: Drop the stale cursor" })).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Address findings" }));
-    expect(handlers.onDoHere).toHaveBeenCalledWith(todo, addressReviewFindingsPrompt(current));
-    const prompt = handlers.onDoHere.mock.calls[0]![1] as string;
-    expect(prompt).toContain("`list_reviews`");
-    expect(prompt).toContain("`update_review_item`");
-    // Titles only: the agent reads bodies, locations, and ids from list_reviews.
-    expect(prompt.split("\n\n")[1]).toBe("1. [P1] Abort pending exports\n2. [P2] Keep the selected output format");
-    expect(prompt).not.toContain("matters");
-    expect(prompt).not.toContain("export-queue.ts");
-    await waitFor(() => expect(screen.getByRole("button", { name: "Address findings" })).toBeEnabled());
+    // Every open finding starts picked; unticking one leaves it out.
+    expect(screen.getByRole("button", { name: "Fix 2 findings" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Fix finding: Keep the selected output format" }));
+    fireEvent.click(screen.getByRole("button", { name: "Fix 1 finding" }));
+    expect(handlers.onDoHere).toHaveBeenCalledWith(todo, [
+      "Fix this finding from Code review:",
+      "",
+      "1. [P1] Abort pending exports",
+      "",
+      "Mark each one addressed with `update_review_item` once it is fixed.",
+    ].join("\n"));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Fix 1 finding" })).toBeEnabled());
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Fix finding: Abort pending exports" }));
+    expect(screen.getByRole("button", { name: "Fix findings" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Fix finding: Abort pending exports" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Fix finding: Keep the selected output format" }));
+    fireEvent.click(screen.getByRole("button", { name: "Fix 2 findings" }));
+    expect(handlers.onDoHere).toHaveBeenLastCalledWith(todo, expect.stringMatching(
+      /^Fix these 2 findings from Code review:\n\n1\. \[P1\] Abort pending exports\n2\. \[P2\] Keep the selected output format\n\n/,
+    ));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Fix 2 findings" })).toBeEnabled());
 
     fireEvent.click(screen.getByRole("button", { name: "Dismiss review" }));
     expect(handlers.onResolve).toHaveBeenCalledWith(todo, "dismissed");
@@ -143,7 +156,7 @@ describe("review To-do card", () => {
     let settle: (sent: boolean) => void = () => {};
     const onDoHere = vi.fn(() => new Promise<boolean>((resolve) => { settle = resolve; }));
     renderCard({ ...review, items: [finding("abort", "Abort pending exports", 1)] }, onDoHere);
-    const button = await screen.findByRole("button", { name: "Address findings" });
+    const button = await screen.findByRole("button", { name: "Fix 1 finding" });
     fireEvent.click(button);
     fireEvent.click(button);
     expect(onDoHere).toHaveBeenCalledTimes(1);
@@ -164,7 +177,7 @@ describe("review To-do card", () => {
     const { api } = renderCard(current);
     await screen.findByText("No findings to settle");
     expect(screen.getByText("Prose only.")).toBeVisible();
-    expect(screen.queryByRole("button", { name: "Address findings" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Fix/ })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Mark handled" }));
     await waitFor(() => expect(api.updateThreadReview).toHaveBeenCalledWith({ id: "review", status: "handled" }));
   });

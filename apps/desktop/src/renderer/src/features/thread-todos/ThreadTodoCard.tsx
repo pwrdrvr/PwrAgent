@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ComponentType } from "react";
 import type {
+  ThreadReviewItem,
   ThreadTodo,
   ThreadTodoKind,
   ThreadTodoMergeMethod,
@@ -12,6 +13,7 @@ import {
 } from "@pwragent/shared";
 import {
   ArrowUpIcon,
+  BanIcon,
   CheckIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
@@ -33,7 +35,7 @@ import type {
   ThreadTodoRunOptions,
 } from "./thread-todos-view";
 import {
-  addressReviewFindingsPrompt,
+  fixReviewFindingsPrompt,
   openReviewItems,
   orderReviewItems,
   useTrackedReview,
@@ -116,6 +118,26 @@ const REVIEW_CARD_ROWS = 4;
  * settled in place, one row per finding; the footer hands what is open to
  * the agent in this thread.
  */
+/** A finding's priority and title; the title's tooltip shows it unclipped. */
+function ReviewTodoFindingLabel(props: { item: ThreadReviewItem }) {
+  const { item } = props;
+  const priority = typeof item.priority === "number" && item.priority >= 0 && item.priority <= 3
+    ? item.priority
+    : undefined;
+  return (
+    <>
+      <span
+        className={`review-todo__priority${priority === undefined ? "" : ` review-todo__priority--p${priority}`}`}
+      >
+        {priority === undefined ? "–" : `P${priority}`}
+      </span>
+      <span className="review-todo__finding-title tooltip-target" data-tooltip={item.title}>
+        {item.title}
+      </span>
+    </>
+  );
+}
+
 function TrackedReviewCard(props: ThreadTodoCardProps) {
   const { todo } = props;
   const tracking = useTrackedReview(todo, { id: todo.reviewId });
@@ -123,10 +145,19 @@ function TrackedReviewCard(props: ThreadTodoCardProps) {
   // One hand-off per click: a second click before the send settles would
   // queue the same reply again.
   const [sending, setSending] = useState(false);
+  // Open findings start picked; the operator unticks the ones to leave alone.
+  // Tracking the exclusions keeps a finding that reopens picked by default.
+  const [skipped, setSkipped] = useState<ReadonlySet<string>>(() => new Set());
   const titleId = `thread-todo-title-${todo.id}`;
   const review = tracking.review;
   const items = review ? orderReviewItems(review.items) : [];
   const open = review ? openReviewItems(review).length : 0;
+  const picked = items.filter((item) => item.status === "open" && !skipped.has(item.id));
+  const togglePicked = (id: string) => setSkipped((current) => {
+    const next = new Set(current);
+    if (!next.delete(id)) next.add(id);
+    return next;
+  });
   const shown = expanded ? items : items.slice(0, REVIEW_CARD_ROWS);
   const hidden = items.length - shown.length;
   const onDoHere = props.onDoHere;
@@ -163,15 +194,17 @@ function TrackedReviewCard(props: ThreadTodoCardProps) {
       <button
         type="button"
         className="button button--primary thread-todo-card__button"
-        disabled={sending}
+        disabled={sending || picked.length === 0}
         onClick={() => {
           setSending(true);
-          void Promise.resolve(onDoHere(todo, addressReviewFindingsPrompt(review)))
+          void Promise.resolve(onDoHere(todo, fixReviewFindingsPrompt(todo.title, picked)))
             .finally(() => setSending(false));
         }}
       >
         <ArrowUpIcon size={12} />
-        Address findings
+        {picked.length === 0
+          ? "Fix findings"
+          : `Fix ${picked.length} ${picked.length === 1 ? "finding" : "findings"}`}
       </button>
     ) : null;
   };
@@ -200,54 +233,47 @@ function TrackedReviewCard(props: ThreadTodoCardProps) {
           <ul className="review-todo__findings" aria-label="Findings">
             {shown.map((item) => (
               <li key={item.id} className="review-todo__finding" data-status={item.status}>
-                <span
-                  className={`review-todo__priority${
-                    typeof item.priority === "number" && item.priority >= 0 && item.priority <= 3
-                      ? ` review-todo__priority--p${item.priority}`
-                      : ""
-                  }`}
-                >
-                  {typeof item.priority === "number" ? `P${item.priority}` : "–"}
-                </span>
-                <span className="review-todo__finding-title tooltip-target" data-tooltip={item.title}>
-                  {item.title}
-                </span>
-                <span className="review-todo__finding-actions">
-                  {item.status === "open" ? (
-                    <>
-                      <button
-                        type="button"
-                        className="thread-todo-card__icon-button"
-                        aria-label={`Mark addressed: ${item.title}`}
-                        title="Mark addressed"
-                        disabled={tracking.busy}
-                        onClick={() => void tracking.update({ itemId: item.id, status: "addressed" })}
-                      >
-                        <CheckIcon size={13} />
-                      </button>
-                      <button
-                        type="button"
-                        className="thread-todo-card__icon-button"
-                        aria-label={`Dismiss finding: ${item.title}`}
-                        title="Do not address"
-                        disabled={tracking.busy}
-                        onClick={() => void tracking.update({ itemId: item.id, status: "dismissed" })}
-                      >
-                        <CloseIcon size={13} />
-                      </button>
-                    </>
-                  ) : (
-                    <button
-                      type="button"
-                      className="review-todo__reopen"
-                      aria-label={`Reopen finding: ${item.title}`}
-                      disabled={tracking.busy}
-                      onClick={() => void tracking.update({ itemId: item.id, status: "open" })}
-                    >
-                      Reopen
-                    </button>
-                  )}
-                </span>
+                {item.status === "open" ? (
+                  <label className="review-todo__pick">
+                    <input
+                      type="checkbox"
+                      className="review-todo__check"
+                      aria-label={`Fix finding: ${item.title}`}
+                      checked={!skipped.has(item.id)}
+                      onChange={() => togglePicked(item.id)}
+                    />
+                    <ReviewTodoFindingLabel item={item} />
+                  </label>
+                ) : (
+                  <span className="review-todo__pick">
+                    <span className="review-todo__settled" aria-hidden="true">
+                      {item.status === "addressed" ? <CheckIcon size={12} /> : <BanIcon size={12} />}
+                    </span>
+                    <ReviewTodoFindingLabel item={item} />
+                  </span>
+                )}
+                {item.status === "open" ? (
+                  <button
+                    type="button"
+                    className="thread-todo-card__icon-button"
+                    aria-label={`Dismiss finding: ${item.title}`}
+                    title="Do not address"
+                    disabled={tracking.busy}
+                    onClick={() => void tracking.update({ itemId: item.id, status: "dismissed" })}
+                  >
+                    <CloseIcon size={13} />
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="review-todo__reopen"
+                    aria-label={`Reopen finding: ${item.title}`}
+                    disabled={tracking.busy}
+                    onClick={() => void tracking.update({ itemId: item.id, status: "open" })}
+                  >
+                    Reopen
+                  </button>
+                )}
               </li>
             ))}
           </ul>
