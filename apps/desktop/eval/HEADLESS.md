@@ -108,6 +108,15 @@ rows), tool accounting and Token Miser totals. `thread.json` preserves the final
 IPC projection. `familyUsage` records tokens, cost and unpriced status for each
 distinct delegated thread; `observed` sums the family. Native helper usage is
 already attributed to its owning thread and is not added a second time.
+Budget polls use `includeTurns: false` to avoid repeatedly hydrating history;
+the final read still includes history. Parent usage follows the normal one-second
+batch flush, while live helper rows are merged by the existing pricing service.
+Each successful parent poll retains `pricing` and `toolAccounting` before any
+family read. `usageSnapshot` records its source, observation time, IPC-view
+`fetchedAt` when available, and `final: false`: retained rows are an observation,
+not proof of complete billing. They survive later IPC failures in `result.json`.
+`ipcDeadline` identifies a timed-out method and its elapsed/allowed milliseconds;
+the 30-second IPC deadline and no-retry policy are unchanged.
 `rollout.jsonl` is PwrAgent's normalized event stream;
 `protocol.jsonl` is sanitized **PwrAgent-owned** App Server protocol capture,
 not a read of Codex's private rollout storage. Credentials/account fields are

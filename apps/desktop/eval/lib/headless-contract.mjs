@@ -4,6 +4,32 @@ import path from "node:path";
 
 export const EXIT = { completed: 0, failed: 1, preflight_failed: 2, timeout: 3, cancelled: 4, budget_exceeded: 5, incomplete: 6 };
 
+export function deadlineCall(method, promise, ms = 30_000) {
+  let timer;
+  const started = performance.now();
+  return Promise.race([promise, new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      const elapsedMs = Math.round(performance.now() - started);
+      const error = new Error(`IPC deadline exceeded: ${method} (${elapsedMs}ms elapsed, ${ms}ms limit)`);
+      error.ipcDeadline = { method, elapsedMs, timeoutMs: ms };
+      reject(error);
+    }, ms);
+  })]).finally(() => clearTimeout(timer));
+}
+
+export function readBudgetThread(call, thread) {
+  return call("readThread", { ...thread, includeTurns: false });
+}
+
+export function retainUsageSnapshot(result, view, source = "budget-poll") {
+  if (!view.pricing) return;
+  result.pricing = view.pricing;
+  result.toolAccounting = view.toolAccounting;
+  // Even a post-outcome read may contain pending helper/parent rows. This
+  // timestamp describes an observation, never proof of finalized billing.
+  result.usageSnapshot = { source, observedAt: new Date().toISOString(), fetchedAt: view.fetchedAt, final: false };
+}
+
 export function launchHeadlessElectron(electron, desktopRoot, env) {
   // Playwright otherwise adds --no-sandbox, even for a non-root Linux user.
   return electron.launch({ chromiumSandbox: true, args: [path.join(desktopRoot, "out/main/index.js"), "--disable-messaging", "--disable-automations"], cwd: desktopRoot, env, timeout: 60_000 });
@@ -160,7 +186,7 @@ export async function observeFamilyBudget(call, root, current) {
   // Family membership includes PwrAgent sub-threads, not native helpers.
   // Each thread's own pricing already includes its native helper usage.
   const familyUsage = await Promise.all([...members].map(async ([id, member]) => {
-    const view = id === rootKey ? current : await call("readThread", { backend: member.backend, threadId: member.threadId });
+    const view = id === rootKey ? current : await readBudgetThread(call, { backend: member.backend, threadId: member.threadId });
     if (!view.pricing && member.usageLineCount > 0) throw new Error("Missing pricing for a billed family member");
     const observed = observedBudget(view.pricing?.lines, view.pricing?.summaries);
     observed.costUsd = Math.max(observed.costUsd, (member.totalCostMicros ?? 0) / 1e6);

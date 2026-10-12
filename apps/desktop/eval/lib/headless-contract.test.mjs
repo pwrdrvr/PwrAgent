@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { EXIT, assertReady, atomicJson, captureLaunchRejections, dispatchTurn, errorStatus, launchHeadlessElectron, observeFamilyBudget, sanitizedProtocolRecord, probeInterrupt, budgetStop, waitForOutcome, claimRun, cleanEnvironment, configToml, observedBudget, sanitizer, terminalEvent, validateInput } from "./headless-contract.mjs";
+import { EXIT, assertReady, atomicJson, captureLaunchRejections, deadlineCall, dispatchTurn, errorStatus, launchHeadlessElectron, observeFamilyBudget, readBudgetThread, retainUsageSnapshot, sanitizedProtocolRecord, probeInterrupt, budgetStop, waitForOutcome, claimRun, cleanEnvironment, configToml, observedBudget, sanitizer, terminalEvent, validateInput } from "./headless-contract.mjs";
 const input = { schemaVersion: 1, runId: "run-1", cwd: "/app", prompt: "Fix it", model: "gpt-6-astra", reasoningEffort: "high", serviceTier: "default", tokenMiser: true, timeoutMs: 1000, runtimeManifest: "/eval/runtime.json" };
 test("strict contract rejects implicit toggles, model substitutions and unknown inputs", () => {
   assert.equal(validateInput(input).codexHome, "/eval/codex");
@@ -214,6 +214,7 @@ test("delegated tokens stop the run, counting each thread and its native helpers
   const call = async (method, request) => {
     if (method === "readThreadFamilyPricing") return { members: [{ ...root, self: true, totalCostMicros: 250000 }, child, grandchild, child] };
     assert.equal(method, "readThread");
+    assert.equal(request.includeTurns, false);
     reads.push(request.threadId);
     return { pricing: { summaries: [{ totalTokens: request.threadId === "child" ? 1000 : 300, totalCostMicros: request.threadId === "child" ? 200000 : 100000, unpricedUsageLineCount: 0 }] } };
   };
@@ -278,4 +279,53 @@ test("acknowledged dispatch stays uncertain until outcome is known; artifact fai
   assert.equal(errorStatus({ ...result, status: "completed" }), "failed");
   assert.equal(errorStatus({}), "preflight_failed");
   assert.equal(errorStatus({}, "cancelled"), "cancelled");
+});
+
+test("IPC deadlines identify the timed-out method without retrying", async () => {
+  await assert.rejects(deadlineCall("readThreadFamilyPricing", new Promise(() => {}), 10), (error) => {
+    assert.match(error.message, /readThreadFamilyPricing.*elapsed.*limit/);
+    assert.equal(error.ipcDeadline.method, "readThreadFamilyPricing");
+    assert.equal(error.ipcDeadline.timeoutMs, 10);
+    assert.ok(error.ipcDeadline.elapsedMs >= 9);
+    return true;
+  });
+  assert.equal(await deadlineCall("readThread", Promise.resolve(42)), 42);
+});
+
+test("budget reads skip history and retain nonfinal pricing before a failed family read", async () => {
+  const result = { status: "incomplete", dispatchIntentAt: "dispatched" };
+  const pricing = { lines: [{ totalTokens: 123, totalCostMicros: 50, priceStatus: "priced" }] };
+  const toolAccounting = { totalCalls: 3 };
+  const requests = [];
+  const call = async (method, request) => {
+    requests.push({ method, request });
+    if (method === "readThread") return { pricing, toolAccounting, fetchedAt: 12345 };
+    assert.deepEqual(result.pricing, pricing);
+    assert.deepEqual(result.toolAccounting, toolAccounting);
+    throw new Error("family deadline");
+  };
+  const root = { backend: "codex", threadId: "p" };
+  await assert.rejects(waitForOutcome({ threadId: "p", turnId: "t", drain: async () => [],
+    read: () => readBudgetThread(call, root), onEvent: () => {},
+    onUsage: async (view) => { retainUsageSnapshot(result, view); await observeFamilyBudget(call, root, view); },
+    stop: () => {}, pause: async () => { throw new Error("no retry"); },
+  }), /family deadline/);
+  assert.equal(errorStatus(result), "incomplete");
+  assert.deepEqual(requests[0], { method: "readThread", request: { ...root, includeTurns: false } });
+  assert.equal(requests.length, 2);
+  assert.equal(result.usageSnapshot.final, false);
+  assert.equal(result.usageSnapshot.source, "budget-poll");
+  assert.equal(result.usageSnapshot.fetchedAt, 12345);
+  assert.ok(Number.isFinite(Date.parse(result.usageSnapshot.observedAt)));
+  retainUsageSnapshot(result, {});
+  assert.deepEqual(result.pricing, pricing);
+  retainUsageSnapshot(result, { pricing, toolAccounting }, "post-outcome");
+  assert.equal(result.usageSnapshot.source, "post-outcome");
+  assert.equal(result.usageSnapshot.final, false);
+});
+
+test("omitted token threshold imposes no hidden task token cap", () => {
+  const request = validateInput(input);
+  assert.equal(request.maxObservedTokens, undefined);
+  assert.equal(budgetStop(request, { tokens: 99_000_000, costUsd: 1, unpriced: false }), undefined);
 });

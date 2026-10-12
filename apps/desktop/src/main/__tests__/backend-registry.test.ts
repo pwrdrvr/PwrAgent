@@ -32205,6 +32205,36 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("refreshes lightweight budget pricing on the normal live usage flush", async () => {
+    vi.useFakeTimers();
+    const codexClient = new MockBackendClient({ initializeResult: { methods: ["thread/read"] } });
+    const baseStore = createOverlayStoreMock();
+    const request = { backend: "codex" as const, threadId: "thread-1", includeTurns: false };
+    const overlayStore = {
+      ...baseStore,
+      upsertThreadUsageLines: async ({ lines }: { lines: ThreadUsageLineRecord[] }) => {
+        for (const line of lines) await baseStore.upsertThreadUsageLine({ line });
+        return await baseStore.readThreadPricing(request);
+      },
+    };
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    try {
+      await codexClient.emit({ method: "thread/tokenUsage/updated", params: {
+        threadId: request.threadId, turnId: "turn-live", model: "gpt-6-astra",
+        tokenUsage: { last: { inputTokens: 1000, cachedInputTokens: 200, outputTokens: 50, totalTokens: 1050 }, total: { inputTokens: 1000, cachedInputTokens: 200, outputTokens: 50, totalTokens: 1050 } },
+      } });
+      expect((await registry.readThread(request)).pricing?.lines).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect((await registry.readThread(request)).pricing?.lines).toEqual(expect.arrayContaining([
+        expect.objectContaining({ turnId: "turn-live", totalTokens: 1050, inputTokens: 1000, cachedInputTokens: 200 }),
+      ]));
+      expect(codexClient.readThreadCalls.every((call) => call.includeTurns === false)).toBe(true);
+    } finally {
+      await registry.close();
+      vi.useRealTimers();
+    }
+  });
+
   it("persists live thread pricing from turn usage, not cumulative thread totals", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/read"] },
@@ -32275,6 +32305,11 @@ command = "pnpm dev"
       uncachedInputTokens: 800,
     });
     expect(pricing.lines[0]?.cumulativeTotalCostMicros).toBeUndefined();
+
+    // Headless budget polling must retain live usage without hydrating history.
+    const budgetView = await registry.readThread({ backend: "codex", threadId: "thread-1", includeTurns: false });
+    expect(budgetView.pricing?.lines).toEqual(pricing.lines);
+    expect(codexClient.readThreadCalls.at(-1)).toMatchObject({ threadId: "thread-1", includeTurns: false });
 
     await registry.close();
   });
@@ -34200,6 +34235,11 @@ command = "pnpm dev"
     const updates = usageEvents.filter((event) => event.notification.method === "thread/subAgents/updated");
     expect(updates).toHaveLength(2);
     expect(updates.every((event) => (event.notification.params as { navigationChanged?: false }).navigationChanged === false)).toBe(true);
+    const budgetView = await registry.readThread({ backend: "codex", threadId: "thread-parent", includeTurns: false });
+    expect(budgetView.pricing?.lines).toEqual(expect.arrayContaining([
+      expect.objectContaining({ scope: "monitor", threadId: nativeThreadId, inputTokens: 131_000, cachedInputTokens: 124_000, outputTokens: 1_800 }),
+    ]));
+    expect(codexClient.readThreadCalls.at(-1)).toMatchObject({ threadId: "thread-parent", includeTurns: false });
     unsubscribe();
     await registry.close();
   });

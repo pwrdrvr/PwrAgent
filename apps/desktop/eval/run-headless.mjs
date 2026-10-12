@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline";
 import { createReadStream } from "node:fs";
-import { EXIT, assertReady, atomicJson, captureLaunchRejections, claimRun, cleanEnvironment, configToml, dispatchTurn, errorStatus, launchHeadlessElectron, observeFamilyBudget, sanitizer, budgetStop, waitForOutcome, probeInterrupt, sanitizedProtocolRecord, validateInput } from "./lib/headless-contract.mjs";
+import { EXIT, assertReady, atomicJson, captureLaunchRejections, claimRun, cleanEnvironment, configToml, deadlineCall, dispatchTurn, errorStatus, launchHeadlessElectron, observeFamilyBudget, readBudgetThread, retainUsageSnapshot, sanitizer, budgetStop, waitForOutcome, probeInterrupt, sanitizedProtocolRecord, validateInput } from "./lib/headless-contract.mjs";
 
 const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = process.argv.slice(2);
@@ -25,10 +25,6 @@ let stopReason;
 let watchdog;
 let logFd;
 const logSubscriptions = [];
-const deadlineCall = (promise, ms = 30_000) => {
-  let timer;
-  return Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("IPC deadline exceeded")), ms); })]).finally(() => clearTimeout(timer));
-};
 const persist = () => atomicJson(claim.file, redact({ ...result, inputHash: claim.hash }));
 const requestStop = (reason) => { stopReason ??= reason; };
 process.on("SIGINT", () => requestStop("cancelled"));
@@ -116,7 +112,7 @@ try {
   }
   const page = await app.firstWindow({ timeout: 60_000 });
   await page.waitForFunction(() => Boolean(window.pwragent?.listBackends), undefined, { timeout: 60_000 });
-  call = (method, arg) => deadlineCall(page.evaluate(({ method, arg }) => {
+  call = (method, arg) => deadlineCall(method, page.evaluate(({ method, arg }) => {
     if (typeof window.pwragent[method] !== "function") throw new Error(`Unsupported IPC: ${method}`);
     return window.pwragent[method](arg);
   }, { method, arg }));
@@ -124,7 +120,7 @@ try {
     window.__headlessEvents = [];
     window.pwragent.onAgentEvent((event) => window.__headlessEvents.push(event));
   });
-  const drain = () => deadlineCall(page.evaluate(() => window.__headlessEvents.splice(0)));
+  const drain = () => deadlineCall("drainEvents", page.evaluate(() => window.__headlessEvents.splice(0)));
   let backend;
   let settings;
   const readyDeadline = Date.now() + 60_000;
@@ -175,9 +171,10 @@ try {
       await dispatchTurn({ call, result, persist, request: { ...common, threadId: result.threadId, input: [{ type: "text", text: input.prompt }] } });
       const outcome = await waitForOutcome({
         threadId: result.threadId, turnId: result.turnId, drain,
-        read: () => call("readThread", { backend: "codex", threadId: result.threadId }),
+        read: () => readBudgetThread(call, { backend: "codex", threadId: result.threadId }),
         onEvent: (event) => appendFileSync(path.join(output, "rollout.jsonl"), JSON.stringify(redact(event)) + "\n", { mode: 0o600 }),
         onUsage: async (current) => {
+          retainUsageSnapshot(result, current);
           Object.assign(result, await observeFamilyBudget(call, { backend: "codex", threadId: result.threadId }, current));
           return budgetStop(input, result.observed);
         },
@@ -190,8 +187,7 @@ try {
         await call("interruptTurn", { backend: "codex", threadId: result.threadId, turnId: result.turnId }).catch(() => undefined);
       }
       const finalView = await call("readThread", { backend: "codex", threadId: result.threadId });
-      result.pricing = finalView.pricing;
-      result.toolAccounting = finalView.toolAccounting;
+      retainUsageSnapshot(result, finalView, "post-outcome");
       result.tokenMiserUsage = await call("readTokenMiserUsage");
       result.answer = finalView.replay?.lastAssistantMessage;
       atomicJson(path.join(output, "thread.json"), redact(finalView));
@@ -201,11 +197,12 @@ try {
   result.status = errorStatus(result, stopReason);
   if (stopReason) result.stopReason ??= stopReason;
   result.error = redact(error.message);
+  if (error.ipcDeadline) result.ipcDeadline = error.ipcDeadline;
 } finally {
   clearTimeout(watchdog);
   if (app) {
     if (result.status !== "completed" && result.threadId && result.turnId && call) await call("interruptTurn", { backend: "codex", threadId: result.threadId, ...(result.turnId ? { turnId: result.turnId } : {}) }).catch(() => undefined);
-    try { await deadlineCall(app.close(), 15_000); result.cleanup = "graceful"; }
+    try { await deadlineCall("closeElectron", app.close(), 15_000); result.cleanup = "graceful"; }
     catch { app.process().kill("SIGKILL"); result.cleanup = "forced"; if (result.status === "completed") result.status = "failed"; }
   }
   for (const unsubscribe of logSubscriptions) unsubscribe();
