@@ -4052,6 +4052,10 @@ describe("CodexAppServerClient", () => {
       expect(threadListRequests[0]?.params?.searchTerm).toBeUndefined();
       expect(methods.filter((method) => method === "initialize")).toHaveLength(2);
       expect(methods.at(-1)).toBe("thread/resume");
+      expect(JSON.parse(transport.sentMessages.at(-1)!)).toMatchObject({
+        method: "thread/resume",
+        params: { threadId, excludeTurns: true },
+      });
     } finally {
       await client.close();
       await fs.rm(tempRoot, { force: true, recursive: true });
@@ -9355,6 +9359,72 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it.each([null, "Use the paginated history APIs."])(
+    "keeps Codex deprecation notices in diagnostics (details=%s)",
+    async (details) => {
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+      try {
+        await client.getInitializeResult();
+        const notifications: AppServerNotification[] = [];
+        client.onNotification((notification) => { notifications.push(notification); });
+        const transport = MockTransport.instances.at(-1)!;
+        const summary = "Full-history hydration is deprecated for paginated threads; use `excludeTurns: true`, then page with `thread/turns/list` and `thread/items/list`.";
+        const status: AppServerNotification = {
+          method: "thread/status/changed",
+          params: { threadId: "thread-2", status: { type: "active", activeFlags: [] } },
+        };
+        codexClientLogWarn.mockClear();
+        transport.emitInbound({ jsonrpc: "2.0", method: "deprecationNotice", params: { summary, details } });
+        transport.emitInbound({ jsonrpc: "2.0", ...status });
+
+        await vi.waitFor(() => expect(notifications).toContainEqual(status));
+        expect(notifications).toEqual([status]);
+        expect(codexClientLogWarn).toHaveBeenCalledExactlyOnceWith(
+          "codex deprecation notice",
+          { summary, details },
+        );
+      } finally {
+        await client.close();
+      }
+    },
+  );
+
+  it("consumes Codex native goal notifications without changing normalized thread state", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    try {
+      await client.getInitializeResult();
+      const notifications: AppServerNotification[] = [];
+      client.onNotification((notification) => { notifications.push(notification); });
+      const transport = MockTransport.instances.at(-1)!;
+      const status: AppServerNotification = {
+        method: "thread/status/changed",
+        params: { threadId: "thread-2", status: { type: "active", activeFlags: [] } },
+      };
+      codexClientLogWarn.mockClear();
+      transport.emitInbound({
+        jsonrpc: "2.0",
+        method: "thread/goal/updated",
+        params: {
+          threadId: "thread-2",
+          goal: {
+            threadId: "thread-2", objective: "Finish the fixture task", status: "active",
+            tokenBudget: null, tokensUsed: 0, timeUsedSeconds: 0,
+          },
+        },
+      });
+      transport.emitInbound({ jsonrpc: "2.0", method: "thread/goal/cleared", params: { threadId: "thread-2" } });
+      transport.emitInbound({ jsonrpc: "2.0", ...status });
+
+      await vi.waitFor(() => expect(notifications).toContainEqual(status));
+      expect(notifications).toEqual([status]);
+      expect(codexClientLogWarn).not.toHaveBeenCalled();
+    } finally {
+      await client.close();
+    }
+  });
+
   it("recognizes Codex hook lifecycle notifications", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 
@@ -13821,7 +13891,7 @@ describe("CodexAppServerClient", () => {
       .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
       .find((payload) => payload.method === "turn/start");
 
-    expect(resumePayload?.params).toEqual({ threadId: "thread-2" });
+    expect(resumePayload?.params).toEqual({ threadId: "thread-2", excludeTurns: true });
     expect(turnStartPayload?.params).toMatchObject({ threadId: "thread-2" });
     expect(resumePayload?.params).not.toHaveProperty("dynamicTools");
     expect(turnStartPayload?.params).not.toHaveProperty("dynamicTools");
