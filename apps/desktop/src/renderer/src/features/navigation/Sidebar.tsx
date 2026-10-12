@@ -7,7 +7,7 @@ import {
 } from "../../lib/subthread-launchpads";
 import { readNavigationPresentationOrder } from "./navigation-presentation-order";
 import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationWindow";
-import { navigationPageErrorCopy, navigationThreadSelectionKey } from "../../lib/navigation-query-state";
+import { isNavigationPeerUnavailable, navigationPageErrorCopy, navigationThreadSelectionKey } from "../../lib/navigation-query-state";
 import { useEventCallback } from "../../lib/useEventCallback";
 import { useMousePress } from "../../lib/useMousePress";
 import { useLensScrollRestoration } from "../../lib/useLensScrollRestoration";
@@ -3116,7 +3116,7 @@ export function Sidebar(props: SidebarProps) {
             )
           )}
           {props.pagedNavigation?.admissionError ? <p className="sidebar-error">{props.pagedNavigation.admissionError}</p> : null}
-          {props.browseMode !== "directories" ? lensResources.map((resource) => (
+          {props.browseMode !== "directories" ? lensResources.filter((resource) => !isNavigationPeerUnavailable(resource.state.error)).map((resource) => (
             <div key={resource.id}>
               {resource.state.error ? <p className="sidebar-error">{navigationPageErrorCopy(resource.state.error)}</p> : null}
               {resource.state.rebaselineRequired ? (

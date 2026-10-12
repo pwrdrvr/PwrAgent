@@ -22,15 +22,16 @@ export function SubthreadPagination(props: {
 }): ReactElement | null {
   const { resource } = props;
   const initialLoad = resource.loading && !resource.state.page;
+  const errorCopy = navigationPageErrorCopy(resource.state.error);
   const nothingToShow =
-    !resource.state.error
+    !errorCopy
     && !initialLoad
     && !resource.state.rebaselineRequired
     && !resource.state.page?.nextCursor;
   if (nothingToShow) return null;
   return (
     <div role="listitem">
-      {resource.state.error ? <p className="sidebar-error" role="alert">{navigationPageErrorCopy(resource.state.error)}</p> : null}
+      {errorCopy ? <p className="sidebar-error" role="alert">{errorCopy}</p> : null}
       {initialLoad ? <p className="sidebar-empty">Loading sub-threads…</p> : null}
       {resource.state.rebaselineRequired ? (
         <SidebarShowMore

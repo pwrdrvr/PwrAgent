@@ -232,12 +232,17 @@ export function navigationFallbackAnchor(
 }
 
 /**
- * Operator copy for a failed page read. The owner's own message is already in
- * the main log ("Error occurred in handler for 'navigation:get-query-page'"),
- * and Electron's IPC wrapper around it is not something an operator can act on.
+ * Operator copy for a failed page read, or none when there is nothing to say.
+ *
+ * An offline peer is not a failure: its rows simply aren't there, as in every
+ * lens that merges peers in main. Main returns that case as data, so it never
+ * reaches the log either; the federation runtime logs the outage itself. Any
+ * other failure is thrown, and the owner's message is in the main log
+ * ("Error occurred in handler for 'navigation:get-query-page'"); Electron's
+ * IPC wrapper around it is not something an operator can act on.
  */
-export function navigationPageErrorCopy(error: string): string {
-  if (isNavigationPeerUnavailable(error)) return "This instance isn't connected.";
+export function navigationPageErrorCopy(error: string | undefined): string | undefined {
+  if (!error || isNavigationPeerUnavailable(error)) return undefined;
   if (error.includes("retained-page budget")) return "Too many thread lists are open. Collapse a directory to load more.";
   if (error.includes("Upgrade the owning instance")) return "Update the other instance to see these threads.";
   if (error.includes("Upgrade this instance")) return "Update PwrAgent to see these threads.";
