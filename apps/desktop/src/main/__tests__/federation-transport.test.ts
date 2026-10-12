@@ -47,6 +47,25 @@ let server: FederationGatewayWebSocketServer | undefined;
 let rawServer: WebSocketServer | undefined;
 let gatewayKeyPair: ReturnType<typeof generateFederationIdentityKeyPair>;
 
+/**
+ * One loopback request on a connection it owns. Global fetch and
+ * http.globalAgent pool keep-alive sockets, so a worker stalled past the
+ * server's keep-alive window reused a socket the server was closing, and the
+ * request failed with ECONNRESET on Windows.
+ */
+function requestGateway(
+  port: number,
+  headers: http.OutgoingHttpHeaders,
+): Promise<{ status?: number; headers: http.IncomingHttpHeaders }> {
+  return new Promise((resolve, reject) => {
+    const request = http.get({ host: "127.0.0.1", port, headers, agent: false }, (incoming) => {
+      incoming.on("end", () => resolve({ status: incoming.statusCode, headers: incoming.headers }));
+      incoming.resume();
+    });
+    request.on("error", reject);
+  });
+}
+
 it("waits for both server close callbacks before completing stop", async () => {
   server = new FederationGatewayWebSocketServer({
     gatewayInstanceId: "gateway_one",
@@ -105,10 +124,10 @@ describe("federation transport", () => {
       gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem, host: "127.0.0.1", port: 0, store,
       cloudflareEnabled: () => enabled,
     });
-    const { url } = await server.start();
+    const { url, port } = await server.start();
     const probe = server.securityProbes.arm();
     const headers = { "cf-ray": "test-ray", "x-pwragent-security-probe": probe.id };
-    const response = await fetch(url.replace("ws:", "http:"), { headers });
+    const response = await requestGateway(port, headers);
     expect(response.status).toBe(403);
     expect(probe.observed()).toBe(false);
     const rejected = new WebSocket(url, { headers });
@@ -117,10 +136,10 @@ describe("federation transport", () => {
       rejected.on("error", reject);
     });
     expect(status).toBe(403);
-    const direct = await fetch(url.replace("ws:", "http:"), { headers: { "x-pwragent-security-probe": probe.id } });
+    const direct = await requestGateway(port, { "x-pwragent-security-probe": probe.id });
     expect(direct.status).toBe(204);
     enabled = true;
-    const allowed = await fetch(url.replace("ws:", "http:"), { headers });
+    const allowed = await requestGateway(port, headers);
     expect(allowed.status).toBe(204);
     probe.close();
   });
@@ -153,24 +172,19 @@ describe("federation transport", () => {
     for (const upgrade of [false, true]) {
       const probe = server.securityProbes.arm();
       try {
-        const response = await new Promise<{ status?: number; proof?: string | string[] }>((resolve, reject) => {
-          const request = http.get({ host: "127.0.0.1", port, headers: {
-            "X-PwrAgent-Security-Probe": probe.id,
-            ...(upgrade ? { Connection: "Upgrade", Upgrade: "websocket" } : {}),
-          } }, (incoming) => {
-            resolve({ status: incoming.statusCode, proof: incoming.headers["x-pwragent-probe-proof"] });
-            incoming.resume();
-          });
-          request.on("error", reject);
+        const response = await requestGateway(port, {
+          "X-PwrAgent-Security-Probe": probe.id,
+          ...(upgrade ? { Connection: "Upgrade", Upgrade: "websocket" } : {}),
         });
-        expect(response).toEqual({ status: 204, proof: probe.proof });
+        expect({ status: response.status, proof: response.headers["x-pwragent-probe-proof"] })
+          .toEqual({ status: 204, proof: probe.proof });
         expect(probe.observed()).toBe(true);
         expect(onEnvelope).not.toHaveBeenCalled();
       } finally { probe.close(); }
     }
-    const ordinary = await fetch(`http://127.0.0.1:${port}/`, { headers: { "X-PwrAgent-Security-Probe": "unarmed" } });
+    const ordinary = await requestGateway(port, { "X-PwrAgent-Security-Probe": "unarmed" });
     expect(ordinary.status).toBe(404);
-    expect(ordinary.headers.has("x-pwragent-probe-proof")).toBe(false);
+    expect(ordinary.headers).not.toHaveProperty("x-pwragent-probe-proof");
   });
 
   it("encodes blob bytes as a binary tail and rejects blob JSON envelopes", () => {
