@@ -2554,6 +2554,18 @@ describe("CodexAppServerClient", () => {
         updatedAt: 1_777_500_300,
         cwd: "/repo/app",
       },
+      {
+        id: "thread-guardian-marker",
+        threadSource: "guardian_review",
+        updatedAt: 1_777_500_400,
+        cwd: "/repo/app",
+      },
+      {
+        id: "thread-guardian-source",
+        source: { subAgent: { other: "guardian" } },
+        updatedAt: 1_777_500_500,
+        cwd: "/repo/app",
+      },
     ]);
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     const client = new CodexAppServerClient({

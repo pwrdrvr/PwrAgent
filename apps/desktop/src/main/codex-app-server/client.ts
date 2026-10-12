@@ -2036,7 +2036,7 @@ function isVisibleCodexThreadSource(thread: RawCodexThreadSummary): boolean {
   // PwrAgent-managed workers have an inspection-only transcript. Neither is a
   // durable navigation thread. Codex source-kind variants use camelCase while
   // the durable ThreadSource marker is the lowercase string "subagent".
-  return !sourceKind?.startsWith("subagent");
+  return sourceKind !== "guardian_review" && !sourceKind?.startsWith("subagent");
 }
 
 function filterVisibleCodexThreads(
@@ -6125,6 +6125,11 @@ function readCodexThreadSourceKind(
   if (!subAgentRecord) {
     return undefined;
   }
+  // thread/list can omit the durable guardian_review marker returned by
+  // thread/read. Its session source still identifies the approval helper.
+  if (subAgentRecord.other === "guardian") {
+    return "guardian_review";
+  }
   if (asRecord(subAgentRecord.thread_spawn) || asRecord(subAgentRecord.threadSpawn)) {
     return "subAgentThreadSpawn";
   }
@@ -9214,7 +9219,14 @@ export class CodexAppServerClient {
     });
     const page = extractThreadListPage(result, this.threadListTextCache);
     if (page.threads.length > params.limit) throw new Error("Archive discovery exceeded the requested provider page budget.");
-    const threads = await this.enrichRawThreadDirectories(page.threads, "thread-list", {
+    // Completed Guardian approval reviews remain unarchived with an inherited
+    // cwd. They are not independent checkout users. Keep active or uncertain
+    // reviews, every ordinary thread/worker, and archived ownership evidence.
+    const checkoutUsers = params.archived ? page.threads : page.threads.filter((thread) =>
+      thread.codexThreadSourceKind !== "guardian_review"
+      || (thread.threadStatus !== "idle" && thread.threadStatus !== "notLoaded"),
+    );
+    const threads = await this.enrichRawThreadDirectories(checkoutUsers, "thread-list", {
       checkpoint: params.checkpoint,
       strict: true,
       concurrency: 1,
