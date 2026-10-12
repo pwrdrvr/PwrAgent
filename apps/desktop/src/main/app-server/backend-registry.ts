@@ -12314,7 +12314,7 @@ export class DesktopBackendRegistry {
       return durableThreads;
     }
     if (params.forceRefresh && !params.skipArchivedMetadataRefresh) {
-      this.invalidateArchiveCleanupReads(params.backend);
+      this.invalidateArchiveCleanupReads(params.backend, undefined, false);
     }
     const diagnostics = {
       callerReason: params.callerReason ?? "thread-list",
@@ -12553,7 +12553,7 @@ export class DesktopBackendRegistry {
     // it. Do not join a thread-list promise admitted under rejected credentials.
     await this.startupProviderRefreshPromise;
     if (this.closed) return;
-    this.invalidateThreadListCache();
+    this.invalidateThreadListCache(undefined, true);
     await this.listBackends({ refreshModels: "codex" }, permit);
     const threads = await this.listThreads({
       backend: "codex",
@@ -14823,7 +14823,7 @@ export class DesktopBackendRegistry {
       updatedAt: Math.max(session.updatedAt, archivedAt),
     });
     await this.overlayStore.observeArchivedThreads?.([{ backend: params.backend, threadId: params.threadId }], archivedAt);
-    this.invalidateThreadListCache(params.backend);
+    this.invalidateThreadListCache(params.backend, true);
     // Archival on ACP is a local store write, with no provider to announce it.
     // Say it in the same words Codex uses, because everything downstream is
     // written against the notification rather than against a backend: the
@@ -14866,7 +14866,7 @@ export class DesktopBackendRegistry {
       ...restoredSession,
       updatedAt: Math.max(session.updatedAt, restoredAt),
     });
-    this.invalidateThreadListCache(params.backend);
+    this.invalidateThreadListCache(params.backend, true);
     this.clearArchivedMessagingCleanupCache({
       backend: params.backend,
       threadId: params.threadId,
@@ -17433,7 +17433,7 @@ export class DesktopBackendRegistry {
         worktreePath: cwd,
       });
     }
-    this.invalidateThreadListCache(backend);
+    this.invalidateThreadListCache(backend, true);
 
     if (backend === "codex") {
       await this.overlayStore.setThreadExecutionMode({
@@ -17960,7 +17960,7 @@ export class DesktopBackendRegistry {
         threadId: result.threadId,
         branch: gitBranch,
       });
-      this.invalidateThreadListCache(backend);
+      this.invalidateThreadListCache(backend, true);
     } catch (error) {
       this.pendingStartedThreads.delete(buildThreadIdentityKey(backend, result.threadId));
       await preparedWorkspace.rollback?.();
@@ -27131,7 +27131,7 @@ export class DesktopBackendRegistry {
           await this.recordObservedCodexSettings(notification);
         }
         if (this.shouldInvalidateThreadListCacheForNotification(notification.method)) {
-          this.invalidateThreadListCache(backend, !this.isAcknowledgedArchiveCleanupNotification(backend, notification));
+          this.invalidateThreadListCache(backend);
         }
         if (notification.method === "thread/archived") {
           if (backend === "codex") await this.archiveTokenMiserThread(notification.params.threadId);
@@ -27587,6 +27587,7 @@ export class DesktopBackendRegistry {
   }): Promise<ThreadOverlayState> {
     const overlay =
       await this.overlayStore.replaceWorkspaceLinkedDirectory(params);
+    this.invalidateArchiveCleanupReads(params.backend);
     this.threadInfoStore.invalidateSummaries({
       backend: params.backend,
       threadId: params.threadId,
@@ -27594,10 +27595,12 @@ export class DesktopBackendRegistry {
     return overlay;
   }
 
-  private invalidateThreadListCache(backend?: AppServerBackendKind, workspaceChanged = true): void {
+  // Display metadata and navigation refreshes do not change checkout ownership.
+  // Only actual workspace mutations may invalidate a removal's safety scan.
+  private invalidateThreadListCache(backend?: AppServerBackendKind, workspaceChanged = false): void {
     if (workspaceChanged) this.archiveWorkspaceRevision += 1;
     if (!backend) {
-      this.invalidateArchiveCleanupReads();
+      this.invalidateArchiveCleanupReads(undefined, undefined, workspaceChanged);
       this.threadListCache.clear();
       return;
     }
@@ -27807,7 +27810,10 @@ export class DesktopBackendRegistry {
       previousActiveThreadIds.size !== nextActiveThreadIds.size
       || [...previousActiveThreadIds].some((id) => !nextActiveThreadIds.has(id))
     )) {
-      this.invalidateArchiveCleanupReads(params.backend);
+      // Observing our completed archive removes an owner; it cannot make
+      // removal unsafe. New active identities still invalidate admission.
+      const addedActiveThread = [...nextActiveThreadIds].some((id) => !previousActiveThreadIds.has(id));
+      this.invalidateArchiveCleanupReads(params.backend, undefined, addedActiveThread);
     }
     this.activeThreadIdsByBackend.set(params.backend, nextActiveThreadIds);
     const missingThreadIds = new Set(
@@ -34006,6 +34012,7 @@ export class DesktopBackendRegistry {
         cwd,
       });
     });
+    this.invalidateArchiveCleanupReads(params.backend);
     // A thread Codex can write to is a thread Codex still has. Clearing here
     // rather than in the scheduler's success path is what makes this
     // reachable: the scheduler skips every thread already recorded missing, so
@@ -44157,11 +44164,20 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind,
     notification: AppServerNotification,
   ): void {
+    const membershipChanged = notification.method === "thread/archived"
+      || notification.method === "thread/deleted"
+      || notification.method === "thread/unarchived"
+      || notification.method === "account/updated";
     if (
-      (notification.method === "thread/archived"
-        || notification.method === "thread/deleted"
-        || notification.method === "thread/unarchived"
-        || notification.method === "account/updated")
+      (membershipChanged
+        || notification.method === "thread/started"
+        || notification.method === "thread/rewound"
+        || notification.method === "turn/started"
+        || notification.method === "navigation/threadDirectories/updated"
+        // Idle/notLoaded cannot add a checkout user. Active or uncertain
+        // status can reactivate a Guardian excluded by the safety inventory.
+        || (notification.method === "thread/status/changed"
+          && !["idle", "notLoaded"].includes(readStatusType(notification.params.status) ?? "")))
       && !this.archiveCleanupNotifications.has(notification)
     ) {
       // Provider notifications enter before async cleanup, then reach emit.
@@ -44173,7 +44189,13 @@ export class DesktopBackendRegistry {
       // The successful local archive already fenced this mutation. A delayed
       // matching notification refreshes archive membership, but must not fail
       // the same cleanup's removal admission as a second workspace change.
-      this.invalidateArchiveCleanupReads(backend, notification, !this.isAcknowledgedArchiveCleanupNotification(backend, notification));
+      if (membershipChanged) {
+        this.invalidateArchiveCleanupReads(backend, notification, !this.isAcknowledgedArchiveCleanupNotification(backend, notification));
+      } else {
+        // A new checkout user invalidates removal admission, but does not
+        // change archived membership or require another messaging cleanup scan.
+        this.archiveWorkspaceRevision += 1;
+      }
     }
   }
 
@@ -44410,7 +44432,7 @@ export class DesktopBackendRegistry {
 
     this.rememberThreadTitleFromEvent(event);
     if (this.shouldInvalidateThreadListCacheForNotification(event.notification.method)) {
-      this.invalidateThreadListCache(event.backend, !this.isAcknowledgedArchiveCleanupNotification(event.backend, event.notification));
+      this.invalidateThreadListCache(event.backend);
     }
 
     if (

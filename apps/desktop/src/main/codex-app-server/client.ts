@@ -9229,7 +9229,9 @@ export class CodexAppServerClient {
       // an incomplete safety inventory, even if the provider accepts it.
       payloads: [{
         archived: params.archived, cursor: params.cursor, limit: params.limit,
-        sortKey: "updated_at", sourceKinds: CODEX_WORKTREE_SAFETY_SOURCE_KINDS, useStateDbOnly: true,
+        // Title/turn updates must not move an existing checkout user across
+        // the cursor while the paced safety inventory is being read.
+        sortKey: "created_at", sourceKinds: CODEX_WORKTREE_SAFETY_SOURCE_KINDS, useStateDbOnly: true,
       } satisfies CodexThreadListParams],
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     });
