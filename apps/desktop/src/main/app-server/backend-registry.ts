@@ -8668,6 +8668,15 @@ export class DesktopBackendRegistry {
   private createdThreadVisibilityPinnedRanks: string[] = [];
   private readonly createdThreadVisibilityLock = new PerKeyAsyncLock();
   private readonly activeThreadIdsByBackend = new Map<AppServerBackendKind, Set<string>>();
+  private readonly observedActiveThreadWorkspaces = new Map<string, {
+    projectKey: string;
+    linkedWorktrees: Set<string>;
+  }>();
+  private readonly archiveWorktreeRemovalAdmissions = new Set<{
+    backend: AppServerBackendKind;
+    threadId: string;
+    worktreePath: string;
+  }>();
   private readonly archiveCleanupReads = new ArchiveCleanupReadPool(THREAD_LIST_REUSE_WINDOW_MS);
   private readonly archiveCleanupQueue = new ArchiveCleanupQueue<ArchiveThreadResponse>();
   private archiveWorkspaceRevision = 0;
@@ -33515,12 +33524,17 @@ export class DesktopBackendRegistry {
         }
 
         let removalMetadata: ArchiveCleanupMetadata | undefined;
+        const admission = {
+          backend: params.backend, threadId: params.thread.id,
+          worktreePath: normalizeWorktreePathForComparison(candidate.worktreePath),
+        };
         const snapshot = await this.worktreeArchiveService.archive({
           backend: params.backend,
           threadId: params.thread.id,
           worktreePath: candidate.worktreePath,
           repositoryPath: candidate.repositoryPath,
           beforeRemove: params.context && this.codexClient.listArchiveCleanupThreadsPage ? async () => {
+            this.archiveWorktreeRemovalAdmissions.add(admission);
             const revision = this.archiveWorkspaceRevision;
             const current = await this.findThreadForArchiveCleanup({
               backend: params.backend, threadId: params.thread.id, context: params.context,
@@ -33552,7 +33566,7 @@ export class DesktopBackendRegistry {
             check();
             return check;
           } : undefined,
-        });
+        }).finally(() => this.archiveWorktreeRemovalAdmissions.delete(admission));
         backendRegistryLog.info("archive thread worktree cleanup removed worktree", {
           backend: params.backend,
           threadId: params.thread.id,
@@ -43530,6 +43544,9 @@ export class DesktopBackendRegistry {
   ): void {
     for (const thread of threads) {
       const identity = { backend: thread.source, threadId: thread.id };
+      if (listedArchived !== true) {
+        this.observeActiveThreadWorkspace(thread, enriched);
+      }
       const projectLabel = readNotificationProjectLabel(
         thread as unknown as Record<string, unknown>,
       );
@@ -43561,6 +43578,49 @@ export class DesktopBackendRegistry {
         summary: thread,
       });
     }
+  }
+
+  private observeActiveThreadWorkspace(thread: AppServerThreadSummary, enriched: boolean): void {
+    const key = buildThreadIdentityKey(thread.source, thread.id);
+    const previous = this.observedActiveThreadWorkspaces.get(key);
+    const projectKey = thread.projectKey ? normalizeWorktreePathForComparison(thread.projectKey) : "";
+    // Unenriched rows can omit linked directories. Keep the last observed
+    // ownership evidence in that case so display refreshes do not look like
+    // workspace changes. An enriched row or explicit directories replaces it.
+    const linkedWorktrees = !enriched && thread.linkedDirectories.length === 0
+      ? previous?.linkedWorktrees ?? new Set<string>()
+      : new Set(thread.linkedDirectories.flatMap((directory) => {
+        const worktreePath = linkedDirectoryWorktreePath(directory);
+        return worktreePath === undefined ? [] : [JSON.stringify([
+          normalizeWorktreePathForComparison(worktreePath),
+          directory.worktreeOwnership === "external",
+        ])];
+      }));
+    // An older navigation observation may already contain this owner while
+    // the final safety inventory does not. Any positive ownership observation
+    // during admission must invalidate that inventory, even if its paths match
+    // the older row. Keep the invalidation until the removal attempt settles.
+    const observedAdmissionOwner = [...this.archiveWorktreeRemovalAdmissions].some((admission) =>
+      !(admission.backend === thread.source && admission.threadId === thread.id)
+      && (projectKey === admission.worktreePath || thread.linkedDirectories.some((directory) => {
+        const worktreePath = linkedDirectoryWorktreePath(directory);
+        return worktreePath !== undefined
+          && normalizeWorktreePathForComparison(worktreePath) === admission.worktreePath;
+      })),
+    );
+    if (
+      observedAdmissionOwner
+      || !previous
+      || previous.projectKey !== projectKey
+      || previous.linkedWorktrees.size !== linkedWorktrees.size
+      || [...linkedWorktrees].some((worktree) => !previous.linkedWorktrees.has(worktree))
+    ) {
+      // A refresh can be the first evidence of another client's workspace
+      // mutation, even when the active thread IDs are unchanged. Invalidate
+      // pending removal admission synchronously before publishing that row.
+      this.archiveWorkspaceRevision += 1;
+    }
+    this.observedActiveThreadWorkspaces.set(key, { projectKey, linkedWorktrees });
   }
 
   private notificationThreadContextLabel(
