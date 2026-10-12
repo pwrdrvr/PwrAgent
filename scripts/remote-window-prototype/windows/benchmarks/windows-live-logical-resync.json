@@ -1,0 +1,52 @@
+{
+  "retainedCanvas": {
+    "lastRow": 29,
+    "text": "LIVE123",
+    "firstRow": 15,
+    "revision": 24
+  },
+  "crossHostClock": "No source/receiver wall-clock subtraction",
+  "kind": "Logical Stop/Start session resync only",
+  "browserClock": "performance.now",
+  "errors": [],
+  "session": {
+    "sessionId": "76414f2b-e0c0-4959-b631-1fc3ce37c351",
+    "epoch": 2,
+    "scene": "owned-fixture",
+    "owner": "pwr_7bd451d0-df75-4676-84f7-bbcbfc565bce",
+    "viewer": "pwr_e87183a6-755f-49be-8df2-a28b3231960d",
+    "width": 800,
+    "height": 548,
+    "control": false,
+    "protocol": "window.prototype.v1",
+    "chunkBytes": 16384,
+    "started": 242263.5
+  },
+  "firstH264Keyframe": "New decoder accepted first frame only after viewer key-frame validation; source frame packet key flag not separately persisted.",
+  "physicalNetworkReconnectTested": false,
+  "frames": [
+    {
+      "seq": 16,
+      "format": "h264",
+      "epoch": 2,
+      "bytes": 59828,
+      "time": 242482.30000019073,
+      "transferAndPresentMs": 193.30000019073486,
+      "decodeAndPresentMs": 11.900000095367432,
+      "encodeMs": 4.297750070691109,
+      "pixelRevision": 24
+    },
+    {
+      "seq": 17,
+      "format": "png",
+      "epoch": 2,
+      "bytes": 365834,
+      "time": 245588.5,
+      "transferAndPresentMs": 2987.7999997138977,
+      "decodeAndPresentMs": 18.199999809265137,
+      "encodeMs": 38.23366668075323,
+      "pixelRevision": 24
+    }
+  ],
+  "schema": 1
+}

@@ -1,0 +1,129 @@
+{
+  "schema": 1,
+  "clock": "Browser performance.now durations only; source encodeMs is a source-local duration. Phase wallStart/wallEnd are receiver labels, not cross-host latency.",
+  "percentile": "Nearest rank",
+  "frames": 16,
+  "mediaBytes": 1553461,
+  "acceptedInputs": 24,
+  "observedInputBeaconSamples": 5,
+  "observationLimit": "Only an exact decoded beacon revision match produces a timing sample; intermediate revisions may be superseded. Accepted commands are not all latency samples.",
+  "finalBeaconRevision": 24,
+  "decoderConfig": {
+    "codec": "avc1.42001F",
+    "codedWidth": 800,
+    "codedHeight": 548,
+    "optimizeForLatency": true,
+    "hardwareAcceleration": "prefer-software"
+  },
+  "errors": [],
+  "pingMs": {
+    "count": 187,
+    "min": 17.40000009536743,
+    "p50": 51.59999990463257,
+    "p95": 540.9000000953674,
+    "max": 824.4000000953674
+  },
+  "inputToCanvasMs": {
+    "count": 5,
+    "min": 168.7000002861023,
+    "p50": 445.90000009536743,
+    "p95": 2176.9000000953674,
+    "max": 2176.9000000953674
+  },
+  "decodeAndPresentMs": {
+    "count": 16,
+    "min": 4.699999809265137,
+    "p50": 11.300000190734863,
+    "p95": 198.5,
+    "max": 198.5
+  },
+  "transferAndPresentMs": {
+    "count": 16,
+    "min": 5.900000095367432,
+    "p50": 16.200000286102295,
+    "p95": 6066,
+    "max": 6066
+  },
+  "phases": [
+    {
+      "name": "idle",
+      "durationMs": 3004.7999997138977,
+      "frames": 0,
+      "videoFrames": 0,
+      "videoFps": 0,
+      "mediaBytes": 0,
+      "videoBytes": 0,
+      "decodeAndPresentMs": {
+        "count": 0,
+        "min": null,
+        "p50": null,
+        "p95": null,
+        "max": null
+      }
+    },
+    {
+      "name": "typing",
+      "durationMs": 2699.9000000953674,
+      "frames": 3,
+      "videoFrames": 3,
+      "videoFps": 1.1111522648594512,
+      "mediaBytes": 12957,
+      "videoBytes": 12957,
+      "decodeAndPresentMs": {
+        "count": 3,
+        "min": 5.5,
+        "p50": 11.300000190734863,
+        "p95": 26.5,
+        "max": 26.5
+      }
+    },
+    {
+      "name": "scroll",
+      "durationMs": 3132.5,
+      "frames": 0,
+      "videoFrames": 0,
+      "videoFps": 0,
+      "mediaBytes": 0,
+      "videoBytes": 0,
+      "decodeAndPresentMs": {
+        "count": 0,
+        "min": null,
+        "p50": null,
+        "p95": null,
+        "max": null
+      }
+    },
+    {
+      "name": "motion",
+      "durationMs": 4000.8999996185303,
+      "frames": 6,
+      "videoFrames": 5,
+      "videoFps": 1.2497188133861705,
+      "mediaBytes": 396817,
+      "videoBytes": 33084,
+      "decodeAndPresentMs": {
+        "count": 6,
+        "min": 5.099999904632568,
+        "p50": 6.199999809265137,
+        "p95": 28.699999809265137,
+        "max": 28.699999809265137
+      }
+    },
+    {
+      "name": "settled",
+      "durationMs": 3001,
+      "frames": 5,
+      "videoFrames": 3,
+      "videoFps": 0.9996667777407531,
+      "mediaBytes": 741138,
+      "videoBytes": 10596,
+      "decodeAndPresentMs": {
+        "count": 5,
+        "min": 4.699999809265137,
+        "p50": 11.100000381469727,
+        "p95": 21.700000286102295,
+        "max": 21.700000286102295
+      }
+    }
+  ]
+}
