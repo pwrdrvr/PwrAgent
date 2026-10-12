@@ -1,5 +1,5 @@
 import type { NavigationPresentationOrder } from "./navigation-presentation-order";
-import { isNavigationPeerUnavailable, navigationIdentityKey, navigationPageErrorCopy, navigationThreadSelectionKey } from "../../lib/navigation-query-state";
+import { isNavigationPeerUnavailable, navigationIdentityKey, navigationThreadSelectionKey } from "../../lib/navigation-query-state";
 import type { NavigationPresentedThread } from "../../lib/navigation-loaded-rows";
 import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationWindow";
 import { buildPagedDirectoryPresentation, type PagedDirectoryPresentation } from "./paged-directory-presentation";
@@ -1461,10 +1461,8 @@ export function DirectoriesList(props: DirectoriesListProps) {
     const visibleThreadCount = directory.counts?.total ?? 0;
     const pinResourceId = `directory-pins:${directory.key}`;
     const pinResource = props.pagedNavigation?.resources.get(pinResourceId);
-    const pinErrorCopy = navigationPageErrorCopy(pinResource?.state.error);
     const rootResourceId = `directory:${directory.key}`;
     const rootResource = props.pagedNavigation?.resources.get(rootResourceId);
-    const rootErrorCopy = navigationPageErrorCopy(rootResource?.state.error);
     const directorySummaryLabel = [
       directory.label,
       directoryUnconfigured ? "not configured on this instance" : undefined,
@@ -2319,11 +2317,10 @@ export function DirectoriesList(props: DirectoriesListProps) {
                       </div>
                     ) : null}
 
-                    {pinResource && (pinErrorCopy || (pinResource.loading && !pinResource.state.page)
+                    {pinResource && ((pinResource.loading && !pinResource.state.page)
                       || pinResource.state.rebaselineRequired || pinResource.state.page?.nextCursor
                       || (pinResource.state.page?.rangeStart ?? 0) > 0) ? (
                       <div role="listitem">
-                        {pinErrorCopy ? <p className="sidebar-error">{pinErrorCopy}</p> : null}
                         {pinResource.loading && !pinResource.state.page ? <p className="sidebar-empty">Loading pinned threads…</p> : null}
                         {(pinResource.state.page?.rangeStart ?? 0) > 0 && !pinResource.state.rebaselineRequired ? (
                           <SidebarShowMore busy={pinResource.loading} label="Show pinned threads from beginning" onClick={() => void props.pagedNavigation?.restart(pinResourceId)} />
@@ -2393,7 +2390,6 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 ) : (
                   <p className="sidebar-empty directory-row__empty">{directory.counts ? "No threads in this directory yet." : "Loading directory counts…"}</p>
                 )}
-                {rootErrorCopy ? <p className="sidebar-error">{rootErrorCopy}</p> : null}
                 {/* `directory-row__empty` reads as "empty" but means "a status
                     line in a directory's lane" — the sibling above already
                     wears it for "Loading directory counts…". Without it this

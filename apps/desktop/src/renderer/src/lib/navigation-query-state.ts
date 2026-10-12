@@ -231,8 +231,10 @@ export function navigationFallbackAnchor(
   return nearest && !navigationAnchorsEqual(nearest, missing) ? nearest : undefined;
 }
 
+export type NavigationPageErrorKind = "page-budget" | "owner-upgrade" | "viewer-upgrade" | "read-failed";
+
 /**
- * Operator copy for a failed page read, or none when there is nothing to say.
+ * What a failed page read means to the operator, or nothing to report.
  *
  * An offline peer is not a failure: its rows simply aren't there, as in every
  * lens that merges peers in main. Main returns that case as data, so it never
@@ -241,12 +243,24 @@ export function navigationFallbackAnchor(
  * ("Error occurred in handler for 'navigation:get-query-page'"); Electron's
  * IPC wrapper around it is not something an operator can act on.
  */
-export function navigationPageErrorCopy(error: string | undefined): string | undefined {
+export function navigationPageErrorKind(error: string | undefined): NavigationPageErrorKind | undefined {
   if (!error || isNavigationPeerUnavailable(error)) return undefined;
-  if (error.includes("retained-page budget")) return "Too many thread lists are open. Collapse a directory to load more.";
-  if (error.includes("Upgrade the owning instance")) return "Update the other instance to see these threads.";
-  if (error.includes("Upgrade this instance")) return "Update PwrAgent to see these threads.";
-  return "Couldn't load these threads.";
+  if (error.includes("retained-page budget")) return "page-budget";
+  if (error.includes("Upgrade the owning instance")) return "owner-upgrade";
+  if (error.includes("Upgrade this instance")) return "viewer-upgrade";
+  return "read-failed";
+}
+
+const NAVIGATION_PAGE_ERROR_COPY: Record<NavigationPageErrorKind, string> = {
+  "page-budget": "Too many thread lists are open. Collapse a directory to load more.",
+  "owner-upgrade": "Update the other instance to see these threads.",
+  "viewer-upgrade": "Update PwrAgent to see these threads.",
+  "read-failed": "Couldn't load these threads.",
+};
+
+export function navigationPageErrorCopy(error: string | undefined): string | undefined {
+  const kind = navigationPageErrorKind(error);
+  return kind && NAVIGATION_PAGE_ERROR_COPY[kind];
 }
 
 export function failNavigationPageRead(

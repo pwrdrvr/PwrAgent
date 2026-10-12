@@ -883,7 +883,7 @@ describe("Sidebar", () => {
     expect(screen.getByRole("tab", { name: "Attention, 1 active thread, 0 threads to review" })).toBeInTheDocument();
   });
 
-  it("leaves an offline peer out of the Drafts lens without an error or a load-more", () => {
+  it("leaves an offline peer out of the Drafts lens and reports read failures only as toasts", () => {
     const request: NavigationQueryRequest = { protocol: 2, consumer: "main-sidebar", query: { kind: "directory-index" } };
     const page = { ...navigationQueryFixture(request, { directories, threads: [] }), nextCursor: "next" };
     const resource = (id: string, error: string) => ({ id, loading: false,
@@ -898,9 +898,9 @@ describe("Sidebar", () => {
       ]), directories: [], selectedDirectoryKeys: undefined, connected: true,
         invalidate: () => undefined, refresh: async () => undefined, loadMore: async () => undefined,
         rebaseline: async () => undefined, restart: async () => undefined, setVisibleAnchor: () => undefined }} />);
-    // The broken peer is the control: a real failure still reports once.
-    expect(screen.getAllByText("Couldn't load these threads.")).toHaveLength(1);
+    // The broken peer is the control: its list still pages. App raises its toast.
     expect(screen.getAllByRole("button", { name: "Load more threads" })).toHaveLength(1);
+    expect(screen.queryByText(/not connected|exploded|Couldn't load/)).not.toBeInTheDocument();
   });
 
   it("renders Inbox as the first thread lens and keeps directory rows available", () => {

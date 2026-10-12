@@ -70,6 +70,7 @@ import { useNavigationDirectoryDisclosure, type NavigationDirectoryDisclosure } 
 import { useNavigationSelectedDetail } from "./useNavigationSelectedDetail";
 import {
   navigationIdentityFromThreadKey,
+  navigationPageErrorKind,
   navigationSelectionAuthorizesComposer,
   navigationThreadSelectionKey,
 } from "./navigation-query-state";
@@ -3572,7 +3573,9 @@ export function useThreadNavigation(
       || acceptedDefaultsRef.current !== launchpadConfiguration.value
       || acceptedDraftHydrationRef.current !== draftStore?.hydrationVersion;
     const resources = [...boundedNavigation.resources.values()];
-    const error = boundedNavigation.connectionError ?? boundedNavigation.admissionError ?? resources.find((resource) => resource.state.error)?.state.error;
+    // An offline peer's read is not a navigation failure (navigationPageErrorKind).
+    const error = boundedNavigation.connectionError ?? boundedNavigation.admissionError
+      ?? resources.find((resource) => navigationPageErrorKind(resource.state.error))?.state.error;
     const refreshing = resources.some((resource) => resource.loading);
     const primary = resources.filter((resource) => browseMode === "directories" ? resource.id === "directory-index"
       : browseMode === "drafts" ? resource.id.startsWith("drafts:") : resource.id === "lens");

@@ -5679,14 +5679,13 @@ a.button {
   margin-left: 14px;
 }
 
-/* The tray's status text. `.sidebar-empty` and `.sidebar-error` are
-   sidebar-level and set 14px, which inside a sub-list lands above both the
-   13px `--sidebar-title-size` of the rows around it and the 12px paging
-   control below it — so a transient "Loading…" became the loudest thing in
-   the tray, the same way the unstyled paging button did. Scope the tray's
-   copies to the tray's own scale. */
-.subthread-list .sidebar-empty,
-.subthread-list .sidebar-error {
+/* The tray's status text. `.sidebar-empty` is sidebar-level and sets 14px,
+   which inside a sub-list lands above both the 13px `--sidebar-title-size`
+   of the rows around it and the 12px paging control below it — so a
+   transient "Loading…" became the loudest thing in the tray, the same way
+   the unstyled paging button did. Scope the tray's copy to the tray's own
+   scale. */
+.subthread-list .sidebar-empty {
   margin-top: 4px;
   font-size: 12px;
 }
