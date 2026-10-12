@@ -287,6 +287,43 @@ describe("integrated terminal IPC federation branch", () => {
     expect(mocks.remotePtyOpen).not.toHaveBeenCalled();
   });
 
+  it("never attaches one owner shell to a window twice during discovery", async () => {
+    const summaries = [1, 2].map((id): IntegratedTerminalSessionSummary => ({
+      sessionId: `owner-${id}`, threadKey: "codex:remote-thread", cwd: "/owner/worktree",
+      shell: "/bin/zsh", createdAt: id, panelHidden: false, status: "running",
+    }));
+    mocks.remotePtyList.mockResolvedValue(summaries);
+    mocks.remotePtySnapshot.mockImplementation(async ({ sessionId }) => ({
+      sessionId, cwd: "/owner/worktree", shell: "/bin/zsh", status: "running",
+      snapshot: { data: "", seq: 0, timestamp: 1, cols: 80, rows: 24, truncated: false },
+    }));
+    mocks.remotePtyOpen.mockResolvedValueOnce({
+      sessionId: "owner-3", cwd: "/owner/worktree", shell: "/bin/zsh",
+    });
+    const sender = fakeWebContents(7);
+    mocks.federationWindowIds.add(sender.id);
+    mocks.federationTargets.set(sender.id, { scope: "remote", instanceId: "peer-a" });
+    const create = async (sessionId: string) => await invoke(INTEGRATED_TERMINAL_CREATE_CHANNEL, sender, {
+      sessionId, threadKey: "codex:remote-thread", cols: 80, rows: 24,
+    });
+    await create("viewer-a");
+    // A renderer that has not yet heard the session list asks again with a
+    // fresh id. Discovery must not hand it a shell this window already holds.
+    await create("viewer-b");
+
+    const owners = (await invoke(INTEGRATED_TERMINAL_LIST_CHANNEL, sender) as IntegratedTerminalSessionSummary[])
+      .map((session) => session.sessionId);
+    expect(owners).toHaveLength(3);
+    expect(owners).toContain("viewer-b");
+    expect(mocks.remotePtyOpen).toHaveBeenCalledTimes(1);
+    mocks.remotePtyEventListener?.({ kind: "output", peerId: "peer-a", params: {
+      sessionId: "owner-1", seq: 1, dataBase64: Buffer.from("only once").toString("base64"),
+    } });
+    const deliveries = vi.mocked(sender.send).mock.calls.filter(([channel, payload]) =>
+      channel === INTEGRATED_TERMINAL_OUTPUT_CHANNEL && (payload as { data?: string }).data === "only once");
+    expect(deliveries).toHaveLength(1);
+  });
+
   it("routes a local window's create to the local PTY service", async () => {
     const sender = fakeWebContents(1);
     await invoke(INTEGRATED_TERMINAL_CREATE_CHANNEL, sender, {

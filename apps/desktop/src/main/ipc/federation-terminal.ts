@@ -182,13 +182,19 @@ export class FederationTerminalBridge {
         const client = getDesktopFederationRuntime().remotePty(target);
         // Discover owner-held sessions when first opening a thread after viewer
         // restart. New explicitly skips discovery and creates another shell.
-        const recovered = !request.newSession && !request.attachOnly && client.list
+        const discovered = !request.newSession && !request.attachOnly && client.list
           ? await client.list({ backend, threadId }).catch((error: unknown) => {
               // Older owners do not implement discovery. A lost connection or
               // denied request must not silently turn attach into a new shell.
               if (isUnsupportedPtyMethod(error)) return [];
               throw error;
             }) : [];
+        // A shell this window already holds is never adopted again under a
+        // second viewer id: it would draw twice and gain a second writer.
+        const held = new Set(this.sessionsForWindow(webContents)
+          .filter((session) => session.target.instanceId === target.instanceId)
+          .map((session) => session.ownerSessionId));
+        const recovered = discovered.filter((summary) => !held.has(summary.sessionId));
         const first = recovered[0];
         const opened = first && client.snapshot
           ? await client.snapshot({ sessionId: first.sessionId })
