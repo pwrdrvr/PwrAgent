@@ -522,6 +522,15 @@ export class RemoteThreadSummaryCache {
   }
 
   /**
+   * The peer's last snapshot rows, stale or fresh, for a viewer read that
+   * must not wait on it. Never fetches and never changes mounted-pin demand,
+   * which `resolvePinnedThreads` replaces on every call.
+   */
+  cachedThreads(instanceId: string): readonly NavigationThreadSummary[] {
+    return this.cache.get(instanceId)?.threads ?? [];
+  }
+
+  /**
    * A single thread from a connected peer's snapshot, fetching when the cache
    * has lapsed; undefined when the peer is unreachable or the thread is absent
    * (e.g. archived). Tier 3 — it can wait on the peer. Callers that only need

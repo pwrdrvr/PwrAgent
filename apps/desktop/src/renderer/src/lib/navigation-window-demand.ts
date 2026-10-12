@@ -29,7 +29,7 @@ export function buildNavigationWindowDemand(params: {
   selectedRootRef?: NavigationIdentity;
   selectedContextReady?: boolean;
   disclosedParents?: readonly NavigationIdentity[];
-  /** Viewer-owned draft identities only. Grouped and bounded per owner below; no draft text. */
+  /** Viewer-owned draft identities only, from any owner. Bounded per read below; no draft text. */
   draftRefs?: readonly NavigationIdentity[];
   /** `general.pinned_threads_on_top`; defaults on, as the setting does. */
   pinnedThreadsOnTop?: boolean;
@@ -73,20 +73,13 @@ export function buildNavigationWindowDemand(params: {
     }
 
   } else if (params.browseMode === "drafts") {
-    const owners = new Map<string, NavigationIdentity[]>();
-    for (const ref of params.draftRefs ?? []) {
-      const owner = ref.ownerInstanceId ?? "";
-      const refs = owners.get(owner) ?? [];
-      refs.push(ref);
-      owners.set(owner, refs);
-    }
-    for (const [owner, refs] of owners) {
-      for (let offset = 0; offset < refs.length; offset += 100) {
-        demand.set(`drafts:${JSON.stringify(owner)}:${offset}`, {
-          ...request({ kind: "exact", identities: refs.slice(offset, offset + 100), includeAncestry: true }),
-          inventory: "owner", federationTarget: owner ? { scope: "remote", instanceId: owner } : undefined,
-        });
-      }
+    // One read names every instance's threads, as the other lenses do. Main
+    // asks each peer for its own rows and holds an offline peer's rows itself.
+    // A remote window's drafts all belong to its one owner.
+    const refs = params.draftRefs ?? [];
+    for (let offset = 0; offset < refs.length; offset += 100) {
+      demand.set(`drafts:${offset}`, request({ kind: "exact", identities: refs.slice(offset, offset + 100), includeAncestry: true,
+        ...(params.target?.scope === "remote" ? {} : { resolveFromOwners: true }) }));
     }
   } else if ((params.browseMode === "inbox" || params.browseMode === "recents") && params.pinnedThreadsOnTop !== false) {
     // Split like a project: the Pinned group pages on its own, so a pin never

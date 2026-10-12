@@ -191,6 +191,15 @@ function validateRequest(request: NavigationQueryRequest): void {
       "An exact navigation query accepts at most 100 identities.",
     );
   }
+  // Owner resolution fans out to this machine's peers. A peer's request is
+  // owner inventory and must never make this instance read on its behalf.
+  if (request.query.kind === "exact" && request.query.resolveFromOwners
+    && (request.inventory !== "viewer" || request.federationTarget?.scope === "remote")) {
+    throw new NavigationQueryError(
+      "navigation_invalid_request",
+      "Owner-resolved navigation is available only to this machine's viewer inventory.",
+    );
+  }
   if (request.query.kind === "group-members" && (!Array.isArray(request.query.roots)
     || !request.query.roots.length || request.query.roots.length > 100)) {
     throw new NavigationQueryError("navigation_invalid_request", "Group discovery accepts one to 100 root identities.");
@@ -280,8 +289,12 @@ export class NavigationQueryStore {
     } = {},
   ) {}
 
-  async readPage(params: {
+  async readPage(params: ({
     loadIndex: () => Promise<NavigationQueryIndex>;
+  } | {
+    /** A viewer read composed from several owners supplies its own projection. */
+    loadMaterialization: () => Promise<NavigationQueryMaterialization>;
+  }) & {
     request: NavigationQueryRequest;
     scopeKey: string;
   }): Promise<NavigationQueryPage> {
@@ -332,22 +345,30 @@ export class NavigationQueryStore {
       generation = retained;
       offset = cursor.offset;
     } else {
-      let eventVersion = this.attentionEventVersion;
-      let index = await params.loadIndex();
-      if (eventVersion !== this.attentionEventVersion) {
-        listingDiagnostics.record("owner-page", "retry", { reason: "owner-invalidated" });
-        eventVersion = this.attentionEventVersion;
-        index = await params.loadIndex();
-        if (eventVersion !== this.attentionEventVersion) throw new NavigationQueryError("navigation_busy", "Navigation changed during its owner read. Refresh the retained range.");
+      let materialization: NavigationQueryMaterialization;
+      if ("loadMaterialization" in params) {
+        materialization = await params.loadMaterialization();
+        if (materialization.queryKey !== queryKey) {
+          throw new NavigationQueryError("navigation_invalid_request", "Navigation materialization does not belong to this query.");
+        }
+      } else {
+        let eventVersion = this.attentionEventVersion;
+        let index = await params.loadIndex();
+        if (eventVersion !== this.attentionEventVersion) {
+          listingDiagnostics.record("owner-page", "retry", { reason: "owner-invalidated" });
+          eventVersion = this.attentionEventVersion;
+          index = await params.loadIndex();
+          if (eventVersion !== this.attentionEventVersion) throw new NavigationQueryError("navigation_busy", "Navigation changed during its owner read. Refresh the retained range.");
+        }
+        if (lifetime?.closedAt !== undefined) throw new NavigationQueryError("navigation_invalid_request", "This Attention view closed during its owner read.");
+        anchorIndex = index;
+        const attentionOrder = this.reconcileAttentionView(params.scopeKey, params.request, index);
+        materialization = projectNavigationQuery({
+          index,
+          request: params.request,
+          attentionOrder,
+        });
       }
-      if (lifetime?.closedAt !== undefined) throw new NavigationQueryError("navigation_invalid_request", "This Attention view closed during its owner read.");
-      anchorIndex = index;
-      const attentionOrder = this.reconcileAttentionView(params.scopeKey, params.request, index);
-      const materialization = projectNavigationQuery({
-        index,
-        request: params.request,
-        attentionOrder,
-      });
       const { revision, retainedBytes } = fingerprintNavigationMaterialization(materialization);
       const currentKey = `${params.scopeKey}\u0000${queryKey}`;
       const currentId = this.currentGenerationByScopeAndQuery.get(currentKey);

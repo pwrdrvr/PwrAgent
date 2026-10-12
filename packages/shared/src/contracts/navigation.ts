@@ -1932,6 +1932,12 @@ export type NavigationQuery =
       kind: "exact";
       identities: NavigationIdentity[];
       includeAncestry?: boolean;
+      /**
+       * Viewer inventory only, and never sent to a peer: read each identity
+       * from its own owner rather than from this machine's mounts. An owner
+       * that cannot answer is served from rows this viewer already holds.
+       */
+      resolveFromOwners?: true;
     }
   | {
       kind: "search";

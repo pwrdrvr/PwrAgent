@@ -2470,6 +2470,10 @@ export class DesktopFederationRuntime {
   ): Promise<NavigationQueryPage> {
     this.assertRemoteNavigationQueryProtocol(target);
     if (request.inventory === "viewer") throw new Error("Viewer navigation inventory is available only on its local machine.");
+    // The viewer resolves owners itself. The flag never travels to an owner.
+    if (request.query.kind === "exact" && request.query.resolveFromOwners) {
+      throw new Error("Owner-resolved navigation is available only to this machine's viewer inventory.");
+    }
     const backend = this.remoteBackend(target);
     if (!backend.getNavigationQueryPage) {
       throw navigationUpgradeRequired(target.instanceId);
