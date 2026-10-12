@@ -1077,6 +1077,7 @@ export class MessagingController {
     MessagingAdmissionTimingRecord
   >();
   private readonly pendingIntentTtlMs: number;
+  private readonly pendingRequestPresentations = new Map<string, Promise<void>>();
   private readonly interactionMapper: MessagingInteractionMapper;
   private readonly activeTurnsByThreadKey = new Map<string, MessagingActiveTurnSummary>();
   private readonly contextUsageSummariesByThreadKey = new Map<string, string>();
@@ -2343,6 +2344,33 @@ export class MessagingController {
     request: AppServerPendingRequestNotification,
     federationTarget?: FederationTarget,
   ): Promise<void> {
+    const key = JSON.stringify([
+      backend,
+      request.params.threadId,
+      request.params.requestId,
+      federationTarget?.scope === "remote" ? federationTarget.instanceId : undefined,
+    ]);
+    const existing = this.pendingRequestPresentations.get(key);
+    if (existing) {
+      await existing;
+      return;
+    }
+    // Reserve before the first store read completes so overlapping redisplays
+    // cannot both create an intent for the same backend request.
+    const presentation = this.presentBackendPendingRequest(backend, request, federationTarget);
+    this.pendingRequestPresentations.set(key, presentation);
+    try {
+      await presentation;
+    } finally {
+      this.pendingRequestPresentations.delete(key);
+    }
+  }
+
+  private async presentBackendPendingRequest(
+    backend: AppServerBackendKind,
+    request: AppServerPendingRequestNotification,
+    federationTarget?: FederationTarget,
+  ): Promise<void> {
     const persistentBindings = this.filterBindingsForChannel(
       await this.options.store.findActiveBindingsForThread({
         backend,
@@ -2358,7 +2386,18 @@ export class MessagingController {
       persistentBindings,
     );
 
+    const existingIntents = await this.options.store.findActivePendingIntentsForRequest({
+      backend,
+      threadId: request.params.threadId,
+      requestId: request.params.requestId,
+      now: this.now(),
+    });
     for (const binding of bindings) {
+      // Desktop transcript recovery also reaches messaging. Keep the existing
+      // actionable message and any questionnaire answers for this binding.
+      if (existingIntents.some((intent) => intent.bindingId === binding.id)) {
+        continue;
+      }
       const intent = this.intentForPendingRequest(request);
       if (!intent) {
         continue;

@@ -35956,6 +35956,76 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("redisplays the remaining MCP request after answering a concurrent request", async () => {
+    const codexClient = new MockBackendClient({ initializeResult: { methods: ["turn/start"] } });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => { events.push(event); });
+    const request = (requestId: string): AppServerPendingRequestNotification => ({
+      method: "mcpServer/elicitation/request",
+      params: {
+        threadId: "thread-1", turnId: "turn-1", requestId,
+        serverName: "codex_apps", mode: "url", message: "Reconnect GitHub",
+        url: "https://chatgpt.com/connector", elicitationId: requestId,
+      },
+    });
+    const first = codexClient.emitRequest(request("57"));
+    await waitForCondition(() => events.length === 1);
+    const second = codexClient.emitRequest(request("58"));
+    await waitForCondition(() => events.length === 2);
+
+    await registry.submitServerRequest({
+      backend: "codex", threadId: "thread-1", turnId: "turn-1",
+      requestId: "58", response: { action: "decline", content: null, _meta: null },
+    });
+    await expect(second).resolves.toMatchObject({ action: "decline" });
+    expect(events.slice(2).map((event) => event.notification)).toEqual([
+      { method: "serverRequest/resolved", params: { threadId: "thread-1", turnId: "turn-1", requestId: "58" } },
+      request("57"),
+    ]);
+    await registry.submitServerRequest({
+      backend: "codex", threadId: "thread-1", turnId: "turn-1",
+      requestId: "57", response: { action: "decline", content: null, _meta: null },
+    });
+    await first;
+    await registry.close();
+  });
+
+  it.each(["turn/completed", "turn/failed", "turn/cancelled"] as const)(
+    "retires MCP requests belonging to an ended turn on %s", async (method) => {
+      const codexClient = new MockBackendClient({ initializeResult: { methods: ["turn/start"] } });
+      const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+      const events: AgentEvent[] = [];
+      registry.onEvent((event) => { events.push(event); });
+      const request: AppServerPendingRequestNotification = {
+        method: "mcpServer/elicitation/request",
+        params: {
+          threadId: "thread-1", turnId: "turn-1", requestId: "57",
+          serverName: "codex_apps", mode: "url", message: "Reconnect GitHub",
+          url: "https://chatgpt.com/connector", elicitationId: "57",
+        },
+      };
+      const response = codexClient.emitRequest(request);
+      await waitForCondition(() => events.length === 1);
+      const params = { threadId: "thread-1", turnId: "turn-1" };
+      await registry.publishLocalEvent({ backend: "codex", notification: method === "turn/failed" ? {
+        method, params: { ...params, turn: { id: "turn-1", status: "failed", error: { message: "Connection lost" } } },
+      } : method === "turn/cancelled" ? {
+        method, params: { ...params, turn: { id: "turn-1", status: "cancelled" } },
+      } : {
+        method, params: {
+          threadId: "thread-1", turnId: "turn-1",
+          turn: { id: "turn-1", status: "completed", output: [] },
+        },
+      } });
+      expect(registry.getPendingRequestForThread({ backend: "codex", threadId: "thread-1" })).toBeUndefined();
+      expect(registry.getNavigationInputRequestThreadKeys().size).toBe(0);
+      await expect(response).resolves.toMatchObject({ action: "cancel" });
+      expect(events.some((event) => event.notification.method === "serverRequest/resolved")).toBe(true);
+      await registry.close();
+    },
+  );
+
   it("persists completed questionnaire answers with secret values redacted", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },

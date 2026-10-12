@@ -23932,6 +23932,8 @@ export class DesktopBackendRegistry {
     if (!pending) {
       throw new Error(`No pending server request found for ${params.requestId}`);
     }
+    const answeredLatestRequest =
+      this.getPendingRequestForThread(params)?.params.requestId === params.requestId;
 
     const recordedQuestionnaire =
       pending.notification.method === "item/tool/requestUserInput"
@@ -23943,6 +23945,12 @@ export class DesktopBackendRegistry {
           })
         : false;
     this.pendingServerRequests.delete(key);
+    // Capture the request already hidden by this card before resolving the
+    // provider call. Resolution can immediately create and publish a new
+    // request, which must not be emitted a second time here.
+    const remainingRequest = answeredLatestRequest
+      ? this.getPendingRequestForThread(params)
+      : undefined;
     pending.resolve(params.response);
     await this.emit({
       backend: params.backend,
@@ -23955,6 +23963,12 @@ export class DesktopBackendRegistry {
         },
       },
     });
+    // Several tools can ask for input concurrently, while the transcript has
+    // one interaction card. Restore the remaining request after removing the
+    // answered card so it stays actionable without leaving the thread.
+    if (remainingRequest && this.getPendingRequestForThread(params) === remainingRequest) {
+      await this.emit({ backend: params.backend, notification: remainingRequest });
+    }
     if (recordedQuestionnaire) {
       await this.emit({
         backend: params.backend,
@@ -44502,6 +44516,27 @@ export class DesktopBackendRegistry {
       // its pending batch so completion does not require a second commit.
       const completedTurnId = turnIdFromTerminalNotification(event.notification);
       this.mcpGatewayTools?.cancel(event.backend, event.notification.params.threadId, completedTurnId);
+      if (completedTurnId) {
+        // An MCP elicitation cannot keep its provider turn alive after that
+        // turn ends. Retaining it lets a later read resurrect the ended turn.
+        for (const [key, pending] of this.pendingServerRequests) {
+          const request = pending.notification;
+          if (pending.backend !== event.backend
+            || request.params.threadId !== event.notification.params.threadId
+            || request.params.turnId !== completedTurnId
+            || request.method !== "mcpServer/elicitation/request") {
+            continue;
+          }
+          this.pendingServerRequests.delete(key);
+          pending.resolve({ action: "cancel", content: null, _meta: null });
+          await this.emit({ backend: event.backend, notification: {
+            method: "serverRequest/resolved", params: {
+              threadId: request.params.threadId, turnId: completedTurnId,
+              requestId: request.params.requestId,
+            },
+          } });
+        }
+      }
       if (completedTurnId) {
         const usageKey = [
           event.backend,

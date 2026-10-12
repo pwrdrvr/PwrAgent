@@ -1,6 +1,32 @@
 import { expect, it } from "vitest";
 import { ReplayController } from "../testing/replay-controller";
 
+it("tracks concurrent requests separately and waits for every answer before progressing", () => {
+  const controller = new ReplayController({ metadata: { backend: "codex", scenario: "concurrent-input" }, steps: [
+    ...["57", "58"].map((requestId) => ({
+      id: requestId, kind: "request" as const, request: {
+        method: "mcpServer/elicitation/request" as const, params: {
+          threadId: "thread-1", turnId: "turn-1", requestId,
+          serverName: "codex_apps", mode: "url" as const, message: "Reconnect GitHub",
+          url: "https://chatgpt.com/connector", elicitationId: requestId,
+        },
+      },
+    })),
+    { id: "idle", kind: "notification", notification: {
+      method: "thread/status/changed", params: { threadId: "thread-1", status: { type: "idle" } },
+    } },
+  ] });
+  controller.advance({ stepId: "57" });
+  controller.advance({ stepId: "58" });
+  expect(controller.getPendingRequest()?.request.params.requestId).toBe("58");
+  controller.resolvePendingRequest("58");
+  expect(controller.getPendingRequest()?.request.params.requestId).toBe("57");
+  expect(() => controller.advance({ stepId: "idle" })).toThrow("Replay is waiting for request 57");
+  controller.resolvePendingRequest("57");
+  expect(controller.getPendingRequest()).toBeUndefined();
+  expect(controller.advance({ stepId: "idle" }).id).toBe("idle");
+});
+
 it("does not expose a created thread when independent startup reads repeat", () => {
   const controller = new ReplayController({ metadata: { backend: "codex", scenario: "causal-list" }, steps: [
     { id: "before", kind: "response", method: "thread/list", result: [] },
