@@ -26,7 +26,7 @@ export type ReplayResponseSelector = {
 export class ReplayController {
   private readonly steps: ReplayStep[];
   private index = 0;
-  private pendingRequest?: ReplayRequestStep;
+  private readonly pendingRequests = new Map<string, ReplayRequestStep>();
   private readonly completedResponses = new Set<string>();
   private readonly reusableResponses = new Map<string, ReplayResponseStep>();
 
@@ -98,13 +98,16 @@ export class ReplayController {
     stepId?: string;
     override?: ReplayStepOverride;
   } = {}): ReplayLiveStep {
-    if (this.pendingRequest) {
+    const nextStep = this.steps[this.index];
+    const pendingRequest = this.getPendingRequest();
+    // Concurrent requests are independent owners. Notifications still wait
+    // for all answers, preserving the fixture's response boundary.
+    if (pendingRequest && nextStep?.kind !== "request") {
       throw new Error(
-        `Replay is waiting for request ${this.pendingRequest.request.params.requestId}`
+        `Replay is waiting for request ${pendingRequest.request.params.requestId}`
       );
     }
 
-    const nextStep = this.steps[this.index];
     if (!nextStep) {
       throw new Error("Replay has no remaining live steps");
     }
@@ -118,26 +121,31 @@ export class ReplayController {
     }
 
     const merged = applyOverride(nextStep, params.override);
+    if (merged.kind === "request" && this.pendingRequests.has(merged.request.params.requestId)) {
+      throw new Error(`Replay request ${merged.request.params.requestId} is already pending`);
+    }
     this.index += 1;
 
     if (merged.kind === "request") {
-      this.pendingRequest = merged;
+      this.pendingRequests.set(merged.request.params.requestId, merged);
     }
 
     return merged;
   }
 
   getPendingRequest(): ReplayRequestStep | undefined {
-    return this.pendingRequest;
+    let latest: ReplayRequestStep | undefined;
+    for (const pending of this.pendingRequests.values()) latest = pending;
+    return latest;
   }
 
   resolvePendingRequest(requestId: string): ReplayRequestStep {
-    if (!this.pendingRequest || this.pendingRequest.request.params.requestId !== requestId) {
+    const current = this.pendingRequests.get(requestId);
+    if (!current) {
       throw new Error(`Replay has no pending request ${requestId}`);
     }
 
-    const current = this.pendingRequest;
-    this.pendingRequest = undefined;
+    this.pendingRequests.delete(requestId);
     return current;
   }
 

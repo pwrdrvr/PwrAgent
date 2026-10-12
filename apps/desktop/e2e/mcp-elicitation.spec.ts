@@ -1,13 +1,16 @@
 import path from "node:path";
+import os from "node:os";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
+import type { ReplayFixture } from "../src/main/testing/replay-fixture";
 import { launchElectronApp } from "./fixtures/electron-app";
 
 const mcpElicitationSpecDir = path.dirname(fileURLToPath(import.meta.url));
 
-async function openMcpElicitationReplay(gatewayApproval = false, urlLogin = false) {
+async function openMcpElicitationReplay(gatewayApproval = false, urlLogin = false, fixturePath?: string) {
   const app = await launchElectronApp({
-    fixturePath: path.resolve(
+    fixturePath: fixturePath ?? path.resolve(
       mcpElicitationSpecDir,
       "fixtures/mcp-elicitation/replay.fixture.json"
     )
@@ -59,8 +62,26 @@ async function openMcpElicitationReplay(gatewayApproval = false, urlLogin = fals
 }
 
 test("recovers concurrent MCP login prompts and answers from To-dos", async ({ browserName: _browserName }, testInfo) => {
-  const app = await openMcpElicitationReplay(false, true);
+  const fixtureRoot = await mkdtemp(path.join(os.tmpdir(), "pwragent-mcp-concurrent-"));
+  let closeApp: (() => Promise<void>) | undefined;
   try {
+    const fixture = JSON.parse(await readFile(path.resolve(
+      mcpElicitationSpecDir, "fixtures/mcp-elicitation/replay.fixture.json",
+    ), "utf8")) as ReplayFixture;
+    const requestIndex = fixture.steps.findIndex((step) => step.id === "mcp-elicitation-1");
+    fixture.steps.splice(requestIndex + 1, 0, {
+      id: "mcp-login-2", kind: "request", request: {
+        method: "mcpServer/elicitation/request", params: {
+          threadId: "thread-mcp-elicitation", turnId: "turn-mcp-2", requestId: "mcp-login-request-2",
+          serverName: "codex_apps", mode: "url", message: "Reconnect GitHub to inspect pull requests.",
+          url: "https://chatgpt.com/connector", elicitationId: "mcp-login-2",
+        },
+      },
+    });
+    const fixturePath = path.join(fixtureRoot, "replay.fixture.json");
+    await writeFile(fixturePath, JSON.stringify(fixture));
+    const app = await openMcpElicitationReplay(false, true, fixturePath);
+    closeApp = app.close;
     const pendingMcp = app.window.getByRole("group", { name: "Pending MCP interaction" });
     await app.advance({ stepId: "mcp-login-2" });
     await expect(pendingMcp).toContainText("inspect pull requests");
@@ -79,7 +100,11 @@ test("recovers concurrent MCP login prompts and answers from To-dos", async ({ b
     await expect(row).toHaveCount(0);
     await expect.poll(async () => await app.getPendingRequest()).toBeUndefined();
   } finally {
-    await app.close();
+    try {
+      await closeApp?.();
+    } finally {
+      await rm(fixtureRoot, { recursive: true, force: true });
+    }
   }
 });
 

@@ -23945,6 +23945,12 @@ export class DesktopBackendRegistry {
           })
         : false;
     this.pendingServerRequests.delete(key);
+    // Capture the request already hidden by this card before resolving the
+    // provider call. Resolution can immediately create and publish a new
+    // request, which must not be emitted a second time here.
+    const remainingRequest = answeredLatestRequest
+      ? this.getPendingRequestForThread(params)
+      : undefined;
     pending.resolve(params.response);
     await this.emit({
       backend: params.backend,
@@ -23960,10 +23966,7 @@ export class DesktopBackendRegistry {
     // Several tools can ask for input concurrently, while the transcript has
     // one interaction card. Restore the remaining request after removing the
     // answered card so it stays actionable without leaving the thread.
-    const remainingRequest = answeredLatestRequest
-      ? this.getPendingRequestForThread(params)
-      : undefined;
-    if (remainingRequest) {
+    if (remainingRequest && this.getPendingRequestForThread(params) === remainingRequest) {
       await this.emit({ backend: params.backend, notification: remainingRequest });
     }
     if (recordedQuestionnaire) {
