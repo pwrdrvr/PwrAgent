@@ -2,6 +2,7 @@
 // every concurrent filesystem operation in that process.
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import fs from "node:fs";
 import { chmod, link, lstat, mkdir, readFile, readlink, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -54,7 +55,32 @@ await tar.t({ file: path.join(staging, "workspace.tar.gz"), onReadEntry: (entry)
 assert.equal(headers.get("privileged.sh"), 0o6755);
 assert.equal(headers.get("directory"), 0o2755);
 
-await importWorkspaceArchive(destination, staging, archive);
+// Some kernels discard special bits during creation. Observe the requested
+// modes too, so those kernels cannot hide a missing importer security boundary.
+const open = fs.open;
+const makeDirectory = fs.mkdir;
+const requestedModes: number[] = [];
+fs.open = Object.assign((...args: unknown[]) => {
+  if (typeof args[0] === "string" && args[0].startsWith(`${destination}${path.sep}`) && typeof args[2] === "number") {
+    requestedModes.push(args[2]);
+  }
+  return Reflect.apply(open, fs, args);
+}, open);
+fs.mkdir = Object.assign((...args: unknown[]) => {
+  if (typeof args[0] === "string" && args[0].startsWith(`${destination}${path.sep}`) && typeof args[1] === "number") {
+    requestedModes.push(args[1]);
+  }
+  return Reflect.apply(makeDirectory, fs, args);
+}, makeDirectory);
+try {
+  await importWorkspaceArchive(destination, staging, archive);
+} finally {
+  fs.open = open;
+  fs.mkdir = makeDirectory;
+}
+assert.ok(requestedModes.includes(0o755), "Observed executable creation mode");
+assert.ok(requestedModes.includes(0o644), "Observed regular file creation mode");
+assert.ok(requestedModes.every((mode) => (mode & 0o7000) === 0), "No special bits passed to filesystem creation");
 assert.equal(await readFile(path.join(destination, "directory", "nested.txt"), "utf8"), "nested");
 assert.equal((await lstat(path.join(destination, "directory", "nested.txt"))).mode & 0o7777, mask === 0o077 ? 0o600 : 0o644);
 const modes = await Promise.all([

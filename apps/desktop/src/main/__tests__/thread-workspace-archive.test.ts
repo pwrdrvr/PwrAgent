@@ -150,3 +150,26 @@ it.skipIf(process.platform === "win32")("rejects an incoming tar link outside th
     .rejects.toThrow("Unsafe");
   await expect(lstat(path.join(destination, "link"))).rejects.toMatchObject({ code: "ENOENT" });
 });
+
+it.skipIf(process.platform === "win32").each(["..", ".git"])("rejects incoming tar paths prefixed by %s before extraction", async (prefix) => {
+  const { root, source, staging, destination } = await fixture();
+  await writeFile(path.join(source, "config"), "unsafe");
+  const file = path.join(staging, "unsafe.tar.gz");
+  await tar.c({ cwd: source, file, gzip: true, prefix }, ["config"]);
+  await expect(importWorkspaceArchive(destination, staging, { format: "tar.gz", dataBase64: (await readFile(file)).toString("base64"), warnings: [] }))
+    .rejects.toThrow("Unsafe");
+  await expect(lstat(path.join(root, "config"))).rejects.toMatchObject({ code: "ENOENT" });
+  await expect(lstat(path.join(destination, ".git"))).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it.skipIf(process.platform === "win32")("rejects tar entries nested under an internal symlink before extraction", async () => {
+  const { source, staging, destination } = await fixture();
+  await mkdir(path.join(source, "directory"));
+  await writeFile(path.join(source, "directory", "child"), "bytes");
+  await symlink("directory", path.join(source, "link"));
+  const file = path.join(staging, "unsafe.tar.gz");
+  await tar.c({ cwd: source, file, gzip: true, noDirRecurse: true }, ["link", "link/child"]);
+  await expect(importWorkspaceArchive(destination, staging, { format: "tar.gz", dataBase64: (await readFile(file)).toString("base64"), warnings: [] }))
+    .rejects.toThrow("nested under a file or symlink");
+  await expect(lstat(path.join(destination, "link"))).rejects.toMatchObject({ code: "ENOENT" });
+});
