@@ -1480,6 +1480,46 @@ describe("terminal history lifecycle", () => {
     await vi.waitFor(async () => expect(await historyStore.load()).toEqual([]));
   });
 
+  it("resumes saved history as a new shell under the same id, in the saved directory", async () => {
+    const root = createTemporaryRoot("terminal-history-resume-");
+    const historyStore = new TerminalHistoryStore(path.join(root, "history"));
+    const launchDir = createTemporaryRoot("terminal-history-launch-");
+    const first = fakePty();
+    const service = new IntegratedTerminalService({ historyStore,
+      loadNodePty: async () => ({ spawn: (() => first) as unknown as typeof import("node-pty").spawn }),
+    });
+    const request = { sessionId: "saved-one", threadKey: "codex:one", cwd: launchDir, cols: 80, rows: 24 };
+    await service.createOrAttach(request, fakeWebContents());
+    vi.mocked(first.onData).mock.calls[0]![0]("retained output\r\n");
+    service.rename("saved-one", "Build");
+    vi.mocked(first.onExit).mock.calls[0]![0]({ exitCode: 0 });
+    await vi.waitFor(async () => expect(await historyStore.load()).toHaveLength(1));
+
+    const second = fakePty();
+    const spawn = vi.fn((_file: string, _args: string[], _options: { cwd?: string }) => second);
+    const restarted = new IntegratedTerminalService({ historyStore,
+      loadNodePty: async () => ({ spawn: spawn as unknown as typeof import("node-pty").spawn }),
+    });
+    // Showing saved history without asking to resume still starts nothing.
+    expect(await restarted.createOrAttach({ ...request, cwd: os.tmpdir(), attachOnly: true }, fakeWebContents()))
+      .toMatchObject({ status: "restored" });
+    expect(spawn).not.toHaveBeenCalled();
+
+    const resumed = await restarted.createOrAttach(
+      { ...request, cwd: os.tmpdir(), attachOnly: true, resume: true }, fakeWebContents());
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(spawn.mock.calls[0]![2].cwd).toBe(launchDir);
+    expect(resumed).toMatchObject({ sessionId: "saved-one", status: "running" });
+    expect(resumed.snapshot?.data).toContain("retained output");
+    expect(resumed.snapshot?.data).toContain("restored history");
+    const sessions = restarted.listSessions();
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]).toMatchObject({ sessionId: "saved-one", name: "Build", status: "running" });
+    restarted.write({ sessionId: "saved-one", data: "echo live\r" });
+    expect(second.write).toHaveBeenCalledWith("echo live\r");
+    restarted.close({ sessionId: "saved-one" });
+  });
+
   it("deduplicates concurrent attaches by terminal ID and rejects cross-thread reuse", async () => {
     const pty = fakePty();
     const spawn = vi.fn(() => pty);

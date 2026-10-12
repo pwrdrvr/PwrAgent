@@ -25,6 +25,13 @@ export type IntegratedTerminalCreateRequest = {
   sessionId?: string;
   /** Refuse to spawn when reattaching a vanished session. */
   attachOnly?: boolean;
+  /**
+   * When `sessionId` names saved history (a restored terminal), start a new
+   * shell under that same id, in the saved launch directory, with the saved
+   * screen above its first prompt. Without it a restored terminal only shows
+   * its history.
+   */
+  resume?: boolean;
   newSession?: boolean;
   /** Grouping attribute, not identity: a thread can own several terminals. */
   threadKey: string;

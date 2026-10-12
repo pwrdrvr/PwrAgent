@@ -1,5 +1,5 @@
 import type { IntegratedTerminalSessionSummary, TerminalSnapshot } from "../../shared/integrated-terminal";
-import { TerminalReplay } from "../terminal/terminal-replay";
+import { restoredHistoryPrelude, TerminalReplay } from "../terminal/terminal-replay";
 import { TerminalHistoryStore, type TerminalHistoryRecord } from "../terminal/terminal-history-store";
 import { randomUUID } from "node:crypto";
 import type {
@@ -100,6 +100,12 @@ export type FederationPtyOpenRequest = {
   threadId: string;
   cols: number;
   rows: number;
+  /**
+   * Saved history this requester owns: the new shell takes that session's id
+   * and starts below its saved screen. An owner that predates this field
+   * ignores it and opens a plain new shell.
+   */
+  resumeSessionId?: string;
 };
 
 export type FederationPtyOpenResponse = {
@@ -364,6 +370,10 @@ export class FederationPtyService {
   private checkpoint(session: FederationPtySession, status: "exited" | "restored" = "restored", exitCode?: number): void {
     const saving = session.replay.snapshot().then(async (snapshot) => {
       if (session.reapReason === "close") return;
+      // Resumed under the same id before this snapshot settled: the live
+      // shell owns the id and its own checkpoints now.
+      const current = this.sessionsById.get(session.sessionId);
+      if (current && current !== session) return;
       const record: TerminalHistoryRecord = { version: 1, peerId: session.peerId,
         summary: { ...this.summary(session), status, exitCode }, snapshot: { ...snapshot, pendingEscape: undefined }, savedAt: this.now() };
       if (!this.sessionsById.has(session.sessionId)) {
@@ -388,6 +398,12 @@ export class FederationPtyService {
     const threadId = typeof request.threadId === "string" ? request.threadId.trim() : "";
     if (!threadId) {
       throw new Error("A thread id is required to open a remote terminal.");
+    }
+    const resumeId = typeof request.resumeSessionId === "string" ? request.resumeSessionId : undefined;
+    const resumed = resumeId ? this.archived.get(resumeId) : undefined;
+    // Same answer for "unknown" and "not yours", as requireSession gives.
+    if (resumeId && (resumed?.peerId !== peerId || resumed.summary.threadKey !== `${request.backend}:${threadId}`)) {
+      throw new Error("Remote terminal session not found for this peer.");
     }
     if (
       this.sessionCountForPeer(peerId)
@@ -434,7 +450,12 @@ export class FederationPtyService {
       }
       throw new Error("Federation peer disconnected while the terminal was starting.");
     }
-    const sessionId = randomUUID();
+    // A second resume of the same history raced this one and won.
+    if (resumed && this.sessionsById.has(resumed.summary.sessionId)) {
+      try { spawned.pty.kill(); } catch { /* already gone */ }
+      throw new Error("That terminal was already resumed.");
+    }
+    const sessionId = resumed?.summary.sessionId ?? randomUUID();
     const session: FederationPtySession = {
       sessionId,
       peerId,
@@ -472,6 +493,14 @@ export class FederationPtyService {
         spawnedRows: request.rows,
       }),
     };
+    if (resumed) {
+      session.createdAt = resumed.summary.createdAt;
+      if (resumed.summary.name) session.name = resumed.summary.name;
+      // Seeded before the PTY's first byte, so every snapshot carries the
+      // saved screen above the new prompt.
+      session.seq = session.replay.append(restoredHistoryPrelude(resumed.snapshot), this.now()).seq;
+      this.archived.delete(resumed.summary.sessionId);
+    }
     session.foregroundCommand = this.detectForegroundCommand(session);
     session.foregroundCheckedAt = this.now();
     this.sessionsById.set(session.sessionId, session);

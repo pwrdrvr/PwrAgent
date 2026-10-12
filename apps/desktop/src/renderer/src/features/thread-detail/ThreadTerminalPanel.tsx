@@ -20,14 +20,15 @@ const STATE_WORD: Record<TerminalState, string> = {
   unseen: "Running, new output",
   exited: "Exited",
   failed: "Exited",
-  saved: "Saved output",
+  saved: "Saved history",
 };
 
 /** The row's second line: where a live shell runs, or how it ended. */
 function terminalDetail(pane: IntegratedTerminalPane, state: TerminalState): string {
   if (state === "starting") return "Starting…";
   if (state === "failed") return `Exited · code ${pane.exitCode}`;
-  if (state === "exited" || state === "saved") return STATE_WORD[state];
+  if (state === "saved") return "Resumes when opened";
+  if (state === "exited") return STATE_WORD[state];
   return homeRelative(pane.cwd) ?? STATE_WORD[state];
 }
 
@@ -80,6 +81,12 @@ const ICON_PROPS = {
   "aria-hidden": true,
 } as const;
 
+/** Hover intent for the rail: open after a short dwell so a pointer passing
+ * through to the terminal's scrollbar does not flash it, close after a short
+ * grace so a diagonal move toward a name does not drop it. */
+const RAIL_OPEN_DELAY_MS = 120;
+const RAIL_CLOSE_DELAY_MS = 180;
+
 export function ThreadTerminalPanel({ desktopApi, terminals, threadKey, panes, visible }: {
   desktopApi?: DesktopApi;
   terminals: IntegratedTerminalsController;
@@ -97,9 +104,18 @@ export function ThreadTerminalPanel({ desktopApi, terminals, threadKey, panes, v
   const [hot, setHot] = useState<string>();
   const [unseen, setUnseen] = useState<ReadonlySet<string>>(() => new Set());
   const [focusRequest, setFocusRequest] = useState<{ sessionId: string; count: number }>();
-  const expanded = terminals.railExpanded;
+  /** Restarts per terminal. Each one remounts that pane asking main to start a
+   *  shell under the same id, below the saved history. */
+  const [restarts, setRestarts] = useState<Readonly<Record<string, number>>>({});
+  const [hovered, setHovered] = useState(false);
+  const [focusWithin, setFocusWithin] = useState(false);
+  const hoverTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const listRef = useRef<HTMLDivElement>(null);
+  const railRef = useRef<HTMLDivElement>(null);
   const cancelRenameRef = useRef(false);
+  const open = hovered || focusWithin || editing !== undefined;
+
+  useEffect(() => () => clearTimeout(hoverTimer.current), []);
 
   useEffect(() => {
     if (!visible || !selectedId) return;
@@ -111,6 +127,23 @@ export function ThreadTerminalPanel({ desktopApi, terminals, threadKey, panes, v
     });
   }, [visible, selectedId]);
 
+  // Saved history comes back as a working shell the first time it is shown,
+  // not as a dead screen with a button. Lazy, so a relaunch does not start a
+  // login shell for every terminal of every thread at once.
+  const selectedStatus = selected?.status;
+  useEffect(() => {
+    if (!visible || !selectedId || selectedStatus !== "restored") return;
+    setRestarts((current) => current[selectedId] ? current : { ...current, [selectedId]: 1 });
+  }, [visible, selectedId, selectedStatus]);
+
+  const hover = (next: boolean) => {
+    clearTimeout(hoverTimer.current);
+    hoverTimer.current = setTimeout(() => setHovered(next), next ? RAIL_OPEN_DELAY_MS : RAIL_CLOSE_DELAY_MS);
+  };
+  const restart = (pane: IntegratedTerminalPane) => {
+    setRestarts((current) => ({ ...current, [pane.sessionId]: (current[pane.sessionId] ?? 0) + 1 }));
+    setFocusRequest((current) => ({ sessionId: pane.sessionId, count: (current?.count ?? 0) + 1 }));
+  };
   const markUnseen = (sessionId: string) => setUnseen((current) =>
     current.has(sessionId) ? current : new Set(current).add(sessionId));
   const focusTab = (index: number) =>
@@ -147,8 +180,6 @@ export function ThreadTerminalPanel({ desktopApi, terminals, threadKey, panes, v
     setFocusRequest((current) => ({ sessionId: pane.sessionId, count: (current?.count ?? 0) + 1 }));
   };
   const startRename = (pane: IntegratedTerminalPane, label: string) => {
-    // Renaming needs the names, so a strip widens to the full list.
-    terminals.setRailExpanded(true);
     cancelRenameRef.current = false;
     setEditing(pane.sessionId);
     setName(label);
@@ -180,12 +211,14 @@ export function ThreadTerminalPanel({ desktopApi, terminals, threadKey, panes, v
         <div className="thread-terminal-panel__screens">
           {panes.map((pane, index) => {
             const state = states[index]!;
-            const ended = state === "exited" || state === "failed" || state === "saved";
+            const ended = state === "exited" || state === "failed";
+            const restartCount = restarts[pane.sessionId] ?? 0;
             return (
               <div key={pane.sessionId} role="tabpanel" id={`terminal-panel-${pane.sessionId}`}
                 aria-labelledby={`terminal-tab-${pane.sessionId}`} hidden={pane !== selected}>
-                <IntegratedTerminal desktopApi={desktopApi} threadKey={threadKey} sessionId={pane.sessionId}
+                <IntegratedTerminal key={restartCount} desktopApi={desktopApi} threadKey={threadKey} sessionId={pane.sessionId}
                   attachOnly={!pane.pending} newSession={pane.newSession} cwd={pane.cwd} remote={pane.remote} height={height} chrome="hosted"
+                  resume={restartCount > 0}
                   visible={visible && pane === selected} onClose={() => terminals.closeTerminal(pane)}
                   onExit={() => terminals.handleExit(threadKey)} onHiddenOutput={() => markUnseen(pane.sessionId)}
                   focusRequest={focusRequest?.sessionId === pane.sessionId ? focusRequest.count : undefined} />
@@ -193,13 +226,11 @@ export function ThreadTerminalPanel({ desktopApi, terminals, threadKey, panes, v
                   <div className="thread-terminal-panel__ended">
                     <span className={`thread-terminal-panel__dot is-${state}`} aria-hidden="true" />
                     <span className="thread-terminal-panel__ended-text">
-                      <b>{state === "failed" ? `Exited with code ${pane.exitCode}` : state === "saved" ? "Saved output" : "Shell exited"}</b>
-                      {state === "saved" ? <span> · from an earlier session, no shell is running</span> : null}
+                      <b>{state === "failed" ? `Exited with code ${pane.exitCode}` : "Shell exited"}</b>
                     </span>
-                    <button type="button" className="thread-terminal-panel__new-here"
-                      onClick={() => terminals.createTerminal(threadKey, pane.cwd, pane.remote)}>
+                    <button type="button" className="thread-terminal-panel__new-here" onClick={() => restart(pane)}>
                       <svg {...ICON_PROPS}><path d="M3.5 8a4.5 4.5 0 1 0 1.4-3.3M3.5 3v2.4h2.4" /></svg>
-                      New shell here
+                      Restart shell
                     </button>
                     <button type="button" className="thread-terminal-panel__end-close"
                       onClick={() => terminals.closeTerminal(pane)}>
@@ -211,92 +242,89 @@ export function ThreadTerminalPanel({ desktopApi, terminals, threadKey, panes, v
             );
           })}
         </div>
-        <aside className={expanded ? "thread-terminal-panel__sidebar" : "thread-terminal-panel__sidebar is-compact"}
-          aria-label="Terminal sessions">
-          <div className="thread-terminal-panel__actions">
-            <span className="thread-terminal-panel__eyebrow">Terminals</span>
-            {panes.length > 1 ? <span className="thread-terminal-panel__count" aria-hidden="true">{panes.length}</span> : null}
-            <button type="button" className="tooltip-target thread-terminal-panel__expand" aria-expanded={expanded}
-              aria-label={expanded ? "Collapse terminal list" : "Expand terminal list"}
-              data-tooltip={expanded ? "Collapse terminal list" : "Expand terminal list"}
-              onClick={() => terminals.setRailExpanded(!expanded)}>
-              <svg {...ICON_PROPS}><path d={expanded ? "M6 4l4 4-4 4" : "M10 4L6 8l4 4"} /></svg>
-            </button>
-            <button type="button" className="tooltip-target" aria-label="New terminal" data-tooltip="New terminal"
-              onClick={() => terminals.createTerminal(threadKey, selected?.cwd, selected?.remote)}>
-              <svg {...ICON_PROPS}><path d="M8 3v10M3 8h10" /></svg>
-            </button>
-            <button type="button" className="tooltip-target" aria-label="Hide terminals" data-tooltip="Hide terminals"
-              onClick={() => terminals.togglePanel(threadKey, selected?.cwd, selected?.remote)}>
-              <svg {...ICON_PROPS}><path d="M4 6l4 4 4-4" /></svg>
-            </button>
-          </div>
-          {remote ? (
-            <div className="thread-terminal-panel__instance">
-              <InstanceChip icon={remote.celestialIcon} instanceId={remote.instanceId} label={remote.instanceLabel} />
+        {/* The aside holds the strip's 40px in the layout. The rail inside it
+            flies out over the terminal, so the shell never reflows. */}
+        <aside className="thread-terminal-panel__sidebar" aria-label="Terminal sessions">
+          <div ref={railRef} className={open ? "thread-terminal-panel__rail is-open" : "thread-terminal-panel__rail"}
+            onPointerEnter={() => hover(true)} onPointerLeave={() => hover(false)}
+            onFocus={() => setFocusWithin(true)}
+            onBlur={(event) => {
+              if (!railRef.current?.contains(event.relatedTarget as Node | null)) setFocusWithin(false);
+            }}>
+            <div className="thread-terminal-panel__actions">
+              <span className="thread-terminal-panel__heading">
+                <span className="thread-terminal-panel__eyebrow">Terminals</span>
+                {panes.length > 1 ? <span className="thread-terminal-panel__count" aria-hidden="true">{panes.length}</span> : null}
+                {remote ? (
+                  <InstanceChip icon={remote.celestialIcon} instanceId={remote.instanceId} label={remote.instanceLabel} />
+                ) : null}
+              </span>
+              <button type="button" className="tooltip-target" aria-label="New terminal" data-tooltip="New terminal"
+                onClick={() => terminals.createTerminal(threadKey, selected?.cwd, selected?.remote)}>
+                <svg {...ICON_PROPS}><path d="M8 3v10M3 8h10" /></svg>
+              </button>
             </div>
-          ) : null}
-          <div className="thread-terminal-panel__list">
-            <div ref={listRef} role="tablist" aria-label="Terminals" aria-orientation="vertical">
-              {panes.map((pane, index) => {
-                const label = labels[index]!;
-                const state = states[index]!;
-                const detail = terminalDetail(pane, state);
-                return (
-                  <button className="thread-terminal-panel__row" key={pane.sessionId} type="button" role="tab" id={`terminal-tab-${pane.sessionId}`}
-                    aria-controls={`terminal-panel-${pane.sessionId}`} aria-selected={pane === selected}
-                    tabIndex={pane === selected ? 0 : -1}
-                    title={`${label} · ${state === "failed" ? `Exited with code ${pane.exitCode}` : STATE_WORD[state]}\n${remote?.instanceLabel ?? "This machine"}${pane.cwd ? `\n${pane.cwd}` : ""}\nDouble-click or F2 to rename`}
-                    onClick={() => openTerminal(pane)}
+            <div className="thread-terminal-panel__list">
+              <div ref={listRef} role="tablist" aria-label="Terminals" aria-orientation="vertical">
+                {panes.map((pane, index) => {
+                  const label = labels[index]!;
+                  const state = states[index]!;
+                  const detail = terminalDetail(pane, state);
+                  return (
+                    <button className="thread-terminal-panel__row" key={pane.sessionId} type="button" role="tab" id={`terminal-tab-${pane.sessionId}`}
+                      aria-controls={`terminal-panel-${pane.sessionId}`} aria-selected={pane === selected}
+                      tabIndex={pane === selected ? 0 : -1}
+                      onClick={() => openTerminal(pane)}
+                      onPointerEnter={() => setHot(pane.sessionId)} onPointerLeave={() => setHot(undefined)}
+                      onFocus={() => setHot(pane.sessionId)} onBlur={() => setHot(undefined)}
+                      onKeyDown={(event) => {
+                        navigate(event, index);
+                        if (event.key === "F2") { event.preventDefault(); startRename(pane, label); }
+                        if (event.key === "Delete") { event.preventDefault(); terminals.closeTerminal(pane); }
+                      }} onDoubleClick={() => startRename(pane, label)}>
+                      <span className="thread-terminal-panel__text">
+                        <span className="thread-terminal-panel__name">{label}</span>
+                        <small className={state === "failed" ? "is-failed" : undefined}>{detail}</small>
+                        {detail !== STATE_WORD[state] && state !== "starting"
+                          ? <span className="thread-terminal-panel__state">, {STATE_WORD[state]}</span>
+                          : null}
+                      </span>
+                      <span className="thread-terminal-panel__tile" aria-hidden="true">
+                        {terminalMonogram(label)}
+                        <span className={`thread-terminal-panel__dot is-${state}`} />
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="thread-terminal-panel__close-list">
+                {panes.map((pane, index) => (
+                  <button key={pane.sessionId} type="button"
+                    className={`thread-terminal-panel__close tooltip-target${pane === selected || hot === pane.sessionId ? " is-shown" : ""}`}
+                    aria-label={`Close ${labels[index]}`} data-tooltip={`Close ${labels[index]}`}
+                    tabIndex={open ? 0 : -1}
                     onPointerEnter={() => setHot(pane.sessionId)} onPointerLeave={() => setHot(undefined)}
-                    onFocus={() => setHot(pane.sessionId)} onBlur={() => setHot(undefined)}
-                    onKeyDown={(event) => {
-                      navigate(event, index);
-                      if (event.key === "F2") { event.preventDefault(); startRename(pane, label); }
-                      if (event.key === "Delete") { event.preventDefault(); terminals.closeTerminal(pane); }
-                    }} onDoubleClick={() => startRename(pane, label)}>
-                    <span className={`thread-terminal-panel__dot is-${state}`} aria-hidden="true" />
-                    <span className="thread-terminal-panel__tile" aria-hidden="true">
-                      {terminalMonogram(label)}
-                      <span className={`thread-terminal-panel__dot is-${state}`} />
-                    </span>
-                    <span className="thread-terminal-panel__text">
-                      <span className="thread-terminal-panel__name">{label}</span>
-                      <small className={state === "failed" ? "is-failed" : undefined}>{detail}</small>
-                      {detail !== STATE_WORD[state] && state !== "starting"
-                        ? <span className="thread-terminal-panel__state">, {STATE_WORD[state]}</span>
-                        : null}
-                    </span>
+                    onClick={() => terminals.closeTerminal(pane)}>
+                    <svg {...ICON_PROPS}><path d="M4.5 4.5l7 7M11.5 4.5l-7 7" /></svg>
                   </button>
-                );
-              })}
+                ))}
+              </div>
+              {editing && editingIndex >= 0 ? (
+                <form className="thread-terminal-panel__rename" style={{ "--row-index": editingIndex } as CSSProperties}
+                  onSubmit={(event) => { event.preventDefault(); finishRename(true); }}>
+                  <input aria-label="Terminal name" autoFocus value={name} maxLength={80}
+                    onFocus={(event) => event.currentTarget.select()}
+                    onChange={(event) => setName(event.target.value)}
+                    onBlur={() => { if (!cancelRenameRef.current) finishRename(true); }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Escape") {
+                        event.preventDefault();
+                        finishRename(false);
+                      }
+                    }} />
+                </form>
+              ) : null}
             </div>
-            <div className="thread-terminal-panel__close-list">
-              {panes.map((pane, index) => (
-                <button key={pane.sessionId} type="button"
-                  className={`thread-terminal-panel__close tooltip-target${pane === selected || hot === pane.sessionId ? " is-shown" : ""}`}
-                  aria-label={`Close ${labels[index]}`} data-tooltip={`Close ${labels[index]}`}
-                  onPointerEnter={() => setHot(pane.sessionId)} onPointerLeave={() => setHot(undefined)}
-                  onClick={() => terminals.closeTerminal(pane)}>
-                  <svg {...ICON_PROPS}><path d="M4.5 4.5l7 7M11.5 4.5l-7 7" /></svg>
-                </button>
-              ))}
-            </div>
-            {editing && editingIndex >= 0 ? (
-              <form className="thread-terminal-panel__rename" style={{ "--row-index": editingIndex } as CSSProperties}
-                onSubmit={(event) => { event.preventDefault(); finishRename(true); }}>
-                <input aria-label="Terminal name" autoFocus value={name} maxLength={80}
-                  onFocus={(event) => event.currentTarget.select()}
-                  onChange={(event) => setName(event.target.value)}
-                  onBlur={() => { if (!cancelRenameRef.current) finishRename(true); }}
-                  onKeyDown={(event) => {
-                    if (event.key === "Escape") {
-                      event.preventDefault();
-                      finishRename(false);
-                    }
-                  }} />
-              </form>
-            ) : null}
           </div>
         </aside>
       </div>

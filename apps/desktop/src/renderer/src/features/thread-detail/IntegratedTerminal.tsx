@@ -56,6 +56,8 @@ type IntegratedTerminalProps = {
   /** Bumped by a host that wants keyboard focus in the shell, such as a
    *  pointer click on this terminal's tab. */
   focusRequest?: number;
+  /** Saved history: start a new shell under this id, below the history. */
+  resume?: boolean;
 };
 
 export function IntegratedTerminal({
@@ -74,6 +76,7 @@ export function IntegratedTerminal({
   onExit,
   onHiddenOutput,
   focusRequest,
+  resume,
 }: IntegratedTerminalProps) {
   const hosted = chrome === "hosted";
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -95,6 +98,7 @@ export function IntegratedTerminal({
   // discarding anything the user had typed during the spawn.
   const attachOnlyRef = useRef(attachOnly);
   const newSessionRef = useRef(newSession);
+  const resumeRef = useRef(resume);
   const cwdRef = useRef(cwd);
   cwdRef.current = cwd;
   // Same rationale as cwdRef: the owning target is a create-time input and
@@ -304,6 +308,7 @@ export function IntegratedTerminal({
           sessionId: requestedSessionId,
           attachOnly: attachOnlyRef.current,
           newSession: newSessionRef.current,
+          ...(resumeRef.current ? { resume: true } : {}),
           threadKey,
           cwd: cwdRef.current,
           cols: dimensions?.cols ?? terminal.cols,

@@ -33,10 +33,6 @@ export type IntegratedTerminalsController = {
   closeTerminal: (pane: { threadKey: string; sessionId?: string }) => void;
   handleExit: (threadKey: string) => void;
   setHeight: (threadKey: string, height: number) => void;
-  /** The session rail shows names (true) or a strip of tiles (false). One
-   *  choice for every thread in the window. */
-  railExpanded: boolean;
-  setRailExpanded: (expanded: boolean) => void;
 };
 
 /** Main owns lifetime; this App-level mirror owns only window selection/layout.
@@ -46,7 +42,6 @@ export function useIntegratedTerminals(desktopApi: DesktopApi | undefined): Inte
   const [localPanes, setLocalPanes] = useState<Record<string, LocalPane>>({});
   const [heightByThread, setHeightByThread] = useState<Record<string, number>>({});
   const [selectedByThread, setSelectedByThread] = useState<Record<string, string>>({});
-  const [railExpanded, setRailExpanded] = useState(false);
   const localRef = useRef(localPanes);
   localRef.current = localPanes;
 
@@ -158,7 +153,5 @@ export function useIntegratedTerminals(desktopApi: DesktopApi | undefined): Inte
     // Natural exit remains a tab containing its last screen.
     handleExit: () => undefined,
     setHeight,
-    railExpanded,
-    setRailExpanded,
   };
 }

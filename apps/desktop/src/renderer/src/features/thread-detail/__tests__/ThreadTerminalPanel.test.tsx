@@ -4,9 +4,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { IntegratedTerminalPane, IntegratedTerminalsController } from "../../../lib/useIntegratedTerminals";
 
 vi.mock("../IntegratedTerminal", () => ({
-  IntegratedTerminal: (props: { sessionId: string; visible?: boolean; onHiddenOutput?: () => void; focusRequest?: number }) => (
+  IntegratedTerminal: (props: {
+    sessionId: string; visible?: boolean; onHiddenOutput?: () => void; focusRequest?: number; resume?: boolean;
+  }) => (
     <section aria-label="Integrated terminal" data-session-id={props.sessionId} data-focus-request={props.focusRequest ?? ""}
-      hidden={props.visible === false}>
+      data-resume={props.resume ? "true" : "false"} hidden={props.visible === false}>
       <button type="button" onClick={props.onHiddenOutput}>Simulate hidden output {props.sessionId}</button>
     </section>
   ),
@@ -14,7 +16,7 @@ vi.mock("../IntegratedTerminal", () => ({
 
 import { ThreadTerminalPanel } from "../ThreadTerminalPanel";
 
-function controller(selected?: string, railExpanded = true): IntegratedTerminalsController {
+function controller(selected?: string): IntegratedTerminalsController {
   return {
     sessions: [],
     liveThreadKeys: new Set(),
@@ -31,8 +33,6 @@ function controller(selected?: string, railExpanded = true): IntegratedTerminals
     closeTerminal: vi.fn(),
     handleExit: vi.fn(),
     setHeight: vi.fn(),
-    railExpanded,
-    setRailExpanded: vi.fn(),
   };
 }
 
@@ -71,9 +71,27 @@ describe("ThreadTerminalPanel", () => {
     expect(screen.getByRole("tab", { name: /zsh/ })).toHaveTextContent("Running");
     expect(screen.getByRole("tab", { name: /Tests/ })).toHaveTextContent("Exited · code 1");
     expect(screen.getByText("Exited with code 1")).toBeVisible();
+    const tests = () => document.querySelector('[data-session-id="b"]')!;
+    expect(tests()).toHaveAttribute("data-resume", "false");
 
-    fireEvent.click(screen.getByRole("button", { name: "New shell here" }));
-    expect(terminals.createTerminal).toHaveBeenCalledWith("codex:thread-a", "/Users/dev/orbit", undefined);
+    // Restart happens in place: the same tab asks for a shell under its own id.
+    fireEvent.click(screen.getByRole("button", { name: "Restart shell" }));
+    expect(terminals.createTerminal).not.toHaveBeenCalled();
+    expect(tests()).toHaveAttribute("data-resume", "true");
+    expect(tests()).toHaveAttribute("data-focus-request", "1");
+  });
+
+  it("resumes saved history the first time it is shown, and not before", () => {
+    const terminals = controller("a");
+    const view = renderPanel(terminals, [pane("a"), pane("b", { status: "restored" })]);
+    const saved = () => document.querySelector('[data-session-id="b"]')!;
+    expect(screen.getByRole("tab", { name: /zsh 2/ })).toHaveTextContent("Resumes when opened");
+    expect(saved()).toHaveAttribute("data-resume", "false");
+
+    view.rerender(<ThreadTerminalPanel terminals={controller("b")} threadKey="codex:thread-a"
+      panes={[pane("a"), pane("b", { status: "restored" })]} visible />);
+    expect(saved()).toHaveAttribute("data-resume", "true");
+    expect(screen.queryByRole("button", { name: /New shell here|Restart shell/ })).not.toBeInTheDocument();
   });
 
   it("marks output from a terminal that is not on screen until it is selected", () => {
@@ -124,19 +142,30 @@ describe("ThreadTerminalPanel", () => {
     expect(terminal("a")).toHaveAttribute("data-focus-request", "");
   });
 
-  it("starts as a strip of tiles that keeps names in the accessible tab", () => {
-    const terminals = controller("a", false);
-    renderPanel(terminals, [pane("a", { name: "Build" }), pane("b", { name: "Tests", status: "exited", exitCode: 1 })]);
+  it("is a strip of tiles that flies out with names on hover and keyboard focus", () => {
+    vi.useFakeTimers();
+    try {
+      const terminals = controller("a");
+      renderPanel(terminals, [pane("a", { name: "Build" }), pane("b", { name: "Tests", status: "exited", exitCode: 1 })]);
+      const rail = () => document.querySelector(".thread-terminal-panel__rail")!;
 
-    expect(screen.getByLabelText("Terminal sessions")).toHaveClass("is-compact");
-    expect(screen.getByRole("tab", { name: /Build/ }).querySelector(".thread-terminal-panel__tile")).toHaveTextContent("B");
-    expect(screen.getByRole("tab", { name: /Tests/ })).toHaveTextContent("Exited · code 1");
+      expect(rail()).not.toHaveClass("is-open");
+      expect(screen.getByRole("tab", { name: /Build/ }).querySelector(".thread-terminal-panel__tile")).toHaveTextContent("B");
+      expect(screen.getByRole("tab", { name: /Tests/ })).toHaveTextContent("Exited · code 1");
+      expect(screen.queryByRole("button", { name: /Expand|Collapse|Hide terminals/ })).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Expand terminal list" }));
-    expect(terminals.setRailExpanded).toHaveBeenCalledWith(true);
+      fireEvent.pointerEnter(rail());
+      expect(rail()).not.toHaveClass("is-open");
+      act(() => { vi.advanceTimersByTime(150); });
+      expect(rail()).toHaveClass("is-open");
+      fireEvent.pointerLeave(rail());
+      act(() => { vi.advanceTimersByTime(250); });
+      expect(rail()).not.toHaveClass("is-open");
 
-    fireEvent.keyDown(screen.getByRole("tab", { name: /Build/ }), { key: "F2" });
-    expect(terminals.setRailExpanded).toHaveBeenCalledTimes(2);
-    expect(screen.getByRole("textbox", { name: "Terminal name" })).toBeInTheDocument();
+      act(() => { screen.getByRole("tab", { name: /Build/ }).focus(); });
+      expect(rail()).toHaveClass("is-open");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

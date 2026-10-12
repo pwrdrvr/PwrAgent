@@ -188,7 +188,7 @@ test("retains exited output until the terminal tab is explicitly closed", async 
     await expect(panel.getByRole("tab")).toContainText("Exited");
     await expect(terminalRows(app.window)).toContainText("PWRAGENT_TERMINAL_EXIT_READY");
     await expect(panel.getByText("Shell exited", { exact: true })).toBeVisible();
-    await expect(panel.getByRole("button", { name: "New shell here", exact: true })).toBeVisible();
+    await expect(panel.getByRole("button", { name: "Restart shell", exact: true })).toBeVisible();
     await expect(app.window.getByRole("button", { name: "Hide integrated terminal" })).toHaveAttribute(
       "aria-pressed",
       "true",

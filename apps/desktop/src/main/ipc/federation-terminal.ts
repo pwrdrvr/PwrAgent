@@ -24,6 +24,7 @@ import type {
 } from "../../shared/integrated-terminal";
 import {
   FEDERATION_PTY_ACK_INTERVAL_BYTES,
+  type FederationPtyOpenResponse,
   type FederationPtyStreamEvent,
 } from "../federation/federation-pty-service";
 import { terminalsForThread } from "../terminal/integrated-terminal-service";
@@ -138,6 +139,9 @@ export class FederationTerminalBridge {
       if (existing.threadKey !== threadKey
         || (request.federationTarget && request.federationTarget.instanceId !== existing.target.instanceId)) {
         throw new Error("That terminal belongs to a different thread.");
+      }
+      if (request.resume && (existing.status === "restored" || existing.status === "exited")) {
+        return await this.resumeRemote(existing, request);
       }
       const client = getDesktopFederationRuntime().remotePty(existing.target);
       if (client.snapshot) {
@@ -713,6 +717,69 @@ export class FederationTerminalBridge {
       sessionId: session.sessionId,
       message: error instanceof Error ? error.message : String(error),
     });
+  }
+
+  /**
+   * Starts a new shell for saved remote history, under the owner's same
+   * session id, so the pane keeps its tab and shows the history above the new
+   * prompt. Another window that resumed the same history first wins; this one
+   * then attaches to that shell instead of starting a second.
+   */
+  private async resumeRemote(
+    session: RemoteTerminalSession,
+    request: IntegratedTerminalCreateRequest,
+  ): Promise<IntegratedTerminalCreateResponse> {
+    const identity = parseThreadIdentityKey(session.threadKey);
+    if (!identity?.threadId) throw new Error("Remote terminal thread key is malformed.");
+    const client = getDesktopFederationRuntime().remotePty(session.target);
+    this.ensureStreamSubscription();
+    let opened: FederationPtyOpenResponse;
+    try {
+      opened = await client.open({
+        backend: identity.backend,
+        threadId: identity.threadId,
+        cols: request.cols,
+        rows: request.rows,
+        resumeSessionId: session.ownerSessionId,
+      });
+    } catch (error) {
+      const live = client.snapshot
+        ? await client.snapshot({ sessionId: session.ownerSessionId }).catch(() => undefined)
+        : undefined;
+      if (!live || live.status !== "running") throw error;
+      opened = live;
+    }
+    if (this.sessionsById.get(session.sessionId) !== session) {
+      if (opened.sessionId !== session.ownerSessionId) {
+        void client.close({ sessionId: opened.sessionId }).catch(() => undefined);
+      }
+      throw new Error("Remote terminal was closed before it finished starting.");
+    }
+    session.resizes.dispose();
+    session.ownerSessionId = opened.sessionId;
+    session.snapshot = opened.snapshot;
+    session.status = opened.status ?? "running";
+    session.cwd = opened.cwd;
+    session.shell = opened.shell;
+    session.buffer = "";
+    session.lastSeq = opened.snapshot?.seq ?? 0;
+    session.consumedBytes = 0;
+    session.foregroundCommand = opened.foregroundCommand ?? true;
+    const ownerSessionId = opened.sessionId;
+    const resizes: PtyResizeCoalescer = new PtyResizeCoalescer({
+      apply: (cols, rows) => {
+        void client.resize({ sessionId: ownerSessionId, cols, rows }).catch((error) => {
+          resizes.forget(cols, rows);
+          logRemoteResizeFailure(error);
+        });
+      },
+      onDeferredError: logRemoteResizeFailure,
+      spawnedCols: request.cols,
+      spawnedRows: request.rows,
+    });
+    session.resizes = resizes;
+    this.broadcastSessions(session.webContents);
+    return this.toCreateResponse(session);
   }
 
   private toCreateResponse(

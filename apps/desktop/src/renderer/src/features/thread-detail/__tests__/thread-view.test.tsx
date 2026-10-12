@@ -2129,7 +2129,7 @@ describe("ThreadView", () => {
 
     expect(screen.getByLabelText("Integrated terminal")).toBeVisible();
     expect(screen.getByText("Shell exited")).toBeVisible();
-    expect(screen.getByRole("button", { name: "New shell here" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Restart shell" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Hide integrated terminal" })).toHaveAttribute(
       "aria-pressed",
       "true",

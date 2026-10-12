@@ -830,6 +830,43 @@ describe("remote terminal snapshots and ownership", () => {
     }
   });
 
+  it("resumes the opener's saved history under its own id, and only for that peer", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "remote-terminal-resume-"));
+    const historyStore = new TerminalHistoryStore(directory);
+    const ptys = [new FakePty(), new FakePty()];
+    let spawned = 0;
+    const { service } = createHarness({
+      historyStore,
+      spawnPty: async () => ({ pty: ptys[spawned++]!, cwd: "/owner/worktree", shell: { file: "/bin/zsh", args: ["-l"] } }),
+    });
+    try {
+      const opened = await service.open("peer-a", OPEN_REQUEST);
+      service.rename("peer-a", { sessionId: opened.sessionId, name: "Build" });
+      ptys[0]!.emitData("earlier output\r\n");
+      ptys[0]!.emitExit(0);
+      await vi.waitFor(async () => expect((await service.list("peer-a", OPEN_REQUEST))[0]?.status).toBe("exited"));
+
+      await expect(service.open("peer-b", { ...OPEN_REQUEST, resumeSessionId: opened.sessionId }))
+        .rejects.toThrow("not found");
+      await expect(service.open("peer-a", { ...OPEN_REQUEST, threadId: "thread-2", resumeSessionId: opened.sessionId }))
+        .rejects.toThrow("not found");
+      expect(spawned).toBe(1);
+
+      const resumed = await service.open("peer-a", { ...OPEN_REQUEST, resumeSessionId: opened.sessionId });
+      expect(resumed.sessionId).toBe(opened.sessionId);
+      expect(resumed.snapshot?.data).toContain("earlier output");
+      expect(resumed.snapshot?.data).toContain("restored history");
+      const listed = await service.list("peer-a", OPEN_REQUEST);
+      expect(listed).toHaveLength(1);
+      expect(listed[0]).toMatchObject({ sessionId: opened.sessionId, name: "Build", status: "running" });
+      await expect(service.open("peer-a", { ...OPEN_REQUEST, resumeSessionId: opened.sessionId }))
+        .rejects.toThrow("not found");
+    } finally {
+      await service.disposeAll();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("does not archive a deliberately closed shell that exits before its reap timer", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "remote-terminal-history-"));
     const historyStore = new TerminalHistoryStore(directory);

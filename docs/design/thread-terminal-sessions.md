@@ -1,15 +1,16 @@
 # Thread terminal sessions
 
 Terminal tabs belong inside the thread's bottom terminal panel. They do not
-change conversation navigation. A compact vertical list shares the terminal's
-surface. Each row shows a status glyph, a name, and the working directory or
-exit code; output in a terminal that is not on screen marks its glyph until it
-is selected (renderer state only). Default names take the lowest free number
-when created and keep it. New, rename (in place: double-click or F2) and close
-act on one terminal ID. An ended or restored terminal keeps its screen and
-offers a new shell in the same directory. Hiding the panel and switching
-threads preserve PTYs. Keyboard navigation uses a vertical tablist; resize and
-focus stay accessible.
+change conversation navigation. A 40px strip of tiles shares the terminal's
+surface: each tile is an initial plus a status dot. Hover or keyboard focus
+flies the rail out over the shell, without reflowing it, to show each name and
+its working directory or exit code. Output in a terminal that is not on screen
+marks its dot until it is selected (renderer state only). Default names take
+the lowest free number when created and keep it. A click on a tab selects it
+and focuses the shell. New, rename (in place: double-click or F2) and close act
+on one terminal ID. Hiding the panel (the thread header's terminal toggle) and
+switching threads preserve PTYs. Keyboard navigation uses a vertical tablist;
+resize and focus stay accessible.
 
 Main/owning service owns identity, lifetime and output. An explicit session ID
 attaches only to its original thread and instance. Creation is deduplicated
@@ -25,8 +26,14 @@ Headless-generated replies are never sent to the PTY. No command is replayed.
 Private, bounded PwrAgent-owned files retain rendered scrollback and terminal
 metadata at lifecycle boundaries (collapse, exit, shutdown), not per output
 chunk or on a timer. Raw output and input are not persisted. Closing a tab
-removes its history. Restored records are read-only and explicitly say the
-process is gone; New terminal starts a new shell using the saved launch cwd.
+removes its history. A restored record shows its saved screen and, the first
+time its tab is shown, resumes: a new shell starts under the same terminal ID
+in the saved launch cwd, below the saved screen and a "restored history"
+divider. Resume is lazy, so a relaunch does not start every saved shell at
+once, and no command is replayed. An exited terminal restarts the same way from
+its end bar. Remote resume passes `resumeSessionId` on `pty.open`; the owner
+honors it only for the peer that opened the saved terminal, and an owner that
+predates the field opens a plain new shell.
 Shell history files are owned by the shell and are neither read nor rewritten.
 The saved cwd is the launch directory, not an inferred current directory.
 An abrupt crash can lose output since the last lifecycle checkpoint.

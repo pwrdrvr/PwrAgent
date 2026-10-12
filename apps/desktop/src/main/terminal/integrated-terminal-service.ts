@@ -34,7 +34,7 @@ import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { resolvePwragentRoot } from "../profile";
 import { terminalHasForegroundCommand } from "./terminal-foreground-command";
 
-import { TerminalReplay } from "./terminal-replay";
+import { restoredHistoryPrelude, TerminalReplay } from "./terminal-replay";
 import { TerminalHistoryStore, type TerminalHistoryRecord } from "./terminal-history-store";
 
 const PTY_SHUTDOWN_FORCE_KILL_MS = 500;
@@ -393,9 +393,8 @@ export class IntegratedTerminalService {
     const archived = requestedId ? this.archived.get(requestedId) : undefined;
     if (archived) {
       if (archived.summary.threadKey !== threadKey) throw new Error("Terminal thread mismatch.");
-      return { ...archived.summary, snapshot: archived.snapshot };
-    }
-    if (request.attachOnly) throw new Error("This terminal is no longer available. Create a new terminal to start a shell.");
+      if (!request.resume) return { ...archived.summary, snapshot: archived.snapshot };
+    } else if (request.attachOnly && !request.resume) throw new Error("This terminal is no longer available. Create a new terminal to start a shell.");
     if (this.sessionsById.size + this.spawningThreadKeyBySessionId.size >= 64
       || this.sessionsForThread(threadKey).length >= 16) throw new Error("Terminal session limit reached.");
 
@@ -409,7 +408,9 @@ export class IntegratedTerminalService {
     let shell: { file: string; args: string[] };
     try {
       const spawned = await spawnTerminalPty({
-        cwd: request.cwd,
+        // A resumed terminal starts where it was launched, not wherever the
+        // pane happens to suggest.
+        cwd: archived?.summary.cwd ?? request.cwd,
         cols: request.cols,
         rows: request.rows,
         platform: this.platform,
@@ -457,10 +458,18 @@ export class IntegratedTerminalService {
       shell: shell.file,
       replay: new TerminalReplay(request.cols, request.rows),
       panelHidden: false,
-      createdAt: this.now(),
+      createdAt: archived?.summary.createdAt ?? this.now(),
+      ...(archived?.summary.name ? { name: archived.summary.name } : {}),
       subscribers: new Set(),
       disposables: [],
     };
+    if (archived) {
+      // Seeded before the PTY's first byte can arrive, so the history sits
+      // above the new prompt in every snapshot from here on. The saved file
+      // stays until this live session's next checkpoint overwrites it.
+      session.replay.append(restoredHistoryPrelude(archived.snapshot));
+      this.archived.delete(sessionId);
+    }
     this.sessionsById.set(session.sessionId, session);
     this.subscribe(session, webContents);
     session.disposables.push(
@@ -776,6 +785,10 @@ export class IntegratedTerminalService {
         savedAt: this.now(),
       };
       if (session.closing) return;
+      // Restarted under the same id before this snapshot settled: the live
+      // shell owns the id and its own checkpoints now.
+      const current = this.sessionsById.get(session.sessionId);
+      if (current && current !== session) return;
       if (exitCode !== undefined) {
         this.archived.set(session.sessionId, record);
         while (this.archived.size > 64) this.archived.delete(this.archived.keys().next().value!);

@@ -10,6 +10,15 @@ const RAW_LIMIT = 256 * 1024;
 
 export type TerminalOutputFrame = { seq: number; timestamp: number; data: string };
 
+/**
+ * What a resumed terminal's replay starts with: the saved screen, then a dim
+ * divider, so the new shell's first prompt lands under the old history and
+ * nobody mistakes the old output for the new shell's.
+ */
+export function restoredHistoryPrelude(snapshot: { data: string }): string {
+  return `${snapshot.data}\x1b[0m\r\n\x1b[2m── restored history · new shell ──\x1b[0m\r\n`;
+}
+
 /** Authoritative screen and bounded raw output, independent of renderer lifetime.
  * Never wire headless onData to a PTY: parsing output can generate replies. */
 export class TerminalReplay {
