@@ -6903,6 +6903,8 @@ function buildThreadResumePayloads(params: {
 }, compatibility: CodexProtocolCompatibility): CodexThreadResumePayload[] {
   const base: CodexThreadResumePayload = {
     threadId: params.threadId,
+    // Transcript history is read separately through the paginated APIs.
+    excludeTurns: true,
   };
   if (compatibility.includePersistExtendedHistory) {
     base.persistExtendedHistory = false;
@@ -7761,6 +7763,20 @@ export class CodexAppServerClient {
           })
         : enrichThreadDirectory);
     this.rawConnection.setNotificationHandler(async (method, params) => {
+      if (method === "deprecationNotice") {
+        // Protocol migration guidance belongs in diagnostics, not thread UI.
+        const notice = asRecord(params) ?? {};
+        codexClientLog.warn("codex deprecation notice", {
+          summary: notice.summary,
+          details: notice.details,
+        });
+        return;
+      }
+      if (method === "thread/goal/updated" || method === "thread/goal/cleared") {
+        // Codex-native goals are not supported by this adapter. Do not forward
+        // their lifecycle as normalized PwrAgent thread-state notifications.
+        return;
+      }
       const isKnownCodexMethod = isKnownCodexNotificationMethod(method);
       // Realtime is routed to live voice below, never logged: its payloads
       // carry the operator's spoken words and session SDP, which stay memory
@@ -8410,7 +8426,7 @@ export class CodexAppServerClient {
       await requestWithFallbacks({
         client: this.rawConnection,
         methods: ["thread/resume"],
-        payloads: [{ threadId: params.threadId }],
+        payloads: [{ threadId: params.threadId, excludeTurns: true } satisfies CodexThreadResumeParams],
         timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       });
       return { recovered: recoveryResult! };
