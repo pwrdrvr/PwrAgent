@@ -2,6 +2,7 @@
   "schema": 1,
   "clock": "Browser performance.now durations only; source encodeMs is a source-local duration. Phase wallStart/wallEnd are receiver labels, not cross-host latency.",
   "percentile": "Nearest rank",
+  "transferAndPresentDefinition": "Receiver timer starts AFTER the first pull response. It includes remaining chunk requests plus decode, canvas draw, and requestAnimationFrame; it excludes the first request/wait/pull. Single-chunk samples mostly measure local presentation and are not network latency.",
   "frames": 16,
   "mediaBytes": 1553461,
   "acceptedInputs": 24,
