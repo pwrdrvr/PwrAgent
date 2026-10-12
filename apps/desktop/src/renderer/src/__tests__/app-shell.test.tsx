@@ -2690,6 +2690,137 @@ describe("App", () => {
     expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps layout choices made while the startup settings snapshot is being adopted", async () => {
+    // The bootstrap projection opens navigation before the live settings
+    // read answers, so the rail is clickable first. A click that lands after
+    // the read resolves but before App adopts the stored layout prefs must
+    // win: the stored tab is only the starting point, never a later reset.
+    const settings = createDeferred<{ snapshot: DesktopSettingsSnapshot }>();
+    const thread = {
+      id: "rail-tab-thread",
+      title: "Rail tab thread",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      executionMode: "default" as const,
+      linkedDirectories: [],
+      inbox: { inInbox: true },
+      updatedAt: 2_000,
+    };
+    const writeSettingsConfig = vi.fn(
+      async () => await new Promise<never>(() => {}),
+    );
+
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: ownerApi({
+        readConfigBootstrap: vi.fn(async () => ({
+          snapshot: {
+            version: 1,
+            configRevision: "fixture",
+            appearance: {
+              theme: "system" as const,
+              darkTheme: "tangerine-dark" as const,
+              lightTheme: "tangerine-light" as const,
+              density: "mission-control" as const,
+              sidebarTextSize: "md" as const,
+              transcriptTextSize: "md" as const,
+            },
+            onboarding: {
+              completed: true,
+              completedSource: "migrated" as const,
+            },
+          },
+        })),
+        readSettings: () => settings.promise,
+        writeSettingsConfig,
+        listBackends: async () => ({ fetchedAt: Date.now(), backends: [] }),
+        getNavigationSnapshot: async (): Promise<NavigationSnapshot> => ({
+          backend: "all",
+          fetchedAt: Date.now(),
+          unchanged: false,
+          inboxThreadKeys: ["codex:rail-tab-thread"],
+          threads: [{ ...thread }],
+          directories: [],
+          launchpadDefaults: { backend: "codex", executionMode: "default" },
+        }),
+        readThread: async () => ({
+          backend: "codex",
+          fetchedAt: Date.now(),
+          threadId: thread.id,
+          replay: {
+            entries: [],
+            messages: [],
+            pagination: { supportsPagination: false, hasPreviousPage: false },
+          },
+        }),
+        onAgentEvent: () => () => undefined,
+      }),
+    });
+
+    render(<App />);
+
+    await screen.findByRole("heading", { level: 2, name: "Rail tab thread" });
+    const context = screen.getByRole("complementary", { name: "Thread context" });
+
+    await act(async () => {
+      settings.resolve({
+        snapshot: {
+          general: {
+            appearance: {
+              theme: { value: "system", source: "default" },
+              darkTheme: { value: "tangerine-dark", source: "default" },
+              lightTheme: { value: "tangerine-light", source: "default" },
+              themedDockIcon: { value: true, source: "default" },
+              terminalMinimumContrast: { value: false, source: "default" },
+              density: { value: "mission-control", source: "default" },
+              sidebarTextSize: { value: "md", source: "default" },
+              transcriptTextSize: { value: "md", source: "default" },
+            },
+          },
+          onboarding: {
+            completed: { value: true, source: "default" },
+          },
+          imageUploads: {
+            pastedImageMaxPatches: { value: 1536, source: "default" },
+          },
+          experimental: {
+            fullAccessRiskWarningDismissed: {
+              value: false,
+              source: "default",
+            },
+          },
+          ui: {
+            sidebarHidden: { value: false, source: "default" },
+            contextRailPinned: { value: true, source: "default" },
+            activeContextTab: { value: "info", source: "default" },
+            editedFilesDock: { value: "above", source: "default" },
+            actionRunsDock: { value: "above", source: "default" },
+          },
+        } as DesktopSettingsSnapshot,
+      });
+      // Let the read land in state; React has not rendered it yet.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      fireEvent.click(within(context).getByRole("tab", { name: "Linked projects" }));
+      fireEvent.click(screen.getAllByRole("button", { name: "Hide sidebar" })[0]!);
+    });
+    await flushReactUpdates();
+
+    expect(writeSettingsConfig).toHaveBeenCalledWith({
+      patch: { ui: { activeContextTab: "projects" } },
+    });
+    expect(writeSettingsConfig).toHaveBeenCalledWith({
+      patch: { ui: { sidebarHidden: true } },
+    });
+    expect(screen.queryByRole("button", { name: "Hide sidebar" })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Show sidebar" }).length).toBeGreaterThan(0);
+    expect(
+      within(context).getByRole("tab", { name: "Linked projects" }),
+    ).toHaveAttribute("aria-selected", "true");
+    expect(
+      within(context).getByRole("heading", { level: 3, name: "Linked projects" }),
+    ).toBeInTheDocument();
+  });
+
   it("renders the live thread shell with transcript history", async () => {
     const copyText = vi.fn(async () => undefined);
     const scrollIntoView = vi.fn();
