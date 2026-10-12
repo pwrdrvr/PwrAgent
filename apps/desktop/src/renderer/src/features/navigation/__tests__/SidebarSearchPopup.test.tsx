@@ -997,6 +997,40 @@ describe("project destinations", () => {
     expect(onJumpToProject).toHaveBeenCalledWith(project);
   });
 
+  // A thread the current lens does not hold is not in the loaded rows, so only
+  // the debounced owner search finds it. Until that answers, the path-matching
+  // projects would be the only rows, and an early Enter would open one.
+  it("holds trailing projects until the owner search can offer a thread", async () => {
+    const thread = localThread({ id: "off-lens", title: "PwrSuite release notes" });
+    const row = { ...thread, ref: { backend: "codex" as const, threadId: thread.id }, rowRevision: "revision",
+      ordinaryChildCount: 0, nativeSubAgentGroupPresent: false, queueCount: 0, queueState: "unknown" as const };
+    const empty = await getNavigationQueryPage();
+    getNavigationQueryPage.mockImplementation((async (request: { query: { kind: string } }) => request.query.kind === "search"
+      ? { ...empty, entries: [{ row, orderKey: "one", placement: { kind: "root" } }] }
+      : empty) as never);
+    const onJumpToProject = vi.fn();
+    const onJumpToThread = vi.fn();
+    render(<SidebarSearchPopup projects={[project]} threads={[]}
+      onJumpToProject={onJumpToProject} onJumpToThread={onJumpToThread} onClose={vi.fn()} />);
+    const input = screen.getByRole("textbox");
+    fireEvent.change(input, { target: { value: "pwr" } });
+
+    expect(screen.queryAllByRole("option")).toHaveLength(0);
+    expect(screen.queryByText("No threads or projects match")).toBeNull();
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onJumpToProject).not.toHaveBeenCalled();
+
+    await settleRemoteSearch();
+    await settleRemoteSearch();
+    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
+      expect.stringContaining("PwrSuite release notes"),
+      expect.stringContaining("/repos/PwrAgnt"),
+    ]);
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onJumpToThread).toHaveBeenCalledWith(expect.objectContaining({ id: thread.id }));
+    expect(onJumpToProject).not.toHaveBeenCalled();
+  });
+
   it("finds an owner project absent from loaded sidebar rows and keeps thread keyboard navigation", async () => {
     getNavigationQueryPage.mockResolvedValue({ protocol: 2, queryKey: "projects", generation: "generation", ownerEpoch: "owner",
       countsRevision: "counts", counts: { total: 0, active: 0, unread: 0, review: 0 }, coverage: { state: "complete" },

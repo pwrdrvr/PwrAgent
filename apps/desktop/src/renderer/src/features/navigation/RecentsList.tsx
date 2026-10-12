@@ -192,9 +192,26 @@ export function RecentsList(props: RecentsListProps) {
   for (const key of topLevelKeys) {
     for (const child of trays.subtree(key)) renderedThreadKeys.add(threadSummaryIdentityKey(child));
   }
+  const childResourcesOf = (parent: NavigationThreadSummary) => {
+    const childResourceId = `children:${navigationIdentityKey({ backend: parent.source, threadId: parent.id,
+      ownerInstanceId: parent.federation?.ref.target.scope === "remote" ? parent.federation.ref.target.instanceId : undefined })}`;
+    return [childResourceId, `${childResourceId}:viewer`]
+      .flatMap((id) => {
+        const resource = props.pagedNavigation?.resources.get(id);
+        return resource ? [resource] : [];
+      });
+  };
   const startingThreads = selectUnlandedStartingThreads(props.startingThreads, renderedThreadKeys);
+  // A rendered ancestor is still revealing the thread while its tray is shut,
+  // or open with its children page on the way. Once that page has landed
+  // without the thread (it is further down the tray), the thread needs a row.
+  const trayStillRevealing = (parent: NavigationThreadSummary): boolean => {
+    if (isSubthreadSectionCollapsed(parent)) return true;
+    const resources = childResourcesOf(parent);
+    return resources.length === 0 || resources.some((resource) => resource.loading || !resource.state.page);
+  };
   const visitingThread = props.visitingThread
-    && !hasRenderedLineage(props.visitingThread, renderedThreadKeys, threadByKey)
+    && !hasRenderedLineage(props.visitingThread, renderedThreadKeys, threadByKey, trayStillRevealing)
     ? props.visitingThread
     : undefined;
   const visitingLabelId = useId();
@@ -210,13 +227,7 @@ export function RecentsList(props: RecentsListProps) {
     const directChildKeys = trays.directChildKeys(parentKey);
     const directChildKeySet = new Set(directChildKeys);
     const nativeSubAgentCount = parent.nativeSubAgentCount ?? parent.codexNativeSubAgents?.length ?? 0;
-    const childResourceId = `children:${navigationIdentityKey({ backend: parent.source, threadId: parent.id,
-      ownerInstanceId: parent.federation?.ref.target.scope === "remote" ? parent.federation.ref.target.instanceId : undefined })}`;
-    const childResources = [childResourceId, `${childResourceId}:viewer`]
-      .flatMap((id) => {
-        const resource = props.pagedNavigation?.resources.get(id);
-        return resource ? [resource] : [];
-      });
+    const childResources = childResourcesOf(parent);
     const subthreadsCollapsed = isSubthreadSectionCollapsed(parent);
     const canManageSubthreads = threadSupportsFederationCapability(
       parent,
@@ -421,6 +432,40 @@ export function RecentsList(props: RecentsListProps) {
     );
   });
 
+  // What a top-level card here receives, lens row or visiting row alike.
+  const topLevelRowProps = (thread: NavigationThreadSummary) => {
+    const key = threadSummaryIdentityKey(thread);
+    return {
+      approvalRequestThreadKeys: props.approvalRequestThreadKeys,
+      terminalThreadKeys: props.terminalThreadKeys,
+      inputRequestThreadKeys: props.inputRequestThreadKeys,
+      queuedMessageThreadKeys: props.queuedMessageThreadKeys,
+      draftThreadKeys: props.draftThreadKeys,
+      composerSourceThreadKey: props.composerSourceThreadKey,
+      actionsMenuOpen: key === props.actionsMenuThreadKey,
+      renaming: isRenamingRow(props.renamingRow, key, undefined),
+      onRequestRename: props.onRequestRenameThread,
+      onCommitRename: props.onCommitRenameThread,
+      includeLinkedDirectories: true,
+      revealSelectedThreadRequest: props.revealSelectedThreadRequest,
+      selectedThreadKey: props.selectedThreadKey,
+      selectedThreadKeys: props.selectedThreadKeys,
+      thinkingThreadKeys: props.thinkingThreadKeys,
+      agentCommandThreadKeys: props.agentCommandThreadKeys,
+      thread,
+      onOpenContextMenu: props.onOpenThreadContextMenu,
+      onOpenPullRequestContextMenu: props.onOpenPullRequestContextMenu,
+      onDetachPullRequest: props.onDetachPullRequest,
+      onPrefetchPullRequests: props.onPrefetchPullRequests,
+      onPrefetchGitWorkingState: props.onPrefetchGitWorkingState,
+      onRevealSelectedThreadComplete: props.onRevealSelectedThreadComplete,
+      onSelectThread: selectThread,
+      onSetReaction: props.onSetReaction,
+      onSetThreadPin: props.onSetThreadPin,
+      onUnbindMessagingBinding: props.onUnbindMessagingBinding,
+    };
+  };
+
   const renderThreadGroup = (thread: NavigationThreadSummary) => {
     const key = threadSummaryIdentityKey(thread);
     const children = trays.subtree(key);
@@ -436,25 +481,9 @@ export function RecentsList(props: RecentsListProps) {
     return (
       <div key={key} className="thread-group">
         <ThreadRow
-          approvalRequestThreadKeys={props.approvalRequestThreadKeys}
-          terminalThreadKeys={props.terminalThreadKeys}
-          inputRequestThreadKeys={props.inputRequestThreadKeys}
-          queuedMessageThreadKeys={props.queuedMessageThreadKeys}
-          draftThreadKeys={props.draftThreadKeys}
-          composerSourceThreadKey={props.composerSourceThreadKey}
-          actionsMenuOpen={key === props.actionsMenuThreadKey}
-          renaming={isRenamingRow(props.renamingRow, key, undefined)}
-          onRequestRename={props.onRequestRenameThread}
-          onCommitRename={props.onCommitRenameThread}
-          includeLinkedDirectories
-          revealSelectedThreadRequest={props.revealSelectedThreadRequest}
-          selectedThreadKey={props.selectedThreadKey}
-          selectedThreadKeys={props.selectedThreadKeys}
+          {...topLevelRowProps(thread)}
           subthreadCount={subthreadCount}
           subthreadsCollapsed={subthreadsCollapsed}
-          thinkingThreadKeys={props.thinkingThreadKeys}
-          agentCommandThreadKeys={props.agentCommandThreadKeys}
-          thread={thread}
           onToggleSubthreads={
             subthreadCount > 0
               && threadSupportsFederationCapability(thread, "thread_grouping")
@@ -462,16 +491,6 @@ export function RecentsList(props: RecentsListProps) {
               ? toggleSubthreads
               : undefined
           }
-          onOpenContextMenu={props.onOpenThreadContextMenu}
-          onOpenPullRequestContextMenu={props.onOpenPullRequestContextMenu}
-          onDetachPullRequest={props.onDetachPullRequest}
-          onPrefetchPullRequests={props.onPrefetchPullRequests}
-          onPrefetchGitWorkingState={props.onPrefetchGitWorkingState}
-          onRevealSelectedThreadComplete={props.onRevealSelectedThreadComplete}
-          onSelectThread={selectThread}
-          onSetReaction={props.onSetReaction}
-          onSetThreadPin={props.onSetThreadPin}
-          onUnbindMessagingBinding={props.onUnbindMessagingBinding}
         />
         {/* `.thread-group` carries no role, so the tray would sit straight
             inside the `role="list"` below, and a list owns only listitem.
@@ -495,35 +514,7 @@ export function RecentsList(props: RecentsListProps) {
       </p>
       <div className="sidebar-list sidebar-list--compact" role="list" aria-labelledby={visitingLabelId}>
         <div className="thread-group">
-          <ThreadRow
-            approvalRequestThreadKeys={props.approvalRequestThreadKeys}
-            terminalThreadKeys={props.terminalThreadKeys}
-            inputRequestThreadKeys={props.inputRequestThreadKeys}
-            queuedMessageThreadKeys={props.queuedMessageThreadKeys}
-            draftThreadKeys={props.draftThreadKeys}
-            composerSourceThreadKey={props.composerSourceThreadKey}
-            actionsMenuOpen={threadSummaryIdentityKey(visitingThread) === props.actionsMenuThreadKey}
-            renaming={isRenamingRow(props.renamingRow, threadSummaryIdentityKey(visitingThread), undefined)}
-            onRequestRename={props.onRequestRenameThread}
-            onCommitRename={props.onCommitRenameThread}
-            includeLinkedDirectories
-            revealSelectedThreadRequest={props.revealSelectedThreadRequest}
-            selectedThreadKey={props.selectedThreadKey}
-            selectedThreadKeys={props.selectedThreadKeys}
-            thinkingThreadKeys={props.thinkingThreadKeys}
-            agentCommandThreadKeys={props.agentCommandThreadKeys}
-            thread={visitingThread}
-            onOpenContextMenu={props.onOpenThreadContextMenu}
-            onOpenPullRequestContextMenu={props.onOpenPullRequestContextMenu}
-            onDetachPullRequest={props.onDetachPullRequest}
-            onPrefetchPullRequests={props.onPrefetchPullRequests}
-            onPrefetchGitWorkingState={props.onPrefetchGitWorkingState}
-            onRevealSelectedThreadComplete={props.onRevealSelectedThreadComplete}
-            onSelectThread={selectThread}
-            onSetReaction={props.onSetReaction}
-            onSetThreadPin={props.onSetThreadPin}
-            onUnbindMessagingBinding={props.onUnbindMessagingBinding}
-          />
+          <ThreadRow {...topLevelRowProps(visitingThread)} />
         </div>
       </div>
     </div>
@@ -564,21 +555,25 @@ export function RecentsList(props: RecentsListProps) {
 
 /**
  * Whether the thread has a row here already, or sits under a rendered
- * ancestor. The second case is still the lens's own row: the sidebar's reveal
- * opens collapsed parents, and the child lands in its tray a moment later. A
- * visiting row in that gap would flash at the end of the list and take the
- * reveal's scroll with it.
+ * ancestor whose tray is still revealing it. The second case is still the
+ * lens's own row: the sidebar's reveal opens collapsed parents, and the child
+ * lands in its tray a moment later. A visiting row in that gap would flash at
+ * the end of the list and take the reveal's scroll with it.
  */
 function hasRenderedLineage(
   thread: NavigationThreadSummary,
   renderedThreadKeys: ReadonlySet<string>,
   threadByKey: ReadonlyMap<string, NavigationThreadSummary>,
+  trayStillRevealing: (parent: NavigationThreadSummary) => boolean,
 ): boolean {
   const visited = new Set<string>();
   let key: string | undefined = threadSummaryIdentityKey(thread);
   let current: NavigationThreadSummary | undefined = thread;
   while (key && !visited.has(key)) {
-    if (renderedThreadKeys.has(key)) return true;
+    if (renderedThreadKeys.has(key)) {
+      // The nearest rendered ancestor owns the tray the thread would land in.
+      return current === thread || !current || trayStillRevealing(current);
+    }
     visited.add(key);
     key = current ? resolveThreadParentKey(current, threadByKey) : undefined;
     current = key ? threadByKey.get(key) : undefined;

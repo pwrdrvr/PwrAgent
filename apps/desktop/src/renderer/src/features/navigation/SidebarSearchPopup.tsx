@@ -217,9 +217,15 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
     () => rankedProjects.filter(({ exact }) => mention || exact).map(({ directory }) => directory),
     [mention, rankedProjects],
   );
+  // Held back while the owner search may still add threads and none have
+  // arrived. A thread outside the loaded rows (any thread the current lens
+  // does not hold) is found only by that search, so until it answers the
+  // trailing projects would be the first rows, and the ones Enter opens.
+  const holdTrailingProjects = results.length === 0 && ownerSearch.loading;
   const trailingProjects = useMemo(
-    () => mention ? [] : rankedProjects.filter(({ exact }) => !exact).map(({ directory }) => directory),
-    [mention, rankedProjects],
+    () => mention || holdTrailingProjects ? []
+      : rankedProjects.filter(({ exact }) => !exact).map(({ directory }) => directory),
+    [holdTrailingProjects, mention, rankedProjects],
   );
   const projectCount = leadProjects.length + trailingProjects.length;
 
@@ -438,7 +444,8 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
     Boolean(trimmed)
     && combinedRows.length === 0
     && (Boolean(mention) || !remoteLoading)
-    && !projectSearch.loading;
+    && !projectSearch.loading
+    && !holdTrailingProjects;
   // The listbox is only in the DOM once it has rows, so `aria-controls` has to
   // come and go with it — a dangling idref is an invalid attribute value, not
   // a harmless one.

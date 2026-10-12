@@ -10235,6 +10235,8 @@ describe("⌘K jump keeps the lens", () => {
     onRevealSelectedThreadComplete?: (request: number) => void;
     initialBrowseMode?: "attention" | "inbox";
     threads?: NavigationThreadSummary[];
+    /** A pick App never selects, as a remote pick whose pin never lands. */
+    unselectableJumpId?: string;
   }) {
     const threads = props.threads ?? jumpThreads;
     const [browseMode, setBrowseMode] = useState<"attention" | "drafts" | "inbox" | "recents" | "directories">(
@@ -10263,6 +10265,7 @@ describe("⌘K jump keeps the lens", () => {
           }}
           onCreateThread={async () => undefined}
           onJumpToThread={(thread) => {
+            if (thread.id === props.unselectableJumpId) return;
             setSelectedItemKey(threadSummaryIdentityKey(thread));
             setRevealRequest((request) => request + 1);
           }}
@@ -10376,6 +10379,43 @@ describe("⌘K jump keeps the lens", () => {
 
     // The sidebar's reveal opens the parent's tray, where the child lands. A
     // visiting row in the meantime would flash at the end of the list.
+    expect(document.querySelector(".sidebar-visiting")).toBeNull();
+  });
+
+  it("gives a sub-thread past its open parent's loaded tray a row", () => {
+    const parent = { ...quietThread, id: "big-parent", title: "Big parent" };
+    const children = Array.from({ length: 11 }, (_, index) => ({ ...quietThread,
+      id: `kid-${index}`, title: `Sub-thread number ${index}`,
+      parentThreadId: parent.id, parentThreadBackend: parent.source, updatedAt: parent.updatedAt - 1 - index }));
+    render(<JumpHarness onBrowseModeChange={vi.fn()} initialBrowseMode="inbox" threads={[parent, ...children]} />);
+    expect(screen.queryByRole("button", { name: "Sub-thread number 10" })).toBeNull();
+
+    jumpTo("Sub-thread number 10");
+
+    // The tray is open and its page has loaded without the thread, so no
+    // reveal is coming: the row goes after the list, where the thread is.
+    const visiting = visitingList("Further down");
+    expect(visiting).not.toBeNull();
+    expect(within(visiting!).getByRole("button", { name: "Sub-thread number 10" })).toBeInTheDocument();
+  });
+
+  // Both leave a jump recorded for a thread that is not selected. Reaching that
+  // thread later by an ordinary click must not bring a visiting row with it.
+  it.each([
+    ["a repeat jump to the same thread", false],
+    ["a jump that never selects its thread", true],
+  ])("ends %s at the next selection", (_label, neverLands) => {
+    render(<JumpHarness onBrowseModeChange={vi.fn()}
+      unselectableJumpId={neverLands ? quietThread.id : undefined} />);
+    jumpTo("Quiet");
+    if (!neverLands) jumpTo("Quiet");
+    fireEvent.click(screen.getByRole("button", { name: "Running thread" }));
+
+    const tablist = screen.getByRole("tablist", { name: "Thread lenses" });
+    fireEvent.click(within(tablist).getByRole("tab", { name: "Updated" }));
+    fireEvent.click(screen.getByRole("button", { name: "Quiet thread" }));
+    fireEvent.click(within(tablist).getByRole("tab", { name: /^Attention/ }));
+
     expect(document.querySelector(".sidebar-visiting")).toBeNull();
   });
 

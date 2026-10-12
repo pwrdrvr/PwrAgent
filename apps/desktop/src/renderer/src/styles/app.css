@@ -6011,6 +6011,16 @@ a.button {
   margin-top: 4px;
 }
 
+/* An empty lens with a visiting row renders its empty line inside the dense
+   lane (RecentsList's `emptyMessage`). Hold it where the bare empty state
+   draws it: the lane's 12px top padding replaces the paragraph's own top
+   margin, and the rail-to-lane difference restores its inline position, so
+   the line does not move when the row comes and goes. */
+.sidebar-list--dense > .sidebar-empty:first-child {
+  margin-top: 0;
+  margin-inline: calc(var(--sidebar-rail-inset) - var(--sidebar-lane-inset));
+}
+
 .recents-pinned-divider::before,
 .recents-pinned-divider::after {
   content: "";

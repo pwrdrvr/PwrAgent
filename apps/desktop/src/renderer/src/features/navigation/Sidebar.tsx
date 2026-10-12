@@ -952,21 +952,15 @@ export function Sidebar(props: SidebarProps) {
   // thread that leaves Attention while it is open (a reply) still leaves.
   const [jumpedThread, setJumpedThread] = useState<NavigationThreadSummary>();
   const jumpedThreadKey = jumpedThread ? threadSummaryIdentityKey(jumpedThread) : undefined;
-  // A remote pick selects only after its pin round-trips, so the jump counts
-  // as over when the selection moves off the thread after landing on it.
-  const jumpLandedRef = useRef(false);
-  const noteThreadJump = (thread: NavigationThreadSummary): void => {
-    jumpLandedRef.current = false;
-    setJumpedThread(thread);
-  };
+  // The jump ends when the selection moves anywhere but the jumped thread. A
+  // remote pick selects only after its pin round-trips, so the selection
+  // standing still meanwhile does not end it; one that never lands ends at
+  // the next selection, as a repeat jump to the same thread does.
+  const jumpSelectionRef = useRef(selectedItemKey);
   useEffect(() => {
-    if (!jumpedThreadKey) return;
-    if (selectedItemKey === jumpedThreadKey) {
-      jumpLandedRef.current = true;
-    } else if (jumpLandedRef.current) {
-      jumpLandedRef.current = false;
-      setJumpedThread(undefined);
-    }
+    if (jumpSelectionRef.current === selectedItemKey) return;
+    jumpSelectionRef.current = selectedItemKey;
+    if (jumpedThreadKey && selectedItemKey !== jumpedThreadKey) setJumpedThread(undefined);
   }, [jumpedThreadKey, selectedItemKey]);
   const visitingThread = browseMode !== "directories" && jumpedThreadKey && jumpedThreadKey === selectedItemKey
     ? navigationThreadByKey.get(jumpedThreadKey) ?? jumpedThread
@@ -2723,11 +2717,11 @@ export function Sidebar(props: SidebarProps) {
             else void props.onOpenLaunchpad(directory);
           }}
           onJumpToThread={(thread) => {
-            noteThreadJump(thread);
+            setJumpedThread(thread);
             (props.onJumpToThread ?? props.onSelectThread)(thread);
           }}
           onJumpToRemoteThread={props.onJumpToRemoteThread ? (thread) => {
-            noteThreadJump(thread);
+            setJumpedThread(thread);
             props.onJumpToRemoteThread?.(thread);
           } : undefined}
           onClose={() => props.onThreadJumpOpenChange?.(false)}
