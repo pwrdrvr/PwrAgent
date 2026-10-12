@@ -122,7 +122,14 @@ the 30-second IPC deadline and no-retry policy are unchanged.
 not a read of Codex's private rollout storage. Credentials/account fields are
 redacted; raw duplicate wire strings are omitted. Profile-local captures are
 private diagnostics and must not be uploaded. `patch.diff` includes tracked
-changes against initial HEAD; `untracked.tar.gz` preserves new task files. The
+changes against initial HEAD; `untracked.tar.gz` recursively preserves new task
+files and cloned source directories. It omits `.git` internals; the separate
+`untracked-manifest.json` records omissions and nested HEAD hashes when readable
+from regular HEAD/loose-ref files. No Git config, objects, hooks or logs are
+exported. Credential paths, traversal, absolute/external/dangling symlinks and
+special files fail export; safe task-local relative symlinks are preserved
+without dereferencing them. Regular file contents use the existing credential
+redaction. A nested clone export is source plus provenance, not a Git backup. The
 mounted task itself remains the authoritative grading artifact.
 
 Exit codes: 0 completed (or preflight passed), 1 failed, 2 preflight/config/auth
