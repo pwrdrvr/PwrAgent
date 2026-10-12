@@ -194,6 +194,23 @@
       }
     },
     {
+      "id": "mcp-login-2",
+      "kind": "request",
+      "request": {
+        "method": "mcpServer/elicitation/request",
+        "params": {
+          "threadId": "thread-mcp-elicitation",
+          "turnId": "turn-mcp-2",
+          "requestId": "mcp-login-request-2",
+          "serverName": "codex_apps",
+          "mode": "url",
+          "message": "Reconnect GitHub to inspect pull requests.",
+          "url": "https://chatgpt.com/connector",
+          "elicitationId": "mcp-login-2"
+        }
+      }
+    },
+    {
       "id": "mcp-progress-1",
       "kind": "notification",
       "notification": {

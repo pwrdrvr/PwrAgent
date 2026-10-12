@@ -5,7 +5,7 @@ import { launchElectronApp } from "./fixtures/electron-app";
 
 const mcpElicitationSpecDir = path.dirname(fileURLToPath(import.meta.url));
 
-async function openMcpElicitationReplay(gatewayApproval = false) {
+async function openMcpElicitationReplay(gatewayApproval = false, urlLogin = false) {
   const app = await launchElectronApp({
     fixturePath: path.resolve(
       mcpElicitationSpecDir,
@@ -39,19 +39,49 @@ async function openMcpElicitationReplay(gatewayApproval = false) {
     ...(gatewayApproval ? { override: { request: { params: {
       _meta: { pwragent_approval_kind: "mcp_tool_call", persist: ["session"] },
     } } } } : {}),
+    ...(urlLogin ? { override: { request: { params: {
+      mode: "url", serverName: "codex_apps", _meta: null,
+      message: "Reconnect GitHub to restore access to repositories.",
+      url: "https://chatgpt.com/connector", elicitationId: "mcp-login-1",
+    } } } } : {}),
   });
 
   const pendingMcp = app.window.getByRole("group", {
     name: "Pending MCP interaction"
   });
   await expect(pendingMcp).toBeVisible();
-  await expect(pendingMcp.getByText("MCP approval")).toBeVisible();
-  await expect(pendingMcp.getByText(/browser_tabs/)).toBeVisible();
+  await expect(pendingMcp.getByText(urlLogin ? "MCP login" : "MCP approval")).toBeVisible();
+  await expect(pendingMcp.getByText(urlLogin ? /restore access to repositories/ : /browser_tabs/)).toBeVisible();
   await expect(app.window.getByRole("group", { name: "Pending input" })).toHaveCount(0);
   await expect(app.window.getByRole("group", { name: "Pending approval" })).toHaveCount(0);
 
   return app;
 }
+
+test("recovers concurrent MCP login prompts and answers from To-dos", async ({ browserName: _browserName }, testInfo) => {
+  const app = await openMcpElicitationReplay(false, true);
+  try {
+    const pendingMcp = app.window.getByRole("group", { name: "Pending MCP interaction" });
+    await app.advance({ stepId: "mcp-login-2" });
+    await expect(pendingMcp).toContainText("inspect pull requests");
+    await pendingMcp.getByRole("button", { name: "Decline", exact: true }).click();
+    await expect(pendingMcp).toContainText("restore access to repositories");
+
+    await app.window.getByRole("tab", { name: /^To-dos/ }).click();
+    const row = app.window.locator('.thread-todos-panel__row[data-wait-kind="mcp-input"]');
+    await expect(row).toContainText("restore access to repositories");
+    await expect(row.getByRole("link", { name: "Open", exact: true })).toBeVisible();
+    await expect(row.getByRole("button", { name: "Allow", exact: true })).toBeVisible();
+    await expect(row.getByRole("button", { name: "Decline", exact: true })).toBeVisible();
+    await app.window.screenshot({ path: testInfo.outputPath("mcp-login-recovered.png") });
+    await row.getByRole("button", { name: "Decline", exact: true }).click();
+    await expect(pendingMcp).toHaveCount(0);
+    await expect(row).toHaveCount(0);
+    await expect.poll(async () => await app.getPendingRequest()).toBeUndefined();
+  } finally {
+    await app.close();
+  }
+});
 
 test("accepts MCP elicitations and resumes MCP progress", async () => {
   const app = await openMcpElicitationReplay();

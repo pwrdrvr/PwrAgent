@@ -5100,6 +5100,10 @@ export function useThreadSessionState(params: {
             || hydratedPendingMcpInteraction
             || hydratedApprovalRequest
           );
+          const shouldClearStaleInteraction =
+            !lifecycleChangedDuringRead
+            && !hydratedPendingInteraction
+            && hasPendingInteraction(current);
           // Host tool calls can remain pending after their provider turn ends.
           // Only a request the renderer can present as an interaction owns a
           // turn here; otherwise it would undo idle reconciliation below.
@@ -5149,7 +5153,6 @@ export function useThreadSessionState(params: {
           const shouldClearStaleThinking =
             responseThreadStatus === "idle"
             && thinkingReasons.length > 0
-            && !hasPendingInteraction(current)
             && !hydratedPendingInteraction
             && !ownUpdateStillSettling
             && !reviewUpdateStillSettling
@@ -5263,12 +5266,16 @@ export function useThreadSessionState(params: {
             pendingAssistantMessage: shouldClearStaleThinking
               ? undefined
               : current.pendingAssistantMessage,
-            pendingMcpInteraction: hydratedPendingInteraction
-              ? hydratedPendingMcpInteraction
-              : current.pendingMcpInteraction,
-            pendingRequest: hydratedPendingInteraction
-              ? hydratedApprovalRequest
-              : current.pendingRequest,
+            pendingMcpInteraction: shouldClearStaleThinking || shouldClearStaleInteraction
+              ? undefined
+              : hydratedPendingInteraction
+                ? hydratedPendingMcpInteraction
+                : current.pendingMcpInteraction,
+            pendingRequest: shouldClearStaleThinking || shouldClearStaleInteraction
+              ? undefined
+              : hydratedPendingInteraction
+                ? hydratedApprovalRequest
+                : current.pendingRequest,
             pendingStatusText: hydratedPendingUserInput
               ? "Waiting for input"
               : hydratedPendingMcpInteraction
@@ -5277,10 +5284,14 @@ export function useThreadSessionState(params: {
                   ? "Waiting for approval"
                   : shouldClearStaleThinking
                     ? undefined
-                    : current.pendingStatusText,
-            pendingUserInput: hydratedPendingInteraction
-              ? hydratedPendingUserInput
-              : current.pendingUserInput,
+                    : shouldClearStaleInteraction
+                      ? backendReportedActive ? "Thinking" : undefined
+                      : current.pendingStatusText,
+            pendingUserInput: shouldClearStaleThinking || shouldClearStaleInteraction
+              ? undefined
+              : hydratedPendingInteraction
+                ? hydratedPendingUserInput
+                : current.pendingUserInput,
             response: responseWithRetainedTail,
             staleThinkingRecheckAt:
               lifecycleChangedDuringRead
@@ -5887,7 +5898,11 @@ export function useThreadSessionState(params: {
         || event.notification.method === "turn/started"
         || event.notification.method === "turn/completed"
         || event.notification.method === "turn/failed"
-        || event.notification.method === "turn/cancelled") {
+        || event.notification.method === "turn/cancelled"
+        || isApprovalRequestNotification(event.notification)
+        || isRequestUserInputNotification(event.notification)
+        || isMcpElicitationNotification(event.notification)
+        || event.notification.method === "serverRequest/resolved") {
         const previous = liveLifecycleVersionsRef.current.get(targetThreadKey);
         liveLifecycleVersionsRef.current.set(targetThreadKey, {
           revision: (previous?.revision ?? 0) + 1,
@@ -7514,7 +7529,12 @@ export function useThreadSessionState(params: {
           current.pendingUserInput?.requestId === requestId
             ? undefined
             : current.pendingUserInput,
-        pendingStatusText: nextStatus,
+        pendingStatusText:
+          current.pendingRequest?.params.requestId === requestId
+          || current.pendingMcpInteraction?.requestId === requestId
+          || current.pendingUserInput?.requestId === requestId
+            ? nextStatus
+            : current.pendingStatusText,
       }));
     },
     [threadKey, updateSession]
