@@ -1933,9 +1933,10 @@ export type NavigationQuery =
       identities: NavigationIdentity[];
       includeAncestry?: boolean;
       /**
-       * Viewer inventory only, and never sent to a peer: read each identity
-       * from its own owner rather than from this machine's mounts. An owner
-       * that cannot answer is served from rows this viewer already holds.
+       * Viewer inventory only, and never sent to a peer: include each peer
+       * identity's row as held by this machine's peer summary cache, which
+       * reads owners in the background and keeps an offline owner's last
+       * rows. The read never waits on a peer.
        */
       resolveFromOwners?: true;
     }

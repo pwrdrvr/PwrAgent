@@ -143,7 +143,6 @@ import {
   type AddRemoteThreadPinResponse,
   type FederatedThreadRef,
   type FederationJumpSearchProgress,
-  type FederationRemoteTarget,
   type FederationJumpSearchRequest,
   type FederationJumpSearchResponse,
   type RemoveRemoteThreadPinRequest,
@@ -381,10 +380,8 @@ import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { getDesktopNavigationQueryStore } from "../app-server/navigation-query-store";
 import { getDesktopNavigationQueryPool } from "../app-server/navigation-query-pool";
 import { searchNavigationOwners } from "../app-server/navigation-jump-search";
-import { appendViewerNavigationPins, attachRemoteThreadsToLocalDirectories, findRemoteHomeDirectoryIndex, loadViewerNavigationPins } from "../app-server/navigation-viewer-pins";
+import { appendViewerNavigationPins, attachRemoteThreadsToLocalDirectories, findRemoteHomeDirectoryIndex, loadViewerNavigationPins, loadViewerWatchedNavigationRows } from "../app-server/navigation-viewer-pins";
 import { loadLocalNavigationQueryIndex } from "../app-server/navigation-query-source";
-import { materializeOwnerResolvedNavigation, OwnerResolvedRowMemory } from "../app-server/navigation-owner-resolved-query";
-import type { NavigationQueryIndex } from "../app-server/navigation-query-projection";
 import { getDesktopNavigationDetailService } from "../app-server/navigation-detail-service";
 import {
   isFederationPeerUnavailableError,
@@ -2098,137 +2095,92 @@ class DesktopAppServerService {
   }
 
   private readonly remoteNavigationPageBaselines = new RemoteNavigationPageBaselines();
-  private readonly ownerResolvedNavigationRows = new OwnerResolvedRowMemory();
 
   private async readNavigationQueryPage(
     request: NavigationQueryRequest,
     rpcOptions?: { deadlineAt: number; signal: AbortSignal },
   ): Promise<NavigationQueryPage> {
     if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      // Owner resolution reads this machine's peers for its own viewer. It must
+      // never become a request this instance sends to an owner.
       if (request.query.kind === "exact" && request.query.resolveFromOwners) {
         throw new Error("Owner-resolved navigation is available only to this machine's viewer inventory.");
       }
-      return this.readRemoteNavigationQueryPage(request.federationTarget, request, rpcOptions);
-    }
-    if (request.query.kind === "exact" && request.query.resolveFromOwners) {
-      // Drafts names threads from every instance in one read. Peers answer
-      // for their own rows here, so an offline peer is a dimmed row, not an
-      // error the renderer has to recognize and hide.
+      const target = request.federationTarget;
       const runtime = getDesktopFederationRuntime();
-      return await getDesktopNavigationQueryStore().readPage({
-        loadMaterialization: () => materializeOwnerResolvedNavigation({
-          request,
-          loadViewerIndex: async () => {
-            // Without mounts the viewer index omits this machine's id, and a
-            // peer's row could not name a local parent through it.
-            const index = await this.loadViewerNavigationQueryIndex(request, rpcOptions);
-            return index.localInstanceId ? index : { ...index, localInstanceId: (await runtime.health()).instanceId };
-          },
-          readOwnerPage: (target, ownerRequest, owner) => this.readRemoteNavigationQueryPage(target, ownerRequest, owner),
-          cachedOwnerThreads: (instanceId) => runtime.remoteThreadSummaries().cachedThreads(instanceId),
-          memory: this.ownerResolvedNavigationRows,
-          signal: rpcOptions?.signal,
-          deadlineAt: rpcOptions?.deadlineAt,
-          onOwnerFailure: (instanceId, error) => {
-            // The federation runtime already reports a peer that went away.
-            if (isFederationPeerUnavailableError(error)) return;
-            appServerLog.warn("serving held navigation rows for an owner that failed its exact read", {
-              instanceId, error: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500) });
-          },
-        }),
-        request,
-        scopeKey: "renderer-viewer",
+      const ownerPage = await this.remoteNavigationPageBaselines.read(request, async (ownerRequest) => {
+        const result = await runtime.remoteNavigationQueryPage(target, ownerRequest, rpcOptions);
+        rpcOptions?.signal.throwIfAborted();
+        return result;
       });
+      rpcOptions?.signal.throwIfAborted();
+      const page = runtime.stampRemoteNavigationQueryPage(target, ownerPage);
+      if (request.query.kind === "exact" && request.consumer === "main-sidebar" && !page.unchanged && !page.rangeUnchanged) {
+        const instanceId = request.federationTarget.instanceId;
+        const snapshots = page.entries.flatMap(({ row }) => {
+          const federation = row.federation;
+          if (federation?.ref.target.scope !== "remote" || federation.ref.target.instanceId !== instanceId) return [];
+          return [{ ref: federation.ref, summary: row, instanceLabel: federation.instanceLabel }];
+        });
+        const hydrated = await this.getOverlayStore().updateRemoteThreadPinSnapshots(snapshots, { onlyMissing: true });
+        if (hydrated) {
+          appServerLog.info("hydrated summaryless remote thread pins from exact owner rows", { instanceId,
+            candidates: snapshots.slice(0, 10).map(({ ref, summary }) => ({ backend: ref.backend,
+              threadId: ref.threadId.slice(0, 200), parentThreadId: summary.parentThreadId?.slice(0, 200),
+              parentInstanceId: summary.parentThreadInstanceId?.slice(0, 200), directoryCount: summary.linkedDirectories.length })) });
+          await getDesktopBackendRegistry().publishLocalEvent({
+            backend: snapshots[0]!.ref.backend,
+            notification: { method: "navigation/remoteThreadPins/changed", params: { instanceId } },
+          });
+        }
+      }
+      const directoryKeys = [...new Set([...(page.directories ?? []).map((directory) => directory.key),
+        ...(page.selectionDirectory ? [page.selectionDirectory.key] : [])])];
+      if (!directoryKeys.length) return page;
+      const overlays = await this.getOverlayStore().readRemoteDirectoryOverlays({
+        instanceId: request.federationTarget.instanceId, directoryKeys,
+      });
+      rpcOptions?.signal.throwIfAborted();
+      const apply = (directory: NavigationDirectoryRow): NavigationDirectoryRow => {
+        const collapsed = overlays[directory.key]?.directoryThreadsCollapsed;
+        return collapsed === undefined || collapsed === directory.directoryThreadsCollapsed
+          ? directory : { ...directory, directoryThreadsCollapsed: collapsed };
+      };
+      const result = { ...page, directories: page.directories?.map(apply),
+        selectionDirectory: page.selectionDirectory ? apply(page.selectionDirectory) : undefined };
+      if (Buffer.byteLength(JSON.stringify(result), "utf8") > NAVIGATION_QUERY_MAX_RESULT_BYTES) {
+        throw new Error("Navigation page with viewer preferences exceeds the byte budget. Request a smaller page.");
+      }
+      return result;
     }
     return await getDesktopNavigationQueryStore().readPage({
-      loadIndex: async () => request.inventory === "viewer"
-        ? this.loadViewerNavigationQueryIndex(request, rpcOptions)
-        : this.loadOwnerNavigationQueryIndex(request, rpcOptions),
+      loadIndex: async () => {
+        rpcOptions?.signal.throwIfAborted();
+        const index = await loadLocalNavigationQueryIndex({
+          backend: request.backend,
+          callerReason: "renderer-navigation-query",
+          signal: rpcOptions?.signal,
+        });
+        rpcOptions?.signal.throwIfAborted();
+        if (request.inventory === "viewer") {
+          const summaries = getDesktopFederationRuntime().remoteThreadSummaries();
+          const pins = await loadViewerNavigationPins(getDesktopOverlayStore(), summaries);
+          rpcOptions?.signal.throwIfAborted();
+          // Drafts name threads on any instance. Peer rows come from the cache
+          // that keeps pins current, so this read never waits on a peer.
+          const watched = request.query.kind === "exact" && request.query.resolveFromOwners
+            ? loadViewerWatchedNavigationRows(summaries, request.query.identities, pins) : [];
+          if (!pins.length && !watched.length) return index;
+          const localInstanceId = (await getDesktopFederationRuntime().health()).instanceId;
+          rpcOptions?.signal.throwIfAborted();
+          const withPins = appendViewerNavigationPins({ ...index, localInstanceId }, pins);
+          return watched.length ? { ...withPins, threads: [...withPins.threads, ...watched] } : withPins;
+        }
+        return index;
+      },
       request,
       scopeKey: request.inventory === "viewer" ? "renderer-viewer" : "renderer-local",
     });
-  }
-
-  private async loadOwnerNavigationQueryIndex(
-    request: NavigationQueryRequest,
-    rpcOptions?: { deadlineAt: number; signal: AbortSignal },
-  ): Promise<NavigationQueryIndex> {
-    rpcOptions?.signal.throwIfAborted();
-    const index = await loadLocalNavigationQueryIndex({
-      backend: request.backend,
-      callerReason: "renderer-navigation-query",
-      signal: rpcOptions?.signal,
-    });
-    rpcOptions?.signal.throwIfAborted();
-    return index;
-  }
-
-  /** This machine's threads plus mounted peer rows, served without awaiting a peer. */
-  private async loadViewerNavigationQueryIndex(
-    request: NavigationQueryRequest,
-    rpcOptions?: { deadlineAt: number; signal: AbortSignal },
-  ): Promise<NavigationQueryIndex> {
-    const index = await this.loadOwnerNavigationQueryIndex(request, rpcOptions);
-    const pins = await loadViewerNavigationPins(getDesktopOverlayStore(),
-      getDesktopFederationRuntime().remoteThreadSummaries());
-    rpcOptions?.signal.throwIfAborted();
-    if (!pins.length) return index;
-    const localInstanceId = (await getDesktopFederationRuntime().health()).instanceId;
-    rpcOptions?.signal.throwIfAborted();
-    return appendViewerNavigationPins({ ...index, localInstanceId }, pins);
-  }
-
-  /** One owner's page, stamped for this viewer, with its pins and directory preferences applied. */
-  private async readRemoteNavigationQueryPage(
-    target: FederationRemoteTarget,
-    request: NavigationQueryRequest,
-    rpcOptions?: { deadlineAt: number; signal: AbortSignal },
-  ): Promise<NavigationQueryPage> {
-    const runtime = getDesktopFederationRuntime();
-    const ownerPage = await this.remoteNavigationPageBaselines.read(request, async (ownerRequest) => {
-      const result = await runtime.remoteNavigationQueryPage(target, ownerRequest, rpcOptions);
-      rpcOptions?.signal.throwIfAborted();
-      return result;
-    });
-    rpcOptions?.signal.throwIfAborted();
-    const page = runtime.stampRemoteNavigationQueryPage(target, ownerPage);
-    if (request.query.kind === "exact" && request.consumer === "main-sidebar" && !page.unchanged && !page.rangeUnchanged) {
-      const instanceId = target.instanceId;
-      const snapshots = page.entries.flatMap(({ row }) => {
-        const federation = row.federation;
-        if (federation?.ref.target.scope !== "remote" || federation.ref.target.instanceId !== instanceId) return [];
-        return [{ ref: federation.ref, summary: row, instanceLabel: federation.instanceLabel }];
-      });
-      const hydrated = await this.getOverlayStore().updateRemoteThreadPinSnapshots(snapshots, { onlyMissing: true });
-      if (hydrated) {
-        appServerLog.info("hydrated summaryless remote thread pins from exact owner rows", { instanceId,
-          candidates: snapshots.slice(0, 10).map(({ ref, summary }) => ({ backend: ref.backend,
-            threadId: ref.threadId.slice(0, 200), parentThreadId: summary.parentThreadId?.slice(0, 200),
-            parentInstanceId: summary.parentThreadInstanceId?.slice(0, 200), directoryCount: summary.linkedDirectories.length })) });
-        await getDesktopBackendRegistry().publishLocalEvent({
-          backend: snapshots[0]!.ref.backend,
-          notification: { method: "navigation/remoteThreadPins/changed", params: { instanceId } },
-        });
-      }
-    }
-    const directoryKeys = [...new Set([...(page.directories ?? []).map((directory) => directory.key),
-      ...(page.selectionDirectory ? [page.selectionDirectory.key] : [])])];
-    if (!directoryKeys.length) return page;
-    const overlays = await this.getOverlayStore().readRemoteDirectoryOverlays({
-      instanceId: target.instanceId, directoryKeys,
-    });
-    rpcOptions?.signal.throwIfAborted();
-    const apply = (directory: NavigationDirectoryRow): NavigationDirectoryRow => {
-      const collapsed = overlays[directory.key]?.directoryThreadsCollapsed;
-      return collapsed === undefined || collapsed === directory.directoryThreadsCollapsed
-        ? directory : { ...directory, directoryThreadsCollapsed: collapsed };
-    };
-    const result = { ...page, directories: page.directories?.map(apply),
-      selectionDirectory: page.selectionDirectory ? apply(page.selectionDirectory) : undefined };
-    if (Buffer.byteLength(JSON.stringify(result), "utf8") > NAVIGATION_QUERY_MAX_RESULT_BYTES) {
-      throw new Error("Navigation page with viewer preferences exceeds the byte budget. Request a smaller page.");
-    }
-    return result;
   }
 
   async releaseNavigationAttentionView(request: NavigationAttentionViewReleaseRequest): Promise<void> {

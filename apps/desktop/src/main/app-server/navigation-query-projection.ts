@@ -60,7 +60,7 @@ function hashValue(value: unknown): string {
     .digest("base64url");
 }
 
-export function navigationIdentity(thread: NavigationThreadSummary): NavigationIdentity {
+function navigationIdentity(thread: NavigationThreadSummary): NavigationIdentity {
   return {
     backend: thread.source,
     threadId: thread.id,
@@ -70,7 +70,7 @@ export function navigationIdentity(thread: NavigationThreadSummary): NavigationI
   };
 }
 
-export function identityKey(identity: NavigationIdentity): string {
+function identityKey(identity: NavigationIdentity): string {
   return [
     identity.ownerInstanceId ?? "local",
     identity.backend,

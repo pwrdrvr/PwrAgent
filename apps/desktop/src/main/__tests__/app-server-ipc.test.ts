@@ -14,8 +14,6 @@ import type {
   GetNavigationSnapshotRequest,
   HandoffThreadWorkspaceRequest,
   MarkThreadSeenRequest,
-  NavigationIdentity,
-  NavigationRow,
   NavigationThreadSummary,
   NavigationQueryPage,
   FederationRemoteTarget,
@@ -138,7 +136,7 @@ const federationMock = vi.hoisted(() => {
       ) => ({ results: [] }),
     ),
     threadFromPeer: vi.fn(async (): Promise<unknown> => undefined),
-    cachedThreads: vi.fn((_instanceId: string): NavigationThreadSummary[] => []),
+    resolveWatchedThreads: vi.fn((_refs: unknown[]): unknown[] => []),
     rememberThreadNames: vi.fn(),
     reserveThreadNameObservation: vi.fn(() => (nextThreadNameObservation += 1)),
     invalidate: vi.fn(),
@@ -2714,134 +2712,6 @@ describe("app server ipc", () => {
     } }));
   });
 
-  describe("owner-resolved Drafts reads", () => {
-    beforeEach(() => {
-      federationMock.runtime.remoteNavigationQueryPage.mockReset();
-      mockAppServerLog.warn.mockClear();
-    });
-    const draftRead = async (senderId: number, identities: NavigationIdentity[]) => {
-      const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
-      const { NAVIGATION_QUERY_PAGE_CHANNEL } = await import("../../shared/ipc");
-      registerAppServerIpcHandlers();
-      return await handlers.get(NAVIGATION_QUERY_PAGE_CHANNEL)!({ sender: { id: senderId, once: vi.fn() } }, {
-        protocol: 2, consumer: "main-sidebar", inventory: "viewer", pageSize: 10,
-        query: { kind: "exact", identities, includeAncestry: true, resolveFromOwners: true },
-      }) as NavigationQueryPage;
-    };
-    const localThread = (id: string): NavigationThreadSummary => ({ id, source: "codex", title: `Local ${id}`,
-      titleSource: "explicit", linkedDirectories: [], inbox: { inInbox: false } });
-    const peerRef = (instanceId: string, threadId: string): NavigationIdentity => ({ backend: "codex", threadId, ownerInstanceId: instanceId });
-    const peerRow = async (instanceId: string, threadId: string, extra: Partial<NavigationRow> = {}): Promise<NavigationRow> => {
-      const { buildFederatedThreadRef } = await import("@pwragent/shared");
-      return { ref: peerRef(instanceId, threadId), rowRevision: "owner", id: threadId, source: "codex",
-        title: `Peer ${threadId}`, titleSource: "explicit", linkedDirectories: [], inbox: { inInbox: true },
-        federation: { ref: buildFederatedThreadRef({ backend: "codex", threadId, instanceId }), instanceLabel: "Peer",
-          peerStatus: "connected" },
-        ordinaryChildCount: 0, nativeSubAgentGroupPresent: false, queueCount: 0, queueState: "unknown", ...extra };
-    };
-    const ownerPage = (rows: NavigationRow[]): NavigationQueryPage => ({ protocol: 2, queryKey: "owner", generation: "g",
-      ownerEpoch: "e", countsRevision: `r:${rows.map((row) => row.id).join()}`, coverage: { state: "complete" },
-      counts: { total: rows.length, active: 0, unread: 0, review: 0 },
-      entries: rows.map((row, index) => ({ row, orderKey: String(index), placement: { kind: "root" } })), complete: true });
-    const peerOffline = (instanceId: string) => Object.assign(new Error(`Federation peer ${instanceId} is not connected.`),
-      { code: "FEDERATION_PEER_UNAVAILABLE", instanceId });
-
-    it("reads this machine's drafts and a connected peer's in one viewer page", async () => {
-      const local = localThread("draft-local-a");
-      const row = await peerRow("draft-peer-a", "draft-remote-a", { pinnedRank: "owner-rank", ordinaryChildCount: 2, queueCount: 1,
-        queueState: "ready" });
-      listThreads.mockResolvedValueOnce([]);
-      readNavigationQueryIndex.mockReturnValueOnce({ threads: [local], directories: [] });
-      federationMock.runtime.remoteNavigationQueryPage.mockResolvedValueOnce(ownerPage([row]));
-      const page = await draftRead(90310, [row.ref, { backend: "codex", threadId: local.id }]);
-      expect(page.entries.map(({ row: entry }) => entry.id)).toEqual([row.id, local.id]);
-      expect(federationMock.runtime.remoteNavigationQueryPage).toHaveBeenCalledTimes(1);
-      const [target, ownerRequest] = federationMock.runtime.remoteNavigationQueryPage.mock.calls[0]!;
-      expect(target).toEqual({ scope: "remote", instanceId: "draft-peer-a" });
-      expect(ownerRequest).toMatchObject({ inventory: "owner", federationTarget: target,
-        query: { kind: "exact", identities: [row.ref], includeAncestry: true } });
-      expect(ownerRequest.query).not.toHaveProperty("resolveFromOwners");
-      // The owner's row, with its child count and queue, but not the owner's pin order.
-      const remote = page.entries[0]!.row;
-      expect(remote).toMatchObject({ ordinaryChildCount: 2, queueCount: 1, queueState: "ready",
-        federation: { peerStatus: "connected" } });
-      expect(remote.pinnedRank).toBeUndefined();
-      expect(remote.rowRevision).not.toBe("owner");
-    });
-
-    it("serves an offline peer's draft from its cached row, dimmed and without a live turn", async () => {
-      const local = localThread("draft-local-b");
-      const cached = await peerRow("draft-peer-b", "draft-remote-b", { threadStatus: "active", hasActiveSubAgent: true });
-      const { ref: _ref, rowRevision: _revision, ...summary } = cached;
-      listThreads.mockResolvedValueOnce([]);
-      readNavigationQueryIndex.mockReturnValueOnce({ threads: [local], directories: [] });
-      federationMock.runtime.remoteNavigationQueryPage.mockRejectedValueOnce(peerOffline("draft-peer-b"));
-      federationMock.remoteThreadSummaries.cachedThreads.mockImplementationOnce((instanceId) =>
-        instanceId === "draft-peer-b" ? [summary] : []);
-      const page = await draftRead(90311, [{ backend: "codex", threadId: local.id }, cached.ref]);
-      expect(page).not.toHaveProperty("navigationReadFailure");
-      expect(page.entries.map(({ row }) => row.id)).toEqual([local.id, cached.id]);
-      const held = page.entries[1]!.row;
-      expect(held.federation?.peerStatus).toBe("disconnected");
-      expect(held.threadStatus).toBeUndefined();
-      expect(held.hasActiveSubAgent).toBeUndefined();
-      expect(page.counts.active).toBe(0);
-    });
-
-    it("places a peer's draft under its local parent when nothing is mounted", async () => {
-      const parent = localThread("draft-local-parent");
-      const child = await peerRow("draft-peer-f", "draft-remote-child", { parentThreadId: parent.id,
-        parentThreadBackend: "codex", parentThreadInstanceId: "pwr_local" });
-      listThreads.mockResolvedValueOnce([]);
-      readNavigationQueryIndex.mockReturnValueOnce({ threads: [parent], directories: [] });
-      federationMock.runtime.remoteNavigationQueryPage.mockResolvedValueOnce(ownerPage([child]));
-      const page = await draftRead(90317, [child.ref]);
-      expect(page.entries.map(({ row }) => row.id)).toEqual([parent.id, child.id]);
-      expect(page.entries[1]!.placement).toEqual({ kind: "child", parent: { backend: "codex", threadId: parent.id } });
-    });
-
-    it("omits an offline peer's draft that this viewer holds no row for", async () => {
-      const local = localThread("draft-local-c");
-      listThreads.mockResolvedValueOnce([]);
-      readNavigationQueryIndex.mockReturnValueOnce({ threads: [local], directories: [] });
-      federationMock.runtime.remoteNavigationQueryPage.mockRejectedValueOnce(peerOffline("draft-peer-c"));
-      const page = await draftRead(90312, [{ backend: "codex", threadId: local.id }, peerRef("draft-peer-c", "never-seen")]);
-      expect(page).not.toHaveProperty("navigationReadFailure");
-      expect(page.entries.map(({ row }) => row.id)).toEqual([local.id]);
-      expect(page.complete).toBe(true);
-    });
-
-    it("holds a peer's last owner row when it later fails, as degraded while it still reports connected", async () => {
-      const row = await peerRow("draft-peer-d", "draft-remote-d", { threadStatus: "active", ordinaryChildCount: 1 });
-      for (let read = 0; read < 3; read += 1) {
-        listThreads.mockResolvedValueOnce([]);
-        readNavigationQueryIndex.mockReturnValueOnce({ threads: [], directories: [] });
-      }
-      federationMock.runtime.remoteNavigationQueryPage.mockResolvedValueOnce(ownerPage([row]));
-      expect((await draftRead(90313, [row.ref])).entries.map(({ row: entry }) => entry.threadStatus)).toEqual(["active"]);
-      federationMock.runtime.remoteNavigationQueryPage.mockRejectedValueOnce(new Error("Owner projection failed"));
-      const page = await draftRead(90314, [row.ref]);
-      expect(page.entries.map(({ row: entry }) => entry.id)).toEqual([row.id]);
-      expect(page.entries[0]!.row).toMatchObject({ ordinaryChildCount: 1, federation: { peerStatus: "degraded" } });
-      expect(page.entries[0]!.row.threadStatus).toBeUndefined();
-      expect(mockAppServerLog.warn).toHaveBeenCalledWith("serving held navigation rows for an owner that failed its exact read",
-        expect.objectContaining({ instanceId: "draft-peer-d", error: "Owner projection failed" }));
-      federationMock.runtime.remoteNavigationQueryPage.mockRejectedValueOnce(peerOffline("draft-peer-d"));
-      expect((await draftRead(90315, [row.ref])).entries[0]!.row.federation?.peerStatus).toBe("disconnected");
-    });
-
-    it("never sends owner resolution to a peer", async () => {
-      const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
-      const { NAVIGATION_QUERY_PAGE_CHANNEL } = await import("../../shared/ipc");
-      registerAppServerIpcHandlers();
-      await expect(handlers.get(NAVIGATION_QUERY_PAGE_CHANNEL)!({ sender: { id: 90316, once: vi.fn() } }, {
-        protocol: 2, consumer: "main-sidebar", inventory: "owner", federationTarget: { scope: "remote", instanceId: "draft-peer-e" },
-        query: { kind: "exact", identities: [peerRef("draft-peer-e", "x")], resolveFromOwners: true },
-      })).rejects.toThrow("only to this machine's viewer inventory");
-      expect(federationMock.runtime.remoteNavigationQueryPage).not.toHaveBeenCalled();
-    });
-  });
-
   it("projects a mounted remote child beneath its local parent through viewer IPC", async () => {
     const { buildFederatedThreadRef } = await import("@pwragent/shared");
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
@@ -2862,6 +2732,62 @@ describe("app server ipc", () => {
     }) as import("@pwragent/shared").NavigationQueryPage;
     expect(page.entries.map(({ row }) => row.id)).toEqual([child.id]);
     expect(page.entries[0]?.placement).toEqual({ kind: "child", parent: { backend: "codex", threadId: parent.id } });
+  });
+
+  it("reads every instance's drafts in one viewer page without waiting on a peer", async () => {
+    const { buildFederatedThreadRef } = await import("@pwragent/shared");
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_QUERY_PAGE_CHANNEL } = await import("../../shared/ipc");
+    const base = { source: "codex" as const, titleSource: "explicit" as const, linkedDirectories: [], inbox: { inInbox: false } };
+    const localParent: NavigationThreadSummary = { ...base, id: "local-parent", title: "Local parent" };
+    const localDraft: NavigationThreadSummary = { ...base, id: "local-draft", title: "Local draft" };
+    const peerRef = buildFederatedThreadRef({ backend: "codex", threadId: "peer-draft", instanceId: "peer-a" });
+    const heldRef = buildFederatedThreadRef({ backend: "codex", threadId: "held-draft", instanceId: "peer-b" });
+    const pinnedRef = buildFederatedThreadRef({ backend: "codex", threadId: "pinned-draft", instanceId: "peer-a" });
+    const peerDraft: NavigationThreadSummary = { ...base, id: "peer-draft", title: "Peer draft", pinnedRank: "a0",
+      parentThreadId: localParent.id, parentThreadBackend: "codex", parentThreadInstanceId: "pwr_local",
+      federation: { ref: peerRef, instanceLabel: "Peer A", peerStatus: "connected" } };
+    const heldDraft: NavigationThreadSummary = { ...base, id: "held-draft", title: "Held draft",
+      federation: { ref: heldRef, instanceLabel: "Peer B", peerStatus: "disconnected" } };
+    const pinnedDraft: NavigationThreadSummary = { ...base, id: "pinned-draft", title: "Pinned draft",
+      federation: { ref: pinnedRef, instanceLabel: "Peer A", peerStatus: "connected" } };
+    listThreads.mockResolvedValueOnce([]);
+    readNavigationQueryIndex.mockReturnValueOnce({ threads: [localParent, localDraft], directories: [] });
+    readRemoteThreadPinNavigationRows.mockResolvedValueOnce([pinnedDraft]);
+    federationMock.remoteThreadSummaries.resolvePinnedThreads.mockResolvedValueOnce({ threads: [pinnedDraft], refreshed: [], archived: [] });
+    federationMock.remoteThreadSummaries.resolveWatchedThreads.mockReturnValueOnce([peerDraft, heldDraft]);
+    federationMock.runtime.remoteNavigationQueryPage.mockClear();
+    registerAppServerIpcHandlers();
+    const identities = [
+      { backend: "codex" as const, threadId: "local-draft" },
+      { backend: "codex" as const, threadId: "peer-draft", ownerInstanceId: "peer-a" },
+      { backend: "codex" as const, threadId: "held-draft", ownerInstanceId: "peer-b" },
+      { backend: "codex" as const, threadId: "pinned-draft", ownerInstanceId: "peer-a" },
+    ];
+    const page = await handlers.get(NAVIGATION_QUERY_PAGE_CHANNEL)!({ sender: { id: 90204, once: vi.fn() } }, {
+      protocol: 2, consumer: "main-sidebar", inventory: "viewer",
+      query: { kind: "exact", identities, includeAncestry: true, resolveFromOwners: true },
+    }) as import("@pwragent/shared").NavigationQueryPage;
+    // A pinned draft already comes from the pins; only the others are watched.
+    expect(federationMock.remoteThreadSummaries.resolveWatchedThreads).toHaveBeenLastCalledWith([peerRef, heldRef]);
+    expect(federationMock.runtime.remoteNavigationQueryPage).not.toHaveBeenCalled();
+    const byId = new Map(page.entries.map((entry) => [entry.row.id, entry]));
+    expect([...byId.keys()].sort()).toEqual(["held-draft", "local-draft", "local-parent", "peer-draft", "pinned-draft"]);
+    expect(byId.get("peer-draft")?.placement).toEqual({ kind: "child", parent: { backend: "codex", threadId: localParent.id } });
+    expect(byId.get("peer-draft")?.row.pinnedRank).toBeUndefined();
+    expect(byId.get("held-draft")?.row.federation?.peerStatus).toBe("disconnected");
+  });
+
+  it("never sends an owner-resolved read to a remote owner", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_QUERY_PAGE_CHANNEL } = await import("../../shared/ipc");
+    federationMock.runtime.remoteNavigationQueryPage.mockClear();
+    registerAppServerIpcHandlers();
+    await expect(handlers.get(NAVIGATION_QUERY_PAGE_CHANNEL)!({ sender: { id: 90205, once: vi.fn() } }, {
+      protocol: 2, consumer: "main-sidebar", inventory: "owner", federationTarget: { scope: "remote", instanceId: "peer-a" },
+      query: { kind: "exact", identities: [{ backend: "codex", threadId: "t1" }], resolveFromOwners: true },
+    })).rejects.toThrow("Owner-resolved navigation is available only to this machine's viewer inventory.");
+    expect(federationMock.runtime.remoteNavigationQueryPage).not.toHaveBeenCalled();
   });
 
   it.each(["FEDERATION_PEER_UNAVAILABLE", "navigation_busy"])("returns expected %s state without rejecting the Electron handler, but still rejects unexpected failures", async (code) => {

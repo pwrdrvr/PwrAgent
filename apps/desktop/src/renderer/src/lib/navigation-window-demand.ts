@@ -74,8 +74,9 @@ export function buildNavigationWindowDemand(params: {
 
   } else if (params.browseMode === "drafts") {
     // One read names every instance's threads, as the other lenses do. Main
-    // asks each peer for its own rows and holds an offline peer's rows itself.
-    // A remote window's drafts all belong to its one owner.
+    // serves peer rows from what it already holds for each owner, including
+    // an offline owner's last rows. A remote window's drafts all belong to
+    // its one owner.
     const refs = params.draftRefs ?? [];
     for (let offset = 0; offset < refs.length; offset += 100) {
       demand.set(`drafts:${offset}`, request({ kind: "exact", identities: refs.slice(offset, offset + 100), includeAncestry: true,

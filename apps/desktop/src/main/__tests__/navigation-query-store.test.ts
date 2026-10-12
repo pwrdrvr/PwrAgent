@@ -455,6 +455,22 @@ describe("NavigationQueryStore", () => {
     })).resolves.toMatchObject({ collectionSize: 0 });
   });
 
+  it("refuses owner resolution outside this machine's viewer inventory", async () => {
+    const store = new NavigationQueryStore();
+    const loadIndex = vi.fn(async () => snapshot([thread("1")]));
+    const query = { kind: "exact" as const, identities: [{ backend: "codex" as const, threadId: "1" }], resolveFromOwners: true as const };
+    for (const patch of [{}, { inventory: "owner" as const },
+      { inventory: "viewer" as const, federationTarget: { scope: "remote" as const, instanceId: "peer" } }]) {
+      await expect(store.readPage({
+        loadIndex, request: request({ query, ...patch }), scopeKey: "renderer-viewer",
+      })).rejects.toMatchObject({ code: "navigation_invalid_request" });
+    }
+    expect(loadIndex).not.toHaveBeenCalled();
+    await expect(store.readPage({
+      loadIndex, request: request({ query, inventory: "viewer" }), scopeKey: "renderer-viewer",
+    })).resolves.toMatchObject({ complete: true });
+  });
+
   it("fits a continuation in the same byte budget as its rows", async () => {
     const load = (titleLength: number) => snapshot([
       thread("2", "x".repeat(titleLength)),
@@ -741,43 +757,6 @@ it("rejects cursor and unchanged-baseline combinations with an anchor", async ()
       request: request({ ...conflict, anchor: { kind: "directory", key: "directory:/selected" } }),
     })).rejects.toMatchObject({ code: "navigation_invalid_request" });
   }
-});
-
-it("refuses owner resolution outside this machine's viewer inventory", async () => {
-  const store = new NavigationQueryStore();
-  const query = { kind: "exact" as const, identities: [{ backend: "codex" as const, threadId: "t", ownerInstanceId: "peer" }],
-    resolveFromOwners: true as const };
-  // A peer's request is owner inventory. It must never make this instance read its own peers.
-  for (const patch of [{}, { inventory: "owner" as const },
-    { inventory: "viewer" as const, federationTarget: { scope: "remote" as const, instanceId: "peer" } }]) {
-    const loadMaterialization = vi.fn();
-    await expect(store.readPage({ scopeKey: "federation:peer", loadMaterialization, request: request({ ...patch, query }) }))
-      .rejects.toMatchObject({ code: "navigation_invalid_request" });
-    expect(loadMaterialization).not.toHaveBeenCalled();
-  }
-});
-
-it("pages a supplied materialization under the same cursor and baseline rules as a projected one", async () => {
-  const store = new NavigationQueryStore();
-  const viewer = request({ inventory: "viewer", pageSize: 2, query: { kind: "exact", resolveFromOwners: true,
-    identities: ["one", "two", "three"].map((threadId) => ({ backend: "codex" as const, threadId })) } });
-  const owned = await new NavigationQueryStore().readPage({ scopeKey: "window", request: { ...viewer, pageSize: 100 },
-    loadIndex: async () => snapshot([thread("one"), thread("two"), thread("three")]) });
-  const materialization = { coverage: owned.coverage, counts: owned.counts, directories: [], entries: owned.entries,
-    queryKey: owned.queryKey };
-  const load = vi.fn(async () => materialization);
-  const first = await store.readPage({ scopeKey: "window", request: viewer, loadMaterialization: load });
-  expect(first.entries.map(({ row }) => row.id)).toEqual(["one", "two"]);
-  const rest = await store.readPage({ scopeKey: "window", request: { ...viewer, cursor: first.nextCursor },
-    loadMaterialization: load });
-  expect(rest.entries.map(({ row }) => row.id)).toEqual(["three"]);
-  expect(load).toHaveBeenCalledTimes(1);
-  const all = await store.readPage({ scopeKey: "window", request: { ...viewer, pageSize: 100 }, loadMaterialization: load });
-  expect((await store.readPage({ scopeKey: "window", request: { ...viewer, pageSize: 100,
-    completeBaselineRevision: all.countsRevision }, loadMaterialization: load })).unchanged).toBe(true);
-  await expect(store.readPage({ scopeKey: "window", request: viewer,
-    loadMaterialization: async () => ({ ...materialization, queryKey: "another query" }) }))
-    .rejects.toMatchObject({ code: "navigation_invalid_request" });
 });
 
 it("does not certify incomplete provider coverage as an authoritative empty population", async () => {
