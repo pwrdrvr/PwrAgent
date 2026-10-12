@@ -254,10 +254,15 @@ describe("missing navigation anchors", () => {
     const raw = "Error invoking remote method 'navigation:get-query-page': NavigationQueryError: [navigation_anchor_missing] "
       + "The visible navigation anchor is no longer in this query. Choose another item or restart this list explicitly.";
     expect(navigationPageErrorCopy(raw)).toBe("Couldn't load these threads.");
-    expect(navigationPageErrorCopy("Federation peer peer-1 is not connected.")).toBe("This instance isn't connected.");
     expect(navigationPageErrorCopy("Navigation retained-page budget reached. Collapse a directory or change lens to release pages."))
       .toBe("Too many thread lists are open. Collapse a directory to load more.");
     expect(navigationPageErrorCopy("Navigation query protocol 2 is required. Upgrade the owning instance."))
       .toBe("Update the other instance to see these threads.");
+  });
+
+  it("says nothing when a peer is offline or nothing failed", () => {
+    expect(navigationPageErrorCopy("Federation peer peer-1 is not connected.")).toBeUndefined();
+    expect(navigationPageErrorCopy("Target federation peer is not connected.")).toBeUndefined();
+    expect(navigationPageErrorCopy(undefined)).toBeUndefined();
   });
 });

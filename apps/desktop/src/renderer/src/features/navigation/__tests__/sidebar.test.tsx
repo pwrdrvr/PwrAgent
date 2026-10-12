@@ -883,6 +883,26 @@ describe("Sidebar", () => {
     expect(screen.getByRole("tab", { name: "Attention, 1 active thread, 0 threads to review" })).toBeInTheDocument();
   });
 
+  it("leaves an offline peer out of the Drafts lens and reports read failures only as toasts", () => {
+    const request: NavigationQueryRequest = { protocol: 2, consumer: "main-sidebar", query: { kind: "directory-index" } };
+    const page = { ...navigationQueryFixture(request, { directories, threads: [] }), nextCursor: "next" };
+    const resource = (id: string, error: string) => ({ id, loading: false,
+      state: { ...createNavigationPageState(request), page, stale: true, error } });
+    render(<Sidebar backends={backends} browseMode="drafts" directories={directories}
+      threads={[]} inboxThreads={[]} loading={false} creatingThread={undefined}
+      selectedItemKey={undefined} onBrowseModeChange={() => undefined}
+      onCreateThread={async () => undefined} onOpenLaunchpad={async () => undefined} onSelectThread={() => undefined}
+      pagedNavigation={{ presentationReady: true, resources: new Map([
+        ["drafts:peer-offline", resource("drafts:peer-offline", "Federation peer peer-offline is not connected.")],
+        ["drafts:peer-broken", resource("drafts:peer-broken", "Navigation owner exploded.")],
+      ]), directories: [], selectedDirectoryKeys: undefined, connected: true,
+        invalidate: () => undefined, refresh: async () => undefined, loadMore: async () => undefined,
+        rebaseline: async () => undefined, restart: async () => undefined, setVisibleAnchor: () => undefined }} />);
+    // The broken peer is the control: its list still pages. App raises its toast.
+    expect(screen.getAllByRole("button", { name: "Load more threads" })).toHaveLength(1);
+    expect(screen.queryByText(/not connected|exploded|Couldn't load/)).not.toBeInTheDocument();
+  });
+
   it("renders Inbox as the first thread lens and keeps directory rows available", () => {
     const onOpenSettings = vi.fn();
     render(

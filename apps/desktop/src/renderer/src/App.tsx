@@ -190,6 +190,7 @@ import {
   threadActionErrorNoticeId,
   type ThreadActionErrorKind,
 } from "./features/notifications/thread-action-error-notice";
+import { useNavigationReadErrorNotices } from "./features/notifications/navigation-read-error-notice";
 import {
   buildCodexMissingThreadsNotice,
   CODEX_MISSING_THREADS_CONFIRMATION_NOTICE_ID,
@@ -1992,6 +1993,10 @@ function DesktopAppShell(props: {
     backendErrorThreadsRef.current = navigation.threads;
     backendErrorDirectoriesRef.current = navigation.directories;
   }, [navigation.directories, navigation.threads]);
+  useNavigationReadErrorNotices({
+    admissionError: navigation.pagedNavigation.admissionError,
+    resources: navigation.pagedNavigation.resources,
+  }, dispatchAppNotice);
   /* Incident-notice inputs the live notification handler reads without
      re-subscribing: which thread is on screen, whether the operator has
      pricing display on, and the loaded thread's usage rows. */

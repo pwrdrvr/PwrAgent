@@ -4032,14 +4032,10 @@ export class DesktopFederationRuntime {
     }
     const retryDelayMs = this.scheduleReconnect();
     if (retryDelayMs === undefined) return;
+    // The error names every endpoint tried and why each failed; without it a
+    // long outage logs nothing an operator can act on.
     const message = this.connectionFailureLog.recordFailure(Date.now(), retryDelayMs);
-    if (message) {
-      if (this.lastConnectionFailureKind === "auth") {
-        log.warn(message, { error: this.lastConnectionError });
-      } else {
-        log.warn(message);
-      }
-    }
+    if (message) log.warn(message, { error: this.lastConnectionError });
   }
 
   // Backoff applies per full cycle through the endpoint list; every cycle

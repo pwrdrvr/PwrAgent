@@ -1,7 +1,6 @@
 import type { ReactElement } from "react";
 import type { NavigationWindowResource } from "../../lib/navigation-window-queries";
 import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationWindow";
-import { navigationPageErrorCopy } from "../../lib/navigation-query-state";
 import { SidebarShowMore } from "./SidebarShowMore";
 
 /**
@@ -23,14 +22,12 @@ export function SubthreadPagination(props: {
   const { resource } = props;
   const initialLoad = resource.loading && !resource.state.page;
   const nothingToShow =
-    !resource.state.error
-    && !initialLoad
+    !initialLoad
     && !resource.state.rebaselineRequired
     && !resource.state.page?.nextCursor;
   if (nothingToShow) return null;
   return (
     <div role="listitem">
-      {resource.state.error ? <p className="sidebar-error" role="alert">{navigationPageErrorCopy(resource.state.error)}</p> : null}
       {initialLoad ? <p className="sidebar-empty">Loading sub-threads…</p> : null}
       {resource.state.rebaselineRequired ? (
         <SidebarShowMore
