@@ -119,6 +119,36 @@ describe("Pinned group", () => {
     expect(groupHeader()).toHaveAttribute("aria-expanded", "true");
   });
 
+  it("gives a jumped-to pin no visiting row, even while the group is closed", () => {
+    render(
+      <RecentsList
+        pinnedResourceId="lens-pins"
+        pinnedGroupCollapsed
+        threads={population}
+        visitingThread={docsMigration}
+        visitingLabel="Further down"
+        onOpenThreadContextMenu={() => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    // The group is where the pin lives; the reveal opens it.
+    expect(groupHeader()).toHaveAttribute("aria-expanded", "false");
+    expect(document.querySelector(".sidebar-visiting")).toBeNull();
+    expect(screen.queryByText("Further down")).toBeNull();
+  });
+
+  it("draws the group, not the empty line, when every thread is pinned", () => {
+    renderRecents({ threads: [releaseManager, rateLimiter, docsMigration] });
+
+    expect(titlesIn(pinnedGroup()!)).toEqual([
+      "Release manager",
+      "Docs IA migration",
+      "Rate limiter rewrite",
+    ]);
+    expect(screen.queryByText("No threads yet.")).toBeNull();
+  });
+
   it("drops the lane's top pad only while the group is drawn", () => {
     const view = renderRecents();
     expect(pinnedGroup()!.parentElement).toHaveClass("sidebar-list--pinned-group");
