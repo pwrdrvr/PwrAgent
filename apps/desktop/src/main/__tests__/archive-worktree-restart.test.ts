@@ -8,7 +8,7 @@ import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { CodexAppServerClient } from "../codex-app-server/client";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
-import { ArchiveWorktreeTransport } from "./fixtures/archive-worktree-transport";
+import { ArchiveWorktreeTransport, type ArchiveWorktreeThread } from "./fixtures/archive-worktree-transport";
 
 vi.mock("../log", () => ({ getMainLogger: () => ({ debug() {}, info() {}, warn() {}, error() {} }) }));
 vi.mock("../codex-app-server/stdio-transport", async () => ({
@@ -98,7 +98,7 @@ describe("archive worktrees across a desktop restart", () => {
     const fixture = await createFixture();
     ArchiveWorktreeTransport.threads = [
       { id: "old-target", cwd: fixture.worktree, source: "cli", originator: "codex" },
-      { id: "hidden-user", cwd: fixture.worktree, ...user },
+      { id: "hidden-user", cwd: fixture.worktree, status: { type: "notLoaded" }, ...user },
     ];
     const instance = fixture.reopen();
 
@@ -107,6 +107,96 @@ describe("archive worktrees across a desktop restart", () => {
     expect(result.cleanup[0]?.skippedReason).toContain("another active thread: hidden-user");
     expect((await stat(fixture.worktree)).isDirectory()).toBe(true);
     expect((await instance.store.getThreadOverlayState({ backend: "codex", threadId: "old-target" }))?.worktreeSnapshots ?? []).toEqual([]);
+  });
+
+  it.each([
+    { kind: "source", status: "notLoaded" },
+    { kind: "source", status: "idle" },
+    { kind: "threadSource", status: "notLoaded" },
+    { kind: "threadSource", status: "idle" },
+  ] as const)("archives and restores a worktree with a $status Guardian review identified by $kind", async ({ kind, status }) => {
+    const fixture = await createFixture();
+    ArchiveWorktreeTransport.threads = [
+      { id: "old-target", cwd: fixture.worktree, source: "cli" },
+      {
+        id: "guardian-review", cwd: fixture.worktree, source: "subAgentOther", status: { type: status },
+        // thread/list omits threadSource; thread/read can return guardian_review.
+        wireSource: kind === "source" ? { subAgent: { other: "guardian" } } : undefined,
+        threadSource: kind === "threadSource" ? "guardian_review" : null,
+      },
+    ];
+    await writeFile(path.join(fixture.worktree, "file.txt"), "work preserved past the approval review\n");
+    const instance = fixture.reopen();
+
+    const result = await instance.registry.archiveThread({ backend: "codex", threadId: "old-target" });
+
+    expect(result.cleanup).toEqual([expect.objectContaining({ removedWorktree: true, worktreePath: fixture.worktree })]);
+    await expect(stat(fixture.worktree)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(ArchiveWorktreeTransport.threads.find((thread) => thread.id === "guardian-review")?.archived).toBeUndefined();
+    await instance.registry.restoreThread({ backend: "codex", threadId: "old-target" });
+    expect(await readFile(path.join(fixture.worktree, "file.txt"), "utf8")).toBe("work preserved past the approval review\n");
+  });
+
+  it.each([
+    { type: "active", activeFlags: [] },
+    { type: "systemError" },
+    undefined,
+  ] satisfies ArchiveWorktreeThread["status"][])("keeps a worktree when a Guardian review has active or uncertain status %j", async (status) => {
+    const fixture = await createFixture();
+    ArchiveWorktreeTransport.threads = [
+      { id: "old-target", cwd: fixture.worktree, source: "cli" },
+      {
+        id: "guardian-review", cwd: fixture.worktree, source: "subAgentOther",
+        wireSource: { subAgent: { other: "guardian" } }, threadSource: null, status,
+      },
+    ];
+    const instance = fixture.reopen();
+
+    const result = await instance.registry.archiveThread({ backend: "codex", threadId: "old-target" });
+
+    expect(result.cleanup[0]?.skippedReason).toContain("another active thread: guardian-review");
+    expect((await stat(fixture.worktree)).isDirectory()).toBe(true);
+  });
+
+  it("rechecks Guardian activity before removing the worktree", async () => {
+    const fixture = await createFixture();
+    const guardian: ArchiveWorktreeThread = {
+      id: "guardian-review", cwd: fixture.worktree, source: "subAgentOther",
+      wireSource: { subAgent: { other: "guardian" } }, threadSource: null, status: { type: "notLoaded" },
+    };
+    ArchiveWorktreeTransport.threads = [
+      { id: "old-target", cwd: fixture.worktree, source: "cli" }, guardian,
+    ];
+    let activeReads = 0;
+    ArchiveWorktreeTransport.onList = (params) => {
+      if (!params.archived && ++activeReads === 2) guardian.status = { type: "active", activeFlags: [] };
+    };
+    const instance = fixture.reopen();
+
+    const result = await instance.registry.archiveThread({ backend: "codex", threadId: "old-target" });
+
+    expect(activeReads).toBe(2);
+    expect(result.cleanup[0]?.removedWorktree).toBe(false);
+    expect(result.cleanup[0]?.error).toContain("Worktree is still used by another active thread");
+    expect((await stat(fixture.worktree)).isDirectory()).toBe(true);
+  });
+
+  it("continues past a page containing only inactive Guardian reviews to find a real checkout user", async () => {
+    const fixture = await createFixture();
+    ArchiveWorktreeTransport.threads = [
+      { id: "old-target", cwd: fixture.worktree, source: "cli" },
+      ...Array.from({ length: 25 }, (_, index): ArchiveWorktreeThread => ({
+        id: `guardian-review-${index}`, cwd: fixture.worktree, source: "subAgentOther",
+        wireSource: { subAgent: { other: "guardian" } }, threadSource: null, status: { type: "notLoaded" },
+      })),
+      { id: "real-user", cwd: fixture.worktree, source: "cli", status: { type: "notLoaded" } },
+    ];
+    const instance = fixture.reopen();
+
+    const result = await instance.registry.archiveThread({ backend: "codex", threadId: "old-target" });
+
+    expect(result.cleanup[0]?.skippedReason).toBe("Worktree is still used by another active thread: real-user.");
+    expect((await stat(fixture.worktree)).isDirectory()).toBe(true);
   });
 
   it("finds an old target on a later archived page and retains its recovery snapshot", async () => {
