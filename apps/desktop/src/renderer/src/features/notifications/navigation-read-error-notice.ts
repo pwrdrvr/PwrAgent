@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { navigationPageErrorKind, type NavigationPageErrorKind } from "../../lib/navigation-query-state";
+import type { NavigationWindowResource } from "../../lib/navigation-window-queries";
 import type { AppNoticeToastNotice } from "./AppNoticeToast";
 import type { AppNoticeAction } from "./app-notice-state";
 
@@ -17,7 +18,7 @@ import type { AppNoticeAction } from "./app-notice-state";
 const NAVIGATION_READ_ERROR_NOTICES: Record<NavigationPageErrorKind, { title: string; message: string }> = {
   "page-budget": {
     title: "Too many thread lists open",
-    message: "Collapse a directory to load more threads.",
+    message: "Collapse directories or switch lenses to load more threads.",
   },
   "owner-upgrade": {
     title: "Another instance needs an update",
@@ -67,21 +68,35 @@ export function resolveNavigationReadErrorNotices(params: {
 /**
  * Keeps the toasts in step with the window's reads. Keyed on what they say, so
  * a dismissed toast stays dismissed until a read fails differently, and a
- * recovered read takes its toast down.
+ * settled read that recovers takes its toast down.
+ *
+ * A re-read clears its resource's error while it is in flight
+ * (`beginNavigationPageRead`), so a resource that is loading keeps the error
+ * it last settled on. Keying on the in-flight state would take a persistent
+ * failure's toast down and put it back on every refresh, undoing a dismissal.
  */
 export function useNavigationReadErrorNotices(
-  params: { admissionError?: string; pageErrors: Iterable<string | undefined> },
+  params: { admissionError?: string; resources: ReadonlyMap<string, NavigationWindowResource> },
   dispatch: (action: AppNoticeAction) => void,
 ): void {
-  const notices = resolveNavigationReadErrorNotices(params);
-  const key = JSON.stringify(notices.map((notice) => [notice.id, notice.copyText]));
-  const noticesRef = useRef(notices);
-  noticesRef.current = notices;
+  const { admissionError, resources } = params;
+  const settledErrorsRef = useRef(new Map<string, string | undefined>());
+  const shownKeyRef = useRef<string | undefined>(undefined);
   useEffect(() => {
-    const current = noticesRef.current;
-    for (const id of NAVIGATION_READ_ERROR_NOTICE_IDS) {
-      if (!current.some((notice) => notice.id === id)) dispatch({ type: "dismiss", id });
+    const settled = new Map<string, string | undefined>();
+    for (const [id, resource] of resources) {
+      settled.set(id, resource.loading && !resource.state.error
+        ? settledErrorsRef.current.get(id)
+        : resource.state.error);
     }
-    for (const notice of current) dispatch({ type: "show", notice });
-  }, [dispatch, key]);
+    settledErrorsRef.current = settled;
+    const notices = resolveNavigationReadErrorNotices({ admissionError, pageErrors: settled.values() });
+    const key = JSON.stringify(notices.map((notice) => [notice.id, notice.copyText]));
+    if (key === shownKeyRef.current) return;
+    shownKeyRef.current = key;
+    for (const id of NAVIGATION_READ_ERROR_NOTICE_IDS) {
+      if (!notices.some((notice) => notice.id === id)) dispatch({ type: "dismiss", id });
+    }
+    for (const notice of notices) dispatch({ type: "show", notice });
+  }, [admissionError, dispatch, resources]);
 }

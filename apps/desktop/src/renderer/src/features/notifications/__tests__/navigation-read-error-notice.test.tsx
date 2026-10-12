@@ -1,5 +1,8 @@
+import type { NavigationQueryRequest } from "@pwragent/shared";
 import { renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { createNavigationPageState } from "../../../lib/navigation-query-state";
+import type { NavigationWindowResource } from "../../../lib/navigation-window-queries";
 import {
   NAVIGATION_READ_ERROR_NOTICE_IDS,
   resolveNavigationReadErrorNotices,
@@ -51,24 +54,40 @@ describe("navigation read error notices", () => {
     ]);
   });
 
-  it("shows a failure once, leaves a dismissal alone, and takes the toast down on recovery", () => {
+  it("shows a failure once, holds it through a re-read, and takes it down on recovery", () => {
+    const request: NavigationQueryRequest = { protocol: 2, consumer: "main-sidebar", query: { kind: "lens", lens: "inbox" } };
+    const resource = (error: string | undefined, loading = false): NavigationWindowResource => ({
+      id: "lens", loading, state: { ...createNavigationPageState(request), error },
+    });
     const dispatch = vi.fn();
-    type Props = { pageErrors: (string | undefined)[] };
+    type Props = { resources: ReadonlyMap<string, NavigationWindowResource> };
     const { rerender } = renderHook(
-      ({ pageErrors }: Props) => useNavigationReadErrorNotices({ pageErrors }, dispatch),
-      { initialProps: { pageErrors: ["Error: owner exploded"] } as Props },
+      ({ resources }: Props) => useNavigationReadErrorNotices({ resources }, dispatch),
+      { initialProps: { resources: new Map([["lens", resource("Error: owner exploded")]]) } as Props },
     );
     const shown = dispatch.mock.calls.filter(([action]) => action.type === "show");
     expect(shown.map(([action]) => action.notice.id)).toEqual(["navigation-read-error:read-failed"]);
 
-    // The same failure on a later render, e.g. after the operator dismissed it.
+    // A refresh clears the error while it reads (beginNavigationPageRead), then
+    // fails the same way. The operator may have dismissed the toast meanwhile.
     dispatch.mockClear();
-    rerender({ pageErrors: ["Error: owner exploded", undefined] });
+    rerender({ resources: new Map([["lens", resource(undefined, true)]]) });
+    rerender({ resources: new Map([["lens", resource("Error: owner exploded")]]) });
     expect(dispatch).not.toHaveBeenCalled();
 
-    rerender({ pageErrors: [undefined, "Federation peer peer-1 is not connected."] });
+    rerender({ resources: new Map([["lens", resource(undefined)]]) });
     expect(dispatch.mock.calls.map(([action]) => action)).toEqual(
       NAVIGATION_READ_ERROR_NOTICE_IDS.map((id) => ({ type: "dismiss", id })),
     );
+  });
+
+  it("raises no toast for an offline peer", () => {
+    const request: NavigationQueryRequest = { protocol: 2, consumer: "main-sidebar", query: { kind: "exact", identities: [] } };
+    const dispatch = vi.fn();
+    renderHook(() => useNavigationReadErrorNotices({ resources: new Map([["drafts:peer", {
+      id: "drafts:peer", loading: false,
+      state: { ...createNavigationPageState(request), error: "Federation peer peer-1 is not connected." },
+    }]]) }, dispatch));
+    expect(dispatch.mock.calls.filter(([action]) => action.type === "show")).toEqual([]);
   });
 });

@@ -1995,7 +1995,7 @@ function DesktopAppShell(props: {
   }, [navigation.directories, navigation.threads]);
   useNavigationReadErrorNotices({
     admissionError: navigation.pagedNavigation.admissionError,
-    pageErrors: [...navigation.pagedNavigation.resources.values()].map((resource) => resource.state.error),
+    resources: navigation.pagedNavigation.resources,
   }, dispatchAppNotice);
   /* Incident-notice inputs the live notification handler reads without
      re-subscribing: which thread is on screen, whether the operator has
