@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.2.0 - 2026-10-12
+
+- Thread Organization - Actionable to-dos with project assignments, a unified "Waiting on You" view for approvals and questions, and thread locks for safer handoffs.
+- Keyboard and Navigation - Configurable shortcuts, inline renaming, archive undo, cross-project pinned groups, and project-scoped quick navigation.
+- Director Voice - Optional camera cues complement voice control with presence and gesture detection. Requires a local decision model; gestures never approve actions.
+- Federated Work - More reliable conversation transfers, branch selection, project moves, remote file previews, and Cloudflare sign-in renewal. Workspace archives respect the receiving machine's permissions while keeping scripts executable.
+- Usage and Cost - Account-filtered usage across machines and profiles, interactive spending breakdowns, and combined totals for threads and their sub-threads.
+- Files and Images - In-app previews for structured data and logs, clickable filenames in transcripts, and synchronized before/after image comparisons.
+- Messaging - Richer Telegram replies with tables, formulas, and mixed media, cleaner private-agent delivery, and correctly ordered delivery receipts.
+- Appearance - Independent light and dark themes, automatic OS switching, and theme-matched macOS Dock icons.
+- Agent Controls - Separate managed Codex Latest/Prerelease tracks, conversation-scoped MCP approvals, and persistent output and Stop controls for running actions. Pending MCP prompts recover without reopening the thread or losing questionnaire answers.
+- Performance and Updates - Less navigation and Star Map churn, paced archive cleanup without false blocks from unrelated metadata refreshes, improved recovery, Linux package updates, and replacement of downloaded updates when a newer release arrives.
+
 ## v1.2.0-prerelease.5 - 2026-10-11
 
 - Keyboard Shortcuts - Customize thread-action shortcuts in Settings. Rename threads inline, and undo local thread archiving without losing your place in the sidebar.
