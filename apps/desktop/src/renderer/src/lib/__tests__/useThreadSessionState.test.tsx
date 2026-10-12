@@ -12049,6 +12049,104 @@ describe("useThreadSessionState", () => {
     });
   });
 
+  it.each([
+    { restoration: "notification", phase: "answering" },
+    { restoration: "notification", phase: "review" },
+    { restoration: "hydration", phase: "answering" },
+    { restoration: "hydration", phase: "review" },
+  ] as const)("preserves questionnaire drafts during $restoration in $phase", async ({ restoration, phase }) => {
+    const listeners = new Set<Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]>();
+    const pendingRequest: AppServerToolRequestUserInputNotification = {
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        requestId: "questionnaire-1",
+        questions: ["approach", "scope"].map((id) => ({
+          id,
+          header: id,
+          question: `Choose ${id}`,
+          isOther: true,
+          isSecret: false,
+          options: [],
+        })),
+      },
+    };
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => {
+        listeners.add(listener);
+        return () => { listeners.delete(listener); };
+      },
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        pendingRequest,
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: { supportsPagination: false, hasPreviousPage: false },
+        },
+      }),
+    };
+    const { result } = renderHook(() => useThreadSessionState({
+      desktopApi,
+      thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+    }));
+    await waitForThreadHydration(result);
+    act(() => {
+      result.current.updatePendingUserInput("questionnaire-1", (state) => ({
+        ...state,
+        phase,
+        currentIndex: 1,
+        answers: [
+          { kind: "text", value: "Keep this scoped" },
+          phase === "review" ? { kind: "text", value: "Desktop" } : null,
+        ],
+      }));
+    });
+    const draft = result.current.pendingUserInput;
+    act(() => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "mcpServer/elicitation/request",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-1",
+              requestId: "login-1",
+              serverName: "github",
+              mode: "url",
+              _meta: null,
+              message: "Reconnect GitHub.",
+              url: "https://example.test/login",
+              elicitationId: "elicitation-1",
+            },
+          },
+        });
+        listener({
+          backend: "codex",
+          notification: {
+            method: "serverRequest/resolved",
+            params: { threadId: "thread-1", requestId: "login-1" },
+          },
+        });
+      }
+    });
+    if (restoration === "notification") {
+      act(() => {
+        for (const listener of listeners) {
+          listener({ backend: "codex", notification: pendingRequest });
+        }
+      });
+    } else {
+      await act(async () => { await result.current.reload(); });
+    }
+    expect(result.current.pendingMcpInteraction).toBeUndefined();
+    expect(result.current.pendingUserInput).toBe(draft);
+  });
+
   it("does not reintroduce thinking when a request resolves after turn completion", async () => {
     const agentEventListeners = new Set<
       Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]

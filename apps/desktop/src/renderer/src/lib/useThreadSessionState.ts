@@ -4496,6 +4496,17 @@ function isRequestUserInputNotification(
   );
 }
 
+function restoreQuestionnaireState(
+  request: AppServerToolRequestUserInputNotification,
+  current: PendingQuestionnaireState | undefined,
+): PendingQuestionnaireState | undefined {
+  // Request identity is scoped to the thread session. Redisplay must keep
+  // the operator's answers, current question, and review phase.
+  return current?.requestId === request.params.requestId
+    ? current
+    : createQuestionnaireState(request);
+}
+
 function isMcpElicitationNotification(
   notification: { method: string; params: Record<string, unknown> }
 ): notification is AppServerMcpElicitationRequestNotification {
@@ -5085,7 +5096,7 @@ export function useThreadSessionState(params: {
             : response.pendingRequest;
           const hydratedPendingUserInput =
             hydratedPendingRequest && isRequestUserInputNotification(hydratedPendingRequest)
-              ? createQuestionnaireState(hydratedPendingRequest)
+              ? restoreQuestionnaireState(hydratedPendingRequest, current.pendingUserInput)
               : undefined;
           const hydratedPendingMcpInteraction =
             hydratedPendingRequest && isMcpElicitationNotification(hydratedPendingRequest)
@@ -5931,7 +5942,7 @@ export function useThreadSessionState(params: {
         }
 
         if (isRequestUserInputNotification(event.notification)) {
-          const pendingUserInput = createQuestionnaireState(event.notification);
+          const pendingUserInput = restoreQuestionnaireState(event.notification, current.pendingUserInput);
           if (!pendingUserInput) {
             return current;
           }

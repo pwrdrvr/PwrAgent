@@ -20274,6 +20274,80 @@ describe("MessagingController", () => {
     });
   });
 
+  it.each(["telegram", "discord"] as const)(
+    "does not duplicate restored pending requests on %s", async (channel) => {
+      const harness = await createHarness({ channel });
+      await harness.store.upsertBinding({
+        id: `binding:${channel}:thread-1`,
+        authorizedActorIds: ["user-1"],
+        backend: "codex",
+        channel: { channel, conversation: { id: "chat-1", kind: "dm" } },
+        createdAt: 1000,
+        targetKind: "agent_thread",
+        threadId: "thread-1",
+        updatedAt: 1000,
+      });
+      const questionnaire: AppServerPendingRequestNotification = {
+        method: "item/tool/requestUserInput",
+        params: {
+          threadId: "thread-1",
+          requestId: "questionnaire-1",
+          questions: [{
+            id: "approach",
+            header: "Approach",
+            question: "How should I proceed?",
+            isOther: true,
+            isSecret: false,
+            options: [],
+          }],
+        },
+      };
+      const login: AppServerPendingRequestNotification = {
+        method: "mcpServer/elicitation/request",
+        params: {
+          threadId: "thread-1",
+          requestId: "login-1",
+          serverName: "github",
+          mode: "url",
+          _meta: null,
+          message: "Reconnect GitHub.",
+          url: "https://example.test/login",
+          elicitationId: "elicitation-1",
+        },
+      };
+      // Duplicate notifications can overlap while the first intent is stored.
+      await Promise.all([
+        harness.controller.handleBackendPendingRequest("codex", questionnaire),
+        harness.controller.handleBackendPendingRequest("codex", questionnaire),
+      ]);
+      await harness.controller.handleBackendPendingRequest("codex", login);
+      await harness.controller.handleBackendPendingRequest("codex", login);
+      const prompts = harness.delivered.filter((intent) => intent.requestContext);
+      expect(prompts.map((intent) => intent.requestContext?.requestId))
+        .toEqual(["questionnaire-1", "login-1"]);
+      await harness.controller.handleBackendEvent({
+        backend: "codex",
+        notification: {
+          method: "serverRequest/resolved",
+          params: { threadId: "thread-1", requestId: "login-1" },
+        },
+      });
+      await harness.controller.handleBackendPendingRequest("codex", questionnaire);
+
+      expect(harness.delivered.filter((intent) =>
+        intent.requestContext?.requestId === "questionnaire-1"
+      )).toHaveLength(1);
+      const retained = await harness.store.findActivePendingIntentsForRequest({
+        backend: "codex",
+        threadId: "thread-1",
+        requestId: "questionnaire-1",
+        now: 1000,
+      });
+      expect(retained).toHaveLength(1);
+      expect(retained[0]?.id).toBe(prompts[0]?.id);
+    },
+  );
+
   it("presents and submits MCP login requests even when Working Updates is None", async () => {
     const harness = await createHarness({ toolUpdateDefaultMode: "show_none" });
     await bindThread(harness);
