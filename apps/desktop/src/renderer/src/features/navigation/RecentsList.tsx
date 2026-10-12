@@ -677,7 +677,7 @@ export function RecentsList(props: RecentsListProps) {
   }
 
   return (
-    <div className="sidebar-list sidebar-list--dense">
+    <div className={`sidebar-list sidebar-list--dense${pinnedRoots.length > 0 ? " sidebar-list--pinned-group" : ""}`}>
       {pinnedGroup}
       <div className="sidebar-list sidebar-list--compact" role="list">
         {startingRootThreads.map((creation) => (

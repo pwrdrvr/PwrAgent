@@ -8315,13 +8315,23 @@ a.button {
    the same kind of section a Directories project is; only the section box,
    the mark and the count are its own. The section box mirrors
    `.directory-row`: `position: relative` contains the drop indicators of a
-   pin drag, and the 2px top pad is the same seam. The hairline under it is
-   the one boundary between the pins and the time-sorted list, open or
-   closed. */
+   pin drag. It takes no top pad: that pad is the seam between two
+   projects, and nothing sits above the group, so the header starts exactly
+   where it sticks. The hairline under it is the one boundary between the
+   pins and the time-sorted list, open or closed. */
 .pinned-group {
   position: relative;
-  padding: 2px 0 4px;
+  padding: 0 0 4px;
   border-bottom: 1px solid var(--border-subtle);
+}
+
+/* A sticky header stops at its scroller's content edge, not its padding
+   edge, so the lane's top pad (`.sidebar-list`) left a strip above the
+   stuck Pinned header where scrolled rows showed through. Zero it, as
+   `.directory-list` does for its project headers: the header starts where
+   it sticks, under the lens switch, and never moves on the first scroll. */
+.sidebar-list--pinned-group {
+  padding-top: 0;
 }
 
 /* The same accent the rows' own pin glyph uses (`.thread-row__pin`). */
