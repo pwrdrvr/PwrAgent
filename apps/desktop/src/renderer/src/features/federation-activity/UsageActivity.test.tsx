@@ -5,6 +5,7 @@ import type { BackendSummary, DesktopSettingsConfigPatch, DesktopSettingsWriteRe
   ReadDesktopSettingsResponse, ReadFederationActivityResponse, UsageLimitObservation } from "@pwragent/shared";
 import { UsageActivity } from "./UsageActivity";
 import { usageFixture } from "./usage-activity-fixture";
+import { USAGE_CUSTOM_RANGE_DEBOUNCE_MS } from "./usage-activity-presentation";
 import { chooseSelectOption, selectListbox, selectOptionLabels } from "../../test/select";
 
 const HOUR = 3_600_000;
@@ -23,12 +24,12 @@ function fakeDebounce() {
   vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ["setTimeout", "clearTimeout"] });
 }
 
-/** Enters a custom range and runs its 400 ms debounce, so the read has started. */
+/** Enters a custom range and runs its debounce, so the read has started. */
 async function chooseCustomRange(from: string, to: string) {
   choosePeriod("Custom");
   fireEvent.change(screen.getByLabelText("From"), { target: { value: from } });
   fireEvent.change(screen.getByLabelText("To"), { target: { value: to } });
-  await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+  await act(async () => { await vi.advanceTimersByTimeAsync(USAGE_CUSTOM_RANGE_DEBOUNCE_MS); });
 }
 
 const peers = (list: Array<{ id: string; label: string; status: string; profileName?: string }>) =>
@@ -539,7 +540,7 @@ it("filters and ranks threads without rereading or launching analysis", async ()
   fakeDebounce();
   render(<UsageActivity desktopApi={{ readUsageActivity, analyzeUsageActivity }} />);
   await chooseCustomRange("2026-09-28T09:00", "2026-09-28T12:00");
-  await waitFor(() => expect(readUsageActivity).toHaveBeenLastCalledWith(expect.objectContaining({ from: new Date(2026, 8, 28, 9).getTime() })));
+  expect(readUsageActivity).toHaveBeenLastCalledWith(expect.objectContaining({ from: new Date(2026, 8, 28, 9).getTime() }));
   await screen.findByRole("button", { name: "Inspect Later thread" });
   const reads = readUsageActivity.mock.calls.length;
   expect(screen.getAllByRole("button", { name: /^Inspect / })[0]).toHaveAccessibleName("Inspect Later thread");
@@ -640,7 +641,7 @@ async function renderSlices(rows: ReturnType<typeof usageFixture>[], desktopApi:
   fakeDebounce();
   render(<UsageActivity desktopApi={{ readUsageActivity, ...desktopApi }} />);
   await chooseCustomRange("2026-09-28T09:00", "2026-09-28T12:00");
-  await waitFor(() => expect(readUsageActivity).toHaveBeenLastCalledWith(expect.objectContaining({ from: new Date(2026, 8, 28, 9).getTime() })));
+  expect(readUsageActivity).toHaveBeenLastCalledWith(expect.objectContaining({ from: new Date(2026, 8, 28, 9).getTime() }));
   await screen.findAllByRole("button", { name: /^Inspect / });
   const plot = screen.getByRole("group", { name: "Filter threads by completion time" });
   return { plot, bar: (label: RegExp) => within(plot).getByRole("button", { name: label }) };

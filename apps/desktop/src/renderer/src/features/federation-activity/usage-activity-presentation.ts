@@ -79,6 +79,9 @@ export function usageRollupLabel(rollup: UsageActivityRollup): string {
 /** Threads beyond this many share the chart's "Other" series. */
 export const USAGE_SERIES = 5;
 
+/** How long a custom range waits for typing to pause before it reads. */
+export const USAGE_CUSTOM_RANGE_DEBOUNCE_MS = 400;
+
 /** What the chart stacks spend by. */
 export type UsageDimension = "thread" | "model" | "provider" | "account" | "instance";
 

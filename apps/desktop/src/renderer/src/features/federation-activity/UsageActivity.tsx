@@ -6,7 +6,7 @@ import { UsageLimitsBand } from "./UsageLimitsBand";
 import { UsageInspector, analysisModelKey, defaultAnalysisModel, parseAnalysisModelKey,
   type AnalysisModelChoice, type AnalysisScope, type UsageAnalysis } from "./UsageInspector";
 import { UsageSignals, groupSignals } from "./UsageSignals";
-import { USAGE_SERIES, usageBucketLabel, usageCompletionBuckets, usageDimensionValue, type UsageDimension, usageNotCountedReason, usageSpendStrip, usageMoney as money, usageCount as compact, usageClock } from "./usage-activity-presentation";
+import { USAGE_CUSTOM_RANGE_DEBOUNCE_MS, USAGE_SERIES, usageBucketLabel, usageCompletionBuckets, usageDimensionValue, type UsageDimension, usageNotCountedReason, usageSpendStrip, usageMoney as money, usageCount as compact, usageClock } from "./usage-activity-presentation";
 import { buildLimitAccounts, fiveHourSeries, limitLabel, projectLimit, seriesStart, sinceResetSeries, type LimitAccount, type LimitSeries } from "./usage-limits";
 import { Select } from "../../components/Select";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -307,7 +307,7 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
   // pause so each keystroke in a date field is not a read.
   useEffect(() => {
     if (!peersReady || !desktopApi?.readUsageActivity) return;
-    const timer = window.setTimeout(() => void refreshRef.current(), preset === "custom" ? 400 : 0);
+    const timer = window.setTimeout(() => void refreshRef.current(), preset === "custom" ? USAGE_CUSTOM_RANGE_DEBOUNCE_MS : 0);
     return () => window.clearTimeout(timer);
   }, [queryKey, peersReady, desktopApi, preset]);
   // Coming back to the window rereads data that has gone stale, and picks up
