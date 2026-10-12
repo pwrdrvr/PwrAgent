@@ -5997,6 +5997,20 @@ a.button {
   color: var(--accent-bright);
 }
 
+/* A ⌘K-jumped thread outside the lens (RecentsList's visiting slot): an
+   ordinary row under the pinned divider's label, after the lens's rows. The
+   4px top matches `.directory-row__thread-divider`: a section label, a hair
+   wider than the 2px the cards keep between each other. */
+.sidebar-visiting {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidebar-visiting > .recents-pinned-divider {
+  margin-top: 4px;
+}
+
 .recents-pinned-divider::before,
 .recents-pinned-divider::after {
   content: "";

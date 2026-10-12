@@ -2,7 +2,7 @@ import { readNavigationPresentationOrder, type NavigationPresentationOrder } fro
 import type { NavigationPresentedThread } from "../../lib/navigation-loaded-rows";
 import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationWindow";
 import { isNavigationPeerUnavailable, navigationIdentityKey, navigationThreadSelectionKey } from "../../lib/navigation-query-state";
-import { useState, type MouseEvent, type ReactNode } from "react";
+import { useId, useState, type MouseEvent, type ReactNode } from "react";
 import { useEventCallback } from "../../lib/useEventCallback";
 import type {
   MessagingThreadBindingSummary,
@@ -78,6 +78,16 @@ type RecentsListProps = {
    * it is not counted as a thread.
    */
   footer?: ReactNode;
+  /**
+   * A thread the operator jumped to (⌘K) that may be outside this lens. When
+   * it has no row here, and no rendered ancestor whose tray the reveal will
+   * open, it gets its own row after the lens's rows under `visitingLabel`,
+   * so the selection is never invisible and the lens never has to change.
+   */
+  visitingThread?: NavigationThreadSummary;
+  visitingLabel?: string;
+  /** Shown in place of the rows when the lens has none, above a visiting row. */
+  emptyMessage?: ReactNode;
   onSelectStartingThread?: (entry: PendingSidebarRow) => void;
   onOpenSubthreadDraftContextMenu?: (
     draft: SubthreadLaunchpadDraft,
@@ -183,6 +193,11 @@ export function RecentsList(props: RecentsListProps) {
     for (const child of trays.subtree(key)) renderedThreadKeys.add(threadSummaryIdentityKey(child));
   }
   const startingThreads = selectUnlandedStartingThreads(props.startingThreads, renderedThreadKeys);
+  const visitingThread = props.visitingThread
+    && !hasRenderedLineage(props.visitingThread, renderedThreadKeys, threadByKey)
+    ? props.visitingThread
+    : undefined;
+  const visitingLabelId = useId();
   const startingSubthreads = startingThreads.filter((creation) =>
     creation.parentThreadKey && renderedThreadKeys.has(creation.parentThreadKey));
   const startingRootThreads = startingThreads.filter((creation) => !startingSubthreads.includes(creation));
@@ -470,6 +485,60 @@ export function RecentsList(props: RecentsListProps) {
     );
   };
 
+  // After the lens's rows rather than above them: no queue row moves when the
+  // slot appears or goes away, and in the paged lenses that is also where the
+  // thread really is.
+  const visitingSlot = visitingThread ? (
+    <div className="sidebar-visiting">
+      <p className="recents-pinned-divider" id={visitingLabelId}>
+        {props.visitingLabel}
+      </p>
+      <div className="sidebar-list sidebar-list--compact" role="list" aria-labelledby={visitingLabelId}>
+        <div className="thread-group">
+          <ThreadRow
+            approvalRequestThreadKeys={props.approvalRequestThreadKeys}
+            terminalThreadKeys={props.terminalThreadKeys}
+            inputRequestThreadKeys={props.inputRequestThreadKeys}
+            queuedMessageThreadKeys={props.queuedMessageThreadKeys}
+            draftThreadKeys={props.draftThreadKeys}
+            composerSourceThreadKey={props.composerSourceThreadKey}
+            actionsMenuOpen={threadSummaryIdentityKey(visitingThread) === props.actionsMenuThreadKey}
+            renaming={isRenamingRow(props.renamingRow, threadSummaryIdentityKey(visitingThread), undefined)}
+            onRequestRename={props.onRequestRenameThread}
+            onCommitRename={props.onCommitRenameThread}
+            includeLinkedDirectories
+            revealSelectedThreadRequest={props.revealSelectedThreadRequest}
+            selectedThreadKey={props.selectedThreadKey}
+            selectedThreadKeys={props.selectedThreadKeys}
+            thinkingThreadKeys={props.thinkingThreadKeys}
+            agentCommandThreadKeys={props.agentCommandThreadKeys}
+            thread={visitingThread}
+            onOpenContextMenu={props.onOpenThreadContextMenu}
+            onOpenPullRequestContextMenu={props.onOpenPullRequestContextMenu}
+            onDetachPullRequest={props.onDetachPullRequest}
+            onPrefetchPullRequests={props.onPrefetchPullRequests}
+            onPrefetchGitWorkingState={props.onPrefetchGitWorkingState}
+            onRevealSelectedThreadComplete={props.onRevealSelectedThreadComplete}
+            onSelectThread={selectThread}
+            onSetReaction={props.onSetReaction}
+            onSetThreadPin={props.onSetThreadPin}
+            onUnbindMessagingBinding={props.onUnbindMessagingBinding}
+          />
+        </div>
+      </div>
+    </div>
+  ) : null;
+
+  if (topLevelThreads.length === 0 && startingRootThreads.length === 0 && props.emptyMessage) {
+    return (
+      <div className="sidebar-list sidebar-list--dense">
+        {props.emptyMessage}
+        {visitingSlot}
+        {props.footer}
+      </div>
+    );
+  }
+
   return (
     <div className="sidebar-list sidebar-list--dense">
       <div className="sidebar-list sidebar-list--compact" role="list">
@@ -487,7 +556,32 @@ export function RecentsList(props: RecentsListProps) {
         ))}
         {topLevelThreads.map((thread) => renderThreadGroup(thread))}
       </div>
+      {visitingSlot}
       {props.footer}
     </div>
   );
+}
+
+/**
+ * Whether the thread has a row here already, or sits under a rendered
+ * ancestor. The second case is still the lens's own row: the sidebar's reveal
+ * opens collapsed parents, and the child lands in its tray a moment later. A
+ * visiting row in that gap would flash at the end of the list and take the
+ * reveal's scroll with it.
+ */
+function hasRenderedLineage(
+  thread: NavigationThreadSummary,
+  renderedThreadKeys: ReadonlySet<string>,
+  threadByKey: ReadonlyMap<string, NavigationThreadSummary>,
+): boolean {
+  const visited = new Set<string>();
+  let key: string | undefined = threadSummaryIdentityKey(thread);
+  let current: NavigationThreadSummary | undefined = thread;
+  while (key && !visited.has(key)) {
+    if (renderedThreadKeys.has(key)) return true;
+    visited.add(key);
+    key = current ? resolveThreadParentKey(current, threadByKey) : undefined;
+    current = key ? threadByKey.get(key) : undefined;
+  }
+  return false;
 }

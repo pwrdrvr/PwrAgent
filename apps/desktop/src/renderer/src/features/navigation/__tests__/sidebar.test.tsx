@@ -25,7 +25,7 @@ import type { FederationProjectDirectory } from "../../chrome/useFederationProje
 import { HOVER_TRANSITION_GRACE_MS } from "../../../lib/useHoverTransitionGrace";
 import { threadSummaryIdentityKey } from "../../../lib/federated-thread-events";
 import { FixtureSidebar as Sidebar } from "../../../test/navigation-presentation-fixture";
-import type { ComponentProps } from "react";
+import { useState, type ComponentProps } from "react";
 import type { Editor } from "@tiptap/react";
 import { ComposerTiptapInput } from "../../composer/ComposerTiptapInput";
 import {
@@ -10209,5 +10209,193 @@ describe("Sidebar archive shortcut on a focused row", () => {
     // A focused row that is not the open thread: no new selection.
     expect(onArchiveThread).toHaveBeenCalledWith(second);
     await waitFor(() => expect(screen.getByRole("button", { name: "Third thread" })).toHaveFocus());
+  });
+});
+
+describe("⌘K jump keeps the lens", () => {
+  const runningThread = {
+    ...sharedThread,
+    id: "jump-running",
+    title: "Running thread",
+    threadStatus: "active" as const,
+    inbox: { inInbox: false },
+  };
+  const quietThread = {
+    ...sharedThread,
+    id: "jump-quiet",
+    title: "Quiet thread",
+    inbox: { inInbox: false },
+  };
+  const jumpThreads = [runningThread, quietThread];
+
+  // Plays App: a pick selects the thread and asks for a reveal; the lens
+  // changes only when a tab (or a project pick) asks for it.
+  function JumpHarness(props: {
+    onBrowseModeChange: (mode: string) => void;
+    onRevealSelectedThreadComplete?: (request: number) => void;
+    initialBrowseMode?: "attention" | "inbox";
+    threads?: NavigationThreadSummary[];
+  }) {
+    const threads = props.threads ?? jumpThreads;
+    const [browseMode, setBrowseMode] = useState<"attention" | "drafts" | "inbox" | "recents" | "directories">(
+      props.initialBrowseMode ?? "attention",
+    );
+    const [selectedItemKey, setSelectedItemKey] = useState<string>();
+    const [threadJumpOpen, setThreadJumpOpen] = useState(false);
+    const [revealRequest, setRevealRequest] = useState(0);
+    return (
+      <>
+        <button type="button" onClick={() => setThreadJumpOpen(true)}>Open jump</button>
+        <Sidebar
+          backends={backends}
+          browseMode={browseMode}
+          directories={directories}
+          draftThreadKeys={{}}
+          inboxThreads={threads}
+          loading={false}
+          revealSelectedThreadRequest={revealRequest}
+          selectedItemKey={selectedItemKey}
+          threadJumpOpen={threadJumpOpen}
+          threads={threads}
+          onBrowseModeChange={(mode) => {
+            props.onBrowseModeChange(mode);
+            setBrowseMode(mode);
+          }}
+          onCreateThread={async () => undefined}
+          onJumpToThread={(thread) => {
+            setSelectedItemKey(threadSummaryIdentityKey(thread));
+            setRevealRequest((request) => request + 1);
+          }}
+          onOpenLaunchpad={async () => undefined}
+          onRevealSelectedThreadComplete={props.onRevealSelectedThreadComplete}
+          onSelectThread={(thread) => setSelectedItemKey(threadSummaryIdentityKey(thread))}
+          onThreadJumpOpenChange={setThreadJumpOpen}
+        />
+      </>
+    );
+  }
+
+  const jumpTo = (query: string): void => {
+    fireEvent.click(screen.getByRole("button", { name: "Open jump" }));
+    const input = screen.getByRole("textbox", { name: "Jump to thread or project" });
+    fireEvent.change(input, { target: { value: query } });
+    fireEvent.keyDown(input, { key: "Enter" });
+  };
+  const visitingList = (label: string): HTMLElement | null =>
+    screen.queryByRole("list", { name: label });
+  const lensRowTitles = (): string[] =>
+    [...document.querySelectorAll<HTMLElement>(".sidebar .thread-row__title")]
+      .map((title) => title.textContent ?? "");
+
+  it("gives a thread outside Attention a visiting row instead of changing the lens", async () => {
+    const { restore } = withMockScrollIntoView();
+    const onBrowseModeChange = vi.fn();
+    const onRevealSelectedThreadComplete = vi.fn();
+    try {
+      render(<JumpHarness onBrowseModeChange={onBrowseModeChange}
+        onRevealSelectedThreadComplete={onRevealSelectedThreadComplete} />);
+      expect(lensRowTitles()).toEqual(["Running thread"]);
+
+      jumpTo("Quiet");
+
+      expect(onBrowseModeChange).not.toHaveBeenCalled();
+      const visiting = visitingList("Not in Attention");
+      expect(visiting).not.toBeNull();
+      const row = within(visiting!).getByRole("button", { name: "Quiet thread" });
+      expect(threadCard(row)).toHaveClass("is-selected");
+      // After the queue's rows, so no queue row moved to make room.
+      expect(lensRowTitles()).toEqual(["Running thread", "Quiet thread"]);
+      // The visiting row completes the reveal, which is what ends a ⌘B peek.
+      await waitFor(() => expect(onRevealSelectedThreadComplete).toHaveBeenCalledWith(1));
+
+      // Leaving the thread ends the visit.
+      fireEvent.click(screen.getByRole("button", { name: "Running thread" }));
+      expect(visitingList("Not in Attention")).toBeNull();
+      expect(lensRowTitles()).toEqual(["Running thread"]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("selects a thread already in the lens in place", () => {
+    const onBrowseModeChange = vi.fn();
+    render(<JumpHarness onBrowseModeChange={onBrowseModeChange} />);
+
+    jumpTo("Running");
+
+    expect(onBrowseModeChange).not.toHaveBeenCalled();
+    expect(visitingList("Not in Attention")).toBeNull();
+    expect(threadCard(screen.getByRole("button", { name: "Running thread" }))).toHaveClass("is-selected");
+  });
+
+  it("relabels the visit for the next lens, and Directories needs none", () => {
+    const onBrowseModeChange = vi.fn();
+    render(<JumpHarness onBrowseModeChange={onBrowseModeChange} />);
+    jumpTo("Quiet");
+    const tablist = screen.getByRole("tablist", { name: "Thread lenses" });
+
+    fireEvent.click(within(tablist).getByRole("tab", { name: /^Drafts/ }));
+    expect(visitingList("Not in Drafts")).not.toBeNull();
+    expect(visitingList("Not in Attention")).toBeNull();
+
+    // Updated holds every thread, so this one has its own row there.
+    fireEvent.click(within(tablist).getByRole("tab", { name: "Updated" }));
+    expect(visitingList("Further down")).toBeNull();
+    expect(threadCard(screen.getByRole("button", { name: "Quiet thread" }))).toHaveClass("is-selected");
+
+    fireEvent.click(within(tablist).getByRole("tab", { name: "Directories" }));
+    expect(document.querySelector(".sidebar-visiting")).toBeNull();
+  });
+
+  it("says a thread past the loaded page of Updated is further down", () => {
+    const now = Date.now();
+    const recent = Array.from({ length: 10 }, (_, index) => ({
+      ...quietThread, id: `recent-${index}`, title: `Recent thread ${index}`, updatedAt: now - index,
+    }));
+    const old = { ...quietThread, id: "old", title: "Old notes", updatedAt: now - 1_000_000 };
+    render(<JumpHarness onBrowseModeChange={vi.fn()} initialBrowseMode="inbox" threads={[...recent, old]} />);
+    expect(screen.queryByRole("button", { name: "Old notes" })).toBeNull();
+
+    jumpTo("Old notes");
+
+    const visiting = visitingList("Further down");
+    expect(visiting).not.toBeNull();
+    expect(within(visiting!).getByRole("button", { name: "Old notes" })).toBeInTheDocument();
+  });
+
+  it("leaves a child under a rendered parent to the reveal", () => {
+    // The running parent is in Attention with its tray closed; its idle child
+    // is not a member, so no Attention page carries it.
+    const parent = { ...runningThread, title: "Parent thread", subthreadsCollapsed: true };
+    const child = { ...quietThread, title: "Child thread",
+      parentThreadId: parent.id, parentThreadBackend: parent.source };
+    render(<JumpHarness onBrowseModeChange={vi.fn()} threads={[parent, child]} />);
+    expect(lensRowTitles()).toEqual(["Parent thread"]);
+
+    jumpTo("Child thread");
+
+    // The sidebar's reveal opens the parent's tray, where the child lands. A
+    // visiting row in the meantime would flash at the end of the list.
+    expect(document.querySelector(".sidebar-visiting")).toBeNull();
+  });
+
+  it("gives no visiting row to a selection that did not come from a jump", () => {
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="attention"
+        directories={directories}
+        inboxThreads={jumpThreads}
+        loading={false}
+        selectedItemKey={threadSummaryIdentityKey(quietThread)}
+        threads={jumpThreads}
+        onBrowseModeChange={vi.fn()}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={vi.fn()}
+      />,
+    );
+    expect(document.querySelector(".sidebar-visiting")).toBeNull();
+    expect(lensRowTitles()).toEqual(["Running thread"]);
   });
 });
