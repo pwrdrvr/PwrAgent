@@ -149,5 +149,13 @@ export async function importWorkspaceArchive(workspace: string, staging: string,
   } });
   if (unsupported) throw new Error("Unsupported workspace archive entry type.");
   validateArchiveEntries(entries);
-  await tar.x({ file, cwd: workspace, strict: true, preservePaths: false });
+  // Portable export normalizes source modes. Import keeps ordinary archive
+  // permissions subject to the receiver's umask: 0755 becomes 0700 under 0077.
+  // Do not chmod masked permissions back on or transfer privileged mode bits
+  // or ownership from a remote workspace.
+  await tar.x({ file, cwd: workspace, strict: true, preservePaths: false, preserveOwner: false, chmod: false,
+    onReadEntry: (entry) => {
+      if (typeof entry.mode === "number") entry.mode &= 0o777;
+    },
+  });
 }
