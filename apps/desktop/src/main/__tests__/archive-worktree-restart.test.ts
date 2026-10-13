@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
+import { WorktreeContainerService } from "../app-server/worktree-container-service";
 import { CodexAppServerClient } from "../codex-app-server/client";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
@@ -33,11 +34,16 @@ afterEach(async () => {
   ArchiveWorktreeTransport.rejectSafetySources = false;
 });
 
-async function createFixture() {
+async function createFixture(managed = false) {
   const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-archive-restart-")));
   roots.push(root);
   const repo = path.join(root, "repo");
-  const worktree = path.join(root, "worktree");
+  const codexHome = path.join(root, "selected-codex");
+  const worktree = managed ? path.join(codexHome, "worktrees", "id", "repo") : path.join(root, "worktree");
+  if (managed) {
+    vi.stubEnv("CODEX_HOME", codexHome);
+    await mkdir(path.dirname(worktree), { recursive: true });
+  }
   await mkdir(repo);
   const git = async (cwd: string, args: string[]) => (await execute("git", ["-C", cwd, ...args])).stdout;
   await git(repo, ["init", "-b", "main"]);
@@ -57,10 +63,116 @@ async function createFixture() {
     registries.push(registry);
     return { db, store, client, registry };
   };
-  return { repo, worktree, directory, git, reopen };
+  return { repo, worktree, directory, git, reopen, codexHome, container: path.dirname(worktree) };
 }
 
 describe("archive worktrees across a desktop restart", () => {
+  it("prunes the empty managed container on ordinary archive and recreates it on restore", async () => {
+    const fixture = await createFixture(true);
+    ArchiveWorktreeTransport.threads = [{ id: "target", cwd: fixture.worktree, source: "cli" }];
+    const instance = fixture.reopen();
+    await writeFile(path.join(fixture.worktree, "file.txt"), "preserved dirty edit\n");
+    expect((await instance.registry.archiveThread({ backend: "codex", threadId: "target" })).cleanup)
+      .toEqual([expect.objectContaining({ removedWorktree: true })]);
+    await expect(stat(fixture.container)).rejects.toMatchObject({ code: "ENOENT" });
+    expect((await stat(path.dirname(fixture.container))).isDirectory()).toBe(true);
+    await instance.registry.restoreThread({ backend: "codex", threadId: "target" });
+    expect(await readFile(path.join(fixture.worktree, "file.txt"), "utf8")).toBe("preserved dirty edit\n");
+  });
+
+  it("repairs only empty containers associated with archived provider cwd, without inventing a snapshot", async () => {
+    const fixture = await createFixture(true);
+    await fixture.git(fixture.repo, ["worktree", "remove", fixture.worktree]);
+    const unrelated = path.join(fixture.codexHome, "worktrees", "unattributed");
+    await mkdir(unrelated);
+    ArchiveWorktreeTransport.threads = [{ id: "archived", cwd: fixture.worktree, source: "cli", archived: true }];
+    // Missing checkout enrichment returns no linked directory. Association
+    // comes from the archived provider cwd, not enumeration of root folders.
+    const instance = fixture.reopen({ ...fixture.directory, worktreePath: "not-this-cwd" });
+    const dryRun = await instance.registry.repairArchivedThreadWorktrees({ dryRun: true });
+    expect(dryRun.emptyContainerCandidates).toHaveLength(1);
+    expect((await stat(fixture.container)).isDirectory()).toBe(true);
+    const result = await instance.registry.repairArchivedThreadWorktrees();
+    expect(result.containerCleanup).toEqual([expect.objectContaining({ removed: true })]);
+    await expect(stat(fixture.container)).rejects.toMatchObject({ code: "ENOENT" });
+    expect((await stat(unrelated)).isDirectory()).toBe(true);
+    expect(await fixture.git(fixture.repo, ["for-each-ref", "refs/codex/snapshots/"])).toBe("");
+    expect((await instance.store.getThreadOverlayState({ backend: "codex", threadId: "archived" }))?.worktreeSnapshots ?? []).toEqual([]);
+    expect(ArchiveWorktreeTransport.requests.filter((request) => request.method === "thread/archive")).toEqual([]);
+  });
+
+  it("removes the archived checkout while preserving another checkout in the same id", async () => {
+    const fixture = await createFixture(true);
+    const sibling = path.join(fixture.container, "other-checkout");
+    await fixture.git(fixture.repo, ["worktree", "add", "--detach", sibling]);
+    ArchiveWorktreeTransport.threads = [
+      { id: "target", cwd: fixture.worktree, source: "cli" }, { id: "active", cwd: sibling, source: "exec" },
+    ];
+    const result = await fixture.reopen().registry.archiveThread({ backend: "codex", threadId: "target" });
+    expect(result.cleanup).toEqual([expect.objectContaining({ removedWorktree: true })]);
+    await expect(stat(fixture.worktree)).rejects.toMatchObject({ code: "ENOENT" });
+    expect((await stat(fixture.container)).isDirectory()).toBe(true);
+    expect(await readFile(path.join(sibling, "file.txt"), "utf8")).toBe("original\n");
+  });
+
+  it.each(["existing owner", "new owner"])("keeps an empty id used by an active thread (%s)", async (scenario) => {
+    const fixture = await createFixture(true);
+    await fixture.git(fixture.repo, ["worktree", "remove", fixture.worktree]);
+    ArchiveWorktreeTransport.threads = [{ id: "archived", cwd: fixture.worktree, source: "cli", archived: true }];
+    const owner = { id: "active", cwd: path.join(fixture.container, "another-missing-checkout"), source: "exec" };
+    if (scenario === "existing owner") ArchiveWorktreeTransport.threads.push(owner);
+    else {
+      let activeReads = 0;
+      ArchiveWorktreeTransport.onList = (params) => {
+        if (!params.archived && ++activeReads === 2) ArchiveWorktreeTransport.threads.push(owner);
+      };
+    }
+    const instance = fixture.reopen();
+    const result = await instance.registry.repairArchivedThreadWorktrees();
+    expect(result.containerCleanup.every((item) => !item.removed)).toBe(true);
+    expect((await stat(fixture.container)).isDirectory()).toBe(true);
+  });
+
+  it("retains a container when another client restores its owner after discovery", async () => {
+    const fixture = await createFixture(true);
+    await fixture.git(fixture.repo, ["worktree", "remove", fixture.worktree]);
+    ArchiveWorktreeTransport.threads = [{ id: "archived", cwd: fixture.worktree, source: "cli", archived: true }];
+    let activeReads = 0;
+    ArchiveWorktreeTransport.onList = (params) => {
+      if (!params.archived && ++activeReads === 2) ArchiveWorktreeTransport.threads[0]!.archived = false;
+    };
+    const result = await fixture.reopen().registry.repairArchivedThreadWorktrees();
+    expect(result.containerCleanup).toEqual([expect.objectContaining({ removed: false, error: expect.any(String) })]);
+    expect((await stat(fixture.container)).isDirectory()).toBe(true);
+  });
+
+  it("reports a container error and continues to other archived containers", async () => {
+    const fixture = await createFixture(true);
+    await fixture.git(fixture.repo, ["worktree", "remove", fixture.worktree]);
+    const secondContainer = path.join(fixture.codexHome, "worktrees", "second-id");
+    const secondWorktree = path.join(secondContainer, "repo");
+    await mkdir(secondContainer);
+    ArchiveWorktreeTransport.threads = [
+      { id: "first", cwd: fixture.worktree, source: "cli", archived: true },
+      { id: "second", cwd: secondWorktree, source: "cli", archived: true },
+    ];
+    const original = WorktreeContainerService.prototype.prune;
+    const prune = vi.spyOn(WorktreeContainerService.prototype, "prune").mockImplementation(async function(this: WorktreeContainerService, worktree, check, identity) {
+      if (worktree === fixture.worktree) return { worktreePath: worktree, containerPath: fixture.container, removed: false, error: "Access denied" };
+      return await original.call(this, worktree, check, identity);
+    });
+    try {
+      const result = await fixture.reopen().registry.repairArchivedThreadWorktrees();
+      expect(result.containerCleanup).toEqual([
+        expect.objectContaining({ removed: false, error: "Access denied" }), expect.objectContaining({ removed: true }),
+      ]);
+      expect((await stat(fixture.container)).isDirectory()).toBe(true);
+      await expect(stat(secondContainer)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      prune.mockRestore();
+    }
+  });
+
   it("repairs an already archived checkout once, preserves non-ignored edits, and restores every archived owner after restart", async () => {
     vi.stubEnv("PWRAGENT_DEV_SQLITE_WRITE_METRICS", "1");
     const fixture = await createFixture();

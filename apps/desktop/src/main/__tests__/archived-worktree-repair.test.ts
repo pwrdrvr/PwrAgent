@@ -21,7 +21,7 @@ function fixture() {
   const db = StateDb.open(dbPath);
   databases.push(db);
   const report: ArchivedWorktreeRepairReport = { archivedThreads: 501, discoveredWorktrees: 501, missingWorktrees: 0,
-    protectedWorktrees: 0, candidates: [], cleanup: [] };
+    protectedWorktrees: 0, protectedWorktreeDetails: [], candidates: [], cleanup: [], emptyContainerCandidates: [], containerCleanup: [] };
   const repair = vi.fn(async () => report);
   return { db, repair, report };
 }

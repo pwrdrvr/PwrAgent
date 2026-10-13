@@ -533,6 +533,9 @@ function prewarmInitialThreadList(permit: ProviderDiscoveryPermit): void {
       archivedThreads: report.archivedThreads, candidates: report.candidates.length,
       removed: report.cleanup.filter((item) => item.removedWorktree).length,
       protected: report.protectedWorktrees, missing: report.missingWorktrees,
+      emptyContainers: report.emptyContainerCandidates.length,
+      removedContainers: report.containerCleanup.filter((item) => item.removed).length,
+      retainedContainers: report.containerCleanup.filter((item) => !item.removed),
       retained: report.cleanup.filter((item) => !item.removedWorktree),
     });
   }).catch((error) => {

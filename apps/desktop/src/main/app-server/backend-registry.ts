@@ -653,6 +653,7 @@ import {
 } from "../acp/acp-available-commands-store";
 import { GitWorkspaceHandoffService } from "./git-workspace-handoff-service";
 import { MissingArchiveWorktreeError, WorktreeArchiveService } from "./worktree-archive-service";
+import { WorktreeContainerService, type WorktreeContainerCleanup } from "./worktree-container-service";
 import { ThreadArchiveSweeper, archiveCandidateLastActivity, isStaleArchiveCandidate, type ThreadArchiveCandidate } from "./thread-archive-sweeper";
 import { getDesktopMessagingStore } from "../messaging/desktop-messaging-store";
 import {
@@ -2035,8 +2036,15 @@ export type ArchivedWorktreeRepairReport = {
   discoveredWorktrees: number;
   missingWorktrees: number;
   protectedWorktrees: number;
+  protectedWorktreeDetails: Array<{
+    worktreePath: string;
+    externallyManaged: boolean;
+    activeThreads: Array<{ backend: AppServerBackendKind; threadId: string; projectKey?: string }>;
+  }>;
   candidates: Array<{ backend: AppServerBackendKind; threadId: string; worktreePath: string }>;
   cleanup: ArchiveThreadCleanupResult[];
+  emptyContainerCandidates: Array<{ backend: AppServerBackendKind; threadId: string; worktreePath: string; containerIdentity: NonNullable<WorktreeContainerCleanup["identity"]> }>;
+  containerCleanup: WorktreeContainerCleanup[];
 };
 
 type WorktreeRestoreCandidate = {
@@ -8624,6 +8632,7 @@ export class DesktopBackendRegistry {
   private workingStateCacheLoad: Promise<void> | undefined;
   private readonly gitWorkspaceHandoffService: GitWorkspaceHandoffService;
   private readonly worktreeArchiveService: WorktreeArchiveService;
+  private readonly worktreeContainerService: WorktreeContainerService;
   private readonly acpBackend: AcpBackendAdapter;
   private closed = false;
   // Resolves a managed-worktree ACP cwd to its repository checkout so ACP
@@ -8693,6 +8702,7 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind;
     threadId: string;
     worktreePath: string;
+    containerPath?: string;
   }>();
   private readonly archiveCleanupReads = new ArchiveCleanupReadPool(THREAD_LIST_REUSE_WINDOW_MS);
   private readonly archiveCleanupQueue = new ArchiveCleanupQueue<ArchiveThreadResponse>();
@@ -10085,6 +10095,7 @@ export class DesktopBackendRegistry {
     this.worktreeArchiveService =
       options?.worktreeArchiveService ??
       new WorktreeArchiveService({ gitEnv: codexEnv });
+    this.worktreeContainerService = new WorktreeContainerService({ codexHome });
     const agentToolMcpServer =
       options?.agentToolMcpServer === null
         ? undefined
@@ -33183,16 +33194,23 @@ export class DesktopBackendRegistry {
     });
     const report: ArchivedWorktreeRepairReport = {
       archivedThreads: inventory.archivedThreads.length, discoveredWorktrees: 0,
-      missingWorktrees: 0, protectedWorktrees: 0, candidates: [], cleanup: [],
+      missingWorktrees: 0, protectedWorktrees: 0, protectedWorktreeDetails: [], candidates: [], cleanup: [],
+      emptyContainerCandidates: [], containerCleanup: [],
     };
     const ownersByPath = new Map<string, AppServerThreadSummary>();
     for (const thread of inventory.archivedThreads) {
+      // A removed checkout may no longer enrich to a linked directory. Its
+      // archived provider cwd still proves association with a managed id.
+      if (thread.source === "codex" && thread.projectKey && this.worktreeContainerService.containerPath(thread.projectKey)) {
+        ownersByPath.set(normalizeWorktreePathForComparison(thread.projectKey), thread);
+      }
       for (const directory of thread.linkedDirectories) {
         const worktreePath = linkedDirectoryWorktreePath(directory);
         if (worktreePath) ownersByPath.set(normalizeWorktreePathForComparison(worktreePath), thread);
       }
     }
     report.discoveredWorktrees = ownersByPath.size;
+    const seenContainers = new Set<string>();
     for (const [worktreePath, thread] of ownersByPath) {
       await checkpoint();
       try {
@@ -33200,11 +33218,26 @@ export class DesktopBackendRegistry {
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
         report.missingWorktrees += 1;
+        const containerPath = thread.source === "codex" ? this.worktreeContainerService.containerPath(worktreePath) : undefined;
+        if (containerPath && !seenContainers.has(containerPath)) {
+          seenContainers.add(containerPath);
+          const inspection = await this.worktreeContainerService.inspect(worktreePath);
+          if (inspection?.identity && !inspection.skippedReason && !inspection.error
+            && !this.isWorktreeContainerProtected(containerPath, inventory)) {
+            report.emptyContainerCandidates.push({ backend: thread.source, threadId: thread.id, worktreePath, containerIdentity: inspection.identity });
+          } else if (inspection?.error) report.containerCleanup.push(inspection);
+        }
         continue;
       }
       if (inventory.worktreeEvidence?.externalPaths.has(worktreePath)
         || inventory.worktreeEvidence?.activeByPath.has(worktreePath)) {
         report.protectedWorktrees += 1;
+        report.protectedWorktreeDetails.push({ worktreePath,
+          externallyManaged: inventory.worktreeEvidence?.externalPaths.has(worktreePath) ?? false,
+          activeThreads: (inventory.worktreeEvidence?.activeByPath.get(worktreePath) ?? []).map((owner) => ({
+            backend: owner.source, threadId: owner.id, projectKey: owner.projectKey,
+          })),
+        });
         continue;
       }
       report.candidates.push({ backend: thread.source, threadId: thread.id, worktreePath });
@@ -33239,7 +33272,62 @@ export class DesktopBackendRegistry {
       }
       options.onProgress?.(report.cleanup.length, report.candidates.length);
     }
+    for (const candidate of report.emptyContainerCandidates) {
+      assertCurrent();
+      const key = buildThreadIdentityKey(candidate.backend, candidate.threadId);
+      const completion = this.archiveCleanupQueue.enqueue(key, async (context) => {
+        const containerPath = this.worktreeContainerService.containerPath(candidate.worktreePath)!;
+        const admission = { ...candidate, containerPath };
+        this.archiveWorktreeRemovalAdmissions.add(admission);
+        try {
+          const revision = this.archiveWorkspaceRevision;
+          const current = await this.findThreadForArchiveCleanup({ ...candidate, context });
+          const ownedPaths = [current.thread.projectKey, ...current.thread.linkedDirectories.map(linkedDirectoryWorktreePath)];
+          if (!ownedPaths.some((value) => value && normalizeWorktreePathForComparison(value) === candidate.worktreePath)) {
+            throw new Error("Archived thread no longer owns the container; it was kept.");
+          }
+          if (this.isWorktreeContainerProtected(containerPath, current)) {
+            report.containerCleanup.push({ ...candidate, containerPath, removed: false, skippedReason: "Container has an active or external owner." });
+          } else {
+            const result = await this.worktreeContainerService.prune(candidate.worktreePath, () => {
+              context.assertCurrent();
+              if (revision !== this.archiveWorkspaceRevision || [...this.threadLifecycleMutationCounts.keys()].some((owner) => owner !== key)) {
+                throw new Error("Workspace ownership changed before container removal; it was kept.");
+              }
+            }, candidate.containerIdentity);
+            if (result) report.containerCleanup.push(result);
+          }
+          return { backend: candidate.backend, threadId: candidate.threadId, archivedAt: Date.now(), cleanup: [] };
+        } finally {
+          this.archiveWorktreeRemovalAdmissions.delete(admission);
+        }
+      });
+      try {
+        await this.observeArchiveCleanupCompletion(completion, { ...candidate, archivedAt: Date.now() });
+      } catch (error) {
+        assertCurrent();
+        report.containerCleanup.push({ worktreePath: candidate.worktreePath,
+          containerPath: this.worktreeContainerService.containerPath(candidate.worktreePath)!, removed: false,
+          error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    assertCurrent();
     return report;
+  }
+
+  private isWorktreeContainerProtected(containerPath: string, inventory: Pick<ArchiveCleanupMetadata, "activeThreads" | "worktreeEvidence">): boolean {
+    const within = (value: string) => {
+      const relative = path.relative(containerPath, path.resolve(value));
+      return relative === "" || (!path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${path.sep}`));
+    };
+    if ([...(inventory.worktreeEvidence?.externalPaths ?? [])].some(within)) return true;
+    return inventory.activeThreads.some((thread) =>
+      (thread.projectKey && within(thread.projectKey))
+      || thread.linkedDirectories.some((directory) => {
+        const worktreePath = linkedDirectoryWorktreePath(directory);
+        return worktreePath && within(worktreePath);
+      }),
+    );
   }
 
   private async readPacedArchiveCleanupMetadata(params: ArchiveCleanupDiscoveryRequest): Promise<ArchiveCleanupMetadata> {
@@ -33641,10 +33729,14 @@ export class DesktopBackendRegistry {
         }
 
         let removalMetadata: ArchiveCleanupMetadata | undefined;
+        let removalRevision = this.archiveWorkspaceRevision;
         const admission = {
           backend: params.backend, threadId: params.thread.id,
           worktreePath: normalizeWorktreePathForComparison(candidate.worktreePath),
         };
+        const managedContainerPath = params.backend === "codex" ? this.worktreeContainerService.containerPath(candidate.worktreePath) : undefined;
+        const containerBefore = managedContainerPath ? await this.worktreeContainerService.inspect(candidate.worktreePath) : undefined;
+        if (containerBefore?.error) backendRegistryLog.warn("archive worktree container inspection failed", containerBefore);
         const snapshot = await this.worktreeArchiveService.archive({
           backend: params.backend,
           threadId: params.thread.id,
@@ -33653,6 +33745,7 @@ export class DesktopBackendRegistry {
           beforeRemove: params.context && this.codexClient.listArchiveCleanupThreadsPage ? async () => {
             this.archiveWorktreeRemovalAdmissions.add(admission);
             const revision = this.archiveWorkspaceRevision;
+            removalRevision = revision;
             const current = await this.findThreadForArchiveCleanup({
               backend: params.backend, threadId: params.thread.id, context: params.context,
               codexRolloutMissing: params.codexRolloutMissing,
@@ -33747,6 +33840,20 @@ export class DesktopBackendRegistry {
             deletedBranch: false,
             error,
           };
+        }
+
+        const containerPath = params.backend === "codex" ? this.worktreeContainerService.containerPath(snapshot.worktreePath) : undefined;
+        if (containerPath && containerBefore?.identity && !this.isWorktreeContainerProtected(containerPath, removalMetadata ?? params)) {
+          const containerAdmission = { ...admission, containerPath };
+          this.archiveWorktreeRemovalAdmissions.add(containerAdmission);
+          const container = await this.worktreeContainerService.prune(snapshot.worktreePath, () => {
+            params.context?.assertCurrent();
+            if (removalRevision !== this.archiveWorkspaceRevision || [...this.threadLifecycleMutationCounts.keys()].some((key) => key !== buildThreadIdentityKey(params.backend, params.thread.id))) {
+              throw new Error("Workspace ownership changed before container removal; it was kept.");
+            }
+          }, containerBefore.identity).finally(() => this.archiveWorktreeRemovalAdmissions.delete(containerAdmission));
+          if (container?.error) backendRegistryLog.warn("archive empty worktree container cleanup failed", container);
+          else if (container?.removed) backendRegistryLog.info("archive empty worktree container removed", container);
         }
 
         return {
@@ -43719,7 +43826,8 @@ export class DesktopBackendRegistry {
     // the older row. Keep the invalidation until the removal attempt settles.
     const observedAdmissionOwner = [...this.archiveWorktreeRemovalAdmissions].some((admission) =>
       !(admission.backend === thread.source && admission.threadId === thread.id)
-      && (projectKey === admission.worktreePath || thread.linkedDirectories.some((directory) => {
+      && ((admission.containerPath && this.isWorktreeContainerProtected(admission.containerPath, { activeThreads: [thread] }))
+        || projectKey === admission.worktreePath || thread.linkedDirectories.some((directory) => {
         const worktreePath = linkedDirectoryWorktreePath(directory);
         return worktreePath !== undefined
           && normalizeWorktreePathForComparison(worktreePath) === admission.worktreePath;
