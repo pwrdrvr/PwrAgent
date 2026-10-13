@@ -36253,6 +36253,8 @@ export class DesktopBackendRegistry {
       const call: NativeVoiceToolCall = {
         threadId: request.params.threadId,
         tool: String(request.params.tool),
+        ...(typeof request.params.namespace === "string" ? { namespace: request.params.namespace } : {}),
+        arguments: request.params.arguments,
         response,
       };
       for (const listener of this.nativeVoiceToolListeners) {

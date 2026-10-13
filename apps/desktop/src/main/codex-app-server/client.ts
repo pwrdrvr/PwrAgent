@@ -4481,11 +4481,12 @@ function buildMcpToolCommandDetail(params: {
   };
 }
 
+/** Undefined when the call has neither arguments nor a result: there is nothing to expand. */
 function buildDynamicToolCommandDetail(params: {
   item: Record<string, unknown>;
   toolName: string;
   elapsedMs: number | undefined;
-}): AppServerThreadCommandDetail {
+}): AppServerThreadCommandDetail | undefined {
   const identifier = formatToolIdentifier(
     pickString(params.item, ["namespace", "toolNamespace", "tool_namespace"]),
     params.toolName,
@@ -4494,6 +4495,9 @@ function buildDynamicToolCommandDetail(params: {
   const output = formatDynamicToolOutput(
     params.item.contentItems ?? params.item.content_items,
   );
+  if (!output && (!args || Object.keys(args).length === 0)) {
+    return undefined;
+  }
   return {
     displayCommand: formatToolInvocation(identifier, args),
     rawCommand: identifier,
@@ -4817,7 +4821,7 @@ function summarizeActivityItems(
           ? buildMcpToolCommandDetail({ item, toolName, elapsedMs })
           : undefined;
       const dynamicCommandDetail =
-        normalizedItemType === "dynamictoolcall" && explicitTitle && toolName
+        normalizedItemType === "dynamictoolcall" && toolName
           ? buildDynamicToolCommandDetail({ item, toolName, elapsedMs })
           : undefined;
       const images =
