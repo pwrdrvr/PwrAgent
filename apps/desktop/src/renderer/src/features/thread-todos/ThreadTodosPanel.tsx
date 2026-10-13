@@ -10,6 +10,7 @@ import {
   THREAD_TODO_RESOLUTION_RESULTS,
   buildThreadIdentityKey,
   operatorTodoItemKey,
+  threadTodoItemProgress,
 } from "@pwragent/shared";
 import {
   HandoffIcon,
@@ -307,8 +308,11 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
                           mergeMethods={view.mergeMethods}
                           instances={view.instances}
                           projectMenu={view.projectMenu}
-                          onResolve={(target, status, resolution) => {
-                            void view.resolve(target, status, resolution).catch((error: unknown) => {
+                          onResolve={(target, status, resolution, options) => {
+                            const resolving = options
+                              ? view.resolve(target, status, resolution, options)
+                              : view.resolve(target, status, resolution);
+                            void resolving.catch((error: unknown) => {
                               console.warn("Resolving a to-do failed.", error);
                             });
                           }}
@@ -319,6 +323,13 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
                           }}
                           onStartReview={props.onStartReview}
                           onDoHere={props.onDoHere}
+                          onSetItemChecked={(target, item, checked) => {
+                            void view.setItemChecked(target, item.id, checked).catch(
+                              (error: unknown) => {
+                                console.warn("Checking a to-do step failed.", error);
+                              },
+                            );
+                          }}
                         />
                       ) : (
                         <TodoRow
@@ -356,6 +367,7 @@ function TodoRow(props: {
     ? undefined
     : todo.result ?? (todo.status === "done" ? "Done" : "Dismissed");
   const route = describeRoute(todo, props.scope, props.projectKey);
+  const progress = threadTodoItemProgress(todo);
   // Grouped by project, the thread is not in the heading: say it here.
   const threadName = props.scope === "all" && !props.current ? view.threadTitle(todo) : undefined;
   const main = (
@@ -364,6 +376,11 @@ function TodoRow(props: {
         {KindIcon ? <KindIcon size={13} /> : <span className="thread-todo-card__ring" />}
       </span>
       <span className="thread-todos-panel__row-title">{todo.title}</span>
+      {progress ? (
+        <span className="thread-todo-card__progress">
+          {progress.checked} of {progress.total}
+        </span>
+      ) : null}
       <span className="thread-todo-card__age">
         {formatTodoAge(todo.resolvedAt ?? todo.createdAt)}
       </span>
@@ -384,8 +401,8 @@ function TodoRow(props: {
           type="button"
           className="thread-todos-panel__row-main"
           aria-label={`Open thread: ${todo.title}, in ${view.threadTitle(todo)}${
-            props.unread ? ", unread" : ""
-          }`}
+            progress ? `, ${progress.checked} of ${progress.total} steps checked` : ""
+          }${props.unread ? ", unread" : ""}`}
           onClick={() => view.openThread(todo)}
         >
           {main}

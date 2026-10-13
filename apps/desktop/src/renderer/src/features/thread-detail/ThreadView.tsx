@@ -2554,7 +2554,10 @@ export function ThreadView(props: ThreadViewProps) {
       && todo.threadId === selectedThread?.id
       && todo.backend === selectedThread?.source
     ) {
-      void props.threadTodos?.resolve(todo, "done").catch((error: unknown) => {
+      // The card asked about any unchecked steps before it opened the review.
+      void props.threadTodos?.resolve(todo, "done", undefined, {
+        allowOpenItems: true,
+      }).catch((error: unknown) => {
         console.warn("Resolving the review to-do failed.", error);
       });
     }
@@ -2569,7 +2572,10 @@ export function ThreadView(props: ThreadViewProps) {
     try {
       const accepted = await handleAnswerAsyncQuestions(todo.action.prompt);
       if (accepted) {
-        await props.threadTodos?.resolve(todo, "done", "sent_here");
+        // The card asked about any unchecked steps before it sent this.
+        await props.threadTodos?.resolve(todo, "done", "sent_here", {
+          allowOpenItems: true,
+        });
       }
       return accepted;
     } catch (error) {

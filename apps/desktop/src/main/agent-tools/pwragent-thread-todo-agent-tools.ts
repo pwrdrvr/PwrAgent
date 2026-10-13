@@ -10,8 +10,11 @@ import {
   PWRAGENT_THREAD_TODO_OPERATION_NAMES,
   PWRAGENT_TOOL_NAMESPACE,
   THREAD_TODO_DETAIL_MAX_LENGTH,
+  THREAD_TODO_ITEM_TEXT_MAX_LENGTH,
+  THREAD_TODO_MAX_ITEMS,
   THREAD_TODO_PROMPT_MAX_LENGTH,
   THREAD_TODO_TITLE_MAX_LENGTH,
+  parseThreadTodoItemTexts,
 } from "@pwragent/shared";
 import type {
   AgentToolCallContext,
@@ -67,7 +70,12 @@ export type PwrAgentThreadTodoHandler = {
   ) => ThreadTodo[] | Promise<ThreadTodo[]>;
   resolve: (
     context: ThreadTodoToolContext,
-    target: { id?: string; key?: string; status: Exclude<ThreadTodoStatus, "open"> },
+    target: {
+      id?: string;
+      key?: string;
+      status: Exclude<ThreadTodoStatus, "open">;
+      allowOpenItems?: boolean;
+    },
   ) => ThreadTodo | Promise<ThreadTodo>;
 };
 
@@ -175,10 +183,17 @@ async function dispatchOperation(
           message: "resolve_todo status must be done or dismissed.",
         });
       }
+      if (args.allowOpenItems !== undefined && typeof args.allowOpenItems !== "boolean") {
+        return agentToolFailure({
+          code: "invalid_arguments",
+          message: "resolve_todo allowOpenItems must be true or false.",
+        });
+      }
       const todo = await handler.resolve(context, {
         ...(id ? { id } : {}),
         ...(key ? { key } : {}),
         status,
+        ...(args.allowOpenItems === true ? { allowOpenItems: true } : {}),
       });
       return agentToolSuccess({ todo: summarizeTodo(todo) });
     }
@@ -219,6 +234,12 @@ export function normalizeAddTodoArgs(
       message: `add_todo project must be at most ${PROJECT_MAX_LENGTH} characters.`,
     };
   }
+  const items = args.items === undefined
+    ? undefined
+    : parseThreadTodoItemTexts(args.items, "add_todo items");
+  if (items && !items.ok) {
+    return items;
+  }
   const action = normalizeAction(args.action);
   if (action && !action.ok) {
     return action;
@@ -228,6 +249,7 @@ export function normalizeAddTodoArgs(
     value: {
       title,
       ...(detail ? { detail } : {}),
+      ...(items ? { items: items.value } : {}),
       ...(key ? { key } : {}),
       ...(project ? { project } : {}),
       ...(action ? { action: action.value } : {}),
@@ -346,6 +368,17 @@ export function normalizeUpdateTodoArgs(
   const project = readClearable(args.project, "project", PROJECT_MAX_LENGTH);
   if (project && !project.ok) return project;
   if (project) value.project = project.value;
+  if (args.items !== undefined) {
+    const items = parseThreadTodoItemTexts(args.items, "update_todo items");
+    if (!items.ok) return items;
+    value.items = items.value;
+  }
+  for (const field of ["check", "uncheck"] as const) {
+    if (args[field] === undefined) continue;
+    const ids = readItemIds(args[field], field);
+    if (!ids.ok) return ids;
+    if (ids.value.length > 0) value[field] = ids.value;
+  }
 
   const action: ThreadTodoActionPatch = {};
   if (args.prompt !== undefined) {
@@ -394,6 +427,23 @@ export function normalizeUpdateTodoArgs(
     target: { ...(id ? { id } : {}), ...(key ? { key } : {}) },
     value,
   };
+}
+
+function readItemIds(
+  value: unknown,
+  name: "check" | "uncheck",
+): { ok: true; value: string[] } | { ok: false; message: string } {
+  if (
+    !Array.isArray(value)
+    || value.length > THREAD_TODO_MAX_ITEMS
+    || !value.every((entry) => typeof entry === "string" && entry.trim())
+  ) {
+    return {
+      ok: false,
+      message: `update_todo ${name} must be an array of at most ${THREAD_TODO_MAX_ITEMS} step ids.`,
+    };
+  }
+  return { ok: true, value: [...new Set(value.map((entry: string) => entry.trim()))] };
 }
 
 /** Absent → undefined; "" → clear (null); otherwise the trimmed string. */
@@ -464,6 +514,7 @@ function summarizeTodo(todo: ThreadTodo): Record<string, unknown> {
     status: todo.status,
     title: todo.title,
     ...(todo.detail ? { detail: todo.detail } : {}),
+    ...(todo.items ? { items: todo.items } : {}),
     ...(todo.action ? { action: todo.action } : {}),
     ...(todo.targetProject
       ? { project: { label: todo.targetProject.label, path: todo.targetProject.path } }
@@ -489,6 +540,9 @@ function descriptionForOperation(operation: PwrAgentThreadTodoOperationName): st
         "The operator clicks to run an action, and you never run it.",
         "Do not use cards for progress updates.",
         "Pass a stable key to update one card instead of adding another each turn.",
+        "For a multi-step follow-up, raise one card with items, its checkable steps, rather than one card per step.",
+        "A card with unchecked steps cannot be marked done until they are checked.",
+        "Re-adding a key with items keeps the id and checked state of every step whose text is unchanged.",
         "Use update_todo to change some fields of a card you already raised.",
         "Pass project when the work is for another project, and raise one card per project.",
         "For the exact project, pass a projectKey from list_instance_projects for this machine.",
@@ -500,12 +554,19 @@ function descriptionForOperation(operation: PwrAgentThreadTodoOperationName): st
         "Fields you omit stay as they are.",
         "Pass an empty string to clear an optional field back to its default.",
         "Use it when the operator asks to change a card, such as its model, effort or permissions.",
+        "Pass check or uncheck with step ids to tick steps as you finish them.",
         "A model may be named by id or by its display name, and the card stores the id.",
       ].join(" ");
     case "list_todos":
       return "List this thread's to-do cards. Defaults to open cards.";
     case "resolve_todo":
-      return "Mark one of this thread's to-do cards done or dismissed, by id or key. Use it when a card no longer applies.";
+      return [
+        "Mark one of this thread's to-do cards done or dismissed, by id or key.",
+        "Use it when a card no longer applies.",
+        "Marking a card done fails while any of its steps is unchecked, and the error names them.",
+        "Check finished steps with update_todo first.",
+        "Dismiss works regardless.",
+      ].join(" ");
   }
 }
 
@@ -526,6 +587,20 @@ function inputSchemaForOperation(
           detail: {
             type: "string",
             description: "One or two sentences of context shown under the title.",
+          },
+          items: {
+            type: "array",
+            maxItems: THREAD_TODO_MAX_ITEMS,
+            items: { type: "string", maxLength: THREAD_TODO_ITEM_TEXT_MAX_LENGTH },
+            description: [
+              "Checkable steps, in order.",
+              `Each step is at most ${THREAD_TODO_ITEM_TEXT_MAX_LENGTH} characters, and a card holds at most ${THREAD_TODO_MAX_ITEMS} steps.`,
+              "Steps start unchecked, and the result gives each step's id.",
+              "Re-adding a key with items replaces the list.",
+              "A step whose text is unchanged keeps its id and checked state.",
+              "A new text starts unchecked, and a step you leave out is removed.",
+              "Omit items to keep the card's steps as they are.",
+            ].join(" "),
           },
           key: {
             type: "string",
@@ -593,6 +668,26 @@ function inputSchemaForOperation(
           key: { type: "string", description: "An open card's key, instead of its id." },
           title: { type: "string" },
           detail: { type: "string", description: "Empty clears it." },
+          items: {
+            type: "array",
+            maxItems: THREAD_TODO_MAX_ITEMS,
+            items: { type: "string", maxLength: THREAD_TODO_ITEM_TEXT_MAX_LENGTH },
+            description: [
+              "The card's steps, restated in full.",
+              "An unchanged text keeps its id and checked state, as with add_todo.",
+              "An empty array removes every step.",
+            ].join(" "),
+          },
+          check: {
+            type: "array",
+            items: { type: "string" },
+            description: "Ids of steps to mark checked, from add_todo or list_todos.",
+          },
+          uncheck: {
+            type: "array",
+            items: { type: "string" },
+            description: "Ids of steps to mark unchecked.",
+          },
           project: {
             type: "string",
             description: "The project the work is for: a projectKey from list_instance_projects, a name, or a path. Empty returns the card to this thread's project.",
@@ -645,6 +740,11 @@ function inputSchemaForOperation(
             type: "string",
             enum: ["done", "dismissed"],
             description: "Defaults to done.",
+          },
+          allowOpenItems: {
+            type: "boolean",
+            description:
+              "With done: mark the card done although some steps are unchecked. Pass it only when the operator says the remaining steps no longer apply.",
           },
         },
       };

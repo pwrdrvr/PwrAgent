@@ -523,4 +523,195 @@ describe("ThreadTodoService", () => {
       writes,
     });
   });
+
+  it("raises a card with steps and keeps them, with their ticks, in the row", () => {
+    const service = createService();
+    const { todo } = service.add({
+      ...THREAD,
+      input: { title: "Land the release", items: ["Run the tests", "Update the docs"] },
+    });
+    expect(todo.items).toEqual([
+      { id: "todo-2", text: "Run the tests", checked: false },
+      { id: "todo-3", text: "Update the docs", checked: false },
+    ]);
+
+    clock = 2_000;
+    const ticked = service.setItemsChecked({ id: todo.id, check: ["todo-3"], uncheck: [] });
+    expect(ticked.items?.map((item) => item.checked)).toEqual([false, true]);
+    expect(ticked.updatedAt).toBe(2_000);
+    expect(events).toHaveLength(2);
+
+    expect(new ThreadTodoStore(db).get(todo.id)?.items).toEqual([
+      { id: "todo-2", text: "Run the tests", checked: false },
+      { id: "todo-3", text: "Update the docs", checked: true },
+    ]);
+    // A card without steps carries no items field at all.
+    expect(service.add({ ...THREAD, input: { title: "Plain" } }).todo).not.toHaveProperty("items");
+  });
+
+  it("reads malformed stored steps as no steps", () => {
+    const service = createService();
+    const { todo } = service.add({ ...THREAD, input: { title: "Steps", items: ["One"] } });
+    db.raw.prepare("UPDATE thread_todos SET items_json = ? WHERE todo_id = ?")
+      .run('[{"id":"x","text":"Bad"},"nope"', todo.id);
+    expect(new ThreadTodoStore(db).get(todo.id)).not.toHaveProperty("items");
+    db.raw.prepare("UPDATE thread_todos SET items_json = ? WHERE todo_id = ?")
+      .run('[{"id":"x","text":"Bad"},{"id":"y","text":"Good","checked":true}]', todo.id);
+    expect(new ThreadTodoStore(db).get(todo.id)?.items).toEqual([
+      { id: "y", text: "Good", checked: true },
+    ]);
+  });
+
+  it("merges re-added steps by text, keeping each unchanged step's id and tick", () => {
+    const service = createService();
+    const { todo } = service.add({
+      ...THREAD,
+      input: { key: "release", title: "Release", items: ["Tests", "Docs", "Notes"] },
+    });
+    service.setItemsChecked({ id: todo.id, check: ["todo-2", "todo-4"], uncheck: [] });
+
+    const reraised = service.add({
+      ...THREAD,
+      input: { key: "release", title: "Release v2", items: ["Notes", "Tests", "Screenshots"] },
+    });
+    expect(reraised.created).toBe(false);
+    expect(reraised.todo.items).toEqual([
+      { id: "todo-4", text: "Notes", checked: true },
+      { id: "todo-2", text: "Tests", checked: true },
+      { id: "todo-5", text: "Screenshots", checked: false },
+    ]);
+
+    // Leaving items out keeps the steps; an empty list clears them.
+    const kept = service.add({ ...THREAD, input: { key: "release", title: "Release v3" } });
+    expect(kept.todo.items).toHaveLength(3);
+    const cleared = service.add({
+      ...THREAD,
+      input: { key: "release", title: "Release v4", items: [] },
+    });
+    expect(cleared.todo).not.toHaveProperty("items");
+  });
+
+  it("refuses Done while steps are open, naming them, unless the override is given", () => {
+    const service = createService();
+    const { todo } = service.add({
+      ...THREAD,
+      input: { key: "ship", title: "Ship", items: ["Tests", "Docs", "Notes"] },
+    });
+    service.setItemsChecked({ id: todo.id, check: ["todo-2"], uncheck: [] });
+
+    const refusal = (() => {
+      try {
+        service.resolveFromThread({ ...THREAD, key: "ship", status: "done" });
+      } catch (error) {
+        return error;
+      }
+      return undefined;
+    })();
+    expect(refusal).toBeInstanceOf(ThreadTodoError);
+    expect(refusal).toMatchObject({ code: "open_items" });
+    expect((refusal as Error).message).toContain('2 unchecked steps: "Docs" (todo-3), "Notes" (todo-4)');
+    expect(service.list({ status: "open" })).toHaveLength(1);
+
+    expect(service.resolve({ id: todo.id, status: "done", allowOpenItems: true }))
+      .toMatchObject({ status: "done" });
+    // Undo reopens it with its steps as they were.
+    expect(service.resolve({ id: todo.id, status: "open" }).items?.map((item) => item.checked))
+      .toEqual([true, false, false]);
+    // Dismiss never asks.
+    expect(service.resolve({ id: todo.id, status: "dismissed" }).status).toBe("dismissed");
+  });
+
+  it("marks a card done once its last step is checked, and only when asked", () => {
+    const service = createService();
+    const { todo } = service.add({ ...THREAD, input: { title: "Two steps", items: ["A", "B"] } });
+    const allChecked = service.setItemsChecked({
+      id: todo.id,
+      check: ["todo-2", "todo-3"],
+      uncheck: [],
+    });
+    expect(allChecked.status).toBe("open");
+    expect(service.resolve({ id: todo.id, status: "done" }).status).toBe("done");
+  });
+
+  it("refuses to run an action while steps are open, unless the override is given", async () => {
+    const mergePullRequest = vi.fn(async () => ({ summary: "Merged #42" }));
+    const service = createService({ mergePullRequest, startThread: vi.fn() });
+    const { todo } = service.add({
+      ...THREAD,
+      input: {
+        title: "Merge",
+        items: ["CI green"],
+        action: { type: "merge_pull_request", pullRequest: "42" },
+      },
+    });
+
+    await expect(service.runAction(todo.id)).rejects.toMatchObject({ code: "open_items" });
+    expect(mergePullRequest).not.toHaveBeenCalled();
+    await expect(service.runAction(todo.id, { allowOpenItems: true }))
+      .resolves.toMatchObject({ status: "done", result: "Merged #42" });
+  });
+
+  it("restates and ticks steps through update, and refuses ids it does not have", () => {
+    const service = createService();
+    const { todo } = service.add({ ...THREAD, input: { title: "Steps", items: ["A", "B"] } });
+
+    const updated = service.update({ id: todo.id, items: ["B", "C"], check: ["todo-3"] });
+    expect(updated.items).toEqual([
+      { id: "todo-3", text: "B", checked: true },
+      { id: "todo-4", text: "C", checked: false },
+    ]);
+    expect(updated.title).toBe("Steps");
+
+    expect(() => service.update({ id: todo.id, check: ["todo-2"] }))
+      .toThrow(expect.objectContaining({ code: "invalid_arguments" }));
+    expect(() => service.setItemsChecked({ id: todo.id, check: ["todo-4"], uncheck: ["todo-4"] }))
+      .toThrow(expect.objectContaining({ code: "invalid_arguments" }));
+    expect(service.update({ id: todo.id, uncheck: ["todo-3"] }).items?.[0]?.checked).toBe(false);
+
+    service.resolve({ id: todo.id, status: "dismissed" });
+    expect(() => service.setItemsChecked({ id: todo.id, check: ["todo-3"], uncheck: [] }))
+      .toThrow(expect.objectContaining({ code: "conflict" }));
+  });
+
+  it("lets a step be ticked while the card's action runs", async () => {
+    let finish: (value: { summary: string }) => void = () => undefined;
+    const mergePullRequest = vi.fn(() => new Promise<{ summary: string }>((resolve) => {
+      finish = resolve;
+    }));
+    const service = createService({ mergePullRequest, startThread: vi.fn() });
+    const { todo } = service.add({
+      ...THREAD,
+      input: {
+        title: "Merge",
+        items: ["Announce it"],
+        action: { type: "merge_pull_request", pullRequest: "42" },
+      },
+    });
+    const run = service.runAction(todo.id, { allowOpenItems: true });
+    expect(service.update({ id: todo.id, check: ["todo-2"] }).items?.[0]?.checked).toBe(true);
+    expect(() => service.update({ id: todo.id, title: "Renamed" }))
+      .toThrow(expect.objectContaining({ code: "conflict" }));
+    finish({ summary: "Merged #42" });
+    await expect(run).resolves.toMatchObject({ status: "done", items: [{ checked: true }] });
+  });
+
+  it("costs one commit to tick a step and none to tick it again", async () => {
+    const service = createService();
+    const { todo } = service.add({
+      ...THREAD,
+      input: { title: "Steps", items: ["Run the tests", "Update the docs", "Attach screenshots"] },
+    });
+    const { writes } = await measureSqliteWrites(() => {
+      service.setItemsChecked({ id: todo.id, check: ["todo-2"], uncheck: [] });
+      service.setItemsChecked({ id: todo.id, check: ["todo-2"], uncheck: [] });
+    });
+    expectSqliteWriteBudget({
+      note: "one checklist step ticked, then ticked again: one commit rewriting the card's "
+        + "unindexed items_json (~4 KB), and the unchanged repeat opens no transaction; only "
+        + "on an operator click or an agent's update_todo check, ~0.2 MB/day at 50 ticks, "
+        + "~0.8 MB/day at 200",
+      scenario: "thread-todo-check-step",
+      writes,
+    });
+  });
 });

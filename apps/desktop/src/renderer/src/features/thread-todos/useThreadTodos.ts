@@ -17,6 +17,7 @@ import type {
 import { buildThreadIdentityKey } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
+import type { ThreadTodoResolveOptions } from "./thread-todos-view";
 
 export type ThreadTodosController = {
   /** Open cards, newest first. */
@@ -32,6 +33,16 @@ export type ThreadTodosController = {
     id: string,
     status: ThreadTodoStatus,
     resolution?: ResolveThreadTodoRequest["resolution"],
+    options?: ThreadTodoResolveOptions,
+  ) => Promise<ThreadTodo | undefined>;
+  /**
+   * Ticks or unticks one step. Not optimistic: the box follows the stored
+   * card, which arrives with the change event's refetch.
+   */
+  setItemChecked: (
+    id: string,
+    itemId: string,
+    checked: boolean,
   ) => Promise<ThreadTodo | undefined>;
   runAction: (
     id: string,
@@ -41,7 +52,11 @@ export type ThreadTodosController = {
 
 type ThreadTodosApi = Pick<
   DesktopApi,
-  "listThreadTodos" | "onThreadTodosChanged" | "resolveThreadTodo" | "runThreadTodoAction"
+  | "listThreadTodos"
+  | "onThreadTodosChanged"
+  | "resolveThreadTodo"
+  | "runThreadTodoAction"
+  | "setThreadTodoItemChecked"
 >;
 
 const EMPTY_TODOS: ThreadTodo[] = [];
@@ -105,14 +120,22 @@ export function useThreadTodos(
       id: string,
       status: ThreadTodoStatus,
       resolution?: ResolveThreadTodoRequest["resolution"],
+      options?: ThreadTodoResolveOptions,
     ): Promise<ThreadTodo | undefined> => {
       const response = await api?.resolveThreadTodo?.({
         id,
         status,
         ...(resolution ? { resolution } : {}),
+        ...(options?.allowOpenItems ? { allowOpenItems: true } : {}),
       });
       return response?.todo;
     },
+    [api],
+  );
+
+  const setItemChecked = useCallback(
+    async (id: string, itemId: string, checked: boolean): Promise<ThreadTodo | undefined> =>
+      (await api?.setThreadTodoItemChecked?.({ id, itemId, checked }))?.todo,
     [api],
   );
 
@@ -157,8 +180,18 @@ export function useThreadTodos(
       runningIds,
       resolve,
       runAction,
+      setItemChecked,
     }),
-    [openTodos, openByThreadKey, revision, mergeMethods, runningIds, resolve, runAction],
+    [
+      openTodos,
+      openByThreadKey,
+      revision,
+      mergeMethods,
+      runningIds,
+      resolve,
+      runAction,
+      setItemChecked,
+    ],
   );
 }
 

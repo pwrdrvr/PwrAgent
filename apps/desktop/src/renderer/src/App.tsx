@@ -2541,8 +2541,10 @@ function DesktopAppShell(props: {
       threadTitle: (todo) =>
         localThreadTitles.get(buildThreadIdentityKey(todo.backend, todo.threadId))
           ?? "Untitled thread",
-      resolve: (todo, status, resolution) =>
-        threadTodoController.resolve(todo.id, status, resolution),
+      resolve: (todo, status, resolution, options) =>
+        threadTodoController.resolve(todo.id, status, resolution, options),
+      setItemChecked: (todo, itemId, checked) =>
+        threadTodoController.setItemChecked(todo.id, itemId, checked),
       run: (todo, options) => {
         if (
           todo.action?.type !== "start_thread"

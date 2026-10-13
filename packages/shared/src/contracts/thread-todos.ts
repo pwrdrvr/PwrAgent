@@ -100,6 +100,16 @@ export const THREAD_TODO_ACTION_TYPES = [
   "start_thread",
 ] as const satisfies readonly ThreadTodoActionType[];
 
+/**
+ * One step of a multi-step card. The id is minted by the main process, so
+ * an agent checks a step by the id it was handed back, never by position.
+ */
+export type ThreadTodoItem = {
+  id: string;
+  text: string;
+  checked: boolean;
+};
+
 export type ThreadTodo = {
   id: string;
   backend: AppServerBackendKind;
@@ -110,6 +120,11 @@ export type ThreadTodo = {
   status: ThreadTodoStatus;
   title: string;
   detail?: string;
+  /**
+   * Checkable steps, in the thread's order. A card with an unchecked step
+   * is not done: resolving it done takes an explicit `allowOpenItems`.
+   */
+  items?: ThreadTodoItem[];
   action?: ThreadTodoAction;
   /**
    * The raising thread's workspace when the card was created. Merge and
@@ -138,6 +153,83 @@ export const THREAD_TODO_MAX_OPEN_PER_THREAD = 20;
 export const THREAD_TODO_TITLE_MAX_LENGTH = 120;
 export const THREAD_TODO_DETAIL_MAX_LENGTH = 1_000;
 export const THREAD_TODO_PROMPT_MAX_LENGTH = 20_000;
+/** Steps one card may hold; a longer plan belongs in more than one card. */
+export const THREAD_TODO_MAX_ITEMS = 20;
+export const THREAD_TODO_ITEM_TEXT_MAX_LENGTH = 200;
+
+/**
+ * Checks an agent's or the operator's step texts: an array of non-empty
+ * strings within the limits. Texts are trimmed; order is kept.
+ */
+export function parseThreadTodoItemTexts(
+  value: unknown,
+  field = "items",
+): { ok: true; value: string[] } | { ok: false; message: string } {
+  if (!Array.isArray(value)) {
+    return { ok: false, message: `${field} must be an array of step texts.` };
+  }
+  if (value.length > THREAD_TODO_MAX_ITEMS) {
+    return {
+      ok: false,
+      message: `${field} may hold at most ${THREAD_TODO_MAX_ITEMS} steps.`,
+    };
+  }
+  const texts: string[] = [];
+  for (const [index, entry] of value.entries()) {
+    const text = typeof entry === "string" ? entry.trim() : "";
+    if (!text) {
+      return {
+        ok: false,
+        message: `${field}[${index}] must be a non-empty string.`,
+      };
+    }
+    if (text.length > THREAD_TODO_ITEM_TEXT_MAX_LENGTH) {
+      return {
+        ok: false,
+        message: `${field}[${index}] must be at most ${THREAD_TODO_ITEM_TEXT_MAX_LENGTH} characters.`,
+      };
+    }
+    texts.push(text);
+  }
+  return { ok: true, value: texts };
+}
+
+/**
+ * The card's steps after the thread restates them. A text that matches an
+ * existing step keeps that step's id and checked state, so a re-raised card
+ * does not undo the operator's ticks; each existing step matches at most
+ * once, in order. New texts start unchecked, and steps the thread left out
+ * are dropped.
+ */
+export function mergeThreadTodoItems(
+  existing: readonly ThreadTodoItem[] | undefined,
+  texts: readonly string[],
+  newId: () => string,
+): ThreadTodoItem[] {
+  const unmatched = [...(existing ?? [])];
+  return texts.map((text) => {
+    const index = unmatched.findIndex((item) => item.text === text);
+    const match = index === -1 ? undefined : unmatched.splice(index, 1)[0];
+    return match
+      ? { id: match.id, text, checked: match.checked }
+      : { id: newId(), text, checked: false };
+  });
+}
+
+export function threadTodoOpenItems(
+  todo: Pick<ThreadTodo, "items">,
+): ThreadTodoItem[] {
+  return (todo.items ?? []).filter((item) => !item.checked);
+}
+
+/** "2 of 4" for a card with steps; undefined for one without. */
+export function threadTodoItemProgress(
+  todo: Pick<ThreadTodo, "items">,
+): { checked: number; total: number } | undefined {
+  const total = todo.items?.length ?? 0;
+  if (total === 0) return undefined;
+  return { checked: total - threadTodoOpenItems(todo).length, total };
+}
 
 export type ListThreadTodosRequest = {
   status?: ThreadTodoStatus | "all";
@@ -186,6 +278,18 @@ export type ResolveThreadTodoRequest = {
    * reply. Recorded as the result.
    */
   resolution?: ThreadTodoResolution;
+  /**
+   * With `done`, complete the card although some of its steps are still
+   * unchecked. Without it the main process refuses, naming the open steps.
+   */
+  allowOpenItems?: boolean;
+};
+
+/** The operator ticks or unticks one step. One commit. */
+export type SetThreadTodoItemCheckedRequest = {
+  id: string;
+  itemId: string;
+  checked: boolean;
 };
 
 export type ThreadTodoResolution = "handled_elsewhere" | "sent_here";
@@ -210,6 +314,11 @@ export type RunThreadTodoActionRequest = {
   rememberMergeMethod?: boolean;
   /** Handoff cards only: start the thread on this federation peer. */
   startOnInstanceId?: string;
+  /**
+   * Run although some steps are unchecked. A run that succeeds marks the
+   * card done, so it follows the same rule as resolving it.
+   */
+  allowOpenItems?: boolean;
 };
 
 export type ThreadTodoMutationResponse = {

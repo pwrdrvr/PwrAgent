@@ -1,8 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import type { ThreadTodo, ThreadTodoResolution } from "@pwragent/shared";
+import { threadTodoItemProgress } from "@pwragent/shared";
 import { TodoIcon } from "../../icons";
 import { ThreadTodoCard } from "./ThreadTodoCard";
-import type { ThreadTodoRunOptions, ThreadTodosView } from "./thread-todos-view";
+import type {
+  ThreadTodoResolveOptions,
+  ThreadTodoRunOptions,
+  ThreadTodosView,
+} from "./thread-todos-view";
 
 const RESOLVED_NOTICE_MS = 4_000;
 
@@ -84,8 +89,12 @@ export function ThreadTodoStack(props: ThreadTodoStackProps) {
     target: ThreadTodo,
     status: "done" | "dismissed",
     resolution?: ThreadTodoResolution,
+    options?: ThreadTodoResolveOptions,
   ): void => {
-    void view.resolve(target, status, resolution).then((resolved) => {
+    const resolving = options
+      ? view.resolve(target, status, resolution, options)
+      : view.resolve(target, status, resolution);
+    void resolving.then((resolved) => {
       if (resolved) {
         showNotice({
           todo: resolved,
@@ -124,13 +133,18 @@ export function ThreadTodoStack(props: ThreadTodoStackProps) {
 
   if (collapsed && todo) {
     const count = todos.length;
+    // A lone collapsed card keeps its checklist progress in view; across
+    // several cards one fraction would not say whose it is.
+    const progress = count === 1 ? threadTodoItemProgress(todo) : undefined;
     return (
       <div className={className}>
         <button
           type="button"
           className="thread-todo-stack__chip"
           aria-expanded={false}
-          aria-label={`Show to-dos: ${count} open`}
+          aria-label={`Show to-dos: ${count} open${
+            progress ? `, ${progress.checked} of ${progress.total} steps checked` : ""
+          }`}
           onClick={() => {
             collapsedIdsByThreadKey.delete(threadKey);
             setCollapseVersion((current) => current + 1);
@@ -141,6 +155,11 @@ export function ThreadTodoStack(props: ThreadTodoStackProps) {
           <span className="thread-todo-stack__chip-label">
             {count === 1 ? "to-do" : "to-dos"}
           </span>
+          {progress ? (
+            <span className="thread-todo-stack__chip-progress">
+              {progress.checked} of {progress.total}
+            </span>
+          ) : null}
         </button>
       </div>
     );
@@ -177,6 +196,11 @@ export function ThreadTodoStack(props: ThreadTodoStackProps) {
             onRun={run}
             onStartReview={props.onStartReview}
             onDoHere={doHere}
+            onSetItemChecked={(target, item, checked) => {
+              void view.setItemChecked(target, item.id, checked).catch((error: unknown) => {
+                console.warn("Checking a to-do step failed.", error);
+              });
+            }}
           />
         </div>
       ) : null}
