@@ -5999,6 +5999,41 @@ describe("Sidebar", () => {
     ).toBeTruthy();
   });
 
+  it("keeps the directory index pager inside the scrolling lane, before the start actions", () => {
+    const request: NavigationQueryRequest = { protocol: 2, consumer: "main-sidebar", query: { kind: "directory-index" } };
+    const page = { ...navigationQueryFixture(request, { directories, threads: [sharedThread] }), nextCursor: "next" };
+    render(<Sidebar backends={backends} browseMode="directories" directories={directories}
+      threads={[sharedThread]} inboxThreads={[]} loading={false} creatingThread={undefined}
+      selectedItemKey={undefined} onBrowseModeChange={() => undefined}
+      onCreateThread={async () => undefined} onCreateThreadWithoutDirectory={async () => undefined}
+      onOpenLaunchpad={async () => undefined} onSelectThread={() => undefined}
+      pagedNavigation={{ presentationReady: true, resources: new Map([["directory-index", { id: "directory-index", loading: false,
+        state: { ...createNavigationPageState(request), page } }]]), directories: [], selectedDirectoryKeys: undefined, connected: true,
+        invalidate: () => undefined, refresh: async () => undefined, loadMore: async () => undefined,
+        rebaseline: async () => undefined, restart: async () => undefined, setVisibleAnchor: () => undefined }} />);
+    const loadMore = screen.getByRole("button", { name: "Load more directories" });
+    expect(loadMore.closest(".sidebar-list--dense")).not.toBeNull();
+    const startChat = screen.getByRole("button", { name: "Start Chat" });
+    expect(
+      loadMore.compareDocumentPosition(startChat) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("still offers the lens pager while the list shows a status line", () => {
+    const request: NavigationQueryRequest = { protocol: 2, consumer: "main-sidebar", query: { kind: "lens", lens: "inbox" } };
+    const page = { ...navigationQueryFixture(request, { directories, threads: [] }), nextCursor: "next" };
+    render(<Sidebar backends={backends} browseMode="inbox" directories={directories}
+      threads={[]} inboxThreads={[]} loading creatingThread={undefined}
+      selectedItemKey={undefined} onBrowseModeChange={() => undefined}
+      onCreateThread={async () => undefined} onOpenLaunchpad={async () => undefined} onSelectThread={() => undefined}
+      pagedNavigation={{ presentationReady: true, resources: new Map([["lens", { id: "lens", loading: false,
+        state: { ...createNavigationPageState(request), page } }]]), directories: [], selectedDirectoryKeys: undefined, connected: true,
+        invalidate: () => undefined, refresh: async () => undefined, loadMore: async () => undefined,
+        rebaseline: async () => undefined, restart: async () => undefined, setVisibleAnchor: () => undefined }} />);
+    expect(screen.getByText("Loading threads…")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Load more threads" })).toBeInTheDocument();
+  });
+
   it("loads the next owner page only after explicit load more", async () => {
     const cappedThreads = Array.from({ length: 12 }, (_, index) => ({
       ...sharedThread,

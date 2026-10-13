@@ -8620,7 +8620,10 @@ a.button {
   font: inherit;
   font-size: 12px;
   font-weight: 600;
-  white-space: nowrap;
+  /* Wraps rather than overflowing: the button is pinned to the row width,
+     and "Load more sub-threads on this machine" in an indented tray at the
+     240px minimum rail is wider than the box. */
+  text-align: center;
   cursor: pointer;
   transition:
     background-color 120ms ease,
