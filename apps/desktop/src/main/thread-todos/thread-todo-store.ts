@@ -30,6 +30,7 @@ type ThreadTodoRow = {
   source_project_json: string | null;
   target_project_json: string | null;
   items_json: string | null;
+  dependency_id: string | null;
 };
 
 type ThreadTodoResult = Pick<ThreadTodo, "result" | "startedThread">;
@@ -37,7 +38,7 @@ type ThreadTodoResult = Pick<ThreadTodo, "result" | "startedThread">;
 const ROW_COLUMNS = `
   todo_id, backend, thread_id, todo_key, kind, status, title, detail,
   action_json, cwd, result_json, error, created_at, updated_at, resolved_at,
-  source_project_json, target_project_json, items_json
+  source_project_json, target_project_json, items_json, dependency_id
 `;
 
 export type InsertThreadTodoRecord = {
@@ -53,6 +54,7 @@ export type InsertThreadTodoRecord = {
   sourceProject?: ThreadTodoProject;
   targetProject?: ThreadTodoProject;
   items?: ThreadTodoItem[];
+  dependencyId?: string;
   now: number;
 };
 
@@ -94,8 +96,8 @@ export class ThreadTodoStore {
         `INSERT INTO thread_todos (
           todo_id, backend, thread_id, todo_key, kind, status, title, detail,
           action_json, cwd, result_json, error, created_at, updated_at, resolved_at,
-          source_project_json, target_project_json, items_json
-        ) VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, NULL, NULL, ?, ?, NULL, ?, ?, ?)`,
+          source_project_json, target_project_json, items_json, dependency_id
+        ) VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, NULL, NULL, ?, ?, NULL, ?, ?, ?, ?)`,
       )
       .run(
         record.id,
@@ -112,6 +114,7 @@ export class ThreadTodoStore {
         projectJson(record.sourceProject),
         projectJson(record.targetProject),
         itemsJson(record.items),
+        record.dependencyId ?? null,
       );
     return this.require(record.id);
   }
@@ -198,6 +201,14 @@ export class ThreadTodoStore {
     const row = this.stateDb.raw
       .prepare(`SELECT ${ROW_COLUMNS} FROM thread_todos WHERE todo_id = ?`)
       .get(id) as ThreadTodoRow | undefined;
+    return row ? rowToThreadTodo(row) : undefined;
+  }
+
+  /** The card a dependency raised, in any status. */
+  findByDependency(dependencyId: string): ThreadTodo | undefined {
+    const row = this.stateDb.raw
+      .prepare(`SELECT ${ROW_COLUMNS} FROM thread_todos WHERE dependency_id = ?`)
+      .get(dependencyId) as ThreadTodoRow | undefined;
     return row ? rowToThreadTodo(row) : undefined;
   }
 
@@ -348,6 +359,7 @@ function rowToThreadTodo(row: ThreadTodoRow): ThreadTodo {
     backend: row.backend,
     threadId: row.thread_id,
     ...(row.todo_key ? { key: row.todo_key } : {}),
+    ...(row.dependency_id ? { dependencyId: row.dependency_id } : {}),
     kind: row.kind,
     status: isThreadTodoStatus(row.status) ? row.status : "open",
     title: row.title,

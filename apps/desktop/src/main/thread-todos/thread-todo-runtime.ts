@@ -98,6 +98,30 @@ export async function setThreadTodoProject(
 }
 
 /**
+ * Where a card raised on this thread runs its Start thread, and the project
+ * it files under, the way add_todo resolves them. Best effort: a missing
+ * workspace or project leaves the card on the thread alone.
+ */
+export async function readThreadTodoPlacement(
+  registry: Pick<DesktopBackendRegistry, "resolveThreadWorkspaceCwd" | "resolveThreadPrimaryDirectory">,
+  thread: { backend: AppServerBackendKind; threadId: string },
+): Promise<{ cwd?: string; sourceProject?: ThreadTodoProject }> {
+  const [cwd, primaryDirectory, projects] = await Promise.all([
+    registry.resolveThreadWorkspaceCwd(thread.backend, thread.threadId)
+      .catch(() => undefined),
+    registry.resolveThreadPrimaryDirectory(thread.backend, thread.threadId)
+      .catch(() => undefined),
+    (listProjectCandidates?.() ?? Promise.resolve([]))
+      .catch((): ThreadTodoProjectCandidate[] => []),
+  ]);
+  const sourceProject = threadTodoProjectForDirectory(primaryDirectory, projects);
+  return {
+    ...(cwd ? { cwd } : {}),
+    ...(sourceProject ? { sourceProject } : {}),
+  };
+}
+
+/**
  * Connects the service to the registry: the agent tools raise cards through
  * it, and its main-process actions run through the registry, gh, and the
  * federation tools for a peer.

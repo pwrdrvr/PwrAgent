@@ -8,6 +8,7 @@ import { publishedPrCommitShas } from "../../shared/pull-request-publication";
 import { THREAD_DEPENDENCIES_CHANNEL, type ManageThreadDependenciesRequest, type ManageThreadDependenciesResponse, type ThreadDependencyCondition, type AppServerThreadTurnMetadata, type AppServerNotification } from "@pwragent/shared";
 import { ThreadDependencyStore } from "../state/thread-dependency-store";
 import { ThreadDependencyCoordinator, validateDependencyCreate, type DependencyThreadSnapshot } from "../app-server/thread-dependency-coordinator";
+import { getThreadTodoService, readThreadTodoPlacement } from "../thread-todos/thread-todo-runtime";
 import { USAGE_ACTIVITY_ANALYZE_CHANNEL } from "../../shared/ipc";
 import { archiveCandidateProtectionReason } from "../app-server/thread-archive-sweeper";
 import { USAGE_ACTIVITY_READ_CHANNEL } from "../../shared/ipc";
@@ -8183,6 +8184,11 @@ class DesktopAppServerService {
       this.threadDependencyCoordinator = new ThreadDependencyCoordinator({
         store,
         hasDeliveryReceipt: (dependency) => store.hasDeliveryReceipt(dependency),
+        operatorTodos: {
+          prepare: (dependency) => readThreadTodoPlacement(getDesktopBackendRegistry(), dependency),
+          raise: (card, placement) => getThreadTodoService().raiseForDependency({ ...card, ...placement }).todo,
+          publish: (todo) => getThreadTodoService().publish(todo),
+        },
         readThread: (condition) => this.readDependencyThread(condition),
         submit: (request) => getDesktopBackendRegistry().submitTurnIfIdle(request),
         isConsumerBusy: (dependency) => Boolean(getDesktopBackendRegistry().getActiveTurnForThread(dependency)),
@@ -8251,7 +8257,7 @@ class DesktopAppServerService {
     if (!request || typeof request.backend !== "string" || !isAppServerBackendKind(request.backend) || typeof request.threadId !== "string" || !request.threadId.trim()) {
       throw new Error("A local backend and waiting threadId are required.");
     }
-    if (Object.keys(request).some((key) => !["action", "backend", "threadId", "conditions", "mode", "onFailure", "continuation", "dependencyId"].includes(key))) throw new Error("Unknown dependency request field.");
+    if (Object.keys(request).some((key) => !["action", "backend", "threadId", "conditions", "mode", "onFailure", "continuation", "deliver", "handoff", "dependencyId"].includes(key))) throw new Error("Unknown dependency request field.");
     if (request.action === "create") {
       validateDependencyCreate(request);
       // The resumed turn starts from this text alone, for the operator's

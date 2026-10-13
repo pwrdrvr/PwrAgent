@@ -120,6 +120,11 @@ export type ThreadTodo = {
   threadTitle?: string;
   /** Re-adding an open card with the same key updates it in place. */
   key?: string;
+  /**
+   * Set when a thread dependency raised the card for the operator. One
+   * dependency raises at most one card, whatever its status.
+   */
+  dependencyId?: string;
   kind: ThreadTodoKind;
   status: ThreadTodoStatus;
   title: string;

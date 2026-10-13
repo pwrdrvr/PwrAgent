@@ -1,8 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PrSummary, ThreadDependency, ThreadDependencyCondition } from "@pwragent/shared";
+import type { ManageThreadDependenciesRequest, PrSummary, ThreadDependency, ThreadDependencyCondition, ThreadTodosChangedEvent } from "@pwragent/shared";
 import { StateDb } from "../state/state-db";
 import { ThreadDependencyStore } from "../state/thread-dependency-store";
-import { ThreadDependencyCoordinator, buildDependencyPrompt, type DependencyThreadSnapshot } from "../app-server/thread-dependency-coordinator";
+import {
+  ThreadDependencyCoordinator, buildDependencyPrompt, buildDependencyTodo,
+  type DependencyThreadSnapshot, type OperatorTodoDelivery,
+} from "../app-server/thread-dependency-coordinator";
+import { ThreadTodoService } from "../thread-todos/thread-todo-service";
+import { ThreadTodoStore } from "../thread-todos/thread-todo-store";
 import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 import { measureSqliteWrites } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
@@ -23,7 +28,9 @@ const pr = (overrides: Partial<PrSummary> = {}): PrSummary => ({
   headSha: "head-one", ...overrides,
 });
 
-function coordinator(dependencyStore = store, changed: (item: ThreadDependency) => Promise<void> = async () => undefined): ThreadDependencyCoordinator {
+type CoordinatorOptions = ConstructorParameters<typeof ThreadDependencyCoordinator>[0];
+
+function coordinator(dependencyStore = store, changed: (item: ThreadDependency) => Promise<void> = async () => undefined, extra: Partial<CoordinatorOptions> = {}): ThreadDependencyCoordinator {
   return new ThreadDependencyCoordinator({
     store: dependencyStore,
     readThread: async (target) => {
@@ -36,10 +43,29 @@ function coordinator(dependencyStore = store, changed: (item: ThreadDependency) 
     changed,
     now: () => now,
     hasDeliveryReceipt: (item) => dependencyStore.hasDeliveryReceipt(item),
+    ...extra,
   });
 }
 
-function create(agent: ThreadDependencyCoordinator, conditions = [condition("foundation")], extra: { mode?: "all" | "any"; onFailure?: "wait" | "notify"; threadId?: string } = {}) {
+let todoEvents: ThreadTodosChangedEvent[];
+let todoIds: number;
+
+/** Operator delivery through the real to-do service, on this connection. */
+function operatorTodos(stateDb = db, prepare: OperatorTodoDelivery["prepare"] = async () => ({ cwd: "/repo" })): OperatorTodoDelivery {
+  const todos = new ThreadTodoService({
+    store: new ThreadTodoStore(stateDb), now: () => now,
+    newId: () => `todo-${++todoIds}`, onChanged: (event) => todoEvents.push(event),
+  });
+  return {
+    prepare,
+    raise: (card, placement) => todos.raiseForDependency({ ...card, ...placement }).todo,
+    publish: (todo) => todos.publish(todo),
+  };
+}
+
+const cards = () => new ThreadTodoStore(db).list({ status: "all" });
+
+function create(agent: ThreadDependencyCoordinator, conditions = [condition("foundation")], extra: Partial<Pick<ManageThreadDependenciesRequest, "mode" | "onFailure" | "threadId" | "continuation" | "deliver" | "handoff">> = {}) {
   return agent.manage({ action: "create", backend: "codex", threadId: "dependencies", conditions, ...extra });
 }
 
@@ -55,6 +81,7 @@ beforeEach(() => {
     ["security", { activeTurnId: "security-turn", turns: [{ id: "security-turn", status: "in_progress" }], prs: [] }],
   ]);
   submit.mockClear();
+  todoEvents = []; todoIds = 0;
 });
 
 afterEach(() => { db.close(); removeTempStateDbDir(tempDir); vi.unstubAllEnvs(); });
@@ -436,5 +463,160 @@ describe("durable thread dependencies", () => {
       await agent.handlePrEvent();
     });
     expectSqliteWriteBudget({ scenario: "thread-dependency-lifecycle", note: "One dependency registration and one successful continuation; no per-poll or per-turn writes when evidence is unchanged.", writes });
+  });
+});
+
+describe("operator delivery", () => {
+  const merged = () => [{ pr: pr({ number: 2999, url: "https://github.com/example/fixture/pull/2999", lifecycleState: "merged", state: "merged" }), fetchedAt: now }];
+  const remind = (extra: Parameters<typeof create>[2] = {}) => ({ deliver: "operator" as const, continuation: "Call mom and tell her I'm her hero again", ...extra });
+
+  it("raises one reminder card instead of a turn, keyed by the dependency", async () => {
+    const changed = vi.fn(async (_item: ThreadDependency) => undefined);
+    const agent = coordinator(store, changed, { operatorTodos: operatorTodos() });
+    busy = true; // A card needs no idle consumer.
+    const { dependencies: [item] } = await create(agent, [condition("foundation", "pr_merged")], remind());
+    expect(item).toMatchObject({ deliver: "operator", status: "waiting" });
+    snapshots.get("foundation")!.prs = merged();
+    await agent.handlePrEvent();
+    expect(submit).not.toHaveBeenCalled();
+    const [card] = cards();
+    expect(cards()).toHaveLength(1);
+    expect(card).toMatchObject({
+      backend: "codex", threadId: "dependencies", kind: "reminder", status: "open",
+      key: `dependency:${item!.id}`, dependencyId: item!.id, cwd: "/repo",
+      title: "#2999 merged: Call mom and tell her I'm her hero again",
+    });
+    expect(card!.action).toBeUndefined();
+    expect(card!.detail).toContain("#2999 (met): PR merged https://github.com/example/fixture/pull/2999");
+    expect(store.get("codex", "dependencies", item!.id)).toMatchObject({ status: "delivered", outcome: "success", todoId: card!.id });
+    expect(todoEvents).toEqual([expect.objectContaining({ backend: "codex", threadId: "dependencies" })]);
+    expect(changed).toHaveBeenLastCalledWith(expect.objectContaining({ status: "delivered", todoId: card!.id }));
+  });
+
+  it("raises the failure with its reason and holds the plan back", async () => {
+    const agent = coordinator(store, undefined, { operatorTodos: operatorTodos() });
+    await create(agent, [condition("foundation", "pr_merged")], remind({ handoff: true }));
+    snapshots.get("foundation")!.prs = [{ pr: pr({ number: 2999, url: "https://github.com/example/fixture/pull/2999", lifecycleState: "closed", state: "closed" }), fetchedAt: now }];
+    await agent.handlePrEvent();
+    const [card] = cards();
+    expect(card).toMatchObject({ kind: "reminder", title: "#2999 failed: PR closed without merging" });
+    // No one-click start of work whose prerequisite failed.
+    expect(card!.action).toBeUndefined();
+    expect(card!.detail).toMatch(/^Not started: Call mom and tell her I'm her hero again\n\n/);
+    expect(store.list("codex", "dependencies")[0]).toMatchObject({ status: "delivered", outcome: "failure" });
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  it("keeps waiting through a repairable CI failure, as agent delivery does", async () => {
+    const agent = coordinator(store, undefined, { operatorTodos: operatorTodos() });
+    snapshots.get("foundation")!.prs = [{ pr: pr({ checkState: "failing", state: "failing" }), fetchedAt: now }];
+    await create(agent, [condition("foundation")], remind({ onFailure: "wait" }));
+    await agent.handlePrEvent();
+    expect(cards()).toEqual([]);
+    snapshots.get("foundation")!.prs = [{ pr: pr({ checkState: "passing", state: "passing" }), fetchedAt: now }];
+    await agent.handlePrEvent();
+    expect(cards().map((card) => card.title)).toEqual(["#1 passed CI: Call mom and tell her I'm her hero again"]);
+  });
+
+  it("offers Start thread with the continuation when asked", async () => {
+    const agent = coordinator(store, undefined, { operatorTodos: operatorTodos() });
+    await create(agent, [condition("foundation", "pr_merged")], remind({ handoff: true, continuation: "Write the release notes for #2999" }));
+    snapshots.get("foundation")!.prs = merged();
+    await agent.handlePrEvent();
+    expect(cards()[0]).toMatchObject({
+      kind: "handoff", title: "#2999 merged: Write the release notes for #2999",
+      action: { type: "start_thread", prompt: "Write the release notes for #2999" },
+    });
+  });
+
+  it("never raises a second card on repeated events, a restart, or a resolved card", async () => {
+    const delivery = operatorTodos();
+    const agent = coordinator(store, undefined, { operatorTodos: delivery });
+    const { dependencies: [item] } = await create(agent, [condition("foundation", "pr_merged")], remind());
+    snapshots.get("foundation")!.prs = merged();
+    await Promise.all([agent.handlePrEvent(), agent.handlePrEvent(), agent.handleThreadEvent(condition("foundation"))]);
+    for (let tick = 0; tick < 5; tick++) await agent.handlePrEvent();
+    db.close(); db = StateDb.open(dbPath); store = new ThreadDependencyStore(db.raw);
+    await coordinator(store, undefined, { operatorTodos: operatorTodos() }).reconcile();
+    expect(cards()).toHaveLength(1);
+    const todos = new ThreadTodoService({ store: new ThreadTodoStore(db), now: () => now });
+    todos.resolve({ id: cards()[0]!.id, status: "done" });
+    // A re-raise for the same dependency returns the resolved card as it stands.
+    const again = todos.raiseForDependency(buildDependencyTodo(store.get("codex", "dependencies", item!.id)!));
+    expect(again).toMatchObject({ created: false, todo: { status: "done" } });
+    expect(cards()).toHaveLength(1);
+  });
+
+  it("arbitrates concurrent claims across two processes' connections to one card", async () => {
+    const agent = coordinator(store, undefined, { operatorTodos: operatorTodos() });
+    await create(agent, [condition("foundation", "pr_merged")], remind());
+    const otherDb = StateDb.open(dbPath);
+    try {
+      const other = coordinator(new ThreadDependencyStore(otherDb.raw), undefined, { operatorTodos: operatorTodos(otherDb) });
+      snapshots.get("foundation")!.prs = merged();
+      await Promise.all([agent.handlePrEvent(), other.handlePrEvent()]);
+    } finally { otherDb.close(); }
+    expect(cards()).toHaveLength(1);
+    expect(store.active()).toEqual([]);
+  });
+
+  it("rolls the card back with a claim lost while the card was being placed", async () => {
+    let race: (() => void) | undefined;
+    const agent = coordinator(store, undefined, {
+      operatorTodos: operatorTodos(db, async () => { race?.(); return {}; }),
+    });
+    const { dependencies: [item] } = await create(agent, [condition("foundation", "pr_merged")], remind());
+    // Another process cancels while this one reads the workspace.
+    race = () => { store.cancel("codex", "dependencies", item!.id, now); };
+    snapshots.get("foundation")!.prs = merged();
+    await agent.handlePrEvent();
+    expect(cards()).toEqual([]);
+    expect(todoEvents).toEqual([]);
+    expect(store.get("codex", "dependencies", item!.id)?.status).toBe("cancelled");
+  });
+
+  it("refuses operator delivery without a to-do service and validates handoff", async () => {
+    await expect(create(coordinator(), [condition("foundation")], remind())).rejects.toThrow("Operator reminders are not available");
+    const agent = coordinator(store, undefined, { operatorTodos: operatorTodos() });
+    await expect(create(agent, [condition("foundation")], { handoff: true, continuation: "x" })).rejects.toThrow("handoff requires deliver: operator");
+    await expect(create(agent, [condition("foundation")], { deliver: "operator", handoff: true })).rejects.toThrow("handoff requires continuation");
+    await expect(create(agent, [condition("foundation")], { deliver: "human" as never })).rejects.toThrow("deliver must be agent or operator");
+    // The target is part of identity: the same prerequisites may both resume and remind.
+    await create(agent, [condition("foundation")], { continuation: "Same plan" });
+    await create(agent, [condition("foundation")], { continuation: "Same plan", deliver: "operator" });
+    expect(store.active().map((item) => item.deliver).sort()).toEqual(["agent", "operator"]);
+  });
+
+  it("names prerequisites and clips the card to the to-do limits", () => {
+    const base: ThreadDependency = {
+      id: "clipped", backend: "codex", threadId: "consumer", status: "ready", mode: "all", onFailure: "notify",
+      deliver: "operator", outcome: "success", createdAt: 1, updatedAt: 1, continuation: "x".repeat(2000),
+      conditions: [condition("foundation", "turn_completed")],
+      evidence: [{ condition: { ...condition("foundation", "turn_completed"), title: "Extract retry helper" }, state: "satisfied", reason: "Turn t1 completed", observedAt: 1 }],
+    };
+    const card = buildDependencyTodo(base);
+    expect(card.title).toHaveLength(120);
+    expect(card.title.startsWith("Extract retry helper finished its turn: xxx")).toBe(true);
+    expect(card.title.endsWith("…")).toBe(true);
+    // A clipped title leaves the whole plan in the detail, up to its limit.
+    expect(card.detail).toHaveLength(1000);
+    const many = buildDependencyTodo({
+      ...base, continuation: undefined,
+      evidence: ["a", "b", "c"].map((threadId) => ({ condition: condition(threadId, "ci_passed"), state: "satisfied" as const, reason: "CI passed", observedAt: 1 })),
+    });
+    expect(many.title).toBe("3 prerequisites met");
+    expect(many.detail?.split("\n")).toEqual(["• Thread a (met): CI passed", "• Thread b (met): CI passed", "• Thread c (met): CI passed"]);
+  });
+
+  it("budgets one registration and one reminder at readiness boundaries", async () => {
+    const agent = coordinator(store, undefined, { operatorTodos: operatorTodos() });
+    const { writes } = await measureSqliteWrites(async () => {
+      await create(agent, [condition("foundation", "pr_merged")], remind());
+      snapshots.get("foundation")!.prs = merged();
+      await agent.handlePrEvent();
+      for (let tick = 0; tick < 10; tick++) await agent.handlePrEvent();
+    });
+    expect(cards()).toHaveLength(1);
+    expectSqliteWriteBudget({ scenario: "thread-dependency-operator-reminder", note: "One operator dependency registration and its reminder card; the card and the delivered claim share one commit, and later PR events write nothing. ~62 KB per reminder: ~6.2 MB/day at 100 reminders, 0 MB/day idle.", writes });
   });
 });

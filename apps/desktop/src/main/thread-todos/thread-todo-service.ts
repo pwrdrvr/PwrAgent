@@ -239,6 +239,54 @@ export class ThreadTodoService {
     return result;
   }
 
+  /**
+   * The card a thread dependency raises for the operator. Synchronous so it
+   * can share the dependency's claim transaction, and silent until
+   * `publish`, after that transaction commits.
+   *
+   * A dependency raises one card for its lifetime: an existing card is
+   * returned as it stands, even when the operator already resolved it. The
+   * open-card cap does not apply. It guards against a looping turn calling
+   * add_todo; a dependency fires once, after a prerequisite event, and a
+   * thread holds at most 32 active registrations.
+   */
+  raiseForDependency(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    dependencyId: string;
+    key: string;
+    title: string;
+    detail?: string;
+    action?: StartThreadAction;
+    cwd?: string;
+    sourceProject?: ThreadTodoProject;
+  }): { todo: ThreadTodo; created: boolean } {
+    const existing = this.store.findByDependency(params.dependencyId);
+    if (existing) return { todo: existing, created: false };
+    // A card the thread raised itself with this key would block the insert.
+    const keyed = this.store.findOpenByKey(params);
+    const todo = this.store.insert({
+      id: this.newId(),
+      backend: params.backend,
+      threadId: params.threadId,
+      ...(keyed ? {} : { key: params.key }),
+      kind: threadTodoKindForAction(params.action),
+      title: params.title,
+      detail: params.detail,
+      action: params.action,
+      cwd: params.cwd,
+      sourceProject: params.sourceProject,
+      dependencyId: params.dependencyId,
+      now: this.now(),
+    });
+    return { todo, created: true };
+  }
+
+  /** Announce a card written outside the service's own mutations. */
+  publish(todo: ThreadTodo): void {
+    this.emit(todo);
+  }
+
   list(request: ListThreadTodosRequest = {}): ThreadTodo[] {
     return this.store.list(request);
   }
