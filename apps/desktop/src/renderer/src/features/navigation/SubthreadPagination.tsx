@@ -31,6 +31,7 @@ export function SubthreadPagination(props: {
       {initialLoad ? <p className="sidebar-empty">Loading sub-threads…</p> : null}
       {resource.state.rebaselineRequired ? (
         <SidebarShowMore
+          kind="reload"
           label="Reload sub-threads"
           onClick={() => void props.pagedNavigation?.restart(resource.id)}
         />

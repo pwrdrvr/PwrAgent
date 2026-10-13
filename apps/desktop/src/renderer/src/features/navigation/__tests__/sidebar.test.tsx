@@ -5952,6 +5952,53 @@ describe("Sidebar", () => {
     );
   });
 
+  it("puts a flat lens's load more right under its last row, inside the scrolling lane", () => {
+    // It rendered as a sibling after the lane, and the lane is `flex: 1`, so
+    // the control landed at the rail's bottom edge — below the start actions,
+    // whose hairline already reads as the end of the list. Operators could
+    // not find it. It belongs to the list: after the last row, before the
+    // start actions, scrolling with both.
+    const pagedThreads = Array.from({ length: 12 }, (_, index) => ({
+      ...sharedThread,
+      id: `thread-page-${index + 1}`,
+      title: `Paged thread ${index + 1}`,
+      updatedAt: sharedThread.updatedAt - index,
+    }));
+    const pagedDirectory = {
+      ...directories[0],
+      threadKeys: pagedThreads.map(threadSummaryIdentityKey),
+    };
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="inbox"
+        directories={[pagedDirectory]}
+        inboxThreads={pagedThreads}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey={undefined}
+        threads={pagedThreads}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onCreateThreadWithoutDirectory={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    const loadMore = screen.getByRole("button", { name: "Load more threads" });
+    const lane = loadMore.closest(".sidebar-list--dense");
+    expect(lane).not.toBeNull();
+    const rows = lane!.querySelector('[role="list"]');
+    expect(rows).not.toBeNull();
+    expect(rows!.nextElementSibling).toBe(loadMore);
+    const startChat = screen.getByRole("button", { name: "Start Chat" });
+    expect(lane!.contains(startChat)).toBe(true);
+    expect(
+      loadMore.compareDocumentPosition(startChat) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
   it("loads the next owner page only after explicit load more", async () => {
     const cappedThreads = Array.from({ length: 12 }, (_, index) => ({
       ...sharedThread,

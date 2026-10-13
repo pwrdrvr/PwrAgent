@@ -100,6 +100,12 @@ type RecentsListProps = {
    */
   footer?: ReactNode;
   /**
+   * The list's continuation ("Load more threads"). Right under the last row
+   * and before the visiting row and the footer, so it reads as the next page
+   * of this list rather than one more action after it.
+   */
+  pager?: ReactNode;
+  /**
    * A thread the operator jumped to (⌘K) that may be outside this lens. When
    * it has no row here, and no rendered ancestor whose tray the reveal will
    * open, it gets its own row after the lens's rows under `visitingLabel`,
@@ -605,7 +611,7 @@ export function RecentsList(props: RecentsListProps) {
     || pinnedResource.state.page?.nextCursor) ? (
     <div role="listitem">
       {pinnedResource.state.rebaselineRequired ? (
-        <SidebarShowMore label="Reload pinned threads" onClick={() => void props.pagedNavigation?.restart(pinnedResource.id)} />
+        <SidebarShowMore kind="reload" label="Reload pinned threads" onClick={() => void props.pagedNavigation?.restart(pinnedResource.id)} />
       ) : pinnedResource.state.page?.nextCursor ? (
         <SidebarShowMore busy={pinnedResource.loading} label="Load more pinned threads" onClick={() => void props.pagedNavigation?.loadMore(pinnedResource.id)} />
       ) : null}
@@ -670,6 +676,7 @@ export function RecentsList(props: RecentsListProps) {
     return (
       <div className="sidebar-list sidebar-list--dense">
         {props.emptyMessage}
+        {props.pager}
         {visitingSlot}
         {props.footer}
       </div>
@@ -694,6 +701,7 @@ export function RecentsList(props: RecentsListProps) {
         ))}
         {topLevelThreads.map((thread) => renderThreadGroup(thread))}
       </div>
+      {props.pager}
       {visitingSlot}
       {props.footer}
     </div>

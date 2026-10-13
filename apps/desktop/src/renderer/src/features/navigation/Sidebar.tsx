@@ -857,6 +857,38 @@ export function Sidebar(props: SidebarProps) {
         : undefined}
     />
   ) : null;
+  // The lens's own continuation, handed to the list beside `startActions` so
+  // it sits right under the last row, inside the scrolling lane. It used to
+  // render after the list as a sibling in the scroll region. The lane is
+  // `flex: 1`, so that put it at the rail's bottom edge, below the start
+  // actions' hairline, which already reads as the end of the list. A short
+  // list left hundreds of pixels of empty rail between the last row and the
+  // control, and a long one parked it under the scroller like a status line.
+  const lensPager = props.browseMode === "directories"
+    // `loadMore` has no reentrancy guard of its own — it awaits any
+    // pending read and then unconditionally starts another — so the
+    // in-flight guard is the only thing standing between a double
+    // click and two page advances. This was the one load-more control
+    // without it.
+    ? directoryIndexResource?.state.page?.nextCursor ? (
+      <SidebarShowMore busy={directoryIndexResource.loading} label="Load more directories" onClick={() => void props.pagedNavigation?.loadMore("directory-index")} />
+    ) : null
+    : listResources.filter((resource) => !isNavigationPeerUnavailable(resource.state.error)).map((resource) => (
+      resource.state.rebaselineRequired ? (
+        <SidebarShowMore key={resource.id} kind="reload" label="Reload this lens" onClick={() => void props.pagedNavigation?.restart(resource.id)} />
+      ) : resource.state.page?.nextCursor ? (
+        <SidebarShowMore key={resource.id} busy={resource.loading} label="Load more threads" onClick={() => void props.pagedNavigation?.loadMore(resource.id)} />
+      ) : null
+    ));
+  // Shown in place of the list, which then takes no footer.
+  const listStatus = props.loading ? (
+    <p className="sidebar-empty">Loading threads…</p>
+  ) : props.providerRefresh?.state === "checking"
+    && renderedThreads.length === 0 ? (
+    <p className="sidebar-empty">Checking providers…</p>
+  ) : props.error && !props.loaded ? (
+    <p className="sidebar-error">{props.error}</p>
+  ) : null;
   const lensScroll = useLensScrollRestoration(
     JSON.stringify([federationTarget, props.browseMode]),
     !props.loading && (!props.pagedNavigation || (props.pagedNavigation.presentationReady
@@ -3029,19 +3061,22 @@ export function Sidebar(props: SidebarProps) {
           {props.browseMode === "drafts" && renderedThreads.length > 0 && Boolean(props.unassignedThreadDraftCount) ? (
             <p className="sidebar-empty">Older drafts are also available. Use Recover Draft in a composer to choose one.</p>
           ) : null}
-          {props.loading ? (
-            <p className="sidebar-empty">Loading threads…</p>
-          ) : props.providerRefresh?.state === "checking"
-            && renderedThreads.length === 0 ? (
-            <p className="sidebar-empty">Checking providers…</p>
-          ) : props.error && !props.loaded ? (
-            <p className="sidebar-error">{props.error}</p>
+          {listStatus ? (
+            <>
+              {listStatus}
+              {lensPager}
+            </>
           ) : props.browseMode === "directories" ? (
             <DirectoriesList
               startingThreads={startingThreads}
               onSelectStartingThread={props.onSelectPendingLaunchpad}
               emptyLabel={props.threadLensesEmpty ? "No threads yet." : undefined}
-              footer={startActions}
+              footer={(
+                <>
+                  {lensPager}
+                  {startActions}
+                </>
+              )}
               onOpenSubthreadDraftContextMenu={openSubthreadDraftMenu}
               projectReveal={projectReveal}
               onProjectRevealComplete={() => setProjectReveal(undefined)}
@@ -3115,10 +3150,12 @@ export function Sidebar(props: SidebarProps) {
             renderedThreads.length === 0 && startingThreads.length === 0 && !visitingThread ? (
               <>
                 {lensEmptyMessage}
+                {lensPager}
                 {startActions}
               </>
             ) : (
               <RecentsList
+                pager={lensPager}
                 footer={startActions}
                 pinnedResourceId={pinnedGroupShown ? PINNED_GROUP_RESOURCE_ID : undefined}
                 pinnedGroupCollapsed={props.pinnedGroupCollapsed}
@@ -3172,23 +3209,6 @@ export function Sidebar(props: SidebarProps) {
               />
             )
           )}
-          {props.browseMode !== "directories" ? listResources.filter((resource) => !isNavigationPeerUnavailable(resource.state.error)).map((resource) => (
-            <div key={resource.id}>
-              {resource.state.rebaselineRequired ? (
-                <SidebarShowMore label="Reload this lens" onClick={() => void props.pagedNavigation?.restart(resource.id)} />
-              ) : resource.state.page?.nextCursor ? (
-                <SidebarShowMore busy={resource.loading} label="Load more threads" onClick={() => void props.pagedNavigation?.loadMore(resource.id)} />
-              ) : null}
-            </div>
-          )) : null}
-          {props.browseMode === "directories" && directoryIndexResource?.state.page?.nextCursor ? (
-            // `loadMore` has no reentrancy guard of its own — it awaits any
-            // pending read and then unconditionally starts another — so the
-            // in-flight guard is the only thing standing between a double
-            // click and two page advances. This was the one load-more control
-            // without it.
-            <SidebarShowMore busy={directoryIndexResource.loading} label="Load more directories" onClick={() => void props.pagedNavigation?.loadMore("directory-index")} />
-          ) : null}
         </div>
       </section>
 

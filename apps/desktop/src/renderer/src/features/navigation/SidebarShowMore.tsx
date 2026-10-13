@@ -1,4 +1,5 @@
 import type { ReactElement } from "react";
+import { ChevronDownIcon } from "../../icons";
 
 /**
  * The sidebar's "reveal more rows" control.
@@ -21,6 +22,12 @@ export function SidebarShowMore(props: {
   onClick: () => void;
   /** In flight. Blocks the click and shows the control is working. */
   busy?: boolean;
+  /**
+   * `more` (the default) continues the list below and carries a down
+   * chevron. `reload` starts a page over, where a chevron would promise rows
+   * that are not coming.
+   */
+  kind?: "more" | "reload";
 }): ReactElement {
   return (
     <button
@@ -57,6 +64,11 @@ export function SidebarShowMore(props: {
         props.onClick();
       }}
     >
+      {props.kind === "reload" ? null : (
+        <span className="sidebar-show-more__icon" aria-hidden="true">
+          <ChevronDownIcon size={14} />
+        </span>
+      )}
       {props.label}
     </button>
   );
