@@ -119,11 +119,15 @@ export function projectThreadDisplay(
       // Completed provider activities can be resolved by their stable turn/id.
       // Overlay-owned and live rows remain inline; their details are not owned
       // by the provider's turn item API. Usage rows are already compact displays.
+      // A lone thread read or message stays inline: its row header is the
+      // thread chip, drawn from the call's result. In a run of calls it is an
+      // ordinary row, and a run of reads would otherwise carry every result.
       if (demand.deferActivityDetails && response.backend === "codex"
         && entry.turn?.id && entry.turn.status !== "in_progress"
         && entry.id.startsWith("activity-") && entry.status !== "in_progress"
         && !entry.details.some((detail) => detail.command?.subAgent
-          || /(?:^|[/.])(?:read_thread|send_message_to_thread)$/i.test(detail.command?.rawCommand ?? ""))
+          || (entry.details.length === 1
+            && /(?:^|[/.])(?:read_thread|send_message_to_thread)$/i.test(detail.command?.rawCommand ?? "")))
         && Buffer.byteLength(JSON.stringify(entry.details.map((detail) => [detail.markdown,
           detail.command?.displayCommand, detail.command?.rawCommand, detail.command?.output]))) > 2_048) {
         return { ...projected,

@@ -133,6 +133,12 @@ it("defers completed provider activity bodies only for a viewer that can resolve
   ]) {
     expect(projectThreadDisplay({ ...data, replay: { ...data.replay, entries: [inline] } }, request).replay.entries[0]).not.toHaveProperty("detailsRef");
   }
+  // Untitled dynamic tool calls are expandable now, so a run of thread reads
+  // carries every result. Only a lone read draws its chip from the result
+  // and stays inline; a run defers like any other activity.
+  const read = (id: string) => ({ ...activity.details[0]!, id, command: { ...activity.details[0]!.command, rawCommand: "pwragent/read_thread" } });
+  expect(projectThreadDisplay({ ...data, replay: { ...data.replay, entries: [{ ...activity, details: [read("one"), read("two")] }] } }, request).replay.entries[0])
+    .toMatchObject({ detailsRef: { entryId: activity.id }, details: [{ command: { output: undefined } }, { command: { output: undefined } }] });
   const fileDiff = { kind: "update" as const, diff: "+changed line", additions: 1, removals: 0 };
   const withEdits = { ...activity, details: [...activity.details, { id: "edit", kind: "write" as const, label: "Edited file", fileDiff }] };
   const projectedEdits = projectThreadDisplay({ ...data, replay: { ...data.replay, entries: [withEdits] } }, request).replay.entries[0];

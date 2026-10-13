@@ -404,6 +404,42 @@ describe("buildLiveToolDetails", () => {
     expect(details[0]?.label).not.toContain("AQID");
   });
 
+  it("makes an untitled dynamic tool call expandable, and leaves an empty one alone", () => {
+    const [read] = buildLiveToolDetails({
+      type: "dynamicToolCall",
+      id: "tool-read",
+      namespace: "pwragent",
+      tool: "read_thread",
+      arguments: { threadId: "sample-thread" },
+      status: "completed",
+      success: true,
+      contentItems: [{ type: "inputText", text: "{\"read\":{\"title\":\"Sample thread\"}}" }],
+    });
+    expect(read?.command).toEqual({
+      displayCommand: "pwragent/read_thread\n{\n  \"threadId\": \"sample-thread\"\n}",
+      rawCommand: "pwragent/read_thread",
+      source: "tool",
+      output: "{\"read\":{\"title\":\"Sample thread\"}}",
+    });
+    const [empty] = buildLiveToolDetails({
+      type: "dynamicToolCall", id: "tool-empty", tool: "list_instances", arguments: {}, status: "completed", contentItems: [],
+    });
+    expect(empty).not.toHaveProperty("command");
+  });
+
+  // live-agent-messages.spec asserts this header while the search runs.
+  it("summarizes a running search call as exploration though it is expandable", () => {
+    const details = buildLiveToolDetails({
+      type: "dynamicToolCall",
+      id: "tool-search",
+      toolName: "search_web",
+      status: "in_progress",
+      arguments: { query: "Sample protocol notes" },
+    });
+    expect(details[0]?.command).toBeDefined();
+    expect(summarizeLiveActivity(details)).toBe("Explored 1 item");
+  });
+
   it("uses dynamic tool titles while preserving expandable tool identity", () => {
     const details = buildLiveToolDetails({
       type: "dynamicToolCall",
