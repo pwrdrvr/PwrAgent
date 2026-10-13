@@ -91,6 +91,8 @@ export class ProviderTranscriptThreadSearchAdapter {
   }
 }
 
+const READ_THREAD_TOOL = /(?:^|[/.])read_thread$/i;
+
 function findTranscriptSnippet(
   response: AppServerReadThreadResponse,
   terms: string[],
@@ -118,7 +120,9 @@ function findTranscriptSnippet(
         detail.label,
         detail.markdown,
         detail.command?.displayCommand,
-        detail.command?.output,
+        // A thread read's result is the other thread's transcript. Matching
+        // it would list every thread that read a thread beside that thread.
+        READ_THREAD_TOOL.test(detail.command?.rawCommand ?? "") ? undefined : detail.command?.output,
       ]),
     ].filter((value): value is string => Boolean(value?.trim()));
     for (const text of texts) {
