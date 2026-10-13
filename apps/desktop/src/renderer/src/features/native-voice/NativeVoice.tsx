@@ -214,7 +214,7 @@ export const CUE_DELIVERY_LABEL = { pending: "sending…", acknowledged: "sent",
 type VoiceFeedRow =
   | ({ kind: "say" } & VoiceView["transcript"][number])
   | ({ kind: "cue" } & NonNullable<VoiceView["cameraCues"]>[number])
-  | { kind: "tools"; seq: number; rows: VoiceView["actions"] };
+  | { kind: "tools"; seq: number; rows: VoiceView["actions"]; entry?: ReturnType<typeof voiceToolActivity> };
 
 /**
  * Transcript rows, tool calls, and sent camera cues, in the order they
@@ -232,6 +232,10 @@ export function VoiceFeed({ view, limit, scrollParent = false, assistant = "Voic
   /** For the tool rows' copy buttons and thread reads. */
   desktopApi?: ComponentProps<typeof TranscriptActivity>["desktopApi"];
 }) {
+  // Receipts never change once added, so a run is known by its first and
+  // last call. A streamed word rebuilds the rows; the run keeps its entry,
+  // and the memoized activity row skips the render.
+  const entries = useRef(new Map<string, ReturnType<typeof voiceToolActivity>>());
   const rows = useMemo(() => {
     const merged = [
       ...view.transcript.map((row) => ({ kind: "say" as const, ...row })),
@@ -249,7 +253,16 @@ export function VoiceFeed({ view, limit, scrollParent = false, assistant = "Voic
       if (last?.kind === "tools") last.rows.push(action);
       else grouped.push({ kind: "tools", seq: row.seq, rows: [action] });
     }
-    return limit ? grouped.slice(-limit) : grouped;
+    const shown = limit ? grouped.slice(-limit) : grouped;
+    const kept = new Map<string, ReturnType<typeof voiceToolActivity>>();
+    for (const row of shown) {
+      if (row.kind !== "tools") continue;
+      const key = `${row.seq}:${row.rows[row.rows.length - 1]!.seq}`;
+      row.entry = entries.current.get(key) ?? voiceToolActivity(row.rows);
+      kept.set(key, row.entry);
+    }
+    entries.current = kept;
+    return shown;
   }, [view.transcript, view.actions, view.cameraCues, limit]);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -278,7 +291,7 @@ export function VoiceFeed({ view, limit, scrollParent = false, assistant = "Voic
         // Keyed by the run's first call, so a call that joins the run keeps
         // the row open if the operator expanded it.
         <div key={`tools-${row.seq}`} className="native-voice-feed__tools">
-          <TranscriptActivity desktopApi={desktopApi} entry={voiceToolActivity(row.rows)} />
+          <TranscriptActivity desktopApi={desktopApi} entry={row.entry!} />
         </div>
       ))}
     </div>

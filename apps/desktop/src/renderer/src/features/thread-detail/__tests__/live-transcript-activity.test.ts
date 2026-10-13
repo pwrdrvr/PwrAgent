@@ -346,7 +346,8 @@ describe("buildLiveToolDetails", () => {
     expect(details).toEqual([
       expect.objectContaining({
         id: "pdf-render-1",
-        label: expect.stringContaining("pageNumber"),
+        label: "render messaging pdf pages",
+        command: expect.objectContaining({ output: expect.stringContaining("pageNumber") }),
         images: [
           {
             type: "image",

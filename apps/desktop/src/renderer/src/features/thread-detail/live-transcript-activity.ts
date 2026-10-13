@@ -814,7 +814,10 @@ export function buildLiveToolDetails(
         buildLiveToolLabel(item, itemType, status, toolName),
         elapsedMs && !commandUsesDedicatedRenderer ? ` (${formatElapsedMs(elapsedMs)})` : "",
         query ? `: ${query}` : "",
-        preview && !commandUsesDedicatedRenderer ? ` - ${preview}` : "",
+        // A result one click away in the call's detail is not repeated in its label.
+        preview && !commandUsesDedicatedRenderer && !(itemType === "dynamictoolcall" && commandDetail)
+          ? ` - ${preview}`
+          : "",
       ].join(""),
       ...(images.length > 0 ? { images } : {}),
       ...(commandDetail ? { command: commandDetail } : {}),
