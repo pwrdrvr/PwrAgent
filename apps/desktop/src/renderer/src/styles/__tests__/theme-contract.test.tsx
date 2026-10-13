@@ -364,30 +364,29 @@ describe("Tangerine Terminal theme contract", () => {
       /min-height:\s*24px;/,
     );
 
-    // The Directories lane's two in-list controls. The "Directory threads"
-    // disclosure is an 11px uppercase label, which left the button 13px tall
-    // — under the floor, with 23px of safe clickable space between the rows
-    // above and below it. Its sibling "Show more" lands at ~24.4px on font
-    // metrics alone (8px padding + 2px border + a 12px `normal` line box), so
-    // it clears the floor only by rounding and a `line-height` anywhere
-    // upstream would drop it under. Both are pinned because the CSS comments
-    // say "do not trade this back for density" and a comment is not a gate.
+    // The Directories lane's "Directory threads" disclosure is an 11px
+    // uppercase label, which left the button 13px tall — under the floor,
+    // with 23px of safe clickable space between the rows above and below it.
+    // Pinned because the CSS comment says "do not trade this back for
+    // density" and a comment is not a gate.
     expect(extractRuleBody(css, ".directory-row__thread-divider")).toMatch(
       /min-height:\s*24px;/,
     );
-    expect(extractRuleBody(css, ".sidebar-show-more")).toMatch(
-      /min-height:\s*24px;/,
-    );
 
-    // The rail's paging control is transparent, left-aligned and 12px — the
-    // shape every one of these must have. Seven of the twelve call sites used
-    // to render a classless <button>, which Chromium draws as an opaque grey
-    // slab stretched across the `display: grid` sub-thread list. Pinned here
-    // because a missing class has no other visible symptom in a unit test.
+    // The rail's paging control ("Load more threads") is a row-width button
+    // on a themed panel with the strong border, 30px like the start actions
+    // beside it. It used to be a transparent, borderless, left-aligned 12px
+    // label: its text passed contrast in every theme and its box cleared
+    // 24px, and operators still could not find it at the end of a list of
+    // borderless rows. The surface and border are what make it read as a
+    // button; the themed fill is also what keeps a call site from falling
+    // back to Chromium's opaque grey slab, which seven of the twelve did when
+    // they rendered a classless <button>.
     const showMore = extractRuleBody(css, ".sidebar-show-more");
-    expect(showMore).toMatch(/background:\s*transparent;/);
-    expect(showMore).toMatch(/justify-self:\s*start;/);
-    expect(showMore).toMatch(/align-self:\s*flex-start;/);
+    expect(showMore).toMatch(/min-height:\s*30px;/);
+    expect(showMore).toMatch(/width:\s*100%;/);
+    expect(showMore).toMatch(/background:\s*var\(--bg-panel-elevated\);/);
+    expect(showMore).toMatch(/border:\s*1px solid var\(--border-strong\);/);
     // `:hover` matches a busy control, so the hover rule has to exclude one
     // or a control with a page already in flight lights up on a click that
     // goes nowhere. The exclusion has to name `aria-disabled`: the control
