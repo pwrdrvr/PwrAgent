@@ -2,9 +2,12 @@ import { randomUUID } from "node:crypto";
 import type {
   AppServerBackendKind, AppServerThreadMessageOrigin, AppServerThreadTurnMetadata,
   ManageThreadDependenciesRequest, ManageThreadDependenciesResponse, PrSummary,
-  ThreadDependency, ThreadDependencyCondition, ThreadDependencyEvidence,
+  ThreadDependency, ThreadDependencyCondition, ThreadDependencyEvidence, ThreadTodo, ThreadTodoProject,
 } from "@pwragent/shared";
-import { isRepairableDependencyFailure, THREAD_DEPENDENCY_CONDITIONS } from "@pwragent/shared";
+import {
+  isRepairableDependencyFailure, THREAD_DEPENDENCY_CONDITIONS, THREAD_DEPENDENCY_DELIVERY_TARGETS,
+  THREAD_TODO_DETAIL_MAX_LENGTH, THREAD_TODO_TITLE_MAX_LENGTH, threadDependencyDeliveryTarget, threadDependencyTodoKey,
+} from "@pwragent/shared";
 import type { ThreadDependencyStore } from "../state/thread-dependency-store";
 
 export type DependencyThreadSnapshot = {
@@ -13,8 +16,32 @@ export type DependencyThreadSnapshot = {
   prs: { pr: PrSummary; fetchedAt: number }[];
 };
 
+/** The to-do card an operator delivery raises on the waiting thread. */
+export type DependencyTodoCard = {
+  backend: AppServerBackendKind;
+  threadId: string;
+  dependencyId: string;
+  key: string;
+  title: string;
+  detail?: string;
+  action?: { type: "start_thread"; prompt: string };
+};
+
+/** Where a card's Start thread runs, read before the claim. */
+export type DependencyTodoPlacement = { cwd?: string; sourceProject?: ThreadTodoProject };
+
+export type OperatorTodoDelivery = {
+  prepare(dependency: ThreadDependency): Promise<DependencyTodoPlacement>;
+  /** Runs inside the claim's SQLite transaction, so it must be synchronous. */
+  raise(card: DependencyTodoCard, placement: DependencyTodoPlacement): ThreadTodo;
+  /** Runs after the claim and the card commit together. */
+  publish(todo: ThreadTodo): void;
+};
+
 type Options = {
   store: ThreadDependencyStore;
+  /** Without it, operator registrations are refused. */
+  operatorTodos?: OperatorTodoDelivery;
   readThread(condition: Pick<ThreadDependencyCondition, "backend" | "threadId"> & Partial<ThreadDependencyCondition>): Promise<DependencyThreadSnapshot>;
   submit(params: {
     backend: AppServerBackendKind;
@@ -60,6 +87,8 @@ export class ThreadDependencyCoordinator {
         return response;
       }
       validateDependencyCreate(request);
+      const deliver = request.deliver ?? "agent";
+      if (deliver === "operator" && !this.options.operatorTodos) throw new Error("Operator reminders are not available on this instance.");
       // Validate the consumer too: a mistyped id must never become a durable wake target.
       await this.options.readThread(request);
       const conditions: ThreadDependencyCondition[] = [];
@@ -79,6 +108,7 @@ export class ThreadDependencyCoordinator {
         id: randomUUID(), backend: request.backend, threadId: request.threadId,
         conditions, mode: request.mode ?? "all", onFailure: request.onFailure ?? "notify",
         ...(request.continuation?.trim() ? { continuation: request.continuation.trim() } : {}),
+        deliver, ...(request.handoff ? { handoff: true } : {}),
         status: "waiting", evidence: [], createdAt: now, updatedAt: now,
       });
       const registered = JSON.stringify(item);
@@ -208,11 +238,13 @@ export class ThreadDependencyCoordinator {
     };
     const current = await this.save(item, next);
     if (!success && !failure) return;
-    if (!current || current.status !== "ready" || this.options.canDispatch?.(current) === false
-      || this.options.isConsumerBusy?.(current) || this.busyConsumers.has(identity(current))) return;
+    if (!current || current.status !== "ready" || this.options.canDispatch?.(current) === false) return;
     // onFailure=wait tolerates repairable CI failures; closure/cancellation
     // still surfaces as terminal rather than silently waiting forever.
     if (current.outcome === "failure" && isRepairableDependencyFailure(current)) return;
+    // A card needs no idle consumer: it starts no turn.
+    if (threadDependencyDeliveryTarget(current) === "operator") return this.remind(current);
+    if (this.options.isConsumerBusy?.(current) || this.busyConsumers.has(identity(current))) return;
     const claim = { ...current, status: "dispatching" as const, dispatchOwnerPid: process.pid, updatedAt: this.now() };
     if (!this.options.store.replace(current, claim)) return;
     await this.options.changed(claim);
@@ -233,6 +265,35 @@ export class ThreadDependencyCoordinator {
     }
   }
 
+  /**
+   * Operator delivery. The card insert and the ready→delivered
+   * compare-and-swap commit in one transaction, so a lost claim raises no
+   * card and a crash leaves either both or neither. There is no uncertain
+   * dispatching state to review, unlike a backend turn.
+   */
+  private async remind(current: ThreadDependency): Promise<void> {
+    const delivery = this.options.operatorTodos;
+    if (!delivery) return;
+    const placement = await delivery.prepare(current).catch((): DependencyTodoPlacement => ({}));
+    let raised: { todo: ThreadTodo; dependency: ThreadDependency } | undefined;
+    try {
+      raised = this.options.store.transaction(() => {
+        const todo = delivery.raise(buildDependencyTodo(current), placement);
+        const delivered: ThreadDependency = { ...current, status: "delivered", todoId: todo.id, updatedAt: this.now() };
+        // Throwing rolls the card back with the lost claim.
+        if (!this.options.store.replace(current, delivered)) throw new LostDependencyClaim();
+        return { todo, dependency: delivered };
+      });
+    } catch (error) {
+      if (error instanceof LostDependencyClaim) return;
+      // Nothing committed, so the next prerequisite event may try again.
+      await this.save(current, { ...current, error: `Could not raise the reminder: ${error instanceof Error ? error.message : String(error)}` });
+      return;
+    }
+    delivery.publish(raised.todo);
+    await this.options.changed(raised.dependency);
+  }
+
   private async save(previous: ThreadDependency, next: ThreadDependency): Promise<ThreadDependency | undefined> {
     // Observation timestamps alone must not cause writes on every PR poll.
     next.evidence = next.evidence.map((entry, index) => {
@@ -249,8 +310,14 @@ export class ThreadDependencyCoordinator {
   private now(): number { return this.options.now?.() ?? Date.now(); }
 }
 
+class LostDependencyClaim extends Error {}
+
 export function validateDependencyCreate(request: ManageThreadDependenciesRequest): void {
   if (request.action !== "create") throw new Error("action must be create, list, or cancel.");
+  if (request.deliver !== undefined && !THREAD_DEPENDENCY_DELIVERY_TARGETS.includes(request.deliver)) throw new Error("deliver must be agent or operator.");
+  if (request.handoff !== undefined && typeof request.handoff !== "boolean") throw new Error("handoff must be true or false.");
+  if (request.handoff && request.deliver !== "operator") throw new Error("handoff requires deliver: operator.");
+  if (request.handoff && !request.continuation?.trim()) throw new Error("handoff requires continuation: the new thread's prompt.");
   if (!Array.isArray(request.conditions) || request.conditions.length < 1 || request.conditions.length > 16) throw new Error("Provide between one and sixteen prerequisite conditions.");
   if (request.mode !== undefined && request.mode !== "all" && request.mode !== "any") throw new Error("mode must be all or any.");
   if (request.onFailure !== undefined && request.onFailure !== "notify" && request.onFailure !== "wait") throw new Error("onFailure must be notify or wait.");
@@ -327,6 +394,61 @@ export function buildDependencyPrompt(item: ThreadDependency): string {
     "Do not poll this dependency or start a Job Monitor for it.",
     `Dependency ${item.id} (mode ${item.mode}, outcome ${item.outcome}); prerequisites: ${item.conditions.map((condition) => `${condition.backend}:${condition.threadId} (${condition.when})`).join(", ")}.`,
   ].join("\n");
+}
+
+const MET_PHRASES: Record<ThreadDependencyCondition["when"], string> = {
+  turn_completed: "finished its turn",
+  pr_attached: "has a reviewable PR",
+  ci_passed: "passed CI",
+  pr_merged: "merged",
+};
+
+function clip(text: string, max: number): string {
+  return text.length <= max ? text : `${text.slice(0, max - 1).trimEnd()}…`;
+}
+
+/** "#2999" for a PR prerequisite, else the saved title or the thread id. */
+function prerequisiteLabel(entry: ThreadDependencyEvidence, max = 48): string {
+  const number = entry.condition.when === "turn_completed" ? undefined : entry.prUrl?.match(/\/pull\/(\d+)/)?.[1];
+  if (number) return `#${number}`;
+  const title = entry.condition.title?.trim();
+  return title ? clip(title, max) : `Thread ${entry.condition.threadId.slice(0, 8)}`;
+}
+
+/**
+ * The operator card for a fired dependency: "#2999 merged: call mom". On
+ * failure the title names the failure and the detail holds the plan back
+ * as not started, the same contract the agent prompt keeps.
+ */
+export function buildDependencyTodo(item: ThreadDependency): DependencyTodoCard {
+  const success = item.outcome === "success";
+  const fired = item.evidence.filter((entry) => entry.state === (success ? "satisfied" : "failed"));
+  const shown = fired.length ? fired : item.evidence;
+  const summary = shown.length > 2
+    ? `${shown.length} prerequisites ${success ? "met" : "failed"}`
+    : shown.map((entry) => success
+      ? `${prerequisiteLabel(entry)} ${MET_PHRASES[entry.condition.when]}`
+      : `${prerequisiteLabel(entry)} failed: ${entry.reason}`).join(success ? " and " : "; ");
+  const continuation = item.continuation?.trim();
+  const fullTitle = success && continuation ? `${summary}: ${continuation}` : summary;
+  const title = clip(fullTitle, THREAD_TODO_TITLE_MAX_LENGTH);
+  const evidence = item.evidence.map((entry) => {
+    const state = entry.state === "satisfied" ? "met" : entry.state;
+    return `• ${prerequisiteLabel(entry, 120)} (${state}): ${entry.reason}${entry.prUrl ? ` ${entry.prUrl}` : ""}`;
+  });
+  const detail = [
+    ...success
+      ? title !== fullTitle && continuation ? [continuation, ""] : []
+      : continuation ? [`Not started: ${continuation}`, ""] : [],
+    ...evidence,
+  ].join("\n");
+  return {
+    backend: item.backend, threadId: item.threadId, dependencyId: item.id,
+    key: threadDependencyTodoKey(item.id), title,
+    ...(detail ? { detail: clip(detail, THREAD_TODO_DETAIL_MAX_LENGTH) } : {}),
+    // Never offer to start dependent work after a prerequisite failed.
+    ...(item.handoff && success && continuation ? { action: { type: "start_thread" as const, prompt: continuation } } : {}),
+  };
 }
 
 function processIsAlive(pid: number): boolean {

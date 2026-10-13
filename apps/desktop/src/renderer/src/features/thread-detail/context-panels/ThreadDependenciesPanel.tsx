@@ -6,9 +6,10 @@ import type {
   PrSummary,
   ThreadDependency,
   ThreadDependencyCondition,
+  ThreadDependencyDeliveryTarget,
   ThreadDependencyEvidence,
 } from "@pwragent/shared";
-import { isRepairableDependencyFailure } from "@pwragent/shared";
+import { isRepairableDependencyFailure, threadDependencyDeliveryTarget } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { Select } from "../../../components/Select";
 import { readRendererFederationTarget } from "../../../lib/federation-window";
@@ -83,6 +84,8 @@ export function ThreadDependenciesPanel({ thread, desktopApi }: { thread: Naviga
   const [mode, setMode] = useState<"all" | "any">("all");
   const [onFailure, setOnFailure] = useState<"notify" | "wait">("wait");
   const [continuation, setContinuation] = useState("");
+  const [deliver, setDeliver] = useState<ThreadDependencyDeliveryTarget>("agent");
+  const [handoff, setHandoff] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const labelId = useId();
@@ -97,6 +100,7 @@ export function ThreadDependenciesPanel({ thread, desktopApi }: { thread: Naviga
     setDependencies([]); setDependents([]); setOpen(false); setHistoryOpen(false); setRows([]); setTargets([]);
     setTargetFilter(""); setTargetsIncomplete(false); setSearching(false);
     setMode("all"); setOnFailure("wait"); setError(undefined); setBusy(false); setContinuation("");
+    setDeliver("agent"); setHandoff(false);
     // Updates arrive in bursts; apply only the newest list response.
     let latestRefresh = 0;
     const refresh = async () => {
@@ -178,7 +182,9 @@ export function ThreadDependenciesPanel({ thread, desktopApi }: { thread: Naviga
   };
   const closeForm = () => {
     setOpen(false); setRows([]); setTargetFilter(""); setContinuation(""); setMode("all"); setOnFailure("wait");
+    setDeliver("agent"); setHandoff(false);
   };
+  const reminds = deliver === "operator";
 
   const submit = async (action: "create" | "cancel" | "dismiss", dependencyId?: string) => {
     setBusy(true); setError(undefined);
@@ -192,6 +198,8 @@ export function ThreadDependenciesPanel({ thread, desktopApi }: { thread: Naviga
           })),
           mode: rows.length > 1 ? mode : "all", onFailure,
           ...(continuation.trim() ? { continuation: continuation.trim() } : {}),
+          ...(reminds ? { deliver } : {}),
+          ...(reminds && handoff && continuation.trim() ? { handoff: true } : {}),
         } : { dependencyId }),
       });
       if (currentKey.current !== key) return;
@@ -319,12 +327,38 @@ export function ThreadDependenciesPanel({ thread, desktopApi }: { thread: Naviga
             <p className="thread-dependencies__hint">
               {onFailure === "wait"
                 ? "Keeps waiting while failing checks or conflicts are repaired."
-                : "Continues once to report the failure, then stays blocked."}
+                : reminds
+                  ? "Reminds you once with the failure."
+                  : "Continues once to report the failure, then stays blocked."}
             </p>
           ) : null}
-          <label className="thread-dependencies__field">Instructions (optional)
-            <textarea value={continuation} onChange={(event) => setContinuation(event.target.value)} disabled={busy} maxLength={8000} placeholder="Continue the previously requested work" />
+          <div className="thread-dependencies__choice">
+            <span id={`${labelId}-deliver`}>When met</span>
+            <div aria-labelledby={`${labelId}-deliver`} className="thread-dependencies__segments" role="group">
+              <button aria-pressed={!reminds} className="thread-dependencies__segment" disabled={busy} type="button" onClick={() => setDeliver("agent")}>Resume this thread</button>
+              <button aria-pressed={reminds} className="thread-dependencies__segment" disabled={busy} type="button" onClick={() => setDeliver("operator")}>Remind me</button>
+            </div>
+          </div>
+          <label className="thread-dependencies__field">{reminds ? "Reminder (optional)" : "Instructions (optional)"}
+            <textarea
+              value={continuation}
+              onChange={(event) => setContinuation(event.target.value)}
+              disabled={busy}
+              maxLength={8000}
+              placeholder={reminds ? "What to do once they're met" : "Continue the previously requested work"}
+            />
           </label>
+          {reminds ? (
+            <label className="composer__checkbox thread-dependencies__handoff">
+              <input
+                checked={handoff && Boolean(continuation.trim())}
+                disabled={busy || !continuation.trim()}
+                type="checkbox"
+                onChange={(event) => setHandoff(event.currentTarget.checked)}
+              />
+              <span>Offer to start a thread with this reminder</span>
+            </label>
+          ) : null}
           <div className="thread-dependencies__actions">
             <button className="context-list__action" type="button" disabled={busy} onClick={closeForm}>Cancel</button>
             <button className="context-list__action thread-dependencies__save" type="submit" disabled={busy || rows.length === 0 || needsPrChoice}>Save</button>
@@ -391,16 +425,18 @@ function DependencyCard(props: { dependency: ThreadDependency; busy: boolean; on
       ? dependency.mode === "all" ? `Waiting · ${met} of ${dependency.conditions.length} met` : `Waiting for any of ${dependency.conditions.length}`
       : "Waiting"
     : status.label;
+  const reminds = threadDependencyDeliveryTarget(dependency) === "operator";
   const details = [
     dependency.conditions.some((condition) => condition.when === "ci_passed")
       ? dependency.onFailure === "wait" ? "Waits through CI repairs" : "Reports a CI failure"
       : undefined,
-    dependency.continuation ? `Instructions: ${dependency.continuation}` : undefined,
+    dependency.continuation ? `${reminds ? "Reminder" : "Instructions"}: ${dependency.continuation}` : undefined,
   ].filter(Boolean).join(" · ");
   return (
     <li className={`rail-card thread-dependencies__card${status.alert ? " thread-dependencies__card--alert" : ""}`}>
       <p className="rail-card__status-line">
         <RailStatusChip alert={status.alert} blink={status.blink} tone={status.tone}>{label}</RailStatusChip>
+        <span className="thread-dependencies__target">{reminds ? "Reminds you" : "Resumes this thread"}</span>
       </p>
       <ul className="thread-dependencies__conditions">
         {dependency.conditions.map((condition, index) => {
@@ -457,7 +493,9 @@ function describeStatus(dependency: ThreadDependency): { label: string; tone: Ra
       return { label: "Waiting", tone: "active", blink: true };
     case "ready":
       // Admission can also wait on a lock or on PR polling, not only a turn.
-      if (dependency.outcome !== "failure") return { label: "Ready to continue", tone: "ok" };
+      if (dependency.outcome !== "failure") {
+        return { label: threadDependencyDeliveryTarget(dependency) === "operator" ? "Ready to remind" : "Ready to continue", tone: "ok" };
+      }
       return isRepairableDependencyFailure(dependency)
         ? { label: "Waiting for CI repair", tone: "warning" }
         : { label: "Ready to report the failure", tone: "error" };
@@ -468,7 +506,7 @@ function describeStatus(dependency: ThreadDependency): { label: string; tone: Ra
     case "delivered":
       return dependency.outcome === "failure"
         ? { label: "Prerequisite failed", tone: "error", alert: true }
-        : { label: "Continued", tone: "ok" };
+        : { label: threadDependencyDeliveryTarget(dependency) === "operator" ? "Reminded" : "Continued", tone: "ok" };
     case "cancelled":
       return { label: "Cancelled", tone: "neutral" };
     case "dismissed":

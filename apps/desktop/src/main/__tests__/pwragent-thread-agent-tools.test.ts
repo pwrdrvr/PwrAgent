@@ -38,6 +38,28 @@ describe("PwrAgent thread agent tools", () => {
     expect(handler).toHaveBeenCalledExactlyOnceWith({ operation: "manage_thread_dependencies", context: { backend: "codex", threadId: "waiting" }, args });
     expect(buildPwrAgentThreadToolRouter(handler, { namespace: "pwragent_threads" }).buildMcpTools().some((tool) => tool.name === "manage_thread_dependencies")).toBe(false);
   });
+
+  it("lets an agent route a dependency to the operator as a reminder card", async () => {
+    const handler = vi.fn(async () => ({ ok: true as const, data: { threadDependencies: { dependencies: [] } } }));
+    const router = buildPwrAgentThreadToolRouter(handler);
+    const tool = router.buildMcpTools().find((candidate) => candidate.name === "manage_thread_dependencies");
+    if (!tool) throw new Error("Expected manage_thread_dependencies");
+    expect(tool.description).toContain("Set deliver to operator when only the human can do the follow-up.");
+    const properties = (tool.inputSchema as { properties: Record<string, { type: string; enum?: string[]; description?: string }> }).properties;
+    expect(properties.deliver).toMatchObject({ type: "string", enum: ["agent", "operator"] });
+    expect(properties.deliver!.description).toContain("starts no turn");
+    expect(properties.deliver!.description).toContain("only the human can act");
+    expect(properties.deliver!.description).toContain("failed prerequisite raises the card");
+    expect(properties.handoff).toMatchObject({ type: "boolean" });
+    expect(properties.handoff!.description).toContain("Only with deliver operator");
+    const args = {
+      action: "create", deliver: "operator", handoff: false,
+      continuation: "Approve the production deploy for #2999",
+      conditions: [{ backend: "codex", threadId: "foundation", when: "pr_merged" }],
+    };
+    await router.handleMcpToolCall({ backend: "codex", threadId: "waiting", tool: "manage_thread_dependencies", args });
+    expect(handler).toHaveBeenCalledExactlyOnceWith({ operation: "manage_thread_dependencies", context: { backend: "codex", threadId: "waiting" }, args });
+  });
   it("advertises the same project mark-read contract through dynamic tools and MCP", async () => {
     const projectRead = { projectKey: "directory:/repo", instanceId: "local", isLocal: true, changedCount: 140 };
     const handler = vi.fn(async () => ({ ok: true as const, data: { projectRead } }));

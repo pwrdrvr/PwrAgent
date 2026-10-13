@@ -42,6 +42,73 @@ under **Waiting on this thread**, and every change notifies the waiting
 thread and each prerequisite thread. A continuation turn is labeled
 **Continue after** in the transcript.
 
+## Delivery target
+
+`deliver` chooses who acts when the dependency fires:
+
+| `deliver` | On delivery |
+| --- | --- |
+| `agent` (default) | Submits a continuation turn to the waiting thread. |
+| `operator` | Raises a reminder to-do card on the waiting thread. No model turn starts. |
+
+Agents should choose `operator` when only the human can do the follow-up. A
+manual approval, a decision, a deploy the agent cannot run, and telling
+someone are all examples. Registrations made before this field existed have
+no `deliver` and resume the thread. The target is part of deduplication, so
+the same prerequisites can both resume the thread and remind the operator.
+
+The card's title joins the fired prerequisites and the continuation, such as
+`#2999 merged: call mom and tell her I'm her hero again`. A PR prerequisite
+is named by its PR number. Other prerequisites use their saved title, or the
+thread id when no title exists. More than two fired prerequisites become
+`3 prerequisites met`. The title is clipped to the 120-character to-do limit.
+The detail lists every prerequisite with its state, reason and PR URL. When
+the title was clipped, the detail starts with the whole continuation.
+Without a continuation, the title is the prerequisites alone.
+
+`handoff: true` (operator delivery only, and it requires a continuation)
+gives the card a **Start thread** action whose prompt is the continuation, so
+the operator can pass the work to an agent with one click. That card's kind
+is `handoff` rather than `reminder`.
+
+In Thread Info, the form's **When met** choice switches between **Resume this
+thread** and **Remind me**. **Remind me** relabels the text field
+**Reminder** and offers the Start thread option. Each card names its target
+beside the status: **Resumes this thread** or **Reminds you**.
+
+### Failures
+
+Failure follows the same policy as agent delivery. `onFailure: "wait"` keeps
+a CI failure or conflict waiting for its repair. A terminal failure, or any
+failure under `notify`, raises the card once. Its title names the failure,
+for example `#2999 failed: PR closed without merging`. The continuation
+appears in the detail as `Not started: …`, the same contract the agent prompt
+keeps: the plan is shown and not begun. A failure card never carries Start
+thread, even with `handoff`, because one click must not start work whose
+prerequisite failed.
+
+### Exactly one card
+
+The card insert and the dependency's `ready` → `delivered` compare-and-swap
+commit in one immediate SQLite transaction. A process that loses the claim
+rolls its card back with it. A crash leaves either both or neither. A turn
+needs an uncertain `dispatching` state because backend admission has no
+idempotency key. Operator delivery has no such state, so there is nothing
+to review or dismiss afterwards. Async lookups (the waiting thread's
+workspace and project, for Start thread) run before the transaction. A claim
+that changes during them simply fails the swap.
+
+Two keys identify the card. `key` is `dependency:<id>`, which follows the
+to-do convention that re-adding a key updates the card in place. The open-key
+index frees a key once its card is resolved, so the card also stores
+`dependency_id`. That column's unique index (schema v77) holds even after the
+operator resolves or dismisses the card, and raising again for the same
+dependency returns the existing card unchanged. These cards skip the
+twenty-open-card cap. The cap stops a looping turn calling `add_todo`.
+A dependency fires once, after a prerequisite event, and a thread holds at
+most thirty-two active registrations. Operator delivery does not wait for an
+idle consumer, because it starts no turn.
+
 ## Conditions
 
 | `when` | Readiness |
@@ -99,7 +166,10 @@ unacknowledged backend request.
 
 The checked-in budgets cover dependency storage, excluding provider turn
 setup: five boundary commits and approximately 49 KB of WAL for registration
-through successful delivery (~4.9 MB/day at 100 dependencies). One hundred
+through successful delivery (~4.9 MB/day at 100 dependencies). Operator
+delivery costs four commits and approximately 62 KB for registration through
+its card (~6.2 MB/day at 100 reminders). The card and the delivered claim
+share one commit. One hundred
 unchanged PR observations plus one hundred thread events make zero commits,
 including when the consumer is busy. Evidence timestamps alone never cause
 a write. No dependency means no per-turn persistence.

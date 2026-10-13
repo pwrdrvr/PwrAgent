@@ -5,6 +5,14 @@ export const THREAD_DEPENDENCY_CONDITIONS = [
   "turn_completed", "pr_attached", "ci_passed", "pr_merged",
 ] as const;
 
+/**
+ * Who acts when a dependency fires. `agent` resumes the waiting thread with a
+ * new turn. `operator` raises a to-do card on that thread instead and starts
+ * no turn, for follow-ups only the human can do.
+ */
+export const THREAD_DEPENDENCY_DELIVERY_TARGETS = ["agent", "operator"] as const;
+export type ThreadDependencyDeliveryTarget = (typeof THREAD_DEPENDENCY_DELIVERY_TARGETS)[number];
+
 export type ThreadDependencyCondition = {
   backend: AppServerBackendKind;
   threadId: string;
@@ -36,15 +44,30 @@ export type ThreadDependency = {
   mode: "all" | "any";
   onFailure: "notify" | "wait";
   continuation?: string;
+  /** Absent on registrations made before operator delivery: `agent`. */
+  deliver?: ThreadDependencyDeliveryTarget;
+  /** Operator delivery only: the card offers Start thread with the continuation. */
+  handoff?: boolean;
   status: "waiting" | "ready" | "dispatching" | "delivered" | "cancelled" | "dismissed";
   outcome?: "success" | "failure";
   evidence: ThreadDependencyEvidence[];
   createdAt: number;
   updatedAt: number;
   turnId?: string;
+  /** The to-do card an operator delivery raised. */
+  todoId?: string;
   error?: string;
   dispatchOwnerPid?: number;
 };
+
+export function threadDependencyDeliveryTarget(dependency: Pick<ThreadDependency, "deliver">): ThreadDependencyDeliveryTarget {
+  return dependency.deliver ?? "agent";
+}
+
+/** The stable to-do key for a dependency's operator card. */
+export function threadDependencyTodoKey(dependencyId: string): string {
+  return `dependency:${dependencyId}`;
+}
 
 /** Evidence reasons a repair can clear while the PR stays open. */
 export const REPAIRABLE_THREAD_DEPENDENCY_FAILURES: readonly string[] = ["CI failed", "Merge conflict"];
@@ -69,6 +92,10 @@ export type ManageThreadDependenciesRequest = {
   /** Notify once on failure, or wait through CI repair. Closed PRs remain terminal. */
   onFailure?: "notify" | "wait";
   continuation?: string;
+  /** Resume the waiting thread (`agent`, the default) or remind the operator. */
+  deliver?: ThreadDependencyDeliveryTarget;
+  /** With `deliver: "operator"`, offer Start thread on the card. */
+  handoff?: boolean;
   dependencyId?: string;
 };
 
