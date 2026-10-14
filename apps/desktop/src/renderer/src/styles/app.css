@@ -46035,9 +46035,12 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
    at the left end of their row, away from the tile the pointer came in on.
    Only the open rail shows them. */
 .thread-terminal-panel__close-list {
+  /* Anchored to where the open rail's left edge will be, not to the rail's
+     current left edge, so the buttons never sweep across the tiles while the
+     rail widens under a pointer that is mid-click. */
   position: absolute;
   top: 0;
-  left: 6px;
+  right: 206px;
   display: flex;
   flex-direction: column;
 }
@@ -46130,4 +46133,53 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   background: var(--bg-panel);
   color: var(--text-secondary);
   font-size: 11px;
+}
+
+/* Right-click menu for a terminal tab. Same chrome as the to-do split menu. */
+.terminal-menu {
+  position: fixed;
+  z-index: 150;
+  min-width: 188px;
+  padding: 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  box-shadow: var(--shadow-popover);
+  transform: translateX(-100%);
+}
+.terminal-menu:focus { outline: none; }
+.terminal-menu__item {
+  display: flex;
+  width: 100%;
+  min-height: 28px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 1.3;
+  text-align: left;
+}
+.terminal-menu__item:hover:not(:disabled),
+.terminal-menu__item:focus-visible {
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+  outline: none;
+}
+.terminal-menu__item:disabled { color: var(--text-subtle); cursor: default; }
+.terminal-menu__item.is-danger { color: var(--danger-text); }
+.terminal-menu__item kbd {
+  color: var(--text-subtle);
+  font: 500 10.5px var(--font-mono);
+}
+.terminal-menu__separator {
+  height: 1px;
+  margin: 4px 2px;
+  background: var(--border-subtle);
 }

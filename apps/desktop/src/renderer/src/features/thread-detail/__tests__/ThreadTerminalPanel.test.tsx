@@ -14,6 +14,9 @@ vi.mock("../IntegratedTerminal", () => ({
   ),
 }));
 
+const copyText = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock("../../../lib/copy-text", () => ({ copyText }));
+
 import { ThreadTerminalPanel } from "../ThreadTerminalPanel";
 
 function controller(selected?: string): IntegratedTerminalsController {
@@ -162,10 +165,40 @@ describe("ThreadTerminalPanel", () => {
       act(() => { vi.advanceTimersByTime(250); });
       expect(rail()).not.toHaveClass("is-open");
 
+      // A click focuses the tab on pointerdown; that must not open the rail
+      // mid-click. Keyboard focus does open it.
+      fireEvent.pointerDown(screen.getByRole("tab", { name: /Tests/ }));
+      act(() => { screen.getByRole("tab", { name: /Tests/ }).focus(); });
+      expect(rail()).not.toHaveClass("is-open");
+      fireEvent.pointerUp(screen.getByRole("tab", { name: /Tests/ }));
       act(() => { screen.getByRole("tab", { name: /Build/ }).focus(); });
       expect(rail()).toHaveClass("is-open");
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("opens a menu on right-click with rename, copy path, restart and close", () => {
+    const terminals = controller("a");
+    renderPanel(terminals, [pane("a", { name: "Build" }), pane("b", { name: "Tests", status: "exited", exitCode: 1 })]);
+
+    fireEvent.contextMenu(screen.getByRole("tab", { name: /Build/ }), { clientX: 400, clientY: 200 });
+    expect(screen.getAllByRole("menuitem").map((item) => item.textContent))
+      .toEqual(["RenameF2", "Copy path", "New terminal here", "Close terminalDel"]);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Copy path" }));
+    expect(copyText).toHaveBeenCalledWith("/Users/dev/orbit", undefined);
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+
+    fireEvent.contextMenu(screen.getByRole("tab", { name: /Tests/ }), { clientX: 400, clientY: 230 });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Restart shell" }));
+    expect(document.querySelector('[data-session-id="b"]')).toHaveAttribute("data-resume", "true");
+
+    fireEvent.contextMenu(screen.getByRole("tab", { name: /Build/ }), { clientX: 400, clientY: 200 });
+    fireEvent.click(screen.getByRole("menuitem", { name: /Rename/ }));
+    expect(screen.getByRole("textbox", { name: "Terminal name" })).toHaveValue("Build");
+
+    fireEvent.contextMenu(screen.getByRole("tab", { name: /Tests/ }), { clientX: 400, clientY: 230 });
+    fireEvent.click(screen.getByRole("menuitem", { name: /Close terminal/ }));
+    expect(terminals.closeTerminal).toHaveBeenCalledWith(expect.objectContaining({ sessionId: "b" }));
   });
 });

@@ -1,8 +1,12 @@
-import { useEffect, useRef, useState } from "react";
-import type { CSSProperties, KeyboardEvent, PointerEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import type { CSSProperties, KeyboardEvent, MouseEvent, PointerEvent, RefObject } from "react";
+import { createPortal } from "react-dom";
 import { IntegratedTerminal } from "./IntegratedTerminal";
 import { InstanceChip } from "../federation/InstanceGlyph";
+import { copyText } from "../../lib/copy-text";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { useDismissOnOutsidePointer } from "../../lib/useDismissOnOutsidePointer";
+import { useMenuNavigation } from "../../lib/useMenuNavigation";
 import type { IntegratedTerminalPane, IntegratedTerminalsController } from "../../lib/useIntegratedTerminals";
 
 type TerminalState = "starting" | "running" | "unseen" | "exited" | "failed" | "saved";
@@ -109,11 +113,26 @@ export function ThreadTerminalPanel({ desktopApi, terminals, threadKey, panes, v
   const [restarts, setRestarts] = useState<Readonly<Record<string, number>>>({});
   const [hovered, setHovered] = useState(false);
   const [focusWithin, setFocusWithin] = useState(false);
+  const [menu, setMenu] = useState<{ sessionId: string; x: number; y: number }>();
+  const menuRef = useRef<HTMLDivElement>(null);
+  const menuTriggerRef = useRef<HTMLElement | null>(null);
+  const pointerFocusRef = useRef(false);
   const hoverTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const listRef = useRef<HTMLDivElement>(null);
   const railRef = useRef<HTMLDivElement>(null);
   const cancelRenameRef = useRef(false);
-  const open = hovered || focusWithin || editing !== undefined;
+  const open = hovered || focusWithin || editing !== undefined || menu !== undefined;
+  const closeMenu = useCallback(() => setMenu(undefined), []);
+  useMenuNavigation({ open: menu !== undefined, menuRef, triggerRef: menuTriggerRef, onClose: closeMenu });
+  useDismissOnOutsidePointer(menu !== undefined, menuRef, closeMenu);
+  // Keep the menu on screen: it opens to the left of the pointer (the rail
+  // sits at the right edge) and moves up when it would run off the bottom.
+  useLayoutEffect(() => {
+    const element = menuRef.current;
+    if (!menu || !element) return;
+    const overflow = element.getBoundingClientRect().bottom - window.innerHeight + 8;
+    element.style.top = `${overflow > 0 ? menu.y - overflow : menu.y}px`;
+  }, [menu]);
 
   useEffect(() => () => clearTimeout(hoverTimer.current), []);
 
@@ -143,6 +162,18 @@ export function ThreadTerminalPanel({ desktopApi, terminals, threadKey, panes, v
   const restart = (pane: IntegratedTerminalPane) => {
     setRestarts((current) => ({ ...current, [pane.sessionId]: (current[pane.sessionId] ?? 0) + 1 }));
     setFocusRequest((current) => ({ sessionId: pane.sessionId, count: (current?.count ?? 0) + 1 }));
+  };
+  const openMenu = (event: MouseEvent<HTMLButtonElement>, pane: IntegratedTerminalPane) => {
+    event.preventDefault();
+    menuTriggerRef.current = event.currentTarget;
+    // The Menu key and Shift+F10 report no pointer position: anchor to the tab.
+    const rect = event.currentTarget.getBoundingClientRect();
+    const fromKeyboard = event.clientX === 0 && event.clientY === 0;
+    setMenu({
+      sessionId: pane.sessionId,
+      x: fromKeyboard ? rect.right : event.clientX,
+      y: fromKeyboard ? rect.bottom : event.clientY,
+    });
   };
   const markUnseen = (sessionId: string) => setUnseen((current) =>
     current.has(sessionId) ? current : new Set(current).add(sessionId));
@@ -247,7 +278,15 @@ export function ThreadTerminalPanel({ desktopApi, terminals, threadKey, panes, v
         <aside className="thread-terminal-panel__sidebar" aria-label="Terminal sessions">
           <div ref={railRef} className={open ? "thread-terminal-panel__rail is-open" : "thread-terminal-panel__rail"}
             onPointerEnter={() => hover(true)} onPointerLeave={() => hover(false)}
-            onFocus={() => setFocusWithin(true)}
+            onPointerDown={() => { pointerFocusRef.current = true; }}
+            onPointerUp={() => { pointerFocusRef.current = false; }}
+            onFocus={() => {
+              // Only keyboard focus opens the rail. A click focuses its tab on
+              // mousedown, and opening then would slide the rail out under a
+              // pointer that has not let go yet. Hover opens it for pointers.
+              if (pointerFocusRef.current) return;
+              setFocusWithin(true);
+            }}
             onBlur={(event) => {
               if (!railRef.current?.contains(event.relatedTarget as Node | null)) setFocusWithin(false);
             }}>
@@ -281,7 +320,8 @@ export function ThreadTerminalPanel({ desktopApi, terminals, threadKey, panes, v
                         navigate(event, index);
                         if (event.key === "F2") { event.preventDefault(); startRename(pane, label); }
                         if (event.key === "Delete") { event.preventDefault(); terminals.closeTerminal(pane); }
-                      }} onDoubleClick={() => startRename(pane, label)}>
+                      }} onDoubleClick={() => startRename(pane, label)}
+                      onContextMenu={(event) => openMenu(event, pane)}>
                       <span className="thread-terminal-panel__text">
                         <span className="thread-terminal-panel__name">{label}</span>
                         <small className={state === "failed" ? "is-failed" : undefined}>{detail}</small>
@@ -328,6 +368,61 @@ export function ThreadTerminalPanel({ desktopApi, terminals, threadKey, panes, v
           </div>
         </aside>
       </div>
+      {menu ? createPortal(<TerminalMenu
+        menuRef={menuRef}
+        menu={menu}
+        pane={panes.find((pane) => pane.sessionId === menu.sessionId)}
+        label={labels[panes.findIndex((pane) => pane.sessionId === menu.sessionId)]}
+        state={states[panes.findIndex((pane) => pane.sessionId === menu.sessionId)]}
+        onClose={closeMenu}
+        onRename={(pane, label) => startRename(pane, label)}
+        onCopyPath={(pane) => { if (pane.cwd) void copyText(pane.cwd, desktopApi); }}
+        onNewHere={(pane) => terminals.createTerminal(threadKey, pane.cwd, pane.remote)}
+        onRestart={restart}
+        onCloseTerminal={(pane) => terminals.closeTerminal(pane)}
+      />, document.body) : null}
     </section>
+  );
+}
+
+function TerminalMenu({ menuRef, menu, pane, label, state, onClose, onRename, onCopyPath, onNewHere, onRestart, onCloseTerminal }: {
+  menuRef: RefObject<HTMLDivElement | null>;
+  menu: { x: number; y: number };
+  pane: IntegratedTerminalPane | undefined;
+  label: string | undefined;
+  state: TerminalState | undefined;
+  onClose: () => void;
+  onRename: (pane: IntegratedTerminalPane, label: string) => void;
+  onCopyPath: (pane: IntegratedTerminalPane) => void;
+  onNewHere: (pane: IntegratedTerminalPane) => void;
+  onRestart: (pane: IntegratedTerminalPane) => void;
+  onCloseTerminal: (pane: IntegratedTerminalPane) => void;
+}) {
+  if (!pane || label === undefined) return null;
+  const ended = state === "exited" || state === "failed" || state === "saved";
+  const act = (run: () => void) => () => { onClose(); run(); };
+  return (
+    <div ref={menuRef} className="terminal-menu" role="menu" aria-label={`${label} terminal`} tabIndex={-1}
+      style={{ left: menu.x, top: menu.y }}>
+      <button type="button" role="menuitem" className="terminal-menu__item" onClick={act(() => onRename(pane, label))}>
+        Rename<kbd>F2</kbd>
+      </button>
+      <button type="button" role="menuitem" className="terminal-menu__item" disabled={!pane.cwd}
+        onClick={act(() => onCopyPath(pane))}>
+        Copy path
+      </button>
+      <button type="button" role="menuitem" className="terminal-menu__item" onClick={act(() => onNewHere(pane))}>
+        New terminal here
+      </button>
+      {ended ? (
+        <button type="button" role="menuitem" className="terminal-menu__item" onClick={act(() => onRestart(pane))}>
+          Restart shell
+        </button>
+      ) : null}
+      <div className="terminal-menu__separator" role="separator" />
+      <button type="button" role="menuitem" className="terminal-menu__item is-danger" onClick={act(() => onCloseTerminal(pane))}>
+        Close terminal<kbd>Del</kbd>
+      </button>
+    </div>
   );
 }

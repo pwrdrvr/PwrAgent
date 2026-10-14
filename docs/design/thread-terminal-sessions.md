@@ -7,7 +7,10 @@ flies the rail out over the shell, without reflowing it, to show each name and
 its working directory or exit code. Output in a terminal that is not on screen
 marks its dot until it is selected (renderer state only). Default names take
 the lowest free number when created and keep it. A click on a tab selects it
-and focuses the shell. New, rename (in place: double-click or F2) and close act
+and focuses the shell; only keyboard focus, not a click, opens the rail, so it
+never slides under a pointer mid-click. Right-click (or the Menu key) on a tab
+offers Rename, Copy path, New terminal here, Restart shell for an ended
+terminal, and Close. New, rename (in place: double-click or F2) and close act
 on one terminal ID. Hiding the panel (the thread header's terminal toggle) and
 switching threads preserve PTYs. Keyboard navigation uses a vertical tablist;
 resize and focus stay accessible.
