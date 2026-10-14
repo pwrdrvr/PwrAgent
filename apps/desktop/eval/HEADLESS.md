@@ -121,7 +121,9 @@ the 30-second IPC deadline and no-retry policy are unchanged.
 `protocol.jsonl` is sanitized **PwrAgent-owned** App Server protocol capture,
 not a read of Codex's private rollout storage. Credentials/account fields are
 redacted; raw duplicate wire strings are omitted. Profile-local captures are
-private diagnostics and must not be uploaded. `patch.diff` includes tracked
+private diagnostics and must not be uploaded. Capture export requires a directory
+created exclusively by the current invocation; rejected profiles never contribute
+previous captures. `patch.diff` includes tracked
 changes against initial HEAD; `untracked.tar.gz` recursively preserves new task
 files and cloned source directories. It omits `.git` internals; the separate
 `untracked-manifest.json` records omissions and nested HEAD hashes when readable
@@ -138,9 +140,15 @@ failure, 3 timeout, 4 signal/provider cancellation, 5 observed budget threshold,
 state alone never means success. Approval/user-input requests fail unattended
 runs instead of receiving invented answers. A provider `turn/completed` with
 status `interrupted` is cancellation, not successful completion. Timeout/cancellation interrupts the
-turn, closes the app and its managed children, then exports artifacts. The
-controller should retain an outer timeout and stop the task container after
-reading the result; tini reaps orphan children.
+turn, closes the app and its managed children, then exports artifacts. If graceful
+shutdown fails, the driver kills Electron's owned POSIX process group and awaits
+the leader's exit. Task commands can create separate sessions, so this path
+defers protocol and task artifact export and records `artifactsSafe: false` and
+`containerStopRequired: true`. The controller must stop the container before any
+external artifact collection; a previously completed turn becomes a failed driver
+result. The controller should retain an outer timeout and stop the task container
+after reading every result. Tini reaps exited orphan children; it does not stop
+live descendants.
 
 Observed cost/token thresholds are **not hard billing limits**: usage lands
 after a model request. The execution owner reserves in-flight headroom (including

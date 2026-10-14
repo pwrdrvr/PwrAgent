@@ -2,11 +2,14 @@ import { createHash } from "node:crypto";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { readEvalManagedRuntime } from "../eval-managed-runtime";
 
+const { logError } = vi.hoisted(() => ({ logError: vi.fn() }));
+vi.mock("../log", () => ({ getMainLogger: () => ({ error: logError }) }));
+
 const roots: string[] = [];
-afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
+afterEach(async () => { logError.mockClear(); await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
 async function fixture() {
   const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-eval-runtime-"));
   roots.push(root);
@@ -32,8 +35,17 @@ describe.skipIf(process.platform === "win32")("eval managed runtime pin", () => 
     expect(runtime?.command).toBe(path.join(f.root, "codex"));
     expect(runtime?.metadata.version).toBe("0.162.1-pwragent.1");
   });
-  it("rejects packaged usage", async () => {
-    await expect(readEvalManagedRuntime(true, { PWRAGENT_DEV_EVAL_RUNTIME_MANIFEST: "/missing" })).rejects.toThrow("unpackaged");
+  it("ignores packaged overrides without reading them, allowing normal runtime fallback", async () => {
+    const f = await fixture();
+    await writeFile(f.manifest, "invalid JSON must not be read");
+    for (const value of ["/missing", f.manifest, ""]) {
+      const fallback = vi.fn(async () => "normal managed runtime");
+      const runtime = await readEvalManagedRuntime(true, { PWRAGENT_DEV_EVAL_RUNTIME_MANIFEST: value }) ?? await fallback();
+      expect(runtime).toBe("normal managed runtime");
+      expect(fallback).toHaveBeenCalledOnce();
+    }
+    expect(logError).toHaveBeenCalledTimes(3);
+    expect(logError).toHaveBeenCalledWith("Ignoring PWRAGENT_DEV_EVAL_RUNTIME_MANIFEST in a packaged application");
   });
   it("rejects tampering in a sibling helper, not just the CLI", async () => {
     const f = await fixture();

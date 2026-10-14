@@ -4,8 +4,10 @@ import { access, readFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
+import { getMainLogger } from "./log";
 
 const execFileAsync = promisify(execFile);
+const evalRuntimeLog = getMainLogger("pwragent:eval-managed-runtime");
 
 /** An unpackaged eval can pin the complete managed release without updating it. */
 export async function readEvalManagedRuntime(
@@ -13,8 +15,11 @@ export async function readEvalManagedRuntime(
   env: NodeJS.ProcessEnv = process.env,
 ) {
   const manifestPath = env.PWRAGENT_DEV_EVAL_RUNTIME_MANIFEST;
+  if (isPackaged && manifestPath !== undefined) {
+    evalRuntimeLog.error("Ignoring PWRAGENT_DEV_EVAL_RUNTIME_MANIFEST in a packaged application");
+    return undefined;
+  }
   if (!manifestPath) return undefined;
-  if (isPackaged) throw new Error("Eval runtime manifests require an unpackaged application");
   const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as {
     version?: string;
     directory?: string;
