@@ -46064,46 +46064,103 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   list-style: none;
 }
 
+/* A finding's row: priority, title, then its state. Nothing leads the row,
+   so no mark on it reads as a step's checkbox. */
 .review-todo__finding {
+  position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
   min-height: 28px;
   align-items: center;
   gap: 6px;
   border-top: 1px solid var(--border-subtle);
 }
 
-/* The whole row left of its action picks the finding: the label is the
-   target, the checkbox only shows it. A settled row keeps the same columns
-   with its outcome's glyph where the checkbox was. */
-.review-todo__pick {
-  display: grid;
-  grid-template-columns: 14px 22px minmax(0, 1fr);
-  min-height: 28px;
+.review-todo__state {
+  display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
-label.review-todo__pick {
+.review-todo__finding[data-selected] .review-todo__state {
+  color: var(--accent-bright);
+}
+
+/* The row's actions sit over its end and show on hover or keyboard focus,
+   so the title keeps the full width at rest. They stay in the tab order:
+   focus reveals them. A clicked chip keeps focus without :focus-visible, so
+   a mouse leaves no second row raised. */
+.review-todo__chips {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-left: 20px;
+  background: linear-gradient(to right, transparent, var(--bg-panel-elevated) 20px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.review-todo__finding:hover .review-todo__chips,
+.review-todo__finding:has(:focus-visible) .review-todo__chips {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* The chips stand in for the state while they show; the row's dimming and
+   strike still carry it. */
+.review-todo__finding:hover .review-todo__state,
+.review-todo__finding:has(:focus-visible) .review-todo__state {
+  visibility: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .review-todo__chips {
+    transition: none;
+  }
+}
+
+/* 24px tall: WCAG 2.2 target-size, which a11y.spec.ts gates on. */
+.review-todo__chip {
+  min-height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 5px;
+  background: var(--bg-panel-elevated);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
   cursor: pointer;
 }
 
-.review-todo__check {
-  width: 14px;
-  height: 14px;
-  margin: 0;
-  accent-color: var(--accent);
+.review-todo__chip:hover:not(:disabled) {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
 }
 
-.review-todo__check:focus-visible {
+.review-todo__chip[aria-pressed="true"] {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.review-todo__chip:focus-visible {
   outline: 2px solid var(--focus-ring);
-  outline-offset: 2px;
+  outline-offset: 1px;
 }
 
-.review-todo__settled {
-  display: inline-flex;
-  justify-content: center;
-  color: var(--text-muted);
+.review-todo__chip:disabled {
+  cursor: default;
+  opacity: 0.45;
 }
 
 .review-todo__priority {
@@ -46144,8 +46201,13 @@ label.review-todo__pick {
   color: var(--text-muted);
 }
 
+/* Addressed reads as a done step; declined is final too, but nothing was
+   done, so it stays unstruck. */
+.review-todo__finding[data-status="addressed"] .review-todo__finding-title {
+  text-decoration: line-through;
+}
+
 /* 24px tall: WCAG 2.2 target-size, which a11y.spec.ts gates on. */
-.review-todo__reopen,
 .review-todo__more {
   min-height: 24px;
   align-self: flex-start;
@@ -46158,19 +46220,13 @@ label.review-todo__pick {
   cursor: pointer;
 }
 
-.review-todo__reopen:hover,
 .review-todo__more:hover {
   color: var(--accent-bright);
 }
 
-.review-todo__reopen:focus-visible,
 .review-todo__more:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
-}
-
-.review-todo__reopen {
-  padding: 0 6px;
 }
 
 /* Where a review and each finding stand. Tone rides on the glyph and the
@@ -46299,7 +46355,6 @@ label.review-todo__pick {
   -webkit-line-clamp: 3;
 }
 
-.review-todo__reopen:disabled,
 .review-todo__more:disabled {
   cursor: default;
   opacity: 0.45;

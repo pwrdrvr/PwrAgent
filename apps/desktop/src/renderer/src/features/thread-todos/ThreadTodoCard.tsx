@@ -41,7 +41,6 @@ import type {
 } from "./thread-todos-view";
 import {
   fixReviewFindingsPrompt,
-  openReviewItems,
   orderReviewItems,
   useTrackedReview,
 } from "./review-tracking";
@@ -142,11 +141,6 @@ export function ThreadTodoCard(props: ThreadTodoCardProps) {
 /** Rows a review card shows before "Show N more". */
 const REVIEW_CARD_ROWS = 4;
 
-/**
- * A completed review still waiting on its findings. The body is a checklist
- * settled in place, one row per finding; the footer hands what is open to
- * the agent in this thread.
- */
 /** A finding's priority and title; the title's tooltip shows it unclipped. */
 function ReviewTodoFindingLabel(props: { item: ThreadReviewItem }) {
   const { item } = props;
@@ -167,6 +161,12 @@ function ReviewTodoFindingLabel(props: { item: ThreadReviewItem }) {
   );
 }
 
+/**
+ * A completed review still waiting on its findings, one row per finding.
+ * A row carries no mark at rest, so nothing on it reads as a step's
+ * checkbox; its chips appear on hover or focus. Fix sends every open
+ * finding, or only the selected ones, to the agent in this thread.
+ */
 function TrackedReviewCard(props: ThreadTodoCardProps) {
   const { todo } = props;
   const tracking = useTrackedReview(todo, { id: todo.reviewId });
@@ -174,15 +174,15 @@ function TrackedReviewCard(props: ThreadTodoCardProps) {
   // One hand-off per click: a second click before the send settles would
   // queue the same reply again.
   const [sending, setSending] = useState(false);
-  // Open findings start picked; the operator unticks the ones to leave alone.
-  // Tracking the exclusions keeps a finding that reopens picked by default.
-  const [skipped, setSkipped] = useState<ReadonlySet<string>>(() => new Set());
+  const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set());
   const titleId = `thread-todo-title-${todo.id}`;
   const review = tracking.review;
   const items = review ? orderReviewItems(review.items) : [];
-  const open = review ? openReviewItems(review).length : 0;
-  const picked = items.filter((item) => item.status === "open" && !skipped.has(item.id));
-  const togglePicked = (id: string) => setSkipped((current) => {
+  const openItems = items.filter((item) => item.status === "open");
+  // A selection that has since settled no longer counts.
+  const selectedItems = openItems.filter((item) => selected.has(item.id));
+  const toSend = selectedItems.length > 0 ? selectedItems : openItems;
+  const toggleSelected = (id: string) => setSelected((current) => {
     const next = new Set(current);
     if (!next.delete(id)) next.add(id);
     return next;
@@ -190,13 +190,22 @@ function TrackedReviewCard(props: ThreadTodoCardProps) {
   const shown = expanded ? items : items.slice(0, REVIEW_CARD_ROWS);
   const hidden = items.length - shown.length;
   const onDoHere = props.onDoHere;
+  const busy = tracking.busy || sending;
+  const fix = onDoHere
+    ? (findings: ThreadReviewItem[]) => {
+        setSending(true);
+        void Promise.resolve(onDoHere(todo, { prompt: fixReviewFindingsPrompt(todo.title, findings) }))
+          .then((sent) => {
+            if (sent !== false) setSelected(new Set());
+          })
+          .finally(() => setSending(false));
+      }
+    : undefined;
 
-  let count: string | undefined;
-  if (review) {
-    if (items.length === 0) count = "No findings to settle";
-    else if (open === 0) count = "No findings left open";
-    else count = open === items.length ? `${open} open` : `${open} of ${items.length} open`;
-  }
+  // Settled of total, the way a card with steps counts checked steps.
+  const progress = items.length > 0
+    ? { checked: items.length - openItems.length, total: items.length }
+    : undefined;
   // The explanation is the transcript's to show; the card repeats it only
   // when there is no list to read instead. Until the review loads, the
   // card's own detail stands in, clamped the same way.
@@ -206,7 +215,7 @@ function TrackedReviewCard(props: ThreadTodoCardProps) {
 
   const renderAction = () => {
     if (!review || review.status !== "open") return null;
-    if (open === 0) {
+    if (openItems.length === 0) {
       return (
         <button
           type="button"
@@ -219,21 +228,15 @@ function TrackedReviewCard(props: ThreadTodoCardProps) {
         </button>
       );
     }
-    return onDoHere ? (
+    return fix ? (
       <button
         type="button"
         className="button button--primary thread-todo-card__button"
-        disabled={sending || picked.length === 0}
-        onClick={() => {
-          setSending(true);
-          void Promise.resolve(onDoHere(todo, { prompt: fixReviewFindingsPrompt(todo.title, picked) }))
-            .finally(() => setSending(false));
-        }}
+        disabled={sending}
+        onClick={() => fix(toSend)}
       >
         <ArrowUpIcon size={12} />
-        {picked.length === 0
-          ? "Fix findings"
-          : `Fix ${picked.length} ${picked.length === 1 ? "finding" : "findings"}`}
+        {selectedItems.length > 0 ? `Fix ${selectedItems.length} selected` : "Fix all"}
       </button>
     ) : null;
   };
@@ -249,62 +252,87 @@ function TrackedReviewCard(props: ThreadTodoCardProps) {
         todo={todo}
         titleId={titleId}
         now={props.now}
+        progress={progress}
         onCollapse={props.onCollapse}
         dismissLabel="Dismiss review"
         onDismiss={() => props.onResolve(todo, "dismissed")}
       />
       <div className="thread-todo-card__body">
-        <p className="review-todo__summary">
-          {count ? <span className="review-todo__count">{count}</span> : null}
-          {explanation ? <span className="review-todo__explanation">{explanation}</span> : null}
-        </p>
+        {review && items.length === 0 ? (
+          <p className="review-todo__summary">
+            <span className="review-todo__count">No findings to settle</span>
+          </p>
+        ) : null}
+        {explanation ? (
+          <p className="review-todo__summary">
+            <span className="review-todo__explanation">{explanation}</span>
+          </p>
+        ) : null}
         {shown.length > 0 && review ? (
           <ul className="review-todo__findings" aria-label="Findings">
-            {shown.map((item) => (
-              <li key={item.id} className="review-todo__finding" data-status={item.status}>
-                {item.status === "open" ? (
-                  <label className="review-todo__pick">
-                    <input
-                      type="checkbox"
-                      className="review-todo__check"
-                      aria-label={`Fix finding: ${item.title}`}
-                      checked={!skipped.has(item.id)}
-                      onChange={() => togglePicked(item.id)}
-                    />
-                    <ReviewTodoFindingLabel item={item} />
-                  </label>
-                ) : (
-                  <span className="review-todo__pick">
-                    <span className="review-todo__settled" aria-hidden="true">
-                      {item.status === "addressed" ? <CheckIcon size={12} /> : <BanIcon size={12} />}
-                    </span>
-                    <ReviewTodoFindingLabel item={item} />
+            {shown.map((item) => {
+              const isSelected = item.status === "open" && selected.has(item.id);
+              return (
+                <li
+                  key={item.id}
+                  className="review-todo__finding"
+                  data-status={item.status}
+                  data-selected={isSelected ? "true" : undefined}
+                >
+                  <ReviewTodoFindingLabel item={item} />
+                  <span className="review-todo__state">
+                    {isSelected ? "Selected" : null}
+                    {item.status === "addressed" ? <><CheckIcon size={11} />Addressed</> : null}
+                    {item.status === "dismissed" ? <><BanIcon size={11} />Did not address</> : null}
                   </span>
-                )}
-                {item.status === "open" ? (
-                  <button
-                    type="button"
-                    className="thread-todo-card__icon-button"
-                    aria-label={`Dismiss finding: ${item.title}`}
-                    title="Do not address"
-                    disabled={tracking.busy}
-                    onClick={() => void tracking.update({ itemId: item.id, status: "dismissed" })}
-                  >
-                    <CloseIcon size={13} />
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    className="review-todo__reopen"
-                    aria-label={`Reopen finding: ${item.title}`}
-                    disabled={tracking.busy}
-                    onClick={() => void tracking.update({ itemId: item.id, status: "open" })}
-                  >
-                    Reopen
-                  </button>
-                )}
-              </li>
-            ))}
+                  <span className="review-todo__chips">
+                    {item.status === "open" ? (
+                      <>
+                        <button
+                          type="button"
+                          className="review-todo__chip"
+                          aria-pressed={isSelected}
+                          aria-label={`Select finding: ${item.title}`}
+                          onClick={() => toggleSelected(item.id)}
+                        >
+                          {isSelected ? "Selected" : "Select"}
+                        </button>
+                        {fix ? (
+                          <button
+                            type="button"
+                            className="review-todo__chip"
+                            aria-label={`Fix now: ${item.title}`}
+                            disabled={sending}
+                            onClick={() => fix([item])}
+                          >
+                            Fix now
+                          </button>
+                        ) : null}
+                        <button
+                          type="button"
+                          className="review-todo__chip"
+                          aria-label={`Decline finding: ${item.title}`}
+                          disabled={busy}
+                          onClick={() => void tracking.update({ itemId: item.id, status: "dismissed" })}
+                        >
+                          Decline
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        className="review-todo__chip"
+                        aria-label={`Reopen finding: ${item.title}`}
+                        disabled={busy}
+                        onClick={() => void tracking.update({ itemId: item.id, status: "open" })}
+                      >
+                        Reopen
+                      </button>
+                    )}
+                  </span>
+                </li>
+              );
+            })}
           </ul>
         ) : null}
         {hidden > 0 || expanded ? (

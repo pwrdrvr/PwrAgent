@@ -213,7 +213,7 @@ export function ReviewStatusRow(props: { review: ThreadReview; busy: boolean; up
         </span>
         <span className="review-status__note">
           {open > 0
-            ? "Tracked in To-dos until each finding is addressed or dismissed."
+            ? "Tracked in To-dos until each finding is addressed or declined."
             : "No findings left open. Mark it handled once you are done with it."}
         </span>
         <div className="review-status__actions">
@@ -248,7 +248,7 @@ export function ReviewStatusRow(props: { review: ThreadReview; busy: boolean; up
     <div className="review-status" data-status={review.status}>
       <span className="review-status__state" data-status={review.status}>
         {dismissed ? <BanIcon size={12} /> : <CheckIcon size={12} />}
-        {dismissed ? "Do not address" : "Handled"}
+        {dismissed ? "Did not address" : "Handled"}
       </span>
       {review.resolution ? (
         <ResolutionDetails outcome={dismissed ? "Dismissed" : "Handled"} resolution={review.resolution} />
@@ -276,7 +276,7 @@ export function ReviewFindingState(props: { review: ThreadReview; item: ThreadRe
   return (
     <span className="review-finding-state" data-status={status}>
       {status === "addressed" ? <CheckIcon size={12} /> : <BanIcon size={12} />}
-      {status === "addressed" ? "Addressed" : "Do not address"}
+      {status === "addressed" ? "Addressed" : "Did not address"}
     </span>
   );
 }
@@ -303,11 +303,11 @@ export function ReviewFindingActions(props: TranscriptFindingControlsProps) {
       <button
         type="button"
         className="button review-status__button review-status__button--quiet"
-        aria-label={`Dismiss finding: ${title}`}
+        aria-label={`Decline finding: ${title}`}
         disabled={busy}
         onClick={() => void update({ itemId: item.id, status: "dismissed" })}
       >
-        Do not address
+        Decline
       </button>
       <button
         type="button"
@@ -330,7 +330,7 @@ export function ReviewFindingResolution(props: TranscriptFindingControlsProps) {
   return (
     <div className="review-status" data-status={item.status}>
       <ResolutionDetails
-        outcome={item.status === "addressed" ? "Addressed" : "Dismissed"}
+        outcome={item.status === "addressed" ? "Addressed" : "Declined"}
         resolution={item.resolution}
       />
       <div className="review-status__actions">

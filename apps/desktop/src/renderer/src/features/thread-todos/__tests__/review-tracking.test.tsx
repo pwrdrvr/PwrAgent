@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AppServerThreadReviewEntry, ThreadReview, ThreadTodo } from "@pwragent/shared";
 import { threadReviewDisplayTitle, threadReviewTodo } from "@pwragent/shared";
@@ -50,24 +50,24 @@ describe("review status controls", () => {
 
   it("documents an addressed finding and keeps the original review visible", async () => {
     const api = installApi({
-      ...review, status: "handled", resolution: { note: "All findings addressed or dismissed.", actor: "system", at: 2 },
+      ...review, status: "handled", resolution: { note: "All findings addressed or declined.", actor: "system", at: 2 },
       items: [{ ...review.items[0]!, status: "addressed", resolution: { note: "Added the abort handler.", url: "https://example.com/atlas/commit/1a2b3c4d5e", actor: "agent", at: 2 } }],
     });
     render(<TranscriptReview entry={entry} parentThreadId="owner" parentThreadBackend="codex" />);
     fireEvent.click(await screen.findByRole("button", { name: "Mark addressed: Abort pending exports" }));
     await waitFor(() => expect(api.updateThreadReview).toHaveBeenCalledWith({ id: "review", itemId: "finding", status: "addressed" }));
-    await screen.findByText("All findings addressed or dismissed.");
+    await screen.findByText("All findings addressed or declined.");
     expect(screen.getByText("Abort pending exports")).toBeVisible();
     expect(screen.getByRole("link", { name: "Commit 1a2b3c4" })).toHaveAttribute("href", "https://example.com/atlas/commit/1a2b3c4d5e");
     expect(screen.getByText("Addressed by the agent · Added the abort handler.")).toBeVisible();
     expect(screen.getByRole("button", { name: "Reopen finding: Abort pending exports" })).toBeVisible();
   });
 
-  it("labels the whole review and its findings Do not address after dismissal", async () => {
+  it("labels the whole review and its findings Did not address after dismissal", async () => {
     const api = installApi({ ...review, status: "dismissed", resolution: { note: "Dismissed by operator.", actor: "user", at: 2 } });
     render(<TranscriptReview entry={entry} parentThreadId="owner" />);
     fireEvent.click(await screen.findByRole("button", { name: "Dismiss review" }));
-    await waitFor(() => expect(screen.getAllByText("Do not address", { exact: true })).toHaveLength(2));
+    await waitFor(() => expect(screen.getAllByText("Did not address", { exact: true })).toHaveLength(2));
     expect(screen.getByText("Stop the export when its owner closes.")).toBeVisible();
     expect(screen.queryByRole("button", { name: /^Mark addressed:/ })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Reopen review" }));
@@ -106,69 +106,111 @@ function renderCard(current: ThreadReview, onDoHere = vi.fn()) {
   return { api, handlers, todo };
 }
 
+const prompt = (lines: string[]) => [...lines, "", "Use PwrAgent's `list_reviews` tool for their details and how to record each fix."].join("\n");
+
 describe("review To-do card", () => {
-  it("lists open findings first by priority and asks the agent to fix the picked ones", async () => {
+  it("lists findings by priority with no mark at rest, and fixes every open one by default", async () => {
     const current: ThreadReview = {
       ...review,
       items: [
         finding("done", "Drop the stale cursor", 1, "addressed"),
         finding("format", "Keep the selected output format", 2),
         finding("abort", "Abort pending exports", 1),
+        finding("retry", "Name the retry budget", 3, "dismissed"),
       ],
     };
     const { handlers, todo } = renderCard(current);
-    await screen.findByText("2 of 3 open");
-    const rows = screen.getAllByRole("listitem").map((row) => row.textContent);
-    expect(rows[0]).toContain("Abort pending exports");
-    expect(rows[1]).toContain("Keep the selected output format");
-    expect(rows[2]).toContain("Drop the stale cursor");
-    expect(screen.getByRole("button", { name: "Reopen finding: Drop the stale cursor" })).toBeVisible();
-    expect(screen.queryByRole("checkbox", { name: "Fix finding: Drop the stale cursor" })).not.toBeInTheDocument();
+    // Settled of total, the way a card with steps counts.
+    await screen.findByText("2 of 4");
+    const rows = screen.getAllByRole("listitem");
+    expect(rows.map((row) => row.textContent)).toEqual([
+      expect.stringContaining("Abort pending exports"),
+      expect.stringContaining("Keep the selected output format"),
+      expect.stringContaining("Drop the stale cursor"),
+      expect.stringContaining("Name the retry budget"),
+    ]);
+    // Nothing on a row reads as a step's checkbox.
+    expect(screen.queryAllByRole("checkbox")).toEqual([]);
+    expect(within(rows[2]!).getByText("Addressed")).toBeInTheDocument();
+    expect(within(rows[3]!).getByText("Did not address")).toBeInTheDocument();
+    expect(within(rows[3]!).getByRole("button", { name: "Reopen finding: Name the retry budget" })).toBeInTheDocument();
 
-    // Every open finding starts picked; unticking one leaves it out.
-    expect(screen.getByRole("button", { name: "Fix 2 findings" })).toBeEnabled();
-    fireEvent.click(screen.getByRole("checkbox", { name: "Fix finding: Keep the selected output format" }));
-    fireEvent.click(screen.getByRole("button", { name: "Fix 1 finding" }));
-    expect(handlers.onDoHere).toHaveBeenCalledWith(todo, { prompt: [
-      "Fix this finding from Code review:",
+    fireEvent.click(screen.getByRole("button", { name: "Fix all" }));
+    expect(handlers.onDoHere).toHaveBeenCalledWith(todo, { prompt: prompt([
+      "Fix these 2 findings from Code review:",
       "",
       "1. [P1] Abort pending exports",
-      "",
-      "Use PwrAgent's `list_reviews` tool for their details and how to record each fix.",
-    ].join("\n") });
-    await waitFor(() => expect(screen.getByRole("button", { name: "Fix 1 finding" })).toBeEnabled());
-
-    fireEvent.click(screen.getByRole("checkbox", { name: "Fix finding: Abort pending exports" }));
-    expect(screen.getByRole("button", { name: "Fix findings" })).toBeDisabled();
-    fireEvent.click(screen.getByRole("checkbox", { name: "Fix finding: Abort pending exports" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: "Fix finding: Keep the selected output format" }));
-    fireEvent.click(screen.getByRole("button", { name: "Fix 2 findings" }));
-    expect(handlers.onDoHere).toHaveBeenLastCalledWith(todo, { prompt: expect.stringMatching(
-      /^Fix these 2 findings from Code review:\n\n1\. \[P1\] Abort pending exports\n2\. \[P2\] Keep the selected output format\n\n/,
-    ) });
-    await waitFor(() => expect(screen.getByRole("button", { name: "Fix 2 findings" })).toBeEnabled());
+      "2. [P2] Keep the selected output format",
+    ]) });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Fix all" })).toBeEnabled());
 
     fireEvent.click(screen.getByRole("button", { name: "Dismiss review" }));
     expect(handlers.onResolve).toHaveBeenCalledWith(todo, "dismissed");
+  });
+
+  it("fixes only the selected findings, then clears the selection", async () => {
+    const current: ThreadReview = {
+      ...review,
+      items: [finding("format", "Keep the selected output format", 2), finding("abort", "Abort pending exports", 1)],
+    };
+    const { handlers, todo } = renderCard(current);
+    const select = await screen.findByRole("button", { name: "Select finding: Keep the selected output format" });
+    expect(select).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(select);
+    expect(select).toHaveAttribute("aria-pressed", "true");
+    expect(within(select.closest("li")!).getAllByText("Selected")).toHaveLength(2);
+    fireEvent.click(screen.getByRole("button", { name: "Fix 1 selected" }));
+    expect(handlers.onDoHere).toHaveBeenCalledWith(todo, { prompt: prompt([
+      "Fix this finding from Code review:",
+      "",
+      "1. [P2] Keep the selected output format",
+    ]) });
+    await screen.findByRole("button", { name: "Fix all" });
+    expect(select).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("keeps the selection when the reply did not send", async () => {
+    const onDoHere = vi.fn(async () => false);
+    renderCard({ ...review, items: [finding("abort", "Abort pending exports", 1), finding("retry", "Name the retry budget", 3)] }, onDoHere);
+    fireEvent.click(await screen.findByRole("button", { name: "Select finding: Abort pending exports" }));
+    fireEvent.click(screen.getByRole("button", { name: "Fix 1 selected" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Fix 1 selected" })).toBeEnabled());
+    expect(onDoHere).toHaveBeenCalledTimes(1);
+  });
+
+  it("fixes one finding now from its row", async () => {
+    const current: ThreadReview = {
+      ...review,
+      items: [finding("format", "Keep the selected output format", 2), finding("abort", "Abort pending exports", 1)],
+    };
+    const { handlers, todo } = renderCard(current);
+    fireEvent.click(await screen.findByRole("button", { name: "Fix now: Keep the selected output format" }));
+    expect(handlers.onDoHere).toHaveBeenCalledWith(todo, { prompt: prompt([
+      "Fix this finding from Code review:",
+      "",
+      "1. [P2] Keep the selected output format",
+    ]) });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Fix all" })).toBeEnabled());
   });
 
   it("sends the hand-off once while the first send is still settling", async () => {
     let settle: (sent: boolean) => void = () => {};
     const onDoHere = vi.fn(() => new Promise<boolean>((resolve) => { settle = resolve; }));
     renderCard({ ...review, items: [finding("abort", "Abort pending exports", 1)] }, onDoHere);
-    const button = await screen.findByRole("button", { name: "Fix 1 finding" });
+    const button = await screen.findByRole("button", { name: "Fix all" });
     fireEvent.click(button);
     fireEvent.click(button);
     expect(onDoHere).toHaveBeenCalledTimes(1);
     expect(button).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Fix now: Abort pending exports" })).toBeDisabled();
     settle(true);
     await waitFor(() => expect(button).toBeEnabled());
   });
 
-  it("settles a finding from its row", async () => {
+  it("declines a finding from its row", async () => {
     const current: ThreadReview = { ...review, items: [finding("abort", "Abort pending exports", 1)] };
     const { api } = renderCard(current);
-    fireEvent.click(await screen.findByRole("button", { name: "Dismiss finding: Abort pending exports" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Decline finding: Abort pending exports" }));
     await waitFor(() => expect(api.updateThreadReview).toHaveBeenCalledWith({ id: "review", itemId: "abort", status: "dismissed" }));
   });
 
@@ -188,7 +230,7 @@ describe("review To-do card", () => {
       items: Array.from({ length: 6 }, (_, index) => finding(`f${index}`, `Finding ${index}`, 2)),
     };
     renderCard(current);
-    await screen.findByText("6 open");
+    await screen.findByText("0 of 6");
     expect(screen.getAllByRole("listitem")).toHaveLength(4);
     fireEvent.click(screen.getByRole("button", { name: "Show 2 more" }));
     expect(screen.getAllByRole("listitem")).toHaveLength(6);

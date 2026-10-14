@@ -181,7 +181,7 @@ export class ThreadReviewService {
           review.resolution = undefined;
         } else if (review.status === "open" && review.items.every((entry) => entry.status !== "open")) {
           review.status = "handled";
-          review.resolution = { note: "All findings addressed or dismissed.", actor: "system", at: now };
+          review.resolution = { note: "All findings addressed or declined.", actor: "system", at: now };
         }
       } else {
         review.status = request.status as typeof review.status;

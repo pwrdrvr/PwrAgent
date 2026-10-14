@@ -64,7 +64,7 @@ const descriptions = {
   record_review: "Track an external or manually written code review on this thread. Native and managed reviews are tracked automatically. Use a stable sourceKey. Findings remain on the operator's To-do list until addressed or dismissed. Do not use this for progress updates.",
   list_reviews: "List this thread's tracked reviews and findings, including stable ids, statuses, last update dates, and resolution notes/links. Defaults to open reviews. Read dismissed reviews with status all: do not address them unless the operator asks to reopen them.",
   update_review_item: "Mark a finding addressed after fixing it, dismissed with a reason, or open again. Document the resolution in note and optionally url. Settling the last open finding automatically marks the review handled and removes it from To-dos.",
-  update_review: "Dismiss, reopen, or document an entire review as handled. Dismissed reviews remain visible as Do not address. A review with open findings cannot be marked handled: settle each finding first. Use note and optionally url to document the final outcome.",
+  update_review: "Dismiss, reopen, or document an entire review as handled. Dismissed reviews remain visible as Did not address. A review with open findings cannot be marked handled: settle each finding first. Use note and optionally url to document the final outcome.",
 };
 
 export function buildPwrAgentThreadReviewToolDefinitions(

@@ -44,7 +44,7 @@ test("tracks an older review, retains dismissals, and clears To-dos after every 
     await app.window.getByRole("button", { name: /Review the Atlas export queue/ }).first().click();
     const transcript = app.window.getByRole("region", { name: "Transcript" });
     const card = transcript.getByRole("group", { name: "Code review" });
-    await expect(card.getByRole("button", { name: /^Dismiss finding:/ })).toHaveCount(2);
+    await expect(card.getByRole("button", { name: /^Decline finding:/ })).toHaveCount(2);
     await app.window.getByRole("region", { name: "To-dos for this thread" })
       .getByRole("button", { name: "Collapse to-dos", exact: true }).click();
     const readReviews = () => app.window.evaluate(async (identity) => {
@@ -56,19 +56,19 @@ test("tracks an older review, retains dismissals, and clears To-dos after every 
 
     await card.getByRole("button", { name: "Dismiss review", exact: true }).click();
     await expect.poll(async () => (await readReviews())[0]?.status).toBe("dismissed");
-    await expect(card.getByText("Do not address", { exact: true })).toHaveCount(3);
+    await expect(card.getByText("Did not address", { exact: true })).toHaveCount(3);
     await expect(card).toContainText("Cancel pending exports when the panel closes");
     await app.window.screenshot({ path: testInfo.outputPath("review-dismissed.png") });
     await card.getByRole("button", { name: "Reopen review", exact: true }).click();
     await card.getByRole("button", { name: "Mark addressed: Cancel pending exports when the panel closes", exact: true }).click();
-    await card.getByRole("button", { name: "Dismiss finding: Keep the selected output format", exact: true }).click();
+    await card.getByRole("button", { name: "Decline finding: Keep the selected output format", exact: true }).click();
     await expect.poll(async () => (await readReviews())[0]?.status).toBe("handled");
     const todos = await app.window.evaluate(async () => {
       const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
       return (await api.listThreadTodos!()).todos;
     });
     expect(todos.filter((todo) => todo.reviewId)).toEqual([]);
-    await expect(card).toContainText("All findings addressed or dismissed.");
+    await expect(card).toContainText("All findings addressed or declined.");
     await app.window.screenshot({ path: testInfo.outputPath("review-handled.png") });
 
     // A renderer reload reads the same artifact again; it must retain outcomes.

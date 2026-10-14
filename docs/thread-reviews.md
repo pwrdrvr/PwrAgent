@@ -22,7 +22,7 @@ An agent cannot mark a review handled while findings are still open. It can
 then document the whole outcome with a final note and link. Reopening a finding
 reopens the review. Whole-review dismissal overrides its findings without
 overwriting their individually recorded outcomes. The transcript labels it
-**Do not address**, and reopening restores the findings that were still open.
+**Did not address**, and reopening restores the findings that were still open.
 
 The shared dynamic-tool and MCP catalog exposes four thread-scoped tools:
 
@@ -56,16 +56,24 @@ is introduced in this change.
 ## Controls
 
 An open review's To-do card lists its findings, open ones first by priority,
-four rows before **Show N more**. Each open row has a checkbox, ticked by
-default, and **Do not address**; a settled row dims in place with its
-outcome's glyph and offers **Reopen**. The head's dismiss control dismisses
-the whole review, and the stack's **Undo** reopens it. **Fix N findings**
-sends one reply to the review's thread: "Fix these N findings from <review>",
-the ticked findings by priority and title, and one line pointing the agent
-at `list_reviews`. That result holds the details, the ids, and how to record
-each fix, so no per-turn note repeats it. Unticked findings stay open. The card stays open until
-the last finding is settled. A review with nothing left open offers
-**Mark handled** instead.
+four rows before **Show N more**. The head counts settled findings of the
+total, the way a card with steps does, but a finding row has no box: a tick
+there would read as "done" on one card and "include" on the other. A row
+shows only its priority and title at rest. Hovering it, or moving focus into
+it, raises its chips. An open row offers **Select**, **Fix now**, and
+**Decline**; a settled row reads **Addressed** or **Did not address** and
+offers **Reopen**. Declining is a final outcome the agent can see in
+`list_reviews`, not a hidden row. The head's dismiss control dismisses the
+whole review, and the stack's **Undo** reopens it.
+
+The footer button reads **Fix all** and sends every open finding. Selecting
+rows turns it into **Fix N selected**. **Fix now** sends its one finding.
+Each sends one reply to the review's thread: "Fix these N findings from
+<review>", the findings by priority and title, and one line pointing the
+agent at `list_reviews`. That result holds the details, the ids, and how to
+record each fix, so no per-turn note repeats it. The selection clears once
+the reply is sent. The card stays open until the last finding is settled. A
+review with nothing left open offers **Mark handled** instead.
 
 The transcript review keeps the record. A status row under the verdict gives
 the open count, or how the review was handled or dismissed. Each finding's
