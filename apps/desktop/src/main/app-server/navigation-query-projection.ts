@@ -396,6 +396,9 @@ function buildDirectoryRows(params: {
       ...(directory.gitStatus?.originRepository
         ? { repositoryKey: directory.gitStatus.originRepository }
         : {}),
+      ...(directory.gitStatus?.remoteRepositories?.length
+        ? { repositoryKeys: directory.gitStatus.remoteRepositories }
+        : {}),
       ...(directory.localAvailability
         ? { localAvailability: directory.localAvailability }
         : {}),

@@ -891,7 +891,7 @@ export class GitDirectoryService {
       branchInventory,
       recentCommitsOutput,
       workspaceInspection,
-      rawOriginUrl,
+      rawRemoteUrls,
     ] = await Promise.all([
       runGit(repoRoot, ["rev-parse", "--abbrev-ref", "HEAD"], gitEnv).catch(
         () => "",
@@ -907,21 +907,25 @@ export class GitDirectoryService {
         gitEnv,
       ).catch(() => ""),
       inspectGitWorkspace(cwd, { env: gitEnv, runGit }),
-      // Local config read, no network. `config --get` over `remote get-url`
-      // so a checkout with no origin exits non-zero quietly rather than
-      // printing to stderr.
-      runGit(repoRoot, ["config", "--get", "remote.origin.url"], gitEnv).catch(
+      // One local config read, no network. Fetch URLs also link a fork to
+      // its upstream; push URLs do not establish project identity.
+      runGit(repoRoot, ["config", "--get-regexp", "^remote\\..*\\.url$"], gitEnv).catch(
         () => "",
       ),
     ]);
     const currentBranch =
       rawCurrentBranch.trim() === "HEAD" ? "" : rawCurrentBranch.trim();
-    // The only part of a checkout that means the same thing on another
-    // machine; see `NavigationDirectoryGitStatus.originRepository`. Rides
-    // with the status because the status is already the per-directory Git
-    // read that is cached, persisted, and federated.
-    const originUrl = normalizeGitOriginUrl(rawOriginUrl);
-    const origin = originUrl ? { originRepository: originUrl } : {};
+    const remotes = rawRemoteUrls.split(/\r?\n/).flatMap((line) => {
+      const match = /^(remote\..*\.url)\s+(.+)$/.exec(line);
+      const repository = match && normalizeGitOriginUrl(match[2]!);
+      return repository ? [{ configKey: match![1]!, repository }] : [];
+    });
+    const originRepository = remotes.find((remote) => remote.configKey === "remote.origin.url")?.repository;
+    const remoteRepositories = [...new Set(remotes.map((remote) => remote.repository))].sort();
+    const origin = {
+      ...(originRepository ? { originRepository } : {}),
+      ...(remoteRepositories.length ? { remoteRepositories } : {}),
+    };
     const upstreamBranch = await runGit(
       repoRoot,
       [

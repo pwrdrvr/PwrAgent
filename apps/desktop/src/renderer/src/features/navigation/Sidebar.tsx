@@ -1858,6 +1858,9 @@ export function Sidebar(props: SidebarProps) {
         ...(directory.repositoryKey !== undefined
           ? { repositoryKey: directory.repositoryKey }
           : {}),
+        ...(directory.repositoryKeys !== undefined
+          ? { repositoryKeys: directory.repositoryKeys }
+          : {}),
       },
     });
   };

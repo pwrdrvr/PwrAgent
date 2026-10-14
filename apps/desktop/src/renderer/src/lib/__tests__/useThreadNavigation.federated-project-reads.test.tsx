@@ -98,6 +98,42 @@ function federatedPeers(initial: Record<string, NavigationDirectorySummary[]>) {
 }
 
 describe("project-aware machine menus: directory-index reads", () => {
+  it.each(["local", "peer"])("checks and opens a fork/upstream counterpart with %s remote metadata", async (side) => {
+    const fork = "github.com/fixture-fork/disktree";
+    const upstream = "github.com/fixture-upstream/disktree";
+    const project = {
+      kind: "directory" as const, label: "disktree", path: "/local/disktree", repositoryKey: fork,
+      ...(side === "local" ? { repositoryKeys: [fork, upstream] } : {}),
+    };
+    const ownerProject = {
+      ...projectOn("studio"), label: "disktree", path: "/studio/disktree",
+      repositoryKey: upstream,
+      ...(side === "peer" ? { repositoryKeys: [upstream, fork] } : {}),
+      gitStatus: {
+        originRepository: upstream,
+        ...(side === "peer" ? { remoteRepositories: [upstream, fork] } : {}),
+      },
+    };
+    const peers = federatedPeers({ studio: [workspace, ownerProject] });
+    const { result } = renderHook(() => useThreadNavigation(peers.desktopApi));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    peers.takeIndexReads();
+
+    for (let opening = 0; opening < 2; opening += 1) {
+      await act(async () => {
+        await expect(result.current.federatedTargetHasProject(remote("studio"), project)).resolves.toBe(true);
+      });
+    }
+    expect(peers.takeIndexReads()).toEqual(["studio"]);
+
+    await act(async () => {
+      await result.current.openFederatedProjectLaunchpad(remote("studio"), project, "Studio");
+    });
+    expect(result.current.selectedLaunchpad).toMatchObject({
+      directoryKey: ownerProject.key, directoryPath: ownerProject.path, federationTarget: remote("studio"),
+    });
+  });
+
   it("re-reads a peer's index only to prove absence, after a change, or to open", async () => {
     const peers = federatedPeers({
       studio: [workspace, projectOn("studio")],

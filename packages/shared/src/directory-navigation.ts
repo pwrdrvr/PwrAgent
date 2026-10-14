@@ -54,14 +54,21 @@ function normalizeComparablePath(value?: string): string | undefined {
 
 export function normalizeGitOriginUrl(value?: string): string | undefined {
   const trimmed = value?.trim();
-  if (!trimmed) {
+  if (!trimmed || /^(?:\/|\.{1,2}[\\/]|[a-z]:[\\/]|file:)/i.test(trimmed)) {
     return undefined;
   }
 
   const sshMatch = trimmed.match(/^git@([^:]+):(.+)$/i);
-  const candidate = sshMatch
+  let candidate = sshMatch
     ? `${sshMatch[1]}/${sshMatch[2]}`
     : trimmed.replace(/^[a-z]+:\/\//i, "");
+  if (!sshMatch && /^[a-z]+:\/\//i.test(trimmed)) {
+    const url = trimmed.match(/^[a-z]+:\/\/(?:[^/?#]*@)?([^/?#]+)(\/[^?#]*)/i);
+    if (!url) {
+      return undefined;
+    }
+    candidate = `${url[1]}${url[2]}`;
+  }
   const normalized = candidate
     .replace(/\.git$/i, "")
     .replace(/^ssh\//i, "")

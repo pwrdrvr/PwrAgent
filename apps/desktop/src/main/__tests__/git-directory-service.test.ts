@@ -1516,4 +1516,31 @@ describe("GitDirectoryService", () => {
     expect(status).toBeDefined();
     expect(status?.originRepository).toBeUndefined();
   });
+
+  it("reports normalized configured remotes for fork and upstream matching", async () => {
+    const repoDir = await createFixtureRepo();
+    cleanupPaths.push(repoDir);
+    runGit(repoDir, ["remote", "add", "origin", "git@github.com:Fixture-Fork/disktree.git"]);
+    runGit(repoDir, ["remote", "add", "upstream", "https://github.com/Fixture-Upstream/disktree.git"]);
+    runGit(repoDir, ["remote", "add", "mirror", "ssh://git@github.com/fixture-upstream/disktree.git"]);
+    runGit(repoDir, ["remote", "add", "local", "/tmp/fixture/disktree"]);
+    runGit(repoDir, ["config", "remote.origin.pushurl", "https://github.com/unrelated/disktree.git"]);
+    const service = new GitDirectoryService({ runGit: runGitAsync });
+
+    await expect(service.readDirectoryStatus({ path: repoDir })).resolves.toMatchObject({
+      originRepository: "github.com/fixture-fork/disktree",
+      remoteRepositories: ["github.com/fixture-fork/disktree", "github.com/fixture-upstream/disktree"],
+    });
+  });
+
+  it("reports a configured upstream even without an origin", async () => {
+    const repoDir = await createFixtureRepo();
+    cleanupPaths.push(repoDir);
+    runGit(repoDir, ["remote", "add", "upstream", "https://github.com/fixture-upstream/disktree.git"]);
+    const service = new GitDirectoryService({ runGit: runGitAsync });
+    const status = await service.readDirectoryStatus({ path: repoDir });
+
+    expect(status?.originRepository).toBeUndefined();
+    expect(status?.remoteRepositories).toEqual(["github.com/fixture-upstream/disktree"]);
+  });
 });
