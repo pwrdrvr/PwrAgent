@@ -734,6 +734,7 @@
     "rowsChanged": 0,
     "statements": 0
   },
+  "pr-auto-dispatch-rejected-submission": {"commits": 3, "note": "Rejected submission: 3 commits/~61.8 KB WAL (~1.48 MB/day at one rejection/hour); the attempt refund shares the existing completion commit; no automatic retry of the same failed fingerprint", "observedWalBytes": 61800, "rowsChanged": 9, "statements": 9},
   "pr-reference-identity-upgrade": {
     "commits": 1,
     "note": "100 detach references and 100 watches rekeyed in one upgrade transaction; runs once per profile, 0 MB/day recurring writes",

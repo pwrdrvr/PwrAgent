@@ -810,6 +810,7 @@ const NOTIFICATION_CONTEXT_RECONCILIATION_LIMIT = 512;
 const ACP_LISTINGS_ARE_ENRICHED = true;
 const backendRegistryLog = getMainLogger("pwragent:backend-registry");
 class AutomaticArchiveCancelledError extends Error {}
+class ThreadAlreadyActiveError extends Error {}
 const GROK_TITLE_HELPER_SESSION_POLICY = buildMinimalGrokHelperSessionPolicy({
   description: "Generate a concise title for a PwrAgent thread.",
   name: "pwragent-title-helper",
@@ -18117,11 +18118,19 @@ export class DesktopBackendRegistry {
     ) {
       return { status: "busy" };
     }
-    return await this.admitThreadAttachments(entry, (input, onAdmission) => this.threadTurnQueue.submitIfIdle({
-      ...entry,
-      input,
-      origin,
-    }, { onAdmission }));
+    try {
+      return await this.admitThreadAttachments(entry, (input, onAdmission) => this.threadTurnQueue.submitIfIdle({
+        ...entry,
+        input,
+        origin,
+      }, { onAdmission }));
+    } catch (error) {
+      // Turn preparation yields after the queue's idle check. If a backend
+      // notification claimed the thread meanwhile, preserve the busy result
+      // so automations wait without spending their attempt reservations.
+      if (error instanceof ThreadAlreadyActiveError) return { status: "busy" };
+      throw error;
+    }
   }
 
   async readQueuedTurn(
@@ -19068,7 +19077,7 @@ export class DesktopBackendRegistry {
         params.threadId,
       );
       if (this.threadHasActiveTurn(params.threadId, params.backend)) {
-        throw new Error("A turn is already active for this thread.");
+        throw new ThreadAlreadyActiveError("A turn is already active for this thread.");
       }
       this.reservedAcpStartThreadKeys.add(reservationKey);
       let pendingMessageContextId: string | undefined;
@@ -19173,7 +19182,7 @@ export class DesktopBackendRegistry {
     const reserveCodexStart = params.backend === "codex";
     if (reserveCodexStart) {
       if (this.threadHasActiveTurn(params.threadId)) {
-        throw new Error("A turn is already active for this thread.");
+        throw new ThreadAlreadyActiveError("A turn is already active for this thread.");
       }
       this.reservedCodexStartThreadIds.add(params.threadId);
     }
