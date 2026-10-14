@@ -224,6 +224,9 @@ export function installThreadTodoRuntime(params: {
         id: current.id,
         ...(input.title !== undefined ? { title: input.title } : {}),
         ...(input.detail !== undefined ? { detail: input.detail } : {}),
+        ...(input.items !== undefined ? { items: input.items } : {}),
+        ...(input.check ? { check: input.check } : {}),
+        ...(input.uncheck ? { uncheck: input.uncheck } : {}),
         ...(targetProject !== undefined ? { targetProject } : {}),
         ...(action ? { action } : {}),
       });

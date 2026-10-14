@@ -76,7 +76,10 @@ import {
   threadSummaryIdentityKey,
 } from "../../lib/federated-thread-events";
 import { ThreadTodoStack } from "../thread-todos/ThreadTodoStack";
-import type { ThreadTodosView } from "../thread-todos/thread-todos-view";
+import type {
+  ThreadTodoResolveOptions,
+  ThreadTodosView,
+} from "../thread-todos/thread-todos-view";
 import { useCelestialIcons } from "../../lib/useCelestialIcons";
 import { useModalDialog } from "../../lib/useModalDialog";
 import { CelestialWatermark } from "../../components/CelestialWatermark";
@@ -2537,9 +2540,16 @@ export function ThreadView(props: ThreadViewProps) {
     threadId: string;
     backend: AppServerBackendKind;
   }>();
-  const pendingReviewTodoRef = useRef<ThreadTodo | undefined>(undefined);
-  const startTodoReview = useEventCallback((todo: ThreadTodo) => {
-    pendingReviewTodoRef.current = todo;
+  // The card's answer about open steps rides along, so the resolve once the
+  // review starts sends the override only if the operator confirmed it.
+  const pendingReviewTodoRef = useRef<
+    { todo: ThreadTodo; options?: ThreadTodoResolveOptions } | undefined
+  >(undefined);
+  const startTodoReview = useEventCallback((
+    todo: ThreadTodo,
+    options?: ThreadTodoResolveOptions,
+  ) => {
+    pendingReviewTodoRef.current = { todo, options };
     setTodoReviewRequest((current) => ({
       id: (current?.id ?? 0) + 1,
       threadId: todo.threadId,
@@ -2547,16 +2557,19 @@ export function ThreadView(props: ThreadViewProps) {
     }));
   });
   const handleReviewStarted = useEventCallback(() => {
-    const todo = pendingReviewTodoRef.current;
+    const pending = pendingReviewTodoRef.current;
     pendingReviewTodoRef.current = undefined;
+    const todo = pending?.todo;
     if (
       todo
       && todo.threadId === selectedThread?.id
       && todo.backend === selectedThread?.source
     ) {
-      void props.threadTodos?.resolve(todo, "done").catch((error: unknown) => {
-        console.warn("Resolving the review to-do failed.", error);
-      });
+      void props.threadTodos?.resolve(todo, "done", undefined, pending?.options).catch(
+        (error: unknown) => {
+          console.warn("Resolving the review to-do failed.", error);
+        },
+      );
     }
   });
   // "Do it here" sends a handoff's prompt through the same reply path an
@@ -2564,12 +2577,15 @@ export function ThreadView(props: ThreadViewProps) {
   // The card resolves only once the composer has taken it.
   // Resolves false when the composer would not take it (disabled, or
   // another answer still sending), so the card can say so.
-  const doTodoHere = useEventCallback(async (todo: ThreadTodo): Promise<boolean> => {
+  const doTodoHere = useEventCallback(async (
+    todo: ThreadTodo,
+    options?: ThreadTodoResolveOptions,
+  ): Promise<boolean> => {
     if (todo.action?.type !== "start_thread") return false;
     try {
       const accepted = await handleAnswerAsyncQuestions(todo.action.prompt);
       if (accepted) {
-        await props.threadTodos?.resolve(todo, "done", "sent_here");
+        await props.threadTodos?.resolve(todo, "done", "sent_here", options);
       }
       return accepted;
     } catch (error) {

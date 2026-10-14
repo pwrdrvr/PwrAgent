@@ -1,4 +1,5 @@
 import type {
+  ResolveThreadTodoRequest,
   RunThreadTodoActionRequest,
   SubmitServerRequestRequest,
   ThreadTodo,
@@ -17,6 +18,9 @@ export type ThreadTodoInstance = {
 };
 
 export type ThreadTodoRunOptions = Omit<RunThreadTodoActionRequest, "id">;
+
+/** `allowOpenItems` completes a card done although steps are unchecked. */
+export type ThreadTodoResolveOptions = Pick<ResolveThreadTodoRequest, "allowOpenItems">;
 
 /** What a card's project menu reads and writes. */
 export type ThreadTodoProjectMenu = {
@@ -50,6 +54,13 @@ export type ThreadTodosView = {
     todo: ThreadTodo,
     status: ThreadTodoStatus,
     resolution?: ThreadTodoResolution,
+    options?: ThreadTodoResolveOptions,
+  ) => Promise<ThreadTodo | undefined>;
+  /** Ticks or unticks one step of the card's checklist. */
+  setItemChecked: (
+    todo: ThreadTodo,
+    itemId: string,
+    checked: boolean,
   ) => Promise<ThreadTodo | undefined>;
   /** Runs a merge or handoff; resolves to the card as it ended. */
   run: (

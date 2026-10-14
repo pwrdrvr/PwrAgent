@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ThreadTodo } from "@pwragent/shared";
+import {
+  THREAD_TODO_ITEM_TEXT_MAX_LENGTH,
+  THREAD_TODO_MAX_ITEMS,
+} from "@pwragent/shared";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import {
   buildPwrAgentThreadTodoToolDefinitions,
@@ -8,7 +12,9 @@ import {
   normalizeUpdateTodoArgs,
   type PwrAgentThreadTodoHandler,
 } from "../agent-tools/pwragent-thread-todo-agent-tools";
-import { ThreadTodoError } from "../thread-todos/thread-todo-service";
+import { ThreadTodoError, ThreadTodoService } from "../thread-todos/thread-todo-service";
+import { ThreadTodoStore } from "../thread-todos/thread-todo-store";
+import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 const CONTEXT: AgentToolCallContext = {
   backend: "codex",
@@ -145,6 +151,53 @@ describe("normalizeAddTodoArgs", () => {
   });
 });
 
+describe("checklist arguments", () => {
+  it("takes steps as trimmed strings within the limits", () => {
+    expect(normalizeAddTodoArgs({ title: "Ship", items: ["  Run the tests ", "Docs"] }))
+      .toEqual({ ok: true, value: { title: "Ship", items: ["Run the tests", "Docs"] } });
+    expect(normalizeAddTodoArgs({ title: "Ship", items: [] }))
+      .toEqual({ ok: true, value: { title: "Ship", items: [] } });
+    for (const items of [
+      "Run the tests",
+      ["Run the tests", ""],
+      [{ text: "Run the tests" }],
+      ["x".repeat(THREAD_TODO_ITEM_TEXT_MAX_LENGTH + 1)],
+      Array.from({ length: THREAD_TODO_MAX_ITEMS + 1 }, (_, index) => `Step ${index}`),
+    ]) {
+      expect(normalizeAddTodoArgs({ title: "Ship", items })).toMatchObject({ ok: false });
+    }
+  });
+
+  it("reads restated steps and step ids to tick on update", () => {
+    expect(normalizeUpdateTodoArgs({ key: "ship", items: ["A"], check: ["s-1", "s-1"], uncheck: [] }))
+      .toEqual({ ok: true, target: { key: "ship" }, value: { items: ["A"], check: ["s-1"] } });
+    expect(normalizeUpdateTodoArgs({ id: "todo-1", uncheck: ["s-2"] }))
+      .toEqual({ ok: true, target: { id: "todo-1" }, value: { uncheck: ["s-2"] } });
+    expect(normalizeUpdateTodoArgs({ id: "todo-1", check: "s-1" })).toMatchObject({ ok: false });
+    expect(normalizeUpdateTodoArgs({ id: "todo-1", check: [""] })).toMatchObject({ ok: false });
+    expect(normalizeUpdateTodoArgs({ id: "todo-1", check: [] })).toMatchObject({ ok: false });
+  });
+
+  it("describes steps, ticking and the override in the schemas", () => {
+    const add = tool("add_todo", undefined).inputSchema as {
+      properties: { items: { type: string; maxItems: number; description: string } };
+    };
+    expect(add.properties.items).toMatchObject({ type: "array", maxItems: THREAD_TODO_MAX_ITEMS });
+    expect(add.properties.items.description).toContain("keeps its id and checked state");
+    const update = tool("update_todo", undefined).inputSchema as {
+      properties: Record<string, unknown>;
+    };
+    expect(Object.keys(update.properties)).toEqual(
+      expect.arrayContaining(["items", "check", "uncheck"]),
+    );
+    const resolve = tool("resolve_todo", undefined).inputSchema as {
+      properties: Record<string, { type: string }>;
+    };
+    expect(resolve.properties.allowOpenItems).toMatchObject({ type: "boolean" });
+    expect(tool("resolve_todo", undefined).description).toContain("unchecked");
+  });
+});
+
 describe("normalizeUpdateTodoArgs", () => {
   it("reads only the fields given, as a patch", () => {
     expect(normalizeUpdateTodoArgs({
@@ -251,6 +304,90 @@ describe("thread to-do tool dispatch", () => {
     });
     const result = await tool("add_todo", handler).dispatch({ title: "One more" }, CONTEXT);
     expect(result).toEqual({ ok: false, code: "limit_reached", message: "Too many." });
+  });
+
+  it("passes the open-steps override through, and only as true", async () => {
+    const handler = createHandler();
+    await tool("resolve_todo", handler).dispatch({ id: "todo-1", allowOpenItems: true }, CONTEXT);
+    expect(handler.resolve).toHaveBeenLastCalledWith(
+      { backend: "codex", threadId: "thread-a" },
+      { id: "todo-1", status: "done", allowOpenItems: true },
+    );
+    await tool("resolve_todo", handler).dispatch({ id: "todo-1", allowOpenItems: false }, CONTEXT);
+    expect(handler.resolve).toHaveBeenLastCalledWith(
+      { backend: "codex", threadId: "thread-a" },
+      { id: "todo-1", status: "done" },
+    );
+    expect(await tool("resolve_todo", handler).dispatch({ id: "todo-1", allowOpenItems: "yes" }, CONTEXT))
+      .toMatchObject({ ok: false, code: "invalid_arguments" });
+  });
+
+  it("raises, ticks, re-raises and resolves a checklist card end to end", async () => {
+    const db = openInMemoryStateDb();
+    try {
+      let ids = 0;
+      const service = new ThreadTodoService({
+        store: new ThreadTodoStore(db),
+        newId: () => `id-${++ids}`,
+      });
+      const handler: PwrAgentThreadTodoHandler = {
+        add: async (context, input) => service.add({ ...context, input }),
+        update: async (context, target, input) =>
+          service.update({ id: service.findForThread({ ...context, ...target }).id, ...input }),
+        list: (context, status) => service.list({ ...context, status }),
+        resolve: (context, target) => service.resolveFromThread({ ...context, ...target }),
+      };
+      const raised = await tool("add_todo", handler).dispatch({
+        key: "ship",
+        title: "Ship the release",
+        items: ["Run the tests", "Update the docs", "Tag the release"],
+      }, CONTEXT);
+      expect(raised).toMatchObject({
+        ok: true,
+        data: {
+          created: true,
+          todo: {
+            items: [
+              { id: "id-2", text: "Run the tests", checked: false },
+              { id: "id-3", text: "Update the docs", checked: false },
+              { id: "id-4", text: "Tag the release", checked: false },
+            ],
+          },
+        },
+      });
+
+      await tool("update_todo", handler).dispatch({ key: "ship", check: ["id-2", "id-3"] }, CONTEXT);
+      const refused = await tool("resolve_todo", handler).dispatch({ key: "ship" }, CONTEXT);
+      expect(refused).toMatchObject({ ok: false, code: "open_items" });
+      expect(refused.ok ? "" : refused.message).toContain('"Tag the release" (id-4)');
+
+      // Restating the list keeps the ticks of unchanged steps.
+      const reraised = await tool("add_todo", handler).dispatch({
+        key: "ship",
+        title: "Ship the release",
+        items: ["Run the tests", "Update the docs", "Tag v2", "Announce it"],
+      }, CONTEXT);
+      expect(reraised).toMatchObject({
+        ok: true,
+        data: {
+          created: false,
+          todo: {
+            items: [
+              { id: "id-2", checked: true },
+              { id: "id-3", checked: true },
+              { id: "id-5", text: "Tag v2", checked: false },
+              { id: "id-6", text: "Announce it", checked: false },
+            ],
+          },
+        },
+      });
+
+      await tool("update_todo", handler).dispatch({ key: "ship", check: ["id-5", "id-6"] }, CONTEXT);
+      expect(await tool("resolve_todo", handler).dispatch({ key: "ship" }, CONTEXT))
+        .toMatchObject({ ok: true, data: { todo: { status: "done" } } });
+    } finally {
+      db.close();
+    }
   });
 
   it("fails cleanly before the runtime installs a handler", async () => {

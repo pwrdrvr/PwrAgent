@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState, type ComponentType } from "react";
+import { useEffect, useId, useRef, useState, type ComponentType } from "react";
 import type {
   ThreadTodo,
+  ThreadTodoItem,
   ThreadTodoKind,
   ThreadTodoMergeMethod,
   ThreadTodoMergeMethodPreferences,
@@ -9,6 +10,8 @@ import type {
 import {
   THREAD_TODO_MERGE_METHODS,
   resolveThreadTodoMergeMethod,
+  threadTodoItemProgress,
+  threadTodoOpenItems,
 } from "@pwragent/shared";
 import {
   CheckIcon,
@@ -29,6 +32,7 @@ import { TodoSplitButton, type TodoSplitMenuEntry } from "./TodoSplitButton";
 import type {
   ThreadTodoInstance,
   ThreadTodoProjectMenu,
+  ThreadTodoResolveOptions,
   ThreadTodoRunOptions,
 } from "./thread-todos-view";
 
@@ -54,18 +58,27 @@ const COPIED_MS = 1_500;
 export type ThreadTodoCardHandlers = {
   /** Merge or start-thread, in the main process. */
   onRun: (todo: ThreadTodo, options?: ThreadTodoRunOptions) => void;
-  /** Opens the composer's `/review` flow; the card resolves once it starts. */
-  onStartReview: (todo: ThreadTodo) => void;
+  /**
+   * Opens the composer's `/review` flow; the card resolves once it starts,
+   * with `options` as the card's open-steps answer.
+   */
+  onStartReview: (todo: ThreadTodo, options?: ThreadTodoResolveOptions) => void;
   onResolve: (
     todo: ThreadTodo,
     status: "done" | "dismissed",
     resolution?: ThreadTodoResolution,
+    options?: ThreadTodoResolveOptions,
   ) => void;
   /**
    * Sends a handoff's prompt to the card's own thread as a reply. Only the
    * thread on screen can take one, so other surfaces leave it out.
    */
-  onDoHere?: (todo: ThreadTodo) => void | Promise<unknown>;
+  onDoHere?: (
+    todo: ThreadTodo,
+    options?: ThreadTodoResolveOptions,
+  ) => void | Promise<unknown>;
+  /** Ticks or unticks one step. */
+  onSetItemChecked: (todo: ThreadTodo, item: ThreadTodoItem, checked: boolean) => void;
 };
 
 export type ThreadTodoCardProps = ThreadTodoCardHandlers & {
@@ -91,14 +104,34 @@ type MergeConfirmation = {
   remember: boolean;
 };
 
+/** Something that would complete the card while steps are still open. */
+type OpenStepsConfirmation = {
+  /** "Mark done anyway?" */
+  question: string;
+  /** The confirming button: what goes ahead. */
+  label: string;
+  proceed: () => void;
+};
+
 /**
  * One to-do. Its anatomy is the notice toast's: the title row carries the
  * kind glyph, age and the icon tools; the pager leads the footer and the
  * card's own action trails it, the way out last.
+ *
+ * A card with steps is done when every step is checked. Checking the last
+ * step never resolves the card by itself: Done, or the card's action, stays
+ * the operator's click. Anything that would complete the card while steps
+ * are open asks first ("2 steps still open"), and only a confirmed click
+ * sends `allowOpenItems`. Dismiss never asks.
  */
 export function ThreadTodoCard(props: ThreadTodoCardProps) {
   const { todo } = props;
   const [confirmingMerge, setConfirmingMerge] = useState<MergeConfirmation>();
+  const [confirmingSteps, setConfirmingSteps] = useState<OpenStepsConfirmation>();
+  const confirmCancelRef = useRef<HTMLButtonElement>(null);
+  const actionsRef = useRef<HTMLDivElement>(null);
+  const wasConfirmingRef = useRef(false);
+  const confirmTextId = useId();
   const [promptExpanded, setPromptExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -109,6 +142,61 @@ export function ThreadTodoCard(props: ThreadTodoCardProps) {
   const prompt = action?.type === "start_thread" ? action.prompt : undefined;
   const facts = buildFacts(todo);
   const runningLabel = action?.type === "merge_pull_request" ? "Merging…" : "Starting…";
+  const progress = threadTodoItemProgress(todo);
+  const openSteps = threadTodoOpenItems(todo).length;
+  const openStepsText = `${openSteps} ${openSteps === 1 ? "step" : "steps"} still open.`;
+  // Ticking the last step while the question is up answers it: the card
+  // goes back to its buttons instead of asking about "0 steps".
+  const stepsConfirmation = openSteps > 0 ? confirmingSteps : undefined;
+  useEffect(() => {
+    if (openSteps === 0) setConfirmingSteps(undefined);
+  }, [openSteps]);
+
+  // The click that asked unmounts with the buttons it sat among, so focus
+  // moves to Cancel; when the question goes away and took focus with it,
+  // focus returns to the card's buttons rather than the document.
+  useEffect(() => {
+    if (stepsConfirmation) {
+      wasConfirmingRef.current = true;
+      confirmCancelRef.current?.focus();
+    } else if (wasConfirmingRef.current) {
+      wasConfirmingRef.current = false;
+      if (!document.activeElement || document.activeElement === document.body) {
+        // Not a split button's menu chevron, which comes first in the DOM.
+        actionsRef.current
+          ?.querySelector<HTMLButtonElement>("button:not([aria-haspopup])")
+          ?.focus();
+      }
+    }
+  }, [stepsConfirmation]);
+
+  /**
+   * Runs `complete` now when every step is checked; otherwise asks first and
+   * runs it with `allowOpenItems` once the operator confirms.
+   */
+  const completeCard = (
+    confirmation: Omit<OpenStepsConfirmation, "proceed">,
+    complete: (allowOpenItems: boolean) => void,
+  ): void => {
+    if (openSteps === 0) {
+      complete(false);
+      return;
+    }
+    setConfirmingSteps({ ...confirmation, proceed: () => complete(true) });
+  };
+  const markDone = (resolution?: ThreadTodoResolution): void =>
+    completeCard(
+      { question: "Mark it done anyway?", label: "Done anyway" },
+      (allowOpenItems) => props.onResolve(todo, "done", resolution, resolveOptions(allowOpenItems)),
+    );
+  const runAction = (options?: ThreadTodoRunOptions): void =>
+    completeCard(
+      { question: "Start the thread anyway?", label: "Start thread" },
+      (allowOpenItems) => props.onRun(todo, {
+        ...options,
+        ...(allowOpenItems ? { allowOpenItems } : {}),
+      }),
+    );
 
   const copyPrompt = (): void => {
     if (!prompt) return;
@@ -122,6 +210,33 @@ export function ThreadTodoCard(props: ThreadTodoCardProps) {
   };
 
   const renderAction = () => {
+    if (stepsConfirmation) {
+      return (
+        <>
+          <button
+            ref={confirmCancelRef}
+            type="button"
+            className="button thread-todo-card__button thread-todo-card__button--quiet"
+            aria-describedby={confirmTextId}
+            onClick={() => setConfirmingSteps(undefined)}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="button button--primary thread-todo-card__button"
+            aria-describedby={confirmTextId}
+            onClick={() => {
+              const confirmation = stepsConfirmation;
+              setConfirmingSteps(undefined);
+              confirmation.proceed();
+            }}
+          >
+            {stepsConfirmation.label}
+          </button>
+        </>
+      );
+    }
     if (props.running) {
       return (
         <span className="thread-todo-card__button thread-todo-card__button--busy" role="status">
@@ -134,7 +249,7 @@ export function ThreadTodoCard(props: ThreadTodoCardProps) {
       <button
         type="button"
         className="button thread-todo-card__button thread-todo-card__button--quiet"
-        onClick={() => props.onResolve(todo, "done")}
+        onClick={() => markDone()}
       >
         Done
       </button>
@@ -145,7 +260,7 @@ export function ThreadTodoCard(props: ThreadTodoCardProps) {
           <button
             type="button"
             className="button thread-todo-card__button"
-            onClick={() => props.onResolve(todo, "done")}
+            onClick={() => markDone()}
           >
             <CheckIcon size={12} />
             Done
@@ -158,7 +273,10 @@ export function ThreadTodoCard(props: ThreadTodoCardProps) {
             <button
               type="button"
               className="button button--primary thread-todo-card__button"
-              onClick={() => props.onStartReview(todo)}
+              onClick={() => completeCard(
+                { question: "Start the review anyway?", label: "Start review" },
+                (allowOpenItems) => props.onStartReview(todo, resolveOptions(allowOpenItems)),
+              )}
             >
               <ReviewIcon size={12} />
               Start review
@@ -182,9 +300,12 @@ export function ThreadTodoCard(props: ThreadTodoCardProps) {
                 onClick={() => {
                   const confirmation = confirmingMerge;
                   setConfirmingMerge(undefined);
+                  // The confirmation text already says how many steps are
+                  // open, so this one click is the override too.
                   props.onRun(todo, {
                     mergeMethod: confirmation.method,
                     ...(confirmation.remember ? { rememberMergeMethod: true } : {}),
+                    ...(openSteps > 0 ? { allowOpenItems: true } : {}),
                   });
                 }}
               >
@@ -222,7 +343,10 @@ export function ThreadTodoCard(props: ThreadTodoCardProps) {
             kind: "item",
             id: "here",
             label: "Do it here",
-            onSelect: () => doHere(todo),
+            onSelect: () => completeCard(
+              { question: "Send it here anyway?", label: "Do it here" },
+              (allowOpenItems) => void doHere(todo, resolveOptions(allowOpenItems)),
+            ),
           });
         }
         const instances = props.instances ?? [];
@@ -235,7 +359,7 @@ export function ThreadTodoCard(props: ThreadTodoCardProps) {
               kind: "item",
               id: instance.instanceId,
               label: instance.label,
-              onSelect: () => props.onRun(todo, { startOnInstanceId: instance.instanceId }),
+              onSelect: () => runAction({ startOnInstanceId: instance.instanceId }),
             })),
           });
         }
@@ -246,14 +370,14 @@ export function ThreadTodoCard(props: ThreadTodoCardProps) {
           kind: "item",
           id: "elsewhere",
           label: "Handled elsewhere",
-          onSelect: () => props.onResolve(todo, "done", "handled_elsewhere"),
+          onSelect: () => markDone("handled_elsewhere"),
         });
         return (
           <TodoSplitButton
             label={todo.error ? "Retry" : "Start thread"}
             Icon={HandoffIcon}
             menuLabel="Handoff options"
-            onClick={() => props.onRun(todo)}
+            onClick={() => runAction()}
             entries={entries}
           />
         );
@@ -273,6 +397,11 @@ export function ThreadTodoCard(props: ThreadTodoCardProps) {
           {KindIcon ? <KindIcon size={13} /> : <span className="thread-todo-card__ring" />}
         </span>
         <h3 id={titleId} className="thread-todo-card__title">{todo.title}</h3>
+        {progress ? (
+          <span className="thread-todo-card__progress">
+            {progress.checked} of {progress.total}
+          </span>
+        ) : null}
         <span className="thread-todo-card__age">
           {formatTodoAge(todo.createdAt, props.now)}
         </span>
@@ -307,9 +436,17 @@ export function ThreadTodoCard(props: ThreadTodoCardProps) {
         disabled={props.running}
       />
 
-      {todo.detail || facts.length > 0 || prompt || todo.error ? (
+      {todo.detail || progress || facts.length > 0 || prompt || todo.error ? (
         <div className="thread-todo-card__body">
           {todo.detail ? <p className="thread-todo-card__detail">{todo.detail}</p> : null}
+          {todo.items && progress ? (
+            <ThreadTodoChecklist
+              todo={todo}
+              items={todo.items}
+              progress={progress}
+              onSetItemChecked={props.onSetItemChecked}
+            />
+          ) : null}
           {facts.length > 0 ? (
             <dl className="thread-todo-card__facts">
               {facts.map(([label, value]) => (
@@ -350,7 +487,13 @@ export function ThreadTodoCard(props: ThreadTodoCardProps) {
 
       {confirmingMerge && action?.type === "merge_pull_request" ? (
         <p className="thread-todo-card__confirm">
+          {openSteps > 0 ? `${openStepsText} ` : ""}
           {confirmMergeText(action.pullRequest, confirmingMerge.method, todo.targetProject?.label)}
+        </p>
+      ) : null}
+      {stepsConfirmation ? (
+        <p id={confirmTextId} className="thread-todo-card__confirm">
+          {openStepsText} {stepsConfirmation.question}
         </p>
       ) : null}
 
@@ -380,9 +523,56 @@ export function ThreadTodoCard(props: ThreadTodoCardProps) {
             </button>
           </nav>
         ) : null}
-        <div className="thread-todo-card__actions">{renderAction()}</div>
+        <div ref={actionsRef} className="thread-todo-card__actions">{renderAction()}</div>
       </div>
     </article>
+  );
+}
+
+/** The override only when the operator confirmed it; nothing otherwise. */
+function resolveOptions(allowOpenItems: boolean): ThreadTodoResolveOptions | undefined {
+  return allowOpenItems ? { allowOpenItems } : undefined;
+}
+
+/**
+ * The card's steps. Each is a real checkbox, drawn over: the hidden input
+ * keeps the native name, state and Space key, and the box beside it is what
+ * shows. A tick is not optimistic; the box follows the stored card.
+ */
+function ThreadTodoChecklist(props: {
+  todo: ThreadTodo;
+  items: ThreadTodoItem[];
+  progress: { checked: number; total: number };
+  onSetItemChecked: ThreadTodoCardHandlers["onSetItemChecked"];
+}) {
+  const { todo, onSetItemChecked } = props;
+  return (
+    <ul
+      className="thread-todo-checklist"
+      aria-label={`Steps, ${props.progress.checked} of ${props.progress.total} checked`}
+    >
+      {props.items.map((item) => (
+        <li key={item.id} className="thread-todo-checklist__item">
+          <label
+            className={`thread-todo-checklist__label${item.checked ? " is-checked" : ""}`}
+          >
+            <input
+              type="checkbox"
+              className="thread-todo-checklist__input"
+              checked={item.checked}
+              onChange={(event) => {
+                onSetItemChecked(todo, item, event.currentTarget.checked);
+              }}
+            />
+            <span
+              aria-hidden="true"
+              className={`thread-todo-checklist__box${item.checked ? " is-checked" : ""}`}
+            />
+            <span className="thread-todo-checklist__text">{item.text}</span>
+          </label>
+        </li>
+      ))}
+    </ul>
   );
 }
 
