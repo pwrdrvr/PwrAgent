@@ -915,10 +915,23 @@ export class GitDirectoryService {
     ]);
     const currentBranch =
       rawCurrentBranch.trim() === "HEAD" ? "" : rawCurrentBranch.trim();
+    const seenRemoteKeys = new Set<string>();
     const remotes = rawRemoteUrls.split(/\r?\n/).flatMap((line) => {
-      const match = /^(remote\..*\.url)\s+(.+)$/.exec(line);
-      const repository = match && normalizeGitOriginUrl(match[2]!);
-      return repository ? [{ configKey: match![1]!, repository }] : [];
+      const match = /^(remote\..*\.url)(?:\s+(.*))?$/.exec(line);
+      if (!match || seenRemoteKeys.has(match[1]!)) {
+        return [];
+      }
+      // Git fetches only the first URL of each remote. Later URL entries
+      // are push destinations, even when the first URL cannot be advertised.
+      seenRemoteKeys.add(match[1]!);
+      const remoteUrl = match[2]?.trim() ?? "";
+      // A local remote can support a handoff, but its path cannot identify
+      // a project on a different machine.
+      if (/^(?:[\\/]|\.{1,2}[\\/]|[a-z]:[\\/]|file:)/i.test(remoteUrl)) {
+        return [];
+      }
+      const repository = normalizeGitOriginUrl(remoteUrl);
+      return repository ? [{ configKey: match[1]!, repository }] : [];
     });
     const originRepository = remotes.find((remote) => remote.configKey === "remote.origin.url")?.repository;
     const remoteRepositories = [...new Set(remotes.map((remote) => remote.repository))].sort();

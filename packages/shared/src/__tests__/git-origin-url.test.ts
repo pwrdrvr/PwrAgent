@@ -11,8 +11,14 @@ describe("normalizeGitOriginUrl", () => {
     expect(normalizeGitOriginUrl(url)).toBe("github.com/fixture/project");
   });
 
-  it.each(["/tmp/fixture/project", "../project", "./project", "C:\\src\\project", "file:///tmp/project"])(
-    "does not use a machine-local remote as cross-machine identity: %s",
-    (url) => expect(normalizeGitOriginUrl(url)).toBeUndefined(),
+  it.each([
+    ["/tmp/Fixture/Project.git", "tmp/fixture/project"],
+    ["../Project.git", "../project"],
+    ["./Project.git", "./project"],
+    ["C:\\src\\Project.git", "c:\\src\\project"],
+    ["file:///tmp/Project.git", "tmp/project"],
+  ])(
+    "preserves the local remote identity used by Git handoffs: %s",
+    (url, identity) => expect(normalizeGitOriginUrl(url)).toBe(identity),
   );
 });

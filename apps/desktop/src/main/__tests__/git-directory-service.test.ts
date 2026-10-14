@@ -1543,4 +1543,36 @@ describe("GitDirectoryService", () => {
     expect(status?.originRepository).toBeUndefined();
     expect(status?.remoteRepositories).toEqual(["github.com/fixture-upstream/disktree"]);
   });
+
+  it("uses only the first fetch URL per remote, excluding additional push destinations", async () => {
+    const repoDir = await createFixtureRepo();
+    cleanupPaths.push(repoDir);
+    runGit(repoDir, ["remote", "add", "origin", "https://github.com/fixture-fork/disktree.git"]);
+    runGit(repoDir, ["config", "--add", "remote.origin.url", "https://github.com/shared-push/disktree.git"]);
+    runGit(repoDir, ["remote", "add", "upstream", "https://github.com/fixture-upstream/disktree.git"]);
+    runGit(repoDir, ["config", "--add", "remote.upstream.url", "https://github.com/shared-push/disktree.git"]);
+    const service = new GitDirectoryService({ runGit: runGitAsync });
+
+    await expect(service.readDirectoryStatus({ path: repoDir })).resolves.toMatchObject({
+      originRepository: "github.com/fixture-fork/disktree",
+      remoteRepositories: ["github.com/fixture-fork/disktree", "github.com/fixture-upstream/disktree"],
+    });
+  });
+
+  it.each([
+    "/tmp/fixture/disktree.git", "../fixture/disktree.git", "C:\\src\\disktree.git",
+    "file:///tmp/fixture/disktree.git", "\\\\fixture-server\\share\\disktree.git",
+    "",
+  ])("does not use a later push URL when the first fetch URL is machine-local or empty: %s", async (fetchUrl) => {
+    const repoDir = await createFixtureRepo();
+    cleanupPaths.push(repoDir);
+    runGit(repoDir, ["config", "remote.origin.url", fetchUrl]);
+    runGit(repoDir, ["config", "--add", "remote.origin.url", "https://github.com/shared-push/disktree.git"]);
+    const service = new GitDirectoryService({ runGit: runGitAsync });
+    const status = await service.readDirectoryStatus({ path: repoDir });
+
+    expect(status).toBeDefined();
+    expect(status?.originRepository).toBeUndefined();
+    expect(status?.remoteRepositories).toBeUndefined();
+  });
 });

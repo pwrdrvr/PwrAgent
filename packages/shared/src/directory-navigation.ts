@@ -54,7 +54,7 @@ function normalizeComparablePath(value?: string): string | undefined {
 
 export function normalizeGitOriginUrl(value?: string): string | undefined {
   const trimmed = value?.trim();
-  if (!trimmed || /^(?:\/|\.{1,2}[\\/]|[a-z]:[\\/]|file:)/i.test(trimmed)) {
+  if (!trimmed) {
     return undefined;
   }
 
@@ -62,7 +62,9 @@ export function normalizeGitOriginUrl(value?: string): string | undefined {
   let candidate = sshMatch
     ? `${sshMatch[1]}/${sshMatch[2]}`
     : trimmed.replace(/^[a-z]+:\/\//i, "");
-  if (!sshMatch && /^[a-z]+:\/\//i.test(trimmed)) {
+  // Local remotes remain valid identities for Git handoffs. Callers that
+  // advertise cross-machine projects must filter those paths themselves.
+  if (!sshMatch && /^[a-z]+:\/\//i.test(trimmed) && !/^file:/i.test(trimmed)) {
     const url = trimmed.match(/^[a-z]+:\/\/(?:[^/?#]*@)?([^/?#]+)(\/[^?#]*)/i);
     if (!url) {
       return undefined;
