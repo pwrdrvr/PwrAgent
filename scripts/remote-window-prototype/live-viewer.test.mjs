@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import { expect, test, vi } from "vitest";
+import { LiveWindowSession } from "./live-session.mjs";
 
 const source = readFileSync(new URL("./live-viewer.html", import.meta.url), "utf8").match(/<script>([\s\S]*?)<\/script>/)[1];
 function deferred() {
@@ -47,4 +48,70 @@ test("a delayed measurement save cannot replace a stopped viewer's stale-frame s
   const status = v.elements.status.textContent;
   saved.resolve({}); await pending;
   expect(v.elements.status.textContent).toBe(status);
+});
+test.each(["paused capture", "expired nonce"])("input sequence recovers after %s rejects a command", async reason => {
+  let time = 0, requestId, revision = 0;
+  const native = {
+    next: (_key, id) => { requestId = id; },
+    input: vi.fn(() => ({ revision: ++revision })),
+  };
+  const owner = new LiveWindowSession({ owner: "source", viewer: "viewer", source: native, control: true, now: () => time });
+  const opened = owner.open("viewer");
+  const rpc = vi.fn((method, params) => owner.handle("viewer", method, params));
+  const v = fixture(rpc);
+  v.context.opened = opened;
+  v.read("session = opened; active = true;");
+  async function present() {
+    const delivery = owner.pull("viewer", { ...opened, offset: 0 });
+    native.onFrame({ requestId, format: "h264", key: true, width: 800, height: 548, data: "eA==" });
+    const packet = await delivery;
+    owner.ack("viewer", { ...opened, seq: packet.seq });
+    v.context.packet = packet;
+    v.read("displayedSeq = packet.seq; nonce = packet.nonce;");
+  }
+  await present();
+  if (reason === "paused capture") native.available = false;
+  else time += 1201;
+  v.read(`pending.push({ command: { action: "text", text: "rejected" }, start: performance.now() });`);
+  await v.context.sendInputs();
+  expect(v.read("inputSeq")).toBe(0);
+  expect(v.read("metrics.acceptedInputs")).toHaveLength(0);
+  expect(v.read("metrics.errors")).toHaveLength(1);
+  expect(native.input).not.toHaveBeenCalled();
+
+  native.available = true;
+  await present();
+  v.read(`pending.push(...["accepted", "next"].map(text => ({ command: { action: "text", text }, start: performance.now() })));`);
+  await v.context.sendInputs();
+  expect(rpc.mock.calls.map(([, params]) => params.inputSeq)).toEqual([0, 0, 1]);
+  expect(native.input.mock.calls.map(([command]) => command.text)).toEqual(["accepted", "next"]);
+  expect(v.read("inputSeq")).toBe(2);
+  expect(v.read("metrics.acceptedInputs")).toEqual([
+    { revision: 1, inputSeq: 0, action: "text" },
+    { revision: 2, inputSeq: 1, action: "text" },
+  ]);
+  owner.disconnect();
+});
+test("a late input acceptance cannot advance a newer session's sequence or release its send lock", async () => {
+  const oldReply = deferred(), newReply = deferred();
+  let inputs = 0;
+  const v = fixture(method => method === "input" ? (inputs++ === 0 ? oldReply.promise : newReply.promise) : Promise.resolve({}));
+  const setup = () => v.read(`
+    session = { sessionId: "fixture", scene: "owned-fixture", epoch: generation, control: true };
+    active = true; sending = false; inputSeq = 0; displayedSeq = 0; nonce = "fixture";
+    pending.push({ command: { action: "text", text: "fixture" }, start: performance.now() });
+  `);
+  setup();
+  const oldSend = v.context.sendInputs();
+  await v.context.stop();
+  setup();
+  const newSend = v.context.sendInputs();
+  oldReply.resolve({ revision: 1 }); await oldSend;
+  expect(v.read("inputSeq")).toBe(0);
+  expect(v.read("sending")).toBe(true);
+  expect(v.read("metrics.acceptedInputs")).toHaveLength(0);
+  newReply.resolve({ revision: 2 }); await newSend;
+  expect(v.read("inputSeq")).toBe(1);
+  expect(v.read("sending")).toBe(false);
+  expect(v.read("metrics.acceptedInputs")).toEqual([{ revision: 2, inputSeq: 0, action: "text" }]);
 });

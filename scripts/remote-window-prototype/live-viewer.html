@@ -163,9 +163,11 @@ async function sendInputs() {
   try {
     while (pending.length && g === generation) {
       const item = pending.shift();
-      const accepted = await rpc("input", { ...address(), displayedSeq, nonce, inputSeq: inputSeq++, command: item.command });
+      const accepted = await rpc("input", { ...address(), displayedSeq, nonce, inputSeq, command: item.command });
       if (g !== generation) return;
-      boundedPush(metrics.acceptedInputs, { revision: accepted.revision, inputSeq: inputSeq - 1, action: item.command.action });
+      // Pause/freshness rejections do not consume a source sequence. Never replay the dropped command.
+      boundedPush(metrics.acceptedInputs, { revision: accepted.revision, inputSeq, action: item.command.action });
+      inputSeq++;
       inputTimes.set(accepted.revision, item.start);
       while (inputTimes.size > 64) inputTimes.delete(inputTimes.keys().next().value);
     }
