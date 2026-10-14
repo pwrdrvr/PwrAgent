@@ -123,7 +123,7 @@ jobs:
       - name: Verify published checksums before sharing installers
         if: steps.plan.outputs.native == 'true'
         run: node scripts/package-manager-release-plan.mjs verify distribution
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: package-manager-inputs
           compression-level: 0
@@ -136,7 +136,7 @@ jobs:
             distribution/previous/Casks
             distribution/previous/manifests
           if-no-files-found: error
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: fromJSON(steps.plan.outputs.homebrew).include[0] != null
         with:
           name: package-manager-macos-assets
@@ -145,7 +145,7 @@ jobs:
             distribution/assets/*.dmg
             distribution/assets/previous/*.dmg
           if-no-files-found: error
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: steps.plan.outputs.winget == 'true'
         with:
           name: package-manager-windows-assets
