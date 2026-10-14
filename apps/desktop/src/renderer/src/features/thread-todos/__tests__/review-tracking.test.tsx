@@ -100,7 +100,7 @@ const finding = (id: string, title: string, priority: number, status: "open" | "
 
 function renderCard(current: ThreadReview, onDoHere = vi.fn()) {
   const api = installApi(current, current);
-  const handlers = { onRun: vi.fn(), onStartReview: vi.fn(), onResolve: vi.fn(), onDoHere };
+  const handlers = { onRun: vi.fn(), onStartReview: vi.fn(), onResolve: vi.fn(), onDoHere, onSetItemChecked: vi.fn() };
   const todo: ThreadTodo = threadReviewTodo(current);
   render(<ThreadTodoCard todo={todo} running={false} {...handlers} />);
   return { api, handlers, todo };
@@ -129,13 +129,13 @@ describe("review To-do card", () => {
     expect(screen.getByRole("button", { name: "Fix 2 findings" })).toBeEnabled();
     fireEvent.click(screen.getByRole("checkbox", { name: "Fix finding: Keep the selected output format" }));
     fireEvent.click(screen.getByRole("button", { name: "Fix 1 finding" }));
-    expect(handlers.onDoHere).toHaveBeenCalledWith(todo, [
+    expect(handlers.onDoHere).toHaveBeenCalledWith(todo, { prompt: [
       "Fix this finding from Code review:",
       "",
       "1. [P1] Abort pending exports",
       "",
       "Use PwrAgent's `list_reviews` tool for their details and how to record each fix.",
-    ].join("\n"));
+    ].join("\n") });
     await waitFor(() => expect(screen.getByRole("button", { name: "Fix 1 finding" })).toBeEnabled());
 
     fireEvent.click(screen.getByRole("checkbox", { name: "Fix finding: Abort pending exports" }));
@@ -143,9 +143,9 @@ describe("review To-do card", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: "Fix finding: Abort pending exports" }));
     fireEvent.click(screen.getByRole("checkbox", { name: "Fix finding: Keep the selected output format" }));
     fireEvent.click(screen.getByRole("button", { name: "Fix 2 findings" }));
-    expect(handlers.onDoHere).toHaveBeenLastCalledWith(todo, expect.stringMatching(
+    expect(handlers.onDoHere).toHaveBeenLastCalledWith(todo, { prompt: expect.stringMatching(
       /^Fix these 2 findings from Code review:\n\n1\. \[P1\] Abort pending exports\n2\. \[P2\] Keep the selected output format\n\n/,
-    ));
+    ) });
     await waitFor(() => expect(screen.getByRole("button", { name: "Fix 2 findings" })).toBeEnabled());
 
     fireEvent.click(screen.getByRole("button", { name: "Dismiss review" }));

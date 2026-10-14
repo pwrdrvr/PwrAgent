@@ -54,6 +54,7 @@ function createView(open: ThreadTodo[], overrides: Partial<ThreadTodosView> = {}
     threadTitle: (entry) => (entry.threadId === "thread-a" ? "Alpha" : "Beta"),
     resolve: vi.fn(async (entry, status) => ({ ...entry, status })),
     run: vi.fn(async (entry) => entry),
+    setItemChecked: vi.fn(async (entry) => entry),
     openThread: vi.fn(),
     openStartedThread: vi.fn(),
     waits: [],
@@ -351,7 +352,7 @@ describe("ThreadTodoStack", () => {
     await act(async () => {
       fireEvent.click(screen.getByRole("menuitem", { name: "Handled elsewhere" }));
     });
-    expect(view.resolve).toHaveBeenCalledWith(handoff, "done", "handled_elsewhere");
+    expect(view.resolve).toHaveBeenCalledWith(handoff, "done", "handled_elsewhere", undefined);
   });
 
   it("shows a handoff's model and permissions", () => {
@@ -425,7 +426,7 @@ describe("ThreadTodoStack", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Start review" }));
-    expect(onStartReview).toHaveBeenCalledWith(review);
+    expect(onStartReview).toHaveBeenCalledWith(review, undefined);
     expect(view.run).not.toHaveBeenCalled();
   });
 
@@ -463,6 +464,215 @@ describe("ThreadTodoStack", () => {
     );
     expect(screen.getByRole("alert").textContent).toBe("backend unavailable");
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+  });
+});
+
+describe("thread to-do checklists", () => {
+  const steps = (checked: boolean[]): NonNullable<ThreadTodo["items"]> =>
+    ["Run the tests", "Update the docs", "Attach screenshots", "Tag the release"]
+      .slice(0, checked.length)
+      .map((text, index) => ({ id: `s${index + 1}`, text, checked: checked[index] ?? false }));
+
+  it("lists the steps as labelled checkboxes with the card's progress", () => {
+    const card = todo({ id: "k1", title: "Ship it", items: steps([true, false, false]) });
+    const view = createView([card]);
+    render(
+      <ThreadTodoStack threadKey="codex:checklist-1" todos={[card]} view={view} onStartReview={vi.fn()} />,
+    );
+
+    expect(screen.getByText("1 of 3")).toBeTruthy();
+    const list = screen.getByRole("list", { name: "Steps, 1 of 3 checked" });
+    const boxes = within(list).getAllByRole("checkbox") as HTMLInputElement[];
+    expect(boxes.map((box) => box.checked)).toEqual([true, false, false]);
+    const docs = within(list).getByRole("checkbox", { name: "Update the docs" });
+
+    fireEvent.click(docs);
+    expect(view.setItemChecked).toHaveBeenCalledWith(card, "s2", true);
+    // Not optimistic: the box follows the stored card.
+    expect((docs as HTMLInputElement).checked).toBe(false);
+    fireEvent.click(within(list).getByRole("checkbox", { name: "Run the tests" }));
+    expect(view.setItemChecked).toHaveBeenLastCalledWith(card, "s1", false);
+  });
+
+  it("asks before marking a card with open steps done, and sends the override only then", async () => {
+    const card = todo({ id: "k2", title: "Ship it", items: steps([true, false, false]) });
+    const view = createView([card]);
+    render(
+      <ThreadTodoStack threadKey="codex:checklist-2" todos={[card]} view={view} onStartReview={vi.fn()} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    expect(view.resolve).not.toHaveBeenCalled();
+    expect(screen.getByText("2 steps still open. Mark it done anyway?")).toBeTruthy();
+    const cancel = screen.getByRole("button", { name: "Cancel" });
+    expect(document.activeElement).toBe(cancel);
+    expect(cancel.getAttribute("aria-describedby")).toBeTruthy();
+    fireEvent.click(cancel);
+    expect(screen.queryByText(/still open/)).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Done anyway" }));
+    });
+    expect(view.resolve).toHaveBeenCalledWith(card, "done", undefined, { allowOpenItems: true });
+  });
+
+  it("marks a card whose steps are all checked done without asking", async () => {
+    const card = todo({ id: "k3", items: steps([true, true]) });
+    const view = createView([card]);
+    render(
+      <ThreadTodoStack threadKey="codex:checklist-3" todos={[card]} view={view} onStartReview={vi.fn()} />,
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    });
+    expect(view.resolve).toHaveBeenCalledWith(card, "done", undefined, undefined);
+  });
+
+  it("dismisses a card with open steps without asking", async () => {
+    const card = todo({ id: "k4", title: "Ship it", items: steps([false]) });
+    const view = createView([card]);
+    render(
+      <ThreadTodoStack threadKey="codex:checklist-4" todos={[card]} view={view} onStartReview={vi.fn()} />,
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Dismiss to-do: Ship it" }));
+    });
+    expect(view.resolve).toHaveBeenCalledWith(card, "dismissed", undefined, undefined);
+  });
+
+  it("asks before an action that would complete the card", async () => {
+    const review = todo({
+      id: "k5",
+      kind: "review",
+      action: { type: "start_review" },
+      items: steps([false]),
+    });
+    const onStartReview = vi.fn();
+    const view = createView([review]);
+    render(
+      <ThreadTodoStack threadKey="codex:checklist-5" todos={[review]} view={view} onStartReview={onStartReview} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+    expect(onStartReview).not.toHaveBeenCalled();
+    expect(screen.getByText("1 step still open. Start the review anyway?")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+    expect(onStartReview).toHaveBeenCalledWith(review, { allowOpenItems: true });
+    cleanup();
+
+    const handoff = todo({
+      id: "k6",
+      kind: "handoff",
+      action: { type: "start_thread", prompt: "Carry on" },
+      items: steps([false, false]),
+    });
+    const handoffView = createView([handoff]);
+    render(
+      <ThreadTodoStack threadKey="codex:checklist-6" todos={[handoff]} view={handoffView} onStartReview={vi.fn()} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
+    expect(handoffView.run).not.toHaveBeenCalled();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
+    });
+    expect(handoffView.run).toHaveBeenCalledWith(handoff, { allowOpenItems: true });
+  });
+
+  it("drops the question once the last open step is checked", () => {
+    const open = todo({ id: "k10", items: steps([true, false]) });
+    const view = createView([open]);
+    const { rerender } = render(
+      <ThreadTodoStack threadKey="codex:checklist-10" todos={[open]} view={view} onStartReview={vi.fn()} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    expect(screen.getByText("1 step still open. Mark it done anyway?")).toBeTruthy();
+
+    const ticked = { ...open, items: steps([true, true]) };
+    rerender(
+      <ThreadTodoStack threadKey="codex:checklist-10" todos={[ticked]} view={view} onStartReview={vi.fn()} />,
+    );
+    expect(screen.queryByText(/still open/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Done anyway" })).toBeNull();
+    // Reopening a step later does not bring the old question back.
+    rerender(
+      <ThreadTodoStack threadKey="codex:checklist-10" todos={[open]} view={view} onStartReview={vi.fn()} />,
+    );
+    expect(screen.queryByText(/still open/)).toBeNull();
+  });
+
+  it("returns focus to the card's buttons when the question is cancelled", () => {
+    // A handoff's buttons are a split button, not the question's plain
+    // buttons, so Cancel's node goes away with the question.
+    const card = todo({
+      id: "k11",
+      kind: "handoff",
+      action: { type: "start_thread", prompt: "Carry on" },
+      items: steps([false]),
+    });
+    render(
+      <ThreadTodoStack threadKey="codex:checklist-11" todos={[card]} view={createView([card])} onStartReview={vi.fn()} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
+    const cancel = screen.getByRole("button", { name: "Cancel" });
+    expect(document.activeElement).toBe(cancel);
+    fireEvent.click(cancel);
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Start thread" }));
+  });
+
+  it("names the open steps in the merge confirmation, which is the override", async () => {
+    const merge = todo({
+      id: "k7",
+      kind: "merge",
+      action: { type: "merge_pull_request", pullRequest: "42" },
+      items: steps([true, false]),
+    });
+    const view = createView([merge]);
+    render(
+      <ThreadTodoStack threadKey="codex:checklist-7" todos={[merge]} view={view} onStartReview={vi.fn()} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Squash merge" }));
+    expect(screen.getByText(/^1 step still open\. Squash merge #42\?/)).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Squash merge" }));
+    });
+    expect(view.run).toHaveBeenCalledWith(merge, { mergeMethod: "squash", allowOpenItems: true });
+  });
+
+  it("keeps a lone collapsed card's progress on its chip", () => {
+    const card = todo({ id: "k8", items: steps([true, true, false, false]) });
+    render(
+      <ThreadTodoStack threadKey="codex:checklist-8" todos={[card]} view={createView([card])} onStartReview={vi.fn()} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Collapse to-dos" }));
+    const chip = screen.getByRole("button", { name: "Show to-dos: 1 open, 2 of 4 steps checked" });
+    expect(chip.textContent).toContain("2 of 4");
+  });
+
+  it("shows progress on another thread's collapsed row", () => {
+    const elsewhere = todo({
+      id: "k9",
+      threadId: "thread-b",
+      title: "Ship it",
+      items: steps([true, false, false, false]),
+    });
+    render(
+      <ThreadTodosPanel
+        view={createView([elsewhere])}
+        threadKey="codex:thread-a"
+        projectKey={AGENT.key}
+        onStartReview={vi.fn()}
+      />,
+    );
+    // The panel remembers its lens across mounts: put back the one it had.
+    const before = screen.getAllByRole("tab")
+      .find((tab) => tab.getAttribute("aria-selected") === "true");
+    fireEvent.click(screen.getByRole("tab", { name: /All/ }));
+    const row = screen.getByRole("button", { name: "Open thread: Ship it, in Beta, 1 of 4 steps checked" });
+    expect(row.textContent).toContain("1 of 4");
+    if (before) fireEvent.click(before);
   });
 });
 

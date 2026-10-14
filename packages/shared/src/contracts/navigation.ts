@@ -1932,6 +1932,13 @@ export type NavigationQuery =
       kind: "exact";
       identities: NavigationIdentity[];
       includeAncestry?: boolean;
+      /**
+       * Viewer inventory only, and never sent to a peer: include each peer
+       * identity's row as held by this machine's peer summary cache, which
+       * reads owners in the background and keeps an offline owner's last
+       * rows. The read never waits on a peer.
+       */
+      resolveFromOwners?: true;
     }
   | {
       kind: "search";

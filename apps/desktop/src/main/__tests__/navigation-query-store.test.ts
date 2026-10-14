@@ -455,6 +455,22 @@ describe("NavigationQueryStore", () => {
     })).resolves.toMatchObject({ collectionSize: 0 });
   });
 
+  it("refuses owner resolution outside this machine's viewer inventory", async () => {
+    const store = new NavigationQueryStore();
+    const loadIndex = vi.fn(async () => snapshot([thread("1")]));
+    const query = { kind: "exact" as const, identities: [{ backend: "codex" as const, threadId: "1" }], resolveFromOwners: true as const };
+    for (const patch of [{}, { inventory: "owner" as const },
+      { inventory: "viewer" as const, federationTarget: { scope: "remote" as const, instanceId: "peer" } }]) {
+      await expect(store.readPage({
+        loadIndex, request: request({ query, ...patch }), scopeKey: "renderer-viewer",
+      })).rejects.toMatchObject({ code: "navigation_invalid_request" });
+    }
+    expect(loadIndex).not.toHaveBeenCalled();
+    await expect(store.readPage({
+      loadIndex, request: request({ query, inventory: "viewer" }), scopeKey: "renderer-viewer",
+    })).resolves.toMatchObject({ complete: true });
+  });
+
   it("fits a continuation in the same byte budget as its rows", async () => {
     const load = (titleLength: number) => snapshot([
       thread("2", "x".repeat(titleLength)),

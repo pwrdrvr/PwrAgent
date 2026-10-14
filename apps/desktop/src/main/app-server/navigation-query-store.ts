@@ -191,6 +191,15 @@ function validateRequest(request: NavigationQueryRequest): void {
       "An exact navigation query accepts at most 100 identities.",
     );
   }
+  // Owner resolution reads this machine's peers. A peer's request is owner
+  // inventory and must never make this instance read on its behalf.
+  if (request.query.kind === "exact" && request.query.resolveFromOwners
+    && (request.inventory !== "viewer" || request.federationTarget?.scope === "remote")) {
+    throw new NavigationQueryError(
+      "navigation_invalid_request",
+      "Owner-resolved navigation is available only to this machine's viewer inventory.",
+    );
+  }
   if (request.query.kind === "group-members" && (!Array.isArray(request.query.roots)
     || !request.query.roots.length || request.query.roots.length > 100)) {
     throw new NavigationQueryError("navigation_invalid_request", "Group discovery accepts one to 100 root identities.");

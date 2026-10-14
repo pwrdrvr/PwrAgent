@@ -1966,3 +1966,236 @@ it("retains pins through repeated incomplete coverage and publishes recovery onc
     expect(problem).toHaveBeenCalledTimes(1);
   } finally { cache.dispose(); }
 });
+
+describe("watched peer threads", () => {
+  const watchedRef = (instanceId: string, threadId: string) =>
+    buildFederatedThreadRef({ backend: "codex", instanceId, threadId });
+
+  it("serves a watched thread once its owner read lands, without waiting on the peer", async () => {
+    vi.useFakeTimers();
+    const draft = stampedThread({ instanceId: "peer-a", threadId: "t1", title: "Draft" });
+    const fetchPinnedSnapshot = vi.fn(async (_target: FederationRemoteTarget, _keys: string[]) => snapshotOf([draft]));
+    const onPinnedSummariesRefreshed = vi.fn();
+    const onPeerInterestChanged = vi.fn();
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [peer("peer-a")], fetchSnapshot: vi.fn(), fetchPinnedSnapshot,
+      fetchArchivedThreads: noArchivedThreads, peerStatus: () => ({ status: "connected" }),
+      onPinnedSummariesRefreshed, onPeerInterestChanged, hasNavigationSubscription: () => true,
+    });
+    try {
+      expect(cache.resolveWatchedThreads([watchedRef("peer-a", "t1")])).toEqual([]);
+      expect(fetchPinnedSnapshot).toHaveBeenCalledTimes(1);
+      expect(fetchPinnedSnapshot.mock.calls[0]![1]).toEqual(["codex:t1"]);
+      expect(onPeerInterestChanged).toHaveBeenLastCalledWith([
+        expect.objectContaining({ instanceId: "peer-a" }),
+      ]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(onPinnedSummariesRefreshed).toHaveBeenCalledWith("peer-a");
+      expect(cache.resolveWatchedThreads([watchedRef("peer-a", "t1")])).toEqual([draft]);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(fetchPinnedSnapshot).toHaveBeenCalledTimes(1);
+    } finally {
+      cache.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps an offline owner's last rows, dimmed and without a live turn", async () => {
+    vi.useFakeTimers();
+    const draft = { ...stampedThread({ instanceId: "peer-a", threadId: "t1", title: "Draft" }), threadStatus: "active" } as NavigationThreadSummary;
+    const fetchPinnedSnapshot = vi.fn(async () => snapshotOf([draft]));
+    let connected = true;
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => connected ? [peer("peer-a")] : [], fetchSnapshot: vi.fn(), fetchPinnedSnapshot,
+      fetchArchivedThreads: noArchivedThreads,
+      peerStatus: () => ({ status: connected ? "connected" : "disconnected", label: "Studio", capabilities: ["thread_navigation"] }),
+      hasNavigationSubscription: () => connected,
+    });
+    try {
+      cache.resolveWatchedThreads([watchedRef("peer-a", "t1")]);
+      await vi.advanceTimersByTimeAsync(0);
+      connected = false;
+      // The runtime invalidates on every connection transition.
+      cache.invalidate("peer-a");
+      await vi.advanceTimersByTimeAsync(0);
+      const [held] = cache.resolveWatchedThreads([watchedRef("peer-a", "t1")]);
+      expect(held).toMatchObject({ id: "t1", title: "Draft",
+        federation: { peerStatus: "disconnected", instanceLabel: "Studio", capabilities: ["thread_navigation"] } });
+      expect(held!.threadStatus).toBeUndefined();
+      expect(fetchPinnedSnapshot).toHaveBeenCalledTimes(1);
+    } finally {
+      cache.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops serving a revoked owner's watched rows", async () => {
+    vi.useFakeTimers();
+    const draft = stampedThread({ instanceId: "peer-a", threadId: "t1", title: "Draft" });
+    let connected = true;
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => connected ? [peer("peer-a")] : [], fetchSnapshot: vi.fn(),
+      fetchPinnedSnapshot: vi.fn(async () => snapshotOf([draft])),
+      fetchArchivedThreads: noArchivedThreads,
+      peerStatus: () => ({ status: connected ? "connected" : "disconnected" }),
+      hasNavigationSubscription: () => connected,
+    });
+    try {
+      cache.resolveWatchedThreads([watchedRef("peer-a", "t1")]);
+      await vi.advanceTimersByTimeAsync(0);
+      connected = false;
+      cache.forgetWatchedThreads("peer-a");
+      cache.invalidate("peer-a");
+      expect(cache.resolveWatchedThreads([watchedRef("peer-a", "t1")])).toEqual([]);
+    } finally {
+      cache.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("answers an owner's identity only with that owner's row", async () => {
+    vi.useFakeTimers();
+    const own = stampedThread({ instanceId: "peer-a", threadId: "t1", title: "Own" });
+    const relayed = stampedThread({ instanceId: "peer-c", threadId: "t1", title: "Relayed" });
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [peer("peer-a")], fetchSnapshot: vi.fn(),
+      fetchPinnedSnapshot: vi.fn(async () => snapshotOf([own, relayed])),
+      fetchArchivedThreads: noArchivedThreads, peerStatus: () => ({ status: "connected" }),
+      hasNavigationSubscription: () => true,
+    });
+    try {
+      cache.resolveWatchedThreads([watchedRef("peer-a", "t1")]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(cache.resolveWatchedThreads([watchedRef("peer-a", "t1")])).toEqual([own]);
+    } finally {
+      cache.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("omits an offline owner's thread it has never observed", () => {
+    const fetchPinnedSnapshot = vi.fn(async () => snapshotOf([]));
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [], fetchSnapshot: vi.fn(), fetchPinnedSnapshot,
+      fetchArchivedThreads: noArchivedThreads, peerStatus: () => ({ status: "disconnected" }),
+    });
+    try {
+      expect(cache.resolveWatchedThreads([watchedRef("peer-a", "t1")])).toEqual([]);
+      expect(fetchPinnedSnapshot).not.toHaveBeenCalled();
+    } finally {
+      cache.dispose();
+    }
+  });
+
+  it("dims a connected owner's rows after its refresh fails", async () => {
+    vi.useFakeTimers();
+    const draft = stampedThread({ instanceId: "peer-a", threadId: "t1", title: "Draft" });
+    const fetchPinnedSnapshot = vi.fn()
+      .mockResolvedValueOnce(snapshotOf([draft]))
+      .mockRejectedValue(new Error("owner timed out"));
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [peer("peer-a")], fetchSnapshot: vi.fn(), fetchPinnedSnapshot,
+      fetchArchivedThreads: noArchivedThreads, peerStatus: () => ({ status: "connected" }),
+      hasNavigationSubscription: () => true,
+    });
+    try {
+      cache.resolveWatchedThreads([watchedRef("peer-a", "t1")]);
+      await vi.advanceTimersByTimeAsync(0);
+      cache.invalidate("peer-a");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(cache.resolveWatchedThreads([watchedRef("peer-a", "t1")])).toEqual([
+        expect.objectContaining({ id: "t1", federation: expect.objectContaining({ peerStatus: "degraded" }) }),
+      ]);
+    } finally {
+      cache.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("walks a watched thread's same-owner parent into the owner read", async () => {
+    vi.useFakeTimers();
+    const parent = stampedThread({ instanceId: "peer-a", threadId: "p1", title: "Parent" });
+    const child = { ...stampedThread({ instanceId: "peer-a", threadId: "c1", title: "Child" }),
+      parentThreadId: "p1" } as NavigationThreadSummary;
+    const fetchPinnedSnapshot = vi.fn(async (_target: FederationRemoteTarget, keys: string[]) =>
+      snapshotOf([child, parent].filter((thread) => keys.includes(buildThreadIdentityKey(thread.source, thread.id)))));
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [peer("peer-a")], fetchSnapshot: vi.fn(), fetchPinnedSnapshot,
+      fetchArchivedThreads: noArchivedThreads, peerStatus: () => ({ status: "connected" }),
+      hasNavigationSubscription: () => true,
+    });
+    try {
+      cache.resolveWatchedThreads([watchedRef("peer-a", "c1")]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(cache.resolveWatchedThreads([watchedRef("peer-a", "c1")])).toEqual([child]);
+      expect(fetchPinnedSnapshot.mock.calls.at(-1)![1]).toEqual(["codex:c1", "codex:p1"]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(cache.resolveWatchedThreads([watchedRef("peer-a", "c1")])).toEqual([child, parent]);
+      expect(fetchPinnedSnapshot).toHaveBeenCalledTimes(2);
+    } finally {
+      cache.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("shares one owner read with pins and does not alternate between them", async () => {
+    vi.useFakeTimers();
+    const pinned = stampedThread({ instanceId: "peer-a", threadId: "t1", title: "Pinned" });
+    const draft = stampedThread({ instanceId: "peer-a", threadId: "t2", title: "Draft" });
+    const fetchPinnedSnapshot = vi.fn(async (_target: FederationRemoteTarget, keys: string[]) =>
+      snapshotOf([pinned, draft].filter((thread) => keys.includes(buildThreadIdentityKey(thread.source, thread.id)))));
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [peer("peer-a")], fetchSnapshot: vi.fn(), fetchPinnedSnapshot,
+      fetchArchivedThreads: noArchivedThreads, peerStatus: () => ({ status: "connected" }),
+      hasNavigationSubscription: () => true,
+    });
+    const pins = [pin({ instanceId: "peer-a", threadId: "t1", summary: pinned })];
+    try {
+      await cache.resolvePinnedThreads(pins);
+      await vi.advanceTimersByTimeAsync(0);
+      cache.resolveWatchedThreads([watchedRef("peer-a", "t2")]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetchPinnedSnapshot.mock.calls.at(-1)![1]).toEqual(["codex:t1", "codex:t2"]);
+      for (let round = 0; round < 3; round += 1) {
+        expect((await cache.resolvePinnedThreads(pins)).threads).toEqual([pinned]);
+        expect(cache.resolveWatchedThreads([watchedRef("peer-a", "t2")])).toEqual([draft]);
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      expect(fetchPinnedSnapshot).toHaveBeenCalledTimes(2);
+    } finally {
+      cache.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("drops a watch that no read has named for the watch TTL", async () => {
+    vi.useFakeTimers();
+    const pinned = stampedThread({ instanceId: "peer-a", threadId: "t1", title: "Pinned" });
+    const draft = stampedThread({ instanceId: "peer-a", threadId: "t2", title: "Draft" });
+    const fetchPinnedSnapshot = vi.fn(async (_target: FederationRemoteTarget, keys: string[]) =>
+      snapshotOf([pinned, draft].filter((thread) => keys.includes(buildThreadIdentityKey(thread.source, thread.id)))));
+    const onPeerInterestChanged = vi.fn();
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [peer("peer-a"), peer("peer-b")], fetchSnapshot: vi.fn(), fetchPinnedSnapshot,
+      fetchArchivedThreads: noArchivedThreads, peerStatus: () => ({ status: "connected" }),
+      hasNavigationSubscription: () => true, onPeerInterestChanged, watchTtlMs: 1_000,
+    });
+    try {
+      await cache.resolvePinnedThreads([pin({ instanceId: "peer-a", threadId: "t1", summary: pinned })]);
+      cache.resolveWatchedThreads([watchedRef("peer-a", "t2"), watchedRef("peer-b", "t3")]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(onPeerInterestChanged.mock.lastCall![0].map((interest: { instanceId: string }) => interest.instanceId))
+        .toEqual(["peer-a", "peer-b"]);
+      fetchPinnedSnapshot.mockClear();
+      await vi.advanceTimersByTimeAsync(1_000);
+      // The pin still owns peer-a's demand; peer-b had only the watch.
+      expect(fetchPinnedSnapshot).toHaveBeenCalledTimes(1);
+      expect(fetchPinnedSnapshot.mock.calls[0]![1]).toEqual(["codex:t1"]);
+      expect(onPeerInterestChanged.mock.lastCall![0].map((interest: { instanceId: string }) => interest.instanceId))
+        .toEqual(["peer-a"]);
+    } finally {
+      cache.dispose();
+      vi.useRealTimers();
+    }
+  });
+});

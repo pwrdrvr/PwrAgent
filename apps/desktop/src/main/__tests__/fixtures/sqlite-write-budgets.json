@@ -1022,6 +1022,13 @@
     "rowsChanged": 3,
     "statements": 3
   },
+  "thread-todo-check-step": {
+    "commits": 1,
+    "note": "one checklist step ticked, then ticked again: one commit rewriting the card's unindexed items_json (~4 KB), and the unchanged repeat opens no transaction; only on an operator click or an agent's update_todo check, ~0.2 MB/day at 50 ticks, ~0.8 MB/day at 200",
+    "observedWalBytes": 4120,
+    "rowsChanged": 1,
+    "statements": 1
+  },
   "thread-todo-edit": {
     "commits": 1,
     "note": "one card edited by update_todo: one commit, only when a thread is asked to change a card",

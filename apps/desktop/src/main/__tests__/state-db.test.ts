@@ -82,6 +82,24 @@ describe("StateDb", () => {
     expect(columnNames("thread_usage_lines").filter((column) => column === "account_key")).toHaveLength(1);
   });
 
+  it("adds the to-do checklist column to a v72 profile and keeps its cards", () => {
+    const dbPath = useFileStateDb();
+    stateDb.raw.exec("ALTER TABLE thread_todos DROP COLUMN items_json");
+    stateDb.raw.exec(`INSERT INTO thread_todos (
+      todo_id, backend, thread_id, kind, status, title, created_at, updated_at
+    ) VALUES ('old-card', 'codex', 'thread-a', 'reminder', 'open', 'Check the docs', 1, 1)`);
+    stateDb.raw.pragma("user_version = 72");
+    stateDb.close();
+    stateDb = StateDb.open(dbPath);
+    expect(columnNames("thread_todos")).toContain("items_json");
+    expect(stateDb.raw.prepare("SELECT title, items_json FROM thread_todos WHERE todo_id = 'old-card'").get())
+      .toEqual({ title: "Check the docs", items_json: null });
+    expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(CURRENT_STATE_DB_USER_VERSION);
+    stateDb.close();
+    stateDb = StateDb.open(dbPath);
+    expect(columnNames("thread_todos").filter((column) => column === "items_json")).toHaveLength(1);
+  });
+
   it.each([false, true])("guards corrupt automation runs when upgrading with legacy index present: %s", (legacyIndexPresent) => {
     const dbPath = useFileStateDb();
     stateDb.raw.exec("DROP INDEX IF EXISTS idx_automation_runs_execution_thread");
@@ -2493,6 +2511,7 @@ function columnNames(
     | "pr_status_cache"
     | "thread_pricing_summaries"
     | "thread_search_fts"
+    | "thread_todos"
     | "thread_usage_lines",
 ): string[] {
   const rows = readTableInfo(tableName);
@@ -2531,6 +2550,7 @@ function readTableInfo(
     | "pr_status_cache"
     | "thread_pricing_summaries"
     | "thread_search_fts"
+    | "thread_todos"
     | "thread_usage_lines",
 ): Array<{ name: string }> {
   switch (tableName) {
@@ -2549,6 +2569,10 @@ function readTableInfo(
     case "thread_search_fts":
       return stateDb.raw
         .prepare("PRAGMA table_info(thread_search_fts)")
+        .all() as Array<{ name: string }>;
+    case "thread_todos":
+      return stateDb.raw
+        .prepare("PRAGMA table_info(thread_todos)")
         .all() as Array<{ name: string }>;
     case "thread_usage_lines":
       return stateDb.raw

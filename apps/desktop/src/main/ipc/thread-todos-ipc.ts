@@ -5,6 +5,7 @@ import type {
   ListThreadTodosResponse,
   ResolveThreadTodoRequest,
   RunThreadTodoActionRequest,
+  SetThreadTodoItemCheckedRequest,
   SetThreadTodoProjectRequest,
   ThreadTodoMutationResponse,
   ThreadTodosChangedEvent,
@@ -23,6 +24,7 @@ import {
   THREAD_TODOS_LIST_PROJECTS_CHANNEL,
   THREAD_TODOS_RESOLVE_CHANNEL,
   THREAD_TODOS_RUN_ACTION_CHANNEL,
+  THREAD_TODOS_SET_ITEM_CHECKED_CHANNEL,
   THREAD_TODOS_SET_PROJECT_CHANNEL,
   THREAD_REVIEWS_LIST_CHANNEL,
   THREAD_REVIEWS_UPDATE_CHANNEL,
@@ -133,6 +135,7 @@ export function registerThreadTodoIpcHandlers(options: {
               ...(isThreadTodoResolution(request.resolution)
                 ? { resolution: request.resolution }
                 : {}),
+              ...(request.allowOpenItems === true ? { allowOpenItems: true } : {}),
             }),
       };
     },
@@ -156,6 +159,7 @@ export function registerThreadTodoIpcHandlers(options: {
           && request.startOnInstanceId.trim()
           ? { startOnInstanceId: request.startOnInstanceId.trim() }
           : {}),
+        ...(request.allowOpenItems === true ? { allowOpenItems: true } : {}),
       }),
     }),
   );
@@ -166,6 +170,23 @@ export function registerThreadTodoIpcHandlers(options: {
     async (): Promise<ListThreadTodoProjectsResponse> => ({
       projects: await listThreadTodoProjects(),
     }),
+  );
+
+  ipcMain.removeHandler(THREAD_TODOS_SET_ITEM_CHECKED_CHANNEL);
+  ipcMain.handle(
+    THREAD_TODOS_SET_ITEM_CHECKED_CHANNEL,
+    (_event, request: SetThreadTodoItemCheckedRequest): ThreadTodoMutationResponse => {
+      if (typeof request.itemId !== "string" || typeof request.checked !== "boolean") {
+        throw new Error("A to-do step toggle needs a step id and a checked state.");
+      }
+      return {
+        todo: getThreadTodoService().setItemsChecked({
+          id: request.id,
+          check: request.checked ? [request.itemId] : [],
+          uncheck: request.checked ? [] : [request.itemId],
+        }),
+      };
+    },
   );
 
   ipcMain.removeHandler(THREAD_TODOS_SET_PROJECT_CHANNEL);
