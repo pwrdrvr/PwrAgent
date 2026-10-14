@@ -59,9 +59,18 @@ export function normalizeGitOriginUrl(value?: string): string | undefined {
   }
 
   const sshMatch = trimmed.match(/^git@([^:]+):(.+)$/i);
-  const candidate = sshMatch
+  let candidate = sshMatch
     ? `${sshMatch[1]}/${sshMatch[2]}`
     : trimmed.replace(/^[a-z]+:\/\//i, "");
+  // Local remotes remain valid identities for Git handoffs. Callers that
+  // advertise cross-machine projects must filter those paths themselves.
+  if (!sshMatch && /^[a-z]+:\/\//i.test(trimmed) && !/^file:/i.test(trimmed)) {
+    const url = trimmed.match(/^[a-z]+:\/\/(?:[^/?#]*@)?([^/?#]+)(\/[^?#]*)/i);
+    if (!url) {
+      return undefined;
+    }
+    candidate = `${url[1]}${url[2]}`;
+  }
   const normalized = candidate
     .replace(/\.git$/i, "")
     .replace(/^ssh\//i, "")

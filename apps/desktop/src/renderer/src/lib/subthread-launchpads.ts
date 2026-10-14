@@ -59,6 +59,7 @@ export function getSubthreadProjectIdentity(
     label: row?.label ?? primary.label,
     path: row?.path ?? primary.path,
     ...(repositoryKey ? { repositoryKey } : {}),
+    ...(row?.repositoryKeys ? { repositoryKeys: row.repositoryKeys } : {}),
   };
 }
 

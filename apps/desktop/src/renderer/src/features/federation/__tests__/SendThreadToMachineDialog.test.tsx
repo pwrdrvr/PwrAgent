@@ -100,6 +100,20 @@ describe("SendThreadToMachineDialog", () => {
     expect(screen.getByRole("button", { name: "Copy to studio-mac" })).toBeEnabled();
   });
 
+  it("passes configured remotes to the lookup and describes a shared remote match", async () => {
+    const project = { ...GIT_SOURCE.project!, repositoryKeys: ["github.com/pwrdrvr/pwragent", "github.com/upstream/pwragent"] };
+    const findRepository = vi.fn<FindThreadHandoffRepository>(async () => ({
+      path: "/home/fixture/PwrAgent", matchedBy: "remote",
+    }));
+    renderDialog({ source: { ...GIT_SOURCE, project }, findRepository });
+    const input = screen.getByRole("textbox", { name: "Repository on build-linux" });
+    await waitFor(() => expect(input).toHaveValue("/home/fixture/PwrAgent"));
+    expect(findRepository).toHaveBeenCalledWith("pwr_linux", project);
+    expect(input).toHaveAccessibleDescription(
+      "Matched by a configured Git remote. A new worktree uses the source branch when available, or starts detached at the source commit.",
+    );
+  });
+
   it("holds Send until a machine with no matching project has a typed path", async () => {
     renderDialog();
     await waitFor(() => expect(machine("build-linux")).toHaveTextContent("No matching project"));

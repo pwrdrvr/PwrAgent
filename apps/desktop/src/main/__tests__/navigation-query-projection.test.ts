@@ -60,6 +60,20 @@ function request(
 }
 
 describe("navigation query projection", () => {
+  it("carries configured remote identities in the compact directory index", () => {
+    const source = snapshot([]);
+    source.directories[0]!.gitStatus = {
+      originRepository: "github.com/fixture-fork/disktree",
+      remoteRepositories: ["github.com/fixture-fork/disktree", "github.com/fixture-upstream/disktree"],
+    };
+    const page = projectNavigationQuery({ index: source, request: request({ kind: "directory-index" }) });
+
+    expect(page.directories[0]).toMatchObject({
+      repositoryKey: "github.com/fixture-fork/disktree",
+      repositoryKeys: ["github.com/fixture-fork/disktree", "github.com/fixture-upstream/disktree"],
+    });
+  });
+
   it.each([
     ["PwrSuiteLab", "pws"], ["PwrAgent", "PA"], ["PwrSnap", "ps"], ["trading-system", "TS"],
   ])("finds owner threads and directory-index projects by initials: %s / %s", (name, text) => {

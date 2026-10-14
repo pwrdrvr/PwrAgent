@@ -7,6 +7,8 @@ export type ProjectIdentity = {
   path?: string;
   /** `host/owner/repo` from the checkout's origin, when the owner read one. */
   repositoryKey?: string;
+  /** Normalized configured fetch remotes, including fork and upstream. */
+  repositoryKeys?: readonly string[];
 };
 
 type PeerDirectory = ProjectIdentity & {
@@ -43,8 +45,9 @@ export function directoryIdentityNames(directory: ProjectIdentity): string[] {
  * The checkout's origin decides first: `~/pwrdrvr/PwrAgnt` here and
  * `C:\src\PwrAgent` there are one project when both clone
  * `github.com/pwrdrvr/pwragent`, whatever their folders are called. Two
- * different origins are two different projects even when the names agree.
- * Only when either side has no origin does the name decide.
+ * different origins can share a configured fetch remote, as a fork and its
+ * upstream do. With no shared remote, two known repositories never match by
+ * name. Only when either side has no repository metadata does the name decide.
  */
 export function findPeerCounterpartDirectory<T extends PeerDirectory>(
   local: ProjectIdentity,
@@ -67,8 +70,17 @@ export function findPeerCounterpartDirectory<T extends PeerDirectory>(
       return byRepository;
     }
   }
-  const nameCandidates = localRepository
-    ? candidates.filter((directory) => !directory.repositoryKey)
+  const localRepositories = repositoryIdentities(local);
+  if (localRepositories.length) {
+    const byRemote = candidates.find((directory) =>
+      repositoryIdentities(directory).some((repository) => localRepositories.includes(repository)),
+    );
+    if (byRemote) {
+      return byRemote;
+    }
+  }
+  const nameCandidates = localRepositories.length
+    ? candidates.filter((directory) => repositoryIdentities(directory).length === 0)
     : candidates;
   const localNames = directoryIdentityNames(local);
   // A label match beats a basename match, so a peer that has both "PwrAgnt"
@@ -85,4 +97,10 @@ export function findPeerCounterpartDirectory<T extends PeerDirectory>(
   return nameCandidates.find((directory) =>
     directoryIdentityNames(directory).some((name) => localNames.includes(name)),
   );
+}
+
+function repositoryIdentities(directory: ProjectIdentity): string[] {
+  return [directory.repositoryKey, ...directory.repositoryKeys ?? []]
+    .filter((repository): repository is string => Boolean(repository))
+    .map((repository) => repository.toLowerCase());
 }

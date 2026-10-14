@@ -6,7 +6,7 @@ import { threadSummaryIdentityKey } from "./federated-thread-events";
 
 /** Owner descriptors plus independently loaded configuration or a viewer-local launchpad. */
 export type NavigationDirectoryView = Pick<NavigationDirectoryRow,
-  "key" | "kind" | "label" | "path" | "repositoryKey" | "localAvailability" | "pinnedRank"
+  "key" | "kind" | "label" | "path" | "repositoryKey" | "repositoryKeys" | "localAvailability" | "pinnedRank"
   | "directoryThreadsCollapsed"
 > & {
   counts?: NavigationCounts;
