@@ -96,6 +96,10 @@ export class FederationServices {
 
   async list(threadInput: ServiceThread): Promise<ThreadService[]> {
     const thread = serviceThread(threadInput);
+    this.prune();
+    // Ordinary thread viewers poll too. Only declarations need authoritative
+    // membership checks; an empty inventory must not scan provider history.
+    if (![...this.services.values()].some((entry) => sameThread(entry, thread))) return [];
     if (!await this.options.threadExists(thread)) {
       for (const service of this.services.values()) if (sameThread(service, thread)) this.remove(thread, service.serviceId);
       return [];

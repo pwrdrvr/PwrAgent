@@ -29,6 +29,39 @@ function owner(options: { now?: () => number; threadExists?: (value: ServiceThre
   return service;
 }
 
+it("skips thread discovery for empty inventories even when other threads declare services", async () => {
+  const threadExists = vi.fn(async () => true);
+  const service = owner({ threadExists });
+  for (let poll = 0; poll < 3; poll++) await expect(service.list(thread)).resolves.toEqual([]);
+  expect(threadExists).not.toHaveBeenCalled();
+  const declaration = await service.advertise(thread, { port: 3000, name: "Preview", protocol: "http" });
+  threadExists.mockClear();
+  await expect(service.list({ ...thread, threadId: "other-thread" })).resolves.toEqual([]);
+  await expect(service.list({ ...thread, backend: "acp:fixture" })).resolves.toEqual([]);
+  expect(threadExists).not.toHaveBeenCalled();
+  await expect(service.list(thread)).resolves.toEqual([declaration]);
+  expect(threadExists).toHaveBeenCalledExactlyOnceWith(thread);
+  service.remove(thread, declaration.serviceId);
+  threadExists.mockClear();
+  await expect(service.list(thread)).resolves.toEqual([]);
+  expect(threadExists).not.toHaveBeenCalled();
+});
+
+it("prunes expired declarations before deciding whether discovery is needed", async () => {
+  let now = 0;
+  const threadExists = vi.fn(async () => true);
+  const service = owner({ threadExists, now: () => now });
+  await service.advertise(thread, { port: 3000, name: "Preview", protocol: "http", ttlSeconds: 60 });
+  const other = { ...thread, threadId: "other-thread" };
+  await service.advertise(other, { port: 3001, name: "Other preview", protocol: "http" });
+  threadExists.mockClear();
+  now = 60_000;
+  await expect(service.list(thread)).resolves.toEqual([]);
+  expect(threadExists).not.toHaveBeenCalled();
+  await expect(service.list(other)).resolves.toHaveLength(1);
+  expect(threadExists).toHaveBeenCalledExactlyOnceWith(other);
+});
+
 it("retains advertisements and leases on failed lookups but revokes confirmed absent threads", async () => {
   vi.useFakeTimers();
   const threadExists = vi.fn(async () => true);
