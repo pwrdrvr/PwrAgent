@@ -712,6 +712,40 @@ describe("GithubPrFetcher", () => {
   });
 
   describe("fetchAllPullRequestsForBranch (single thread, all states)", () => {
+    it("reports an unanswered branch instead of confirming no PRs", async () => {
+      const { fetcher, fetchPullRequestsForBranches } = buildFetcher();
+      fetchPullRequestsForBranches.mockResolvedValueOnce(new Map());
+      const onProviderFailure = vi.fn();
+      await expect(fetcher.fetchAllPullRequestsForBranch({
+        cwd: "/tmp/repo", branch: "feat/x", onProviderFailure,
+      })).resolves.toEqual([]);
+      expect(onProviderFailure).toHaveBeenCalledOnce();
+    });
+
+    it("accepts an explicitly answered empty branch", async () => {
+      const { fetcher } = buildFetcher();
+      const onProviderFailure = vi.fn();
+      await expect(fetcher.fetchAllPullRequestsForBranch({
+        cwd: "/tmp/repo", branch: "feat/x", onProviderFailure,
+      })).resolves.toEqual([]);
+      expect(onProviderFailure).not.toHaveBeenCalled();
+    });
+
+    it("retains successful siblings while reporting a partially unanswered lookup", async () => {
+      const { fetcher, fetchPullRequestsForBranches } = buildFetcher({ repos: [
+        { host: "github.com", owner: "operator", repo: "PwrAgent" },
+        { host: "github.com", owner: "pwrdrvr", repo: "PwrAgent" },
+      ] });
+      fetchPullRequestsForBranches.mockResolvedValueOnce(new Map([
+        ["pwrdrvr/pwragent#feat/x", [primedPr]],
+      ]));
+      const onProviderFailure = vi.fn();
+      await expect(fetcher.fetchAllPullRequestsForBranch({
+        cwd: "/tmp/repo", branch: "feat/x", onProviderFailure,
+      })).resolves.toEqual([primedPr]);
+      expect(onProviderFailure).toHaveBeenCalledOnce();
+    });
+
     it("uses the in-process all-state branch query", async () => {
       const { fetcher, fetchPullRequestsForBranches } = buildFetcher({
         branchResults: () => [mergedPr],

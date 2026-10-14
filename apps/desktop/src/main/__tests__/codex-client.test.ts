@@ -8607,6 +8607,66 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  // PwrAgent's own tools take no title argument, so read_thread and
+  // send_message_to_thread rows could not be opened to see their call.
+  it("makes an untitled dynamic tool call expandable, and leaves an empty one alone", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.readThreadResultByThreadId.set("thread-dynamic-tool-untitled", {
+      thread: {
+        turns: [
+          {
+            id: "turn-dynamic-tool-untitled",
+            status: "completed",
+            items: [
+              {
+                type: "dynamicToolCall",
+                id: "tool-read",
+                namespace: "pwragent",
+                tool: "read_thread",
+                arguments: { threadId: "sample-thread" },
+                status: "completed",
+                success: true,
+                contentItems: [
+                  { type: "inputText", text: "{\"read\":{\"title\":\"Sample thread\"}}" },
+                ],
+              },
+              {
+                type: "dynamicToolCall",
+                id: "tool-empty",
+                namespace: "pwragent",
+                tool: "list_instances",
+                arguments: {},
+                status: "completed",
+                success: true,
+                contentItems: [],
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const replay = await client.readThread({
+      threadId: "thread-dynamic-tool-untitled",
+    });
+
+    const details = replay.entries.flatMap((entry) => entry.type === "activity" ? entry.details : []);
+    expect(details.find((detail) => detail.id === "tool-read")?.command).toEqual({
+      displayCommand: "pwragent/read_thread\n{\n  \"threadId\": \"sample-thread\"\n}",
+      rawCommand: "pwragent/read_thread",
+      source: "tool",
+      output: "{\"read\":{\"title\":\"Sample thread\"}}",
+    });
+    expect(details.find((detail) => detail.id === "tool-empty")).not.toHaveProperty("command");
+
+    await client.close();
+  });
+
   it("hydrates dynamic tool result images from persisted thread activity", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.readThreadResultByThreadId.set("thread-pdf-tool-image", {

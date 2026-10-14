@@ -1,3 +1,4 @@
+import { ForgeReadError, type ForgeReadRequest } from "../pr-status/forge-tool-contract";
 import type {
   ListBackgroundTerminalsRequest,
   ListBackgroundTerminalsResponse,
@@ -442,6 +443,7 @@ export const FEDERATION_BACKEND_METHODS = {
   setThreadParent: "backend.setThreadParent",
   updateSubthreadOrder: "backend.updateSubthreadOrder",
   setSubthreadsCollapsed: "backend.setSubthreadsCollapsed",
+  readForge: "backend.readForge",
   detachThreadPullRequest: "backend.detachThreadPullRequest",
   setThreadPrAutoDispatch: "backend.setThreadPrAutoDispatch",
   cancelThreadPrAutoDispatch: "backend.cancelThreadPrAutoDispatch",
@@ -551,6 +553,7 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.resolveThread]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.resolveThreadAdmissionState]: "messaging_route",
   [FEDERATION_BACKEND_METHODS.readThread]: "thread_detail",
+  [FEDERATION_BACKEND_METHODS.readForge]: "thread_detail",
   /* Reads the thread's own transcript history; same data class as reading it. */
   [FEDERATION_BACKEND_METHODS.readUsageActivity]: "thread_detail",
   // Starts a paid helper turn on the owner; transcript-read permission is insufficient.
@@ -771,6 +774,7 @@ export type FederationBackendOperations = {
   setSubthreadsCollapsed(
     request: SetSubthreadsCollapsedRequest,
   ): Promise<SetSubthreadsCollapsedResponse>;
+  readForge(request: ForgeReadRequest, options?: FederationRpcRequestOptions): Promise<unknown>;
   detachThreadPullRequest(
     request: DetachThreadPullRequestRequest,
   ): Promise<DetachThreadPullRequestResponse>;
@@ -1290,6 +1294,14 @@ export function registerFederationBackendHandlers(params: {
         envelope.params as SetSubthreadsCollapsedRequest,
       ),
   );
+  params.router.registerHandler(FEDERATION_BACKEND_METHODS.readForge, async (envelope) => {
+    try {
+      return { ok: true, data: await params.backend.readForge(envelope.params as ForgeReadRequest, { deadlineAt: envelope.deadlineAt }) };
+    } catch (error) {
+      if (error instanceof ForgeReadError) return { ok: false, error: { code: error.code, message: error.message } };
+      throw error;
+    }
+  });
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.detachThreadPullRequest,
     async (envelope) =>
@@ -2231,6 +2243,19 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
       method: FEDERATION_BACKEND_METHODS.markThreadSeen,
       params: request,
     });
+  }
+
+  async readForge(request: ForgeReadRequest, options?: FederationRpcRequestOptions): Promise<unknown> {
+    try {
+      const reply = await this.rpc.request<{ ok: true; data: unknown } | { ok: false; error: { code: string; message: string } }>({
+        method: FEDERATION_BACKEND_METHODS.readForge, params: request, ...options,
+      });
+      if (!reply.ok) throw new ForgeReadError(reply.error.code, reply.error.message);
+      return reply.data;
+    } catch (error) {
+      if (hasFederationErrorCode(error, "method_not_found")) throw new ForgeReadError("unavailable", "Update PwrAgent on the owning instance to use forge read tools.");
+      throw error;
+    }
   }
 
   async detachThreadPullRequest(

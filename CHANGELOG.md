@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.2.1 - 2026-10-13
+
+- Voice Activity - Group consecutive tool calls into compact, expandable rows, with clearer thread labels and inspectable arguments and results.
+- Tool Details - Expand dynamic tool calls in regular transcripts even when they have no title, including replayed history.
+- Thread Navigation - Make "Load more threads" easier to find with a full-width button directly below the thread rows.
+
 ## v1.2.0 - 2026-10-12
 
 - Thread Organization - Actionable to-dos with project assignments, a unified "Waiting on You" view for approvals and questions, and thread locks for safer handoffs.

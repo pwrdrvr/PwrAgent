@@ -183,11 +183,12 @@ function buildLiveMcpToolCommandDetail(
   };
 }
 
+/** Undefined when the call has neither arguments nor a result: there is nothing to expand. */
 function buildLiveDynamicToolCommandDetail(
   item: Record<string, unknown>,
   toolName: string,
   elapsedMs: number | undefined,
-): AppServerThreadCommandDetail {
+): AppServerThreadCommandDetail | undefined {
   const namespace =
     readString(item, "namespace") ??
     readString(item, "toolNamespace") ??
@@ -195,6 +196,9 @@ function buildLiveDynamicToolCommandDetail(
   const identifier = formatToolIdentifier(namespace, toolName);
   const args = readRecord(item.arguments) ?? readRecord(item.input);
   const output = formatDynamicToolOutput(item.contentItems ?? item.content_items);
+  if (!output && (!args || Object.keys(args).length === 0)) {
+    return undefined;
+  }
   return {
     displayCommand: formatToolInvocation(identifier, args),
     rawCommand: identifier,
@@ -790,7 +794,7 @@ export function buildLiveToolDetails(
         ? buildCollabAgentCommandDetail(item, toolName, readStringArray(item.receiverThreadIds))
         : itemType === "mcptoolcall"
           ? buildLiveMcpToolCommandDetail(item, toolName, elapsedMs)
-          : itemType === "dynamictoolcall" && title
+          : itemType === "dynamictoolcall"
             ? buildLiveDynamicToolCommandDetail(item, toolName, elapsedMs)
         : undefined;
   const commandUsesDedicatedRenderer =
@@ -810,7 +814,10 @@ export function buildLiveToolDetails(
         buildLiveToolLabel(item, itemType, status, toolName),
         elapsedMs && !commandUsesDedicatedRenderer ? ` (${formatElapsedMs(elapsedMs)})` : "",
         query ? `: ${query}` : "",
-        preview && !commandUsesDedicatedRenderer ? ` - ${preview}` : "",
+        // A result one click away in the call's detail is not repeated in its label.
+        preview && !commandUsesDedicatedRenderer && !(itemType === "dynamictoolcall" && commandDetail)
+          ? ` - ${preview}`
+          : "",
       ].join(""),
       ...(images.length > 0 ? { images } : {}),
       ...(commandDetail ? { command: commandDetail } : {}),
@@ -887,10 +894,13 @@ export function summarizeLiveActivity(details: AppServerThreadActivityDetail[]):
     (detail) => !detail.id.includes("-source-") && !isSubAgentActivityDetail(detail),
   );
   const directDetail = primaryDetails.length === 1 ? primaryDetails[0] : undefined;
+  // A search tool's call is expandable, but it summarizes as exploration,
+  // as it does once its sources arrive: its label already names the query.
   if (
     details.length === 1
     && subAgentActivityParts.length === 0
     && directDetail?.command
+    && !(directDetail.kind === "read" && /(?:^|[/.])search_\w+$/.test(directDetail.command.rawCommand ?? ""))
     && (
       directDetail.kind === "read"
       || directDetail.label.trim().toLowerCase()

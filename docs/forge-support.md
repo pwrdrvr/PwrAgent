@@ -73,3 +73,11 @@ Reconnect uses the same router and the GitHub adapter's reconnect probe.
 
 Adapters return observations. The existing app-server status registry owns
 persistence and publication; the router adds no SQLite writes or timers.
+
+## Agent read tools
+
+[First-party forge read tools](forge-agent-tools.md) expose the status cache and
+GitHub Actions/GitLab CI through the shared agent catalog. These are independent
+of connectors, explicit review scheduling and Auto-fix. Enterprise CI is
+supported with explicit host/product evidence; the existing github.com-only PR
+status boundary above remains unchanged.

@@ -646,7 +646,7 @@ function OpenDirectorVoicePanel({
         />
       ) : null}
       <div className="director-voice-panel__feed">
-        <VoiceFeed view={view} scrollParent assistant="Director" />
+        <VoiceFeed view={view} scrollParent assistant="Director" desktopApi={desktopApi} />
       </div>
       {/* A sibling of the feed, never inside it: the camera holds one place
           while the transcript scrolls above it. */}

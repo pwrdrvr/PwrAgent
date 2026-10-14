@@ -1774,10 +1774,10 @@ export function DirectoriesList(props: DirectoriesListProps) {
                       <div role="listitem">
                         {pinResource.loading && !pinResource.state.page ? <p className="sidebar-empty">Loading pinned threads…</p> : null}
                         {(pinResource.state.page?.rangeStart ?? 0) > 0 && !pinResource.state.rebaselineRequired ? (
-                          <SidebarShowMore busy={pinResource.loading} label="Show pinned threads from beginning" onClick={() => void props.pagedNavigation?.restart(pinResourceId)} />
+                          <SidebarShowMore kind="reload" busy={pinResource.loading} label="Show pinned threads from beginning" onClick={() => void props.pagedNavigation?.restart(pinResourceId)} />
                         ) : null}
                         {pinResource.state.rebaselineRequired ? (
-                          <SidebarShowMore label="Reload pinned threads" onClick={() => void props.pagedNavigation?.restart(pinResourceId)} />
+                          <SidebarShowMore kind="reload" label="Reload pinned threads" onClick={() => void props.pagedNavigation?.restart(pinResourceId)} />
                         ) : pinResource.state.page?.nextCursor ? (
                           <SidebarShowMore busy={pinResource.loading} label="Load more pinned threads" onClick={() => void props.pagedNavigation?.loadMore(pinResourceId)} />
                         ) : null}
@@ -1849,7 +1849,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                     left. Both render together while a directory first opens. */}
                 {rootResource?.loading && !rootResource.state.page ? <p className="sidebar-empty directory-row__empty">Loading threads…</p> : null}
                 {rootResource?.state.rebaselineRequired ? (
-                  <SidebarShowMore label="Reload this directory" onClick={() => void props.pagedNavigation?.restart(rootResourceId)} />
+                  <SidebarShowMore kind="reload" label="Reload this directory" onClick={() => void props.pagedNavigation?.restart(rootResourceId)} />
                 ) : rootResource?.state.page?.nextCursor ? (
                   <SidebarShowMore busy={rootResource.loading} label="Load more threads" onClick={() => void props.pagedNavigation?.loadMore(rootResourceId)} />
                 ) : null}
