@@ -2173,8 +2173,9 @@ class DesktopAppServerService {
           if (!pins.length && !watched.length) return index;
           const localInstanceId = (await getDesktopFederationRuntime().health()).instanceId;
           rpcOptions?.signal.throwIfAborted();
-          const withPins = appendViewerNavigationPins({ ...index, localInstanceId }, pins);
-          return watched.length ? { ...withPins, threads: [...withPins.threads, ...watched] } : withPins;
+          // Watched rows join local project groups as pins do, so a selected
+          // draft resolves its project. The index serves this one read only.
+          return appendViewerNavigationPins({ ...index, localInstanceId }, [...pins, ...watched]);
         }
         return index;
       },

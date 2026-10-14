@@ -2008,7 +2008,7 @@ describe("watched peer threads", () => {
     const cache = new RemoteThreadSummaryCache({
       peers: () => connected ? [peer("peer-a")] : [], fetchSnapshot: vi.fn(), fetchPinnedSnapshot,
       fetchArchivedThreads: noArchivedThreads,
-      peerStatus: () => ({ status: connected ? "connected" : "disconnected", label: "Studio" }),
+      peerStatus: () => ({ status: connected ? "connected" : "disconnected", label: "Studio", capabilities: ["thread_navigation"] }),
       hasNavigationSubscription: () => connected,
     });
     try {
@@ -2020,9 +2020,53 @@ describe("watched peer threads", () => {
       await vi.advanceTimersByTimeAsync(0);
       const [held] = cache.resolveWatchedThreads([watchedRef("peer-a", "t1")]);
       expect(held).toMatchObject({ id: "t1", title: "Draft",
-        federation: { peerStatus: "disconnected", instanceLabel: "Studio" } });
+        federation: { peerStatus: "disconnected", instanceLabel: "Studio", capabilities: ["thread_navigation"] } });
       expect(held!.threadStatus).toBeUndefined();
       expect(fetchPinnedSnapshot).toHaveBeenCalledTimes(1);
+    } finally {
+      cache.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops serving a revoked owner's watched rows", async () => {
+    vi.useFakeTimers();
+    const draft = stampedThread({ instanceId: "peer-a", threadId: "t1", title: "Draft" });
+    let connected = true;
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => connected ? [peer("peer-a")] : [], fetchSnapshot: vi.fn(),
+      fetchPinnedSnapshot: vi.fn(async () => snapshotOf([draft])),
+      fetchArchivedThreads: noArchivedThreads,
+      peerStatus: () => ({ status: connected ? "connected" : "disconnected" }),
+      hasNavigationSubscription: () => connected,
+    });
+    try {
+      cache.resolveWatchedThreads([watchedRef("peer-a", "t1")]);
+      await vi.advanceTimersByTimeAsync(0);
+      connected = false;
+      cache.forgetWatchedThreads("peer-a");
+      cache.invalidate("peer-a");
+      expect(cache.resolveWatchedThreads([watchedRef("peer-a", "t1")])).toEqual([]);
+    } finally {
+      cache.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("answers an owner's identity only with that owner's row", async () => {
+    vi.useFakeTimers();
+    const own = stampedThread({ instanceId: "peer-a", threadId: "t1", title: "Own" });
+    const relayed = stampedThread({ instanceId: "peer-c", threadId: "t1", title: "Relayed" });
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [peer("peer-a")], fetchSnapshot: vi.fn(),
+      fetchPinnedSnapshot: vi.fn(async () => snapshotOf([own, relayed])),
+      fetchArchivedThreads: noArchivedThreads, peerStatus: () => ({ status: "connected" }),
+      hasNavigationSubscription: () => true,
+    });
+    try {
+      cache.resolveWatchedThreads([watchedRef("peer-a", "t1")]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(cache.resolveWatchedThreads([watchedRef("peer-a", "t1")])).toEqual([own]);
     } finally {
       cache.dispose();
       vi.useRealTimers();

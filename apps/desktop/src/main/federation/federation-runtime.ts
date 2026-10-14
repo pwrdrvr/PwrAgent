@@ -1873,6 +1873,8 @@ export class DesktopFederationRuntime {
     revokedAt?: number,
   ): Promise<void> {
     try {
+      // A revoked instance's drafts stop rendering with its pins.
+      this.remoteThreadSummaryCache?.forgetWatchedThreads(instanceId);
       this.remoteThreadSummaryCache?.invalidate(instanceId);
       const overlayStore = getDesktopOverlayStore();
       const affected =

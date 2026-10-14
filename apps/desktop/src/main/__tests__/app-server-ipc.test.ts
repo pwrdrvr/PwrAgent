@@ -2778,6 +2778,29 @@ describe("app server ipc", () => {
     expect(byId.get("held-draft")?.row.federation?.peerStatus).toBe("disconnected");
   });
 
+  it("resolves a selected peer draft's local project", async () => {
+    const { buildFederatedThreadRef } = await import("@pwragent/shared");
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_QUERY_PAGE_CHANNEL } = await import("../../shared/ipc");
+    const ref = buildFederatedThreadRef({ backend: "codex", threadId: "peer-draft", instanceId: "peer-a" });
+    const peerDraft: NavigationThreadSummary = { source: "codex", id: "peer-draft", title: "Peer draft", titleSource: "explicit",
+      linkedDirectories: [{ path: "/peer/src/PwrAgent", label: "PwrAgent", kind: "local" }], inbox: { inInbox: false },
+      federation: { ref, instanceLabel: "Peer A", peerStatus: "connected" } } as NavigationThreadSummary;
+    listThreads.mockResolvedValueOnce([]);
+    readNavigationQueryIndex.mockReturnValueOnce({ threads: [], directories: [{ key: "directory:/local/PwrAgent",
+      kind: "directory", label: "PwrAgent", path: "/local/PwrAgent", threadKeys: [], needsAttentionCount: 0 }] });
+    readRemoteThreadPinNavigationRows.mockResolvedValueOnce([]);
+    federationMock.remoteThreadSummaries.resolveWatchedThreads.mockReturnValueOnce([peerDraft]);
+    registerAppServerIpcHandlers();
+    const page = await handlers.get(NAVIGATION_QUERY_PAGE_CHANNEL)!({ sender: { id: 90206, once: vi.fn() } }, {
+      protocol: 2, consumer: "main-sidebar", inventory: "viewer",
+      query: { kind: "exact", identities: [{ backend: "codex", threadId: "peer-draft", ownerInstanceId: "peer-a" }],
+        includeAncestry: true, resolveFromOwners: true },
+    }) as import("@pwragent/shared").NavigationQueryPage;
+    expect(page.entries.map(({ row }) => row.id)).toEqual(["peer-draft"]);
+    expect(page.selectionDirectory?.key).toBe("directory:/local/PwrAgent");
+  });
+
   it("never sends an owner-resolved read to a remote owner", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_QUERY_PAGE_CHANNEL } = await import("../../shared/ipc");

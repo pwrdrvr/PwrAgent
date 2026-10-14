@@ -783,11 +783,13 @@ export class RemoteThreadSummaryCache {
     for (const [instanceId, keys] of keysByInstanceId) {
       const previous = this.mountedSelectionKey(instanceId);
       const watches = this.watchedByInstanceId.get(instanceId) ?? new Map();
-      this.watchedByInstanceId.set(instanceId, watches);
-      const rows = new Map((this.cache.get(instanceId)?.threads ?? []).map((thread) => [
-        buildThreadIdentityKey(thread.source, thread.id),
-        thread,
-      ]));
+      // A relayed row another instance owns can share a thread id. Only this
+      // owner's rows answer for its identities.
+      const rows = new Map((this.cache.get(instanceId)?.threads ?? []).flatMap((thread) => {
+        const owner = thread.federation?.ref.target;
+        return owner && (owner.scope !== "remote" || owner.instanceId !== instanceId) ? []
+          : [[buildThreadIdentityKey(thread.source, thread.id), thread] as const];
+      }));
       // Walk each row's same-owner parent into the demand. A parent that has
       // no row yet arrives with the next owner read and continues the walk.
       const queue = [...keys];
@@ -809,6 +811,7 @@ export class RemoteThreadSummaryCache {
         keys.add(parentKey);
         queue.push(parentKey);
       }
+      if (watches.size) this.watchedByInstanceId.set(instanceId, watches);
       if (previous !== this.mountedSelectionKey(instanceId)) {
         // Wider demand fences the narrower read and starts one for all of it.
         this.invalidate(instanceId);
@@ -827,6 +830,21 @@ export class RemoteThreadSummaryCache {
     }
     this.scheduleWatchedExpiry();
     return threads;
+  }
+
+  /**
+   * Stop listing an instance's watched threads, as a revocation stops its
+   * pins. Its retained snapshot then lapses like any unmounted owner's.
+   */
+  forgetWatchedThreads(instanceId: string): void {
+    if (!this.watchedByInstanceId.delete(instanceId)) return;
+    if (!this.hasMountedDemand(instanceId)) {
+      this.cache.delete(instanceId);
+      this.pinnedReadStates.delete(instanceId);
+      this.uncertainPinnedMembership.delete(instanceId);
+    }
+    this.notifyPeerInterestChanged();
+    this.scheduleWatchedExpiry();
   }
 
   /**
@@ -878,6 +896,9 @@ export class RemoteThreadSummaryCache {
         instanceLabel: current.label ?? thread.federation.instanceLabel,
         // Connected without navigation still cannot refresh this row.
         peerStatus: current.status === "connected" ? "degraded" : current.status ?? "disconnected",
+        // The peer's live grants and icon, as a pin's fallback row carries.
+        capabilities: current.capabilities ?? [],
+        celestialIcon: current.celestialIcon,
       },
     };
   }
