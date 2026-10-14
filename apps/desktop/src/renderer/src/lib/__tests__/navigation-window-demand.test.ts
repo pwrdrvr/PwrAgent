@@ -57,7 +57,7 @@ it("waits for selected ancestry before opening its root directory range", () => 
   expect(ready.get("directory:directory:42")?.anchor).toBeUndefined();
 });
 
-it("routes disclosed children and viewer drafts to their explicit owners", () => {
+it("routes disclosed children to their explicit owners", () => {
   const remote = { backend: "codex" as const, threadId: "same-id", ownerInstanceId: "peer" };
   const local = { backend: "codex" as const, threadId: "same-id" };
   const demand = buildNavigationWindowDemand({ ...base, browseMode: "drafts", disclosedParents: [remote], draftRefs: [remote, local] });
@@ -68,9 +68,33 @@ it("routes disclosed children and viewer drafts to their explicit owners", () =>
   expect(demand.get('children:["peer","codex","same-id"]:viewer')?.federationTarget).toBeUndefined();
   const remoteWindow = buildNavigationWindowDemand({ ...base, target: { scope: "remote", instanceId: "peer" }, disclosedParents: [remote] });
   expect([...remoteWindow.keys()].some((key) => key.endsWith(":viewer"))).toBe(false);
-  expect(demand.get('drafts:"peer":0')).toMatchObject({ federationTarget: { scope: "remote", instanceId: "peer" }, query: { identities: [remote] } });
-  expect(demand.get('drafts:"":0')?.federationTarget).toBeUndefined();
-  expect(demand.get('drafts:"":0')?.query).toMatchObject({ identities: [local] });
+});
+
+it("reads every instance's drafts in one viewer request that main resolves per owner", () => {
+  const remote = { backend: "codex" as const, threadId: "same-id", ownerInstanceId: "peer" };
+  const other = { backend: "codex" as const, threadId: "other", ownerInstanceId: "offline-peer" };
+  const local = { backend: "codex" as const, threadId: "same-id" };
+  const demand = buildNavigationWindowDemand({ ...base, browseMode: "drafts", draftRefs: [remote, local, other] });
+  const drafts = [...demand].filter(([id]) => id.startsWith("drafts:"));
+  // A peer's own request failed while it was offline; a viewer read never awaits one.
+  expect(drafts).toEqual([["drafts:0", expect.objectContaining({ inventory: "viewer",
+    query: { kind: "exact", identities: [remote, local, other], includeAncestry: true, resolveFromOwners: true } })]]);
+  expect(drafts[0]![1].federationTarget).toBeUndefined();
+
+  const many = Array.from({ length: 150 }, (_, index) => ({ backend: "codex" as const, threadId: `t${index}`,
+    ...(index % 2 ? { ownerInstanceId: "peer" } : {}) }));
+  const bounded = buildNavigationWindowDemand({ ...base, browseMode: "drafts", draftRefs: many });
+  expect([...bounded.keys()].filter((id) => id.startsWith("drafts:"))).toEqual(["drafts:0", "drafts:100"]);
+  const query = (id: string) => bounded.get(id)?.query;
+  expect(query("drafts:0")).toMatchObject({ identities: many.slice(0, 100) });
+  expect(query("drafts:100")).toMatchObject({ identities: many.slice(100) });
+
+  // A remote window's drafts all belong to its owner, which serves them directly.
+  const target = { scope: "remote" as const, instanceId: "peer" };
+  const remoteWindow = buildNavigationWindowDemand({ ...base, target, browseMode: "drafts", draftRefs: [remote] });
+  expect(remoteWindow.get("drafts:0")).toMatchObject({ inventory: "owner", federationTarget: target,
+    query: { kind: "exact", identities: [remote], includeAncestry: true } });
+  expect(remoteWindow.get("drafts:0")?.query).not.toHaveProperty("resolveFromOwners");
 });
 
 

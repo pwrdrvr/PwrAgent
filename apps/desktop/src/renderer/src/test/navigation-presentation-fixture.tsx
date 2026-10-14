@@ -62,7 +62,7 @@ function usePresentationOwner(props: FixtureProps) {
     ownerInstanceId: selectedThread.federation?.ref.target.scope === "remote" ? selectedThread.federation.ref.target.instanceId : undefined,
   }] });
   const mode = props.browseMode ?? "directories";
-  if (mode === "drafts") add('drafts:"":0', { kind: "exact", identities: ownerThreads
+  if (mode === "drafts") add("drafts:0", { kind: "exact", identities: ownerThreads
     .filter((thread) => props.draftThreadKeys?.[threadSummaryIdentityKey(thread)])
     .map((thread) => ({ backend: thread.source, threadId: thread.id })), includeAncestry: true });
   else if ((mode === "inbox" || mode === "recents") && props.pinnedThreadsOnTop !== false) {

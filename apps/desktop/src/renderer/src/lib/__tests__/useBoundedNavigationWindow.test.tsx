@@ -44,6 +44,45 @@ it.each(["drafts", "directories"] as const)("waits for the demand transition eve
   unmount();
 });
 
+it("reads every instance's drafts in one viewer request and shows the rows main resolved", async () => {
+  const fixture = api();
+  const row = (threadId: string, owner?: { instanceId: string; peerStatus: "connected" | "disconnected" }): NavigationRow => ({
+    id: threadId, source: "codex", title: `Draft ${threadId}`, titleSource: "explicit",
+    ref: { backend: "codex", threadId, ...(owner ? { ownerInstanceId: owner.instanceId } : {}) }, rowRevision: "r",
+    linkedDirectories: [], inbox: { inInbox: false }, ordinaryChildCount: 0, nativeSubAgentGroupPresent: false,
+    queueCount: 0, queueState: "unknown",
+    ...(owner ? { federation: { instanceLabel: owner.instanceId, peerStatus: owner.peerStatus,
+      ref: { backend: "codex", threadId, target: { scope: "remote", instanceId: owner.instanceId } } } } : {}),
+  });
+  // An offline peer's row arrives from main already dimmed; it is not an error here.
+  const rows = [row("local"), row("online", { instanceId: "peer-online", peerStatus: "connected" }),
+    row("held", { instanceId: "peer-offline", peerStatus: "disconnected" })];
+  fixture.read.mockImplementation(async (request) => page({
+    entries: request.query.kind === "exact" ? rows.map((entry) => ({ row: entry, placement: { kind: "root" }, orderKey: entry.id })) : [],
+  }));
+  let navigation!: ReturnType<typeof useBoundedNavigationWindow>;
+  function Window() {
+    navigation = useBoundedNavigationWindow({ ...base, browseMode: "drafts", desktopApi: fixture.desktopApi,
+      draftRefs: rows.map((entry) => entry.ref) });
+    const threads = [...navigation.resources.values()].flatMap((resource) => resource.state.page?.entries.map(({ row: entry }) => entry) ?? []);
+    return <Sidebar backends={[]} browseMode="drafts" directories={[]} threads={threads} inboxThreads={threads}
+      pagedNavigation={navigation} loading={false} onBrowseModeChange={() => undefined} onSelectThread={() => undefined}
+      onCreateThread={async () => undefined} onOpenLaunchpad={async () => undefined} />;
+  }
+  const mounted = render(<Window />);
+  try {
+    await waitFor(() => expect(mounted.getAllByText(/^Draft /).map((title) => title.textContent)).toEqual(
+      ["Draft local", "Draft online", "Draft held"]));
+    const drafts = fixture.read.mock.calls.map(([request]) => request).filter((request) => request.query.kind === "exact");
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]).toMatchObject({ inventory: "viewer", query: { identities: rows.map((entry) => entry.ref), resolveFromOwners: true } });
+    expect(fixture.read.mock.calls.some(([request]) => request.federationTarget?.scope === "remote")).toBe(false);
+    expect([...navigation.resources.keys()].filter((id) => id.startsWith("drafts:"))).toEqual(["drafts:0"]);
+  } finally {
+    mounted.unmount();
+  }
+});
+
 it("waits for the expanded unpinned section after directory descriptors and pins arrive", async () => {
   const fixture = api();
   let finish!: () => void;
