@@ -149,11 +149,21 @@ async function createUnreadRegressionFixture(): Promise<{
   };
 }
 
-test("does not make the selected read thread unread after a metadata-only refresh", async () => {
+test("does not make the selected foreground thread unread after a metadata-only refresh", async () => {
   const fixture = await createUnreadRegressionFixture();
   const app = await launchElectronApp({ fixturePath: fixture.fixturePath });
 
   try {
+    // Selection marks a thread seen even when the native window is inactive,
+    // but subsequent refreshes intentionally preserve unread in background
+    // views. Own this test's renderer focus rather than relying on the runner's
+    // desktop activation policy (notably Windows). Native focus is not under test.
+    const cdp = await app.window.context().newCDPSession(app.window);
+    await cdp.send("Emulation.setFocusEmulationEnabled", { enabled: true });
+    await app.window.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await expect.poll(() => app.window.evaluate(() =>
+      document.visibilityState === "visible" && document.hasFocus(),
+    )).toBe(true);
     const browseSection = app.window.locator(".sidebar__section--fill");
     const readRow = browseSection.getByRole("button", {
       name: /Read thread/i,
