@@ -101,6 +101,7 @@ function createHarness(options: {
   gate?: boolean;
   currentPr?: PrSummary;
   pauseGateWhenBudgetPaused?: boolean;
+  onPendingChanged?: (pending: ThreadPrAutoDispatchPending | null) => void;
 } = {}) {
   let busy = options.busy ?? false;
   let gate = options.gate ?? true;
@@ -134,6 +135,7 @@ function createHarness(options: {
     now: () => clock,
     onPendingChanged: ({ pending }) => {
       pendingUpdates.push(pending);
+      options.onPendingChanged?.(pending);
     },
     onBudgetStatusChanged: (status) => {
       budgetStatuses.push(status);
@@ -736,6 +738,137 @@ describe("PrAutoDispatchCoordinator", () => {
       threadId: "thread-1",
       prKey: buildPullRequestStatusKey(pr()),
     })).toBe(1);
+  });
+
+  it("does not exhaust incident attempts when submissions fail across PR snapshots", async () => {
+    const harness = createHarness({ budget: { capacity: 1, refillPerMinute: 0 } });
+    harness.submitTurnIfIdle.mockRejectedValue(new Error("Backend disconnected before turn start"));
+    for (const head of ["a", "b", "c"]) {
+      const currentPr = pr({ headSha: head.repeat(40) });
+      harness.setCurrentPr(currentPr);
+      expect((await observe(harness.coordinator, currentPr))[0]?.status).toBe("scheduled");
+      await runCountdown();
+    }
+
+    expect(harness.submitTurnIfIdle).toHaveBeenCalledTimes(3);
+    expect(await store.getThreadPrAutoDispatchAttemptCount({
+      backend: "codex", threadId: "thread-1", prKey: buildPullRequestStatusKey(pr()),
+    })).toBe(0);
+    expect(await store.getPrAutoDispatchBudgetStatus({ config: harness.budgetConfig, now: clock }))
+      .toMatchObject({ availableTokens: 1, paused: false });
+    expect(harness.onActivity).not.toHaveBeenCalledWith(expect.objectContaining({
+      message: expect.stringContaining("Repair started"),
+    }));
+
+    harness.submitTurnIfIdle.mockResolvedValue({ status: "started", turnId: "accepted-repair" });
+    const nextPr = pr({ headSha: "d".repeat(40) });
+    harness.setCurrentPr(nextPr);
+    expect((await observe(harness.coordinator, nextPr))[0]?.status).toBe("scheduled");
+    await runCountdown();
+    expect(harness.submitTurnIfIdle).toHaveBeenLastCalledWith(expect.objectContaining({
+      input: [{ type: "text", text: expect.stringContaining("Automatic attempt: 1/2") }],
+    }));
+    expect(await store.getThreadPrAutoDispatchAttemptCount({
+      backend: "codex", threadId: "thread-1", prKey: buildPullRequestStatusKey(pr()),
+    })).toBe(1);
+  });
+
+  it("allows an explicit check to retry a rejected submission on the same PR head", async () => {
+    const harness = createHarness();
+    harness.submitTurnIfIdle.mockRejectedValueOnce(new Error("Backend disconnected before turn start"));
+    await observe(harness.coordinator);
+    await runCountdown();
+    // Background polls must not loop on a persistent submission error.
+    expect((await observe(harness.coordinator))[0]?.status).toBe("duplicate");
+
+    expect((await harness.coordinator.handleStatusSnapshot({
+      pr: pr(), threadKeys: ["codex:thread-1"], observedAt: clock,
+      backgroundPollingEnabled: true, operatorInitiated: true,
+    }))[0]?.status).toBe("scheduled");
+    await runCountdown();
+    expect(harness.submitTurnIfIdle).toHaveBeenCalledTimes(2);
+    expect(harness.submitTurnIfIdle).toHaveBeenLastCalledWith(expect.objectContaining({
+      input: [{ type: "text", text: expect.stringContaining("Automatic attempt: 1/2") }],
+    }));
+  });
+
+  it("reports an in-flight claim as pending while its last attempt may still be refunded", async () => {
+    const harness = createHarness();
+    await observe(harness.coordinator);
+    await runCountdown();
+
+    const secondPr = pr({ headSha: "b".repeat(40) });
+    harness.setCurrentPr(secondPr);
+    const [second] = await observe(harness.coordinator, secondPr);
+    let rejectBusy!: () => void;
+    harness.submitTurnIfIdle.mockImplementationOnce(() => new Promise((resolve) => {
+      rejectBusy = () => resolve({ status: "busy" });
+    }));
+    const submission = harness.coordinator.sendPendingNow({
+      backend: "codex", threadId: "thread-1", fingerprint: second!.fingerprint!,
+    });
+    await vi.waitFor(() => expect(rejectBusy).toBeTypeOf("function"));
+    const thirdPr = pr({ headSha: "c".repeat(40) });
+    harness.setCurrentPr(thirdPr);
+    expect((await observe(harness.coordinator, thirdPr))[0]?.status).toBe("pending");
+    rejectBusy();
+    await submission;
+    expect(await store.getThreadPrAutoDispatchAttemptCount({
+      backend: "codex", threadId: "thread-1", prKey: buildPullRequestStatusKey(pr()),
+    })).toBe(1);
+    expect((await observe(harness.coordinator, thirdPr))[0]?.status).toBe("scheduled");
+    await runCountdown();
+    expect(harness.onActivity).toHaveBeenCalledWith(expect.objectContaining({
+      message: "Repair started (attempt 2/2)",
+    }));
+  });
+
+  it("keeps an accepted turn spent when publishing its completed countdown fails", async () => {
+    const harness = createHarness({
+      budget: { capacity: 1, refillPerMinute: 0 },
+      onPendingChanged: (pending) => {
+        if (!pending) throw new Error("Window notification failed");
+      },
+    });
+    const [scheduled] = await observe(harness.coordinator);
+    await expect(harness.coordinator.sendPendingNow({
+      backend: "codex", threadId: "thread-1", fingerprint: scheduled!.fingerprint!,
+    })).rejects.toThrow("Window notification failed");
+    expect(harness.submitTurnIfIdle).toHaveBeenCalledTimes(1);
+    expect(await store.getThreadPrAutoDispatchAttemptCount({
+      backend: "codex", threadId: "thread-1", prKey: buildPullRequestStatusKey(pr()),
+    })).toBe(1);
+    expect(await store.getPrAutoDispatchBudgetStatus({ config: harness.budgetConfig, now: clock }))
+      .toMatchObject({ availableTokens: 0, paused: true });
+    expect(harness.onActivity).not.toHaveBeenCalledWith(expect.objectContaining({
+      message: expect.stringContaining("Repair submission failed"),
+    }));
+    expect((await observe(harness.coordinator))[0]?.status).toBe("duplicate");
+  });
+
+  it("refunds a failed attempt exactly once and only for its dispatch owner", async () => {
+    await createReadyBudgetClaim({
+      targetStore: store, threadId: "thread-1", fingerprint: "failed-claim",
+      prKey: buildPullRequestStatusKey(pr()), ownerId: "claim-owner",
+    });
+    const harness = createHarness();
+    await store.reserveThreadPrAutoDispatchBudget({
+      backend: "codex", threadId: "thread-1", fingerprint: "failed-claim",
+      ownerId: "claim-owner", config: harness.budgetConfig, now: clock,
+    });
+    const finish = (ownerId: string) => store.finishThreadPrAutoDispatch({
+      backend: "codex", threadId: "thread-1", fingerprint: "failed-claim", ownerId,
+      budgetConfig: harness.budgetConfig, now: clock, status: "failed", refundBudgetReservation: true,
+    });
+    const attemptCount = () => store.getThreadPrAutoDispatchAttemptCount({
+      backend: "codex", threadId: "thread-1", prKey: buildPullRequestStatusKey(pr()),
+    });
+    expect(await finish("another-instance")).toBeUndefined();
+    expect(await attemptCount()).toBe(1);
+    expect(await finish("claim-owner")).toMatchObject({ budget: { availableTokens: 30 } });
+    expect(await attemptCount()).toBe(0);
+    expect(await finish("claim-owner")).toBeUndefined();
+    expect(await attemptCount()).toBe(0);
   });
 
   it("drops a repair for a locked thread without spending an attempt or submitting", async () => {
