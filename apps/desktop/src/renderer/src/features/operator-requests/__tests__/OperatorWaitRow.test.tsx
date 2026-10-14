@@ -57,7 +57,7 @@ describe("OperatorWaitRow questions", () => {
 
   it("answers a free-text question in the row through the composer", async () => {
     const wait = questionWait([{ title: "Which bucket?", options: null }]);
-    const answerQuestion = vi.fn(async () => true);
+    const answerQuestion = vi.fn(async (_text: string) => true);
     renderRow(wait, { answerQuestion });
     fireEvent.click(screen.getByRole("button", { name: "Answer" }));
     const form = screen.getByRole("group", { name: "Answer: Which bucket?" });
@@ -67,7 +67,7 @@ describe("OperatorWaitRow questions", () => {
     fireEvent.change(text, { target: { value: "staging-exports" } });
     fireEvent.click(within(form).getByRole("button", { name: "Answer" }));
     await waitFor(() => expect(answerQuestion).toHaveBeenCalledTimes(1));
-    expect(parseCodexAsyncQuestionReply(answerQuestion.mock.calls[0]![0] as string)).toEqual([{
+    expect(parseCodexAsyncQuestionReply(answerQuestion.mock.calls[0]![0])).toEqual([{
       questionItemId: codexAsyncQuestionItemId("msg-1", 0),
       question: "Which bucket?",
       answer: "staging-exports",
@@ -80,7 +80,7 @@ describe("OperatorWaitRow questions", () => {
       { title: "Keep the toast?", options: ["Keep it", "Dismiss it"] },
       { title: "Which bucket?", options: null },
     ]);
-    const answerQuestion = vi.fn(async () => true);
+    const answerQuestion = vi.fn(async (_text: string) => true);
     renderRow(wait, { answerQuestion });
     fireEvent.click(screen.getByRole("button", { name: "Answer" }));
     const form = screen.getByRole("group", { name: "Answer: Keep the toast?" });
@@ -88,7 +88,7 @@ describe("OperatorWaitRow questions", () => {
     expect(within(form).getByText("1 of 2 answered")).toBeTruthy();
     fireEvent.click(within(form).getByRole("button", { name: "Answer" }));
     await waitFor(() => expect(answerQuestion).toHaveBeenCalledTimes(1));
-    expect(parseCodexAsyncQuestionReply(answerQuestion.mock.calls[0]![0] as string)).toEqual([{
+    expect(parseCodexAsyncQuestionReply(answerQuestion.mock.calls[0]![0])).toEqual([{
       questionItemId: codexAsyncQuestionItemId("msg-1", 0),
       question: "Keep the toast?",
       answer: "Keep it",
