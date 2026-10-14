@@ -46128,16 +46128,21 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   }
 }
 
-/* 24px tall: WCAG 2.2 target-size, which a11y.spec.ts gates on. */
+/* The app's pill chip (.review-chip, .rail-chip). At 22px tall the 4px gap
+   keeps each target's 24px circle clear of its neighbours, which is how WCAG
+   2.2 target-size, gated by a11y.spec.ts, passes an undersized target. */
 .review-todo__chip {
-  min-height: 24px;
+  display: inline-flex;
+  height: 22px;
+  align-items: center;
   padding: 0 8px;
   border: 1px solid var(--border-subtle);
-  border-radius: 5px;
+  border-radius: 999px;
   background: var(--bg-panel-elevated);
   color: var(--text-secondary);
   font-size: 11px;
-  font-weight: 600;
+  font-weight: 500;
+  line-height: 1;
   white-space: nowrap;
   cursor: pointer;
 }
@@ -46155,7 +46160,7 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
 
 .review-todo__chip:focus-visible {
   outline: 2px solid var(--focus-ring);
-  outline-offset: 1px;
+  outline-offset: 2px;
 }
 
 .review-todo__chip:disabled {
