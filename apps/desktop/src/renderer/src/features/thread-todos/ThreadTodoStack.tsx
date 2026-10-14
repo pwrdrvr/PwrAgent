@@ -31,12 +31,12 @@ export type ThreadTodoStackProps = {
   /** Open cards for this thread, newest first. */
   todos: ThreadTodo[];
   view: ThreadTodosView;
-  onStartReview: (todo: ThreadTodo) => void;
+  onStartReview: (todo: ThreadTodo, options?: ThreadTodoResolveOptions) => void;
   /**
    * Sends a handoff's prompt to this thread as a reply. Resolves false when
    * the composer would not take it.
    */
-  onDoHere?: (todo: ThreadTodo) => Promise<boolean>;
+  onDoHere?: (todo: ThreadTodo, options?: ThreadTodoResolveOptions) => Promise<boolean>;
   /** Moves the stack below the find bar while it is open. */
   findOpen?: boolean;
 };
@@ -91,10 +91,7 @@ export function ThreadTodoStack(props: ThreadTodoStackProps) {
     resolution?: ThreadTodoResolution,
     options?: ThreadTodoResolveOptions,
   ): void => {
-    const resolving = options
-      ? view.resolve(target, status, resolution, options)
-      : view.resolve(target, status, resolution);
-    void resolving.then((resolved) => {
+    void view.resolve(target, status, resolution, options).then((resolved) => {
       if (resolved) {
         showNotice({
           todo: resolved,
@@ -117,8 +114,8 @@ export function ThreadTodoStack(props: ThreadTodoStackProps) {
   };
   const onDoHere = props.onDoHere;
   const doHere = onDoHere
-    ? (target: ThreadTodo): void => {
-        void onDoHere(target).then((sent) => {
+    ? (target: ThreadTodo, options?: ThreadTodoResolveOptions): void => {
+        void onDoHere(target, options).then((sent) => {
           if (!sent) {
             showNotice({
               todo: target,

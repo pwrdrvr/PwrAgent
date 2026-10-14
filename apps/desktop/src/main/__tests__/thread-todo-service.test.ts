@@ -647,6 +647,9 @@ describe("ThreadTodoService", () => {
 
     await expect(service.runAction(todo.id)).rejects.toMatchObject({ code: "open_items" });
     expect(mergePullRequest).not.toHaveBeenCalled();
+    // A card with nothing to run says so first, not that its steps are open.
+    const reminder = service.add({ ...THREAD, input: { title: "Steps", items: ["A"] } }).todo;
+    await expect(service.runAction(reminder.id)).rejects.toMatchObject({ code: "invalid_arguments" });
     await expect(service.runAction(todo.id, { allowOpenItems: true }))
       .resolves.toMatchObject({ status: "done", result: "Merged #42" });
   });

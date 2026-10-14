@@ -340,7 +340,7 @@ describe("ThreadTodoStack", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Handoff options" }));
     fireEvent.click(screen.getByRole("menuitem", { name: "Do it here" }));
-    expect(onDoHere).toHaveBeenCalledWith(handoff);
+    expect(onDoHere).toHaveBeenCalledWith(handoff, undefined);
 
     fireEvent.click(screen.getByRole("button", { name: "Handoff options" }));
     fireEvent.click(screen.getByRole("menuitem", { name: "Start thread on" }));
@@ -352,7 +352,7 @@ describe("ThreadTodoStack", () => {
     await act(async () => {
       fireEvent.click(screen.getByRole("menuitem", { name: "Handled elsewhere" }));
     });
-    expect(view.resolve).toHaveBeenCalledWith(handoff, "done", "handled_elsewhere");
+    expect(view.resolve).toHaveBeenCalledWith(handoff, "done", "handled_elsewhere", undefined);
   });
 
   it("shows a handoff's model and permissions", () => {
@@ -396,7 +396,7 @@ describe("ThreadTodoStack", () => {
     await act(async () => {
       fireEvent.click(screen.getByRole("menuitem", { name: "Do it here" }));
     });
-    expect(onDoHere).toHaveBeenCalledWith(handoff);
+    expect(onDoHere).toHaveBeenCalledWith(handoff, undefined);
     expect(screen.getByRole("status").textContent).toContain("The composer is busy.");
   });
 
@@ -426,7 +426,7 @@ describe("ThreadTodoStack", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Start review" }));
-    expect(onStartReview).toHaveBeenCalledWith(review);
+    expect(onStartReview).toHaveBeenCalledWith(review, undefined);
     expect(view.run).not.toHaveBeenCalled();
   });
 
@@ -527,7 +527,7 @@ describe("thread to-do checklists", () => {
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Done" }));
     });
-    expect(view.resolve).toHaveBeenCalledWith(card, "done", undefined);
+    expect(view.resolve).toHaveBeenCalledWith(card, "done", undefined, undefined);
   });
 
   it("dismisses a card with open steps without asking", async () => {
@@ -540,7 +540,7 @@ describe("thread to-do checklists", () => {
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Dismiss to-do: Ship it" }));
     });
-    expect(view.resolve).toHaveBeenCalledWith(card, "dismissed", undefined);
+    expect(view.resolve).toHaveBeenCalledWith(card, "dismissed", undefined, undefined);
   });
 
   it("asks before an action that would complete the card", async () => {
@@ -559,7 +559,7 @@ describe("thread to-do checklists", () => {
     expect(onStartReview).not.toHaveBeenCalled();
     expect(screen.getByText("1 step still open. Start the review anyway?")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Start review" }));
-    expect(onStartReview).toHaveBeenCalledWith(review);
+    expect(onStartReview).toHaveBeenCalledWith(review, { allowOpenItems: true });
     cleanup();
 
     const handoff = todo({
@@ -578,6 +578,47 @@ describe("thread to-do checklists", () => {
       fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
     });
     expect(handoffView.run).toHaveBeenCalledWith(handoff, { allowOpenItems: true });
+  });
+
+  it("drops the question once the last open step is checked", () => {
+    const open = todo({ id: "k10", items: steps([true, false]) });
+    const view = createView([open]);
+    const { rerender } = render(
+      <ThreadTodoStack threadKey="codex:checklist-10" todos={[open]} view={view} onStartReview={vi.fn()} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    expect(screen.getByText("1 step still open. Mark it done anyway?")).toBeTruthy();
+
+    const ticked = { ...open, items: steps([true, true]) };
+    rerender(
+      <ThreadTodoStack threadKey="codex:checklist-10" todos={[ticked]} view={view} onStartReview={vi.fn()} />,
+    );
+    expect(screen.queryByText(/still open/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Done anyway" })).toBeNull();
+    // Reopening a step later does not bring the old question back.
+    rerender(
+      <ThreadTodoStack threadKey="codex:checklist-10" todos={[open]} view={view} onStartReview={vi.fn()} />,
+    );
+    expect(screen.queryByText(/still open/)).toBeNull();
+  });
+
+  it("returns focus to the card's buttons when the question is cancelled", () => {
+    // A handoff's buttons are a split button, not the question's plain
+    // buttons, so Cancel's node goes away with the question.
+    const card = todo({
+      id: "k11",
+      kind: "handoff",
+      action: { type: "start_thread", prompt: "Carry on" },
+      items: steps([false]),
+    });
+    render(
+      <ThreadTodoStack threadKey="codex:checklist-11" todos={[card]} view={createView([card])} onStartReview={vi.fn()} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
+    const cancel = screen.getByRole("button", { name: "Cancel" });
+    expect(document.activeElement).toBe(cancel);
+    fireEvent.click(cancel);
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Start thread" }));
   });
 
   it("names the open steps in the merge confirmation, which is the override", async () => {

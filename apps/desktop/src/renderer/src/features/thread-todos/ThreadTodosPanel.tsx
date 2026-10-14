@@ -21,7 +21,7 @@ import {
 import { OperatorWaitRow } from "../operator-requests/OperatorWaitRow";
 import { isBlockingWait, type OperatorWait } from "../operator-requests/operator-waits";
 import { ThreadTodoCard, formatTodoAge } from "./ThreadTodoCard";
-import type { ThreadTodosView } from "./thread-todos-view";
+import type { ThreadTodoResolveOptions, ThreadTodosView } from "./thread-todos-view";
 
 export type ThreadTodoScope = "thread" | "project" | "all";
 
@@ -70,8 +70,11 @@ export type ThreadTodosPanelProps = {
   threadKey: string;
   /** Directory key of that thread's project, when it has one. */
   projectKey?: string;
-  onStartReview: (todo: ThreadTodo) => void;
-  onDoHere?: (todo: ThreadTodo) => void | Promise<unknown>;
+  onStartReview: (todo: ThreadTodo, options?: ThreadTodoResolveOptions) => void;
+  onDoHere?: (
+    todo: ThreadTodo,
+    options?: ThreadTodoResolveOptions,
+  ) => void | Promise<unknown>;
 };
 
 /**
@@ -309,12 +312,11 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
                           instances={view.instances}
                           projectMenu={view.projectMenu}
                           onResolve={(target, status, resolution, options) => {
-                            const resolving = options
-                              ? view.resolve(target, status, resolution, options)
-                              : view.resolve(target, status, resolution);
-                            void resolving.catch((error: unknown) => {
-                              console.warn("Resolving a to-do failed.", error);
-                            });
+                            void view.resolve(target, status, resolution, options).catch(
+                              (error: unknown) => {
+                                console.warn("Resolving a to-do failed.", error);
+                              },
+                            );
                           }}
                           onRun={(target, options) => {
                             void view.run(target, options).catch((error: unknown) => {

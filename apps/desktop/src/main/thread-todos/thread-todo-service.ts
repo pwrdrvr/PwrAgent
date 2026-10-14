@@ -485,15 +485,15 @@ export class ThreadTodoService {
     if (todo.status !== "open") {
       throw new ThreadTodoError("conflict", "This to-do is already resolved.");
     }
-    if (!options.allowOpenItems) {
-      assertNoOpenItems(todo);
-    }
     const action = todo.action;
     if (!action || action.type === "start_review") {
       throw new ThreadTodoError(
         "invalid_arguments",
         "This to-do has no action that runs here.",
       );
+    }
+    if (!options.allowOpenItems) {
+      assertNoOpenItems(todo);
     }
     if (this.running.has(id)) {
       throw new ThreadTodoError("conflict", "This to-do's action is already running.");
