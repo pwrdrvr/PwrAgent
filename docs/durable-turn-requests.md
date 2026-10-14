@@ -152,7 +152,7 @@ transcript. This does not permit automatic redispatch.
 
 ## Admission, crash boundaries and persistence
 
-The owner uses profile-owned `state.db`, schema version 73. An immediate
+The owner uses profile-owned `state.db`, schema version 74. An immediate
 transaction checks the unique `(caller_scope, request_id)` key, payload conflict
 and quotas, then inserts admission. Another immediate transaction claims only
 an accepted request with no result. Receipt/claim commits use SQLite
