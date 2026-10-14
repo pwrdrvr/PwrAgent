@@ -4,10 +4,9 @@ import { appendFileSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createInterface } from "node:readline";
-import { createReadStream } from "node:fs";
-import { EXIT, assertReady, atomicJson, captureLaunchRejections, claimRun, cleanEnvironment, configToml, deadlineCall, dispatchTurn, errorStatus, launchHeadlessElectron, observeFamilyBudget, readBudgetThread, retainUsageSnapshot, sanitizer, budgetStop, waitForOutcome, probeInterrupt, sanitizedProtocolRecord, validateInput } from "./lib/headless-contract.mjs";
+import { EXIT, assertReady, atomicJson, captureLaunchRejections, claimRun, cleanEnvironment, configToml, deadlineCall, dispatchTurn, errorStatus, launchHeadlessElectron, observeFamilyBudget, readBudgetThread, retainUsageSnapshot, sanitizer, budgetStop, waitForOutcome, probeInterrupt, validateInput } from "./lib/headless-contract.mjs";
 import { stageTaskExports } from "./lib/task-export.mjs";
+import { closeHeadlessApp, createOwnedCaptureRoot, exportOwnedProtocol } from "./lib/attempt-lifecycle.mjs";
 
 const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = process.argv.slice(2);
@@ -25,6 +24,8 @@ let redact = sanitizer();
 let stopReason;
 let watchdog;
 let logFd;
+let ownedCaptureRoot;
+let artifactsSafe = true;
 const logSubscriptions = [];
 const persist = () => atomicJson(claim.file, redact({ ...result, inputHash: claim.hash }));
 const requestStop = (reason) => { stopReason ??= reason; };
@@ -35,27 +36,6 @@ function strings(value) {
   if (typeof value === "string") return [value];
   if (value && typeof value === "object") return Object.values(value).flatMap(strings);
   return [];
-}
-async function exportProtocol(root) {
-  const destination = path.join(output, "protocol.jsonl");
-  writeFileSync(destination, "", { mode: 0o600 });
-  async function walk(directory) {
-    for (const entry of readdirSync(directory, { withFileTypes: true })) {
-      const file = path.join(directory, entry.name);
-      if (entry.isDirectory()) await walk(file);
-      else if (entry.name.endsWith(".jsonl")) {
-        const lines = createInterface({ input: createReadStream(file), crlfDelay: Infinity });
-        for await (const line of lines) {
-          if (!line.trim()) continue;
-          // CaptureStore keeps the wire payload only in raw. Parse it before
-          // redacting so usage/capability evidence survives without an unsafe
-          // second copy of serialized credential fields.
-          appendFileSync(destination, JSON.stringify(sanitizedProtocolRecord(JSON.parse(line), redact)) + "\n");
-        }
-      }
-    }
-  }
-  if (existsSync(root)) await walk(root);
 }
 try {
   input = validateInput(JSON.parse(readFileSync(args[1], "utf8")));
@@ -89,8 +69,8 @@ try {
   mkdirSync(profile, { recursive: true, mode: 0o700 });
   mkdirSync(home, { recursive: true, mode: 0o700 });
   writeFileSync(path.join(profile, "config.toml"), configToml(input, path.join(runtime.directory, "codex")), { mode: 0o600 });
-  const captureRoot = path.join(input.profileDir, "protocol");
-  const env = cleanEnvironment(input, home, captureRoot);
+  ownedCaptureRoot = createOwnedCaptureRoot(input.profileDir);
+  const env = cleanEnvironment(input, home, ownedCaptureRoot.directory);
   const { _electron: electron } = await import("@playwright/test");
   watchdog = setTimeout(() => requestStop("timeout"), input.timeoutMs);
   // A bounded overall watchdog also covers a hung launch/IPC/cleanup. Container
@@ -203,14 +183,21 @@ try {
   clearTimeout(watchdog);
   if (app) {
     if (result.status !== "completed" && result.threadId && result.turnId && call) await call("interruptTurn", { backend: "codex", threadId: result.threadId, ...(result.turnId ? { turnId: result.turnId } : {}) }).catch(() => undefined);
-    try { await deadlineCall("closeElectron", app.close(), 15_000); result.cleanup = "graceful"; }
-    catch { app.process().kill("SIGKILL"); result.cleanup = "forced"; if (result.status === "completed") result.status = "failed"; }
+    const cleanup = await closeHeadlessApp(app);
+    Object.assign(result, redact(cleanup));
+    artifactsSafe = cleanup.artifactsSafe;
+    if (!artifactsSafe) {
+      result.artifactError = "Artifact collection deferred: controller must stop the container before external collection";
+      if (result.status === "completed") result.status = "failed";
+    }
   }
   for (const unsubscribe of logSubscriptions) unsubscribe();
   if (logFd !== undefined) closeSync(logFd);
   if (input && claim && !claim.prior) {
-    try { await exportProtocol(path.join(input.profileDir, "protocol")); } catch (error) { result.artifactError = redact(error.message); }
-    if (result.baseCommit) {
+    if (artifactsSafe) {
+      try { await exportOwnedProtocol(ownedCaptureRoot, path.join(output, "protocol.jsonl"), redact); } catch (error) { result.artifactError = redact(error.message); }
+    }
+    if (artifactsSafe && result.baseCommit) {
       try {
         writeFileSync(path.join(output, "patch.diff"), redact(git(["diff", "--binary", result.baseCommit])), { mode: 0o600 });
         const untracked = git(["ls-files", "--others", "--exclude-standard", "-z"]);
