@@ -192,6 +192,11 @@ export class DurableTurnRequestService {
     terminalStatus?: string;
   }): void {
     if (!["started", "terminal", "failed", "cancelled"].includes(event.status)) return;
+    // Queue availability (idle/notLoaded/unknown) is not a turn outcome.
+    const outcome = event.status === "cancelled" || event.terminalStatus === "turn/cancelled" ? "cancelled"
+      : event.terminalStatus === "turn/failed" ? "failed"
+        : event.terminalStatus === "turn/completed" ? "completed" : undefined;
+    if (event.status === "terminal" && !outcome) return;
     const db = this.options.stateDb.raw;
     const match = db.prepare("SELECT receipt_json FROM durable_turn_requests WHERE queue_entry_id = ?").get(event.queueEntryId) as { receipt_json: string } | undefined;
     if (!match) return;
@@ -213,8 +218,6 @@ export class DurableTurnRequestService {
           this.write(row.caller_scope, { ...receipt, state: "uncertain", updatedAt: this.now() });
         }
       } else {
-        const outcome = event.status === "cancelled" || event.terminalStatus === "turn/cancelled" ? "cancelled"
-          : event.terminalStatus === "failed" || event.terminalStatus === "turn/failed" ? "failed" : "completed";
         this.write(row.caller_scope, { ...receipt, state: "completed", outcome, updatedAt: this.now() });
       }
     });

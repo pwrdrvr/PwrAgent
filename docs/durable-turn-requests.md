@@ -62,10 +62,16 @@ V1 is a distinct new-turn queue operation (dispatch forces `delivery: "new_turn"
 It is not grouped agent steering. `queueEntryId` and `federationTarget` are
 server/routing fields and rejected in the canonical request. A request is at
 most 64 KiB of canonical UTF-8 JSON. Ephemeral `federationBlob` transfer IDs are
-rejected; clients must use supported stable inline inputs/references. A file
-reference hashes its reference fields, not mutable filesystem bytes; callers
-that need content identity must capture a stable input rather than a mutable
-path. Large durable attachment transfer needs a future content-addressed protocol.
+rejected; clients must use supported stable inline inputs/references. Remote
+Federation submit/steer rejects `localFile`, `localImage` and image `file:` URLs
+before admission, including over relays. Inline file/image content is accepted
+without invoking the staged resolver or rewriting the canonical payload. V1 has
+no verified owner-issued file-reference protocol. Trusted local runtime callers
+may still pass local references; adapters must not grant remote clients that
+trust implicitly. A local file reference hashes its reference fields, not
+mutable filesystem bytes; callers that need content identity must capture a
+stable input rather than a mutable path. Large durable attachment transfer needs
+a future content-addressed protocol.
 
 ## Explicit active-turn steering
 
@@ -127,7 +133,7 @@ Receipt lifecycle can advance between replies.
 | `dispatching` | Durable claim committed before calling the queue/provider; another retry must only reconcile. |
 | `accepted`, queued result | Server queue admitted the prompt, not provider acceptance. Correlate by `queueEntryId`. |
 | `dispatched` | Owning queue observed start/returned the provider turn identity. Read transcript via `result.turnId`. |
-| `completed` | Owner queue observed terminal/cancellation; `outcome` is completed, failed or cancelled. This means execution ended, not necessarily succeeded. |
+| `completed` | Owner queue observed explicit `turn/completed`, `turn/failed`, `turn/cancelled`, or queued cancellation; `outcome` is completed, failed or cancelled. This means execution ended, not necessarily succeeded. |
 | `uncertain` | Downstream acceptance cannot be proved or a queued entry disappeared. Never automatically dispatch it again. Inspect transcript/queue and let the operator decide. |
 
 Existing `thread/turnQueue/updated` events contain receipt `queueEntryId` and the
@@ -136,6 +142,13 @@ the receipt stores identities rather than duplicating transcript text. After a
 stream gap, reconcile the receipt and existing transcript/queue APIs. There is
 no new unrestricted event broadcast, and status polling performs no writes
 except a one-time transition to uncertain.
+
+Generic queue releases (`idle`, `notLoaded`, `unknown`, or absent status) are
+availability signals, not terminal proof. They do not change the receipt or
+write an outcome. If such a release removes a running entry before its explicit
+terminal event arrives, the queue may lose correlation; the receipt remains
+`dispatched` without an outcome and completion must be reconciled from the
+transcript. This does not permit automatic redispatch.
 
 ## Admission, crash boundaries and persistence
 

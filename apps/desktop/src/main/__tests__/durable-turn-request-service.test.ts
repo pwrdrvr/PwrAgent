@@ -135,17 +135,42 @@ describe("durable turn request inbox", () => {
     expect(fixture.dispatch).toHaveBeenCalledTimes(1);
     fixture.service.observeQueueEvent({ backend: "codex", threadId: "thread", queueEntryId: admitted.queueEntryId, status: "started", turnId: "real-turn" });
     expect((await fixture.service.get(SCOPE, lookup(value)))?.result?.turnId).toBe("real-turn");
-    fixture.service.observeQueueEvent({ backend: "codex", threadId: "thread", queueEntryId: admitted.queueEntryId, status: "terminal", terminalStatus: "failed" });
+    fixture.service.observeQueueEvent({ backend: "codex", threadId: "thread", queueEntryId: admitted.queueEntryId, status: "terminal", terminalStatus: "turn/failed" });
     expect(await fixture.service.get(SCOPE, lookup(value))).toMatchObject({ state: "completed", outcome: "failed" });
   });
 
   it("preserves terminal proof when queue events precede the dispatch response", async () => {
     const fixture = setup();
     fixture.dispatch.mockImplementation(async (request) => {
-      fixture.service.observeQueueEvent({ backend: "codex", threadId: "thread", queueEntryId: request.queueEntryId!, status: "terminal" });
+      fixture.service.observeQueueEvent({ backend: "codex", threadId: "thread", queueEntryId: request.queueEntryId!, status: "terminal", terminalStatus: "turn/completed" });
       return { backend: "codex", threadId: "thread", turnId: "turn" };
     });
     expect((await fixture.service.submit(SCOPE, submission())).state).toBe("completed");
+  });
+
+  it.each([undefined, "idle", "notLoaded", "unknown", "failed", "completed"])(
+    "does not treat queue availability %s as terminal proof or write a receipt",
+    async (terminalStatus) => {
+      vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+      const fixture = setup();
+      const value = submission();
+      const receipt = await fixture.service.submit(SCOPE, value);
+      const { writes } = await measureSqliteWrites(() => {
+        fixture.service.observeQueueEvent({ backend: "codex", threadId: "thread", queueEntryId: receipt.queueEntryId, status: "terminal", terminalStatus });
+      });
+      expect(writes.commits).toBe(0);
+      expect(await fixture.service.get(SCOPE, lookup(value))).toEqual(receipt);
+      fixture.service.observeQueueEvent({ backend: "codex", threadId: "thread", queueEntryId: receipt.queueEntryId, status: "terminal", terminalStatus: "turn/failed" });
+      expect(await fixture.service.get(SCOPE, lookup(value))).toMatchObject({ state: "completed", outcome: "failed" });
+    },
+  );
+
+  it.each(["completed", "failed", "cancelled"] as const)("records only explicit turn/%s terminal proof", async (outcome) => {
+    const fixture = setup();
+    const value = submission();
+    const receipt = await fixture.service.submit(SCOPE, value);
+    fixture.service.observeQueueEvent({ backend: "codex", threadId: "thread", queueEntryId: receipt.queueEntryId, status: "terminal", terminalStatus: `turn/${outcome}` });
+    expect(await fixture.service.get(SCOPE, lookup(value))).toMatchObject({ state: "completed", outcome });
   });
 
   it("preserves start proof when a delayed queue-admission response arrives after actual start", async () => {
@@ -230,7 +255,7 @@ describe("durable turn request inbox", () => {
     const value = submission();
     const { writes, result: receipt } = await measureSqliteWrites(async () => {
       const receipt = await fixture.service.submit(SCOPE, value);
-      fixture.service.observeQueueEvent({ backend: "codex", threadId: "thread", queueEntryId: receipt.queueEntryId, status: "terminal" });
+      fixture.service.observeQueueEvent({ backend: "codex", threadId: "thread", queueEntryId: receipt.queueEntryId, status: "terminal", terminalStatus: "turn/completed" });
       return receipt;
     });
     expectSqliteWriteBudget({ scenario: "durable-turn-request", note: "One prompt: admission, dispatch claim, dispatch receipt and terminal receipt; no payload persistence.", writes });
@@ -244,6 +269,35 @@ describe("durable turn request inbox", () => {
     expect(retries.writes.commits).toBe(0);
     expect(fixture.file.db.raw.pragma("synchronous", { simple: true })).toBe(1);
   });
+});
+
+it.each(["turn/failed", "turn/cancelled"])("leaves a generic release awaiting reconciliation when %s arrives after queue removal", async (terminalStatus) => {
+  let fixture!: ReturnType<typeof setup>;
+  const provider = vi.fn(async () => ({ backend: "codex" as const, threadId: "thread", turnId: "turn" }));
+  const queue = new ThreadTurnQueue({
+    startTurn: provider,
+    onLifecycle: (event) => fixture.service.observeQueueEvent({
+      backend: event.entry.backend, threadId: event.entry.threadId, queueEntryId: event.entry.id,
+      status: event.type, turnId: "turnId" in event ? event.turnId : undefined,
+      terminalStatus: event.type === "terminal" ? event.status : undefined,
+    }),
+  });
+  cleanups.push(() => queue.close());
+  fixture = setup({ dispatch: async (request) => {
+    const { delivery: _delivery, ...entry } = request;
+    const submitted = await queue.submit({ ...entry, id: request.queueEntryId, origin: "manual" });
+    if (submitted.status !== "started") throw new Error("Test turn did not start");
+    return { backend: request.backend, threadId: request.threadId, queueEntryId: submitted.entry.id, queueStatus: "started", turnId: submitted.turnId };
+  } });
+  const value = submission();
+  const receipt = await fixture.service.submit(SCOPE, value);
+  await queue.releaseThread({ backend: "codex", threadId: "thread", status: "idle" });
+  await queue.releaseThread({ backend: "codex", threadId: "thread", turnId: "turn", status: terminalStatus });
+  expect(await fixture.service.get(SCOPE, lookup(value))).toEqual(receipt);
+  expect(receipt.state).toBe("dispatched");
+  expect(receipt.outcome).toBeUndefined();
+  expect(await fixture.service.submit(SCOPE, value)).toEqual(receipt);
+  expect(provider).toHaveBeenCalledTimes(1);
 });
 
 it("routes a durable device submission through gateway -> owner -> actual backend, then reconciles an ACK-lost retry", async () => {
