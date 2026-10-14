@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { stat } from "node:fs/promises";
+import path from "node:path";
 import type { AgentEvent, AppServerThreadSummary, ThreadOverlayState } from "@pwragent/shared";
 import { ARCHIVE_CLEANUP_PAUSE_MS } from "../app-server/archive-cleanup-queue";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
@@ -130,14 +131,14 @@ describe("archive cleanup pipeline", () => {
     }] }));
     fixture.client.listArchiveCleanupThreadsPage.mockImplementation(async (params) => ({ threads: params.archived ? rows : [], nextCursor: undefined }));
     vi.mocked(stat).mockImplementation(async (filePath) => {
-      if (filePath === "/contrived/denied") throw Object.assign(new Error("Access denied"), { code: "EACCES" });
+      if (filePath === path.normalize("/contrived/denied")) throw Object.assign(new Error("Access denied"), { code: "EACCES" });
       return { isDirectory: () => true } as Awaited<ReturnType<typeof stat>>;
     });
     const scan = fixture.registry.repairArchivedThreadWorktrees({ dryRun: true });
     await vi.advanceTimersByTimeAsync(10_000);
     const result = await scan;
-    expect(result.cleanup).toEqual([expect.objectContaining({ worktreePath: "/contrived/denied", removedWorktree: false, error: "Access denied" })]);
-    expect(result.candidates).toEqual([{ backend: "codex", threadId: "valid", worktreePath: "/contrived/valid" }]);
+    expect(result.cleanup).toEqual([expect.objectContaining({ worktreePath: path.normalize("/contrived/denied"), removedWorktree: false, error: "Access denied" })]);
+    expect(result.candidates).toEqual([{ backend: "codex", threadId: "valid", worktreePath: path.normalize("/contrived/valid") }]);
   });
 
   it("discovers more than 500 archived worktrees in bounded pages without mutating them", async () => {

@@ -34160,7 +34160,7 @@ export class DesktopBackendRegistry {
       // preferring its snapshot over a metadata-only detached fallback.
       if (seenWorktreePaths.has(resolvedPath)) continue;
       seenWorktreePaths.add(resolvedPath);
-      candidates.push({ ...candidate, worktreePath: resolvedPath });
+      candidates.push(container ? { ...candidate, worktreePath: resolvedPath } : candidate);
     }
     return candidates;
   }

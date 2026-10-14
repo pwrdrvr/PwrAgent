@@ -97,7 +97,7 @@ describe("archive worktrees across a desktop restart", () => {
     const report = await instance.registry.repairArchivedThreadWorktrees();
     expect(report.cleanup.every((item) => !item.removedWorktree)).toBe(true);
     expect(await readFile(path.join(fixture.worktree, "file.txt"), "utf8")).toBe("preserve ACP edits\n");
-    expect(await fixture.git(fixture.repo, ["worktree", "list", "--porcelain"])).toContain(fixture.worktree);
+    expect(await fixture.git(fixture.repo, ["worktree", "list", "--porcelain"])).toContain(fixture.worktree.split(path.sep).join("/"));
     if (scenario !== "late ACP owner") expect(await fixture.git(fixture.repo, ["for-each-ref", "refs/codex/snapshots/"])).toBe("");
     expect(instance.acpSessionStore.getSession("acp:grok", "acp-owner")?.archivedAt).toBe(1);
     // Restore only changes ACP metadata: its original checkout must survive.
@@ -106,7 +106,7 @@ describe("archive worktrees across a desktop restart", () => {
     expect(await readFile(path.join(fixture.worktree, "file.txt"), "utf8")).toBe("preserve ACP edits\n");
   });
 
-  it.each(["file", "uninspectable path"])("records a historical inspection failure and still completes a valid repair (%s)", async (scenario) => {
+  it.each(["file", "non-directory ancestor"])("retains invalid historical paths and still completes a valid repair (%s)", async (scenario) => {
     const fixture = await createFixture();
     const replaced = path.join(path.dirname(fixture.repo), "replaced-checkout");
     await writeFile(replaced, "retain this file\n");
@@ -117,10 +117,13 @@ describe("archive worktrees across a desktop restart", () => {
     const instance = fixture.reopen();
     await instance.store.addLinkedDirectory({ backend: "codex", threadId: "invalid", directory: { ...fixture.directory, worktreePath: invalid } });
     const first = await runOneTimeArchivedWorktreeRepair({ db: instance.db.raw, repair: async () => await instance.registry.repairArchivedThreadWorktrees() });
-    expect(first?.cleanup).toEqual([
-      expect.objectContaining({ worktreePath: invalid, removedWorktree: false, error: expect.any(String) }),
-      expect.objectContaining({ worktreePath: fixture.worktree, removedWorktree: true }),
-    ]);
+    // Windows reports ENOENT below a file; POSIX reports ENOTDIR. Both must
+    // retain the file, continue the valid repair, and complete the once marker.
+    const missingBelowFile = scenario === "non-directory ancestor" && process.platform === "win32";
+    const retained = expect.objectContaining({ worktreePath: invalid, removedWorktree: false, error: expect.any(String) });
+    const removed = expect.objectContaining({ worktreePath: fixture.worktree, removedWorktree: true });
+    expect(first?.cleanup).toEqual(missingBelowFile ? [removed] : [retained, removed]);
+    if (missingBelowFile) expect(first?.missingWorktrees).toBe(1);
     expect(await readFile(replaced, "utf8")).toBe("retain this file\n");
     await expect(stat(fixture.worktree)).rejects.toMatchObject({ code: "ENOENT" });
     const again = vi.fn(async () => await instance.registry.repairArchivedThreadWorktrees());
