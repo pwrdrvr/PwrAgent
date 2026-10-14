@@ -33201,7 +33201,8 @@ export class DesktopBackendRegistry {
     for (const thread of inventory.archivedThreads) {
       // A removed checkout may no longer enrich to a linked directory. Its
       // archived provider cwd still proves association with a managed id.
-      if (thread.source === "codex" && thread.projectKey && this.worktreeContainerService.containerPath(thread.projectKey)) {
+      if (thread.source !== "codex") continue;
+      if (thread.projectKey && await this.worktreeContainerService.containerPath(thread.projectKey)) {
         ownersByPath.set(normalizeWorktreePathForComparison(thread.projectKey), thread);
       }
       for (const directory of thread.linkedDirectories) {
@@ -33216,9 +33217,13 @@ export class DesktopBackendRegistry {
       try {
         if (!(await stat(worktreePath)).isDirectory()) throw new Error(`Worktree path is not a directory: ${worktreePath}`);
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+          report.cleanup.push({ worktreePath, removedWorktree: false, deletedBranch: false,
+            error: error instanceof Error ? error.message : String(error) });
+          continue;
+        }
         report.missingWorktrees += 1;
-        const containerPath = thread.source === "codex" ? this.worktreeContainerService.containerPath(worktreePath) : undefined;
+        const containerPath = thread.source === "codex" ? await this.worktreeContainerService.containerPath(worktreePath) : undefined;
         if (containerPath && !seenContainers.has(containerPath)) {
           seenContainers.add(containerPath);
           const inspection = await this.worktreeContainerService.inspect(worktreePath);
@@ -33227,6 +33232,12 @@ export class DesktopBackendRegistry {
             report.emptyContainerCandidates.push({ backend: thread.source, threadId: thread.id, worktreePath, containerIdentity: inspection.identity });
           } else if (inspection?.error) report.containerCleanup.push(inspection);
         }
+        continue;
+      }
+      if (this.hasArchivedAcpWorktreeOwner(worktreePath, inventory)) {
+        report.protectedWorktrees += 1;
+        report.cleanup.push({ worktreePath, removedWorktree: false, deletedBranch: false,
+          skippedReason: "Archived ACP session owns this worktree; ACP restore does not recreate snapshots." });
         continue;
       }
       if (inventory.worktreeEvidence?.externalPaths.has(worktreePath)
@@ -33257,6 +33268,7 @@ export class DesktopBackendRegistry {
           backend: candidate.backend, threadId: candidate.threadId, archivedAt: Date.now(),
           cleanup: await this.archiveThreadWorktrees({
             ...current, backend: candidate.backend, thread, context,
+            preserveArchivedAcpWorktrees: true,
           }),
         };
       });
@@ -33276,7 +33288,8 @@ export class DesktopBackendRegistry {
       assertCurrent();
       const key = buildThreadIdentityKey(candidate.backend, candidate.threadId);
       const completion = this.archiveCleanupQueue.enqueue(key, async (context) => {
-        const containerPath = this.worktreeContainerService.containerPath(candidate.worktreePath)!;
+        const containerPath = await this.worktreeContainerService.containerPath(candidate.worktreePath);
+        if (!containerPath) throw new Error("Selected worktree root is unavailable; the container was kept.");
         const admission = { ...candidate, containerPath };
         this.archiveWorktreeRemovalAdmissions.add(admission);
         try {
@@ -33307,7 +33320,7 @@ export class DesktopBackendRegistry {
       } catch (error) {
         assertCurrent();
         report.containerCleanup.push({ worktreePath: candidate.worktreePath,
-          containerPath: this.worktreeContainerService.containerPath(candidate.worktreePath)!, removed: false,
+          containerPath: path.dirname(candidate.worktreePath), removed: false,
           error: error instanceof Error ? error.message : String(error) });
       }
     }
@@ -33317,8 +33330,10 @@ export class DesktopBackendRegistry {
 
   private isWorktreeContainerProtected(containerPath: string, inventory: Pick<ArchiveCleanupMetadata, "activeThreads" | "worktreeEvidence">): boolean {
     const within = (value: string) => {
-      const relative = path.relative(containerPath, path.resolve(value));
-      return relative === "" || (!path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${path.sep}`));
+      return this.worktreeContainerService.comparisonPaths(containerPath).some((candidate) => {
+        const relative = path.relative(candidate, path.resolve(value));
+        return relative === "" || (!path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${path.sep}`));
+      });
     };
     if ([...(inventory.worktreeEvidence?.externalPaths ?? [])].some(within)) return true;
     return inventory.activeThreads.some((thread) =>
@@ -33327,6 +33342,13 @@ export class DesktopBackendRegistry {
         const worktreePath = linkedDirectoryWorktreePath(directory);
         return worktreePath && within(worktreePath);
       }),
+    );
+  }
+
+  private hasArchivedAcpWorktreeOwner(worktreePath: string, inventory: Pick<ArchiveCleanupMetadata, "worktreeEvidence">): boolean {
+    return this.worktreeContainerService.worktreeComparisonPaths(worktreePath).some((value) =>
+      (inventory.worktreeEvidence?.archivedByPath.get(normalizeWorktreePathForComparison(value)) ?? [])
+        .some((thread) => thread.source !== "codex"),
     );
   }
 
@@ -33643,6 +33665,7 @@ export class DesktopBackendRegistry {
     context?: ArchiveCleanupContext;
     codexRolloutMissing?: boolean;
     worktreeEvidence?: ArchiveCleanupMetadata["worktreeEvidence"];
+    preserveArchivedAcpWorktrees?: boolean;
   }): Promise<ArchiveThreadCleanupResult[]> {
     // Ownership may live on another (even archived) thread using the same
     // checkout. A provider alias without the marker must not authorize removal.
@@ -33691,6 +33714,10 @@ export class DesktopBackendRegistry {
     const cleanupCandidate = async (candidate: WorktreeArchiveCandidate): Promise<ArchiveThreadCleanupResult> => {
       await params.context?.checkpoint();
       try {
+        if (params.preserveArchivedAcpWorktrees && this.hasArchivedAcpWorktreeOwner(candidate.worktreePath, params)) {
+          return { worktreePath: candidate.worktreePath, removedWorktree: false, deletedBranch: false,
+            skippedReason: "Archived ACP session owns this worktree; ACP restore does not recreate snapshots." };
+        }
         if (externalWorktreePaths.has(normalizeWorktreePathForComparison(candidate.worktreePath))) {
           return {
             worktreePath: candidate.worktreePath,
@@ -33734,7 +33761,7 @@ export class DesktopBackendRegistry {
           backend: params.backend, threadId: params.thread.id,
           worktreePath: normalizeWorktreePathForComparison(candidate.worktreePath),
         };
-        const managedContainerPath = params.backend === "codex" ? this.worktreeContainerService.containerPath(candidate.worktreePath) : undefined;
+        const managedContainerPath = params.backend === "codex" ? await this.worktreeContainerService.containerPath(candidate.worktreePath) : undefined;
         const containerBefore = managedContainerPath ? await this.worktreeContainerService.inspect(candidate.worktreePath) : undefined;
         if (containerBefore?.error) backendRegistryLog.warn("archive worktree container inspection failed", containerBefore);
         const snapshot = await this.worktreeArchiveService.archive({
@@ -33759,6 +33786,9 @@ export class DesktopBackendRegistry {
               throw new Error("Another thread lifecycle mutation is still in flight; the worktree was kept. Retry archive after it settles.");
             }
               const key = normalizeWorktreePathForComparison(candidate.worktreePath);
+              if (params.preserveArchivedAcpWorktrees && this.hasArchivedAcpWorktreeOwner(key, current)) {
+                throw new Error("Archived ACP session owns this worktree; the checkout was kept.");
+              }
               if (!current.thread.linkedDirectories.some((directory) => {
                 const worktreePath = linkedDirectoryWorktreePath(directory);
                 return worktreePath && normalizeWorktreePathForComparison(worktreePath) === key;
@@ -33842,7 +33872,7 @@ export class DesktopBackendRegistry {
           };
         }
 
-        const containerPath = params.backend === "codex" ? this.worktreeContainerService.containerPath(snapshot.worktreePath) : undefined;
+        const containerPath = params.backend === "codex" ? await this.worktreeContainerService.containerPath(snapshot.worktreePath) : undefined;
         if (containerPath && containerBefore?.identity && !this.isWorktreeContainerProtected(containerPath, removalMetadata ?? params)) {
           const containerAdmission = { ...admission, containerPath };
           this.archiveWorktreeRemovalAdmissions.add(containerAdmission);
@@ -34014,7 +34044,8 @@ export class DesktopBackendRegistry {
       backend: params.backend,
       threadId: params.threadId,
     });
-    const candidates = this.buildRestoreThreadWorktreeCandidates({
+    const candidates = await this.buildRestoreThreadWorktreeCandidates({
+      backend: params.backend,
       overlay,
       thread: params.thread,
     });
@@ -34096,10 +34127,11 @@ export class DesktopBackendRegistry {
     );
   }
 
-  private buildRestoreThreadWorktreeCandidates(params: {
+  private async buildRestoreThreadWorktreeCandidates(params: {
+    backend: AppServerBackendKind;
     overlay?: ThreadOverlayState;
     thread?: AppServerThreadSummary;
-  }): WorktreeRestoreCandidate[] {
+  }): Promise<WorktreeRestoreCandidate[]> {
     const snapshotCandidates: WorktreeRestoreCandidate[] = [
       ...(params.overlay?.worktreeSnapshots ?? []),
     ]
@@ -34119,14 +34151,18 @@ export class DesktopBackendRegistry {
       snapshotCandidates,
     );
     const seenWorktreePaths = new Set<string>();
-    return [...snapshotCandidates, ...metadataCandidates].filter((candidate) => {
-      const resolvedPath = path.resolve(candidate.worktreePath);
-      if (seenWorktreePaths.has(resolvedPath)) {
-        return false;
-      }
+    const candidates: WorktreeRestoreCandidate[] = [];
+    for (const candidate of [...snapshotCandidates, ...metadataCandidates]) {
+      const container = params.backend === "codex" ? await this.worktreeContainerService.containerPath(candidate.worktreePath) : undefined;
+      const resolvedPath = container ? path.join(container, path.basename(candidate.worktreePath)) : path.resolve(candidate.worktreePath);
+      // The snapshot uses Git's canonical path while provider metadata can
+      // retain the home alias. Restore that physical checkout only once,
+      // preferring its snapshot over a metadata-only detached fallback.
+      if (seenWorktreePaths.has(resolvedPath)) continue;
       seenWorktreePaths.add(resolvedPath);
-      return true;
-    });
+      candidates.push({ ...candidate, worktreePath: resolvedPath });
+    }
+    return candidates;
   }
 
   private buildRestoreThreadMetadataCandidates(

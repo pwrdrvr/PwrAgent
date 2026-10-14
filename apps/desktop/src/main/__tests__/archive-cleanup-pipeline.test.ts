@@ -8,6 +8,13 @@ import { CountingBackendClient, codexThread, publishNotification } from "./fixtu
 import budgets from "./fixtures/archive-cleanup-budgets.json";
 
 vi.mock("../log", () => ({ getMainLogger: () => ({ debug() {}, info() {}, warn() {}, error() {} }) }));
+vi.mock("../app-server/worktree-container-service", () => ({ WorktreeContainerService: class {
+  // Every path in this harness is outside the managed root. Keep container
+  // discovery free of host I/O just like the contrived Git/stat operations.
+  async containerPath(_worktreePath: string): Promise<undefined> { return undefined; }
+  comparisonPaths(containerPath: string): string[] { return [containerPath]; }
+  worktreeComparisonPaths(worktreePath: string): string[] { return [worktreePath]; }
+} }));
 vi.mock("../app-server/thread-assets", async (importOriginal) => ({
   ...await importOriginal<typeof import("../app-server/thread-assets")>(),
   // The registry delivers `thread/deleted` only after removing the thread's
@@ -115,6 +122,24 @@ function build(active: AppServerThreadSummary[], target = codexThread({ id: "tar
 }
 
 describe("archive cleanup pipeline", () => {
+  it("retains an inaccessible historical path while discovering other repair candidates", async () => {
+    vi.useFakeTimers();
+    const fixture = build([]);
+    const rows = ["denied", "valid"].map((id) => codexThread({ id, linkedDirectories: [{
+      id, kind: "worktree", label: "repo", path: "/contrived/repo", worktreePath: `/contrived/${id}`,
+    }] }));
+    fixture.client.listArchiveCleanupThreadsPage.mockImplementation(async (params) => ({ threads: params.archived ? rows : [], nextCursor: undefined }));
+    vi.mocked(stat).mockImplementation(async (filePath) => {
+      if (filePath === "/contrived/denied") throw Object.assign(new Error("Access denied"), { code: "EACCES" });
+      return { isDirectory: () => true } as Awaited<ReturnType<typeof stat>>;
+    });
+    const scan = fixture.registry.repairArchivedThreadWorktrees({ dryRun: true });
+    await vi.advanceTimersByTimeAsync(10_000);
+    const result = await scan;
+    expect(result.cleanup).toEqual([expect.objectContaining({ worktreePath: "/contrived/denied", removedWorktree: false, error: "Access denied" })]);
+    expect(result.candidates).toEqual([{ backend: "codex", threadId: "valid", worktreePath: "/contrived/valid" }]);
+  });
+
   it("discovers more than 500 archived worktrees in bounded pages without mutating them", async () => {
     vi.useFakeTimers();
     const fixture = build([]);

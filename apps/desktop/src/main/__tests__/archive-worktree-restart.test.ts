@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -12,6 +12,8 @@ import { StateDb } from "../state/state-db";
 import { runOneTimeArchivedWorktreeRepair } from "../state/archived-worktree-repair";
 import { measureSqliteWrites } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
+import { AcpAgentStore } from "../acp/acp-agent-store";
+import { AcpSessionStore } from "../acp/acp-session-store";
 import { ArchiveWorktreeTransport, type ArchiveWorktreeThread } from "./fixtures/archive-worktree-transport";
 
 vi.mock("../log", () => ({ getMainLogger: () => ({ debug() {}, info() {}, warn() {}, error() {} }) }));
@@ -59,14 +61,103 @@ async function createFixture(managed = false) {
     databases.push(db);
     const store = new SqliteOverlayStore(db);
     const client = new CodexAppServerClient({ directoryResolver: async (cwd) => cwd === workspace.worktreePath ? [workspace] : [] });
-    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: store, messagingStore: null, threadTitleGenerationService: null });
+    const acpAgentStore = new AcpAgentStore(db);
+    const acpSessionStore = new AcpSessionStore(db);
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: store, messagingStore: null, threadTitleGenerationService: null,
+      acpAgentStore, acpSessionStore, discoverLocalAcpAgents: async () => [],
+      acpWorktreeRepositoryResolver: async (cwd) => cwd === worktree ? directory : undefined });
     registries.push(registry);
-    return { db, store, client, registry };
+    return { db, store, client, registry, acpAgentStore, acpSessionStore };
   };
   return { repo, worktree, directory, git, reopen, codexHome, container: path.dirname(worktree) };
 }
 
 describe("archive worktrees across a desktop restart", () => {
+  it.each(["ACP only", "shared with Codex", "late ACP owner", "shared through home alias"])("preserves archived ACP checkouts during repair (%s)", async (scenario) => {
+    const fixture = await createFixture(scenario === "shared through home alias");
+    let codexWorktree = fixture.worktree;
+    if (scenario === "shared through home alias") {
+      const alias = path.join(path.dirname(fixture.codexHome), "codex-home-alias");
+      await symlink(fixture.codexHome, alias, process.platform === "win32" ? "junction" : "dir");
+      vi.stubEnv("CODEX_HOME", alias);
+      codexWorktree = path.join(alias, "worktrees", "id", "repo");
+    }
+    ArchiveWorktreeTransport.threads = scenario === "ACP only" ? [] : [{ id: "codex-owner", cwd: codexWorktree, source: "cli", archived: true }];
+    const instance = fixture.reopen({ ...fixture.directory, worktreePath: codexWorktree });
+    instance.acpAgentStore.upsertInstalledAgent({ backendId: "acp:grok", registryId: "grok", name: "Grok",
+      distributionKind: "local", distributionSource: "grok --acp", installStatus: "installed", authStatus: "not-required",
+      verificationStatus: "not-applicable", allowlistRuleId: "fixture-grok", installedAt: 1, updatedAt: 1 });
+    const addAcpOwner = () => instance.acpSessionStore.upsertSession({ backendId: "acp:grok", sessionId: "acp-owner",
+      title: "Archived ACP owner", cwd: fixture.worktree, createdAt: 1, updatedAt: 1, executionMode: "default", status: "idle", archivedAt: 1 });
+    if (scenario === "late ACP owner") {
+      let activeReads = 0;
+      ArchiveWorktreeTransport.onList = (params) => { if (!params.archived && ++activeReads === 3) addAcpOwner(); };
+    } else addAcpOwner();
+    await writeFile(path.join(fixture.worktree, "file.txt"), "preserve ACP edits\n");
+    const report = await instance.registry.repairArchivedThreadWorktrees();
+    expect(report.cleanup.every((item) => !item.removedWorktree)).toBe(true);
+    expect(await readFile(path.join(fixture.worktree, "file.txt"), "utf8")).toBe("preserve ACP edits\n");
+    expect(await fixture.git(fixture.repo, ["worktree", "list", "--porcelain"])).toContain(fixture.worktree);
+    if (scenario !== "late ACP owner") expect(await fixture.git(fixture.repo, ["for-each-ref", "refs/codex/snapshots/"])).toBe("");
+    expect(instance.acpSessionStore.getSession("acp:grok", "acp-owner")?.archivedAt).toBe(1);
+    // Restore only changes ACP metadata: its original checkout must survive.
+    await instance.registry.restoreThread({ backend: "acp:grok", threadId: "acp-owner" });
+    expect(instance.acpSessionStore.getSession("acp:grok", "acp-owner")?.archivedAt).toBeUndefined();
+    expect(await readFile(path.join(fixture.worktree, "file.txt"), "utf8")).toBe("preserve ACP edits\n");
+  });
+
+  it.each(["file", "uninspectable path"])("records a historical inspection failure and still completes a valid repair (%s)", async (scenario) => {
+    const fixture = await createFixture();
+    const replaced = path.join(path.dirname(fixture.repo), "replaced-checkout");
+    await writeFile(replaced, "retain this file\n");
+    const invalid = scenario === "file" ? replaced : path.join(replaced, "missing-child");
+    ArchiveWorktreeTransport.threads = [
+      { id: "invalid", cwd: invalid, source: "cli", archived: true }, { id: "valid", cwd: fixture.worktree, source: "cli", archived: true },
+    ];
+    const instance = fixture.reopen();
+    await instance.store.addLinkedDirectory({ backend: "codex", threadId: "invalid", directory: { ...fixture.directory, worktreePath: invalid } });
+    const first = await runOneTimeArchivedWorktreeRepair({ db: instance.db.raw, repair: async () => await instance.registry.repairArchivedThreadWorktrees() });
+    expect(first?.cleanup).toEqual([
+      expect.objectContaining({ worktreePath: invalid, removedWorktree: false, error: expect.any(String) }),
+      expect.objectContaining({ worktreePath: fixture.worktree, removedWorktree: true }),
+    ]);
+    expect(await readFile(replaced, "utf8")).toBe("retain this file\n");
+    await expect(stat(fixture.worktree)).rejects.toMatchObject({ code: "ENOENT" });
+    const again = vi.fn(async () => await instance.registry.repairArchivedThreadWorktrees());
+    expect(await runOneTimeArchivedWorktreeRepair({ db: instance.db.raw, repair: again })).toBeUndefined();
+    expect(again).not.toHaveBeenCalled();
+  });
+
+  it("archives, prunes and restores through a symlinked Codex home", async () => {
+    const fixture = await createFixture(true);
+    const alias = path.join(path.dirname(fixture.codexHome), "codex-home-alias");
+    await symlink(fixture.codexHome, alias, process.platform === "win32" ? "junction" : "dir");
+    vi.stubEnv("CODEX_HOME", alias);
+    const aliasedWorktree = path.join(alias, "worktrees", "id", "repo");
+    ArchiveWorktreeTransport.threads = [{ id: "target", cwd: aliasedWorktree, source: "cli" }];
+    const instance = fixture.reopen({ ...fixture.directory, worktreePath: aliasedWorktree });
+    expect((await instance.registry.archiveThread({ backend: "codex", threadId: "target" })).cleanup)
+      .toEqual([expect.objectContaining({ removedWorktree: true })]);
+    await expect(stat(fixture.container)).rejects.toMatchObject({ code: "ENOENT" });
+    await instance.registry.restoreThread({ backend: "codex", threadId: "target" });
+    expect(await readFile(path.join(fixture.worktree, "file.txt"), "utf8")).toBe("original\n");
+  });
+
+  it("protects an empty canonical container referenced by an active home-alias cwd", async () => {
+    const fixture = await createFixture(true);
+    const alias = path.join(path.dirname(fixture.codexHome), "codex-home-alias");
+    await symlink(fixture.codexHome, alias, process.platform === "win32" ? "junction" : "dir");
+    vi.stubEnv("CODEX_HOME", alias);
+    await fixture.git(fixture.repo, ["worktree", "remove", fixture.worktree]);
+    ArchiveWorktreeTransport.threads = [
+      { id: "archived", cwd: fixture.worktree, source: "cli", archived: true },
+      { id: "active", cwd: path.join(alias, "worktrees", "id", "another-missing-checkout"), source: "exec" },
+    ];
+    const report = await fixture.reopen().registry.repairArchivedThreadWorktrees();
+    expect(report.emptyContainerCandidates).toEqual([]);
+    expect((await stat(fixture.container)).isDirectory()).toBe(true);
+  });
+
   it("prunes the empty managed container on ordinary archive and recreates it on restore", async () => {
     const fixture = await createFixture(true);
     ArchiveWorktreeTransport.threads = [{ id: "target", cwd: fixture.worktree, source: "cli" }];

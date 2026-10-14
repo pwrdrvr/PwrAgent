@@ -16,21 +16,49 @@ export type WorktreeContainerCleanup = {
  * to a grandparent, or uses recursive deletion. */
 export class WorktreeContainerService {
   private readonly root: string;
+  private canonicalRoot?: string;
 
   constructor(options: { codexHome?: string } = {}) {
     this.root = path.resolve(options.codexHome?.trim() || process.env.CODEX_HOME?.trim() || path.join(os.homedir(), ".codex"), "worktrees");
   }
 
-  containerPath(worktreePath: string): string | undefined {
+  async containerPath(worktreePath: string): Promise<string | undefined> {
     const container = path.dirname(path.resolve(worktreePath));
-    return path.dirname(container) === this.root ? container : undefined;
+    const parent = path.dirname(container);
+    try {
+      const root = await realpath(this.root);
+      this.canonicalRoot = root;
+      if (parent !== this.root && parent !== root) return undefined;
+      // Canonicalize the root, not the id itself: following an id symlink
+      // would defeat the ordinary-directory check in inspect/prune.
+      return path.join(root, path.basename(container));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw error;
+    }
+  }
+
+  comparisonPaths(containerPath: string): string[] {
+    return path.dirname(containerPath) === this.canonicalRoot
+      ? [containerPath, path.join(this.root, path.basename(containerPath))]
+      : [containerPath];
+  }
+
+  worktreeComparisonPaths(worktreePath: string): string[] {
+    const resolved = path.resolve(worktreePath);
+    const container = path.dirname(resolved);
+    const parent = path.dirname(container);
+    return this.canonicalRoot && (parent === this.root || parent === this.canonicalRoot)
+      ? this.comparisonPaths(path.join(this.canonicalRoot, path.basename(container))).map((value) => path.join(value, path.basename(resolved)))
+      : [resolved];
   }
 
   async inspect(worktreePath: string): Promise<WorktreeContainerCleanup | undefined> {
-    const containerPath = this.containerPath(worktreePath);
-    if (!containerPath) return undefined;
-    let result: WorktreeContainerCleanup = { worktreePath, containerPath, removed: false };
+    let result: WorktreeContainerCleanup = { worktreePath, containerPath: path.dirname(path.resolve(worktreePath)), removed: false };
     try {
+      const containerPath = await this.containerPath(worktreePath);
+      if (!containerPath) return undefined;
+      result = { ...result, containerPath };
       const container = await lstat(containerPath);
       if (!container.isDirectory() || container.isSymbolicLink()) {
         return { ...result, skippedReason: "Container is not an ordinary directory." };
@@ -55,10 +83,11 @@ export class WorktreeContainerService {
   }
 
   async prune(worktreePath: string, assertCurrent?: () => void, expectedIdentity?: WorktreeContainerCleanup["identity"]): Promise<WorktreeContainerCleanup | undefined> {
-    const containerPath = this.containerPath(worktreePath);
-    if (!containerPath) return undefined;
-    const result = { worktreePath, containerPath, removed: false };
+    let result = { worktreePath, containerPath: path.dirname(path.resolve(worktreePath)), removed: false };
     try {
+      const containerPath = await this.containerPath(worktreePath);
+      if (!containerPath) return undefined;
+      result = { ...result, containerPath };
       const before = await lstat(containerPath);
       if (expectedIdentity && (before.dev !== expectedIdentity.dev || before.ino !== expectedIdentity.ino)) {
         return { ...result, skippedReason: "Container identity changed since discovery." };

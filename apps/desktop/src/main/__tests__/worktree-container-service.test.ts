@@ -27,6 +27,18 @@ async function fixture() {
 }
 
 describe("empty archived worktree containers", () => {
+  it.each(["alias", "canonical"])("prunes an empty container under a symlinked home using the %s checkout path", async (form) => {
+    const f = await fixture();
+    const alias = path.join(f.root, "home-alias");
+    await symlink(f.codexHome, alias, process.platform === "win32" ? "junction" : "dir");
+    const service = new WorktreeContainerService({ codexHome: alias });
+    const worktree = form === "alias" ? path.join(alias, "worktrees", "id", "repo") : f.worktree;
+    expect(await service.containerPath(worktree)).toBe(f.container);
+    expect(service.comparisonPaths(f.container)).toContain(path.join(alias, "worktrees", "id"));
+    expect(await service.prune(worktree)).toMatchObject({ removed: true, containerPath: f.container });
+    await expect(lstat(f.container)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("removes exactly one empty id while preserving the worktree root and sibling ids", async () => {
     const f = await fixture();
     const sibling = path.join(f.codexHome, "worktrees", "sibling");
