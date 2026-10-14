@@ -111,6 +111,10 @@ type ThreadContextPanelProps = {
     projectKey?: string;
     onStartReview: (todo: ThreadTodo, options?: ThreadTodoResolveOptions) => void;
     onDoHere?: (todo: ThreadTodo, options?: ThreadTodoResolveOptions) => void;
+    /** Answers a question in this thread through its composer. */
+    onAnswerQuestion?: (text: string) => Promise<boolean>;
+    /** This thread's answers the composer took, by question item id. */
+    sentQuestionAnswers?: ReadonlyMap<string, string>;
   };
   activeTurnId?: string;
   backendError?: string;
@@ -789,6 +793,8 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             projectKey={props.todos.projectKey}
             onStartReview={props.todos.onStartReview}
             onDoHere={props.todos.onDoHere}
+            onAnswerQuestion={props.todos.onAnswerQuestion}
+            sentQuestionAnswers={props.todos.sentQuestionAnswers}
           />
         );
       case "edits":
