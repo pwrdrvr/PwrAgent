@@ -1,3 +1,9 @@
+import { ForgeReadService, repositoryFromPr } from "../pr-status/forge-read-service";
+import { ForgeCiClient } from "../pr-status/forge-ci-client";
+import { ForgeReadError, type ForgeReadArgs, type ForgeReadOperation } from "../pr-status/forge-tool-contract";
+import { readForgeRepositoryRemotes } from "../pr-status/git-remote";
+import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
+import { createOwnerRoutedForgeReadHandler } from "../federation/federated-forge-read-service";
 import { publishedPrCommitShas } from "../../shared/pull-request-publication";
 import { USAGE_ACTIVITY_ANALYZE_CHANNEL } from "../../shared/ipc";
 import { archiveCandidateProtectionReason } from "../app-server/thread-archive-sweeper";
@@ -3925,6 +3931,69 @@ class DesktopAppServerService {
       response = await refreshContext(context);
     }
     return response;
+  }
+
+  private forgeCiClient?: ForgeCiClient;
+
+  async readForgeForTool(operation: ForgeReadOperation, args: ForgeReadArgs, context: AgentToolCallContext): Promise<unknown> {
+    const backend = args.backend ?? context.backend;
+    const threadId = args.threadId ?? context.threadId;
+    if (!isAppServerBackendKind(backend)) throw new ForgeReadError("invalid_arguments", "Unknown PwrAgent backend.");
+    const active = await this.listThreads({ backend });
+    const thread = active.threads.find((t) => t.id === threadId)
+      ?? (await this.listThreads({ backend, archived: true })).threads.find((t) => t.id === threadId);
+    if (!thread) throw new ForgeReadError("thread_not_found", "Thread is not owned by this instance.");
+    const overlay = await this.getOverlayStore().getThreadOverlayState({ backend, threadId });
+    const directories = resolveThreadPullRequestDirectoryPaths({ linkedDirectories: [...(thread.linkedDirectories ?? []), ...(overlay?.extraLinkedDirectories ?? [])] });
+    if (directories.length > 20) throw new ForgeReadError("scope_too_large", "Forge reads support up to 20 linked directories per thread.");
+    const remotes = (await Promise.all(directories.map((cwd) => readForgeRepositoryRemotes(cwd)))).flat();
+    const attached = overlay?.prs ?? [];
+    // Snapshot reads must not call rememberPrStatuses: it publishes transitions.
+    const observations = new Map<string, { pr: PrSummary; fetchedAt: number }>();
+    const persisted = this.prStatusRegistryLoaded ? [] : Object.values(await this.getOverlayStore().readPrStatusCache());
+    for (const entry of [...attached.map((pr) => ({ pr, fetchedAt: overlay?.prsFetchedAt ?? 0 })), ...persisted, ...this.prStatusRegistry.values()]) {
+      const key = getPrStatusKey(entry.pr);
+      if (!observations.has(key) || observations.get(key)!.fetchedAt < entry.fetchedAt) observations.set(key, { pr: entry.pr, fetchedAt: entry.fetchedAt });
+    }
+    const enabled = (provider: "github" | "gitlab") => getDesktopSettingsService().isForgeEnabled(provider);
+    this.forgeCiClient ??= new ForgeCiClient({ gitlab: this.getPrFetcher().gitlab, enabled, takeToken: () => this.takePrPollingToken("Agent CI read") });
+    const service = new ForgeReadService({
+      enabled, ci: this.forgeCiClient,
+      refresh: async (request, repositories) => {
+        context.signal?.throwIfAborted();
+        const urls = request.url ? [request.url] : attached.filter((pr) => {
+          const r = repositoryFromPr(pr.url);
+          return r && repositories.some((selected) => selected.provider === r.provider && selected.host === r.host && selected.owner === r.owner && selected.repo === r.repo)
+            && (!request.branch || pr.headRefName === request.branch);
+        }).map((pr) => pr.url);
+        if (urls.length > 20) throw new ForgeReadError("scope_too_large", "Select a PR/MR URL or branch to refresh at most 20 requests.");
+        const fetcher = this.getPrFetcher();
+        const availability = await fetcher.getProviderAvailability(directories, urls);
+        if (repositories.some((r) => !availability.some((a) => a.provider === r.host && a.available))) throw new ForgeReadError("unavailable", "A selected forge provider is unavailable. Check its CLI installation and host login in Settings → Git.");
+        let failed = false;
+        const results: PrSummary[] = [];
+        if (urls.length) {
+          for (const url of urls) {
+            context.signal?.throwIfAborted();
+            if (!this.takePrPollingToken("Agent explicit forge refresh")) throw new ForgeReadError("rate_limited", "The shared PR refresh budget is exhausted.");
+            const pr = await fetcher.fetchPullRequestByUrl({ cwd: directories[0] ?? os.homedir(), url, onProviderFailure: () => { failed = true; } });
+            if (!pr) failed = true;
+            else results.push(pr);
+          }
+        } else {
+          for (const cwd of directories) {
+            context.signal?.throwIfAborted();
+            if (!this.takePrPollingToken("Agent branch forge refresh")) throw new ForgeReadError("rate_limited", "The shared PR refresh budget is exhausted.");
+            results.push(...await fetcher.fetchAllPullRequestsForBranch({ allowPrimed: false, providers: [...new Set(repositories.map((r) => r.provider))], cwd, branch: request.branch ?? thread.observedGitBranch ?? thread.gitBranch ?? "HEAD", onProviderFailure: () => { failed = true; } }));
+          }
+        }
+        if (failed) throw new ForgeReadError("provider_error", "PR/MR refresh failed or was unavailable. Check the host's CLI login, read permissions and provider settings. Cached observations were not changed.");
+        return results;
+      },
+    });
+    const result = await service.execute(operation, args, { remotes, attached, observations: [...observations.values()], branch: thread.observedGitBranch ?? thread.gitBranch }, context.signal);
+    const prAutomation = await this.getThreadPullRequestAutomationStatus({ backend, threadId }, { backend: context.backend, threadId: context.threadId });
+    return { ...(result as Record<string, unknown>), backend, threadId, prAutomation };
   }
 
   async checkThreadPullRequestStatusForTool(
@@ -7969,6 +8038,7 @@ class DesktopAppServerService {
     this.ownerNavigationMetadataAbort?.abort();
     this.focusedDiffService = null;
     this.prFetcher = undefined;
+    this.forgeCiClient = undefined;
     this.prPollingScheduler?.stop();
     this.prPollingScheduler = undefined;
     this.prPollingSettingsSyncGeneration += 1;
@@ -8330,6 +8400,12 @@ export function registerAppServerIpcHandlers(): void {
     appServerService.handleAgentEventForWorkingState(event);
     appServerService.handleAgentEventForPrAttachments(event);
   });
+  const localForgeRead = (operation: ForgeReadOperation, args: ForgeReadArgs, context: AgentToolCallContext) => appServerService.readForgeForTool(operation, args, context);
+  getDesktopBackendRegistry().setForgeReadHandlers(localForgeRead, createOwnerRoutedForgeReadHandler({
+    local: localForgeRead,
+    runtime: getDesktopFederationRuntime,
+    targetStore: getDesktopOverlayStore(),
+  }));
   getDesktopBackendRegistry().setThreadPullRequestStatusToolHandler(
     async (args, context) =>
       await appServerService.checkThreadPullRequestStatusForTool(args, context),
