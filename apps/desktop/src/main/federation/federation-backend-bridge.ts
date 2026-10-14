@@ -321,6 +321,23 @@ async function resolveFederationTurnInput(
   return input as AppServerTurnInputItem[];
 }
 
+/** Durable v1 cannot verify owner-local references or rewrite hashed inputs. */
+function assertDurableFederationTurnInput(input: unknown): void {
+  if (!Array.isArray(input)) throw new DurableTurnRequestError("request_invalid");
+  for (const item of input) {
+    if (!item || typeof item !== "object"
+      || item.type === "localImage" || item.type === "localFile") {
+      throw new DurableTurnRequestError("request_invalid");
+    }
+    if (item.type === "image") {
+      let protocol: string;
+      try { protocol = new URL(item.url).protocol; }
+      catch { throw new DurableTurnRequestError("request_invalid"); }
+      if (protocol === "file:") throw new DurableTurnRequestError("request_invalid");
+    }
+  }
+}
+
 export type FederationRefreshThreadPullRequestsRequest =
   RefreshOwnedThreadPullRequestsRequest;
 
@@ -995,6 +1012,7 @@ export function registerFederationBackendHandlers(params: {
     const service = params.durableTurnRequests;
     params.router.registerHandler(FEDERATION_BACKEND_METHODS.submitTurnRequest, async (envelope) => {
       const request = envelope.params as FederationSubmitDurableTurnRequest;
+      assertDurableFederationTurnInput(request?.request?.input);
       return service.submit(durableFederationCallerScope(envelope.sourceInstanceId, request?.callerScope), request);
     });
     params.router.registerHandler(FEDERATION_BACKEND_METHODS.getTurnRequest, async (envelope) => {
@@ -1003,6 +1021,7 @@ export function registerFederationBackendHandlers(params: {
     });
     params.router.registerHandler(FEDERATION_BACKEND_METHODS.submitSteerRequest, async (envelope) => {
       const request = envelope.params as FederationSubmitDurableSteerRequest;
+      assertDurableFederationTurnInput(request?.request?.input);
       return service.submitSteer(durableFederationCallerScope(envelope.sourceInstanceId, request?.callerScope), request);
     });
     params.router.registerHandler(FEDERATION_BACKEND_METHODS.getSteerRequest, async (envelope) => {
