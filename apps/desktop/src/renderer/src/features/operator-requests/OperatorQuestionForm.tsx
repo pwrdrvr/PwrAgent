@@ -12,13 +12,16 @@ export type OperatorQuestionFormProps = {
   question: OperatorAsyncQuestion;
   /** Names the form; the card's group is "Question from Codex", so this is not. */
   label: string;
-  /** Resolves true once the composer has taken the reply. */
+  /**
+   * Resolves true once the composer, or for a thread off screen its owner,
+   * has taken the reply. A rejection's message is shown as the reason.
+   */
   onSubmit: (text: string) => Promise<boolean>;
   onCancel: () => void;
 };
 
 /**
- * Answers an async question from its To-dos row, in the thread on screen.
+ * Answers an async question from its To-dos row.
  * The same choices as the transcript card: the agent's first option is
  * preselected, typed text replaces the chosen option, and pressing the chosen
  * option again leaves that question out. The reply is the card's, item ids
@@ -58,15 +61,20 @@ export function OperatorQuestionForm(props: OperatorQuestionFormProps) {
     setSending(true);
     setError(undefined);
     let accepted = false;
+    let refusal: string | undefined;
     try {
       accepted = await props.onSubmit(text);
     } catch (cause) {
       console.warn("Answering the question from the To-dos panel failed.", cause);
+      // The thread's owner says why, as for a lock or a handoff.
+      refusal = cause instanceof Error && cause.message ? cause.message : undefined;
     }
     // Accepted, the row takes over and shows the answer as sent.
     if (!accepted) {
       setSending(false);
-      setError("The answer was not sent. The composer is busy or unavailable.");
+      setError(refusal
+        ? `The answer was not sent. ${refusal}`
+        : "The answer was not sent. The composer is busy or unavailable.");
     }
   };
 

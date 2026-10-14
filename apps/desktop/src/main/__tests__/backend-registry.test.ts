@@ -3254,6 +3254,7 @@ describe("DesktopBackendRegistry", () => {
     await expect(registry.withThreadHandoff(params.threadId, async () => {
       await expect(registry.submitTurn(params)).rejects.toThrow("being handed off");
       await expect(registry.submitTurnIfIdle(params)).rejects.toThrow("being handed off");
+      await expect(registry.submitThreadReply(params)).rejects.toThrow("being handed off");
       await expect(registry.submitHeldTurn({ ...params, queueEntryId: "held", holdReason: "manual" })).rejects.toThrow("being handed off");
       await expect(registry.startTurn(params)).rejects.toThrow("being handed off");
       await expect(registry.withThreadHandoff(params.threadId, async () => {})).rejects.toThrow("being handed off");
@@ -3270,6 +3271,7 @@ describe("DesktopBackendRegistry", () => {
     const refusal = "This thread is locked: Worktree handed to the repair thread. Unlock it before starting a turn.";
 
     await expect(registry.submitTurn(params)).rejects.toThrow(refusal);
+    await expect(registry.submitThreadReply(params)).rejects.toThrow(refusal);
     // Automations see a lock as busy, so a PR watch waits without spending an attempt.
     await expect(registry.submitTurnIfIdle(params)).resolves.toEqual({ status: "busy" });
     await expect(registry.startTurn(params)).rejects.toThrow(refusal);
@@ -3280,6 +3282,31 @@ describe("DesktopBackendRegistry", () => {
 
     await registry.setThreadLock({ ...params, locked: false }, { source: "operator" });
     await expect(registry.submitTurnIfIdle(params)).resolves.toMatchObject({ status: "started" });
+  });
+
+  it("starts an off-screen reply on an idle thread and steers one into a running turn", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "turn/steer"] },
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    onTestFinished(() => registry.close());
+    const idle = { backend: "codex" as const, threadId: "answered-idle" };
+    await expect(registry.submitThreadReply({
+      ...idle, input: [{ type: "text", text: "Use the staging bucket" }],
+    })).resolves.toMatchObject({ status: "started", entry: { origin: "manual", delivery: "queued-steer" } });
+
+    const running = { backend: "codex" as const, threadId: "answered-running" };
+    const turn = await registry.startTurn({ ...running, input: [{ type: "text", text: "Export" }] });
+    const steer = vi.spyOn(registry, "steerTurn");
+    const reply = [{ type: "text" as const, text: "Keep last week's export" }];
+    await expect(registry.submitThreadReply({ ...running, input: reply }))
+      .resolves.toMatchObject({ status: "queued" });
+    await vi.waitFor(() => expect(codexClient.steerTurnCallCount).toBe(1));
+    expect(steer).toHaveBeenCalledWith(
+      expect.objectContaining({ ...running, expectedTurnId: turn.turnId, input: reply }),
+      undefined,
+    );
+    expect(registry.getQueuedTurnsForThread(running)).toEqual([]);
   });
 
   it("returns busy when a turn becomes active after immediate admission", async () => {

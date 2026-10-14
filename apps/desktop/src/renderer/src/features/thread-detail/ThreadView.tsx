@@ -2491,14 +2491,17 @@ export function ThreadView(props: ThreadViewProps) {
         .map((key) => key.slice(prefix.length)),
     );
   }, [asyncQuestionThreadKey, dismissedAsyncQuestions]);
+  // The To-dos panel's answers count too: one sent while this thread was off
+  // screen may still be waiting to reach the transcript.
+  const panelSentAsyncQuestionAnswers = props.threadTodos?.sentQuestionAnswers;
   const threadSentAsyncQuestionAnswers = useMemo(() => {
     const prefix = `${asyncQuestionThreadKey}\0`;
     return new Map(
-      [...sentAsyncQuestionAnswers]
+      [...(panelSentAsyncQuestionAnswers ?? []), ...sentAsyncQuestionAnswers]
         .filter(([key]) => key.startsWith(prefix))
         .map(([key, answer]) => [key.slice(prefix.length), answer]),
     );
-  }, [asyncQuestionThreadKey, sentAsyncQuestionAnswers]);
+  }, [asyncQuestionThreadKey, panelSentAsyncQuestionAnswers, sentAsyncQuestionAnswers]);
   useEffect(() => {
     const settlers = asyncQuestionReplySettlers.current;
     return () => {

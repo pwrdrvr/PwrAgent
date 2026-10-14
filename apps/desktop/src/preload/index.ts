@@ -412,6 +412,8 @@ import type {
   StartThreadRequest,
   StartThreadResponse,
   StartTurnRequest,
+  SubmitThreadReplyRequest,
+  SubmitThreadReplyResponse,
   StartTurnResponse,
   ScheduledThreadActionIdRequest,
   ScheduledThreadActionMutationResponse,
@@ -676,6 +678,7 @@ import {
   AGENT_START_THREAD_CHANNEL,
   AGENT_START_REVIEW_CHANNEL,
   AGENT_START_TURN_CHANNEL,
+  AGENT_SUBMIT_THREAD_REPLY_CHANNEL,
   AGENT_STEER_TURN_CHANNEL,
   AGENT_SUBMIT_SERVER_REQUEST_CHANNEL,
   AGENT_TRUST_CODEX_PROJECT_CHANNEL,
@@ -2147,6 +2150,10 @@ const desktopApi = Object.freeze({
     request: StartTurnRequest
   ): Promise<StartTurnResponse> =>
     await ipcRenderer.invoke(AGENT_START_TURN_CHANNEL, request),
+  submitThreadReply: async (
+    request: SubmitThreadReplyRequest,
+  ): Promise<SubmitThreadReplyResponse> =>
+    await ipcRenderer.invoke(AGENT_SUBMIT_THREAD_REPLY_CHANNEL, request),
   readQueuedTurn: async (
     request: ReadQueuedTurnRequest,
   ): Promise<ReadQueuedTurnResponse> =>

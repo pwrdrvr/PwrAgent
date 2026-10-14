@@ -165,6 +165,7 @@ import {
   OperatorWaitsContext,
   useOperatorRequests,
 } from "./features/operator-requests/useOperatorRequests";
+import { useOffscreenQuestionAnswers } from "./features/operator-requests/useOffscreenQuestionAnswers";
 import { copyTextAsCodeBlock } from "./lib/copy-text";
 import { resolveThreadWorkingStatePath } from "./lib/thread-working-state-path";
 import { CodexConfigWarningBanner } from "./features/codex-config/CodexConfigWarningBanner";
@@ -2521,6 +2522,13 @@ function DesktopAppShell(props: {
   useEffect(() => {
     selectedThreadKeyRef.current = navigation.selectedThreadKey;
   }, [navigation.selectedThreadKey]);
+  const offscreenQuestionAnswers = useOffscreenQuestionAnswers({
+    submitThreadReply: desktopApi?.submitThreadReply,
+    findThread: (threadKey) => navigation.threads.find((candidate) =>
+      !candidate.federation
+      && buildThreadIdentityKey(candidate.source, candidate.id) === threadKey),
+    onUserRepliedToThread: reportUserRepliedToThread,
+  });
   const threadTodosView = useMemo<ThreadTodosView | undefined>(() => {
     if (!listThreadTodos || readRendererFederationTarget()) return undefined;
     const showTodoThread = (backend: AppServerBackendKind, threadId: string): void => {
@@ -2621,6 +2629,7 @@ function DesktopAppShell(props: {
           ...(messageId ? { messageId } : {}),
         });
       },
+      ...offscreenQuestionAnswers,
       threadTitleForKey: (threadKey) => localThreadTitles.get(threadKey) ?? "Untitled thread",
       threadProjectForKey: (threadKey) => localThreadProjects.get(threadKey),
     };
@@ -2629,6 +2638,7 @@ function DesktopAppShell(props: {
     listThreadTodos,
     localThreadProjects,
     localThreadTitles,
+    offscreenQuestionAnswers,
     operatorRequests,
     queueMessageLinkRequest,
     submitServerRequest,

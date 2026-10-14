@@ -289,13 +289,26 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
                   if (item.type === "wait") {
                     const { wait } = item;
                     const mine = wait.threadKey === threadKey;
-                    // Only the thread on screen has a composer to answer through.
-                    const asked = mine ? wait.question : undefined;
-                    // Any reply closes all of a message's questions.
-                    const questionSent = asked?.questions.some((_, index) =>
-                      props.sentQuestionAnswers?.has(
-                        codexAsyncQuestionItemId(asked.messageId, index),
-                      )) ?? false;
+                    const asked = wait.question;
+                    const answerOffscreen = view.answerQuestion;
+                    // The thread on screen answers through its composer, which
+                    // also draws the reply in its transcript. Any other local
+                    // thread answers through its owner's turn FIFO.
+                    const answerQuestion = !asked
+                      ? undefined
+                      : mine
+                        ? props.onAnswerQuestion
+                        : answerOffscreen
+                          ? (text: string) => answerOffscreen(wait, text)
+                          : undefined;
+                    // Any reply closes all of a message's questions. The
+                    // composer's answers include the panel's for its thread.
+                    const questionSent = asked?.questions.some((_, index) => {
+                      const itemId = codexAsyncQuestionItemId(asked.messageId, index);
+                      return mine
+                        ? props.sentQuestionAnswers?.has(itemId)
+                        : view.sentQuestionAnswers?.has(`${wait.threadKey}\0${itemId}`);
+                    }) ?? false;
                     return (
                       <li key={item.key}>
                         <OperatorWaitRow
@@ -311,7 +324,7 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
                             return question ? view.dismissQuestion(question) : Promise.resolve();
                           }}
                           openWait={view.openWait}
-                          answerQuestion={asked ? props.onAnswerQuestion : undefined}
+                          answerQuestion={answerQuestion}
                           questionSent={questionSent}
                         />
                       </li>

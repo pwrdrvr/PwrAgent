@@ -94,6 +94,8 @@ import {
   type StartThreadResponse,
   type StartTurnRequest,
   type StartTurnResponse,
+  type SubmitThreadReplyRequest,
+  type SubmitThreadReplyResponse,
   type SubmitServerRequestRequest,
   type SubmitServerRequestResponse,
   type TrustCodexProjectRequest,
@@ -148,6 +150,7 @@ import {
   AGENT_START_REVIEW_CHANNEL,
   AGENT_START_TURN_CHANNEL,
   AGENT_STEER_TURN_CHANNEL,
+  AGENT_SUBMIT_THREAD_REPLY_CHANNEL,
   AGENT_SUBMIT_SERVER_REQUEST_CHANNEL,
   AGENT_TRUST_CODEX_PROJECT_CHANNEL,
   AGENT_UPDATE_THREAD_EXPECTED_BRANCH_CHANNEL,
@@ -640,6 +643,43 @@ export function registerAgentIpcHandlers(): void {
         return response;
       } catch (error) {
         appServerLog.error("startTurn failed", {
+          backend: request.backend,
+          threadId: request.threadId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
+    },
+  );
+
+  // Local only: the To-dos panel lists this instance's threads, so a reply
+  // through here never has a peer to forward to.
+  ipcMain.removeHandler(AGENT_SUBMIT_THREAD_REPLY_CHANNEL);
+  ipcMain.handle(
+    AGENT_SUBMIT_THREAD_REPLY_CHANNEL,
+    async (
+      _event,
+      request: SubmitThreadReplyRequest,
+    ): Promise<SubmitThreadReplyResponse> => {
+      logDebug("submitThreadReply", {
+        backend: request.backend,
+        threadId: request.threadId,
+        ...summarizeTurnInput(request.input),
+      });
+      try {
+        const submitted = await registry.submitThreadReply({
+          backend: request.backend,
+          threadId: request.threadId,
+          input: request.input,
+        });
+        return {
+          backend: submitted.entry.backend,
+          threadId: submitted.entry.threadId,
+          queueStatus: submitted.status,
+          queueEntryId: submitted.entry.id,
+        };
+      } catch (error) {
+        appServerLog.error("submitThreadReply failed", {
           backend: request.backend,
           threadId: request.threadId,
           error: error instanceof Error ? error.message : String(error),
@@ -1439,6 +1479,7 @@ export function disposeAgentIpcHandlers(): void {
   ipcMain.removeHandler(CODEX_MCP_SERVER_LOGIN_CHANNEL);
   ipcMain.removeHandler(CODEX_MCP_SERVER_REMOVE_CHANNEL);
   ipcMain.removeHandler(AGENT_START_TURN_CHANNEL);
+  ipcMain.removeHandler(AGENT_SUBMIT_THREAD_REPLY_CHANNEL);
   ipcMain.removeHandler(AGENT_INTERRUPT_TURN_CHANNEL);
   ipcMain.removeHandler(AGENT_STOP_SUB_AGENT_CHANNEL);
   ipcMain.removeHandler(AGENT_STEER_TURN_CHANNEL);

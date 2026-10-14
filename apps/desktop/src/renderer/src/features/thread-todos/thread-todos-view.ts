@@ -95,6 +95,13 @@ export type ThreadTodosView = {
   dismissedQuestionKeys: ReadonlySet<string>;
   /** Shows the wait's thread, scrolled to a question's card. */
   openWait: (wait: OperatorWait) => void;
+  /**
+   * Answers a question in a thread no composer shows. Resolves true once the
+   * thread's owner took the reply, and throws the owner's refusal.
+   */
+  answerQuestion?: (wait: OperatorWait, text: string) => Promise<boolean>;
+  /** Answers `answerQuestion` sent, by `backend:threadId` NUL question item id. */
+  sentQuestionAnswers?: ReadonlyMap<string, string>;
   /** Name of a thread, by `backend:threadId`. */
   threadTitleForKey: (threadKey: string) => string;
   /** The project a thread belongs to, by `backend:threadId`. */
