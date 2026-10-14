@@ -312,7 +312,14 @@ export class GithubPrFetcher {
       const byBranch = await this.graphqlClient.fetchPullRequestsForBranches(refs);
       const byUrl = new Map<string, PrSummary>();
       for (const ref of refs) {
-        for (const pr of byBranch.get(branchRefKey(ref)) ?? []) {
+        const prs = byBranch.get(branchRefKey(ref));
+        if (!prs) {
+          // Missing entries mean the provider could not answer (auth, retry
+          // exhaustion or backoff). Only an explicit [] confirms no PRs.
+          params.onProviderFailure?.();
+          continue;
+        }
+        for (const pr of prs) {
           byUrl.set(pr.url, pr);
         }
       }

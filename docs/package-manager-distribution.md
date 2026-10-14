@@ -76,6 +76,48 @@ repositories, and have the owner verify expiration/rotation. Authentication,
 throttling and incomplete search results are blockers, not evidence of package
 absence. Existing read-token retry budgets remain unchanged.
 
+## Read-only source audit
+
+Run `pnpm release:channels --audit` to check published source metadata without
+requesting release assets, including HEAD requests. The audit confirms public
+repository identity and pins each source read/link to a default-branch commit.
+It checks literal cask metadata and Winget installer YAML against each channel's
+own published stable release: identity, architecture/scope, exact versioned URL,
+unique release asset, positive size, and SHA-256 digest. A channel behind Latest
+can still have valid source metadata. Same-version source drift is checked too.
+Winget preparation and submission inspect only Winget; Homebrew publication
+continues independently in the tap.
+
+JSON `status: complete` means the requested metadata checks completed.
+`status: blocked` retains findings marked `drift` or `unverifiable`; missing
+digests and unsupported/dynamic source layouts cannot pass integrity checks.
+`status: incomplete` means an API read, repository identity, or pagination check
+failed. Blocked/incomplete CLI checks exit nonzero, and preparation retains
+`preflight.json`. Cask parsing supports direct two-space declarations of literal
+version/URL and arm/intel maps, plus the `url :url` / `strategy :github_latest`
+livecheck block. Conditional/nested declarations, escaped strings and other
+Ruby layouts remain unverifiable. URL interpolation applies only to
+double-quoted Ruby strings; single-quoted expressions stay literal. Winget
+parsing supports literal scalar mappings, including reordered/inherited fields,
+and derives each installer's mapping column from its first key. Unrecognized
+indentation cannot silently fall back to inherited fields. Neither parser
+executes source code or resolves YAML tags.
+
+Add `--discover` to `--audit` for optional name/homepage searches across the tap,
+Winget, and official Homebrew cask/core repositories. Only actual package files
+with matching product metadata become `discoveries` for ownership review;
+documentation matches are ignored. Discoveries do not automatically block a
+legitimate beta registration. Searches reject incomplete results, changing
+counts, duplicate/missing pages, and results beyond GitHub's 1,000-result cap. Index lag means
+even completed searches cannot prove exhaustive registry absence. Canonical
+official Homebrew paths are probed directly without relying on search indexing.
+
+Upgrade-baseline selection traverses up to 20 release pages, rejects duplicates,
+rechecks the first page after multi-page traversal, and stops explicitly at the
+limit. This prevents the first 100 releases from silently excluding a baseline;
+it does not change Stable Latest promotion policy. An audit does not establish
+downloaded-byte integrity, native install/upgrade success, or client discovery.
+
 ## Stable promotion and verification
 
 1. Promote the authorized stable release; keep product publication separate from

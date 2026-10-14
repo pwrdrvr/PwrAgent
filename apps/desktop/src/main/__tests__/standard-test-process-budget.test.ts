@@ -10,18 +10,21 @@ import workspaceConfig from "../../../../../vitest.workspace";
 const EXPECTED_PROJECTS = [
   "desktop-main",
   "desktop-renderer",
+  "desktop-renderer-node",
   "messaging",
   "shared",
 ];
 const EXPECTED_POOLS = {
   "desktop-main": "forks",
   "desktop-renderer": "threads",
+  "desktop-renderer-node": "threads",
   messaging: "threads",
   shared: "threads",
 } as const;
 const EXPECTED_OS_WORKER_PROCESSES_PER_TEST_FILE = [
   { name: "desktop-main", osWorkerProcessesPerTestFile: 1 },
   { name: "desktop-renderer", osWorkerProcessesPerTestFile: 0 },
+  { name: "desktop-renderer-node", osWorkerProcessesPerTestFile: 0 },
   { name: "messaging", osWorkerProcessesPerTestFile: 0 },
   { name: "shared", osWorkerProcessesPerTestFile: 0 },
 ];

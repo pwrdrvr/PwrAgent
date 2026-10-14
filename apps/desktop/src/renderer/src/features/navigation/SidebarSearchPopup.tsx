@@ -137,7 +137,7 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
       query: { kind: "directory-index", filter: projectFilter }, pageSize: 100,
     } : undefined,
   });
-  const projects = useMemo(() => {
+  const rankedProjects = useMemo(() => {
     if (projectFilter === undefined) return [];
     const query = projectFilter.toLowerCase();
     const candidates = new Map((props.projects ?? []).map((directory) => [directory.key, directory]));
@@ -159,7 +159,11 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
           - Number(Boolean(foreignProjectPlatform(right.path, platform))))
         || rank(left) - rank(right)
         || left.label.localeCompare(right.label))
-      .slice(0, MAX_RESULTS);
+      .slice(0, MAX_RESULTS)
+      // A foreign-platform path keeps its place behind every local project,
+      // so it never leads, however exactly it is named.
+      .map((directory) => ({ directory, exact: rank(directory) === 0
+        && (Boolean(ownerInstanceId) || !foreignProjectPlatform(directory.path, platform)) }));
   }, [projectFilter, props.projects, projectSearch.state, ownerInstanceId, platform]);
 
   const results = useMemo(() => {
@@ -204,12 +208,35 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
     );
   }, [mention, remoteResults, results]);
 
+  // Only a project named by the whole query leads the threads. The first row
+  // is the one Enter opens, and a prefix or path match is usually incidental:
+  // `pwr` matches every repository under ~/pwrdrvr, so leading with those sent
+  // a thread search to a project launchpad, and the sidebar to Directories.
+  // While an `@` mention completes, the list holds projects alone.
+  const leadProjects = useMemo(
+    () => rankedProjects.filter(({ exact }) => mention || exact).map(({ directory }) => directory),
+    [mention, rankedProjects],
+  );
+  // Held back while the owner search may still add threads and none have
+  // arrived. A thread outside the loaded rows (any thread the current lens
+  // does not hold) is found only by that search, so until it answers the
+  // trailing projects would be the first rows, and the ones Enter opens.
+  const holdTrailingProjects = results.length === 0 && ownerSearch.loading;
+  const trailingProjects = useMemo(
+    () => mention || holdTrailingProjects ? []
+      : rankedProjects.filter(({ exact }) => !exact).map(({ directory }) => directory),
+    [holdTrailingProjects, mention, rankedProjects],
+  );
+  const projectCount = leadProjects.length + trailingProjects.length;
+
   const combinedRows = useMemo(
     (): JumpResult[] => [
-      ...projects.map((directory): JumpResult => ({ kind: "project", directory })),
-      ...[...results, ...remoteRows].map((thread): JumpResult => ({ kind: "thread", thread })),
+      ...leadProjects.map((directory): JumpResult => ({ kind: "project", directory })),
+      ...results.map((thread): JumpResult => ({ kind: "thread", thread })),
+      ...trailingProjects.map((directory): JumpResult => ({ kind: "project", directory })),
+      ...remoteRows.map((thread): JumpResult => ({ kind: "thread", thread })),
     ],
-    [projects, results, remoteRows],
+    [leadProjects, results, trailingProjects, remoteRows],
   );
 
   useEffect(() => {
@@ -417,11 +444,39 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
     Boolean(trimmed)
     && combinedRows.length === 0
     && (Boolean(mention) || !remoteLoading)
-    && !projectSearch.loading;
+    && !projectSearch.loading
+    && !holdTrailingProjects;
   // The listbox is only in the DOM once it has rows, so `aria-controls` has to
   // come and go with it — a dangling idref is an invalid attribute value, not
   // a harmless one.
-  const listVisible = Boolean(trimmed) && (projects.length > 0 || results.length > 0 || showRemoteSection);
+  const listVisible = Boolean(trimmed) && (projectCount > 0 || results.length > 0 || showRemoteSection);
+  // Trailing projects sit under their own divider once anything precedes them,
+  // as peer threads do under "Other instances".
+  const showProjectSection = trailingProjects.length > 0 && leadProjects.length + results.length > 0;
+  const renderProjectRow = (directory: NavigationDirectoryView, index: number): ReactElement => (
+    <li key={`project:${directory.key}`} id={rowId(index)} role="option" aria-selected={index === activeIndex}>
+      <button type="button" tabIndex={-1}
+        className={`jump-palette__row${index === activeIndex ? " is-active" : ""}`}
+        onMouseEnter={() => setActiveIndex(index)}
+        onClick={() => chooseProject(directory)}
+        title={directory.path}
+      >
+        <FolderIcon size={14} aria-hidden />
+        <span className="jump-palette__row-title">{directory.label}</span>
+        {ownerInstanceId ? (
+          <InstanceChip instanceId={ownerInstanceId}
+            label={readRendererFederationLabel() ?? ownerInstanceId} />
+        ) : foreignProjectPlatform(directory.path, platform) ? (
+          <span className="chip chip--instance tooltip-target"
+            data-tooltip="This path belongs to another operating system.">
+            Other machine · {foreignProjectPlatform(directory.path, platform)}
+          </span>
+        ) : null}
+        <span className="jump-palette__row-branch">{directory.path}</span>
+        <span className="jump-palette__row-repo">{mention ? "Filter" : "Project"}</span>
+      </button>
+    </li>
+  );
 
   return createPortal(
     <div
@@ -493,31 +548,20 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
             role="listbox"
             aria-label={mention ? "Projects" : props.onJumpToProject ? "Threads and projects" : "Threads"}
           >
-            {projects.map((directory, index) => (
-              <li key={`project:${directory.key}`} id={rowId(index)} role="option" aria-selected={index === activeIndex}>
-                <button type="button" tabIndex={-1}
-                  className={`jump-palette__row${index === activeIndex ? " is-active" : ""}`}
-                  onMouseEnter={() => setActiveIndex(index)}
-                  onClick={() => chooseProject(directory)}
-                  title={directory.path}
-                >
-                  <FolderIcon size={14} aria-hidden />
-                  <span className="jump-palette__row-title">{directory.label}</span>
-                  {ownerInstanceId ? (
-                    <InstanceChip instanceId={ownerInstanceId}
-                      label={readRendererFederationLabel() ?? ownerInstanceId} />
-                  ) : foreignProjectPlatform(directory.path, platform) ? (
-                    <span className="chip chip--instance tooltip-target"
-                      data-tooltip="This path belongs to another operating system.">
-                      Other machine · {foreignProjectPlatform(directory.path, platform)}
-                    </span>
-                  ) : null}
-                  <span className="jump-palette__row-branch">{directory.path}</span>
-                  <span className="jump-palette__row-repo">{mention ? "Filter" : "Project"}</span>
-                </button>
+            {leadProjects.map((directory, index) => renderProjectRow(directory, index))}
+            {results.map((thread, index) => renderRow(thread, leadProjects.length + index))}
+            {showProjectSection ? (
+              <li
+                aria-hidden="true"
+                className="jump-palette__section-divider"
+                role="presentation"
+              >
+                Projects
               </li>
-            ))}
-            {results.map((thread, index) => renderRow(thread, projects.length + index))}
+            ) : null}
+            {trailingProjects.map((directory, index) =>
+              renderProjectRow(directory, leadProjects.length + results.length + index),
+            )}
             {showRemoteSection ? (
               <li
                 aria-hidden="true"
@@ -528,7 +572,7 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
               </li>
             ) : null}
             {remoteRows.map((thread, index) =>
-              renderRow(thread, projects.length + results.length + index),
+              renderRow(thread, projectCount + results.length + index),
             )}
           </ul>
         ) : showEmpty ? (

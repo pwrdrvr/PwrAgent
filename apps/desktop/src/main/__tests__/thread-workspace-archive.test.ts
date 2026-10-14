@@ -1,12 +1,18 @@
+import { execFile } from "node:child_process";
 import { chmod, lstat, mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { zipSync } from "fflate";
 import * as tar from "tar";
 import { afterEach, expect, it } from "vitest";
 import { exportWorkspaceArchive, importWorkspaceArchive } from "../federation/thread-workspace-archive";
 
 const roots: string[] = [];
+const run = promisify(execFile);
+const require = createRequire(import.meta.url);
 async function fixture() {
   const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-workspace-archive-"));
   roots.push(root);
@@ -78,8 +84,25 @@ it.skipIf(process.platform === "win32")("preserves executable files and internal
   await importWorkspaceArchive(destination, staging, archive);
   expect(await readlink(path.join(destination, "internal-link"))).toBe("run.sh");
   expect(await readlink(path.join(destination, "dangling-link"))).toBe("missing-target");
-  expect((await lstat(path.join(destination, "run.sh"))).mode & 0o111).toBe(0o111);
+  // Group/other execution is governed by the receiver's umask. The explicit
+  // subprocess matrix below checks every permission bit under 0022 and 0077.
+  expect((await lstat(path.join(destination, "run.sh"))).mode & 0o100).toBe(0o100);
   await expect(lstat(path.join(destination, "external-link"))).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it.skipIf(process.platform === "win32").each([
+  { mask: 0o022, expected: [0o755, 0o751, 0o700, 0o644, 0o640, 0o600, 0o755, 0o755, 0o755] },
+  { mask: 0o077, expected: [0o700, 0o700, 0o700, 0o600, 0o600, 0o600, 0o700, 0o700, 0o700] },
+])("applies receiver umask $mask without transferring privileged modes", async ({ mask, expected }) => {
+  const { root } = await fixture();
+  // umask is process-wide, even its deprecated getter writes it twice. Only
+  // this dedicated child sets it; no test worker or sibling test is affected.
+  const { stdout } = await run(process.execPath, [
+    "--import", require.resolve("tsx"),
+    fileURLToPath(new URL("./fixtures/workspace-archive-permissions.ts", import.meta.url)),
+    root, String(mask),
+  ]);
+  expect(JSON.parse(stdout)).toEqual({ modes: expected, executable: true, links: true, externalOmitted: true });
 });
 
 it.skipIf(process.platform === "win32")("omits all symlinks and warns when Windows requires ZIP", async () => {
@@ -125,5 +148,28 @@ it.skipIf(process.platform === "win32")("rejects an incoming tar link outside th
   await tar.c({ cwd: source, file, gzip: true }, ["link"]);
   await expect(importWorkspaceArchive(destination, staging, { format: "tar.gz", dataBase64: (await readFile(file)).toString("base64"), warnings: [] }))
     .rejects.toThrow("Unsafe");
+  await expect(lstat(path.join(destination, "link"))).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it.skipIf(process.platform === "win32").each(["..", ".git"])("rejects incoming tar paths prefixed by %s before extraction", async (prefix) => {
+  const { root, source, staging, destination } = await fixture();
+  await writeFile(path.join(source, "config"), "unsafe");
+  const file = path.join(staging, "unsafe.tar.gz");
+  await tar.c({ cwd: source, file, gzip: true, prefix }, ["config"]);
+  await expect(importWorkspaceArchive(destination, staging, { format: "tar.gz", dataBase64: (await readFile(file)).toString("base64"), warnings: [] }))
+    .rejects.toThrow("Unsafe");
+  await expect(lstat(path.join(root, "config"))).rejects.toMatchObject({ code: "ENOENT" });
+  await expect(lstat(path.join(destination, ".git"))).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it.skipIf(process.platform === "win32")("rejects tar entries nested under an internal symlink before extraction", async () => {
+  const { source, staging, destination } = await fixture();
+  await mkdir(path.join(source, "directory"));
+  await writeFile(path.join(source, "directory", "child"), "bytes");
+  await symlink("directory", path.join(source, "link"));
+  const file = path.join(staging, "unsafe.tar.gz");
+  await tar.c({ cwd: source, file, gzip: true, noDirRecurse: true }, ["link", "link/child"]);
+  await expect(importWorkspaceArchive(destination, staging, { format: "tar.gz", dataBase64: (await readFile(file)).toString("base64"), warnings: [] }))
+    .rejects.toThrow("nested under a file or symlink");
   await expect(lstat(path.join(destination, "link"))).rejects.toMatchObject({ code: "ENOENT" });
 });

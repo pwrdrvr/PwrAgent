@@ -87,6 +87,7 @@ function renderSidebar(params: {
     parent: NavigationThreadSummary,
     collapsed: boolean,
   ) => Promise<void>;
+  pinnedThreadsOnTop?: boolean;
   recentThreads?: NavigationThreadSummary[];
   selectedItemKey?: string;
   threads: NavigationThreadSummary[];
@@ -99,6 +100,7 @@ function renderSidebar(params: {
       draftThreadKeys={params.draftThreadKeys}
       inboxThreads={params.inboxThreads ?? params.threads}
       loading={false}
+      pinnedThreadsOnTop={params.pinnedThreadsOnTop}
       recentThreads={params.recentThreads}
       selectedItemKey={params.selectedItemKey}
       threads={params.threads}
@@ -346,10 +348,13 @@ describe("Sidebar hover-stable thread ordering", () => {
     ]);
   });
 
+  // With pinned threads kept in place, Inbox is a pure sort: a pin changes
+  // nothing about a row's position, so it must not release the pointer's order.
   it("updates an inline Inbox pin without releasing deferred ordering", () => {
     const onSetThreadPin = vi.fn(async () => undefined);
     const view = render(renderSidebar({
       browseMode: "inbox",
+      pinnedThreadsOnTop: false,
       threads: [alpha, bravo],
       onSetThreadPin,
     }));
@@ -357,6 +362,7 @@ describe("Sidebar hover-stable thread ordering", () => {
     fireEvent.pointerOver(alphaRow, { pointerType: "mouse" });
     view.rerender(renderSidebar({
       browseMode: "inbox",
+      pinnedThreadsOnTop: false,
       threads: [bravo, alpha],
       onSetThreadPin,
     }));
@@ -368,6 +374,7 @@ describe("Sidebar hover-stable thread ordering", () => {
 
     view.rerender(renderSidebar({
       browseMode: "inbox",
+      pinnedThreadsOnTop: false,
       threads: [bravo, { ...alpha, pinnedRank: "1024" }],
       onSetThreadPin,
     }));
@@ -387,6 +394,7 @@ describe("Sidebar hover-stable thread ordering", () => {
     const pinnedAlpha = { ...alpha, pinnedRank: "1024" };
     const view = render(renderSidebar({
       browseMode: "inbox",
+      pinnedThreadsOnTop: false,
       threads: [pinnedAlpha, bravo],
       onSetThreadPin,
     }));
@@ -394,6 +402,7 @@ describe("Sidebar hover-stable thread ordering", () => {
     fireEvent.pointerOver(alphaRow, { pointerType: "mouse" });
     view.rerender(renderSidebar({
       browseMode: "inbox",
+      pinnedThreadsOnTop: false,
       threads: [bravo, pinnedAlpha],
       onSetThreadPin,
     }));
@@ -406,6 +415,7 @@ describe("Sidebar hover-stable thread ordering", () => {
 
     view.rerender(renderSidebar({
       browseMode: "inbox",
+      pinnedThreadsOnTop: false,
       threads: [bravo, alpha],
       onSetThreadPin,
     }));

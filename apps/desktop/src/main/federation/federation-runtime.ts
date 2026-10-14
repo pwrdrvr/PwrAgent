@@ -4120,14 +4120,10 @@ export class DesktopFederationRuntime {
     }
     const retryDelayMs = this.scheduleReconnect();
     if (retryDelayMs === undefined) return;
+    // The error names every endpoint tried and why each failed; without it a
+    // long outage logs nothing an operator can act on.
     const message = this.connectionFailureLog.recordFailure(Date.now(), retryDelayMs);
-    if (message) {
-      if (this.lastConnectionFailureKind === "auth") {
-        log.warn(message, { error: this.lastConnectionError });
-      } else {
-        log.warn(message);
-      }
-    }
+    if (message) log.warn(message, { error: this.lastConnectionError });
   }
 
   // Backoff applies per full cycle through the endpoint list; every cycle
@@ -6706,6 +6702,11 @@ function localBackendOperations(): FederationBackendOperations {
       // cycle. An unregistered reader (messaging not wired yet) reads as
       // "no platforms configured", which renders as no MSG chip.
       return await (messagingPlatformStatusReader?.() ?? []);
+    },
+    async readForge(request, options) {
+      const deadline = options?.deadlineAt ?? Date.now() + 60_000;
+      if (deadline <= Date.now()) throw new Error("Forge read deadline expired.");
+      return await getDesktopBackendRegistry().readForgeForPeer(request, AbortSignal.timeout(Math.min(60_000, deadline - Date.now())));
     },
     async detachThreadPullRequest(
       request: DetachThreadPullRequestRequest,

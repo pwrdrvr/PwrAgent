@@ -50,8 +50,12 @@ complete scope, native typecheck command and formatting policy.
   fix. New signals that should move a row need a transition in the reducer, not
   a tiebreaker in the sort.
 - User-curated Pins live as a scrollable section at the top of each directory
-  in the Directories lens. Inbox and Recents are pure sort orders and do not
-  float pins.
+  in the Directories lens. While `general.pinned_threads_on_top` is on (the
+  default), Inbox (the Updated tab) and Recents (the Created tab) also share
+  one collapsible Pinned group at their top, holding every pin across
+  projects in the same global order. Each lists every other thread by its own
+  time below the group, and a thread renders in only one of them. Off, both
+  are pure time sorts and do not float pins.
 - Unread state uses the orange cookie marker, not punctuation badges.
 - The sidebar is an information surface, not a stack of generic cards.
 - Do not use browser-default controls in shipped UI.
@@ -1250,7 +1254,7 @@ Two more suite-wide guards, both pure test infrastructure. Production code has
 no test-awareness and behaves identically either way — the seams are in
 `vitest.workspace.ts`.
 
-**Where.** Both desktop projects set `PWRAGENT_HOME` to
+**Where.** Every desktop project sets `PWRAGENT_HOME` to
 `<os.tmpdir()>/pwragent-vitest-home-<pid>`. `resolvePwragentRoot` otherwise
 falls back to `~/.pwragent`, and only about a dozen main tests override it
 themselves, so every other test that touches a root-relative path was reading
@@ -1271,7 +1275,7 @@ deliberately `os.homedir()`-anchored; no test has ever created it, and
 `git-directory-service` takes an injected `homeDir`.
 
 `XDG_CONFIG_HOME` and `XDG_STATE_HOME` travel with it, pinned to
-`<os.tmpdir()>/pwragent-vitest-xdg-<pid>/{config,state}` on both projects and
+`<os.tmpdir()>/pwragent-vitest-xdg-<pid>/{config,state}` on each project and
 guarded by the same test. Nothing in the app reads them today; the pre-profile
 migration that searched them for `pwragnt/` state is gone. They stay because
 `PWRAGENT_HOME` never covered them: those roots came from `os.homedir()` and
@@ -1331,7 +1335,7 @@ those have no host to classify, and reading an inline fixture is not egress.
 The allowance is pinned by the self-test, including that a remote host merely
 *containing* "localhost" is still blocked.
 
-The renderer project loads the fetch guard too. It has no `fetch` call site
+Both renderer projects load the fetch guard too. It has no `fetch` call site
 today and reaches the network through IPC, but `lint:boundaries` reads imports
 and cannot see a `globalThis.fetch`, and jsdom inherits a live one from Node —
 so this is the only thing here that would catch a renderer reaching a remote

@@ -2554,6 +2554,18 @@ describe("CodexAppServerClient", () => {
         updatedAt: 1_777_500_300,
         cwd: "/repo/app",
       },
+      {
+        id: "thread-guardian-marker",
+        threadSource: "guardian_review",
+        updatedAt: 1_777_500_400,
+        cwd: "/repo/app",
+      },
+      {
+        id: "thread-guardian-source",
+        source: { subAgent: { other: "guardian" } },
+        updatedAt: 1_777_500_500,
+        cwd: "/repo/app",
+      },
     ]);
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     const client = new CodexAppServerClient({
@@ -4040,6 +4052,10 @@ describe("CodexAppServerClient", () => {
       expect(threadListRequests[0]?.params?.searchTerm).toBeUndefined();
       expect(methods.filter((method) => method === "initialize")).toHaveLength(2);
       expect(methods.at(-1)).toBe("thread/resume");
+      expect(JSON.parse(transport.sentMessages.at(-1)!)).toMatchObject({
+        method: "thread/resume",
+        params: { threadId, excludeTurns: true },
+      });
     } finally {
       await client.close();
       await fs.rm(tempRoot, { force: true, recursive: true });
@@ -8591,6 +8607,66 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  // PwrAgent's own tools take no title argument, so read_thread and
+  // send_message_to_thread rows could not be opened to see their call.
+  it("makes an untitled dynamic tool call expandable, and leaves an empty one alone", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.readThreadResultByThreadId.set("thread-dynamic-tool-untitled", {
+      thread: {
+        turns: [
+          {
+            id: "turn-dynamic-tool-untitled",
+            status: "completed",
+            items: [
+              {
+                type: "dynamicToolCall",
+                id: "tool-read",
+                namespace: "pwragent",
+                tool: "read_thread",
+                arguments: { threadId: "sample-thread" },
+                status: "completed",
+                success: true,
+                contentItems: [
+                  { type: "inputText", text: "{\"read\":{\"title\":\"Sample thread\"}}" },
+                ],
+              },
+              {
+                type: "dynamicToolCall",
+                id: "tool-empty",
+                namespace: "pwragent",
+                tool: "list_instances",
+                arguments: {},
+                status: "completed",
+                success: true,
+                contentItems: [],
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const replay = await client.readThread({
+      threadId: "thread-dynamic-tool-untitled",
+    });
+
+    const details = replay.entries.flatMap((entry) => entry.type === "activity" ? entry.details : []);
+    expect(details.find((detail) => detail.id === "tool-read")?.command).toEqual({
+      displayCommand: "pwragent/read_thread\n{\n  \"threadId\": \"sample-thread\"\n}",
+      rawCommand: "pwragent/read_thread",
+      source: "tool",
+      output: "{\"read\":{\"title\":\"Sample thread\"}}",
+    });
+    expect(details.find((detail) => detail.id === "tool-empty")).not.toHaveProperty("command");
+
+    await client.close();
+  });
+
   it("hydrates dynamic tool result images from persisted thread activity", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.readThreadResultByThreadId.set("thread-pdf-tool-image", {
@@ -9341,6 +9417,72 @@ describe("CodexAppServerClient", () => {
     );
 
     await client.close();
+  });
+
+  it.each([null, "Use the paginated history APIs."])(
+    "keeps Codex deprecation notices in diagnostics (details=%s)",
+    async (details) => {
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+      try {
+        await client.getInitializeResult();
+        const notifications: AppServerNotification[] = [];
+        client.onNotification((notification) => { notifications.push(notification); });
+        const transport = MockTransport.instances.at(-1)!;
+        const summary = "Full-history hydration is deprecated for paginated threads; use `excludeTurns: true`, then page with `thread/turns/list` and `thread/items/list`.";
+        const status: AppServerNotification = {
+          method: "thread/status/changed",
+          params: { threadId: "thread-2", status: { type: "active", activeFlags: [] } },
+        };
+        codexClientLogWarn.mockClear();
+        transport.emitInbound({ jsonrpc: "2.0", method: "deprecationNotice", params: { summary, details } });
+        transport.emitInbound({ jsonrpc: "2.0", ...status });
+
+        await vi.waitFor(() => expect(notifications).toContainEqual(status));
+        expect(notifications).toEqual([status]);
+        expect(codexClientLogWarn).toHaveBeenCalledExactlyOnceWith(
+          "codex deprecation notice",
+          { summary, details },
+        );
+      } finally {
+        await client.close();
+      }
+    },
+  );
+
+  it("consumes Codex native goal notifications without changing normalized thread state", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    try {
+      await client.getInitializeResult();
+      const notifications: AppServerNotification[] = [];
+      client.onNotification((notification) => { notifications.push(notification); });
+      const transport = MockTransport.instances.at(-1)!;
+      const status: AppServerNotification = {
+        method: "thread/status/changed",
+        params: { threadId: "thread-2", status: { type: "active", activeFlags: [] } },
+      };
+      codexClientLogWarn.mockClear();
+      transport.emitInbound({
+        jsonrpc: "2.0",
+        method: "thread/goal/updated",
+        params: {
+          threadId: "thread-2",
+          goal: {
+            threadId: "thread-2", objective: "Finish the fixture task", status: "active",
+            tokenBudget: null, tokensUsed: 0, timeUsedSeconds: 0,
+          },
+        },
+      });
+      transport.emitInbound({ jsonrpc: "2.0", method: "thread/goal/cleared", params: { threadId: "thread-2" } });
+      transport.emitInbound({ jsonrpc: "2.0", ...status });
+
+      await vi.waitFor(() => expect(notifications).toContainEqual(status));
+      expect(notifications).toEqual([status]);
+      expect(codexClientLogWarn).not.toHaveBeenCalled();
+    } finally {
+      await client.close();
+    }
   });
 
   it("recognizes Codex hook lifecycle notifications", async () => {
@@ -13809,7 +13951,7 @@ describe("CodexAppServerClient", () => {
       .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
       .find((payload) => payload.method === "turn/start");
 
-    expect(resumePayload?.params).toEqual({ threadId: "thread-2" });
+    expect(resumePayload?.params).toEqual({ threadId: "thread-2", excludeTurns: true });
     expect(turnStartPayload?.params).toMatchObject({ threadId: "thread-2" });
     expect(resumePayload?.params).not.toHaveProperty("dynamicTools");
     expect(turnStartPayload?.params).not.toHaveProperty("dynamicTools");

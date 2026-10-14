@@ -418,3 +418,75 @@ it.each([undefined, "199680"])("keeps a local handoff reachable when its remote 
   expect(project({ kind: "directory", directoryKey: "directory:/repo" }).entries).toEqual([]);
   expect(child.parentThreadInstanceId).toBeUndefined();
 });
+
+describe("Lens split by root pin", () => {
+  const kept = String(-(2 ** 40));
+  const source = () => snapshot([
+    thread("t1", { pinnedRank: "2048" }),
+    thread("t2"),
+    thread("t3", { pinnedRank: kept }),
+    thread("t4"),
+    // Every pin across projects: one with no linked directory, and a peer's
+    // thread this viewer pinned (its local rank arrives as `pinnedRank`).
+    thread("t5", { pinnedRank: "1024", linkedDirectories: [] }),
+    thread("t6", { pinnedRank: "512", federation: {
+      ref: { backend: "codex", threadId: "t6", target: { scope: "remote", instanceId: "peer" } }, instanceLabel: "Peer",
+    } }),
+    // Children follow their roots, newest first, never by their own pin.
+    thread("t7", { parentThreadId: "t1" }),
+    thread("t8", { parentThreadId: "t2", pinnedRank: "1" }),
+    thread("t9", { parentThreadId: "t1", threadStatus: "active" }),
+  ]);
+  const lens = (roots?: "pinned" | "unpinned", filter?: string) => projectNavigationQuery({
+    index: source(),
+    request: request({ kind: "lens", lens: "recents", ...(roots ? { roots } : {}), ...(filter ? { filter } : {}) }),
+  });
+
+  it("puts every pinned root and its subtree in the pinned bucket, in the global pin order", () => {
+    const pinned = lens("pinned");
+    expect(pinned.entries.map(({ row }) => row.id)).toEqual(["t3", "t6", "t5", "t1", "t9", "t7"]);
+    expect(pinned.entries.filter(({ placement }) => placement.kind === "root").map(({ row }) => row.id))
+      .toEqual(["t3", "t6", "t5", "t1"]);
+  });
+
+  it("keeps the unpinned bucket in creation order, holding no pinned root", () => {
+    expect(lens("unpinned").entries.map(({ row }) => row.id)).toEqual(["t8", "t4", "t2"]);
+  });
+
+  it("acknowledges the split with a root count and scopes counts to the bucket", () => {
+    const pinned = lens("pinned");
+    expect(pinned.collectionSize).toBe(4);
+    expect(pinned.counts).toMatchObject({ total: 6, pinned: 4, active: 1 });
+    expect(lens("unpinned").collectionSize).toBe(2);
+    // An unsplit lens is unchanged: no acknowledgment, whole-owner counts.
+    const unsplit = lens();
+    expect(unsplit.collectionSize).toBeUndefined();
+    expect(unsplit.counts.total).toBe(9);
+    expect(unsplit.entries.map(({ row }) => row.id)).toEqual(["t9", "t8", "t7", "t6", "t5", "t4", "t3", "t2", "t1"]);
+  });
+
+  it("splits Updated the same way, keeping its list in last-update order", () => {
+    // t2 was created early but touched last; Updated lists it first.
+    const updated = (roots: "pinned" | "unpinned") => projectNavigationQuery({
+      index: snapshot([
+        thread("t1", { pinnedRank: "2048", updatedAt: 90 }),
+        thread("t2", { updatedAt: 80 }),
+        thread("t3", { pinnedRank: kept }),
+        thread("t4", { updatedAt: 5 }),
+      ]),
+      request: request({ kind: "lens", lens: "inbox", roots }),
+    });
+    // Pins keep their rank, however recently they changed.
+    expect(updated("pinned").entries.map(({ row }) => row.id)).toEqual(["t3", "t1"]);
+    expect(updated("pinned").collectionSize).toBe(2);
+    expect(updated("unpinned").entries.map(({ row }) => row.id)).toEqual(["t2", "t4"]);
+  });
+
+  it("applies the lens filter to both buckets", () => {
+    expect(lens("pinned", "thread t5").entries.map(({ row }) => row.id)).toEqual(["t5"]);
+    expect(lens("pinned", "thread t5").collectionSize).toBe(1);
+    expect(lens("unpinned", "thread t5").entries).toEqual([]);
+    expect(lens("pinned", "thread t4").entries).toEqual([]);
+    expect(lens("pinned", "thread t4").collectionSize).toBe(0);
+  });
+});

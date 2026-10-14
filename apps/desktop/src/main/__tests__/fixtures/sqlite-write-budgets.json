@@ -64,6 +64,20 @@
     "rowsChanged": 100,
     "statements": 100
   },
+  "archived-worktree-repair-once-marker": {
+    "commits": 2,
+    "note": "One claim and one completion for a 501-thread pass plus a completed-startup no-op: 2 commits total, no per-item or timer writes; about 0.02 MB once and 0 MB/day afterward.",
+    "observedWalBytes": 12360,
+    "rowsChanged": 2,
+    "statements": 2
+  },
+  "archived-worktree-repair-shared-snapshot": {
+    "commits": 4,
+    "note": "One-time repair of one dirty checkout shared by two archived threads, including the profile claim and completion; no timer or idle writes.",
+    "observedWalBytes": 45320,
+    "rowsChanged": 4,
+    "statements": 4
+  },
   "auto-access-selection": {
     "commits": 2,
     "note": "one operator mode selection and permission audit; no per-review persistence",
@@ -777,6 +791,13 @@
     "observedWalBytes": 16480,
     "rowsChanged": 1,
     "statements": 1
+  },
+  "pinned-group-collapse": {
+    "commits": 3,
+    "note": "three header clicks and three repeated writes of the same value: one commit per change, none per repeat; a few clicks a day is well under 1 MB/day of WAL",
+    "observedWalBytes": 24720,
+    "rowsChanged": 3,
+    "statements": 3
   },
   "registered-project-launchpad-submit": {
     "commits": 1,

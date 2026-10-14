@@ -708,6 +708,7 @@ function emitRegistryEvent(event: unknown): void {
   }
 }
 const publishLocalEvent = vi.fn(async (_event?: unknown) => undefined);
+const setForgeReadHandlers = vi.fn();
 const setThreadPullRequestStatusToolHandler = vi.fn();
 const setThreadPullRequestCanonicalizer = vi.fn();
 const setLocalPullRequestAuthorityResolver = vi.fn();
@@ -1048,6 +1049,7 @@ vi.mock("../settings/desktop-settings-singleton", () => ({
       diffCondensation: { enabled: false },
     }),
     readSettings: prAutomationSettings.readSettings,
+    isForgeEnabled: () => true,
   }),
 }));
 
@@ -1150,6 +1152,7 @@ vi.mock("../app-server/backend-registry", () => {
     resolveEditCommitStates,
     onEvent,
     publishLocalEvent,
+    setForgeReadHandlers,
     setThreadPullRequestStatusToolHandler,
     setThreadPullRequestCanonicalizer,
     setThreadPrimaryGitRepositoryReader: vi.fn(),
@@ -1221,6 +1224,7 @@ vi.mock("../pr-status/git-remote", async () => {
     ...actual,
     resolveGitHubRepoForDirectory,
     resolveGitHubReposForDirectory,
+    readForgeRepositoryRemotes: resolveGitHubReposForDirectory,
   };
 });
 
@@ -8672,6 +8676,73 @@ describe("app server ipc", () => {
         },
       );
     });
+  });
+
+  it("forge tool cache reads and explicit refresh never publish transitions, attach PRs or write status", async () => {
+    const cachedPr = githubPr({ number: 944, org: "pwrdrvr", repo: "PwrAgent", state: "failing", url: "https://github.com/pwrdrvr/PwrAgent/pull/944" });
+    const fetchedAt = Date.now() - 90_000;
+    listThreads.mockResolvedValue([{ id: "thread-1", source: "codex", title: "Fixture", linkedDirectories: [], updatedAt: 2000 }] as never);
+    getThreadOverlayState.mockResolvedValue({ backend: "codex", threadId: "thread-1", executionMode: "default", prs: [cachedPr], prsFetchedAt: fetchedAt });
+    registerAppServerIpcHandlers();
+    const local = setForgeReadHandlers.mock.calls.at(-1)?.[0];
+    expect(local).toBeTypeOf("function");
+    const context = { backend: "codex", threadId: "thread-1", transport: "mcp" };
+    publishLocalEvent.mockClear();
+    fetchPullRequestByUrl.mockClear();
+    writePrStatusCacheEntries.mockClear();
+    const cached = await local("get_forge_status", {}, context);
+    expect(cached).toMatchObject({ source: "cache", observations: [{ pr: cachedPr, fetchedAt, freshness: "stale" }], prAutomation: { autoFixActive: false } });
+    expect(fetchPullRequestByUrl).not.toHaveBeenCalled();
+    expect(writePrStatusCacheEntries).not.toHaveBeenCalled();
+    expect(publishLocalEvent).not.toHaveBeenCalled();
+    fetchPullRequestByUrl.mockResolvedValueOnce({ ...cachedPr, state: "passing" });
+    const live = await local("get_forge_status", { refresh: true, url: cachedPr.url }, context);
+    expect(live).toMatchObject({ source: "provider", observations: [{ pr: { state: "passing" }, freshness: "recent" }] });
+    expect(fetchPullRequestByUrl).toHaveBeenCalledOnce();
+    expect(writePrStatusCacheEntries).not.toHaveBeenCalled();
+    expect(publishLocalEvent).not.toHaveBeenCalled();
+    // The status registry remains scheduler-owned even after an explicit read.
+    expect(await local("get_forge_status", {}, context)).toMatchObject({ source: "cache", observations: [{ pr: { state: "failing" } }] });
+  });
+
+  it.each([false, true])("forge branch refresh preserves whether GitHub answered (%s)", async (answered) => {
+    const { ForgePrFetcher } = await vi.importActual<typeof import("../pr-status/forge-pr-fetcher")>("../pr-status/forge-pr-fetcher");
+    const { appServerService } = await import("../ipc/app-server");
+    const repos = [{ host: "github.com", owner: "pwrdrvr", repo: "PwrAgent" }];
+    const fetchPullRequestsForBranches = vi.fn(async () => new Map<string, PrSummary[]>(
+      answered ? [["pwrdrvr/pwragent#topic", []]] : [],
+    ));
+    const fetcher = new ForgePrFetcher({
+      isProviderEnabled: (provider) => provider === "github",
+      probeGhAvailable: async () => true,
+      resolveGitHubRepos: async () => repos,
+      graphqlClient: { fetchPullRequests: async () => [], fetchPullRequestsForBranches },
+    });
+    const service = appServerService as unknown as { getPrFetcher: () => InstanceType<typeof ForgePrFetcher> };
+    const provider = vi.spyOn(service, "getPrFetcher").mockReturnValue(fetcher);
+    try {
+      resolveGitHubReposForDirectory.mockResolvedValue(repos);
+      listThreads.mockResolvedValue([{
+        id: "thread-1", source: "codex", title: "Fixture", gitBranch: "topic", updatedAt: 2000,
+        linkedDirectories: [{ id: "/repo", kind: "directory", label: "repo", path: "/repo" }],
+      }] as never);
+      getThreadOverlayState.mockResolvedValue({ backend: "codex", threadId: "thread-1", executionMode: "default", prs: [] });
+      registerAppServerIpcHandlers();
+      const local = setForgeReadHandlers.mock.calls.at(-1)?.[0];
+      publishLocalEvent.mockClear();
+      writePrStatusCacheEntries.mockClear();
+      const result = local("get_forge_status", { refresh: true, branch: "topic" }, { backend: "codex", threadId: "thread-1", transport: "mcp" });
+      if (answered) {
+        await expect(result).resolves.toMatchObject({ source: "provider", observations: [], error: { code: "no_matching_pull_requests" } });
+      } else {
+        await expect(result).rejects.toMatchObject({ code: "provider_error" });
+      }
+      expect(fetchPullRequestsForBranches).toHaveBeenCalledOnce();
+      expect(writePrStatusCacheEntries).not.toHaveBeenCalled();
+      expect(publishLocalEvent).not.toHaveBeenCalled();
+    } finally {
+      provider.mockRestore();
+    }
   });
 
   it("registers a user-invoked PR status tool handler with freshness metadata", async () => {

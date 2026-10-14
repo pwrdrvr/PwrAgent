@@ -15,9 +15,10 @@ it("records StrictMode effect replay but only the surviving effect dispatches", 
   const before = navigationListingDiagnostics.snapshot().recorded;
   const read = vi.fn<NonNullable<DesktopApi["getNavigationQueryPage"]>>(async () => page);
   const api = { getNavigationQueryPage: read, releaseNavigationQuery: vi.fn(async () => {}) };
+  // One lens page, so the event budget below measures replay, not lens shape.
   const { result, rerender, unmount } = renderHook(() => useBoundedNavigationWindow({ desktopApi: api,
     enabled: true, visible: true, browseMode: "inbox", attentionView: { id: "fixture", promoteOnTurnEnd: true },
-    expandedByKey: {}, unpinnedExpandedByKey: {},
+    expandedByKey: {}, unpinnedExpandedByKey: {}, pinnedThreadsOnTop: false,
   }), { wrapper: StrictMode });
   await waitFor(() => expect(result.current.presentationReady).toBe(true));
   expect(read).toHaveBeenCalledTimes(2);

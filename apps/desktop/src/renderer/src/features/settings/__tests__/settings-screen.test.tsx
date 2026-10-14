@@ -108,6 +108,10 @@ function createSnapshot(
         value: true,
         source: "default",
       },
+      pinnedThreadsOnTop: {
+        value: true,
+        source: "default",
+      },
       mcpGatewayEnabled: {
         value: true,
         source: "default",
@@ -1655,6 +1659,23 @@ describe("SettingsScreen", () => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         general: {
           attentionPromoteOnTurnEnd: false,
+        },
+      });
+    });
+    expect(
+      screen.getByRole("switch", {
+        name: "Show pinned threads in a group at the top",
+      }),
+    ).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(
+      screen.getByRole("switch", {
+        name: "Show pinned threads in a group at the top",
+      }),
+    );
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: {
+          pinnedThreadsOnTop: false,
         },
       });
     });

@@ -1,10 +1,14 @@
 import type { JsonRpcTransport } from "@pwrdrvr/agent-transport";
+import type { Thread } from "@pwrdrvr/codex-app-server-protocol/v2";
 import type { AppServerNotification } from "@pwragent/shared";
 
 export type ArchiveWorktreeThread = {
   id: string;
   cwd: string;
   source: string;
+  wireSource?: Thread["source"];
+  threadSource?: Thread["threadSource"];
+  status?: Thread["status"];
   originator?: string;
   name?: string;
   archived?: boolean;
@@ -34,10 +38,15 @@ export class ArchiveWorktreeTransport implements JsonRpcTransport {
     const params = request.params ?? {};
     ArchiveWorktreeTransport.requests.push({ method: request.method, params });
     let result: unknown = {};
-    const wireThread = (thread: ArchiveWorktreeThread) => ({
-      ...thread, name: thread.name ?? thread.id, createdAt: 1, updatedAt: 2, modelProvider: "openai",
-      threadSource: thread.source.startsWith("subAgent") ? "subagent" : "user", turns: [],
-    });
+    const wireThread = (thread: ArchiveWorktreeThread) => {
+      const { wireSource, threadSource, ...metadata } = thread;
+      return {
+        ...metadata, source: wireSource ?? thread.source,
+        name: thread.name ?? thread.id, createdAt: 1, updatedAt: 2, modelProvider: "openai",
+        threadSource: threadSource === undefined ? (thread.source.startsWith("subAgent") ? "subagent" : "user") : threadSource,
+        turns: [],
+      };
+    };
     if (request.method === "initialize") {
       result = { userAgent: "archive-fixture/1.0", codexHome: "/fixture", platformFamily: "unix", platformOs: "linux" };
     } else if (request.method === "thread/start") {

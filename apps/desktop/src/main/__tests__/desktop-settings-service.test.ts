@@ -3083,6 +3083,33 @@ describe("DesktopSettingsService", () => {
     });
   });
 
+  it("defaults pinned threads on top and persists overrides", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    expect((await service.readSettingsProjection()).general.pinnedThreadsOnTop).toEqual({
+      value: true,
+      source: "default",
+    });
+
+    await service.writeConfigPatchTargeted({
+      general: {
+        pinnedThreadsOnTop: false,
+      },
+    });
+
+    expect(fs.readFileSync(configPath, "utf8")).toContain("pinned_threads_on_top = false");
+    expect((await service.readSettingsProjection()).general.pinnedThreadsOnTop).toEqual({
+      value: false,
+      source: "config",
+    });
+  });
+
   it("defaults both interactive SVG preferences off and persists overrides", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");

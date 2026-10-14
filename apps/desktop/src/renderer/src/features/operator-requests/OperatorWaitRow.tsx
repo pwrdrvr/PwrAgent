@@ -122,6 +122,9 @@ export function OperatorWaitRow(props: OperatorWaitRowProps) {
     switch (wait.kind) {
       case "mcp-approval":
         return renderMcpApproval();
+      case "mcp-input":
+        if (wait.mcp?.mode === "url") return renderMcpApproval();
+        return null;
       case "approval":
         return renderApproval();
       case "question":
@@ -187,6 +190,16 @@ export function OperatorWaitRow(props: OperatorWaitRowProps) {
     ];
     return (
       <div className="thread-todos-panel__row-actions">
+        {mcp.url ? (
+          <a
+            className="thread-todos-panel__row-link"
+            href={mcp.url.url}
+            rel="noreferrer"
+            target="_blank"
+          >
+            Open
+          </a>
+        ) : null}
         <button
           type="button"
           className="thread-todos-panel__row-link thread-todos-panel__row-link--quiet"

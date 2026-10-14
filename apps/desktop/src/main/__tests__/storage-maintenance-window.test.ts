@@ -71,7 +71,7 @@ afterEach(() => {
   fixture.otherInstance = false; fixture.record = { historyEnabled: true }; write.mockClear(); vi.restoreAllMocks(); vi.useRealTimers();
 });
 
-it("releases startup on completion but preserves a hovered window and its settings", async () => {
+it("releases startup on completion and keeps a held window above the app with its settings", async () => {
   const { done, window, worker } = await started();
   await command({ action: "hold" });
   worker.emit("message", { phase: "complete", afterBytes: 100 });
@@ -86,22 +86,13 @@ it("releases startup on completion but preserves a hovered window and its settin
   expect(window.close).toHaveBeenCalledOnce();
 });
 
-it("allows hover during the completion grace period to cancel auto-dismiss", async () => {
+it("leaves closing a finished window to the renderer's countdown", async () => {
   const { done, window, worker } = await started();
   worker.emit("message", { phase: "complete" }); worker.emit("exit", 0);
   await done;
-  await vi.advanceTimersByTimeAsync(3000);
-  await command({ action: "hold" });
-  await vi.advanceTimersByTimeAsync(10000);
+  await vi.advanceTimersByTimeAsync(60000);
   expect(window.close).not.toHaveBeenCalled();
-});
-
-it("auto-dismisses an untouched completion window after startup is released", async () => {
-  const { done, window, worker } = await started();
-  worker.emit("message", { phase: "complete" }); worker.emit("exit", 0);
-  await done;
-  expect(window.close).not.toHaveBeenCalled();
-  await vi.advanceTimersByTimeAsync(4000);
+  await command({ action: "dismiss" });
   expect(window.close).toHaveBeenCalledOnce();
 });
 

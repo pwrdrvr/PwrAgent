@@ -52,6 +52,9 @@ const ENDPOINT = "ws://192.0.2.1:47830";
 const FAILURE = "Federation gateway is unreachable on every configured endpoint. "
   + `${ENDPOINT}: connect ECONNREFUSED 192.0.2.1:47830`;
 const MINUTE_MS = 60_000;
+// What walkGatewayEndpoints reports for the mocked connectClient rejection.
+const RETRY_FAILURE = "Federation gateway is unreachable on every configured endpoint. "
+  + `${ENDPOINT}: connect ECONNREFUSED`;
 
 describe("federation connection failure logging", () => {
   let runtime: DesktopFederationRuntime;
@@ -76,15 +79,15 @@ describe("federation connection failure logging", () => {
     vi.restoreAllMocks();
   });
 
-  it("logs three concise failures with the actual retry delay and next log interval", async () => {
+  it("logs three failures with the actual retry delay, next log interval, and endpoint errors", async () => {
     harness.handleClientConnectionFailure(new Error(FAILURE));
     await vi.advanceTimersToNextTimerAsync();
     await vi.advanceTimersToNextTimerAsync();
 
     expect(logger.warn.mock.calls).toEqual([
-      ["Couldn't connect to federation gateway for 0s; retrying in 1s; logging again in 1s."],
-      ["Couldn't connect to federation gateway for 1s; retrying in 2s; logging again in 2s."],
-      ["Couldn't connect to federation gateway for 3s; retrying in 4s; logging again in 5m."],
+      ["Couldn't connect to federation gateway for 0s; retrying in 1s; logging again in 1s.", { error: FAILURE }],
+      ["Couldn't connect to federation gateway for 1s; retrying in 2s; logging again in 2s.", { error: RETRY_FAILURE }],
+      ["Couldn't connect to federation gateway for 3s; retrying in 4s; logging again in 5m.", { error: RETRY_FAILURE }],
     ]);
     expect(harness.lastConnectionError).toContain("ECONNREFUSED");
     expect(harness.lastConnectionFailureKind).toBe("transport");
@@ -98,11 +101,11 @@ describe("federation connection failure logging", () => {
 
     expect(warningTimes).toEqual([0, 1_000, 3_000, 303_000, 2_103_000, 5_703_000, 9_303_000, 12_903_000]);
     expect(logger.warn.mock.calls.slice(3)).toEqual([
-      ["Couldn't connect to federation gateway for 5m 3s; retrying every 1m; logging every 30m."],
-      ["Couldn't connect to federation gateway for 35m 3s; retrying every 1m; logging every 60m."],
-      ["Couldn't connect to federation gateway for 1h 35m; retrying every 1m; logging every 60m."],
-      ["Couldn't connect to federation gateway for 2h 35m; retrying every 1m; logging every 60m."],
-      ["Couldn't connect to federation gateway for 3h 35m; retrying every 1m; logging every 60m."],
+      ["Couldn't connect to federation gateway for 5m 3s; retrying every 1m; logging every 30m.", { error: RETRY_FAILURE }],
+      ["Couldn't connect to federation gateway for 35m 3s; retrying every 1m; logging every 60m.", { error: RETRY_FAILURE }],
+      ["Couldn't connect to federation gateway for 1h 35m; retrying every 1m; logging every 60m.", { error: RETRY_FAILURE }],
+      ["Couldn't connect to federation gateway for 2h 35m; retrying every 1m; logging every 60m.", { error: RETRY_FAILURE }],
+      ["Couldn't connect to federation gateway for 3h 35m; retrying every 1m; logging every 60m.", { error: RETRY_FAILURE }],
     ]);
     // Suppressed warnings must not suppress dialing or detailed diagnostics.
     expect(harness.connectClient).toHaveBeenCalledTimes(244);
@@ -122,6 +125,7 @@ describe("federation connection failure logging", () => {
 
     expect(logger.warn).toHaveBeenCalledExactlyOnceWith(
       "Couldn't connect to federation gateway for 0s; retrying every 1m; logging again in 1m.",
+      { error: FAILURE },
     );
   });
 
@@ -137,6 +141,7 @@ describe("federation connection failure logging", () => {
 
     expect(logger.warn).toHaveBeenCalledExactlyOnceWith(
       "Couldn't connect to federation gateway for 0s; retrying in 1s; logging again in 1s.",
+      { error: FAILURE },
     );
   });
 
@@ -176,6 +181,7 @@ describe("federation connection failure logging", () => {
 
     expect(logger.warn).toHaveBeenCalledExactlyOnceWith(
       `Couldn't connect to federation gateway for 0s; retrying ${retry}; logging again ${retry.replace("every", "in")}.`,
+      { error: FAILURE },
     );
   });
 

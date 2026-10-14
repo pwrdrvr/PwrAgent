@@ -5085,6 +5085,7 @@ textarea,
    (a `.sidebar` child, not a region child) are untouched. */
 .sidebar__scroll-region > .sidebar-empty,
 .sidebar__scroll-region > .sidebar-error,
+.sidebar__scroll-region > .sidebar-show-more,
 .sidebar__scroll-region > .sidebar-start-actions {
   margin-inline: var(--sidebar-rail-inset);
 }
@@ -5679,14 +5680,13 @@ a.button {
   margin-left: 14px;
 }
 
-/* The tray's status text. `.sidebar-empty` and `.sidebar-error` are
-   sidebar-level and set 14px, which inside a sub-list lands above both the
-   13px `--sidebar-title-size` of the rows around it and the 12px paging
-   control below it — so a transient "Loading…" became the loudest thing in
-   the tray, the same way the unstyled paging button did. Scope the tray's
-   copies to the tray's own scale. */
-.subthread-list .sidebar-empty,
-.subthread-list .sidebar-error {
+/* The tray's status text. `.sidebar-empty` is sidebar-level and sets 14px,
+   which inside a sub-list lands above both the 13px `--sidebar-title-size`
+   of the rows around it and the 12px paging control below it — so a
+   transient "Loading…" became the loudest thing in the tray, the same way
+   the unstyled paging button did. Scope the tray's copy to the tray's own
+   scale. */
+.subthread-list .sidebar-empty {
   margin-top: 4px;
   font-size: 12px;
 }
@@ -5995,6 +5995,30 @@ a.button {
 
 .recents-pinned-divider.is-drop-target {
   color: var(--accent-bright);
+}
+
+/* A ⌘K-jumped thread outside the lens (RecentsList's visiting slot): an
+   ordinary row under the pinned divider's label, after the lens's rows. The
+   4px top matches `.directory-row__thread-divider`: a section label, a hair
+   wider than the 2px the cards keep between each other. */
+.sidebar-visiting {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidebar-visiting > .recents-pinned-divider {
+  margin-top: 4px;
+}
+
+/* An empty lens with a visiting row renders its empty line inside the dense
+   lane (RecentsList's `emptyMessage`). Hold it where the bare empty state
+   draws it: the lane's 12px top padding replaces the paragraph's own top
+   margin, and the rail-to-lane difference restores its inline position, so
+   the line does not move when the row comes and goes. */
+.sidebar-list--dense > .sidebar-empty:first-child {
+  margin-top: 0;
+  margin-inline: calc(var(--sidebar-rail-inset) - var(--sidebar-lane-inset));
 }
 
 .recents-pinned-divider::before,
@@ -8286,6 +8310,50 @@ a.button {
   padding-right: 8px;
 }
 
+/* The Pinned group of Updated and Created. It borrows a project's header
+   primitives (`.directory-row__header` is sticky over the rows,
+   `.directory-row__summary` is the disclosure button) so the group reads as
+   the same kind of section a Directories project is; only the section box,
+   the mark and the count are its own. The section box mirrors
+   `.directory-row`: `position: relative` contains the drop indicators of a
+   pin drag. It takes no top pad: that pad is the seam between two
+   projects, and nothing sits above the group, so the header starts exactly
+   where it sticks. The hairline under it is the one boundary between the
+   pins and the time-sorted list, open or closed. */
+.pinned-group {
+  position: relative;
+  padding: 0 0 4px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/* A sticky header stops at its scroller's content edge, not its padding
+   edge, so the lane's top pad (`.sidebar-list`) left a strip above the
+   stuck Pinned header where scrolled rows showed through. Zero it, as
+   `.directory-list` does for its project headers: the header starts where
+   it sticks, under the lens switch, and never moves on the first scroll. */
+.sidebar-list--pinned-group {
+  padding-top: 0;
+}
+
+/* The same accent the rows' own pin glyph uses (`.thread-row__pin`). */
+.pinned-group__icon {
+  color: var(--accent-bright);
+}
+
+/* The group's size, in the readouts' type so the meta reads as one row: mono,
+   tabular, and the two-digit box `.directory-row__summary-meta` gives every
+   count so the readouts beside it hold their x. Muted: it is a size, not a
+   signal. */
+.pinned-group__count {
+  min-width: 2ch;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
 .directory-row__threads-slot {
   /* `role="listitem"` box around the children of `.directory-row__threads`
      that are not thread rows: the "Directory threads" disclosure, "Show
@@ -8514,46 +8582,73 @@ a.button {
 }
 
 /* The rail's one paging affordance: directory, pinned, lens and sub-thread
-   all reach it through `SidebarShowMore`. Reads as a quiet index control,
-   not a card; left padding aligns its label with the thread-row titles
-   above it.
+   all reach it through `SidebarShowMore`. A button the width of the rows
+   above it, in the start actions' family (6px radius, 30px, centred label
+   and glyph), but on a filled panel with the strong border, because it has
+   to be found at the end of a list of borderless rows.
+
+   It was a transparent, borderless 12px label. Its text passed contrast in
+   every theme (6.4:1 at the lowest, Solarized dark) and its box passed
+   WCAG 2.5.8, yet operators could not find it: nothing about it said
+   "button", and in the flat lenses it also sat below the start actions'
+   hairline at the rail's bottom edge (see `lensPager` in Sidebar.tsx).
 
    It was `directory-row__show-more`, a name that reads as private to one
    parent — and the seven call sites that did not sit beside the rule (five
    outside DirectoriesList, two inside it) styled nothing at all rather than
-   reach for it, so they shipped as native Chromium buttons. (The old comment here described a "Show N more / Show
-   less" thread-cap toggle; that control moved to
-   `.directory-row__thread-divider` and left this text behind.) */
+   reach for it, so they shipped as native Chromium buttons. */
 .sidebar-show-more {
   overflow-anchor: none;
-  align-self: flex-start;
-  /* Defensive, not load-bearing today. `.subthread-list` is a grid, where
-     `align-self` answers the block axis and leaves the inline one on the
-     default `stretch` — which is how the unstyled sub-thread button came out
-     full-bleed. `SubthreadPagination` now wraps the control in the
-     `role="listitem"` its list requires, and that wrapper is the grid item,
-     so the inline-block button shrink-wraps on its own. This keeps a control
-     narrow if one is ever a direct grid child again; it is not a substitute
-     for the wrapper, which the list's validity depends on. */
-  justify-self: start;
-  margin-top: 2px;
-  /* WCAG 2.5.8, same as the divider above. Without it this lands at
-     ~24.4px — 8px padding + 2px border + a 12px font's `normal` line box —
-     so it clears the 24px floor on font metrics alone. Adding a
-     `line-height` anywhere upstream would drop it under with no other
-     visible cause. */
-  min-height: 24px;
-  padding: 4px 10px;
-  border: 1px solid transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  /* The row width, in every container. `.subthread-list` is a grid, and
+     `SubthreadPagination` wraps the control in the `role="listitem"` its
+     list requires; that wrapper is the grid item and this fills it. */
+  width: 100%;
+  min-width: 0;
+  margin-top: 6px;
+  /* WCAG 2.5.8 asks for 24px. 30px matches the start actions below it, so
+     the two read as one family of list-end controls. */
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
   border-radius: 6px;
-  background: transparent;
+  background: var(--bg-panel-elevated);
   color: var(--text-secondary);
+  font: inherit;
   font-size: 12px;
   font-weight: 600;
+  /* Wraps rather than overflowing: the button is pinned to the row width,
+     and "Load more sub-threads on this machine" in an indented tray at the
+     240px minimum rail is wider than the box. */
+  text-align: center;
   cursor: pointer;
   transition:
     background-color 120ms ease,
+    border-color 120ms ease,
     color 120ms ease;
+}
+
+/* Inset by the rule with `.sidebar-empty` when a lens shows a status line in
+   place of its list; the flex column stretches it to the inset width, which
+   `width: 100%` plus that margin would overflow. */
+.sidebar__scroll-region > .sidebar-show-more {
+  width: auto;
+}
+
+/* A directory's own pager is a sibling of its `.directory-row__threads`
+   list, not a child, so it takes that list's 8px inset to line up with the
+   row cards. The details column's 8px gap already spaces it from the rows. */
+.directory-row__details > .sidebar-show-more {
+  width: auto;
+  margin: 0 8px;
+}
+
+.sidebar-show-more__icon {
+  display: inline-flex;
+  flex: none;
 }
 
 /* `:hover` matches a busy control exactly as it matched a disabled one, so
@@ -8561,6 +8656,7 @@ a.button {
    flight and the click went nowhere. The busy state is `aria-disabled` now
    (see SidebarShowMore.tsx), which `:disabled` does not match. */
 .sidebar-show-more:hover:not([aria-disabled="true"]) {
+  border-color: var(--text-muted);
   background: var(--bg-panel-hover);
   color: var(--text-primary);
 }
@@ -8576,6 +8672,7 @@ a.button {
    whole life, so the rail looked the same whether a click would do something
    or nothing. */
 .sidebar-show-more[aria-disabled="true"] {
+  border-color: var(--border-subtle);
   color: var(--text-muted);
   cursor: default;
 }

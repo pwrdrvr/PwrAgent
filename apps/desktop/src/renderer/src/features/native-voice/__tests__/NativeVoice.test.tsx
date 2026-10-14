@@ -302,8 +302,13 @@ it("keeps director voice through navigation and shows what its tools did", async
   f.emit({ sessionId, type: "action", tool: "stop_thread", ok: false });
   const feed = screen.getByRole("log", { name: "Voice transcript" });
   expect(feed).toHaveTextContent("You: Tell the sample thread to rerun its checks.");
-  expect(feed).toHaveTextContent("send_message_to_threadSample second threadqueued");
-  expect(feed).toHaveTextContent("stop_threadfailed");
+  // Calls with nothing said between them fold into one row, as in a thread.
+  const tools = within(feed).getByRole("button", { name: "Used 2 tools · 1 failed" });
+  expect(tools).toHaveAttribute("aria-expanded", "false");
+  expect(feed).not.toHaveTextContent("stop_thread");
+  fireEvent.click(tools);
+  expect(feed).toHaveTextContent("send_message_to_thread: Sample second thread - queuedDone");
+  expect(feed).toHaveTextContent("stop_threadFailed");
 
   // Closing a live panel ends the session too.
   fireEvent.click(screen.getByRole("button", { name: "Close director voice" }));
@@ -625,4 +630,45 @@ it("places the camera beside the Director panel mic, outside the thread-list too
   expect(camera.closest("header")).toBeInTheDocument();
   expect(camera.previousElementSibling).toHaveAttribute("aria-label", "Mute microphone");
   expect(within(toolbar.container).queryByRole("button", { name: /camera cues/ })).not.toBeInTheDocument();
+});
+
+// A burst of reads used to stack one receipt per call and push the
+// conversation out of the panel. Each run of calls is one row now, and the
+// row it expands to opens each call to show what it was asked.
+it("folds a run of director tool calls into one row that opens to each call's arguments", async () => {
+  const f = voiceFixture();
+  render(<DirectorVoicePanel api={f.api} />);
+  await act(async () => { await toggleDirectorVoice(f.api, f.owner); });
+  await waitFor(() => expect(f.owner.getView().status).toBe("listening"));
+  const sessionId = vi.mocked(f.api.startNativeVoice).mock.calls[0][0].sessionId;
+  f.emit({ sessionId, type: "transcript", role: "user", text: "What changed overnight?", done: true });
+  f.emit({ sessionId, type: "action", tool: "search_threads", ok: true, namespace: "pwragent", arguments: { query: "overnight" }, output: "{\"threads\":[]}" });
+  for (const id of ["one", "two", "three"]) {
+    f.emit({ sessionId, type: "action", tool: "read_thread", ok: true, target: `Sample thread ${id}`, namespace: "pwragent", arguments: { threadId: `sample-${id}` } });
+  }
+  f.emit({ sessionId, type: "transcript", role: "assistant", text: "Three threads moved.", done: true });
+  f.emit({
+    sessionId, type: "action", tool: "read_thread", ok: true, target: "Sample thread four", namespace: "pwragent",
+    arguments: { threadId: "sample-four" }, output: JSON.stringify({ threadId: "sample-four", title: "Sample thread four", messages: [] }),
+  });
+
+  const feed = screen.getByRole("log", { name: "Voice transcript" });
+  // The reply splits the runs: four calls before it, one after.
+  const run = within(feed).getByRole("button", { name: "Used 4 tools" });
+  // A lone thread read draws as it does in a thread: the thread it read.
+  expect(within(feed).getByRole("button", { name: "Read thread" })).toBeInTheDocument();
+  expect(feed).toHaveTextContent("#Sample thread four");
+  expect(feed.textContent!.indexOf("Used 4 tools")).toBeLessThan(feed.textContent!.indexOf("Director: Three threads moved."));
+
+  fireEvent.click(run);
+  const read = within(feed).getByRole("button", { name: "read_thread: Sample thread two" });
+  expect(feed).not.toHaveTextContent("sample-two");
+  fireEvent.click(read);
+  expect(feed).toHaveTextContent("pwragent/read_thread");
+  expect(feed).toHaveTextContent("\"threadId\": \"sample-two\"");
+
+  // A call that joins an open run keeps it open.
+  f.emit({ sessionId, type: "action", tool: "read_thread", ok: true, target: "Sample thread five" });
+  expect(within(feed).getByRole("button", { name: "Used 2 tools" })).toHaveAttribute("aria-expanded", "false");
+  expect(run).toHaveAttribute("aria-expanded", "true");
 });

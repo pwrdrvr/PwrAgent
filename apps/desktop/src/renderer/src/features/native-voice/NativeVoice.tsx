@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type ComponentProps } from "react";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { NativeVoiceApi } from "../../../../shared/native-voice";
 import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
@@ -12,6 +12,8 @@ import {
   type VoiceView,
 } from "./native-voice-controller";
 import { CameraGlyph, cameraCueLabel } from "./VoiceCameraButton";
+import { voiceToolActivity } from "./voice-tool-activity";
+import { TranscriptActivity } from "../thread-detail/TranscriptActivity";
 import "./native-voice.css";
 
 export function isNativeVoiceApi(api: DesktopApi | undefined): api is DesktopApi & NativeVoiceApi {
@@ -209,25 +211,58 @@ function micHint(muted: boolean): string {
 
 export const CUE_DELIVERY_LABEL = { pending: "sending…", acknowledged: "sent", failed: "not delivered" } as const;
 
+type VoiceFeedRow =
+  | ({ kind: "say" } & VoiceView["transcript"][number])
+  | ({ kind: "cue" } & NonNullable<VoiceView["cameraCues"]>[number])
+  | { kind: "tools"; seq: number; rows: VoiceView["actions"]; entry?: ReturnType<typeof voiceToolActivity> };
+
 /**
- * Transcript rows, tool receipts, and sent camera cues, in the order they
+ * Transcript rows, tool calls, and sent camera cues, in the order they
  * happened. A cue is a moment like a tool call, so it reads back in place:
- * "did it see my stop?" is answered by the transcript. `assistant` names
- * the speaker: the director panel says Director, thread voice says Voice.
+ * "did it see my stop?" is answered by the transcript. Tool calls with
+ * nothing said between them fold into one row, as they do in a thread, so a
+ * burst of reads does not push the conversation out of the panel. `assistant`
+ * names the speaker: the director panel says Director, thread voice says Voice.
  */
-export function VoiceFeed({ view, limit, scrollParent = false, assistant = "Voice" }: {
+export function VoiceFeed({ view, limit, scrollParent = false, assistant = "Voice", desktopApi }: {
   view: VoiceView;
   limit?: number;
   scrollParent?: boolean;
   assistant?: string;
+  /** For the tool rows' copy buttons and thread reads. */
+  desktopApi?: ComponentProps<typeof TranscriptActivity>["desktopApi"];
 }) {
+  // Receipts never change once added, so a run is known by its first and
+  // last call. A streamed word rebuilds the rows; the run keeps its entry,
+  // and the memoized activity row skips the render.
+  const entries = useRef(new Map<string, ReturnType<typeof voiceToolActivity>>());
   const rows = useMemo(() => {
     const merged = [
       ...view.transcript.map((row) => ({ kind: "say" as const, ...row })),
       ...view.actions.map((row) => ({ kind: "action" as const, ...row })),
       ...(view.cameraCues ?? []).map((row) => ({ kind: "cue" as const, ...row })),
     ].sort((left, right) => left.seq - right.seq);
-    return limit ? merged.slice(-limit) : merged;
+    const grouped: VoiceFeedRow[] = [];
+    for (const row of merged) {
+      if (row.kind !== "action") {
+        grouped.push(row);
+        continue;
+      }
+      const { kind: _kind, ...action } = row;
+      const last = grouped[grouped.length - 1];
+      if (last?.kind === "tools") last.rows.push(action);
+      else grouped.push({ kind: "tools", seq: row.seq, rows: [action] });
+    }
+    const shown = limit ? grouped.slice(-limit) : grouped;
+    const kept = new Map<string, ReturnType<typeof voiceToolActivity>>();
+    for (const row of shown) {
+      if (row.kind !== "tools") continue;
+      const key = `${row.seq}:${row.rows[row.rows.length - 1]!.seq}`;
+      row.entry = entries.current.get(key) ?? voiceToolActivity(row.rows);
+      kept.set(key, row.entry);
+    }
+    entries.current = kept;
+    return shown;
   }, [view.transcript, view.actions, view.cameraCues, limit]);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -253,12 +288,11 @@ export function VoiceFeed({ view, limit, scrollParent = false, assistant = "Voic
           <span className="native-voice-feed__cue-outcome">{CUE_DELIVERY_LABEL[row.delivery]}</span>
         </p>
       ) : (
-        <p key={`action-${row.seq}`} className={row.ok ? "native-voice-feed__action" : "native-voice-feed__action native-voice-feed__action--failed"}>
-          <span className="native-voice-feed__tool">{row.tool}</span>
-          {row.target ? <span className="native-voice-feed__target">{row.target}</span> : null}
-          {row.instance ? <span className="native-voice-feed__instance">on {row.instance}</span> : null}
-          <span className="native-voice-feed__outcome">{row.ok ? row.outcome ?? "done" : "failed"}</span>
-        </p>
+        // Keyed by the run's first call, so a call that joins the run keeps
+        // the row open if the operator expanded it.
+        <div key={`tools-${row.seq}`} className="native-voice-feed__tools">
+          <TranscriptActivity desktopApi={desktopApi} entry={row.entry!} />
+        </div>
       ))}
     </div>
   );

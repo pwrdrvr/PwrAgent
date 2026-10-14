@@ -9,7 +9,12 @@ import { WorktreeArchiveService } from "../app-server/worktree-archive-service";
 const execFileAsync = promisify(execFile);
 
 async function git(cwd: string, args: string[]): Promise<string> {
-  const { stdout } = await execFileAsync("git", ["-C", cwd, ...args], {
+  // A fixture commit can start maintenance. Keep it in the awaited process
+  // lifetime so it cannot write packfiles while the test removes its repo.
+  const { stdout } = await execFileAsync("git", [
+    "-c", "maintenance.autoDetach=false", "-c", "gc.autoDetach=false",
+    "-C", cwd, ...args,
+  ], {
     encoding: "utf8",
     maxBuffer: 1024 * 1024 * 10,
   });
