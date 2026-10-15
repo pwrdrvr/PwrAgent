@@ -8733,8 +8733,13 @@ describe("Sidebar directory pinning", () => {
   it("keeps the directory launchpad button a single click and puts machines behind the chevron", async () => {
     const onOpenLaunchpad = vi.fn(async () => undefined);
     const onCreateThreadOnFederationTarget = vi.fn(async () => undefined);
+    const project = {
+      ...projectADirectory,
+      repositoryKey: "github.com/fixture-fork/project-a",
+      repositoryKeys: ["github.com/fixture-fork/project-a", "github.com/fixture-upstream/project-a"],
+    };
 
-    renderSidebar([projectADirectory], {
+    renderSidebar([project], {
       onOpenLaunchpad,
       onCreateThreadOnFederationTarget,
       newThreadFederationTargets: [
@@ -8776,6 +8781,8 @@ describe("Sidebar directory pinning", () => {
       kind: "directory",
       label: "ProjectA",
       path: "/Users/fixture-user/pwrdrvr/ProjectA",
+      repositoryKey: project.repositoryKey,
+      repositoryKeys: project.repositoryKeys,
     });
     // Opening a remote launchpad is not also a local launchpad open.
     expect(onOpenLaunchpad).toHaveBeenCalledTimes(1);

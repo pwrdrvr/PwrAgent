@@ -12,12 +12,13 @@ import { NAVIGATION_BACKEND_METADATA_SCHEMA } from "./navigation-backend-metadat
 import { THREAD_NAVIGATION_RELATIONSHIPS_SCHEMA } from "./thread-navigation-relationships.js";
 import { STORAGE_RETENTION_SCHEMA } from "./storage-maintenance.js";
 import { migratePrReferenceIdentities } from "./migrate-pr-reference-identities.js";
+import { DURABLE_TURN_REQUEST_SCHEMA } from "./durable-turn-request-schema";
 import {
   attachSqliteWriteMetrics,
   isSqliteWriteMetricsEnabled,
 } from "./sqlite-write-metrics.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 74;
+export const CURRENT_STATE_DB_USER_VERSION = 75;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -2019,6 +2020,15 @@ export class StateDb {
       }
       if ((db.pragma("user_version", { simple: true }) as number) < 74) {
         db.transaction(() => {
+          db.exec(DURABLE_TURN_REQUEST_SCHEMA);
+          db.pragma("user_version = 74");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 75) {
+        db.transaction(() => {
+          // A profile that ran this migration as version 74 before durable turn
+          // requests took that number skipped their table; both are idempotent.
+          db.exec(DURABLE_TURN_REQUEST_SCHEMA);
           db.exec(`CREATE TABLE IF NOT EXISTS thread_reviews (
             review_id TEXT PRIMARY KEY,
             backend TEXT NOT NULL,
@@ -2029,7 +2039,7 @@ export class StateDb {
           );
           CREATE INDEX IF NOT EXISTS idx_thread_reviews_status_thread
             ON thread_reviews(status, backend, thread_id);`);
-          db.pragma("user_version = 74");
+          db.pragma("user_version = 75");
         })();
       }
       // Keep current-version databases converged without asking pre-v36 profiles
