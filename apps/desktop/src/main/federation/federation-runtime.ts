@@ -260,6 +260,9 @@ import {
 import { getMcpConnectionGatewayService } from "../mcp-connections/mcp-connection-gateway-service";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { getAppStateDb, isAppStateInitialized } from "../state/app-state";
+import { DurableTurnRequestService, DurableTurnRequestError } from "./durable-turn-request-service";
+import { durableFederationCallerScope, authenticateMessageOrigin } from "./federation-backend-bridge";
+import type { SubmitDurableTurnRequest, GetDurableTurnRequest, DurableTurnReceipt, SubmitDurableSteerRequest, DurableSteerReceipt } from "@pwragent/shared";
 import {
   getExistingRuntimeFederationLeaseCoordinator,
   getRuntimeFederationLeaseCoordinator,
@@ -543,6 +546,8 @@ const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "thread_grouping",
   "thread_detail",
   "turn_control",
+  "durable_turn_requests_v1",
+  "durable_steer_requests_v1",
   "scheduled_actions",
   "pending_request_control",
   "environment_actions",
@@ -958,6 +963,104 @@ function eventClassAllowedByCapabilities(
 }
 
 export class DesktopFederationRuntime {
+  private durableTurnRequests?: DurableTurnRequestService;
+  private unsubscribeDurableTurnEvents?: () => void;
+
+  /** Adapter must authenticate callerScope and check its grants on every call.
+   * Target is the original owner recorded in the client's outbox, never discovery.
+   */
+  async submitDurableTurnRequest(
+    callerScope: string,
+    request: SubmitDurableTurnRequest,
+    target?: FederationRemoteTarget,
+  ): Promise<DurableTurnReceipt> {
+    if (target) {
+      this.assertDurableTurnPeer(target);
+      return this.remoteBackend(target).submitTurnRequest({ ...request, callerScope });
+    }
+    return this.durableTurnRequestService().submit(durableFederationCallerScope(this.ensureLocalInstanceId(), callerScope), request);
+  }
+
+  async getDurableTurnRequest(
+    callerScope: string,
+    request: GetDurableTurnRequest,
+    target?: FederationRemoteTarget,
+  ): Promise<DurableTurnReceipt | null> {
+    if (target) {
+      this.assertDurableTurnPeer(target);
+      return this.remoteBackend(target).getTurnRequest({ ...request, callerScope });
+    }
+    return this.durableTurnRequestService().get(durableFederationCallerScope(this.ensureLocalInstanceId(), callerScope), request);
+  }
+
+  async submitDurableSteerRequest(
+    callerScope: string,
+    request: SubmitDurableSteerRequest,
+    target?: FederationRemoteTarget,
+  ): Promise<DurableSteerReceipt> {
+    if (target) {
+      this.assertDurableTurnPeer(target, "durable_steer_requests_v1");
+      return this.remoteBackend(target).submitSteerRequest({ ...request, callerScope });
+    }
+    return this.durableTurnRequestService().submitSteer(durableFederationCallerScope(this.ensureLocalInstanceId(), callerScope), request);
+  }
+
+  async getDurableSteerRequest(
+    callerScope: string,
+    request: GetDurableTurnRequest,
+    target?: FederationRemoteTarget,
+  ): Promise<DurableSteerReceipt | null> {
+    if (target) {
+      this.assertDurableTurnPeer(target, "durable_steer_requests_v1");
+      return this.remoteBackend(target).getSteerRequest({ ...request, callerScope });
+    }
+    return this.durableTurnRequestService().getSteer(durableFederationCallerScope(this.ensureLocalInstanceId(), callerScope), request);
+  }
+
+  private assertDurableTurnPeer(target: FederationRemoteTarget, capability: FederationCapability = "durable_turn_requests_v1"): void {
+    const peer = this.connectedPeerTargets().find((candidate) => candidate.target.instanceId === target.instanceId);
+    if (!peer?.capabilities.includes(capability) || !peer.capabilities.includes("turn_control")) {
+      throw new DurableTurnRequestError("request_unsupported");
+    }
+  }
+
+  private durableTurnRequestService(): DurableTurnRequestService {
+    if (!this.durableTurnRequests) {
+      const backend = localBackendOperations();
+      this.durableTurnRequests = new DurableTurnRequestService({
+        stateDb: getAppStateDb(),
+        ownerInstanceId: this.ensureLocalInstanceId(),
+        authorize: async (_scope, request) => {
+          const resolved = await backend.resolveThread({ backend: request.backend, threadId: request.threadId });
+          if (!resolved.thread) throw new DurableTurnRequestError("request_destination_unavailable");
+        },
+        dispatch: (request, scope) => backend.startTurn({
+          ...request,
+          messageOrigin: authenticateMessageOrigin({
+            messageOrigin: request.messageOrigin,
+            sourceInstanceId: (JSON.parse(scope) as string[])[1]!,
+            resolveSourceInstance: (instanceId) => this.resolveThreadMessageOriginInstance(instanceId),
+          }),
+        }),
+        isQueued: async (receipt) => {
+          await backend.readQueuedTurn({ backend: receipt.backend, threadId: receipt.threadId, queueEntryId: receipt.queueEntryId });
+          return true;
+        },
+        steer: (request) => backend.controlActiveTurn!({ ...request, operation: "steer" }),
+      });
+      const service = this.durableTurnRequests;
+      this.unsubscribeDurableTurnEvents = getDesktopBackendRegistry().onEvent((event) => {
+        if (event.notification.method === "thread/turnQueue/updated") {
+          const params = event.notification.params as {
+            threadId: string; queueEntryId: string; status: string; turnId?: string; terminalStatus?: string;
+          };
+          service.observeQueueEvent({ backend: event.backend, ...params });
+        }
+      });
+    }
+    return this.durableTurnRequests;
+  }
+
   private sessionEnabledOverride?: boolean;
   private router?: FederationRouter;
   private server?: FederationGatewayWebSocketServer;
@@ -1450,6 +1553,9 @@ export class DesktopFederationRuntime {
     this.signInExpiryTimer = undefined;
     this.unsubscribeLocalBackendEvents?.();
     this.unsubscribeLocalBackendEvents = undefined;
+    this.unsubscribeDurableTurnEvents?.();
+    this.unsubscribeDurableTurnEvents = undefined;
+    this.durableTurnRequests = undefined;
     this.remoteThreadSummaryCache?.dispose();
     this.remoteThreadSummaryCache = undefined;
     this.peerDirectoryReceivers.clear();
@@ -3173,6 +3279,7 @@ export class DesktopFederationRuntime {
     registerFederationBackendHandlers({
       router,
       backend: localBackendOperations(),
+      durableTurnRequests: this.durableTurnRequestService(),
       resolveTurnInput: async (input, sourceInstanceId) =>
         await this.turnInputAttachmentReceiver.resolveInput(
           input,

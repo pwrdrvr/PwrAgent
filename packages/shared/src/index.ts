@@ -9,6 +9,8 @@ export * from "./codex-git-action-directives";
 export * from "./codex-async-questions";
 export * from "./contracts/backend";
 export * from "./contracts/agent";
+export * from "./contracts/durable-turn-requests";
+export * from "./durable-turn-request";
 export * from "./contracts/agent-tools";
 export * from "./contracts/app-tools";
 export * from "./contracts/automations";
