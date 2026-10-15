@@ -82,7 +82,9 @@ an active turn or hold unrelated manual messages.
 Watching/ready registrations survive restart and reconcile through the
 provider protocol. Runtime code never reads Codex storage. An admitted turn
 carries `dependencyId` in its message origin. That durable receipt can settle
-a claim left incomplete by a crash.
+a claim left incomplete by a crash. A claim counts as in flight only while
+another process holds it and it is under five minutes old. The admitting
+PID is not trusted beyond that, because the OS reuses PIDs.
 
 Backend turn admission has no idempotency key. If a crash or transport error
 leaves admission uncertain and no receipt exists, PwrAgent retains a visible

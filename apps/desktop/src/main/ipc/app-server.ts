@@ -6483,7 +6483,11 @@ class DesktopAppServerService {
     const freshPrUrls = canonical
       .filter((pr) => this.prStatusRegistry.get(getPrStatusKey(pr))?.fetchedAt === fetchedAt)
       .map((pr) => pr.url);
-    if (freshPrUrls.length > 0) await this.threadDependencyCoordinator?.handlePrEvent(freshPrUrls);
+    // Evaluation can start a continuation turn; the poll must not wait on it.
+    if (freshPrUrls.length > 0) {
+      void this.threadDependencyCoordinator?.handlePrEvent(freshPrUrls)
+        .catch((error) => appServerLog.warn("thread dependency evaluation failed", { error: String(error) }));
+    }
     if (changed.length === 0) {
       return [];
     }
