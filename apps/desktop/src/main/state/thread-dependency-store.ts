@@ -109,10 +109,11 @@ export class ThreadDependencyStore {
   cancel(backend: string, threadId: string, id: string, now: number): ThreadDependency {
     const item = this.get(backend, threadId, id);
     if (!item) throw new Error("Dependency not found for this thread.");
+    if (item.status === "cancelled") return item;
     if (item.status === "dispatching" || item.status === "delivered") {
       throw new Error("The continuation has already been admitted and cannot be cancelled here.");
     }
-    if (item.status === "cancelled") return item;
+    if (item.status === "dismissed") throw new Error("This dependency was already dismissed after review.");
     const next = { ...item, status: "cancelled" as const, updatedAt: now };
     if (!this.replace(item, next)) {
       throw new Error("Dependency changed while cancelling. Read its current state first.");
