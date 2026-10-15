@@ -31,6 +31,7 @@ type Options = {
 };
 
 const CURRENT_STATUS_MAX_AGE_MS = 60_000;
+const DISPATCH_CLAIM_MAX_AGE_MS = 5 * 60_000;
 const identity = (value: { backend: string; threadId: string }): string => JSON.stringify([value.backend, value.threadId]);
 
 export class ThreadDependencyCoordinator {
@@ -80,8 +81,12 @@ export class ThreadDependencyCoordinator {
         ...(request.continuation?.trim() ? { continuation: request.continuation.trim() } : {}),
         status: "waiting", evidence: [], createdAt: now, updatedAt: now,
       });
+      const registered = JSON.stringify(item);
       await this.evaluate(item);
-      await this.options.changed(item);
+      // Evaluation publishes whatever it saved; announce the registration only
+      // when it left the record as registered.
+      const stored = this.options.store.get(item.backend, item.threadId, item.id);
+      if (!stored || JSON.stringify(stored) === registered) await this.options.changed(item);
       return this.response(request);
     });
   }
@@ -101,7 +106,12 @@ export class ThreadDependencyCoordinator {
             await this.save(item, { ...item, status: "delivered", error: undefined });
             continue;
           }
-          if (item.dispatchOwnerPid && processIsAlive(item.dispatchOwnerPid)) continue;
+          // Admission is one turn/start. A claim older than that, or one this
+          // process holds while nothing here is dispatching, outlived its owner
+          // even when the PID now belongs to an unrelated process.
+          if (item.dispatchOwnerPid && item.dispatchOwnerPid !== process.pid
+            && this.now() - item.updatedAt < DISPATCH_CLAIM_MAX_AGE_MS
+            && processIsAlive(item.dispatchOwnerPid)) continue;
           // A backend turn/start has no idempotency key. Never replay an
           // uncertain admission after a crash and create a duplicate turn.
           if (!item.error) await this.save(item, { ...item, error: "Continuation delivery was interrupted. Inspect this thread before scheduling another dependency." });

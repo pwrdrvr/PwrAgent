@@ -345,6 +345,43 @@ describe("durable thread dependencies", () => {
     expect(submit).not.toHaveBeenCalled();
   });
 
+  it("does not trust a reused or stale dispatch owner PID", async () => {
+    const agent = coordinator(); await create(agent);
+    const original = store.active()[0];
+    // A live owner mid-admission keeps its claim.
+    const live = { ...original, status: "dispatching" as const, dispatchOwnerPid: process.ppid, updatedAt: now };
+    store.replace(original, live);
+    await coordinator().reconcile();
+    expect(store.active()[0].error).toBeUndefined();
+    // The same live PID long after admission must have been reused.
+    now += 10 * 60_000;
+    await coordinator().reconcile();
+    expect(store.active()[0].error).toContain("interrupted");
+    // This process never holds a claim while nothing here is dispatching.
+    const own = store.active()[0];
+    store.replace(own, { ...own, error: undefined, dispatchOwnerPid: process.pid, updatedAt: now });
+    await coordinator().reconcile();
+    expect(store.active()[0].error).toContain("interrupted");
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  it("refuses to rewrite a dismissed delivery as cancelled", async () => {
+    const agent = coordinator(); await create(agent);
+    const original = store.active()[0];
+    store.replace(original, { ...original, status: "dismissed" });
+    await expect(agent.manage({ action: "cancel", backend: "codex", threadId: "dependencies", dependencyId: original.id }))
+      .rejects.toThrow("already dismissed");
+    expect(store.list("codex", "dependencies")[0].status).toBe("dismissed");
+  });
+
+  it("announces a registration once when evaluation already published it", async () => {
+    const changed = vi.fn(async (_item: ThreadDependency) => undefined);
+    snapshots.get("foundation")!.prs = [{ pr: pr(), fetchedAt: now }];
+    await create(coordinator(store, changed));
+    expect(changed).toHaveBeenCalledTimes(1);
+    expect(changed.mock.calls[0]![0].evidence).toHaveLength(1);
+  });
+
   it("makes no SQLite writes for unchanged polls or turns, including a busy consumer", async () => {
     const agent = coordinator(); busy = true;
     snapshots.get("foundation")!.prs = [{ pr: pr({ checkState: "passing", state: "passing" }), fetchedAt: now }];
