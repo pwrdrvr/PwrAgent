@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { Terminal } from "@xterm/headless";
 import { afterEach, describe, expect, it } from "vitest";
-import { TerminalReplay, TERMINAL_SNAPSHOT_LIMIT } from "../terminal/terminal-replay";
+import { restoredHistoryPrelude, TerminalReplay, TERMINAL_SNAPSHOT_LIMIT } from "../terminal/terminal-replay";
 import { TerminalHistoryStore, type TerminalHistoryRecord } from "../terminal/terminal-history-store";
 
 const roots: string[] = [];
@@ -14,6 +14,24 @@ function text(terminal: Terminal): string {
 }
 
 describe("TerminalReplay", () => {
+  it("resumes saved history in a plain terminal, out of a saved full-screen program", async () => {
+    const saved = new TerminalReplay(40, 6);
+    saved.append("$ less notes.txt\r\n");
+    saved.append("\x1b[?1049h\x1b[?1000h\x1b[?25lLESS SCREEN");
+    const snapshot = await saved.snapshot();
+    expect(snapshot.data).toContain("\x1b[?1049h");
+    await saved.dispose();
+
+    const terminal = new Terminal({ cols: 40, rows: 6, allowProposedApi: true });
+    await new Promise<void>((resolve) => terminal.write(`${restoredHistoryPrelude(snapshot)}$ `, resolve));
+    expect(terminal.buffer.active.type).toBe("normal");
+    expect(terminal.modes.mouseTrackingMode).toBe("none");
+    expect(text(terminal)).toContain("less notes.txt");
+    expect(text(terminal)).toContain("restored history");
+    expect(text(terminal)).not.toContain("LESS SCREEN");
+    terminal.dispose();
+  });
+
   it("serializes parsed cells across split escapes, carriage returns and Unicode without replaying queries", async () => {
     const replay = new TerminalReplay(40, 4);
     replay.append("stale\r\x1b[", 1);

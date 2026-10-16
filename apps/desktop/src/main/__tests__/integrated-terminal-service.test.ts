@@ -12,6 +12,7 @@ import os from "node:os";
 import path from "node:path";
 import type { WebContents } from "electron";
 import type { IPty } from "node-pty";
+import type { IntegratedTerminalSessionSummary } from "../../shared/integrated-terminal";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   IntegratedTerminalService,
@@ -1478,6 +1479,27 @@ describe("terminal history lifecycle", () => {
     await expect(restarted.createOrAttach({ ...request, threadKey: "codex:other" }, fakeWebContents())).rejects.toThrow("mismatch");
     restarted.close({ sessionId: "saved-one" });
     await vi.waitFor(async () => expect(await historyStore.load()).toEqual([]));
+  });
+
+  it("never broadcasts a list without a terminal that just exited", async () => {
+    const root = createTemporaryRoot("terminal-history-exit-");
+    const historyStore = new TerminalHistoryStore(path.join(root, "history"));
+    const pty = fakePty();
+    const broadcasts: IntegratedTerminalSessionSummary[][] = [];
+    const service = new IntegratedTerminalService({ historyStore,
+      loadNodePty: async () => ({ spawn: (() => pty) as unknown as typeof import("node-pty").spawn }),
+      onSessionsChanged: (sessions) => broadcasts.push(sessions),
+    });
+    await service.createOrAttach({ sessionId: "only", threadKey: "codex:one", cwd: os.tmpdir(), cols: 80, rows: 24 },
+      fakeWebContents());
+    const before = broadcasts.length;
+    vi.mocked(pty.onExit).mock.calls[0]![0]({ exitCode: 2 });
+    await vi.waitFor(() => expect(service.listSessions()[0]?.status).toBe("exited"));
+    await vi.waitFor(() => expect(broadcasts.length).toBeGreaterThan(before));
+    for (const sessions of broadcasts.slice(before)) {
+      expect(sessions.map((session) => session.sessionId)).toEqual(["only"]);
+    }
+    expect(broadcasts.at(-1)![0]).toMatchObject({ status: "exited", exitCode: 2 });
   });
 
   it("resumes saved history as a new shell under the same id, in the saved directory", async () => {

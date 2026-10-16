@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IntegratedTerminalPane, IntegratedTerminalsController } from "../../../lib/useIntegratedTerminals";
 
 vi.mock("../IntegratedTerminal", () => ({
@@ -50,7 +50,12 @@ function renderPanel(terminals: IntegratedTerminalsController, panes: Integrated
 }
 
 describe("ThreadTerminalPanel", () => {
-  afterEach(() => cleanup());
+  // Directories are shown home-relative through the preload's home directory.
+  beforeEach(() => { (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir = "/Users/dev"; });
+  afterEach(() => {
+    cleanup();
+    delete (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir;
+  });
 
   it("keeps default names when a sibling closes", () => {
     const terminals = controller("a");
@@ -200,5 +205,16 @@ describe("ThreadTerminalPanel", () => {
     fireEvent.contextMenu(screen.getByRole("tab", { name: /Tests/ }), { clientX: 400, clientY: 230 });
     fireEvent.click(screen.getByRole("menuitem", { name: /Close terminal/ }));
     expect(terminals.closeTerminal).toHaveBeenCalledWith(expect.objectContaining({ sessionId: "b" }));
+  });
+
+  it("drops the menu when its terminal goes away", () => {
+    const terminals = controller("a");
+    const view = renderPanel(terminals, [pane("a", { name: "Build" }), pane("b", { name: "Tests" })]);
+    fireEvent.contextMenu(screen.getByRole("tab", { name: /Tests/ }), { clientX: 400, clientY: 230 });
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+
+    view.rerender(<ThreadTerminalPanel terminals={terminals} threadKey="codex:thread-a" panes={[pane("a", { name: "Build" })]} visible />);
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(document.querySelector(".thread-terminal-panel__rail")).not.toHaveClass("is-open");
   });
 });

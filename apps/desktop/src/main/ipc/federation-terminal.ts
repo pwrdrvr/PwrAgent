@@ -79,6 +79,10 @@ type RemoteTerminalSession = {
    * attaches to this session, which is what makes it the shell's one writer.
    */
   resizes: PtyResizeCoalescer;
+  /** Stream events held while a resume's `pty.open` is in flight. The new
+   *  shell numbers its frames from 1, so judging them against the saved
+   *  history's watermark would drop them as duplicates. */
+  resumeQueue?: { event: FederationPtyStreamEvent; acknowledge: boolean }[];
 };
 
 /**
@@ -564,6 +568,10 @@ export class FederationTerminalBridge {
   }
 
   private handleSessionStreamEvent(session: RemoteTerminalSession, event: FederationPtyStreamEvent, acknowledge: boolean): void {
+    if (session.resumeQueue) {
+      session.resumeQueue.push({ event, acknowledge });
+      return;
+    }
     if (event.kind === "output") {
       if (event.params.snapshot) {
         if (event.params.snapshot.seq < session.lastSeq) return;
@@ -733,27 +741,39 @@ export class FederationTerminalBridge {
     if (!identity?.threadId) throw new Error("Remote terminal thread key is malformed.");
     const client = getDesktopFederationRuntime().remotePty(session.target);
     this.ensureStreamSubscription();
+    const savedOwnerSessionId = session.ownerSessionId;
+    session.resumeQueue = [];
     let opened: FederationPtyOpenResponse;
     try {
-      opened = await client.open({
-        backend: identity.backend,
-        threadId: identity.threadId,
-        cols: request.cols,
-        rows: request.rows,
-        resumeSessionId: session.ownerSessionId,
-      });
+      try {
+        opened = await client.open({
+          backend: identity.backend,
+          threadId: identity.threadId,
+          cols: request.cols,
+          rows: request.rows,
+          resumeSessionId: savedOwnerSessionId,
+        });
+      } catch (error) {
+        const live = client.snapshot
+          ? await client.snapshot({ sessionId: savedOwnerSessionId }).catch(() => undefined)
+          : undefined;
+        if (!live || live.status !== "running") throw error;
+        opened = live;
+      }
     } catch (error) {
-      const live = client.snapshot
-        ? await client.snapshot({ sessionId: session.ownerSessionId }).catch(() => undefined)
-        : undefined;
-      if (!live || live.status !== "running") throw error;
-      opened = live;
+      session.resumeQueue = undefined;
+      throw error;
     }
     if (this.sessionsById.get(session.sessionId) !== session) {
-      if (opened.sessionId !== session.ownerSessionId) {
+      if (opened.sessionId !== savedOwnerSessionId) {
         void client.close({ sessionId: opened.sessionId }).catch(() => undefined);
       }
       throw new Error("Remote terminal was closed before it finished starting.");
+    }
+    if (opened.sessionId !== savedOwnerSessionId) {
+      // An owner that predates resume opened a plain shell under a new id.
+      // Release the saved record, or discovery would list it again later.
+      void client.close({ sessionId: savedOwnerSessionId }).catch(() => undefined);
     }
     session.resizes.dispose();
     session.ownerSessionId = opened.sessionId;
@@ -778,6 +798,11 @@ export class FederationTerminalBridge {
       spawnedRows: request.rows,
     });
     session.resizes = resizes;
+    // Frames the new shell sent before this reply: those already in the
+    // snapshot fall under its watermark, the rest apply on top of it.
+    const queued = session.resumeQueue ?? [];
+    session.resumeQueue = undefined;
+    for (const { event, acknowledge } of queued) this.handleSessionStreamEvent(session, event, acknowledge);
     this.broadcastSessions(session.webContents);
     return this.toCreateResponse(session);
   }

@@ -297,7 +297,9 @@ export class FederationPtyService {
   private disposed = false;
   private readonly archived = new Map<string, TerminalHistoryRecord>();
   private readonly ready: Promise<void>;
-  private readonly checkpoints = new Set<Promise<void>>();
+  /** In-flight checkpoints by session id. A snapshot waits only for its own
+   *  session's, so one peer's large saves never delay another's reattach. */
+  private readonly checkpoints = new Map<string, Set<Promise<void>>>();
 
   constructor(private readonly options: FederationPtyServiceOptions) {
     this.ready = options.historyStore?.load().then((records) => {
@@ -324,7 +326,7 @@ export class FederationPtyService {
 
   async snapshot(peerId: FederationInstanceId, request: FederationPtyCloseRequest): Promise<FederationPtyOpenResponse> {
     await this.ready;
-    await Promise.all([...this.checkpoints]);
+    await Promise.all([...this.checkpoints.get(request.sessionId) ?? []]);
     if (this.options.allowOpen?.() === false) throw new Error("Remote shells are disabled.");
     const record = this.archived.get(request.sessionId);
     if (record?.peerId === peerId) return { ...record.summary, snapshot: record.snapshot };
@@ -382,8 +384,13 @@ export class FederationPtyService {
       }
       await this.options.historyStore?.save(record);
     }).catch((error) => this.options.log?.warn("terminal history save failed", { error: String(error) }));
-    this.checkpoints.add(saving);
-    void saving.finally(() => this.checkpoints.delete(saving));
+    const pending = this.checkpoints.get(session.sessionId) ?? new Set<Promise<void>>();
+    pending.add(saving);
+    this.checkpoints.set(session.sessionId, pending);
+    void saving.finally(() => {
+      pending.delete(saving);
+      if (!pending.size && this.checkpoints.get(session.sessionId) === pending) this.checkpoints.delete(session.sessionId);
+    });
   }
 
   async open(
@@ -620,7 +627,7 @@ export class FederationPtyService {
     for (const session of Array.from(this.sessionsById.values())) {
       this.killSession(session, "owner_shutdown");
     }
-    return Promise.all([...this.checkpoints]).then(() => undefined);
+    return Promise.all([...this.checkpoints.values()].flatMap((pending) => [...pending])).then(() => undefined);
   }
 
   private requireSession(

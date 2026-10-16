@@ -771,8 +771,12 @@ export class IntegratedTerminalService {
       void this.historyStore?.remove(session.sessionId).catch(() => undefined);
     } else {
       // Preserve the screen after natural exit; never silently start a shell.
-      void this.checkpoint(session, exitCode ?? null);
-      this.deleteSession(session);
+      // Announce the removal only once the exited record is archived, so the
+      // tab never drops out of the list in between: that unmounted its pane
+      // and, for a thread's only terminal, closed the panel for a moment.
+      const archiving = this.checkpoint(session, exitCode ?? null);
+      this.deleteSession(session, false);
+      void archiving.finally(() => this.emitSessionsChanged());
     }
   }
 
@@ -792,7 +796,6 @@ export class IntegratedTerminalService {
       if (exitCode !== undefined) {
         this.archived.set(session.sessionId, record);
         while (this.archived.size > 64) this.archived.delete(this.archived.keys().next().value!);
-        this.emitSessionsChanged();
       }
       await this.historyStore?.save(record);
     } catch (error) { this.logger.warn("history-save-failed", { error: String(error) }); }
@@ -816,14 +819,14 @@ export class IntegratedTerminalService {
     }
   }
 
-  private deleteSession(session: TerminalSession): void {
+  private deleteSession(session: TerminalSession, announce = true): void {
     // Before the listeners: a queued resize must not reach a dead PTY.
     session.resizes.dispose();
     this.disposeSessionListeners(session);
     this.sessionsById.delete(session.sessionId);
     session.subscribers.clear();
     void session.replay.dispose();
-    this.emitSessionsChanged();
+    if (announce) this.emitSessionsChanged();
   }
 
   private async disposeSessionForShutdown(

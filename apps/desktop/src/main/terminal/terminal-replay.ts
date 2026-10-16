@@ -16,8 +16,18 @@ export type TerminalOutputFrame = { seq: number; timestamp: number; data: string
  * nobody mistakes the old output for the new shell's.
  */
 export function restoredHistoryPrelude(snapshot: { data: string }): string {
-  return `${snapshot.data}\x1b[0m\r\n\x1b[2m── restored history · new shell ──\x1b[0m\r\n`;
+  // The serializer replays the saved program's state: an alternate screen
+  // (vim, less) and terminal modes such as mouse reporting. The new shell
+  // starts in a plain terminal, so leave all of that first.
+  const leaveAltScreen = snapshot.data.includes("\x1b[?1049h") ? "\x1b[?1049l" : "";
+  return `${snapshot.data}${leaveAltScreen}${PLAIN_TERMINAL_MODES}\r\n`
+    + "\x1b[2m── restored history · new shell ──\x1b[0m\r\n";
 }
+
+/** Attributes off, cursor shown, and every mode the serializer can restore
+ *  returned to its default (see `SerializeAddon._serializeModes`). */
+const PLAIN_TERMINAL_MODES = "\x1b[0m\x1b[?25h\x1b[?1l\x1b[?66l\x1b[?2004l\x1b[4l\x1b[?6l\x1b[?45l"
+  + "\x1b[?1004l\x1b[?7h\x1b[?9l\x1b[?1000l\x1b[?1002l\x1b[?1003l";
 
 /** Authoritative screen and bounded raw output, independent of renderer lifetime.
  * Never wire headless onData to a PTY: parsing output can generate replies. */

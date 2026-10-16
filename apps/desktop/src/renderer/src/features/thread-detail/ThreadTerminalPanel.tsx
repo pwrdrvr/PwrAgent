@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import { IntegratedTerminal } from "./IntegratedTerminal";
 import { InstanceChip } from "../federation/InstanceGlyph";
 import { copyText } from "../../lib/copy-text";
+import { tildifyPath } from "../../lib/tildify-path";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { useDismissOnOutsidePointer } from "../../lib/useDismissOnOutsidePointer";
 import { useMenuNavigation } from "../../lib/useMenuNavigation";
@@ -33,13 +34,7 @@ function terminalDetail(pane: IntegratedTerminalPane, state: TerminalState): str
   if (state === "failed") return `Exited · code ${pane.exitCode}`;
   if (state === "saved") return "Resumes when opened";
   if (state === "exited") return STATE_WORD[state];
-  return homeRelative(pane.cwd) ?? STATE_WORD[state];
-}
-
-function homeRelative(cwd: string | undefined): string | undefined {
-  return cwd
-    ?.replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, "~")
-    .replace(/^[A-Za-z]:\\Users\\[^\\]+(?=\\|$)/, "~");
+  return pane.cwd ? tildifyPath(pane.cwd) : STATE_WORD[state];
 }
 
 /** What a strip tile can fit: the first character, plus a trailing number
@@ -121,10 +116,18 @@ export function ThreadTerminalPanel({ desktopApi, terminals, threadKey, panes, v
   const listRef = useRef<HTMLDivElement>(null);
   const railRef = useRef<HTMLDivElement>(null);
   const cancelRenameRef = useRef(false);
-  const open = hovered || focusWithin || editing !== undefined || menu !== undefined;
+  const menuIndex = menu ? panes.findIndex((pane) => pane.sessionId === menu.sessionId) : -1;
+  // The menu's terminal can go away under it (closed elsewhere, or a remote
+  // owner reaped it). Drop the menu too, or it would hold the rail open and
+  // keep a dismissable layer registered with nothing on screen.
+  useEffect(() => {
+    if (menu && menuIndex < 0) setMenu(undefined);
+  }, [menu, menuIndex]);
+  const menuOpen = menuIndex >= 0;
+  const open = hovered || focusWithin || editing !== undefined || menuOpen;
   const closeMenu = useCallback(() => setMenu(undefined), []);
-  useMenuNavigation({ open: menu !== undefined, menuRef, triggerRef: menuTriggerRef, onClose: closeMenu });
-  useDismissOnOutsidePointer(menu !== undefined, menuRef, closeMenu);
+  useMenuNavigation({ open: menuOpen, menuRef, triggerRef: menuTriggerRef, onClose: closeMenu });
+  useDismissOnOutsidePointer(menuOpen, menuRef, closeMenu);
   // Keep the menu on screen: it opens to the left of the pointer (the rail
   // sits at the right edge) and moves up when it would run off the bottom.
   useLayoutEffect(() => {
@@ -368,12 +371,12 @@ export function ThreadTerminalPanel({ desktopApi, terminals, threadKey, panes, v
           </div>
         </aside>
       </div>
-      {menu ? createPortal(<TerminalMenu
+      {menu && menuOpen ? createPortal(<TerminalMenu
         menuRef={menuRef}
         menu={menu}
-        pane={panes.find((pane) => pane.sessionId === menu.sessionId)}
-        label={labels[panes.findIndex((pane) => pane.sessionId === menu.sessionId)]}
-        state={states[panes.findIndex((pane) => pane.sessionId === menu.sessionId)]}
+        pane={panes[menuIndex]!}
+        label={labels[menuIndex]!}
+        state={states[menuIndex]!}
         onClose={closeMenu}
         onRename={(pane, label) => startRename(pane, label)}
         onCopyPath={(pane) => { if (pane.cwd) void copyText(pane.cwd, desktopApi); }}
@@ -388,9 +391,9 @@ export function ThreadTerminalPanel({ desktopApi, terminals, threadKey, panes, v
 function TerminalMenu({ menuRef, menu, pane, label, state, onClose, onRename, onCopyPath, onNewHere, onRestart, onCloseTerminal }: {
   menuRef: RefObject<HTMLDivElement | null>;
   menu: { x: number; y: number };
-  pane: IntegratedTerminalPane | undefined;
-  label: string | undefined;
-  state: TerminalState | undefined;
+  pane: IntegratedTerminalPane;
+  label: string;
+  state: TerminalState;
   onClose: () => void;
   onRename: (pane: IntegratedTerminalPane, label: string) => void;
   onCopyPath: (pane: IntegratedTerminalPane) => void;
@@ -398,7 +401,6 @@ function TerminalMenu({ menuRef, menu, pane, label, state, onClose, onRename, on
   onRestart: (pane: IntegratedTerminalPane) => void;
   onCloseTerminal: (pane: IntegratedTerminalPane) => void;
 }) {
-  if (!pane || label === undefined) return null;
   const ended = state === "exited" || state === "failed" || state === "saved";
   const act = (run: () => void) => () => { onClose(); run(); };
   return (
