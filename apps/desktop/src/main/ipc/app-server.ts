@@ -386,7 +386,7 @@ import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { getDesktopNavigationQueryStore } from "../app-server/navigation-query-store";
 import { getDesktopNavigationQueryPool } from "../app-server/navigation-query-pool";
 import { searchNavigationOwners } from "../app-server/navigation-jump-search";
-import { appendViewerNavigationPins, attachRemoteThreadsToLocalDirectories, findRemoteHomeDirectoryIndex, loadViewerNavigationPins } from "../app-server/navigation-viewer-pins";
+import { appendViewerNavigationPins, attachRemoteThreadsToLocalDirectories, findRemoteHomeDirectoryIndex, loadViewerNavigationPins, loadViewerWatchedNavigationRows } from "../app-server/navigation-viewer-pins";
 import { loadLocalNavigationQueryIndex } from "../app-server/navigation-query-source";
 import { getDesktopNavigationDetailService } from "../app-server/navigation-detail-service";
 import {
@@ -2107,6 +2107,11 @@ class DesktopAppServerService {
     rpcOptions?: { deadlineAt: number; signal: AbortSignal },
   ): Promise<NavigationQueryPage> {
     if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      // Owner resolution reads this machine's peers for its own viewer. It must
+      // never become a request this instance sends to an owner.
+      if (request.query.kind === "exact" && request.query.resolveFromOwners) {
+        throw new Error("Owner-resolved navigation is available only to this machine's viewer inventory.");
+      }
       const target = request.federationTarget;
       const runtime = getDesktopFederationRuntime();
       const ownerPage = await this.remoteNavigationPageBaselines.read(request, async (ownerRequest) => {
@@ -2164,13 +2169,19 @@ class DesktopAppServerService {
         });
         rpcOptions?.signal.throwIfAborted();
         if (request.inventory === "viewer") {
-          const pins = await loadViewerNavigationPins(getDesktopOverlayStore(),
-            getDesktopFederationRuntime().remoteThreadSummaries());
+          const summaries = getDesktopFederationRuntime().remoteThreadSummaries();
+          const pins = await loadViewerNavigationPins(getDesktopOverlayStore(), summaries);
           rpcOptions?.signal.throwIfAborted();
-          if (!pins.length) return index;
+          // Drafts name threads on any instance. Peer rows come from the cache
+          // that keeps pins current, so this read never waits on a peer.
+          const watched = request.query.kind === "exact" && request.query.resolveFromOwners
+            ? loadViewerWatchedNavigationRows(summaries, request.query.identities, pins) : [];
+          if (!pins.length && !watched.length) return index;
           const localInstanceId = (await getDesktopFederationRuntime().health()).instanceId;
           rpcOptions?.signal.throwIfAborted();
-          return appendViewerNavigationPins({ ...index, localInstanceId }, pins);
+          // Watched rows join local project groups as pins do, so a selected
+          // draft resolves its project. The index serves this one read only.
+          return appendViewerNavigationPins({ ...index, localInstanceId }, [...pins, ...watched]);
         }
         return index;
       },

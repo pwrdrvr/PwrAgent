@@ -589,7 +589,7 @@ Apache-2.0
 - @discordjs/rest@2.6.3 | https://github.com/discordjs/discord.js
 - @discordjs/util@1.2.0 | https://github.com/discordjs/discord.js
 - @discordjs/ws@1.2.3 | https://github.com/discordjs/discord.js
-- @line/bot-sdk@11.2.0 | https://github.com/line/line-bot-sdk-nodejs
+- @line/bot-sdk@11.3.0 | https://github.com/line/line-bot-sdk-nodejs
 - @sigstore/bundle@5.0.0 | https://github.com/sigstore/sigstore-js
 - @sigstore/core@4.0.1 | https://github.com/sigstore/sigstore-js
 - @sigstore/protobuf-specs@0.5.1 | https://github.com/sigstore/protobuf-specs
@@ -605,7 +605,7 @@ Apache-2.0
 - discord.js@14.27.0 | https://github.com/discordjs/discord.js
 - events-universal@1.0.1 | https://github.com/holepunchto/events-universal
 - long@5.3.2 | https://github.com/dcodeIO/long.js
-- pdfjs-dist@6.3.289 | https://github.com/mozilla/pdf.js
+- pdfjs-dist@6.4.299 | https://github.com/mozilla/pdf.js
 - reflect-metadata@0.2.2 | https://github.com/rbuckton/reflect-metadata
 - sigstore@5.0.0 | https://github.com/sigstore/sigstore-js
 - text-decoder@1.2.7 | https://github.com/holepunchto/text-decoder
@@ -734,19 +734,19 @@ MIT
 - @mattermost/client@11.9.0 | https://github.com/mattermost/mattermost
 - @mattermost/types@11.9.0 | https://github.com/mattermost/mattermost
 - @mermaid-js/parser@1.2.1 | https://github.com/mermaid-js/mermaid
-- @modelcontextprotocol/sdk@1.30.1 | https://github.com/modelcontextprotocol/typescript-sdk
-- @napi-rs/canvas@1.0.9 | https://github.com/Brooooooklyn/canvas
-- @napi-rs/canvas-android-arm64@1.0.9 | https://github.com/Brooooooklyn/canvas
-- @napi-rs/canvas-darwin-arm64@1.0.9 | https://github.com/Brooooooklyn/canvas
-- @napi-rs/canvas-darwin-x64@1.0.9 | https://github.com/Brooooooklyn/canvas
-- @napi-rs/canvas-linux-arm-gnueabihf@1.0.9 | https://github.com/Brooooooklyn/canvas
-- @napi-rs/canvas-linux-arm64-gnu@1.0.9 | https://github.com/Brooooooklyn/canvas
-- @napi-rs/canvas-linux-arm64-musl@1.0.9 | https://github.com/Brooooooklyn/canvas
-- @napi-rs/canvas-linux-riscv64-gnu@1.0.9 | https://github.com/Brooooooklyn/canvas
-- @napi-rs/canvas-linux-x64-gnu@1.0.9 | https://github.com/Brooooooklyn/canvas
-- @napi-rs/canvas-linux-x64-musl@1.0.9 | https://github.com/Brooooooklyn/canvas
-- @napi-rs/canvas-win32-arm64-msvc@1.0.9 | https://github.com/Brooooooklyn/canvas
-- @napi-rs/canvas-win32-x64-msvc@1.0.9 | https://github.com/Brooooooklyn/canvas
+- @modelcontextprotocol/sdk@1.32.1 | https://github.com/modelcontextprotocol/typescript-sdk
+- @napi-rs/canvas@1.0.10 | https://github.com/Brooooooklyn/canvas
+- @napi-rs/canvas-android-arm64@1.0.10 | https://github.com/Brooooooklyn/canvas
+- @napi-rs/canvas-darwin-arm64@1.0.10 | https://github.com/Brooooooklyn/canvas
+- @napi-rs/canvas-darwin-x64@1.0.10 | https://github.com/Brooooooklyn/canvas
+- @napi-rs/canvas-linux-arm-gnueabihf@1.0.10 | https://github.com/Brooooooklyn/canvas
+- @napi-rs/canvas-linux-arm64-gnu@1.0.10 | https://github.com/Brooooooklyn/canvas
+- @napi-rs/canvas-linux-arm64-musl@1.0.10 | https://github.com/Brooooooklyn/canvas
+- @napi-rs/canvas-linux-riscv64-gnu@1.0.10 | https://github.com/Brooooooklyn/canvas
+- @napi-rs/canvas-linux-x64-gnu@1.0.10 | https://github.com/Brooooooklyn/canvas
+- @napi-rs/canvas-linux-x64-musl@1.0.10 | https://github.com/Brooooooklyn/canvas
+- @napi-rs/canvas-win32-arm64-msvc@1.0.10 | https://github.com/Brooooooklyn/canvas
+- @napi-rs/canvas-win32-x64-msvc@1.0.10 | https://github.com/Brooooooklyn/canvas
 - @octokit/endpoint@11.0.5 | github:octokit/endpoint.js
 - @octokit/graphql@9.0.5 | github:octokit/graphql.js
 - @octokit/openapi-types@29.0.1 | https://github.com/octokit/openapi-types.ts
@@ -779,39 +779,39 @@ MIT
 - @sapphire/snowflake@3.5.5 | https://github.com/sapphiredev/utilities
 - @shutterstock/p-map-iterable@1.2.0 | https://github.com/shutterstock/p-map-iterable
 - @slack/logger@5.0.0 | https://github.com/slackapi/node-slack-sdk
-- @slack/socket-mode@3.0.1 | https://github.com/slackapi/node-slack-sdk
-- @slack/types@3.1.0 | https://github.com/slackapi/node-slack-sdk
-- @slack/web-api@8.1.1 | https://github.com/slackapi/node-slack-sdk
-- @tiptap/core@3.31.3 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-blockquote@3.31.3 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-bold@3.31.3 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-bubble-menu@3.31.3 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-bullet-list@3.31.3 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-code@3.31.3 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-code-block@3.31.3 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-document@3.31.3 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-dropcursor@3.31.3 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-floating-menu@3.31.3 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-gapcursor@3.31.3 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-hard-break@3.31.3 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-heading@3.31.3 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-horizontal-rule@3.31.3 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-italic@3.31.3 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-link@3.31.3 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-list@3.31.3 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-list-item@3.31.3 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-list-keymap@3.31.3 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-mention@3.31.3 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-ordered-list@3.31.3 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-paragraph@3.31.3 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-strike@3.31.3 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-text@3.31.3 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-underline@3.31.3 | https://github.com/ueberdosis/tiptap
-- @tiptap/extensions@3.31.3 | https://github.com/ueberdosis/tiptap
-- @tiptap/pm@3.31.3 | https://github.com/ueberdosis/tiptap
-- @tiptap/react@3.31.3 | https://github.com/ueberdosis/tiptap
-- @tiptap/starter-kit@3.31.3 | https://github.com/ueberdosis/tiptap
-- @tiptap/suggestion@3.31.3 | https://github.com/ueberdosis/tiptap
+- @slack/socket-mode@3.1.0 | https://github.com/slackapi/node-slack-sdk
+- @slack/types@3.2.0 | https://github.com/slackapi/node-slack-sdk
+- @slack/web-api@8.2.0 | https://github.com/slackapi/node-slack-sdk
+- @tiptap/core@3.31.4 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-blockquote@3.31.4 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-bold@3.31.4 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-bubble-menu@3.31.4 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-bullet-list@3.31.4 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-code@3.31.4 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-code-block@3.31.4 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-document@3.31.4 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-dropcursor@3.31.4 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-floating-menu@3.31.4 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-gapcursor@3.31.4 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-hard-break@3.31.4 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-heading@3.31.4 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-horizontal-rule@3.31.4 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-italic@3.31.4 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-link@3.31.4 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-list@3.31.4 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-list-item@3.31.4 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-list-keymap@3.31.4 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-mention@3.31.4 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-ordered-list@3.31.4 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-paragraph@3.31.4 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-strike@3.31.4 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-text@3.31.4 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-underline@3.31.4 | https://github.com/ueberdosis/tiptap
+- @tiptap/extensions@3.31.4 | https://github.com/ueberdosis/tiptap
+- @tiptap/pm@3.31.4 | https://github.com/ueberdosis/tiptap
+- @tiptap/react@3.31.4 | https://github.com/ueberdosis/tiptap
+- @tiptap/starter-kit@3.31.4 | https://github.com/ueberdosis/tiptap
+- @tiptap/suggestion@3.31.4 | https://github.com/ueberdosis/tiptap
 - @tufjs/canonical-json@2.0.0 | https://github.com/theupdateframework/tuf-js
 - @tufjs/models@5.0.0 | https://github.com/theupdateframework/tuf-js
 - @types/d3@7.4.3 | https://github.com/DefinitelyTyped/DefinitelyTyped
@@ -923,7 +923,7 @@ MIT
 - dugite@3.2.3 | https://github.com/desktop/dugite
 - dunder-proto@1.0.1 | https://github.com/es-shims/dunder-proto
 - ee-first@1.1.1 | jonathanong/ee-first
-- electron@44.4.5 | https://github.com/electron/electron
+- electron@44.6.0 | https://github.com/electron/electron
 - electron-log@5.4.4 | megahertz/electron-log
 - electron-updater@6.8.9 | https://github.com/electron-userland/electron-builder
 - encodeurl@2.0.0 | pillarjs/encodeurl
@@ -1000,7 +1000,7 @@ MIT
 - json-with-bigint@3.5.12 | https://github.com/Ivan-Korolenko/json-with-bigint
 - jsonfile@6.2.1 | https://github.com/jprichardson/node-jsonfile
 - katex@0.16.47 | https://github.com/KaTeX/KaTeX
-- katex@0.18.9 | https://github.com/KaTeX/KaTeX
+- katex@0.19.0 | https://github.com/KaTeX/KaTeX
 - khroma@2.1.0 | github:fabiospampinato/khroma
 - layout-base@1.0.2 | https://github.com/iVis-at-Bilkent/layout-base
 - layout-base@2.0.1 | https://github.com/iVis-at-Bilkent/layout-base
@@ -1018,10 +1018,10 @@ MIT
 - magic-bytes.js@1.13.0 | https://github.com/LarsKoelpin/magic-bytes
 - markdown-table@3.0.4 | wooorm/markdown-table
 - marked@16.4.2 | https://github.com/markedjs/marked
-- marked@18.0.14 | https://github.com/markedjs/marked
+- marked@18.1.0 | https://github.com/markedjs/marked
 - math-intrinsics@1.1.0 | https://github.com/es-shims/math-intrinsics
 - mdast-util-find-and-replace@3.0.2 | syntax-tree/mdast-util-find-and-replace
-- mdast-util-from-markdown@2.0.3 | syntax-tree/mdast-util-from-markdown
+- mdast-util-from-markdown@2.1.0 | syntax-tree/mdast-util-from-markdown
 - mdast-util-gfm@3.1.0 | syntax-tree/mdast-util-gfm
 - mdast-util-gfm-autolink-literal@2.0.1 | syntax-tree/mdast-util-gfm-autolink-literal
 - mdast-util-gfm-footnote@2.1.0 | syntax-tree/mdast-util-gfm-footnote
@@ -1109,14 +1109,13 @@ MIT
 - prosemirror-commands@1.7.2 | https://code.haverbeke.berlin/prosemirror/prosemirror-commands
 - prosemirror-dropcursor@1.8.3 | https://code.haverbeke.berlin/prosemirror/prosemirror-dropcursor
 - prosemirror-gapcursor@1.4.1 | https://github.com/prosemirror/prosemirror-gapcursor
-- prosemirror-history@1.5.0 | https://github.com/prosemirror/prosemirror-history
+- prosemirror-history@1.5.1 | https://code.haverbeke.berlin/prosemirror/prosemirror-history
 - prosemirror-inputrules@1.5.1 | https://github.com/prosemirror/prosemirror-inputrules
 - prosemirror-keymap@1.2.3 | https://github.com/prosemirror/prosemirror-keymap
 - prosemirror-model@1.25.9 | https://code.haverbeke.berlin/prosemirror/prosemirror-model
 - prosemirror-schema-list@1.5.1 | https://github.com/prosemirror/prosemirror-schema-list
 - prosemirror-state@1.4.4 | https://github.com/prosemirror/prosemirror-state
 - prosemirror-tables@1.8.5 | https://github.com/ProseMirror/prosemirror-tables
-- prosemirror-transform@1.12.0 | https://github.com/prosemirror/prosemirror-transform
 - prosemirror-transform@1.12.1 | https://code.haverbeke.berlin/prosemirror/prosemirror-transform
 - prosemirror-view@1.41.9 | https://code.haverbeke.berlin/prosemirror/prosemirror-view
 - proxy-addr@2.0.8 | jshttp/proxy-addr
@@ -3337,13 +3336,13 @@ The above copyright notice and this permission notice, shall be included in all 
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-@line/bot-sdk@11.2.0 (Apache-2.0)
+@line/bot-sdk@11.3.0 (Apache-2.0)
 ---------------------------------
 
 Applies to:
-- @line/bot-sdk@11.2.0 (Apache-2.0)
+- @line/bot-sdk@11.3.0 (Apache-2.0)
 
-Representative file: @line/bot-sdk@11.2.0/LICENSE
+Representative file: @line/bot-sdk@11.3.0/LICENSE
 
 Apache License
                            Version 2.0, January 2004
@@ -3641,13 +3640,13 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-@modelcontextprotocol/sdk@1.30.1 (MIT)
+@modelcontextprotocol/sdk@1.32.1 (MIT)
 --------------------------------------
 
 Applies to:
-- @modelcontextprotocol/sdk@1.30.1 (MIT)
+- @modelcontextprotocol/sdk@1.32.1 (MIT)
 
-Representative file: @modelcontextprotocol/sdk@1.30.1/LICENSE
+Representative file: @modelcontextprotocol/sdk@1.32.1/LICENSE
 
 MIT License
 
@@ -3671,24 +3670,24 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-@napi-rs/canvas@1.0.9 (MIT)
----------------------------
+@napi-rs/canvas@1.0.10 (MIT)
+----------------------------
 
 Applies to:
-- @napi-rs/canvas@1.0.9 (MIT)
-- @napi-rs/canvas-android-arm64@1.0.9 (MIT)
-- @napi-rs/canvas-darwin-arm64@1.0.9 (MIT)
-- @napi-rs/canvas-darwin-x64@1.0.9 (MIT)
-- @napi-rs/canvas-linux-arm-gnueabihf@1.0.9 (MIT)
-- @napi-rs/canvas-linux-arm64-gnu@1.0.9 (MIT)
-- @napi-rs/canvas-linux-arm64-musl@1.0.9 (MIT)
-- @napi-rs/canvas-linux-riscv64-gnu@1.0.9 (MIT)
-- @napi-rs/canvas-linux-x64-gnu@1.0.9 (MIT)
-- @napi-rs/canvas-linux-x64-musl@1.0.9 (MIT)
-- @napi-rs/canvas-win32-arm64-msvc@1.0.9 (MIT)
-- @napi-rs/canvas-win32-x64-msvc@1.0.9 (MIT)
+- @napi-rs/canvas@1.0.10 (MIT)
+- @napi-rs/canvas-android-arm64@1.0.10 (MIT)
+- @napi-rs/canvas-darwin-arm64@1.0.10 (MIT)
+- @napi-rs/canvas-darwin-x64@1.0.10 (MIT)
+- @napi-rs/canvas-linux-arm-gnueabihf@1.0.10 (MIT)
+- @napi-rs/canvas-linux-arm64-gnu@1.0.10 (MIT)
+- @napi-rs/canvas-linux-arm64-musl@1.0.10 (MIT)
+- @napi-rs/canvas-linux-riscv64-gnu@1.0.10 (MIT)
+- @napi-rs/canvas-linux-x64-gnu@1.0.10 (MIT)
+- @napi-rs/canvas-linux-x64-musl@1.0.10 (MIT)
+- @napi-rs/canvas-win32-arm64-msvc@1.0.10 (MIT)
+- @napi-rs/canvas-win32-x64-msvc@1.0.10 (MIT)
 
-Representative file: @napi-rs/canvas@1.0.9/LICENSE
+Representative file: @napi-rs/canvas@1.0.10/LICENSE
 
 MIT License
 
@@ -4441,9 +4440,9 @@ The package declares license: Apache-2.0.
 
 Applies to:
 - @slack/logger@5.0.0 (MIT)
-- @slack/socket-mode@3.0.1 (MIT)
-- @slack/types@3.1.0 (MIT)
-- @slack/web-api@8.1.1 (MIT)
+- @slack/socket-mode@3.1.0 (MIT)
+- @slack/types@3.2.0 (MIT)
+- @slack/web-api@8.2.0 (MIT)
 
 Representative file: @slack/logger@5.0.0/LICENSE
 
@@ -4470,42 +4469,42 @@ LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-@tiptap/core@3.31.3 (MIT)
+@tiptap/core@3.31.4 (MIT)
 -------------------------
 
 Applies to:
-- @tiptap/core@3.31.3 (MIT)
-- @tiptap/extension-blockquote@3.31.3 (MIT)
-- @tiptap/extension-bold@3.31.3 (MIT)
-- @tiptap/extension-bubble-menu@3.31.3 (MIT)
-- @tiptap/extension-bullet-list@3.31.3 (MIT)
-- @tiptap/extension-code@3.31.3 (MIT)
-- @tiptap/extension-code-block@3.31.3 (MIT)
-- @tiptap/extension-document@3.31.3 (MIT)
-- @tiptap/extension-dropcursor@3.31.3 (MIT)
-- @tiptap/extension-floating-menu@3.31.3 (MIT)
-- @tiptap/extension-gapcursor@3.31.3 (MIT)
-- @tiptap/extension-hard-break@3.31.3 (MIT)
-- @tiptap/extension-heading@3.31.3 (MIT)
-- @tiptap/extension-horizontal-rule@3.31.3 (MIT)
-- @tiptap/extension-italic@3.31.3 (MIT)
-- @tiptap/extension-link@3.31.3 (MIT)
-- @tiptap/extension-list@3.31.3 (MIT)
-- @tiptap/extension-list-item@3.31.3 (MIT)
-- @tiptap/extension-list-keymap@3.31.3 (MIT)
-- @tiptap/extension-mention@3.31.3 (MIT)
-- @tiptap/extension-ordered-list@3.31.3 (MIT)
-- @tiptap/extension-paragraph@3.31.3 (MIT)
-- @tiptap/extension-strike@3.31.3 (MIT)
-- @tiptap/extension-text@3.31.3 (MIT)
-- @tiptap/extension-underline@3.31.3 (MIT)
-- @tiptap/extensions@3.31.3 (MIT)
-- @tiptap/pm@3.31.3 (MIT)
-- @tiptap/react@3.31.3 (MIT)
-- @tiptap/starter-kit@3.31.3 (MIT)
-- @tiptap/suggestion@3.31.3 (MIT)
+- @tiptap/core@3.31.4 (MIT)
+- @tiptap/extension-blockquote@3.31.4 (MIT)
+- @tiptap/extension-bold@3.31.4 (MIT)
+- @tiptap/extension-bubble-menu@3.31.4 (MIT)
+- @tiptap/extension-bullet-list@3.31.4 (MIT)
+- @tiptap/extension-code@3.31.4 (MIT)
+- @tiptap/extension-code-block@3.31.4 (MIT)
+- @tiptap/extension-document@3.31.4 (MIT)
+- @tiptap/extension-dropcursor@3.31.4 (MIT)
+- @tiptap/extension-floating-menu@3.31.4 (MIT)
+- @tiptap/extension-gapcursor@3.31.4 (MIT)
+- @tiptap/extension-hard-break@3.31.4 (MIT)
+- @tiptap/extension-heading@3.31.4 (MIT)
+- @tiptap/extension-horizontal-rule@3.31.4 (MIT)
+- @tiptap/extension-italic@3.31.4 (MIT)
+- @tiptap/extension-link@3.31.4 (MIT)
+- @tiptap/extension-list@3.31.4 (MIT)
+- @tiptap/extension-list-item@3.31.4 (MIT)
+- @tiptap/extension-list-keymap@3.31.4 (MIT)
+- @tiptap/extension-mention@3.31.4 (MIT)
+- @tiptap/extension-ordered-list@3.31.4 (MIT)
+- @tiptap/extension-paragraph@3.31.4 (MIT)
+- @tiptap/extension-strike@3.31.4 (MIT)
+- @tiptap/extension-text@3.31.4 (MIT)
+- @tiptap/extension-underline@3.31.4 (MIT)
+- @tiptap/extensions@3.31.4 (MIT)
+- @tiptap/pm@3.31.4 (MIT)
+- @tiptap/react@3.31.4 (MIT)
+- @tiptap/starter-kit@3.31.4 (MIT)
+- @tiptap/suggestion@3.31.4 (MIT)
 
-Representative file: @tiptap/core@3.31.3/LICENSE.md
+Representative file: @tiptap/core@3.31.4/LICENSE.md
 
 MIT License
 
@@ -6769,7 +6768,7 @@ Applies to:
 - hastscript@9.0.1 (MIT)
 - markdown-table@3.0.4 (MIT)
 - mdast-util-find-and-replace@3.0.2 (MIT)
-- mdast-util-from-markdown@2.0.3 (MIT)
+- mdast-util-from-markdown@2.1.0 (MIT)
 - mdast-util-gfm@3.1.0 (MIT)
 - mdast-util-gfm-footnote@2.1.0 (MIT)
 - mdast-util-to-markdown@2.1.2 (MIT)
@@ -7061,13 +7060,13 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
-electron@44.4.5 (MIT)
+electron@44.6.0 (MIT)
 ---------------------
 
 Applies to:
-- electron@44.4.5 (MIT)
+- electron@44.6.0 (MIT)
 
-Representative file: electron@44.4.5/LICENSE
+Representative file: electron@44.6.0/LICENSE
 
 Copyright (c) Electron contributors
 Copyright (c) 2013-2020 GitHub Inc.
@@ -8875,7 +8874,7 @@ katex@0.16.47 (MIT)
 
 Applies to:
 - katex@0.16.47 (MIT)
-- katex@0.18.9 (MIT)
+- katex@0.19.0 (MIT)
 
 Representative file: katex@0.16.47/LICENSE
 
@@ -9387,7 +9386,7 @@ marked@16.4.2 (MIT)
 
 Applies to:
 - marked@16.4.2 (MIT)
-- marked@18.0.14 (MIT)
+- marked@18.1.0 (MIT)
 
 Representative file: marked@16.4.2/LICENSE.md
 
@@ -10294,13 +10293,13 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
-pdfjs-dist@6.3.289 (Apache-2.0)
+pdfjs-dist@6.4.299 (Apache-2.0)
 -------------------------------
 
 Applies to:
-- pdfjs-dist@6.3.289 (Apache-2.0)
+- pdfjs-dist@6.4.299 (Apache-2.0)
 
-Representative file: pdfjs-dist@6.3.289/LICENSE
+Representative file: pdfjs-dist@6.4.299/LICENSE
 
 Apache License
                            Version 2.0, January 2004
@@ -10682,13 +10681,12 @@ Applies to:
 - prosemirror-commands@1.7.2 (MIT)
 - prosemirror-dropcursor@1.8.3 (MIT)
 - prosemirror-gapcursor@1.4.1 (MIT)
-- prosemirror-history@1.5.0 (MIT)
+- prosemirror-history@1.5.1 (MIT)
 - prosemirror-inputrules@1.5.1 (MIT)
 - prosemirror-keymap@1.2.3 (MIT)
 - prosemirror-model@1.25.9 (MIT)
 - prosemirror-schema-list@1.5.1 (MIT)
 - prosemirror-state@1.4.4 (MIT)
-- prosemirror-transform@1.12.0 (MIT)
 - prosemirror-transform@1.12.1 (MIT)
 - prosemirror-view@1.41.9 (MIT)
 

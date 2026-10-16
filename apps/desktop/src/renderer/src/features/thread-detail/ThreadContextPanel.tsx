@@ -52,7 +52,11 @@ import { resolveThreadWorkingStatePath } from "../../lib/thread-working-state-pa
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { ThreadAutomationsPanel } from "../automations/ThreadAutomationsPanel";
 import { ThreadTodosPanel } from "../thread-todos/ThreadTodosPanel";
-import type { ThreadTodosView } from "../thread-todos/thread-todos-view";
+import type {
+  ThreadTodoDoHereOptions,
+  ThreadTodoResolveOptions,
+  ThreadTodosView,
+} from "../thread-todos/thread-todos-view";
 import { PrActivityPanel } from "./context-panels/PrActivityPanel";
 import { ThreadInfoPanel } from "./context-panels/ThreadInfoPanel";
 import { ProviderStatusPanel } from "./context-panels/ProviderStatusPanel";
@@ -106,8 +110,8 @@ type ThreadContextPanelProps = {
     view: ThreadTodosView;
     threadKey: string;
     projectKey?: string;
-    onStartReview: (todo: ThreadTodo) => void;
-    onDoHere?: (todo: ThreadTodo) => void;
+    onStartReview: (todo: ThreadTodo, options?: ThreadTodoResolveOptions) => void;
+    onDoHere?: (todo: ThreadTodo, options?: ThreadTodoDoHereOptions) => void;
   };
   activeTurnId?: string;
   backendError?: string;

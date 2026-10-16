@@ -2541,8 +2541,10 @@ function DesktopAppShell(props: {
       threadTitle: (todo) =>
         localThreadTitles.get(buildThreadIdentityKey(todo.backend, todo.threadId))
           ?? "Untitled thread",
-      resolve: (todo, status, resolution) =>
-        threadTodoController.resolve(todo.id, status, resolution),
+      resolve: (todo, status, resolution, options) =>
+        threadTodoController.resolve(todo.id, status, resolution, options),
+      setItemChecked: (todo, itemId, checked) =>
+        threadTodoController.setItemChecked(todo.id, itemId, checked),
       run: (todo, options) => {
         if (
           todo.action?.type !== "start_thread"
@@ -2959,13 +2961,15 @@ function DesktopAppShell(props: {
         return undefined;
       }
       const localRepository = project.repositoryKey?.toLowerCase();
+      const knownRepository = Boolean(counterpart.repositoryKey || counterpart.repositoryKeys?.length)
+        && Boolean(project.repositoryKey || project.repositoryKeys?.length);
       return {
         path: counterpart.path,
         matchedBy:
           localRepository
           && counterpart.repositoryKey?.toLowerCase() === localRepository
             ? "origin"
-            : "name",
+            : knownRepository ? "remote" : "name",
       };
     },
     [findFederatedCounterpartDirectory],
@@ -3001,6 +3005,7 @@ function DesktopAppShell(props: {
             ? { path: directoryRow?.path ?? descriptor.path }
             : {}),
           ...(repositoryKey !== undefined ? { repositoryKey } : {}),
+          ...(directoryRow?.repositoryKeys !== undefined ? { repositoryKeys: directoryRow.repositoryKeys } : {}),
         }
       : undefined;
     return {
@@ -3163,6 +3168,9 @@ function DesktopAppShell(props: {
           ...(projectRow.path !== undefined ? { path: projectRow.path } : {}),
           ...(projectRow.repositoryKey !== undefined
             ? { repositoryKey: projectRow.repositoryKey }
+            : {}),
+          ...(projectRow.repositoryKeys !== undefined
+            ? { repositoryKeys: projectRow.repositoryKeys }
             : {}),
         }
       : {

@@ -12,12 +12,13 @@ import { NAVIGATION_BACKEND_METADATA_SCHEMA } from "./navigation-backend-metadat
 import { THREAD_NAVIGATION_RELATIONSHIPS_SCHEMA } from "./thread-navigation-relationships.js";
 import { STORAGE_RETENTION_SCHEMA } from "./storage-maintenance.js";
 import { migratePrReferenceIdentities } from "./migrate-pr-reference-identities.js";
+import { DURABLE_TURN_REQUEST_SCHEMA } from "./durable-turn-request-schema";
 import {
   attachSqliteWriteMetrics,
   isSqliteWriteMetricsEnabled,
 } from "./sqlite-write-metrics.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 72;
+export const CURRENT_STATE_DB_USER_VERSION = 75;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -575,7 +576,8 @@ CREATE TABLE IF NOT EXISTS thread_todos (
   updated_at   INTEGER NOT NULL,
   resolved_at  INTEGER,
   source_project_json TEXT,
-  target_project_json TEXT
+  target_project_json TEXT,
+  items_json   TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_thread_todos_status_thread
   ON thread_todos(status, backend, thread_id, created_at);
@@ -611,6 +613,22 @@ function ensureThreadTodoProjectColumns(db: BetterSqlite3.Database): void {
   db.exec(THREAD_TODO_PROJECT_PREFS_SCHEMA);
 }
 
+/**
+ * v73: a card's checklist, as one JSON array on the card's own row. The
+ * steps are always read and written with their card, a list is capped at
+ * 20 short steps, and nothing queries a step on its own, so a child table
+ * would only add a join to every list and a second row to every write. A
+ * tick rewrites this one unindexed column: one row page per commit.
+ */
+function ensureThreadTodoItemsColumn(db: BetterSqlite3.Database): void {
+  if (!tableExists(db, "thread_todos")) {
+    db.exec(THREAD_TODO_SCHEMA);
+  }
+  if (!tableColumnExists(db, "thread_todos", "items_json")) {
+    db.exec("ALTER TABLE thread_todos ADD COLUMN items_json TEXT");
+  }
+}
+
 // What threads are waiting on the operator for, beyond the registry's live
 // server requests. An async question is an assistant message, so nothing
 // else records that it is still open; a row is written when it arrives and
@@ -619,6 +637,20 @@ function ensureThreadTodoProjectColumns(db: BetterSqlite3.Database): void {
 // approval); closing it blanks `questions_json`. Seen marks
 // are written once per item, the first time it is on screen. Neither table
 // is written per streamed event or on a timer.
+/** Tracked review findings; see "Tracked review findings" in docs/thread-history-persistence.md. */
+const THREAD_REVIEW_SCHEMA = `
+CREATE TABLE IF NOT EXISTS thread_reviews (
+  review_id TEXT PRIMARY KEY,
+  backend TEXT NOT NULL,
+  thread_id TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('open', 'handled', 'dismissed')),
+  updated_at INTEGER NOT NULL,
+  payload TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_thread_reviews_status_thread
+  ON thread_reviews(status, backend, thread_id);
+`;
+
 const OPERATOR_REQUEST_SCHEMA = `
 CREATE TABLE IF NOT EXISTS operator_async_questions (
   backend        TEXT NOT NULL,
@@ -1994,6 +2026,20 @@ export class StateDb {
           db.pragma("user_version = 72");
         })();
       }
+      if ((db.pragma("user_version", { simple: true }) as number) < 73) {
+        db.transaction(() => {
+          ensureThreadTodoItemsColumn(db);
+          db.pragma("user_version = 73");
+        })();
+      }
+      // ensureCurrentSchema creates durable turn requests (74) and tracked
+      // reviews (75) on every open; these steps only record the version.
+      if ((db.pragma("user_version", { simple: true }) as number) < 74) {
+        db.pragma("user_version = 74");
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 75) {
+        db.pragma("user_version = 75");
+      }
       // Keep current-version databases converged without asking pre-v36 profiles
       // to install the unique index before the migration above removes duplicates.
       db.exec(PR_AUTO_DISPATCH_GLOBAL_FINGERPRINT_INDEX);
@@ -2706,7 +2752,13 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     db.exec(STAR_MAP_WORKSPACE_SCHEMA);
     db.exec(THREAD_TODO_SCHEMA);
     ensureThreadTodoProjectColumns(db);
+    ensureThreadTodoItemsColumn(db);
     db.exec(DESKTOP_CONFIG_STORE_SCHEMA);
+    // Created on every open rather than in their numbered steps: two branches
+    // claimed version 74, so a profile can hold either version without the
+    // other's table. Both are idempotent.
+    db.exec(DURABLE_TURN_REQUEST_SCHEMA);
+    db.exec(THREAD_REVIEW_SCHEMA);
     if ((db.pragma("user_version", { simple: true }) as number) < 4) {
       db.pragma("user_version = 4");
     }

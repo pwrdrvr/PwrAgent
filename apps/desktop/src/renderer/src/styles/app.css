@@ -22466,6 +22466,16 @@ a.button {
   line-height: 18px;
 }
 
+/* Checklist progress, "2 of 4". Beside the age, in its type. */
+.thread-todo-card__progress {
+  flex: none;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
 .thread-todo-card__tools {
   display: flex;
   flex: none;
@@ -22485,6 +22495,99 @@ a.button {
   overflow-wrap: anywhere;
   font-size: 12.5px;
   line-height: 17px;
+}
+
+/* A card's steps. The box is the settings archive list's drawn checkbox
+   (`.settings-thread-management__checkbox`), on the same tokens, sized to
+   the card's 17px text line. The real input sits invisibly over it. */
+.thread-todo-checklist {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.thread-todo-card__detail + .thread-todo-checklist {
+  margin-top: 8px;
+}
+
+.thread-todo-checklist__label {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  column-gap: 8px;
+  align-items: start;
+  padding: 2px 0;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 17px;
+  cursor: pointer;
+}
+
+.thread-todo-checklist__input {
+  position: relative;
+  z-index: 1;
+  grid-column: 1;
+  grid-row: 1;
+  width: 14px;
+  height: 14px;
+  margin: 2px 0 0;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.thread-todo-checklist__box {
+  position: relative;
+  grid-column: 1;
+  grid-row: 1;
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  align-items: center;
+  justify-content: center;
+  margin-top: 2px;
+  border: 1.5px solid var(--text-muted);
+  border-radius: 4px;
+  background: var(--bg-input);
+  box-shadow: inset 0 0 0 1px var(--bg-app);
+  pointer-events: none;
+}
+
+.thread-todo-checklist__label:hover .thread-todo-checklist__box:not(.is-checked) {
+  border-color: var(--text-secondary);
+}
+
+.thread-todo-checklist__box.is-checked {
+  border-color: var(--accent-border);
+  background: var(--accent);
+  box-shadow: none;
+}
+
+.thread-todo-checklist__box.is-checked::after {
+  width: 7px;
+  height: 4px;
+  border-bottom: 2px solid var(--bg-panel);
+  border-left: 2px solid var(--bg-panel);
+  content: "";
+  transform: translateY(-1px) rotate(-45deg);
+}
+
+.thread-todo-checklist__input:focus-visible + .thread-todo-checklist__box {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.thread-todo-checklist__text {
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.thread-todo-checklist__label.is-checked .thread-todo-checklist__text {
+  color: var(--text-muted);
+  text-decoration: line-through;
 }
 
 .thread-todo-card__facts {
@@ -22975,6 +23078,12 @@ a.button {
 .thread-todo-stack__chip-count {
   color: var(--text-primary);
   font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.thread-todo-stack__chip-progress {
+  padding-left: 6px;
+  border-left: 1px solid var(--border-subtle);
   font-variant-numeric: tabular-nums;
 }
 
@@ -29408,9 +29517,13 @@ div.composer-error-row__toggle {
   background: var(--scrim-subtle);
 }
 
+/* A settled finding's label joins the row only when there is one, so the
+   copy control keeps the last column either way. */
 .transcript-review__finding-head {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-auto-columns: auto;
+  grid-auto-flow: column;
   gap: 8px;
   align-items: baseline;
 }
@@ -45927,4 +46040,333 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   font-variant-numeric: tabular-nums;
   line-height: 17px;
   white-space: nowrap;
+}
+
+/* A tracked review's To-do card: the open findings, each settled in place,
+   with the hand-off to the agent as the card's one primary action. */
+.review-todo__summary {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.review-todo__count {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.review-todo__findings {
+  display: flex;
+  flex-direction: column;
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* A finding's row: priority, title, then its state. Nothing leads the row,
+   so no mark on it reads as a step's checkbox. */
+.review-todo__finding {
+  position: relative;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  min-height: 28px;
+  align-items: center;
+  gap: 6px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.review-todo__state {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.review-todo__finding[data-selected] .review-todo__state {
+  color: var(--accent-bright);
+}
+
+/* The row's actions sit over its end and show on hover or keyboard focus,
+   so the title keeps the full width at rest. They stay in the tab order:
+   focus reveals them. A clicked chip keeps focus without :focus-visible, so
+   a mouse leaves no second row raised. */
+.review-todo__chips {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-left: 20px;
+  background: linear-gradient(to right, transparent, var(--bg-panel-elevated) 20px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.review-todo__finding:hover .review-todo__chips,
+.review-todo__finding:has(:focus-visible) .review-todo__chips {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* The chips stand in for the state while they show; the row's dimming and
+   strike still carry it. */
+.review-todo__finding:hover .review-todo__state,
+.review-todo__finding:has(:focus-visible) .review-todo__state {
+  visibility: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .review-todo__chips {
+    transition: none;
+  }
+}
+
+/* The app's pill chip (.review-chip, .rail-chip). At 22px tall the 4px gap
+   keeps each target's 24px circle clear of its neighbours, which is how WCAG
+   2.2 target-size, gated by a11y.spec.ts, passes an undersized target. */
+.review-todo__chip {
+  display: inline-flex;
+  height: 22px;
+  align-items: center;
+  padding: 0 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: var(--bg-panel-elevated);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.review-todo__chip:hover:not(:disabled) {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.review-todo__chip[aria-pressed="true"] {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.review-todo__chip:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.review-todo__chip:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.review-todo__priority {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.review-todo__priority--p0 {
+  color: var(--danger-text);
+}
+
+.review-todo__priority--p1 {
+  color: var(--danger-text-light);
+}
+
+.review-todo__priority--p2 {
+  color: var(--status-warning-text);
+}
+
+.review-todo__priority--p3 {
+  color: var(--info-text);
+}
+
+.review-todo__finding-title {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-todo__finding:not([data-status="open"]) .review-todo__finding-title,
+.review-todo__finding:not([data-status="open"]) .review-todo__priority {
+  color: var(--text-muted);
+}
+
+/* Addressed reads as a done step; declined is final too, but nothing was
+   done, so it stays unstruck. */
+.review-todo__finding[data-status="addressed"] .review-todo__finding-title {
+  text-decoration: line-through;
+}
+
+/* 24px tall: WCAG 2.2 target-size, which a11y.spec.ts gates on. */
+.review-todo__more {
+  min-height: 24px;
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.review-todo__more:hover {
+  color: var(--accent-bright);
+}
+
+.review-todo__more:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* Where a review and each finding stand. Tone rides on the glyph and the
+   label; the row itself stays neutral. */
+.review-status {
+  display: flex;
+  min-height: 28px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.review-status__state,
+.review-finding-state {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-primary);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.review-status__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent-bright);
+}
+
+.review-status__state[data-status="handled"],
+.review-finding-state[data-status="addressed"] {
+  color: var(--success-text);
+}
+
+.review-status__state[data-status="dismissed"],
+.review-finding-state[data-status="dismissed"] {
+  color: var(--text-secondary);
+}
+
+.review-status__note {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.review-status__time {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.review-status__link {
+  color: var(--text-secondary);
+  text-decoration: underline;
+  text-decoration-color: var(--text-secondary-underline);
+  text-underline-offset: 2px;
+}
+
+.review-status__link:hover {
+  color: var(--accent-bright);
+  text-decoration-color: currentColor;
+}
+
+.review-status__actions {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.review-status__button {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 9px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.review-status__button--quiet {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.review-status__button--quiet:hover:not([disabled]) {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+/* A finding's own row: where it is, then how it was settled or the two
+   ways to settle it. */
+.transcript-review__finding-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+
+.transcript-review__finding-foot .transcript-review__location {
+  flex: 1 1 auto;
+}
+
+.transcript-review__finding .review-status {
+  padding-top: 8px;
+}
+
+.review-finding-state {
+  font-size: 11px;
+  align-self: start;
+  min-height: 24px;
+}
+
+.review-todo__explanation {
+  display: -webkit-box;
+  margin-top: 2px;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.review-todo__more:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.review-status__error {
+  margin: 0;
+  color: var(--danger-text);
+  font-size: 12px;
 }

@@ -168,10 +168,13 @@ export const SCHEDULED_ACTIONS_UPDATE_CHANNEL = "scheduled-actions:update";
 export const SCHEDULED_ACTIONS_CANCEL_CHANNEL = "scheduled-actions:cancel";
 export const SCHEDULED_ACTIONS_SEND_NOW_CHANNEL = "scheduled-actions:send-now";
 export const THREAD_TODOS_LIST_CHANNEL = "thread-todos:list";
+export const THREAD_REVIEWS_LIST_CHANNEL = "thread-reviews:list";
+export const THREAD_REVIEWS_UPDATE_CHANNEL = "thread-reviews:update";
 export const THREAD_TODOS_RESOLVE_CHANNEL = "thread-todos:resolve";
 export const THREAD_TODOS_RUN_ACTION_CHANNEL = "thread-todos:run-action";
 export const THREAD_TODOS_LIST_PROJECTS_CHANNEL = "thread-todos:list-projects";
 export const THREAD_TODOS_SET_PROJECT_CHANNEL = "thread-todos:set-project";
+export const THREAD_TODOS_SET_ITEM_CHECKED_CHANNEL = "thread-todos:set-item-checked";
 /**
  * Marker event: a thread's to-do cards changed. Listeners refetch with
  * `thread-todos:list`. Sent to local windows only; a peer's cards stay on

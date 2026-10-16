@@ -12,9 +12,13 @@ import type {
   ListThreadTodosResponse,
   ResolveThreadTodoRequest,
   RunThreadTodoActionRequest,
+  SetThreadTodoItemCheckedRequest,
   SetThreadTodoProjectRequest,
   ThreadTodoMutationResponse,
   ThreadTodosChangedEvent,
+  ThreadReview,
+  ListThreadReviewsRequest,
+  UpdateThreadReviewRequest,
   DismissOperatorQuestionRequest,
   ListOperatorRequestsResponse,
   MarkOperatorItemsSeenRequest,
@@ -999,6 +1003,8 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   listThreadTodos?: (
     request?: ListThreadTodosRequest,
   ) => Promise<ListThreadTodosResponse>;
+  listThreadReviews?: (request?: ListThreadReviewsRequest) => Promise<{ reviews: ThreadReview[] }>;
+  updateThreadReview?: (request: UpdateThreadReviewRequest) => Promise<{ review: ThreadReview }>;
   resolveThreadTodo?: (
     request: ResolveThreadTodoRequest,
   ) => Promise<ThreadTodoMutationResponse>;
@@ -1011,6 +1017,10 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   /** The operator's pick from a card's project menu. */
   setThreadTodoProject?: (
     request: SetThreadTodoProjectRequest,
+  ) => Promise<ThreadTodoMutationResponse>;
+  /** Ticks or unticks one step of a card's checklist. */
+  setThreadTodoItemChecked?: (
+    request: SetThreadTodoItemCheckedRequest,
   ) => Promise<ThreadTodoMutationResponse>;
   /** Marker event; refetch with `listThreadTodos`. Local windows only. */
   onThreadTodosChanged?: (

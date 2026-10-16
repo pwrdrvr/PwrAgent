@@ -1122,6 +1122,8 @@ export type NavigationDirectoryGitStatus = {
    * origin, and for a directory that is not a Git repository at all.
    */
   originRepository?: string;
+  /** Normalized fetch remote repositories, including origin, for fork/upstream matching. */
+  remoteRepositories?: string[];
   syncState?:
     | "in-sync"
     | "ahead"
@@ -1845,6 +1847,8 @@ export type NavigationDirectoryRow = {
    * consumers must fall back to `key`.
    */
   repositoryKey?: string;
+  /** Configured fetch remote identities from `gitStatus.remoteRepositories`. */
+  repositoryKeys?: string[];
   localAvailability?: "unconfigured";
   counts: NavigationCounts;
   pinnedRootCount: number;
@@ -1932,6 +1936,13 @@ export type NavigationQuery =
       kind: "exact";
       identities: NavigationIdentity[];
       includeAncestry?: boolean;
+      /**
+       * Viewer inventory only, and never sent to a peer: include each peer
+       * identity's row as held by this machine's peer summary cache, which
+       * reads owners in the background and keeps an offline owner's last
+       * rows. The read never waits on a peer.
+       */
+      resolveFromOwners?: true;
     }
   | {
       kind: "search";

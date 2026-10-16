@@ -1,8 +1,10 @@
 import type {
   AppServerBackendKind,
+  AppServerThreadReviewEntry,
   CreateInstanceThreadResult,
   ListInstanceProjectsResult,
   PwrAgentFederationContext,
+  ThreadReviewIdentity,
   ThreadTodo,
   ThreadTodoMergeMethod,
   ThreadTodoProject,
@@ -30,6 +32,12 @@ import {
   type ThreadTodoActionRunners,
 } from "./thread-todo-service.js";
 import { ThreadTodoStore } from "./thread-todo-store.js";
+import {
+  getThreadReviewService,
+  setThreadReviewBroadcast,
+  resetThreadReviewServiceForTests,
+} from "../thread-reviews/thread-review-runtime";
+import { completedThreadReview } from "../thread-reviews/thread-review-events";
 
 const threadTodoLog = getMainLogger("pwragent:thread-todos");
 
@@ -55,6 +63,7 @@ export function resetThreadTodoServiceForTests(): void {
   readDefaultMergeMethod = undefined;
   listProjectCandidates = undefined;
   service = null;
+  resetThreadReviewServiceForTests();
 }
 
 /**
@@ -105,23 +114,41 @@ export function installThreadTodoRuntime(params: {
 }): void {
   const { registry, listProjects, federation } = params;
   const todos = getThreadTodoService();
+  const reviews = getThreadReviewService();
+  setThreadReviewBroadcast(params.broadcast);
+  reviews.importStoredReviews();
+  // Tracking a review is a side effect of reading or finishing one. A review
+  // that cannot be recorded must not fail the thread read or the event.
+  const importReview = (
+    identity: ThreadReviewIdentity,
+    entry: AppServerThreadReviewEntry,
+  ): void => {
+    try {
+      reviews.importEntry(identity, entry);
+    } catch (error) {
+      threadTodoLog.warn("could not track a completed review", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
   readDefaultMergeMethod = params.readDefaultMergeMethod;
   todos.setOnChanged(params.broadcast);
   todos.setRunners(createThreadTodoRunners({ registry, federation }));
   // An archived thread's cards have nothing left to act on.
   unsubscribeArchive?.();
   unsubscribeArchive = registry.onEvent((event) => {
-    if (
-      event.notification.method !== "thread/archived"
-      || event.federationTarget?.scope === "remote"
-    ) {
-      return;
-    }
+    if (event.federationTarget?.scope === "remote") return;
+    const completed = completedThreadReview(event);
+    if (completed) importReview(completed.identity, completed.entry);
+    if (event.notification.method !== "thread/archived") return;
     try {
       todos.dismissOpenForThread({
         backend: event.backend,
         threadId: event.notification.params.threadId,
       });
+      for (const review of reviews.list({ backend: event.backend, threadId: event.notification.params.threadId })) {
+        reviews.update({ id: review.id, status: "dismissed", note: "Thread archived." }, "system");
+      }
     } catch (error) {
       threadTodoLog.warn("could not dismiss an archived thread's to-dos", {
         error: error instanceof Error ? error.message : String(error),
@@ -193,6 +220,29 @@ export function installThreadTodoRuntime(params: {
     };
   };
   registry.setPwrAgentThreadTodoHandler({
+    reviews: {
+      record: async (identity, input) => {
+        const [cwd, directory, projects] = await Promise.all([
+          registry.resolveThreadWorkspaceCwd(identity.backend, identity.threadId).catch(() => undefined),
+          registry.resolveThreadPrimaryDirectory(identity.backend, identity.threadId).catch(() => undefined),
+          listProjectsForTodo(),
+        ]);
+        const project = threadTodoProjectForDirectory(directory, projects);
+        const workspacePath = cwd ?? project?.path;
+        return reviews.record(identity, {
+          ...input,
+          ...(workspacePath ? { context: {
+            workspacePath,
+            ...(project ? { projectLabel: project.label, repositoryPath: project.path } : {}),
+          } } : {}),
+        });
+      },
+      list: (identity, status) => reviews.list({ ...identity, status }),
+      update: (identity, request) => reviews.update(request, "agent", identity),
+    },
+    importReviews: (identity, entries) => {
+      for (const entry of entries) importReview(identity, entry);
+    },
     update: async (context, target, input) => {
       const current = todos.findForThread({ ...context, ...target });
       let action: ThreadTodoActionPatch | undefined = input.action;
@@ -224,6 +274,9 @@ export function installThreadTodoRuntime(params: {
         id: current.id,
         ...(input.title !== undefined ? { title: input.title } : {}),
         ...(input.detail !== undefined ? { detail: input.detail } : {}),
+        ...(input.items !== undefined ? { items: input.items } : {}),
+        ...(input.check ? { check: input.check } : {}),
+        ...(input.uncheck ? { uncheck: input.uncheck } : {}),
         ...(targetProject !== undefined ? { targetProject } : {}),
         ...(action ? { action } : {}),
       });

@@ -3307,6 +3307,42 @@ describe("DesktopBackendRegistry", () => {
     await expect(registry.submitTurnIfIdle(params)).resolves.toMatchObject({ status: "started" });
   });
 
+  it("returns busy when a turn becomes active after immediate admission", async () => {
+    const codexClient = new MockBackendClient({});
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    onTestFinished(() => registry.close());
+    const startTurn = vi.spyOn(codexClient, "startTurn");
+    const params = { backend: "codex" as const, threadId: "thread-race", input: [{ type: "text" as const, text: "Repair PR" }] };
+    // Turn preparation yields after the idle check. A backend notification
+    // from another instance can claim the thread during that window.
+    vi.spyOn(registry, "applyThreadModelMigration").mockImplementationOnce(async ({ backend, threadId }) => {
+      await registry.publishLocalEvent({ backend, notification: { method: "turn/started", params: {
+        threadId, turnId: "existing-turn", turn: { id: "existing-turn" },
+      } } });
+      return { backend, threadId, status: "none" };
+    });
+
+    await expect(registry.submitTurnIfIdle(params)).resolves.toEqual({ status: "busy" });
+    expect(startTurn).not.toHaveBeenCalled();
+    expect(registry.getQueuedTurnsForThread(params)).toEqual([]);
+    await registry.publishLocalEvent({ backend: "codex", notification: { method: "turn/completed", params: {
+      threadId: params.threadId, turnId: "existing-turn", turn: { id: "existing-turn", status: "completed", output: [] },
+    } } });
+    await expect(registry.submitTurnIfIdle(params)).resolves.toMatchObject({ status: "started" });
+    expect(startTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves backend submission errors from immediate admission", async () => {
+    const error = new Error("Backend disconnected before turn start");
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ startTurnError: error }), overlayStore: createOverlayStoreMock(),
+    });
+    onTestFinished(() => registry.close());
+    await expect(registry.submitTurnIfIdle({
+      backend: "codex", threadId: "thread-error", input: [{ type: "text", text: "Repair PR" }],
+    })).rejects.toThrow("Backend disconnected before turn start");
+  });
+
   it("holds a delivery on a locked thread and starts it once unlocked", async () => {
     const codexClient = new MockBackendClient({});
     const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });

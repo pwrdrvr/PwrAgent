@@ -8,6 +8,7 @@ import type {
   FederationResponseEnvelope,
 } from "@pwragent/shared";
 import { FEDERATION_PROTOCOL_VERSION } from "@pwragent/shared";
+import { DurableTurnRequestError } from "./durable-turn-request-service";
 
 export type FederationRouterConnection = {
   peerDirectoryPaging?: boolean;
@@ -250,7 +251,7 @@ export class FederationRouter {
       return { status: "handled", response };
     } catch (error) {
       const failure = this.errorEnvelope(params.envelope, {
-        code: "handler_failed",
+        code: error instanceof DurableTurnRequestError ? error.code : "handler_failed",
         message: error instanceof Error ? error.message : String(error),
       });
       this.replyToSource(params.sourcePeerId, failure);

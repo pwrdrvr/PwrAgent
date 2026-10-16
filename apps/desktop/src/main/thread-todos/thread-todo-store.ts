@@ -2,6 +2,7 @@ import type {
   AppServerBackendKind,
   ThreadTodo,
   ThreadTodoAction,
+  ThreadTodoItem,
   ThreadTodoKind,
   ThreadTodoMergeMethod,
   ThreadTodoProject,
@@ -28,6 +29,7 @@ type ThreadTodoRow = {
   resolved_at: number | null;
   source_project_json: string | null;
   target_project_json: string | null;
+  items_json: string | null;
 };
 
 type ThreadTodoResult = Pick<ThreadTodo, "result" | "startedThread">;
@@ -35,7 +37,7 @@ type ThreadTodoResult = Pick<ThreadTodo, "result" | "startedThread">;
 const ROW_COLUMNS = `
   todo_id, backend, thread_id, todo_key, kind, status, title, detail,
   action_json, cwd, result_json, error, created_at, updated_at, resolved_at,
-  source_project_json, target_project_json
+  source_project_json, target_project_json, items_json
 `;
 
 export type InsertThreadTodoRecord = {
@@ -50,6 +52,7 @@ export type InsertThreadTodoRecord = {
   cwd?: string;
   sourceProject?: ThreadTodoProject;
   targetProject?: ThreadTodoProject;
+  items?: ThreadTodoItem[];
   now: number;
 };
 
@@ -58,6 +61,8 @@ export type ReplaceThreadTodoContentRecord = {
   kind: ThreadTodoKind;
   title: string;
   detail?: string;
+  /** The whole list as it should read; absent or empty clears it. */
+  items?: ThreadTodoItem[];
   action?: ThreadTodoAction;
   cwd?: string;
   sourceProject?: ThreadTodoProject;
@@ -68,10 +73,20 @@ export type ReplaceThreadTodoContentRecord = {
 /**
  * Each mutation is a single statement in its own implicit transaction: one
  * commit per tool call or operator click. Nothing here runs per turn, per
- * streamed event or on a timer.
+ * streamed event or on a timer. A read-modify-write, such as ticking one
+ * step of a checklist, runs inside `transaction`, which is still one commit.
  */
 export class ThreadTodoStore {
   constructor(private readonly stateDb: StateDb) {}
+
+  /**
+   * Runs `work` in one IMMEDIATE transaction: the write lock is taken before
+   * the read, so another window or instance sharing the profile cannot tick
+   * a step between this read and this write. One commit.
+   */
+  transaction<T>(work: () => T): T {
+    return this.stateDb.raw.transaction(work).immediate();
+  }
 
   insert(record: InsertThreadTodoRecord): ThreadTodo {
     this.stateDb.raw
@@ -79,8 +94,8 @@ export class ThreadTodoStore {
         `INSERT INTO thread_todos (
           todo_id, backend, thread_id, todo_key, kind, status, title, detail,
           action_json, cwd, result_json, error, created_at, updated_at, resolved_at,
-          source_project_json, target_project_json
-        ) VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, NULL, NULL, ?, ?, NULL, ?, ?)`,
+          source_project_json, target_project_json, items_json
+        ) VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, NULL, NULL, ?, ?, NULL, ?, ?, ?)`,
       )
       .run(
         record.id,
@@ -96,6 +111,7 @@ export class ThreadTodoStore {
         record.now,
         projectJson(record.sourceProject),
         projectJson(record.targetProject),
+        itemsJson(record.items),
       );
     return this.require(record.id);
   }
@@ -109,7 +125,7 @@ export class ThreadTodoStore {
     this.stateDb.raw
       .prepare(
         `UPDATE thread_todos
-            SET kind = ?, title = ?, detail = ?, action_json = ?,
+            SET kind = ?, title = ?, detail = ?, items_json = ?, action_json = ?,
                 cwd = COALESCE(?, cwd),
                 source_project_json = COALESCE(?, source_project_json),
                 target_project_json = ?,
@@ -120,6 +136,7 @@ export class ThreadTodoStore {
         record.kind,
         record.title,
         record.detail ?? null,
+        itemsJson(record.items),
         record.action ? JSON.stringify(record.action) : null,
         record.cwd ?? null,
         projectJson(record.sourceProject),
@@ -155,6 +172,16 @@ export class ThreadTodoStore {
         params.status,
         params.id,
       );
+    return this.require(params.id);
+  }
+
+  /** A tick or untick: the list is rewritten, nothing else on the card. */
+  setItems(params: { id: string; items: ThreadTodoItem[]; now: number }): ThreadTodo {
+    this.stateDb.raw
+      .prepare(
+        `UPDATE thread_todos SET items_json = ?, updated_at = ? WHERE todo_id = ?`,
+      )
+      .run(itemsJson(params.items), params.now, params.id);
     return this.require(params.id);
   }
 
@@ -315,6 +342,7 @@ function rowToThreadTodo(row: ThreadTodoRow): ThreadTodo {
   const action = parseJson<ThreadTodoAction>(row.action_json);
   const sourceProject = parseProject(row.source_project_json);
   const targetProject = parseProject(row.target_project_json);
+  const items = parseItems(row.items_json);
   return {
     id: row.todo_id,
     backend: row.backend,
@@ -324,6 +352,7 @@ function rowToThreadTodo(row: ThreadTodoRow): ThreadTodo {
     status: isThreadTodoStatus(row.status) ? row.status : "open",
     title: row.title,
     ...(row.detail ? { detail: row.detail } : {}),
+    ...(items.length > 0 ? { items } : {}),
     ...(action ? { action } : {}),
     ...(row.cwd ? { cwd: row.cwd } : {}),
     ...(sourceProject ? { sourceProject } : {}),
@@ -341,6 +370,24 @@ function projectJson(project: ThreadTodoProject | undefined): string | null {
   return project
     ? JSON.stringify({ key: project.key, label: project.label, path: project.path })
     : null;
+}
+
+function itemsJson(items: ThreadTodoItem[] | undefined): string | null {
+  return items && items.length > 0
+    ? JSON.stringify(items.map(({ id, text, checked }) => ({ id, text, checked })))
+    : null;
+}
+
+function parseItems(value: string | null): ThreadTodoItem[] {
+  const items = parseJson<unknown>(value);
+  if (!Array.isArray(items)) return [];
+  return items.flatMap((item: Partial<ThreadTodoItem> | null) =>
+    item
+      && typeof item.id === "string"
+      && typeof item.text === "string"
+      && typeof item.checked === "boolean"
+      ? [{ id: item.id, text: item.text, checked: item.checked }]
+      : []);
 }
 
 function parseProject(value: string | null): ThreadTodoProject | undefined {

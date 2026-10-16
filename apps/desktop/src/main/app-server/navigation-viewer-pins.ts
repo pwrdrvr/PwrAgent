@@ -1,6 +1,6 @@
 import path from "node:path";
-import { buildThreadIdentityKey, classifyDirectory, federatedThreadIdentityKey } from "@pwragent/shared";
-import type { LinkedDirectorySummary, NavigationDirectorySummary, NavigationThreadSummary } from "@pwragent/shared";
+import { buildFederatedThreadRef, buildThreadIdentityKey, classifyDirectory, federatedThreadIdentityKey } from "@pwragent/shared";
+import type { LinkedDirectorySummary, NavigationDirectorySummary, NavigationIdentity, NavigationThreadSummary } from "@pwragent/shared";
 import type { NavigationQueryIndex } from "./navigation-query-projection";
 import type { RemoteThreadSummaryCache } from "../federation/remote-thread-summary-cache";
 import type { SqliteOverlayStore } from "../state/overlay-store-sqlite";
@@ -23,6 +23,26 @@ export async function loadViewerNavigationPins(
     const rank = thread.federation ? ranks.get(federatedThreadIdentityKey(thread.federation.ref)) : undefined;
     return rank ? { ...thread, pinnedRank: rank } : thread;
   });
+}
+
+/**
+ * Rows for peer threads an exact viewer read names without pinning them, such
+ * as another instance's drafts. The summary cache holds them beside the pins
+ * and never waits on a peer; a pinned identity is already in `pins`.
+ */
+export function loadViewerWatchedNavigationRows(
+  cache: Pick<RemoteThreadSummaryCache, "resolveWatchedThreads">,
+  identities: readonly NavigationIdentity[],
+  pins: readonly NavigationThreadSummary[],
+): NavigationThreadSummary[] {
+  const pinned = new Set(pins.flatMap((pin) => pin.federation ? [federatedThreadIdentityKey(pin.federation.ref)] : []));
+  const refs = identities.flatMap((identity) => identity.ownerInstanceId ? [buildFederatedThreadRef({
+    backend: identity.backend, instanceId: identity.ownerInstanceId, threadId: identity.threadId,
+  })] : []).filter((ref) => !pinned.has(federatedThreadIdentityKey(ref)));
+  if (!refs.length) return [];
+  // An owner's pin order is not this viewer's; only a viewer pin ranks a row here.
+  return cache.resolveWatchedThreads(refs).flatMap(({ pinnedRank: _ownerRank, ...thread }) =>
+    thread.federation && !pinned.has(federatedThreadIdentityKey(thread.federation.ref)) ? [thread] : []);
 }
 
 /** Viewer-owned remote memberships use the same project grouping as the established sidebar. */
