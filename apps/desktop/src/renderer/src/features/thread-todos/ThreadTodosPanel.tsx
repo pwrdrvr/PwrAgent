@@ -9,6 +9,7 @@ import type { ThreadTodo, ThreadTodoKind } from "@pwragent/shared";
 import {
   THREAD_TODO_RESOLUTION_RESULTS,
   buildThreadIdentityKey,
+  codexAsyncQuestionItemId,
   operatorTodoItemKey,
   threadTodoItemProgress,
 } from "@pwragent/shared";
@@ -78,6 +79,10 @@ export type ThreadTodosPanelProps = {
     todo: ThreadTodo,
     options?: ThreadTodoDoHereOptions,
   ) => void | Promise<unknown>;
+  /** Answers a question in the thread on screen, through its composer. */
+  onAnswerQuestion?: (text: string) => Promise<boolean>;
+  /** Answers the composer took in that thread, by question item id. */
+  sentQuestionAnswers?: ReadonlyMap<string, string>;
 };
 
 /**
@@ -284,6 +289,13 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
                   if (item.type === "wait") {
                     const { wait } = item;
                     const mine = wait.threadKey === threadKey;
+                    // Only the thread on screen has a composer to answer through.
+                    const asked = mine ? wait.question : undefined;
+                    // Any reply closes all of a message's questions.
+                    const questionSent = asked?.questions.some((_, index) =>
+                      props.sentQuestionAnswers?.has(
+                        codexAsyncQuestionItemId(asked.messageId, index),
+                      )) ?? false;
                     return (
                       <li key={item.key}>
                         <OperatorWaitRow
@@ -299,6 +311,8 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
                             return question ? view.dismissQuestion(question) : Promise.resolve();
                           }}
                           openWait={view.openWait}
+                          answerQuestion={asked ? props.onAnswerQuestion : undefined}
+                          questionSent={questionSent}
                         />
                       </li>
                     );

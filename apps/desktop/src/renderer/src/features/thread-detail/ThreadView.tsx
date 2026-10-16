@@ -4415,6 +4415,9 @@ export function ThreadView(props: ThreadViewProps) {
             projectKey: threadTodos.projectKey,
             onStartReview: startTodoReview,
             onDoHere: doTodoHere,
+            // The card's own answer path: start, steer or queue.
+            onAnswerQuestion: handleAnswerAsyncQuestions,
+            sentQuestionAnswers: threadSentAsyncQuestionAnswers,
           } : undefined,
         }
       : {};

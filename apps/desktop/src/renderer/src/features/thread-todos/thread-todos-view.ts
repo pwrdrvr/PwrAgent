@@ -93,7 +93,7 @@ export type ThreadTodosView = {
   dismissQuestion: (target: OperatorQuestionTarget) => Promise<void>;
   /** Question item keys this window dismissed, so open cards fold too. */
   dismissedQuestionKeys: ReadonlySet<string>;
-  /** Shows the wait's thread, where its card takes the answer. */
+  /** Shows the wait's thread, scrolled to a question's card. */
   openWait: (wait: OperatorWait) => void;
   /** Name of a thread, by `backend:threadId`. */
   threadTitleForKey: (threadKey: string) => string;
