@@ -438,6 +438,79 @@ async function transcriptImageUrlForMessaging(
   return `data:${resolution.mimeType};base64,${buffer.toString("base64")}`;
 }
 
+/**
+ * Resolve the images of one assistant message read from a federation peer.
+ * The owner already materialized the message's local and Markdown-linked
+ * images when it served the thread, and the remote client rewrote them to
+ * `pwragent-image://federation/...` URLs. Those name files on the owner's
+ * disk, so their bytes come back through `readOwnerImage` and leave here as
+ * data URLs. Nothing is resolved against this instance's filesystem: a
+ * `/tmp` path in a peer's message names a file on the peer.
+ */
+export async function materializeFederatedTranscriptMessageImagesForMessaging(
+  message: AppServerThreadMessage,
+  instanceId: FederationInstanceId,
+  readOwnerImage: (
+    request: FederatedTranscriptImageRequest,
+  ) => Promise<FederatedTranscriptImageResponse>,
+): Promise<AppServerThreadImagePart[]> {
+  const imageParts = message.parts?.filter(
+    (part): part is AppServerThreadImagePart => part.type === "image",
+  ) ?? [];
+  const output: AppServerThreadImagePart[] = [];
+  for (const part of imageParts) {
+    const providerUrl = await federatedTranscriptImageUrlForMessaging(
+      part.url,
+      instanceId,
+      readOwnerImage,
+    );
+    if (!providerUrl) {
+      continue;
+    }
+    output.push({
+      ...part,
+      url: providerUrl,
+    });
+  }
+  return output;
+}
+
+async function federatedTranscriptImageUrlForMessaging(
+  url: string,
+  instanceId: FederationInstanceId,
+  readOwnerImage: (
+    request: FederatedTranscriptImageRequest,
+  ) => Promise<FederatedTranscriptImageResponse>,
+): Promise<string | undefined> {
+  if (url.startsWith("data:image/") || /^https:\/\//iu.test(url)) {
+    return url;
+  }
+
+  const request = decodeFederatedTranscriptImageProtocolRequest(url);
+  if (!request || request.instanceId !== instanceId) {
+    return undefined;
+  }
+
+  let remote: FederatedTranscriptImageResponse;
+  try {
+    remote = await readOwnerImage(request);
+  } catch {
+    return undefined;
+  }
+  const mimeType = remote.mimeType.toLowerCase();
+  if (!DATA_IMAGE_EXTENSIONS.has(mimeType)) {
+    return undefined;
+  }
+  const bytes = Buffer.from(remote.dataBase64, "base64");
+  if (
+    bytes.byteLength === 0
+    || bytes.byteLength > MAX_FETCHED_TRANSCRIPT_IMAGE_BYTES
+  ) {
+    return undefined;
+  }
+  return `data:${mimeType};base64,${bytes.toString("base64")}`;
+}
+
 export function registerTranscriptImageProtocolScheme(): void {
   protocol.registerSchemesAsPrivileged([
     {

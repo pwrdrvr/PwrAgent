@@ -15,6 +15,10 @@ import {
   DesktopMessagingBackendBridge,
   type DesktopMessagingFederationBridge,
 } from "../messaging/desktop-backend-bridge";
+import {
+  toFederatedTranscriptImageProtocolUrl,
+  toTranscriptImageProtocolUrl,
+} from "../transcript-image-protocol";
 
 const {
   getThreadOverlayState,
@@ -1219,6 +1223,88 @@ describe("DesktopMessagingBackendBridge", () => {
         url: "https://example.com/current.png",
       }),
     ]);
+  });
+
+  it("fetches a peer-owned thread's assistant images from the owning peer", async () => {
+    const ownerImageUrl = toTranscriptImageProtocolUrl(
+      "file:///owner/profiles/work/state/thread-images/codex/thread-1/markdown-a.png",
+    );
+    const response: AppServerReadThreadResponse = {
+      backend: "codex",
+      fetchedAt: 1,
+      threadId: "thread-1",
+      replay: {
+        entries: [
+          {
+            id: "item-final",
+            role: "assistant",
+            text: "![chart](/tmp/charts/chart.png)",
+            type: "message",
+            turn: { id: "turn-1" },
+            parts: [
+              { type: "text", text: "![chart](/tmp/charts/chart.png)" },
+              {
+                type: "image",
+                url: toFederatedTranscriptImageProtocolUrl("peer-a", ownerImageUrl),
+              },
+              {
+                type: "image",
+                url: toFederatedTranscriptImageProtocolUrl("peer-b", ownerImageUrl),
+              },
+            ],
+          },
+        ],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+      },
+    };
+    const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const remoteReadThread = vi.fn(async () => response);
+    const readTranscriptImage = vi.fn(async () => ({
+      dataBase64: pngBytes.toString("base64"),
+      mimeType: "image/png",
+    }));
+    const localReadThread = vi.fn();
+    const bridge = new DesktopMessagingBackendBridge({
+      getThreadTranscriptImageRoots: vi.fn(async () => []),
+      readThread: localReadThread,
+    } as unknown as DesktopBackendRegistry, {
+      connectedPeerTargets: () => [{
+        target: { scope: "remote", instanceId: "peer-a" },
+        label: "peer-a",
+        capabilities: ["messaging_route"],
+      }],
+      remoteBackend: () => ({
+        readThread: remoteReadThread,
+        readTranscriptImage,
+      } as unknown as FederationBackendOperations),
+    } as unknown as DesktopMessagingFederationBridge);
+
+    await expect(bridge.resolveAssistantMessageImages({
+      backend: "codex",
+      federationTarget: { scope: "remote", instanceId: "peer-a" },
+      itemId: "item-final",
+      text: "![chart](/tmp/charts/chart.png)",
+      threadId: "thread-1",
+      turnId: "turn-1",
+    })).resolves.toEqual([
+      expect.objectContaining({
+        source: "assistant",
+        type: "image",
+        url: `data:image/png;base64,${pngBytes.toString("base64")}`,
+      }),
+    ]);
+    expect(remoteReadThread).toHaveBeenCalledWith({
+      backend: "codex",
+      limit: 20,
+      threadId: "thread-1",
+    });
+    expect(readTranscriptImage).toHaveBeenCalledTimes(1);
+    expect(readTranscriptImage).toHaveBeenCalledWith({ url: ownerImageUrl });
+    expect(localReadThread).not.toHaveBeenCalled();
   });
 
   it("resolves an explicit remote attach target with a federated thread ref", async () => {

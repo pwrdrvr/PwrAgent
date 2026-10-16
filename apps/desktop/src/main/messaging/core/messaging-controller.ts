@@ -8146,6 +8146,7 @@ export class MessagingController {
     try {
       const images = await resolveImages({
         backend: binding.backend,
+        federationTarget: federationTargetForBinding(binding),
         itemId: assistantItemIdForBackendEvent(event),
         text,
         threadId: binding.threadId,
@@ -8153,9 +8154,12 @@ export class MessagingController {
       });
       return selectAssistantImagesForCapability(images, this.capabilityProfile);
     } catch (error) {
-      this.logger.debug?.("messaging assistant image resolution failed", {
+      // The reply text still goes out, so a failure here otherwise leaves only
+      // dead image links in the chat with nothing in the main log to say why.
+      this.logger.warn?.("messaging assistant image resolution failed", {
         backend: binding.backend,
         error: error instanceof Error ? error.message : String(error),
+        federated: federationTargetForBinding(binding) !== undefined,
         threadId: binding.threadId,
       });
       return [];
@@ -8255,6 +8259,7 @@ export class MessagingController {
         images = selectAssistantImagesForCapability(
           await this.options.backend.resolveAssistantMessageImages({
             backend: binding.backend,
+            federationTarget: federationTargetForBinding(binding),
             text: trimmed,
             threadId: binding.threadId,
           }),

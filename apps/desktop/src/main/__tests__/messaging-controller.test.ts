@@ -17256,6 +17256,75 @@ describe("MessagingController", () => {
     ]);
   });
 
+  it("resolves a peer-owned thread's assistant images through its federation target", async () => {
+    const resolveAssistantMessageImages = vi.fn(async () => [{
+      type: "image" as const,
+      url: "data:image/png;base64,AQID",
+      alt: "Session chart",
+      source: "assistant" as const,
+    }]);
+    const harness = await createHarness({ resolveAssistantMessageImages });
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "pwr_owner",
+    };
+    await harness.store.upsertBinding({
+      id: "binding:remote-owner",
+      authorizedActorIds: ["user-1"],
+      backend: "codex",
+      channel: buildTextEvent("hello").channel,
+      createdAt: 1_000,
+      federatedThread: {
+        backend: "codex",
+        target: federationTarget,
+        threadId: "thread-1",
+      },
+      targetKind: "thread",
+      threadId: "thread-1",
+      updatedAt: 1_000,
+    });
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      federationTarget,
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "assistant-message-1",
+            type: "agentMessage",
+            phase: "final",
+            text: "![Session chart](/tmp/charts/session.png)",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(resolveAssistantMessageImages).toHaveBeenCalledWith({
+      backend: "codex",
+      federationTarget,
+      itemId: "assistant-message-1",
+      text: "![Session chart](/tmp/charts/session.png)",
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+    expect(harness.delivered.filter((intent) => intent.kind === "message")).toEqual([
+      expect.objectContaining({
+        kind: "message",
+        role: "assistant",
+        parts: expect.arrayContaining([
+          expect.objectContaining({
+            type: "image",
+            url: "data:image/png;base64,AQID",
+          }),
+        ]),
+      }),
+    ]);
+  });
+
   it("delivers resolved images for an image-only assistant completion", async () => {
     const resolveAssistantMessageImages = vi.fn(async () => [{
       type: "image" as const,
