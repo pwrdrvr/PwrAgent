@@ -136,6 +136,7 @@ const federationMock = vi.hoisted(() => {
       ) => ({ results: [] }),
     ),
     threadFromPeer: vi.fn(async (): Promise<unknown> => undefined),
+    resolveWatchedThreads: vi.fn((_refs: unknown[]): unknown[] => []),
     rememberThreadNames: vi.fn(),
     reserveThreadNameObservation: vi.fn(() => (nextThreadNameObservation += 1)),
     invalidate: vi.fn(),
@@ -708,6 +709,7 @@ function emitRegistryEvent(event: unknown): void {
   }
 }
 const publishLocalEvent = vi.fn(async (_event?: unknown) => undefined);
+const setForgeReadHandlers = vi.fn();
 const setThreadPullRequestStatusToolHandler = vi.fn();
 const setThreadPullRequestCanonicalizer = vi.fn();
 const setLocalPullRequestAuthorityResolver = vi.fn();
@@ -1048,6 +1050,7 @@ vi.mock("../settings/desktop-settings-singleton", () => ({
       diffCondensation: { enabled: false },
     }),
     readSettings: prAutomationSettings.readSettings,
+    isForgeEnabled: () => true,
   }),
 }));
 
@@ -1150,6 +1153,7 @@ vi.mock("../app-server/backend-registry", () => {
     resolveEditCommitStates,
     onEvent,
     publishLocalEvent,
+    setForgeReadHandlers,
     setThreadPullRequestStatusToolHandler,
     setThreadPullRequestCanonicalizer,
     setThreadPrimaryGitRepositoryReader: vi.fn(),
@@ -1221,6 +1225,7 @@ vi.mock("../pr-status/git-remote", async () => {
     ...actual,
     resolveGitHubRepoForDirectory,
     resolveGitHubReposForDirectory,
+    readForgeRepositoryRemotes: resolveGitHubReposForDirectory,
   };
 });
 
@@ -2731,6 +2736,85 @@ describe("app server ipc", () => {
     }) as import("@pwragent/shared").NavigationQueryPage;
     expect(page.entries.map(({ row }) => row.id)).toEqual([child.id]);
     expect(page.entries[0]?.placement).toEqual({ kind: "child", parent: { backend: "codex", threadId: parent.id } });
+  });
+
+  it("reads every instance's drafts in one viewer page without waiting on a peer", async () => {
+    const { buildFederatedThreadRef } = await import("@pwragent/shared");
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_QUERY_PAGE_CHANNEL } = await import("../../shared/ipc");
+    const base = { source: "codex" as const, titleSource: "explicit" as const, linkedDirectories: [], inbox: { inInbox: false } };
+    const localParent: NavigationThreadSummary = { ...base, id: "local-parent", title: "Local parent" };
+    const localDraft: NavigationThreadSummary = { ...base, id: "local-draft", title: "Local draft" };
+    const peerRef = buildFederatedThreadRef({ backend: "codex", threadId: "peer-draft", instanceId: "peer-a" });
+    const heldRef = buildFederatedThreadRef({ backend: "codex", threadId: "held-draft", instanceId: "peer-b" });
+    const pinnedRef = buildFederatedThreadRef({ backend: "codex", threadId: "pinned-draft", instanceId: "peer-a" });
+    const peerDraft: NavigationThreadSummary = { ...base, id: "peer-draft", title: "Peer draft", pinnedRank: "a0",
+      parentThreadId: localParent.id, parentThreadBackend: "codex", parentThreadInstanceId: "pwr_local",
+      federation: { ref: peerRef, instanceLabel: "Peer A", peerStatus: "connected" } };
+    const heldDraft: NavigationThreadSummary = { ...base, id: "held-draft", title: "Held draft",
+      federation: { ref: heldRef, instanceLabel: "Peer B", peerStatus: "disconnected" } };
+    const pinnedDraft: NavigationThreadSummary = { ...base, id: "pinned-draft", title: "Pinned draft",
+      federation: { ref: pinnedRef, instanceLabel: "Peer A", peerStatus: "connected" } };
+    listThreads.mockResolvedValueOnce([]);
+    readNavigationQueryIndex.mockReturnValueOnce({ threads: [localParent, localDraft], directories: [] });
+    readRemoteThreadPinNavigationRows.mockResolvedValueOnce([pinnedDraft]);
+    federationMock.remoteThreadSummaries.resolvePinnedThreads.mockResolvedValueOnce({ threads: [pinnedDraft], refreshed: [], archived: [] });
+    federationMock.remoteThreadSummaries.resolveWatchedThreads.mockReturnValueOnce([peerDraft, heldDraft]);
+    federationMock.runtime.remoteNavigationQueryPage.mockClear();
+    registerAppServerIpcHandlers();
+    const identities = [
+      { backend: "codex" as const, threadId: "local-draft" },
+      { backend: "codex" as const, threadId: "peer-draft", ownerInstanceId: "peer-a" },
+      { backend: "codex" as const, threadId: "held-draft", ownerInstanceId: "peer-b" },
+      { backend: "codex" as const, threadId: "pinned-draft", ownerInstanceId: "peer-a" },
+    ];
+    const page = await handlers.get(NAVIGATION_QUERY_PAGE_CHANNEL)!({ sender: { id: 90204, once: vi.fn() } }, {
+      protocol: 2, consumer: "main-sidebar", inventory: "viewer",
+      query: { kind: "exact", identities, includeAncestry: true, resolveFromOwners: true },
+    }) as import("@pwragent/shared").NavigationQueryPage;
+    // A pinned draft already comes from the pins; only the others are watched.
+    expect(federationMock.remoteThreadSummaries.resolveWatchedThreads).toHaveBeenLastCalledWith([peerRef, heldRef]);
+    expect(federationMock.runtime.remoteNavigationQueryPage).not.toHaveBeenCalled();
+    const byId = new Map(page.entries.map((entry) => [entry.row.id, entry]));
+    expect([...byId.keys()].sort()).toEqual(["held-draft", "local-draft", "local-parent", "peer-draft", "pinned-draft"]);
+    expect(byId.get("peer-draft")?.placement).toEqual({ kind: "child", parent: { backend: "codex", threadId: localParent.id } });
+    expect(byId.get("peer-draft")?.row.pinnedRank).toBeUndefined();
+    expect(byId.get("held-draft")?.row.federation?.peerStatus).toBe("disconnected");
+  });
+
+  it("resolves a selected peer draft's local project", async () => {
+    const { buildFederatedThreadRef } = await import("@pwragent/shared");
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_QUERY_PAGE_CHANNEL } = await import("../../shared/ipc");
+    const ref = buildFederatedThreadRef({ backend: "codex", threadId: "peer-draft", instanceId: "peer-a" });
+    const peerDraft: NavigationThreadSummary = { source: "codex", id: "peer-draft", title: "Peer draft", titleSource: "explicit",
+      linkedDirectories: [{ path: "/peer/src/PwrAgent", label: "PwrAgent", kind: "local" }], inbox: { inInbox: false },
+      federation: { ref, instanceLabel: "Peer A", peerStatus: "connected" } } as NavigationThreadSummary;
+    listThreads.mockResolvedValueOnce([]);
+    readNavigationQueryIndex.mockReturnValueOnce({ threads: [], directories: [{ key: "directory:/local/PwrAgent",
+      kind: "directory", label: "PwrAgent", path: "/local/PwrAgent", threadKeys: [], needsAttentionCount: 0 }] });
+    readRemoteThreadPinNavigationRows.mockResolvedValueOnce([]);
+    federationMock.remoteThreadSummaries.resolveWatchedThreads.mockReturnValueOnce([peerDraft]);
+    registerAppServerIpcHandlers();
+    const page = await handlers.get(NAVIGATION_QUERY_PAGE_CHANNEL)!({ sender: { id: 90206, once: vi.fn() } }, {
+      protocol: 2, consumer: "main-sidebar", inventory: "viewer",
+      query: { kind: "exact", identities: [{ backend: "codex", threadId: "peer-draft", ownerInstanceId: "peer-a" }],
+        includeAncestry: true, resolveFromOwners: true },
+    }) as import("@pwragent/shared").NavigationQueryPage;
+    expect(page.entries.map(({ row }) => row.id)).toEqual(["peer-draft"]);
+    expect(page.selectionDirectory?.key).toBe("directory:/local/PwrAgent");
+  });
+
+  it("never sends an owner-resolved read to a remote owner", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_QUERY_PAGE_CHANNEL } = await import("../../shared/ipc");
+    federationMock.runtime.remoteNavigationQueryPage.mockClear();
+    registerAppServerIpcHandlers();
+    await expect(handlers.get(NAVIGATION_QUERY_PAGE_CHANNEL)!({ sender: { id: 90205, once: vi.fn() } }, {
+      protocol: 2, consumer: "main-sidebar", inventory: "owner", federationTarget: { scope: "remote", instanceId: "peer-a" },
+      query: { kind: "exact", identities: [{ backend: "codex", threadId: "t1" }], resolveFromOwners: true },
+    })).rejects.toThrow("Owner-resolved navigation is available only to this machine's viewer inventory.");
+    expect(federationMock.runtime.remoteNavigationQueryPage).not.toHaveBeenCalled();
   });
 
   it.each(["FEDERATION_PEER_UNAVAILABLE", "navigation_busy"])("returns expected %s state without rejecting the Electron handler, but still rejects unexpected failures", async (code) => {
@@ -8672,6 +8756,73 @@ describe("app server ipc", () => {
         },
       );
     });
+  });
+
+  it("forge tool cache reads and explicit refresh never publish transitions, attach PRs or write status", async () => {
+    const cachedPr = githubPr({ number: 944, org: "pwrdrvr", repo: "PwrAgent", state: "failing", url: "https://github.com/pwrdrvr/PwrAgent/pull/944" });
+    const fetchedAt = Date.now() - 90_000;
+    listThreads.mockResolvedValue([{ id: "thread-1", source: "codex", title: "Fixture", linkedDirectories: [], updatedAt: 2000 }] as never);
+    getThreadOverlayState.mockResolvedValue({ backend: "codex", threadId: "thread-1", executionMode: "default", prs: [cachedPr], prsFetchedAt: fetchedAt });
+    registerAppServerIpcHandlers();
+    const local = setForgeReadHandlers.mock.calls.at(-1)?.[0];
+    expect(local).toBeTypeOf("function");
+    const context = { backend: "codex", threadId: "thread-1", transport: "mcp" };
+    publishLocalEvent.mockClear();
+    fetchPullRequestByUrl.mockClear();
+    writePrStatusCacheEntries.mockClear();
+    const cached = await local("get_forge_status", {}, context);
+    expect(cached).toMatchObject({ source: "cache", observations: [{ pr: cachedPr, fetchedAt, freshness: "stale" }], prAutomation: { autoFixActive: false } });
+    expect(fetchPullRequestByUrl).not.toHaveBeenCalled();
+    expect(writePrStatusCacheEntries).not.toHaveBeenCalled();
+    expect(publishLocalEvent).not.toHaveBeenCalled();
+    fetchPullRequestByUrl.mockResolvedValueOnce({ ...cachedPr, state: "passing" });
+    const live = await local("get_forge_status", { refresh: true, url: cachedPr.url }, context);
+    expect(live).toMatchObject({ source: "provider", observations: [{ pr: { state: "passing" }, freshness: "recent" }] });
+    expect(fetchPullRequestByUrl).toHaveBeenCalledOnce();
+    expect(writePrStatusCacheEntries).not.toHaveBeenCalled();
+    expect(publishLocalEvent).not.toHaveBeenCalled();
+    // The status registry remains scheduler-owned even after an explicit read.
+    expect(await local("get_forge_status", {}, context)).toMatchObject({ source: "cache", observations: [{ pr: { state: "failing" } }] });
+  });
+
+  it.each([false, true])("forge branch refresh preserves whether GitHub answered (%s)", async (answered) => {
+    const { ForgePrFetcher } = await vi.importActual<typeof import("../pr-status/forge-pr-fetcher")>("../pr-status/forge-pr-fetcher");
+    const { appServerService } = await import("../ipc/app-server");
+    const repos = [{ host: "github.com", owner: "pwrdrvr", repo: "PwrAgent" }];
+    const fetchPullRequestsForBranches = vi.fn(async () => new Map<string, PrSummary[]>(
+      answered ? [["pwrdrvr/pwragent#topic", []]] : [],
+    ));
+    const fetcher = new ForgePrFetcher({
+      isProviderEnabled: (provider) => provider === "github",
+      probeGhAvailable: async () => true,
+      resolveGitHubRepos: async () => repos,
+      graphqlClient: { fetchPullRequests: async () => [], fetchPullRequestsForBranches },
+    });
+    const service = appServerService as unknown as { getPrFetcher: () => InstanceType<typeof ForgePrFetcher> };
+    const provider = vi.spyOn(service, "getPrFetcher").mockReturnValue(fetcher);
+    try {
+      resolveGitHubReposForDirectory.mockResolvedValue(repos);
+      listThreads.mockResolvedValue([{
+        id: "thread-1", source: "codex", title: "Fixture", gitBranch: "topic", updatedAt: 2000,
+        linkedDirectories: [{ id: "/repo", kind: "directory", label: "repo", path: "/repo" }],
+      }] as never);
+      getThreadOverlayState.mockResolvedValue({ backend: "codex", threadId: "thread-1", executionMode: "default", prs: [] });
+      registerAppServerIpcHandlers();
+      const local = setForgeReadHandlers.mock.calls.at(-1)?.[0];
+      publishLocalEvent.mockClear();
+      writePrStatusCacheEntries.mockClear();
+      const result = local("get_forge_status", { refresh: true, branch: "topic" }, { backend: "codex", threadId: "thread-1", transport: "mcp" });
+      if (answered) {
+        await expect(result).resolves.toMatchObject({ source: "provider", observations: [], error: { code: "no_matching_pull_requests" } });
+      } else {
+        await expect(result).rejects.toMatchObject({ code: "provider_error" });
+      }
+      expect(fetchPullRequestsForBranches).toHaveBeenCalledOnce();
+      expect(writePrStatusCacheEntries).not.toHaveBeenCalled();
+      expect(publishLocalEvent).not.toHaveBeenCalled();
+    } finally {
+      provider.mockRestore();
+    }
   });
 
   it("registers a user-invoked PR status tool handler with freshness metadata", async () => {

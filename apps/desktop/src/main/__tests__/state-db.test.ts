@@ -82,6 +82,63 @@ describe("StateDb", () => {
     expect(columnNames("thread_usage_lines").filter((column) => column === "account_key")).toHaveLength(1);
   });
 
+  it("adds the to-do checklist column to a v72 profile and keeps its cards", () => {
+    const dbPath = useFileStateDb();
+    stateDb.raw.exec("ALTER TABLE thread_todos DROP COLUMN items_json");
+    stateDb.raw.exec(`INSERT INTO thread_todos (
+      todo_id, backend, thread_id, kind, status, title, created_at, updated_at
+    ) VALUES ('old-card', 'codex', 'thread-a', 'reminder', 'open', 'Check the docs', 1, 1)`);
+    stateDb.raw.pragma("user_version = 72");
+    stateDb.close();
+    stateDb = StateDb.open(dbPath);
+    expect(columnNames("thread_todos")).toContain("items_json");
+    expect(stateDb.raw.prepare("SELECT title, items_json FROM thread_todos WHERE todo_id = 'old-card'").get())
+      .toEqual({ title: "Check the docs", items_json: null });
+    expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(CURRENT_STATE_DB_USER_VERSION);
+    stateDb.close();
+    stateDb = StateDb.open(dbPath);
+    expect(columnNames("thread_todos").filter((column) => column === "items_json")).toHaveLength(1);
+  });
+
+  it("adds durable receipts to a v73 profile without changing its checklist items", () => {
+    const dbPath = useFileStateDb();
+    const items = JSON.stringify([{ id: "item-1", text: "Check the docs", checked: false }]);
+    stateDb.raw.prepare(`INSERT INTO thread_todos (
+      todo_id, backend, thread_id, kind, status, title, items_json, created_at, updated_at
+    ) VALUES ('checklist-card', 'codex', 'thread-a', 'reminder', 'open', 'Release checklist', ?, 1, 1)`).run(items);
+    stateDb.raw.exec("DROP TABLE durable_turn_requests");
+    stateDb.raw.pragma("user_version = 73");
+    stateDb.close();
+    stateDb = StateDb.open(dbPath);
+    expect(columnNames("durable_turn_requests")).toContain("receipt_json");
+    expect(stateDb.raw.prepare("SELECT title, items_json FROM thread_todos WHERE todo_id = 'checklist-card'").get())
+      .toEqual({ title: "Release checklist", items_json: items });
+    expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(75);
+    stateDb.close();
+    stateDb = StateDb.open(dbPath);
+    expect(columnNames("durable_turn_requests").filter((column) => column === "receipt_json")).toHaveLength(1);
+  });
+
+  // Two branches each shipped a table as version 74; a profile can hold
+  // either 74 without the other's table, and both must converge.
+  it.each([
+    ["durable turn requests", "durable_turn_requests", "receipt_json"],
+    ["tracked reviews", "thread_reviews", "payload"],
+  ] as const)("restores %s to a profile whose version 74 lacked them", (_label, table, column) => {
+    const dbPath = useFileStateDb();
+    stateDb.raw.exec(`DROP TABLE ${table}`);
+    stateDb.raw.pragma("user_version = 74");
+    stateDb.close();
+    stateDb = StateDb.open(dbPath);
+    expect(columnNames(table)).toContain(column);
+    expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(75);
+    // A current profile that lost the table converges as well.
+    stateDb.raw.exec(`DROP TABLE ${table}`);
+    stateDb.close();
+    stateDb = StateDb.open(dbPath);
+    expect(columnNames(table)).toContain(column);
+  });
+
   it.each([false, true])("guards corrupt automation runs when upgrading with legacy index present: %s", (legacyIndexPresent) => {
     const dbPath = useFileStateDb();
     stateDb.raw.exec("DROP INDEX IF EXISTS idx_automation_runs_execution_thread");
@@ -2489,10 +2546,13 @@ function existingTables(): string[] {
 
 function columnNames(
   tableName:
+    | "durable_turn_requests"
     | "pr_lookup_cache"
     | "pr_status_cache"
     | "thread_pricing_summaries"
+    | "thread_reviews"
     | "thread_search_fts"
+    | "thread_todos"
     | "thread_usage_lines",
 ): string[] {
   const rows = readTableInfo(tableName);
@@ -2527,13 +2587,20 @@ function queryPlanDetails(sql: string, params: unknown[]): string {
 
 function readTableInfo(
   tableName:
+    | "durable_turn_requests"
     | "pr_lookup_cache"
     | "pr_status_cache"
     | "thread_pricing_summaries"
+    | "thread_reviews"
     | "thread_search_fts"
+    | "thread_todos"
     | "thread_usage_lines",
 ): Array<{ name: string }> {
   switch (tableName) {
+    case "durable_turn_requests":
+      return stateDb.raw
+        .prepare("PRAGMA table_info(durable_turn_requests)")
+        .all() as Array<{ name: string }>;
     case "pr_lookup_cache":
       return stateDb.raw.prepare("PRAGMA table_info(pr_lookup_cache)").all() as Array<{
         name: string;
@@ -2546,9 +2613,17 @@ function readTableInfo(
       return stateDb.raw
         .prepare("PRAGMA table_info(thread_pricing_summaries)")
         .all() as Array<{ name: string }>;
+    case "thread_reviews":
+      return stateDb.raw
+        .prepare("PRAGMA table_info(thread_reviews)")
+        .all() as Array<{ name: string }>;
     case "thread_search_fts":
       return stateDb.raw
         .prepare("PRAGMA table_info(thread_search_fts)")
+        .all() as Array<{ name: string }>;
+    case "thread_todos":
+      return stateDb.raw
+        .prepare("PRAGMA table_info(thread_todos)")
         .all() as Array<{ name: string }>;
     case "thread_usage_lines":
       return stateDb.raw

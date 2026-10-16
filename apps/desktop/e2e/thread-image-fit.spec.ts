@@ -403,6 +403,12 @@ test("runs SVG flamegraph controls in an isolated lightbox frame", async () => {
     await expect(notice).toBeHidden();
     const frame = app.window.frameLocator('iframe[title="Interactive SVG: Interactive flamegraph"]');
     await expect(frame.locator("#state")).toHaveText("Ready");
+    // Ready marks SVG onload, not presentation of the opaque frame. Linux
+    // can route an earlier hover to the parent iframe without reaching the
+    // SVG. Wait for presentation before the first native pointer action.
+    await expect.poll(() => frame.locator("html").evaluate(() =>
+      performance.getEntriesByType("paint").some((entry) => entry.name === "first-contentful-paint"),
+    ), { message: "Interactive SVG has presented its first contentful paint" }).toBe(true);
     await frame.locator("#frame").hover();
     await expect(frame.locator("#details")).toHaveText("Function: frame");
     await frame.locator("#frame").click();

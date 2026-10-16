@@ -52,6 +52,36 @@ describe("ProviderTranscriptThreadSearchAdapter", () => {
     ]);
   });
 
+  // Thread reads carry the other thread's transcript as their result, so a
+  // phrase from one thread would also match every thread that read it.
+  it("does not match a read_thread result, only the call that made it", async () => {
+    const adapter = new ProviderTranscriptThreadSearchAdapter(async () => {
+      const response = readThreadResponse("Checking on the sample thread.");
+      response.replay.entries = [{
+        type: "activity",
+        id: "activity-read",
+        summary: "Used 1 tool",
+        turn: { id: "turn-2" },
+        details: [{
+          id: "read",
+          kind: "command",
+          label: "read_thread",
+          command: {
+            displayCommand: "pwragent/read_thread\n{\n  \"threadId\": \"sample-thread\"\n}",
+            rawCommand: "pwragent/read_thread",
+            source: "tool",
+            output: "{\"read\":{\"messages\":[{\"text\":\"We discussed branch drift screenshots.\"}]}}",
+          },
+        }],
+      }];
+      return response;
+    });
+
+    expect((await adapter.searchContent({ candidates: [candidate("thread-1")], limit: 5, query: "branch drift" })).results).toEqual([]);
+    expect((await adapter.searchContent({ candidates: [candidate("thread-1")], limit: 5, query: "sample-thread" })).results)
+      .toEqual([expect.objectContaining({ snippets: [expect.objectContaining({ turnId: "turn-2" })] })]);
+  });
+
   it("reports provider read failures as unavailable scopes", async () => {
     const adapter = new ProviderTranscriptThreadSearchAdapter(async () => {
       throw new Error("provider offline");

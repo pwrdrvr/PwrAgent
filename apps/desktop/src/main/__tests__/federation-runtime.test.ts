@@ -1005,6 +1005,18 @@ describe("DesktopFederationRuntime", () => {
     expect(() => runtime.assertRemoteNavigationQueryProtocol(target)).not.toThrow();
   });
 
+  it("never sends a viewer's owner-resolved read to a connected owner", async () => {
+    const runtime = new DesktopFederationRuntime();
+    const harness = runtime as unknown as RuntimeHarness;
+    const target = { scope: "remote" as const, instanceId: "owner" };
+    vi.spyOn(harness, "visiblePeers").mockReturnValue([Object.assign({ id: "owner", status: "connected" }, { navigationQueryProtocol: 2 })]);
+    const remoteBackend = vi.spyOn(runtime, "remoteBackend");
+    await expect(runtime.remoteNavigationQueryPage(target, { protocol: 2, consumer: "main-sidebar", inventory: "owner",
+      query: { kind: "exact", identities: [{ backend: "codex", threadId: "t", ownerInstanceId: "owner" }], resolveFromOwners: true },
+    })).rejects.toThrow("only to this machine's viewer inventory");
+    expect(remoteBackend).not.toHaveBeenCalled();
+  });
+
   it("requires negotiated peer-directory pages and sends an upgrade error instead of a legacy snapshot", () => {
     const initialized = vi.spyOn(appState, "isAppStateInitialized").mockReturnValue(true);
     try {

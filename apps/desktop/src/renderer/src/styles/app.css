@@ -5085,6 +5085,7 @@ textarea,
    (a `.sidebar` child, not a region child) are untouched. */
 .sidebar__scroll-region > .sidebar-empty,
 .sidebar__scroll-region > .sidebar-error,
+.sidebar__scroll-region > .sidebar-show-more,
 .sidebar__scroll-region > .sidebar-start-actions {
   margin-inline: var(--sidebar-rail-inset);
 }
@@ -5679,14 +5680,13 @@ a.button {
   margin-left: 14px;
 }
 
-/* The tray's status text. `.sidebar-empty` and `.sidebar-error` are
-   sidebar-level and set 14px, which inside a sub-list lands above both the
-   13px `--sidebar-title-size` of the rows around it and the 12px paging
-   control below it — so a transient "Loading…" became the loudest thing in
-   the tray, the same way the unstyled paging button did. Scope the tray's
-   copies to the tray's own scale. */
-.subthread-list .sidebar-empty,
-.subthread-list .sidebar-error {
+/* The tray's status text. `.sidebar-empty` is sidebar-level and sets 14px,
+   which inside a sub-list lands above both the 13px `--sidebar-title-size`
+   of the rows around it and the 12px paging control below it — so a
+   transient "Loading…" became the loudest thing in the tray, the same way
+   the unstyled paging button did. Scope the tray's copy to the tray's own
+   scale. */
+.subthread-list .sidebar-empty {
   margin-top: 4px;
   font-size: 12px;
 }
@@ -5995,6 +5995,30 @@ a.button {
 
 .recents-pinned-divider.is-drop-target {
   color: var(--accent-bright);
+}
+
+/* A ⌘K-jumped thread outside the lens (RecentsList's visiting slot): an
+   ordinary row under the pinned divider's label, after the lens's rows. The
+   4px top matches `.directory-row__thread-divider`: a section label, a hair
+   wider than the 2px the cards keep between each other. */
+.sidebar-visiting {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidebar-visiting > .recents-pinned-divider {
+  margin-top: 4px;
+}
+
+/* An empty lens with a visiting row renders its empty line inside the dense
+   lane (RecentsList's `emptyMessage`). Hold it where the bare empty state
+   draws it: the lane's 12px top padding replaces the paragraph's own top
+   margin, and the rail-to-lane difference restores its inline position, so
+   the line does not move when the row comes and goes. */
+.sidebar-list--dense > .sidebar-empty:first-child {
+  margin-top: 0;
+  margin-inline: calc(var(--sidebar-rail-inset) - var(--sidebar-lane-inset));
 }
 
 .recents-pinned-divider::before,
@@ -8286,6 +8310,50 @@ a.button {
   padding-right: 8px;
 }
 
+/* The Pinned group of Updated and Created. It borrows a project's header
+   primitives (`.directory-row__header` is sticky over the rows,
+   `.directory-row__summary` is the disclosure button) so the group reads as
+   the same kind of section a Directories project is; only the section box,
+   the mark and the count are its own. The section box mirrors
+   `.directory-row`: `position: relative` contains the drop indicators of a
+   pin drag. It takes no top pad: that pad is the seam between two
+   projects, and nothing sits above the group, so the header starts exactly
+   where it sticks. The hairline under it is the one boundary between the
+   pins and the time-sorted list, open or closed. */
+.pinned-group {
+  position: relative;
+  padding: 0 0 4px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/* A sticky header stops at its scroller's content edge, not its padding
+   edge, so the lane's top pad (`.sidebar-list`) left a strip above the
+   stuck Pinned header where scrolled rows showed through. Zero it, as
+   `.directory-list` does for its project headers: the header starts where
+   it sticks, under the lens switch, and never moves on the first scroll. */
+.sidebar-list--pinned-group {
+  padding-top: 0;
+}
+
+/* The same accent the rows' own pin glyph uses (`.thread-row__pin`). */
+.pinned-group__icon {
+  color: var(--accent-bright);
+}
+
+/* The group's size, in the readouts' type so the meta reads as one row: mono,
+   tabular, and the two-digit box `.directory-row__summary-meta` gives every
+   count so the readouts beside it hold their x. Muted: it is a size, not a
+   signal. */
+.pinned-group__count {
+  min-width: 2ch;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
 .directory-row__threads-slot {
   /* `role="listitem"` box around the children of `.directory-row__threads`
      that are not thread rows: the "Directory threads" disclosure, "Show
@@ -8514,46 +8582,73 @@ a.button {
 }
 
 /* The rail's one paging affordance: directory, pinned, lens and sub-thread
-   all reach it through `SidebarShowMore`. Reads as a quiet index control,
-   not a card; left padding aligns its label with the thread-row titles
-   above it.
+   all reach it through `SidebarShowMore`. A button the width of the rows
+   above it, in the start actions' family (6px radius, 30px, centred label
+   and glyph), but on a filled panel with the strong border, because it has
+   to be found at the end of a list of borderless rows.
+
+   It was a transparent, borderless 12px label. Its text passed contrast in
+   every theme (6.4:1 at the lowest, Solarized dark) and its box passed
+   WCAG 2.5.8, yet operators could not find it: nothing about it said
+   "button", and in the flat lenses it also sat below the start actions'
+   hairline at the rail's bottom edge (see `lensPager` in Sidebar.tsx).
 
    It was `directory-row__show-more`, a name that reads as private to one
    parent — and the seven call sites that did not sit beside the rule (five
    outside DirectoriesList, two inside it) styled nothing at all rather than
-   reach for it, so they shipped as native Chromium buttons. (The old comment here described a "Show N more / Show
-   less" thread-cap toggle; that control moved to
-   `.directory-row__thread-divider` and left this text behind.) */
+   reach for it, so they shipped as native Chromium buttons. */
 .sidebar-show-more {
   overflow-anchor: none;
-  align-self: flex-start;
-  /* Defensive, not load-bearing today. `.subthread-list` is a grid, where
-     `align-self` answers the block axis and leaves the inline one on the
-     default `stretch` — which is how the unstyled sub-thread button came out
-     full-bleed. `SubthreadPagination` now wraps the control in the
-     `role="listitem"` its list requires, and that wrapper is the grid item,
-     so the inline-block button shrink-wraps on its own. This keeps a control
-     narrow if one is ever a direct grid child again; it is not a substitute
-     for the wrapper, which the list's validity depends on. */
-  justify-self: start;
-  margin-top: 2px;
-  /* WCAG 2.5.8, same as the divider above. Without it this lands at
-     ~24.4px — 8px padding + 2px border + a 12px font's `normal` line box —
-     so it clears the 24px floor on font metrics alone. Adding a
-     `line-height` anywhere upstream would drop it under with no other
-     visible cause. */
-  min-height: 24px;
-  padding: 4px 10px;
-  border: 1px solid transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  /* The row width, in every container. `.subthread-list` is a grid, and
+     `SubthreadPagination` wraps the control in the `role="listitem"` its
+     list requires; that wrapper is the grid item and this fills it. */
+  width: 100%;
+  min-width: 0;
+  margin-top: 6px;
+  /* WCAG 2.5.8 asks for 24px. 30px matches the start actions below it, so
+     the two read as one family of list-end controls. */
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
   border-radius: 6px;
-  background: transparent;
+  background: var(--bg-panel-elevated);
   color: var(--text-secondary);
+  font: inherit;
   font-size: 12px;
   font-weight: 600;
+  /* Wraps rather than overflowing: the button is pinned to the row width,
+     and "Load more sub-threads on this machine" in an indented tray at the
+     240px minimum rail is wider than the box. */
+  text-align: center;
   cursor: pointer;
   transition:
     background-color 120ms ease,
+    border-color 120ms ease,
     color 120ms ease;
+}
+
+/* Inset by the rule with `.sidebar-empty` when a lens shows a status line in
+   place of its list; the flex column stretches it to the inset width, which
+   `width: 100%` plus that margin would overflow. */
+.sidebar__scroll-region > .sidebar-show-more {
+  width: auto;
+}
+
+/* A directory's own pager is a sibling of its `.directory-row__threads`
+   list, not a child, so it takes that list's 8px inset to line up with the
+   row cards. The details column's 8px gap already spaces it from the rows. */
+.directory-row__details > .sidebar-show-more {
+  width: auto;
+  margin: 0 8px;
+}
+
+.sidebar-show-more__icon {
+  display: inline-flex;
+  flex: none;
 }
 
 /* `:hover` matches a busy control exactly as it matched a disabled one, so
@@ -8561,6 +8656,7 @@ a.button {
    flight and the click went nowhere. The busy state is `aria-disabled` now
    (see SidebarShowMore.tsx), which `:disabled` does not match. */
 .sidebar-show-more:hover:not([aria-disabled="true"]) {
+  border-color: var(--text-muted);
   background: var(--bg-panel-hover);
   color: var(--text-primary);
 }
@@ -8576,6 +8672,7 @@ a.button {
    whole life, so the rail looked the same whether a click would do something
    or nothing. */
 .sidebar-show-more[aria-disabled="true"] {
+  border-color: var(--border-subtle);
   color: var(--text-muted);
   cursor: default;
 }
@@ -22369,6 +22466,16 @@ a.button {
   line-height: 18px;
 }
 
+/* Checklist progress, "2 of 4". Beside the age, in its type. */
+.thread-todo-card__progress {
+  flex: none;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
 .thread-todo-card__tools {
   display: flex;
   flex: none;
@@ -22388,6 +22495,99 @@ a.button {
   overflow-wrap: anywhere;
   font-size: 12.5px;
   line-height: 17px;
+}
+
+/* A card's steps. The box is the settings archive list's drawn checkbox
+   (`.settings-thread-management__checkbox`), on the same tokens, sized to
+   the card's 17px text line. The real input sits invisibly over it. */
+.thread-todo-checklist {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.thread-todo-card__detail + .thread-todo-checklist {
+  margin-top: 8px;
+}
+
+.thread-todo-checklist__label {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  column-gap: 8px;
+  align-items: start;
+  padding: 2px 0;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 17px;
+  cursor: pointer;
+}
+
+.thread-todo-checklist__input {
+  position: relative;
+  z-index: 1;
+  grid-column: 1;
+  grid-row: 1;
+  width: 14px;
+  height: 14px;
+  margin: 2px 0 0;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.thread-todo-checklist__box {
+  position: relative;
+  grid-column: 1;
+  grid-row: 1;
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  align-items: center;
+  justify-content: center;
+  margin-top: 2px;
+  border: 1.5px solid var(--text-muted);
+  border-radius: 4px;
+  background: var(--bg-input);
+  box-shadow: inset 0 0 0 1px var(--bg-app);
+  pointer-events: none;
+}
+
+.thread-todo-checklist__label:hover .thread-todo-checklist__box:not(.is-checked) {
+  border-color: var(--text-secondary);
+}
+
+.thread-todo-checklist__box.is-checked {
+  border-color: var(--accent-border);
+  background: var(--accent);
+  box-shadow: none;
+}
+
+.thread-todo-checklist__box.is-checked::after {
+  width: 7px;
+  height: 4px;
+  border-bottom: 2px solid var(--bg-panel);
+  border-left: 2px solid var(--bg-panel);
+  content: "";
+  transform: translateY(-1px) rotate(-45deg);
+}
+
+.thread-todo-checklist__input:focus-visible + .thread-todo-checklist__box {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.thread-todo-checklist__text {
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.thread-todo-checklist__label.is-checked .thread-todo-checklist__text {
+  color: var(--text-muted);
+  text-decoration: line-through;
 }
 
 .thread-todo-card__facts {
@@ -22881,6 +23081,12 @@ a.button {
   font-variant-numeric: tabular-nums;
 }
 
+.thread-todo-stack__chip-progress {
+  padding-left: 6px;
+  border-left: 1px solid var(--border-subtle);
+  font-variant-numeric: tabular-nums;
+}
+
 .thread-todo-stack__notice {
   display: flex;
   max-width: 100%;
@@ -23098,6 +23304,182 @@ button.thread-todos-panel__row-main:focus-visible {
 .thread-todos-panel__row-error {
   margin: 2px 0 0;
   padding: 0 8px 0 30px;
+  color: var(--danger-text);
+  font-size: 11.5px;
+  line-height: 16px;
+}
+
+/* A question's row opens its card. On hover and focus the age gives way to
+   a glyph that says so. */
+.thread-todos-panel__row-jump {
+  display: none;
+  flex: none;
+  width: 14px;
+  place-items: center;
+  color: var(--accent-bright);
+}
+
+button.thread-todos-panel__row-main:is(:hover, :focus-visible) .thread-todos-panel__row-jump {
+  display: inline-grid;
+}
+
+button.thread-todos-panel__row-main:is(:hover, :focus-visible)
+  .thread-todo-card__age:has(+ .thread-todos-panel__row-jump) {
+  display: none;
+}
+
+/* A question answered in its row: the card's choices, sized for the rail. */
+.operator-question-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 6px 8px 2px 30px;
+}
+
+.operator-question-form__question {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.operator-question-form__question + .operator-question-form__question {
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.operator-question-form__title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 17px;
+  overflow-wrap: anywhere;
+}
+
+.operator-question-form__options {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.operator-question-form__option {
+  display: flex;
+  width: 100%;
+  min-height: 28px;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--surface-overlay-subtle);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+  line-height: 16px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.operator-question-form__option:hover:not(:disabled),
+.operator-question-form__option.is-selected {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+
+.operator-question-form__option:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.operator-question-form__option-key {
+  display: inline-grid;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  place-items: center;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.operator-question-form__option.is-selected .operator-question-form__option-key {
+  border-color: var(--accent-border);
+  color: var(--accent-bright);
+}
+
+.operator-question-form__option-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.operator-question-form__recommended {
+  flex: none;
+  color: var(--accent-bright);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.operator-question-form__freeform {
+  display: grid;
+  gap: 4px;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.operator-question-form__freeform textarea {
+  min-height: 32px;
+  max-height: calc((12px * 1.45 * 4) + 16px);
+  resize: none;
+  overflow-y: hidden;
+  padding: 7px 9px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--surface-overlay-soft);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.45;
+}
+
+.operator-question-form__freeform textarea:focus {
+  border-color: var(--accent-border);
+}
+
+.operator-question-form__freeform textarea:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.operator-question-form__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.operator-question-form__count {
+  margin-right: auto;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.operator-question-form__actions .thread-todos-panel__row-link:disabled {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.operator-question-form__actions .thread-todos-panel__row-link:disabled:hover {
+  background: transparent;
+}
+
+.operator-question-form__error {
+  margin: 0;
   color: var(--danger-text);
   font-size: 11.5px;
   line-height: 16px;
@@ -29311,9 +29693,13 @@ div.composer-error-row__toggle {
   background: var(--scrim-subtle);
 }
 
+/* A settled finding's label joins the row only when there is one, so the
+   copy control keeps the last column either way. */
 .transcript-review__finding-head {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-auto-columns: auto;
+  grid-auto-flow: column;
   gap: 8px;
   align-items: baseline;
 }
@@ -45830,4 +46216,685 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   font-variant-numeric: tabular-nums;
   line-height: 17px;
   white-space: nowrap;
+}
+
+/* Thread terminals: one shell canvas plus a 40px strip of session tiles. The
+   strip's rail flies out over the shell with names, so the shell never gives
+   up more than the strip and never reflows when the names show. */
+.thread-terminal-panel {
+  height: var(--integrated-terminal-height, 260px);
+  min-height: 140px;
+  flex: 0 0 auto;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--terminal-bg);
+}
+.thread-terminal-panel[hidden], .thread-terminal-panel [hidden] { display: none; }
+.thread-terminal-panel__body { display: flex; height: calc(100% - 10px); min-height: 0; }
+.thread-terminal-panel__screens { flex: 1; min-width: 0; }
+.thread-terminal-panel__screens > [role="tabpanel"] { height: 100%; display: flex; flex-direction: column; }
+.thread-terminal-panel__screens > [role="tabpanel"][hidden] { display: none; }
+.thread-terminal-panel__screens .integrated-terminal { flex: 1 1 0; height: auto; min-height: 0; }
+.thread-terminal-panel button {
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.thread-terminal-panel button:focus-visible, .thread-terminal-panel input:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+.thread-terminal-panel svg { display: block; width: 14px; height: 14px; }
+
+.thread-terminal-panel__sidebar {
+  position: relative;
+  width: 40px;
+  flex-shrink: 0;
+  min-height: 0;
+}
+.thread-terminal-panel__rail {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  width: 40px;
+  overflow: hidden;
+  background: var(--terminal-bg);
+  box-shadow: inset 1px 0 0 var(--border-subtle);
+  transition: width 120ms ease, box-shadow 120ms ease;
+}
+.thread-terminal-panel__rail.is-open {
+  width: 232px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  box-shadow: inset 1px 0 0 var(--border-subtle), var(--shadow-popover);
+}
+@media (prefers-reduced-motion: reduce) {
+  .thread-terminal-panel__rail { transition: none; }
+}
+
+/* Rows and the header share one grid: a text column that is zero wide in the
+   strip, then the 40px tile column the strip is made of. */
+.thread-terminal-panel__actions,
+.thread-terminal-panel__row[role="tab"] {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 40px;
+  align-items: center;
+  width: 100%;
+}
+.thread-terminal-panel__rail:not(.is-open) .thread-terminal-panel__actions,
+.thread-terminal-panel__rail:not(.is-open) .thread-terminal-panel__row[role="tab"] {
+  grid-template-columns: 0 40px;
+}
+.thread-terminal-panel__actions { flex-shrink: 0; height: 30px; }
+.thread-terminal-panel__heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding-left: 12px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.thread-terminal-panel__heading .chip--instance { height: 18px; padding: 0 6px; font-size: 10px; }
+.thread-terminal-panel__eyebrow {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.thread-terminal-panel__count { color: var(--text-subtle); font-family: var(--font-mono); font-size: 10px; }
+.thread-terminal-panel__actions > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  justify-self: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+}
+.thread-terminal-panel__actions > button:hover, .thread-terminal-panel__close:hover {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.thread-terminal-panel__list { position: relative; }
+.thread-terminal-panel__row[role="tab"] {
+  height: 30px;
+  padding: 0;
+  border-radius: 0;
+  color: var(--text-secondary);
+  text-align: left;
+  transition: background 120ms ease;
+}
+.thread-terminal-panel__row[role="tab"]:hover { background: var(--bg-panel-hover); }
+.thread-terminal-panel__row[role="tab"][aria-selected="true"] {
+  background: var(--bg-row-active);
+  box-shadow: inset 2px 0 0 var(--accent);
+  color: var(--text-primary);
+}
+.thread-terminal-panel__text {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding-left: 32px;
+  overflow: hidden;
+}
+.thread-terminal-panel__name, .thread-terminal-panel__text small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.thread-terminal-panel__name { font-family: var(--font-mono); font-size: 12px; line-height: 14px; }
+.thread-terminal-panel__text small {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 12px;
+}
+.thread-terminal-panel__text small.is-failed { color: var(--danger-text); }
+.thread-terminal-panel__state {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.thread-terminal-panel__tile {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  justify-self: center;
+  box-sizing: border-box;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 3px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font: 500 11px var(--font-mono);
+}
+.thread-terminal-panel__row[aria-selected="true"] .thread-terminal-panel__tile {
+  border-color: var(--accent-border);
+  color: var(--text-primary);
+}
+
+/* One dot carries every state. Live: filled. Ended: hollow. Saved history
+   with no process yet: dashed. */
+.thread-terminal-panel__dot {
+  width: 8px;
+  height: 8px;
+  box-sizing: border-box;
+  border-radius: 50%;
+}
+.thread-terminal-panel__dot.is-running { background: var(--status-ok); }
+.thread-terminal-panel__dot.is-unseen { background: var(--accent); }
+.thread-terminal-panel__dot.is-starting { border: 1.5px solid var(--accent); }
+.thread-terminal-panel__dot.is-exited { border: 1.5px solid var(--text-subtle); }
+.thread-terminal-panel__dot.is-failed { background: var(--status-error); }
+.thread-terminal-panel__dot.is-saved { border: 1.5px dashed var(--text-subtle); }
+.thread-terminal-panel__tile > .thread-terminal-panel__dot {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  width: 7px;
+  height: 7px;
+  box-shadow: 0 0 0 1.5px var(--terminal-bg);
+}
+.thread-terminal-panel__tile > .thread-terminal-panel__dot:is(.is-exited, .is-saved, .is-starting) {
+  background: var(--terminal-bg);
+}
+.thread-terminal-panel__tile > .thread-terminal-panel__dot.is-unseen {
+  box-shadow: 0 0 0 1.5px var(--terminal-bg), 0 0 0 4px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+/* Close buttons stay outside the tablist (a tab may own no controls) and sit
+   at the left end of their row, away from the tile the pointer came in on.
+   Only the open rail shows them. */
+.thread-terminal-panel__close-list {
+  /* Anchored to where the open rail's left edge will be, not to the rail's
+     current left edge, so the buttons never sweep across the tiles while the
+     rail widens under a pointer that is mid-click. */
+  position: absolute;
+  top: 0;
+  right: 206px;
+  display: flex;
+  flex-direction: column;
+}
+.thread-terminal-panel__rail:not(.is-open) .thread-terminal-panel__close-list { visibility: hidden; }
+.thread-terminal-panel__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin: 5px 0;
+  border-radius: 6px;
+  opacity: 0;
+}
+.thread-terminal-panel__close.is-shown, .thread-terminal-panel__close:focus-visible { opacity: 1; }
+.thread-terminal-panel__close svg { width: 12px; height: 12px; }
+.thread-terminal-panel__rename {
+  position: absolute;
+  top: calc(var(--row-index, 0) * 30px + 4px);
+  right: 44px;
+  left: 30px;
+  z-index: 1;
+  margin: 0;
+}
+.thread-terminal-panel__rename input {
+  box-sizing: border-box;
+  width: 100%;
+  height: 22px;
+  padding: 0 5px;
+  border: 1px solid var(--accent-border);
+  border-radius: 4px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font: 12px var(--font-mono);
+}
+
+/* An ended shell keeps its screen; the bar under it restarts it in place. */
+.thread-terminal-panel__ended {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  min-height: 34px;
+  padding: 0 8px 0 12px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
+  font-size: 12px;
+}
+.thread-terminal-panel__ended .thread-terminal-panel__dot { flex-shrink: 0; }
+.thread-terminal-panel__ended-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.thread-terminal-panel__ended-text b { color: var(--text-primary); font-weight: 600; }
+.thread-terminal-panel button.thread-terminal-panel__new-here {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid var(--accent-border);
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+  font: 600 11px var(--font-sans);
+}
+.thread-terminal-panel button.thread-terminal-panel__new-here:hover {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+}
+.thread-terminal-panel__new-here svg { width: 12px; height: 12px; }
+.thread-terminal-panel button.thread-terminal-panel__end-close {
+  flex-shrink: 0;
+  height: 24px;
+  padding: 0 9px;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font: 600 11px var(--font-sans);
+}
+.thread-terminal-panel button.thread-terminal-panel__end-close:hover {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+.thread-terminal-panel__history-note {
+  padding: 5px 10px;
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+/* Right-click menu for a terminal tab. Same chrome as the to-do split menu. */
+.terminal-menu {
+  position: fixed;
+  z-index: 150;
+  min-width: 188px;
+  padding: 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  box-shadow: var(--shadow-popover);
+  transform: translateX(-100%);
+}
+.terminal-menu:focus { outline: none; }
+.terminal-menu__item {
+  display: flex;
+  width: 100%;
+  min-height: 28px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 1.3;
+  text-align: left;
+}
+.terminal-menu__item:hover:not(:disabled),
+.terminal-menu__item:focus-visible {
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+  outline: none;
+}
+.terminal-menu__item:disabled { color: var(--text-subtle); cursor: default; }
+.terminal-menu__item.is-danger { color: var(--danger-text); }
+.terminal-menu__item kbd {
+  color: var(--text-subtle);
+  font: 500 10.5px var(--font-mono);
+}
+.terminal-menu__separator {
+  height: 1px;
+  margin: 4px 2px;
+  background: var(--border-subtle);
+}
+
+/* A tracked review's To-do card: the open findings, each settled in place,
+   with the hand-off to the agent as the card's one primary action. */
+.review-todo__summary {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.review-todo__count {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.review-todo__findings {
+  display: flex;
+  flex-direction: column;
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* A finding's row: priority, title, then its state. Nothing leads the row,
+   so no mark on it reads as a step's checkbox. */
+.review-todo__finding {
+  position: relative;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  min-height: 28px;
+  align-items: center;
+  gap: 6px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.review-todo__state {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.review-todo__finding[data-selected] .review-todo__state {
+  color: var(--accent-bright);
+}
+
+/* The row's actions sit over its end and show on hover or keyboard focus,
+   so the title keeps the full width at rest. They stay in the tab order:
+   focus reveals them. A clicked chip keeps focus without :focus-visible, so
+   a mouse leaves no second row raised. */
+.review-todo__chips {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-left: 20px;
+  background: linear-gradient(to right, transparent, var(--bg-panel-elevated) 20px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.review-todo__finding:hover .review-todo__chips,
+.review-todo__finding:has(:focus-visible) .review-todo__chips {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* The chips stand in for the state while they show; the row's dimming and
+   strike still carry it. */
+.review-todo__finding:hover .review-todo__state,
+.review-todo__finding:has(:focus-visible) .review-todo__state {
+  visibility: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .review-todo__chips {
+    transition: none;
+  }
+}
+
+/* The app's pill chip (.review-chip, .rail-chip). At 22px tall the 4px gap
+   keeps each target's 24px circle clear of its neighbours, which is how WCAG
+   2.2 target-size, gated by a11y.spec.ts, passes an undersized target. */
+.review-todo__chip {
+  display: inline-flex;
+  height: 22px;
+  align-items: center;
+  padding: 0 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: var(--bg-panel-elevated);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.review-todo__chip:hover:not(:disabled) {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.review-todo__chip[aria-pressed="true"] {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.review-todo__chip:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.review-todo__chip:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.review-todo__priority {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.review-todo__priority--p0 {
+  color: var(--danger-text);
+}
+
+.review-todo__priority--p1 {
+  color: var(--danger-text-light);
+}
+
+.review-todo__priority--p2 {
+  color: var(--status-warning-text);
+}
+
+.review-todo__priority--p3 {
+  color: var(--info-text);
+}
+
+.review-todo__finding-title {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-todo__finding:not([data-status="open"]) .review-todo__finding-title,
+.review-todo__finding:not([data-status="open"]) .review-todo__priority {
+  color: var(--text-muted);
+}
+
+/* Addressed reads as a done step; declined is final too, but nothing was
+   done, so it stays unstruck. */
+.review-todo__finding[data-status="addressed"] .review-todo__finding-title {
+  text-decoration: line-through;
+}
+
+/* 24px tall: WCAG 2.2 target-size, which a11y.spec.ts gates on. */
+.review-todo__more {
+  min-height: 24px;
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.review-todo__more:hover {
+  color: var(--accent-bright);
+}
+
+.review-todo__more:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* Where a review and each finding stand. Tone rides on the glyph and the
+   label; the row itself stays neutral. */
+.review-status {
+  display: flex;
+  min-height: 28px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.review-status__state,
+.review-finding-state {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-primary);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.review-status__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent-bright);
+}
+
+.review-status__state[data-status="handled"],
+.review-finding-state[data-status="addressed"] {
+  color: var(--success-text);
+}
+
+.review-status__state[data-status="dismissed"],
+.review-finding-state[data-status="dismissed"] {
+  color: var(--text-secondary);
+}
+
+.review-status__note {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.review-status__time {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.review-status__link {
+  color: var(--text-secondary);
+  text-decoration: underline;
+  text-decoration-color: var(--text-secondary-underline);
+  text-underline-offset: 2px;
+}
+
+.review-status__link:hover {
+  color: var(--accent-bright);
+  text-decoration-color: currentColor;
+}
+
+.review-status__actions {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.review-status__button {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 9px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.review-status__button--quiet {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.review-status__button--quiet:hover:not([disabled]) {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+/* A finding's own row: where it is, then how it was settled or the two
+   ways to settle it. */
+.transcript-review__finding-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+
+.transcript-review__finding-foot .transcript-review__location {
+  flex: 1 1 auto;
+}
+
+.transcript-review__finding .review-status {
+  padding-top: 8px;
+}
+
+.review-finding-state {
+  font-size: 11px;
+  align-self: start;
+  min-height: 24px;
+}
+
+.review-todo__explanation {
+  display: -webkit-box;
+  margin-top: 2px;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.review-todo__more:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.review-status__error {
+  margin: 0;
+  color: var(--danger-text);
+  font-size: 12px;
 }

@@ -69,6 +69,7 @@ export function useFederationProjectChecks(params: {
   const directoryPath = directory?.path;
   const directoryKind = directory?.kind;
   const directoryRepositoryKey = directory?.repositoryKey;
+  const directoryRepositoryKeys = directory?.repositoryKeys?.join("\n");
   const availableIds = targets
     .filter((target) => target.availability === "available")
     .map((target) => target.instanceId)
@@ -86,6 +87,9 @@ export function useFederationProjectChecks(params: {
       ...(directoryPath !== undefined ? { path: directoryPath } : {}),
       ...(directoryRepositoryKey !== undefined
         ? { repositoryKey: directoryRepositoryKey }
+        : {}),
+      ...(directoryRepositoryKeys !== undefined
+        ? { repositoryKeys: directoryRepositoryKeys.split("\n") }
         : {}),
     };
     let cancelled = false;
@@ -118,6 +122,7 @@ export function useFederationProjectChecks(params: {
     directoryLabel,
     directoryPath,
     directoryRepositoryKey,
+    directoryRepositoryKeys,
     scoped,
   ]);
 

@@ -593,6 +593,14 @@ function normalizeLaunchpadDefaults(
 
 const NAVIGATION_BROWSE_MODE_META_KEY = "navigation_browse_mode";
 /**
+ * Whether the Pinned group, which Updated and Created share, is collapsed.
+ * Beside the lens for the same reason: the first paint reads it, and
+ * `config.toml` is no home for it because a config write restarts the
+ * federation runtime. Written only by a click on the group header, so one
+ * commit per toggle.
+ */
+const NAVIGATION_PINNED_GROUP_COLLAPSED_META_KEY = "navigation_pinned_group_collapsed";
+/**
  * Which thread the Star Map manager card reopens. Written once when the
  * manager thread is created (and once more if the operator resets it), so
  * it needs no write budget: this is not a per-turn or per-event write.
@@ -5883,7 +5891,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           duplicate.status === "deferred"
           || (
             params.allowCancelledRearm
-            && ["cancelled", "resolved", "superseded"].includes(duplicate.status)
+            && ["cancelled", "resolved", "superseded", "failed"].includes(duplicate.status)
           )
         ) {
           this.stateDb.raw
@@ -5917,10 +5925,6 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         threadId: params.threadId,
         prKey: params.pending.prKey,
       });
-      if ((incident?.attempt_count ?? 0) >= params.maxAttempts) {
-        return { status: "attempt-limit" };
-      }
-
       const activeClaim = this.stateDb.raw
         .prepare(
           `SELECT pr_key, status, payload
@@ -5941,6 +5945,14 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         if (activeClaim.status === "dispatching") {
           return { status: "pending" };
         }
+      }
+      // A dispatching claim reserves an attempt until submission returns.
+      // Observe its ownership before reporting a limit that a busy or failed
+      // submission may still refund.
+      if ((incident?.attempt_count ?? 0) >= params.maxAttempts) {
+        return { status: "attempt-limit" };
+      }
+      if (activeClaim) {
         this.stateDb.raw
           .prepare(
             `UPDATE pr_auto_dispatch_claims
@@ -6538,6 +6550,18 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           params.threadId,
           params.fingerprint,
         );
+      if (params.status === "failed") {
+        // Beginning a dispatch reserves an incident attempt. A rejected
+        // submission never started a repair turn, so refund that reservation
+        // together with the shared budget, under the same owner check.
+        this.stateDb.raw
+          .prepare(
+            `UPDATE pr_auto_dispatch_incidents
+             SET attempt_count = MAX(0, attempt_count - 1), updated_at = ?
+             WHERE backend = ? AND thread_id = ? AND pr_key = ?`,
+          )
+          .run(params.now, params.backend, params.threadId, claim.pr_key);
+      }
       return {
         budget: this.toPrAutoDispatchBudgetStatus({
           budget,
@@ -7455,6 +7479,18 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     const normalized = normalizeNavigationBrowseMode(browseMode);
     this.stateDb.setMeta(NAVIGATION_BROWSE_MODE_META_KEY, normalized);
     return normalized;
+  }
+
+  getPinnedGroupCollapsedSync(): boolean {
+    return this.stateDb.getMeta(NAVIGATION_PINNED_GROUP_COLLAPSED_META_KEY) === "1";
+  }
+
+  async setPinnedGroupCollapsed(collapsed: boolean): Promise<boolean> {
+    // A repeated value commits nothing: the budget is one commit per change.
+    if (this.getPinnedGroupCollapsedSync() !== collapsed) {
+      this.stateDb.setMeta(NAVIGATION_PINNED_GROUP_COLLAPSED_META_KEY, collapsed ? "1" : "0");
+    }
+    return collapsed;
   }
 
   async getDirectoryLaunchpad(params: {
@@ -9590,6 +9626,7 @@ export type OverlayStoreLike = Pick<
   forgetThreadArchiveStates?: SqliteOverlayStore["forgetThreadArchiveStates"];
   upsertThreadMessageOrigin?: SqliteOverlayStore["upsertThreadMessageOrigin"];
   readThreadMessageOrigins?: SqliteOverlayStore["readThreadMessageOrigins"];
+  setPinnedGroupCollapsed?: SqliteOverlayStore["setPinnedGroupCollapsed"];
 };
 
 function reliableSubAgentCompletionBoundary(

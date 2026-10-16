@@ -181,14 +181,18 @@ describe("native voice ownership", () => {
     const result = (data: unknown, success = true) => ({ success, contentItems: [{ type: "inputText", text: JSON.stringify(data) }] });
     f.call({ threadId: "other-thread", tool: "steer_thread", response: result({ disposition: "steered" }) });
     expect(f.emit).not.toHaveBeenCalled();
+    const sent = { threadLink: "[Sample target](pwragent://thread/codex/sample)", queueStatus: "queued", instanceId: "sample-peer" };
     f.call({
       threadId: f.request.threadId,
       tool: "send_message_to_thread",
-      response: result({ threadLink: "[Sample target](pwragent://thread/codex/sample)", queueStatus: "queued", instanceId: "sample-peer" }),
+      namespace: "pwragent",
+      arguments: { threadId: "sample", prompt: "Rerun the checks." },
+      response: result(sent),
     });
     expect(f.emit).toHaveBeenCalledWith({
       sessionId: f.request.sessionId, type: "action", tool: "send_message_to_thread", ok: true,
       target: "Sample target", instance: "sample-peer", outcome: "queued",
+      namespace: "pwragent", arguments: { threadId: "sample", prompt: "Rerun the checks." }, output: JSON.stringify(sent),
     });
     await f.manager.stop(1, f.request);
     expect(f.toolCalls.size).toBe(0);
@@ -199,12 +203,53 @@ describe("native voice receipts", () => {
   it("reads disposition and title from PwrAgent tool results and never more than the tool said", () => {
     const response = (text: string, success = true) => ({ success, contentItems: [{ type: "inputText", text }] });
     expect(describeNativeVoiceAction({ threadId: "t", tool: "steer_thread", response: response(JSON.stringify({ disposition: "started" })) }))
-      .toEqual({ tool: "steer_thread", ok: true, outcome: "started" });
+      .toEqual({ tool: "steer_thread", ok: true, outcome: "started", output: "{\"disposition\":\"started\"}" });
     expect(describeNativeVoiceAction({ threadId: "t", tool: "handoff_task", response: response(JSON.stringify({ title: "Sample handoff" })) }))
-      .toEqual({ tool: "handoff_task", ok: true, target: "Sample handoff" });
+      .toEqual({ tool: "handoff_task", ok: true, target: "Sample handoff", output: "{\"title\":\"Sample handoff\"}" });
     expect(describeNativeVoiceAction({ threadId: "t", tool: "stop_thread", response: response("not json", false) }))
-      .toEqual({ tool: "stop_thread", ok: false });
+      .toEqual({ tool: "stop_thread", ok: false, output: "not json" });
     expect(describeNativeVoiceAction({ threadId: "t", tool: "read_thread", response: undefined }))
       .toEqual({ tool: "read_thread", ok: false });
+  });
+});
+
+describe("native voice receipt details", () => {
+  const response = (text: string) => ({ success: true, contentItems: [{ type: "inputText", text }] });
+
+  // The panel expands a receipt into the call it made, so the receipt
+  // carries the arguments and result: read_thread names its thread there.
+  it("carries the call's arguments, from an object or Codex's JSON string", () => {
+    expect(describeNativeVoiceAction({ threadId: "t", tool: "read_thread", arguments: { threadId: "sample" }, response: response("{}") }))
+      .toMatchObject({ arguments: { threadId: "sample" } });
+    expect(describeNativeVoiceAction({ threadId: "t", tool: "read_thread", arguments: "{\"threadId\":\"sample\"}", response: response("{}") }))
+      .toMatchObject({ arguments: { threadId: "sample" } });
+    expect(describeNativeVoiceAction({ threadId: "t", tool: "read_thread", arguments: "not json", response: response("{}") }))
+      .not.toHaveProperty("arguments");
+  });
+
+  // Receipts are memory-only but cross IPC once per call; a large thread
+  // read must not ride along whole, and a cut argument object would misstate
+  // the call, so arguments are kept whole or dropped.
+  it("bounds the result and keeps arguments whole or not at all", () => {
+    const read = describeNativeVoiceAction({ threadId: "t", tool: "read_thread", response: response("x".repeat(60_000)) });
+    expect(read.output?.startsWith("x".repeat(48_000))).toBe(true);
+    expect(read.output).toMatch(/\n… 12,000 more characters$/);
+    expect(describeNativeVoiceAction({ threadId: "t", tool: "handoff_task", arguments: { prompt: "y".repeat(5_000) }, response: response("{}") }))
+      .not.toHaveProperty("arguments");
+  });
+
+  // read_thread returns up to 4,000 characters per message, so a cut would
+  // land mid-JSON and the panel could no longer name the thread it read.
+  it("keeps an over-bound JSON result parseable by dropping its oldest list items", () => {
+    const messages = Array.from({ length: 40 }, (_, index) => ({ role: "assistant", text: `${index}:${"z".repeat(3_000)}` }));
+    const read = describeNativeVoiceAction({
+      threadId: "t", tool: "read_thread",
+      response: response(JSON.stringify({ read: { threadId: "sample", title: "Sample thread", messages } })),
+    });
+    expect(read.output!.length).toBeLessThanOrEqual(48_000);
+    const parsed = JSON.parse(read.output!) as { read: { title: string; messages: Array<{ text: string }> }; receiptOmittedItems: number };
+    expect(parsed.read.title).toBe("Sample thread");
+    expect(parsed.read.messages.at(-1)!.text.startsWith("39:")).toBe(true);
+    expect(parsed.receiptOmittedItems).toBe(40 - parsed.read.messages.length);
   });
 });

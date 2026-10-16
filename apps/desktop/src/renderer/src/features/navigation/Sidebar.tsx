@@ -7,7 +7,8 @@ import {
 } from "../../lib/subthread-launchpads";
 import { readNavigationPresentationOrder } from "./navigation-presentation-order";
 import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationWindow";
-import { navigationPageErrorCopy, navigationThreadSelectionKey } from "../../lib/navigation-query-state";
+import { isNavigationPeerUnavailable, navigationThreadSelectionKey } from "../../lib/navigation-query-state";
+import { PINNED_GROUP_RESOURCE_ID, lensHasPinnedGroup } from "../../lib/navigation-window-demand";
 import { useEventCallback } from "../../lib/useEventCallback";
 import { useMousePress } from "../../lib/useMousePress";
 import { useLensScrollRestoration } from "../../lib/useLensScrollRestoration";
@@ -125,6 +126,7 @@ import {
   nextThreadAfterArchive,
   readVisibleThreadRowKeys,
   resolveThreadHotkeyTargets,
+  threadHotkeyFocusContext,
   threadSupportsRename,
   type RenamingThreadRow,
 } from "./thread-action-hotkeys";
@@ -216,6 +218,14 @@ type SidebarProps = {
   inert?: boolean;
   backends: BackendSummary[];
   browseMode: BrowseMode;
+  /**
+   * `general.pinned_threads_on_top`: Updated and Created gather every pin
+   * into a Pinned group. Defaults on, as the setting does.
+   */
+  pinnedThreadsOnTop?: boolean;
+  /** Whether the Pinned group is closed. Persisted per profile. */
+  pinnedGroupCollapsed?: boolean;
+  onSetPinnedGroupCollapsed?: (collapsed: boolean) => void;
   /**
    * The owner index holds no threads, so every lens but Directories is empty.
    * Those tabs go `aria-disabled` while Directories is shown in their place.
@@ -497,6 +507,17 @@ const browseModeLabels = {
   directories: "Directories",
 } satisfies Record<BrowseMode, string>;
 
+// The label over a ⌘K-jumped thread's visiting row (see RecentsList). Updated
+// and Created hold every thread but load a page at a time, so a thread with
+// no row there is further down, not absent.
+const visitingThreadLabels = {
+  attention: "Not in Attention",
+  drafts: "Not in Drafts",
+  inbox: "Further down",
+  recents: "Further down",
+  directories: undefined,
+} satisfies Record<BrowseMode, string | undefined>;
+
 // Attention is absent: it renders its two live indicators instead of an icon.
 // Typed as `ComponentType`, not `(props) => ReactElement`: every icon is a
 // `memo(...)` exotic component, which is a valid element type but not a
@@ -543,6 +564,16 @@ function formatDraftThreadCount(count: number): string {
 // The line a thread lens's tooltip gains while no threads exist to show.
 const NO_THREADS_TOOLTIP_LINE = "No threads yet";
 
+/**
+ * The lenses that draw pin order: each project's pins in Directories, and the
+ * Pinned group in Updated and Created while pinned threads sit on top. There
+ * a pin moves a row and Move Up/Down, Keep at Top and ⌘⇧↑/↓ mean something;
+ * with the setting off, both are pure time sorts.
+ */
+function lensShowsPinOrder(mode: BrowseMode, pinnedThreadsOnTop: boolean): boolean {
+  return mode === "directories" || lensHasPinnedGroup(mode, pinnedThreadsOnTop);
+}
+
 function formatThreadCount(count: number): string {
   return `${count} ${count === 1 ? "Thread" : "Threads"}`;
 }
@@ -559,6 +590,8 @@ function uniqueContextMenuValues(
 
 export function Sidebar(props: SidebarProps) {
   useNativeDragInteractionGuard();
+  const pinnedThreadsOnTop = props.pinnedThreadsOnTop ?? true;
+  const pinnedGroupShown = lensHasPinnedGroup(props.browseMode, pinnedThreadsOnTop);
   const federationLabel = readRendererFederationLabel();
   const federationTarget = readRendererFederationTarget();
   const contextMenuRef = useRef<HTMLDivElement>(null);
@@ -724,7 +757,10 @@ export function Sidebar(props: SidebarProps) {
     })
     : undefined;
   const lensResources = [...props.pagedNavigation?.resources.values() ?? []]
-    .filter((resource) => props.browseMode === "drafts" ? resource.id.startsWith("drafts:") : resource.id === "lens");
+    .filter((resource) => props.browseMode === "drafts" ? resource.id.startsWith("drafts:")
+      : resource.id === "lens" || (pinnedGroupShown && resource.id === PINNED_GROUP_RESOURCE_ID));
+  // The Pinned group pages on its own and renders its own continuation.
+  const listResources = lensResources.filter((resource) => resource.id !== PINNED_GROUP_RESOURCE_ID);
   const directoryIndexResource = props.pagedNavigation?.resources.get("directory-index");
   const rowsByKey = useMemo(() => new Map(props.threads.map((thread) => [threadSummaryIdentityKey(thread), thread])), [props.threads]);
   const visibleThreads = [...new Map(lensResources.flatMap((resource) => resource.state.page?.entries ?? [])
@@ -744,7 +780,10 @@ export function Sidebar(props: SidebarProps) {
   const hoverStableSnapshot = useHoverStableSnapshot({
     hydrateFrozenValue: (frozen, latest) =>
       hydrateHoverStable(frozen, latest, {
-        refreshThreadPinRanks: props.browseMode !== "directories",
+        // A pin moves a row in Directories and, with a Pinned group, in
+        // Updated and Created (into or out of the group), so none of them
+        // may take a new rank under the pointer.
+        refreshThreadPinRanks: !lensShowsPinOrder(props.browseMode, pinnedThreadsOnTop),
         removeMissingThreads: props.browseMode === "attention",
       }),
     scope: props.browseMode,
@@ -788,6 +827,21 @@ export function Sidebar(props: SidebarProps) {
   const canStartFromList = !props.loading
     && props.backends.some((backend) => backend.available)
     && Boolean(onCreateThreadWithoutDirectory || onAddProjectDirectory);
+  const lensEmptyMessage = (
+    <p className="sidebar-empty">
+      {props.browseMode === "attention"
+        ? "Nothing running, nothing to review."
+        : props.browseMode === "drafts"
+          // "replies", not "drafts": launchpad (new-thread) composer
+          // text is equally unsent but belongs to a directory rather
+          // than a thread, so this lens cannot show it and must not
+          // claim there is nothing to find.
+          ? props.unassignedThreadDraftCount
+            ? "Older drafts are available. Use Recover Draft in a composer to choose one."
+            : "No unsent replies."
+          : "No threads yet."}
+    </p>
+  );
   // Handed to whichever list renders, which places it after its last row,
   // inside the scrolling lane; an empty lens shows it under its empty line.
   const startActions = canStartFromList ? (
@@ -802,6 +856,38 @@ export function Sidebar(props: SidebarProps) {
         ? () => void onAddProjectDirectory()
         : undefined}
     />
+  ) : null;
+  // The lens's own continuation, handed to the list beside `startActions` so
+  // it sits right under the last row, inside the scrolling lane. It used to
+  // render after the list as a sibling in the scroll region. The lane is
+  // `flex: 1`, so that put it at the rail's bottom edge, below the start
+  // actions' hairline, which already reads as the end of the list. A short
+  // list left hundreds of pixels of empty rail between the last row and the
+  // control, and a long one parked it under the scroller like a status line.
+  const lensPager = props.browseMode === "directories"
+    // `loadMore` has no reentrancy guard of its own — it awaits any
+    // pending read and then unconditionally starts another — so the
+    // in-flight guard is the only thing standing between a double
+    // click and two page advances. This was the one load-more control
+    // without it.
+    ? directoryIndexResource?.state.page?.nextCursor ? (
+      <SidebarShowMore busy={directoryIndexResource.loading} label="Load more directories" onClick={() => void props.pagedNavigation?.loadMore("directory-index")} />
+    ) : null
+    : listResources.filter((resource) => !isNavigationPeerUnavailable(resource.state.error)).map((resource) => (
+      resource.state.rebaselineRequired ? (
+        <SidebarShowMore key={resource.id} kind="reload" label="Reload this lens" onClick={() => void props.pagedNavigation?.restart(resource.id)} />
+      ) : resource.state.page?.nextCursor ? (
+        <SidebarShowMore key={resource.id} busy={resource.loading} label="Load more threads" onClick={() => void props.pagedNavigation?.loadMore(resource.id)} />
+      ) : null
+    ));
+  // Shown in place of the list, which then takes no footer.
+  const listStatus = props.loading ? (
+    <p className="sidebar-empty">Loading threads…</p>
+  ) : props.providerRefresh?.state === "checking"
+    && renderedThreads.length === 0 ? (
+    <p className="sidebar-empty">Checking providers…</p>
+  ) : props.error && !props.loaded ? (
+    <p className="sidebar-error">{props.error}</p>
   ) : null;
   const lensScroll = useLensScrollRestoration(
     JSON.stringify([federationTarget, props.browseMode]),
@@ -841,17 +927,25 @@ export function Sidebar(props: SidebarProps) {
     revealHoverStableSnapshot,
     props.onSetSubthreadsCollapsed,
   );
-  // Directories is the only lens whose pin action reorders the list, so it is
-  // the only one that has to reveal the result. Elsewhere pins render in
-  // place and the freeze must survive the write. One stable wrapper spanning
-  // both, rather than a lens-dependent identity: a row's `memo` cannot bail
-  // out past a handler that changes when the lens does.
+  // Directories and a lens with a Pinned group are the ones whose pin action
+  // moves a row (into or out of the group), so they have to reveal the
+  // result. Elsewhere pins render in place and the freeze must survive the
+  // write. One stable wrapper spanning both, rather than a lens-dependent
+  // identity: a row's `memo` cannot bail out past a handler that changes
+  // when the lens does.
+  //
+  // A pin also opens a closed Pinned group: selection follows the thread
+  // into the group, and a closed group would hide the selected row.
   const setThreadPin = useStableRowCallback(
     props.onSetThreadPin
-      ? (thread: NavigationThreadSummary, pinned: boolean): Promise<void> =>
-          props.browseMode === "directories"
+      ? (thread: NavigationThreadSummary, pinned: boolean): Promise<void> => {
+          if (pinned && pinnedGroupShown && props.pinnedGroupCollapsed) {
+            props.onSetPinnedGroupCollapsed?.(false);
+          }
+          return lensShowsPinOrder(props.browseMode, pinnedThreadsOnTop)
             ? revealHoverStableSnapshot(() => props.onSetThreadPin!(thread, pinned))
-            : props.onSetThreadPin!(thread, pinned)
+            : props.onSetThreadPin!(thread, pinned);
+        }
       : undefined,
   );
   const releasedUpdateSubthreadOrder = useRevealListChange(
@@ -916,7 +1010,30 @@ export function Sidebar(props: SidebarProps) {
     [navigationThreads],
   );
   const setSubthreadsCollapsed = props.onSetSubthreadsCollapsed;
+  const pinnedGroupCollapsed = Boolean(props.pinnedGroupCollapsed);
+  const setPinnedGroupCollapsed = props.onSetPinnedGroupCollapsed;
   const browseMode = props.browseMode;
+
+  // The thread a ⌘K pick landed on, for as long as it stays selected. A jump
+  // never changes the lens: when the thread is not among the lens's rows,
+  // RecentsList gives it a visiting row instead (Directories needs none — its
+  // reveal opens the folder that holds the thread). Only jumps do this. A
+  // thread that leaves Attention while it is open (a reply) still leaves.
+  const [jumpedThread, setJumpedThread] = useState<NavigationThreadSummary>();
+  const jumpedThreadKey = jumpedThread ? threadSummaryIdentityKey(jumpedThread) : undefined;
+  // The jump ends when the selection moves anywhere but the jumped thread. A
+  // remote pick selects only after its pin round-trips, so the selection
+  // standing still meanwhile does not end it; one that never lands ends at
+  // the next selection, as a repeat jump to the same thread does.
+  const jumpSelectionRef = useRef(selectedItemKey);
+  useEffect(() => {
+    if (jumpSelectionRef.current === selectedItemKey) return;
+    jumpSelectionRef.current = selectedItemKey;
+    if (jumpedThreadKey && selectedItemKey !== jumpedThreadKey) setJumpedThread(undefined);
+  }, [jumpedThreadKey, selectedItemKey]);
+  const visitingThread = browseMode !== "directories" && jumpedThreadKey && jumpedThreadKey === selectedItemKey
+    ? navigationThreadByKey.get(jumpedThreadKey) ?? jumpedThread
+    : undefined;
 
   // A direct navigation change (history, search, a thread link, etc.) starts a
   // fresh selection. Modified clicks deliberately do not navigate, so they can
@@ -1136,12 +1253,20 @@ export function Sidebar(props: SidebarProps) {
       }
       current = parent;
     }
+    // A pinned root renders only in the Pinned group, so a closed group
+    // opens to reveal it, as a project opens to reveal its thread.
+    if (pinnedGroupShown && pinnedGroupCollapsed && isPinnedThread(current)) {
+      setPinnedGroupCollapsed?.(false);
+    }
   }, [
     browseMode,
     navigationThreadByKey,
+    pinnedGroupCollapsed,
+    pinnedGroupShown,
     revealSelectedThreadRequest,
     releaseHoverStableSnapshot,
     selectedItemKey,
+    setPinnedGroupCollapsed,
     setSubthreadsCollapsed,
   ]);
 
@@ -1733,6 +1858,9 @@ export function Sidebar(props: SidebarProps) {
         ...(directory.repositoryKey !== undefined
           ? { repositoryKey: directory.repositoryKey }
           : {}),
+        ...(directory.repositoryKeys !== undefined
+          ? { repositoryKeys: directory.repositoryKeys }
+          : {}),
       },
     });
   };
@@ -1898,8 +2026,13 @@ export function Sidebar(props: SidebarProps) {
     threads: NavigationThreadSummary[],
   ): void => {
     setContextMenu(undefined);
-    if (props.browseMode === "directories") {
+    if (lensShowsPinOrder(props.browseMode, pinnedThreadsOnTop)) {
       hoverStableSnapshot.release();
+    }
+    // Selection follows a pinned thread into the group; a closed group
+    // would hide it.
+    if (pinnedGroupShown && props.pinnedGroupCollapsed) {
+      props.onSetPinnedGroupCollapsed?.(false);
     }
     void (async () => {
       for (const thread of threads) {
@@ -1912,7 +2045,7 @@ export function Sidebar(props: SidebarProps) {
     threads: NavigationThreadSummary[],
   ): void => {
     setContextMenu(undefined);
-    if (props.browseMode === "directories") {
+    if (lensShowsPinOrder(props.browseMode, pinnedThreadsOnTop)) {
       hoverStableSnapshot.release();
     }
     void Promise.all(
@@ -2104,8 +2237,23 @@ export function Sidebar(props: SidebarProps) {
   });
 
   useEffect(() => {
+    const captureComposerArchive = (event: KeyboardEvent): void => {
+      // ProseMirror consumes native Backspace at a block boundary before the
+      // window's bubble listener sees it. Claim only the permitted archive
+      // chord in the composer, through the same action/lifecycle owner.
+      if (threadHotkeyFocusContext(event) !== "field"
+        || matchThreadHotkey(event) !== "threads.archive") return;
+      runThreadHotkey(event);
+      // Keep the editor from deleting draft content and the bubble listener
+      // from dispatching a second archive. Unhandled chords stay with editing.
+      if (event.defaultPrevented) event.stopPropagation();
+    };
+    window.addEventListener("keydown", captureComposerArchive, true);
     window.addEventListener("keydown", runThreadHotkey);
-    return () => window.removeEventListener("keydown", runThreadHotkey);
+    return () => {
+      window.removeEventListener("keydown", captureComposerArchive, true);
+      window.removeEventListener("keydown", runThreadHotkey);
+    };
   }, [runThreadHotkey]);
 
   const contextMenuThreads = contextMenu?.threads ?? [];
@@ -2486,10 +2634,12 @@ export function Sidebar(props: SidebarProps) {
    * Move Up / Move Down show as menu items only when the target
    * thread is pinned (reorder only applies inside the pinned
    * section), the reorder IPC is wired, AND the active lens actually
-   * renders a pinned section. Updated and Created are pure sort
-   * orders, so a reorder there would move a thread within a list whose
+   * renders a pinned section: Directories, or the Pinned group in Updated
+   * and Created. With pinned threads kept in place, those two are pure
+   * sorts, so a reorder there would move a thread within a list whose
    * order is invisible — the row would not budge and the menu's
-   * Move Up / Move Down hint would advertise a shortcut those rows don't carry.
+   * Move Up / Move Down hint would advertise a shortcut those rows don't
+   * carry. Rows below the group are unpinned, so they get none.
    * Each item is then disabled when the thread is at the top / bottom
    * of the global pinned section. We render the items even when
    * disabled so the menu layout doesn't jump as the user walks the
@@ -2497,7 +2647,7 @@ export function Sidebar(props: SidebarProps) {
    */
   const contextMenuShowMoveItems = Boolean(
     !contextMenuIsBulk &&
-      browseMode === "directories" &&
+      lensShowsPinOrder(browseMode, pinnedThreadsOnTop) &&
       contextMenuPinThread?.pinnedRank &&
       props.onReorderThreadPins,
   );
@@ -2521,7 +2671,7 @@ export function Sidebar(props: SidebarProps) {
   const contextMenuCanKeepAtTop = Boolean(
     contextMenuHasPinAction
       && !contextMenuIsBulk
-      && browseMode === "directories"
+      && lensShowsPinOrder(browseMode, pinnedThreadsOnTop)
       && props.onReorderThreadPins,
   );
   const contextMenuHasCreationActions =
@@ -2653,8 +2803,14 @@ export function Sidebar(props: SidebarProps) {
             if (props.onJumpToProject) props.onJumpToProject(directory);
             else void props.onOpenLaunchpad(directory);
           }}
-          onJumpToThread={props.onJumpToThread ?? props.onSelectThread}
-          onJumpToRemoteThread={props.onJumpToRemoteThread}
+          onJumpToThread={(thread) => {
+            setJumpedThread(thread);
+            (props.onJumpToThread ?? props.onSelectThread)(thread);
+          }}
+          onJumpToRemoteThread={props.onJumpToRemoteThread ? (thread) => {
+            setJumpedThread(thread);
+            props.onJumpToRemoteThread?.(thread);
+          } : undefined}
           onClose={() => props.onThreadJumpOpenChange?.(false)}
         />
       ) : null}
@@ -2908,19 +3064,22 @@ export function Sidebar(props: SidebarProps) {
           {props.browseMode === "drafts" && renderedThreads.length > 0 && Boolean(props.unassignedThreadDraftCount) ? (
             <p className="sidebar-empty">Older drafts are also available. Use Recover Draft in a composer to choose one.</p>
           ) : null}
-          {props.loading ? (
-            <p className="sidebar-empty">Loading threads…</p>
-          ) : props.providerRefresh?.state === "checking"
-            && renderedThreads.length === 0 ? (
-            <p className="sidebar-empty">Checking providers…</p>
-          ) : props.error && !props.loaded ? (
-            <p className="sidebar-error">{props.error}</p>
+          {listStatus ? (
+            <>
+              {listStatus}
+              {lensPager}
+            </>
           ) : props.browseMode === "directories" ? (
             <DirectoriesList
               startingThreads={startingThreads}
               onSelectStartingThread={props.onSelectPendingLaunchpad}
               emptyLabel={props.threadLensesEmpty ? "No threads yet." : undefined}
-              footer={startActions}
+              footer={(
+                <>
+                  {lensPager}
+                  {startActions}
+                </>
+              )}
               onOpenSubthreadDraftContextMenu={openSubthreadDraftMenu}
               projectReveal={projectReveal}
               onProjectRevealComplete={() => setProjectReveal(undefined)}
@@ -2991,31 +3150,29 @@ export function Sidebar(props: SidebarProps) {
               onUnbindMessagingBinding={forwardedUnbindMessagingBinding}
             />
           ) : (
-            renderedThreads.length === 0 && startingThreads.length === 0 ? (
+            renderedThreads.length === 0 && startingThreads.length === 0 && !visitingThread ? (
               <>
-                <p className="sidebar-empty">
-                  {props.browseMode === "attention"
-                    ? "Nothing running, nothing to review."
-                    : props.browseMode === "drafts"
-                      // "replies", not "drafts": launchpad (new-thread) composer
-                      // text is equally unsent but belongs to a directory rather
-                      // than a thread, so this lens cannot show it and must not
-                      // claim there is nothing to find.
-                      ? props.unassignedThreadDraftCount
-                        ? "Older drafts are available. Use Recover Draft in a composer to choose one."
-                        : "No unsent replies."
-                      : "No threads yet."}
-                </p>
+                {lensEmptyMessage}
+                {lensPager}
                 {startActions}
               </>
             ) : (
               <RecentsList
+                pager={lensPager}
                 footer={startActions}
+                pinnedResourceId={pinnedGroupShown ? PINNED_GROUP_RESOURCE_ID : undefined}
+                pinnedGroupCollapsed={props.pinnedGroupCollapsed}
+                onSetPinnedGroupCollapsed={props.onSetPinnedGroupCollapsed}
+                onReorderThreadPins={pinnedGroupShown
+                  ? hoverReleasedListHandlers.reorderThreadPins : undefined}
+                emptyMessage={lensEmptyMessage}
+                visitingThread={visitingThread}
+                visitingLabel={visitingThreadLabels[props.browseMode]}
                 startingThreads={startingThreads}
                 onSelectStartingThread={props.onSelectPendingLaunchpad}
                 onOpenSubthreadDraftContextMenu={openSubthreadDraftMenu}
                 pagedNavigation={props.pagedNavigation}
-                resourceIds={lensResources.map((resource) => resource.id)}
+                resourceIds={listResources.map((resource) => resource.id)}
                 presentationOrder={hoverStableSnapshot.value.order}
                 loadedThreads={presentedThreads}
                 approvalRequestThreadKeys={props.approvalRequestThreadKeys}
@@ -3055,25 +3212,6 @@ export function Sidebar(props: SidebarProps) {
               />
             )
           )}
-          {props.pagedNavigation?.admissionError ? <p className="sidebar-error">{props.pagedNavigation.admissionError}</p> : null}
-          {props.browseMode !== "directories" ? lensResources.map((resource) => (
-            <div key={resource.id}>
-              {resource.state.error ? <p className="sidebar-error">{navigationPageErrorCopy(resource.state.error)}</p> : null}
-              {resource.state.rebaselineRequired ? (
-                <SidebarShowMore label="Reload this lens" onClick={() => void props.pagedNavigation?.restart(resource.id)} />
-              ) : resource.state.page?.nextCursor ? (
-                <SidebarShowMore busy={resource.loading} label="Load more threads" onClick={() => void props.pagedNavigation?.loadMore(resource.id)} />
-              ) : null}
-            </div>
-          )) : null}
-          {props.browseMode === "directories" && directoryIndexResource?.state.page?.nextCursor ? (
-            // `loadMore` has no reentrancy guard of its own — it awaits any
-            // pending read and then unconditionally starts another — so the
-            // in-flight guard is the only thing standing between a double
-            // click and two page advances. This was the one load-more control
-            // without it.
-            <SidebarShowMore busy={directoryIndexResource.loading} label="Load more directories" onClick={() => void props.pagedNavigation?.loadMore("directory-index")} />
-          ) : null}
         </div>
       </section>
 

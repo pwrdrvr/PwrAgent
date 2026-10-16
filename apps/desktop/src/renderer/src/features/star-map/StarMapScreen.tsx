@@ -1318,8 +1318,9 @@ export function StarMapScreen(props: StarMapScreenProps) {
     localInstanceId, descriptors: projectDescriptorsByInstance, filters: filterSelection,
   });
   useEffect(() => {
-    const pageError = [...projectPages.state.resources.values()].find((resource) => resource.state.error)?.state.error;
-    const error = projectPages.state.admissionError ?? (pageError ? navigationPageErrorCopy(pageError) : undefined);
+    const pageError = [...projectPages.state.resources.values()]
+      .map((resource) => navigationPageErrorCopy(resource.state.error)).find(Boolean);
+    const error = projectPages.state.admissionError ?? pageError;
     if (error) setCardError(error);
   }, [projectPages.state]);
   const projectThreadsByInstance = useMemo(() => {

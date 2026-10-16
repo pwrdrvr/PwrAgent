@@ -1,5 +1,34 @@
 # Changelog
 
+## v1.2.1 - 2026-10-13
+
+- Voice Activity - Group consecutive tool calls into compact, expandable rows, with clearer thread labels and inspectable arguments and results.
+- Tool Details - Expand dynamic tool calls in regular transcripts even when they have no title, including replayed history.
+- Thread Navigation - Make "Load more threads" easier to find with a full-width button directly below the thread rows.
+
+## v1.2.0 - 2026-10-12
+
+- Thread Organization - Actionable to-dos with project assignments, a unified "Waiting on You" view for approvals and questions, and thread locks for safer handoffs.
+- Keyboard and Navigation - Configurable shortcuts, inline renaming, archive undo, cross-project pinned groups, and project-scoped quick navigation.
+- Director Voice - Optional camera cues complement voice control with presence and gesture detection. Requires a local decision model; gestures never approve actions.
+- Federated Work - More reliable conversation transfers, branch selection, project moves, remote file previews, and Cloudflare sign-in renewal. Workspace archives respect the receiving machine's permissions while keeping scripts executable.
+- Usage and Cost - Account-filtered usage across machines and profiles, interactive spending breakdowns, and combined totals for threads and their sub-threads.
+- Files and Images - In-app previews for structured data and logs, clickable filenames in transcripts, and synchronized before/after image comparisons.
+- Messaging - Richer Telegram replies with tables, formulas, and mixed media, cleaner private-agent delivery, and correctly ordered delivery receipts.
+- Appearance - Independent light and dark themes, automatic OS switching, and theme-matched macOS Dock icons.
+- Agent Controls - Separate managed Codex Latest/Prerelease tracks, conversation-scoped MCP approvals, and persistent output and Stop controls for running actions. Pending MCP prompts recover without reopening the thread or losing questionnaire answers.
+- Performance and Updates - Less navigation and Star Map churn, paced archive cleanup without false blocks from unrelated metadata refreshes, improved recovery, Linux package updates, and replacement of downloaded updates when a newer release arrives.
+
+## v1.2.0-prerelease.5 - 2026-10-11
+
+- Keyboard Shortcuts - Customize thread-action shortcuts in Settings. Rename threads inline, and undo local thread archiving without losing your place in the sidebar.
+- To-dos - Assign or change a card's target project directly from the card, making it clear where its actions will run.
+- File Previews - Existing filenames in inline code become preview or editor links, including remote files when the owning instance permits access.
+- Federation and Worktrees - Copied threads appear immediately in their destination project and retain their source branch when available. Project moves preserve worktree isolation and detach threads from their previous group.
+- Archive Cleanup - Fix worktrees being left behind after archiving persisted threads, while protecting shared and externally owned checkouts.
+- Running Actions - Keep logs and Stop controls available when changing or clearing an environment, rather than losing visibility into processes still running.
+- Messaging and Grok - Keep delivery receipts in their correct transcript position. Unsupported Grok builds now queue follow-ups normally instead of attempting steering and failing.
+
 ## v1.2.0-prerelease.4 - 2026-10-09
 
 - MCP Approvals - Allow a tool once or for the conversation, reducing repeated prompts while keeping permission scoped to that connection and tool.

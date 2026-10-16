@@ -21,7 +21,16 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import { afterAll, describe, expect, it, onTestFinished, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import {
   applyNavigationLaunchpadProviderSettingsPatch,
   buildFederatedThreadRef,
@@ -1950,6 +1959,7 @@ class MockBackendClient {
       invalidIdRecoveryBlockingTurns?: Array<{ threadId: string; turnId?: string }>;
       invalidIdRecoveryWaitsForAbort?: boolean;
       steerTurnError?: Error;
+      interruptEndsTurn?: boolean;
       setThreadPermissionsError?: Error;
       setThreadPermissionsDelay?: Promise<unknown>;
       startReviewResult?: {
@@ -2365,6 +2375,20 @@ class MockBackendClient {
   }): Promise<{ threadId: string; turnId: string }> {
     this.interruptTurnCallCount += 1;
     this.lastInterruptTurnParams = params;
+    // Codex answers turn/interrupt by ending the turn with status
+    // interrupted. Without that answer, close() waits out the whole
+    // shutdown-stop deadline for each turn a test leaves running. Tests that
+    // script their own terminal after the interrupt leave this off.
+    if (this.options.interruptEndsTurn) {
+      await this.emit({
+        method: "turn/completed",
+        params: {
+          threadId: params.threadId,
+          turnId: params.turnId,
+          turn: { id: params.turnId, status: "interrupted", output: [] },
+        },
+      } as never);
+    }
     return params;
   }
 
@@ -2845,7 +2869,9 @@ function createKimiAcpRegistry(options?: {
     ensureSession: vi.fn(async () => undefined),
     loadSession: vi.fn(async (): Promise<AppServerThreadReplay> => replay),
     refreshSession: vi.fn(async () => undefined),
-    cancelSession: vi.fn(),
+    cancelSession: vi.fn(async (sessionId: string) => {
+      answerAcpSessionCancel(registry, acpBackendId, sessionId);
+    }),
     readReplay: vi.fn((): AppServerThreadReplay => replay),
     setRuntimeOption: vi.fn(async (params: {
       sessionId: string;
@@ -2975,6 +3001,48 @@ async function callRegistryMcpTool(params: {
   });
 }
 
+/**
+ * Answer session/cancel the way an ACP agent does: the agent settles the
+ * session's running prompt with stopReason cancelled, which the adapter
+ * reports as turn/cancelled after the cancel notification has gone out.
+ * Without that answer, close() waits out the whole shutdown-stop deadline
+ * for each turn a test leaves running.
+ */
+function answerAcpSessionCancel(
+  registry: DesktopBackendRegistry,
+  backend: AcpBackendId,
+  sessionId: string,
+): void {
+  const internal = registry as unknown as {
+    activeTurnKeys: ReadonlySet<string>;
+    emit(event: AgentEvent): Promise<void>;
+  };
+  const prefix = `${backend}:${sessionId}:`;
+  const turnIds = [...internal.activeTurnKeys].flatMap((key) => {
+    const turnId = key.slice(prefix.length);
+    // Any other suffix belongs to a longer session id, such as a helper's.
+    return key.startsWith(prefix)
+      && (!turnId.includes(":") || turnId.startsWith("pending:"))
+      ? [turnId]
+      : [];
+  });
+  void Promise.resolve().then(async () => {
+    for (const turnId of turnIds) {
+      await internal.emit({
+        backend,
+        notification: {
+          method: "turn/cancelled",
+          params: {
+            threadId: sessionId,
+            turnId,
+            turn: { id: turnId, status: "cancelled", completedAt: Date.now() },
+          },
+        },
+      });
+    }
+  });
+}
+
 async function emitCompletedTurn(
   registry: DesktopBackendRegistry,
   backend: AppServerBackendKind,
@@ -3083,6 +3151,22 @@ function rememberCollapsedDirectoryWithPinnedThread(params: {
   }));
 }
 
+// close() asks each running turn to stop and waits up to 2s for its terminal.
+// A fake that accepts the stop and never ends the turn costs every test that
+// leaves one running the whole deadline, which is how this file once grew
+// from 10s to 106s on CI. Answer the stop the way the backend does
+// (`answerAcpSessionCancel`, `interruptEndsTurn`).
+beforeEach(() => {
+  mainLoggerMock.warn.mockClear();
+});
+afterEach(() => {
+  expect(
+    mainLoggerMock.warn.mock.calls.filter(([message]) =>
+      message === "running turns still unanswered at the shutdown deadline"
+    ),
+  ).toEqual([]);
+});
+
 describe("DesktopBackendRegistry", () => {
   it("exports the authoritative handoff workspace while provider cwd synchronization is pending", async () => {
     const thread: AppServerThreadSummary = {
@@ -3170,6 +3254,7 @@ describe("DesktopBackendRegistry", () => {
     await expect(registry.withThreadHandoff(params.threadId, async () => {
       await expect(registry.submitTurn(params)).rejects.toThrow("being handed off");
       await expect(registry.submitTurnIfIdle(params)).rejects.toThrow("being handed off");
+      await expect(registry.submitThreadReply(params)).rejects.toThrow("being handed off");
       await expect(registry.submitHeldTurn({ ...params, queueEntryId: "held", holdReason: "manual" })).rejects.toThrow("being handed off");
       await expect(registry.startTurn(params)).rejects.toThrow("being handed off");
       await expect(registry.withThreadHandoff(params.threadId, async () => {})).rejects.toThrow("being handed off");
@@ -3186,6 +3271,7 @@ describe("DesktopBackendRegistry", () => {
     const refusal = "This thread is locked: Worktree handed to the repair thread. Unlock it before starting a turn.";
 
     await expect(registry.submitTurn(params)).rejects.toThrow(refusal);
+    await expect(registry.submitThreadReply(params)).rejects.toThrow(refusal);
     // Automations see a lock as busy, so a PR watch waits without spending an attempt.
     await expect(registry.submitTurnIfIdle(params)).resolves.toEqual({ status: "busy" });
     await expect(registry.startTurn(params)).rejects.toThrow(refusal);
@@ -3196,6 +3282,67 @@ describe("DesktopBackendRegistry", () => {
 
     await registry.setThreadLock({ ...params, locked: false }, { source: "operator" });
     await expect(registry.submitTurnIfIdle(params)).resolves.toMatchObject({ status: "started" });
+  });
+
+  it("starts an off-screen reply on an idle thread and steers one into a running turn", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "turn/steer"] },
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    onTestFinished(() => registry.close());
+    const idle = { backend: "codex" as const, threadId: "answered-idle" };
+    await expect(registry.submitThreadReply({
+      ...idle, input: [{ type: "text", text: "Use the staging bucket" }],
+    })).resolves.toMatchObject({ status: "started", entry: { origin: "manual", delivery: "queued-steer" } });
+
+    const running = { backend: "codex" as const, threadId: "answered-running" };
+    const turn = await registry.startTurn({ ...running, input: [{ type: "text", text: "Export" }] });
+    const steer = vi.spyOn(registry, "steerTurn");
+    const reply = [{ type: "text" as const, text: "Keep last week's export" }];
+    await expect(registry.submitThreadReply({ ...running, input: reply }))
+      .resolves.toMatchObject({ status: "queued" });
+    await vi.waitFor(() => expect(codexClient.steerTurnCallCount).toBe(1));
+    expect(steer).toHaveBeenCalledWith(
+      expect.objectContaining({ ...running, expectedTurnId: turn.turnId, input: reply }),
+      undefined,
+    );
+    expect(registry.getQueuedTurnsForThread(running)).toEqual([]);
+  });
+
+  it("returns busy when a turn becomes active after immediate admission", async () => {
+    const codexClient = new MockBackendClient({});
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    onTestFinished(() => registry.close());
+    const startTurn = vi.spyOn(codexClient, "startTurn");
+    const params = { backend: "codex" as const, threadId: "thread-race", input: [{ type: "text" as const, text: "Repair PR" }] };
+    // Turn preparation yields after the idle check. A backend notification
+    // from another instance can claim the thread during that window.
+    vi.spyOn(registry, "applyThreadModelMigration").mockImplementationOnce(async ({ backend, threadId }) => {
+      await registry.publishLocalEvent({ backend, notification: { method: "turn/started", params: {
+        threadId, turnId: "existing-turn", turn: { id: "existing-turn" },
+      } } });
+      return { backend, threadId, status: "none" };
+    });
+
+    await expect(registry.submitTurnIfIdle(params)).resolves.toEqual({ status: "busy" });
+    expect(startTurn).not.toHaveBeenCalled();
+    expect(registry.getQueuedTurnsForThread(params)).toEqual([]);
+    await registry.publishLocalEvent({ backend: "codex", notification: { method: "turn/completed", params: {
+      threadId: params.threadId, turnId: "existing-turn", turn: { id: "existing-turn", status: "completed", output: [] },
+    } } });
+    await expect(registry.submitTurnIfIdle(params)).resolves.toMatchObject({ status: "started" });
+    expect(startTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves backend submission errors from immediate admission", async () => {
+    const error = new Error("Backend disconnected before turn start");
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ startTurnError: error }), overlayStore: createOverlayStoreMock(),
+    });
+    onTestFinished(() => registry.close());
+    await expect(registry.submitTurnIfIdle({
+      backend: "codex", threadId: "thread-error", input: [{ type: "text", text: "Repair PR" }],
+    })).rejects.toThrow("Backend disconnected before turn start");
   });
 
   it("holds a delivery on a locked thread and starts it once unlocked", async () => {
@@ -11648,7 +11795,9 @@ describe("DesktopBackendRegistry", () => {
       ensureSession: vi.fn(async () => undefined),
       loadSession: vi.fn(),
       refreshSession: vi.fn(async () => undefined),
-      cancelSession: vi.fn(),
+      cancelSession: vi.fn(async (sessionId: string) => {
+        answerAcpSessionCancel(registry, acpBackendId, sessionId);
+      }),
       readReplay: vi.fn((): AppServerThreadReplay => ({
         entries: [],
         messages: [],
@@ -15310,7 +15459,9 @@ script = "echo setup"
       ensureSession: vi.fn(async () => await ensureSession.promise),
       loadSession: vi.fn(),
       refreshSession: vi.fn(async () => undefined),
-      cancelSession: vi.fn(),
+      cancelSession: vi.fn(async (sessionId: string) => {
+        answerAcpSessionCancel(registry, acpBackendId, sessionId);
+      }),
       readReplay: vi.fn((): AppServerThreadReplay => ({
         entries: [],
         messages: [],
@@ -28471,7 +28622,9 @@ command = "pnpm dev"
       ensureSession: vi.fn(async () => undefined),
       loadSession: vi.fn(),
       refreshSession: vi.fn(async () => undefined),
-      cancelSession: vi.fn(),
+      cancelSession: vi.fn(async (sessionId: string) => {
+        answerAcpSessionCancel(registry, acpBackendId, sessionId);
+      }),
       startPrompt: vi.fn(() => ({
         sessionId: "grok-session-1",
         turnId: "turn-1",
@@ -35866,6 +36019,76 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("redisplays the remaining MCP request after answering a concurrent request", async () => {
+    const codexClient = new MockBackendClient({ initializeResult: { methods: ["turn/start"] } });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => { events.push(event); });
+    const request = (requestId: string): AppServerPendingRequestNotification => ({
+      method: "mcpServer/elicitation/request",
+      params: {
+        threadId: "thread-1", turnId: "turn-1", requestId,
+        serverName: "codex_apps", mode: "url", message: "Reconnect GitHub",
+        url: "https://chatgpt.com/connector", elicitationId: requestId,
+      },
+    });
+    const first = codexClient.emitRequest(request("57"));
+    await waitForCondition(() => events.length === 1);
+    const second = codexClient.emitRequest(request("58"));
+    await waitForCondition(() => events.length === 2);
+
+    await registry.submitServerRequest({
+      backend: "codex", threadId: "thread-1", turnId: "turn-1",
+      requestId: "58", response: { action: "decline", content: null, _meta: null },
+    });
+    await expect(second).resolves.toMatchObject({ action: "decline" });
+    expect(events.slice(2).map((event) => event.notification)).toEqual([
+      { method: "serverRequest/resolved", params: { threadId: "thread-1", turnId: "turn-1", requestId: "58" } },
+      request("57"),
+    ]);
+    await registry.submitServerRequest({
+      backend: "codex", threadId: "thread-1", turnId: "turn-1",
+      requestId: "57", response: { action: "decline", content: null, _meta: null },
+    });
+    await first;
+    await registry.close();
+  });
+
+  it.each(["turn/completed", "turn/failed", "turn/cancelled"] as const)(
+    "retires MCP requests belonging to an ended turn on %s", async (method) => {
+      const codexClient = new MockBackendClient({ initializeResult: { methods: ["turn/start"] } });
+      const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+      const events: AgentEvent[] = [];
+      registry.onEvent((event) => { events.push(event); });
+      const request: AppServerPendingRequestNotification = {
+        method: "mcpServer/elicitation/request",
+        params: {
+          threadId: "thread-1", turnId: "turn-1", requestId: "57",
+          serverName: "codex_apps", mode: "url", message: "Reconnect GitHub",
+          url: "https://chatgpt.com/connector", elicitationId: "57",
+        },
+      };
+      const response = codexClient.emitRequest(request);
+      await waitForCondition(() => events.length === 1);
+      const params = { threadId: "thread-1", turnId: "turn-1" };
+      await registry.publishLocalEvent({ backend: "codex", notification: method === "turn/failed" ? {
+        method, params: { ...params, turn: { id: "turn-1", status: "failed", error: { message: "Connection lost" } } },
+      } : method === "turn/cancelled" ? {
+        method, params: { ...params, turn: { id: "turn-1", status: "cancelled" } },
+      } : {
+        method, params: {
+          threadId: "thread-1", turnId: "turn-1",
+          turn: { id: "turn-1", status: "completed", output: [] },
+        },
+      } });
+      expect(registry.getPendingRequestForThread({ backend: "codex", threadId: "thread-1" })).toBeUndefined();
+      expect(registry.getNavigationInputRequestThreadKeys().size).toBe(0);
+      await expect(response).resolves.toMatchObject({ action: "cancel" });
+      expect(events.some((event) => event.notification.method === "serverRequest/resolved")).toBe(true);
+      await registry.close();
+    },
+  );
+
   it("persists completed questionnaire answers with secret values redacted", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
@@ -43110,6 +43333,7 @@ script = "printf setup"
 
   it("stops and steers another active local thread with distinct dispositions", async () => {
     const codexClient = new MockBackendClient({
+      interruptEndsTurn: true,
       initializeResult: {
         methods: ["thread/resume", "turn/interrupt", "turn/steer"],
       },
@@ -43346,6 +43570,7 @@ script = "printf setup"
 
   it("preserves idle and stale steers as follow-ups while rejecting invalid stops", async () => {
     const codexClient = new MockBackendClient({
+      interruptEndsTurn: true,
       initializeResult: {
         methods: [
           "thread/resume",
@@ -50943,6 +51168,7 @@ script = "printf setup"
 
   it("stops pending active task monitors without starting recovery", async () => {
     const codexClient = new MockBackendClient({
+      interruptEndsTurn: true,
       initializeResult: { methods: ["turn/start", "turn/interrupt"] },
       models: TEST_TASK_MONITOR_MODELS,
       startThreadResult: { threadId: "monitor-thread" },
@@ -51069,6 +51295,7 @@ script = "printf setup"
 
   it("keeps monitor failure navigation on the parent when recovery cannot read the helper", async () => {
     const codexClient = new MockBackendClient({
+      interruptEndsTurn: true,
       initializeResult: { methods: ["turn/start", "turn/interrupt"] },
       models: TEST_TASK_MONITOR_MODELS,
       startThreadResult: { threadId: "monitor-thread" },
@@ -51140,6 +51367,7 @@ script = "printf setup"
 
   it("stops a task monitor on its live recovery turn", async () => {
     const codexClient = new MockBackendClient({
+      interruptEndsTurn: true,
       initializeResult: { methods: ["turn/start", "turn/interrupt"] },
       models: TEST_TASK_MONITOR_MODELS,
       startThreadResult: { threadId: "monitor-thread" },
@@ -56234,7 +56462,9 @@ script = "printf setup"
       startSession,
       ensureSession,
       startPrompt,
-      cancelSession: vi.fn(),
+      cancelSession: vi.fn(async (sessionId: string) => {
+        answerAcpSessionCancel(registry, acpBackendId, sessionId);
+      }),
       readReplay: vi.fn(),
       loadSession: vi.fn(),
       refreshSession: vi.fn(async () => undefined),
@@ -56344,7 +56574,9 @@ script = "printf setup"
       startSession,
       ensureSession,
       startPrompt,
-      cancelSession: vi.fn(),
+      cancelSession: vi.fn(async (sessionId: string) => {
+        answerAcpSessionCancel(registry, acpBackendId, sessionId);
+      }),
       readReplay: vi.fn(),
       loadSession: vi.fn(),
       refreshSession: vi.fn(async () => undefined),
@@ -56455,7 +56687,9 @@ script = "printf setup"
       startSession,
       ensureSession,
       startPrompt,
-      cancelSession: vi.fn(),
+      cancelSession: vi.fn(async (sessionId: string) => {
+        answerAcpSessionCancel(registry, acpBackendId, sessionId);
+      }),
       readReplay: vi.fn(),
       loadSession: vi.fn(),
       refreshSession: vi.fn(async () => undefined),
@@ -56599,7 +56833,9 @@ script = "printf setup"
       startSession,
       ensureSession,
       startPrompt,
-      cancelSession: vi.fn(),
+      cancelSession: vi.fn(async (sessionId: string) => {
+        answerAcpSessionCancel(registry, acpBackendId, sessionId);
+      }),
       readReplay: vi.fn(),
       loadSession: vi.fn(),
       refreshSession: vi.fn(async () => undefined),

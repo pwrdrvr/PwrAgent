@@ -2251,6 +2251,10 @@ describe("App", () => {
           value: true,
           source: "default",
         },
+        pinnedThreadsOnTop: {
+          value: true,
+          source: "default",
+        },
         mcpGatewayEnabled: {
           value: true,
           source: "default",
@@ -2688,6 +2692,137 @@ describe("App", () => {
     });
 
     expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps layout choices made while the startup settings snapshot is being adopted", async () => {
+    // The bootstrap projection opens navigation before the live settings
+    // read answers, so the rail is clickable first. A click that lands after
+    // the read resolves but before App adopts the stored layout prefs must
+    // win: the stored tab is only the starting point, never a later reset.
+    const settings = createDeferred<{ snapshot: DesktopSettingsSnapshot }>();
+    const thread = {
+      id: "rail-tab-thread",
+      title: "Rail tab thread",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      executionMode: "default" as const,
+      linkedDirectories: [],
+      inbox: { inInbox: true },
+      updatedAt: 2_000,
+    };
+    const writeSettingsConfig = vi.fn(
+      async () => await new Promise<never>(() => {}),
+    );
+
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: ownerApi({
+        readConfigBootstrap: vi.fn(async () => ({
+          snapshot: {
+            version: 1,
+            configRevision: "fixture",
+            appearance: {
+              theme: "system" as const,
+              darkTheme: "tangerine-dark" as const,
+              lightTheme: "tangerine-light" as const,
+              density: "mission-control" as const,
+              sidebarTextSize: "md" as const,
+              transcriptTextSize: "md" as const,
+            },
+            onboarding: {
+              completed: true,
+              completedSource: "migrated" as const,
+            },
+          },
+        })),
+        readSettings: () => settings.promise,
+        writeSettingsConfig,
+        listBackends: async () => ({ fetchedAt: Date.now(), backends: [] }),
+        getNavigationSnapshot: async (): Promise<NavigationSnapshot> => ({
+          backend: "all",
+          fetchedAt: Date.now(),
+          unchanged: false,
+          inboxThreadKeys: ["codex:rail-tab-thread"],
+          threads: [{ ...thread }],
+          directories: [],
+          launchpadDefaults: { backend: "codex", executionMode: "default" },
+        }),
+        readThread: async () => ({
+          backend: "codex",
+          fetchedAt: Date.now(),
+          threadId: thread.id,
+          replay: {
+            entries: [],
+            messages: [],
+            pagination: { supportsPagination: false, hasPreviousPage: false },
+          },
+        }),
+        onAgentEvent: () => () => undefined,
+      }),
+    });
+
+    render(<App />);
+
+    await screen.findByRole("heading", { level: 2, name: "Rail tab thread" });
+    const context = screen.getByRole("complementary", { name: "Thread context" });
+
+    await act(async () => {
+      settings.resolve({
+        snapshot: {
+          general: {
+            appearance: {
+              theme: { value: "system", source: "default" },
+              darkTheme: { value: "tangerine-dark", source: "default" },
+              lightTheme: { value: "tangerine-light", source: "default" },
+              themedDockIcon: { value: true, source: "default" },
+              terminalMinimumContrast: { value: false, source: "default" },
+              density: { value: "mission-control", source: "default" },
+              sidebarTextSize: { value: "md", source: "default" },
+              transcriptTextSize: { value: "md", source: "default" },
+            },
+          },
+          onboarding: {
+            completed: { value: true, source: "default" },
+          },
+          imageUploads: {
+            pastedImageMaxPatches: { value: 1536, source: "default" },
+          },
+          experimental: {
+            fullAccessRiskWarningDismissed: {
+              value: false,
+              source: "default",
+            },
+          },
+          ui: {
+            sidebarHidden: { value: false, source: "default" },
+            contextRailPinned: { value: true, source: "default" },
+            activeContextTab: { value: "info", source: "default" },
+            editedFilesDock: { value: "above", source: "default" },
+            actionRunsDock: { value: "above", source: "default" },
+          },
+        } as DesktopSettingsSnapshot,
+      });
+      // Let the read land in state; React has not rendered it yet.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      fireEvent.click(within(context).getByRole("tab", { name: "Linked projects" }));
+      fireEvent.click(screen.getAllByRole("button", { name: "Hide sidebar" })[0]!);
+    });
+    await flushReactUpdates();
+
+    expect(writeSettingsConfig).toHaveBeenCalledWith({
+      patch: { ui: { activeContextTab: "projects" } },
+    });
+    expect(writeSettingsConfig).toHaveBeenCalledWith({
+      patch: { ui: { sidebarHidden: true } },
+    });
+    expect(screen.queryByRole("button", { name: "Hide sidebar" })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Show sidebar" }).length).toBeGreaterThan(0);
+    expect(
+      within(context).getByRole("tab", { name: "Linked projects" }),
+    ).toHaveAttribute("aria-selected", "true");
+    expect(
+      within(context).getByRole("heading", { level: 3, name: "Linked projects" }),
+    ).toBeInTheDocument();
   });
 
   it("renders the live thread shell with transcript history", async () => {
@@ -6450,6 +6585,21 @@ describe("App", () => {
   });
 
   it.each(["title button", "row padding"])("walks back and forward across threads and search after %s clicks", async (clickSurface) => {
+    // Headings and the history cursor commit separately. Observe both history
+    // destinations before the next action consumes or replaces their entries.
+    const waitForHistory = async (back?: string, forward?: string): Promise<void> => {
+      await waitFor(() => {
+        for (const [name, destination] of [["Back", back], ["Forward", forward]] as const) {
+          const button = screen.getByRole("button", { name });
+          if (destination === undefined) {
+            expect(button).toBeDisabled();
+          } else {
+            expect(button).toBeEnabled();
+            expect(button).toHaveAttribute("aria-description", destination);
+          }
+        }
+      });
+    };
     const secondThreadReady = createDeferred<void>();
     const deliveredSecondThread = vi.fn();
     const searchThreads = vi.fn(async () => ({
@@ -6657,12 +6807,13 @@ describe("App", () => {
       fireEvent.click(target, { detail: 1 });
     });
     await waitFor(() => expect(screen.getByRole("textbox", { name: "Reply" })).toHaveFocus());
-    expect(screen.getByRole("button", { name: "Back" })).toBeEnabled();
+    await waitForHistory("First cached thread");
 
     // Search unmounts Composer. Keyboard history must not replay the handled
     // mouse request when it mounts again, even with a sidebar row focused.
     await clickButton("Search threads");
     await screen.findByRole("heading", { level: 2, name: "Search" });
+    await waitForHistory("Second cached thread");
     act(() => {
       secondRow.focus();
       fireEvent.keyDown(window, { metaKey: true, code: "BracketLeft", key: "[" });
@@ -6674,9 +6825,11 @@ describe("App", () => {
       await new Promise((resolve) => requestAnimationFrame(resolve));
     });
     expect(secondRow).toHaveFocus();
+    await waitForHistory("First cached thread", "Search");
 
     // Search, then open the result (thread 1).
     await clickButton("Search threads");
+    await waitForHistory("Second cached thread");
     fireEvent.change(screen.getByRole("combobox", { name: "Search threads" }), {
       target: { value: "history" },
     });
@@ -6687,10 +6840,12 @@ describe("App", () => {
       level: 2,
       name: "First cached thread",
     });
+    await waitForHistory("Search");
 
     // Back lands on search with the results still populated — no re-query.
     await clickButton("Back");
     await screen.findByRole("heading", { level: 2, name: "Search" });
+    await waitForHistory("Second cached thread", "First cached thread");
     expect(screen.getByText("Opened from search.")).toBeInTheDocument();
     expect(searchThreads).toHaveBeenCalledTimes(1);
 
@@ -6700,6 +6855,7 @@ describe("App", () => {
       level: 2,
       name: "Second cached thread",
     });
+    await waitForHistory("First cached thread", "Search");
 
     // Back to the start, where the affordance bottoms out.
     await clickButton("Back");
@@ -6707,14 +6863,14 @@ describe("App", () => {
       level: 2,
       name: "First cached thread",
     });
-    expect(screen.getByRole("button", { name: "Back" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Forward" })).toBeEnabled();
+    await waitForHistory(undefined, "Second cached thread");
 
     await clickButton("Forward");
     await screen.findByRole("heading", {
       level: 2,
       name: "Second cached thread",
     });
+    await waitForHistory("First cached thread", "Search");
 
     // The window-level chord (⌘[) and the mouse thumb buttons drive the
     // same history.
@@ -6730,6 +6886,7 @@ describe("App", () => {
       level: 2,
       name: "First cached thread",
     });
+    await waitForHistory(undefined, "Second cached thread");
 
     await act(async () => {
       fireEvent.mouseUp(window, { button: 4 });
@@ -6739,6 +6896,7 @@ describe("App", () => {
       level: 2,
       name: "Second cached thread",
     });
+    await waitForHistory("First cached thread", "Search");
   });
 
   it("restores an unsubmitted project launchpad from thread history", async () => {

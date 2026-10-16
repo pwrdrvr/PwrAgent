@@ -1,7 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 
 // Windows CI runners are markedly slower at spawning child processes (git.exe,
 // bash.exe), so git/worktree-heavy desktop tests can exceed the 5s default.
@@ -110,6 +110,37 @@ const DISPOSABLE_DESKTOP_ENV = {
   XDG_STATE_HOME: DISPOSABLE_XDG_STATE_HOME,
 };
 
+// Renderer `.test.ts` files that need a DOM. Every other renderer `.test.ts`
+// runs in `desktop-renderer-node`, because loading jsdom costs a file about
+// 0.4s of worker time whether or not it touches the DOM, and most of them
+// test pure projections. A `.test.ts` that needs the DOM fails there with
+// `window is not defined` or `document is not defined`: list it here.
+const RENDERER_DOM_TS_TESTS = [
+  "apps/desktop/src/renderer/src/features/native-voice/__tests__/voice-camera.test.ts",
+  "apps/desktop/src/renderer/src/features/navigation/__tests__/drag-drop.test.ts",
+  "apps/desktop/src/renderer/src/features/navigation/__tests__/thread-row-drag-preview.test.ts",
+  "apps/desktop/src/renderer/src/features/navigation/__tests__/useThreadJump.test.ts",
+  "apps/desktop/src/renderer/src/features/star-map/__tests__/star-map-keyboard.test.ts",
+  "apps/desktop/src/renderer/src/features/star-map/__tests__/star-map-orbit.test.ts",
+  "apps/desktop/src/renderer/src/features/star-map/__tests__/star-map-preferences.test.ts",
+  "apps/desktop/src/renderer/src/features/thread-detail/__tests__/composer-slot.test.ts",
+  "apps/desktop/src/renderer/src/features/thread-detail/__tests__/interactive-svg-document.test.ts",
+  "apps/desktop/src/renderer/src/features/thread-detail/__tests__/token-miser-savings-layout.test.ts",
+  "apps/desktop/src/renderer/src/lib/__tests__/appearance.test.ts",
+  "apps/desktop/src/renderer/src/lib/__tests__/bundled-font-preload.test.ts",
+  "apps/desktop/src/renderer/src/lib/__tests__/copy-image.test.ts",
+  "apps/desktop/src/renderer/src/lib/__tests__/copy-text.test.ts",
+  "apps/desktop/src/renderer/src/lib/__tests__/diagram-image.test.ts",
+  "apps/desktop/src/renderer/src/lib/__tests__/keyboard-accel.test.ts",
+  "apps/desktop/src/renderer/src/lib/__tests__/load-image-blob.test.ts",
+  "apps/desktop/src/renderer/src/lib/__tests__/mermaid-runtime.test.ts",
+  "apps/desktop/src/renderer/src/lib/__tests__/nerd-font-fallback.test.ts",
+  "apps/desktop/src/renderer/src/lib/__tests__/tildify-path.test.ts",
+  "apps/desktop/src/renderer/src/lib/__tests__/useScheduledThreadActionProjection.test.ts",
+  "apps/desktop/src/renderer/src/lib/__tests__/window-frame.test.ts",
+  "apps/desktop/src/renderer/src/test/outbound-fetch-guard.test.ts",
+];
+
 export default defineConfig({
   test: {
     projects: [
@@ -197,7 +228,10 @@ export default defineConfig({
           testTimeout: TEST_TIMEOUT_MS,
           environment: "jsdom",
           env: DISPOSABLE_DESKTOP_ENV,
-          include: ["apps/desktop/src/renderer/src/**/*.test.{ts,tsx}"],
+          include: [
+            "apps/desktop/src/renderer/src/**/*.test.tsx",
+            ...RENDERER_DOM_TS_TESTS,
+          ],
           // The renderer reaches the network through IPC, so it has no `fetch`
           // call site today — but `lint:boundaries` reads imports and cannot
           // see a `globalThis.fetch`, and jsdom inherits a live one from Node,
@@ -206,6 +240,21 @@ export default defineConfig({
             "apps/desktop/src/test-setup/outbound-fetch-guard.ts",
             "apps/desktop/src/renderer/src/test/setup.ts",
           ]
+        }
+      },
+      {
+        test: {
+          name: "desktop-renderer-node",
+          // No act-warning runner: its guard is installed by the jsdom
+          // project's setup.ts, and nothing here renders React.
+          pool: "threads",
+          globals: true,
+          testTimeout: TEST_TIMEOUT_MS,
+          environment: "node",
+          env: DISPOSABLE_DESKTOP_ENV,
+          include: ["apps/desktop/src/renderer/src/**/*.test.ts"],
+          exclude: [...configDefaults.exclude, ...RENDERER_DOM_TS_TESTS],
+          setupFiles: ["apps/desktop/src/test-setup/outbound-fetch-guard.ts"],
         }
       }
     ]

@@ -808,6 +808,12 @@ export type DesktopGeneralSettingsSnapshot = {
    */
   attentionPromoteOnTurnEnd: DesktopSettingsValue<boolean>;
   /**
+   * Gather every pinned thread into one Pinned group, in the operator's own
+   * pin order, above the Updated and Created lists. Off keeps both lenses
+   * pure time sorts with each pin in its own slot. Directories is unaffected.
+   */
+  pinnedThreadsOnTop: DesktopSettingsValue<boolean>;
+  /**
    * Skip the notice the image lightbox shows before an SVG's own scripts run
    * in its isolated frame. The notice's "Always Run" sets this.
    */
@@ -1571,6 +1577,7 @@ export type DesktopSettingsConfigPatch = {
   general?: {
     confirmQuitWithInProgressThreads?: boolean;
     attentionPromoteOnTurnEnd?: boolean;
+    pinnedThreadsOnTop?: boolean;
     interactiveSvgSkipNotice?: boolean;
     interactiveSvgAutoOpen?: boolean;
     mcpGatewayEnabled?: boolean;

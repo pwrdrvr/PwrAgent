@@ -43,6 +43,8 @@ vi.mock("@xterm/xterm", () => ({
     hasSelection = () => this.selection.length > 0;
     getSelection = () => this.selection;
     open = vi.fn();
+    reset = vi.fn();
+    resize = vi.fn();
     write = vi.fn((data: string, callback?: () => void) => {
       const responses = xtermState.replayDataEvents.get(data) ?? [];
       for (const response of responses) {
@@ -618,6 +620,30 @@ describe("IntegratedTerminal", () => {
     });
   });
 
+  it("continues legacy buffered replay at its watermark without duplicating or reattaching", async () => {
+    let output: Parameters<NonNullable<DesktopApi["onIntegratedTerminalOutput"]>>[0] | undefined;
+    const createIntegratedTerminal = vi.fn(async () => ({
+      sessionId: "session-1", threadKey: "codex:thread-a", cwd: "/repo/a", shell: "/bin/zsh",
+      buffer: "saved terminal output", bufferSeq: 12,
+    }));
+    render(<IntegratedTerminal
+      desktopApi={{
+        createIntegratedTerminal,
+        onIntegratedTerminalOutput: (listener) => { output = listener; return () => undefined; },
+      }}
+      sessionId="session-1" threadKey="codex:thread-a" height={260}
+      onClose={() => undefined} onExit={() => undefined}
+    />);
+    await waitFor(() => expect(screen.getByText("/repo/a")).toBeInTheDocument());
+    await act(async () => {
+      output?.({ sessionId: "session-1", seq: 12, data: "already buffered" });
+      output?.({ sessionId: "session-1", seq: 13, data: "next frame" });
+    });
+    expect(xtermState.instances[0]!.write).not.toHaveBeenCalledWith("already buffered");
+    expect(xtermState.instances[0]!.write).toHaveBeenCalledWith("next frame");
+    expect(createIntegratedTerminal).toHaveBeenCalledTimes(1);
+  });
+
   it("does not send terminal replies from replayed output back to the pty", async () => {
     xtermState.replayDataEvents.set("saved terminal output", [
       "\u001b[>0;276;0c\u001b]10;rgb:cccc/cccc/cccc\u001b\\",
@@ -715,6 +741,7 @@ describe("IntegratedTerminal", () => {
     expect(writeIntegratedTerminal).not.toHaveBeenCalled();
 
     act(() => {
+      xtermState.pendingWriteCallbacks.shift()?.();
       xtermState.pendingWriteCallbacks.shift()?.();
     });
 

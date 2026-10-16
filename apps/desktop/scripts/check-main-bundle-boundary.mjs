@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { readdir, readFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -33,6 +34,25 @@ for (const filePath of javascriptFiles) {
       violations.push({
         file: path.relative(desktopRoot, filePath),
         label: rule.label,
+      });
+    }
+  }
+  // Vitest accepts synthetic named exports from xterm's CommonJS packages,
+  // but Node/Electron's native ESM loader does not. Check the actual bundled
+  // import clauses without booting Electron or opening a desktop window.
+  const terminalImports = [...contents.matchAll(
+    /\bimport\s*[^;]*?\bfrom\s*["']@xterm\/(?:headless|addon-serialize)["'];?/g,
+  )].map(([statement]) => statement);
+  if (terminalImports.length > 0) {
+    try {
+      execFileSync(process.execPath, ["--input-type=module", "--eval", terminalImports.join("\n")], {
+        cwd: desktopRoot,
+        stdio: "pipe",
+      });
+    } catch (error) {
+      violations.push({
+        file: path.relative(desktopRoot, filePath),
+        label: `terminal dependency imports rejected by native ESM: ${error.stderr?.toString().split("\n").slice(0, 4).join(" ") ?? error.message}`,
       });
     }
   }

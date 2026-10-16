@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from "electron";
+import { app, autoUpdater as electronNativeUpdater, BrowserWindow, ipcMain } from "electron";
 import electronUpdater from "electron-updater";
 import { authorizeLinuxPackageUpdate, createLinuxPackageUpdater } from "./linux-package-updater";
 const autoUpdater = createLinuxPackageUpdater(electronUpdater.autoUpdater);
@@ -50,6 +50,28 @@ export const APP_UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1_000;
 // memory instead of spending a request each time.
 export const APP_UPDATE_RELEASE_CACHE_TTL_MS = 15 * 60 * 1_000;
 const RATE_LIMIT_FALLBACK_BACKOFF_MS = 15 * 60 * 1_000;
+/** How long a superseding macOS download may wait for Squirrel.Mac to stage
+ *  it before the older staged update is offered again. Squirrel re-fetches the
+ *  whole zip from electron-updater's loopback proxy, unpacks it and checks its
+ *  signature, so this is sized like a download rather than a request. */
+const SQUIRREL_STAGE_TIMEOUT_MS = 5 * 60 * 1_000;
+
+/**
+ * Electron's own `autoUpdater`: on macOS, the Squirrel.Mac wrapper that
+ * electron-updater drives. Read defensively because test suites mock
+ * `electron` without it, and a missing export on a mock throws on access.
+ */
+function optionalNativeUpdater():
+  | Pick<NodeJS.EventEmitter, "once" | "removeListener">
+  | undefined {
+  try {
+    return typeof electronNativeUpdater?.once === "function"
+      ? electronNativeUpdater
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 let initialized = false;
 let updateStatus: AppUpdateStatus = { status: "idle" };
@@ -59,8 +81,36 @@ let updateCheckInFlight: Promise<AppUpdateCheckResult> | undefined;
 type UpdateSelectionKey = `${DesktopUpdateTrain}:${DesktopUpdateChannel}`;
 
 let updateCheckChannelInFlight: UpdateSelectionKey | undefined;
-let heldDownloadedUpdate:
-  | { selection: UpdateSelectionKey; version: string }
+type HeldDownloadedUpdate = { selection: UpdateSelectionKey; version: string };
+let heldDownloadedUpdate: HeldDownloadedUpdate | undefined;
+/**
+ * The downloaded update a newer release is downloading over.
+ *
+ * A downloaded update used to end every later check, so an operator who left
+ * the app open across two releases restarted into the older one only to be
+ * offered the newer one straight away. A forward update now keeps reading the
+ * feed and is replaced by a newer release on its track.
+ *
+ * What the replaced update is still good for differs by platform, and that is
+ * the reason this is tracked:
+ *
+ * - macOS: Squirrel.Mac keeps the older build staged until the newer one is
+ *   staged in its place, and electron-updater's `squirrelDownloadedUpdate`
+ *   never resets, so `quitAndInstall` installs the OLDER build until
+ *   Squirrel's own `update-downloaded` fires. `heldDownloadedUpdate` stays on
+ *   the older build until then (see `pendingSquirrelStage`), and a newer
+ *   download that fails or is canceled puts its Restart offer back.
+ * - Windows and Linux: starting the new download empties electron-updater's
+ *   pending cache dir, which deletes the older installer while its
+ *   `downloadedUpdateHelper.file` still points at it. The older offer is
+ *   dropped when the download starts, and install-on-quit is held off until
+ *   the newer installer exists.
+ */
+let supersedingDownload: HeldDownloadedUpdate | undefined;
+/** macOS only: electron-updater has the newer build on disk and has asked
+ *  Squirrel.Mac to stage it, but Squirrel has not confirmed. */
+let pendingSquirrelStage:
+  | (HeldDownloadedUpdate & { dispose: () => void; settled: Promise<void> })
   | undefined;
 const pendingDownloadChannelsByVersion = new Map<string, UpdateSelectionKey>();
 // A passive Settings read must not undo Cancel, even after another check
@@ -484,9 +534,10 @@ async function simulateDevUpdateCheck(
   if (updateCheckInFlight) {
     return await updateCheckInFlight;
   }
-  // A held download ends the real check before it starts, so the fake ends
-  // here too — otherwise a second check tears the offer down to `checking`
-  // and rebuilds it, which production never does.
+  // The fake only ever offers one version, so a held fake download is never
+  // superseded: answer as the real check does when the feed has nothing newer.
+  // Walking again would tear the offer down to `checking` and rebuild it,
+  // which production never does.
   const alreadyOffered = downloadedUpdateMatchesChannel(
     currentUpdateSelectionKey(),
   );
@@ -658,6 +709,14 @@ function syncAutoInstallOnAppQuit(updateSelection: UpdateSelectionKey): void {
     autoUpdater.autoInstallOnAppQuit = false;
     return;
   }
+  // Windows: the replaced installer is already gone from the pending cache,
+  // but electron-updater still points at it, so quitting must not try to run
+  // it. macOS keeps this on: MacUpdater reads it when the newer download
+  // lands, and it is what makes Squirrel stage that build at all.
+  if (supersedingDownload !== undefined && process.platform !== "darwin") {
+    autoUpdater.autoInstallOnAppQuit = false;
+    return;
+  }
   autoUpdater.autoInstallOnAppQuit =
     eligibleDownload !== undefined || heldDownloadedUpdate === undefined;
 }
@@ -667,6 +726,12 @@ function reconcileDownloadedUpdateEligibility(
 ): void {
   const eligibleDownload = downloadedUpdateMatchesChannel(updateSelection);
   syncAutoInstallOnAppQuit(updateSelection);
+  // The status is reporting the newer download. Every status read reconciles,
+  // so without this a Settings mount would put the older Restart offer back
+  // over the progress the operator is watching.
+  if (supersedingDownload !== undefined) {
+    return;
+  }
   if (eligibleDownload) {
     if (
       updateStatus.status !== "downloaded"
@@ -698,6 +763,88 @@ function recordPendingDownloadChannel(
   pendingDownloadChannelsByVersion.set(version, updateSelection);
 }
 
+/** The newer release is installable: it becomes the Restart offer. */
+function promoteSupersede(next: HeldDownloadedUpdate): void {
+  heldDownloadedUpdate = next;
+  supersedingDownload = undefined;
+  reconcileDownloadedUpdateEligibility();
+}
+
+/** The newer release did not arrive: the check found nothing to download, the
+ *  download failed or was canceled, or Squirrel.Mac never staged it. On macOS
+ *  the older staged update is still installable and its Restart offer comes
+ *  back; elsewhere it was deleted when the download started. */
+function abandonSupersede(reason: string): void {
+  pendingSquirrelStage?.dispose();
+  if (supersedingDownload === undefined) {
+    return;
+  }
+  const replaced = supersedingDownload;
+  supersedingDownload = undefined;
+  log.info("newer update did not replace the downloaded one", {
+    reason,
+    replacedVersion: replaced.version,
+    stillInstallable: heldDownloadedUpdate !== undefined,
+  });
+  reconcileDownloadedUpdateEligibility();
+}
+
+/**
+ * macOS: offer the newer build only once Squirrel.Mac has staged it.
+ *
+ * electron-updater emits `update-downloaded` as soon as the zip is on disk,
+ * BEFORE Squirrel has fetched it from the loopback proxy, and its
+ * `squirrelDownloadedUpdate` flag is still true from the build being replaced.
+ * A Restart clicked in that gap would install the OLDER build while the offer
+ * named the newer one. Squirrel's own `update-downloaded` is the signal that
+ * `quitAndInstall` now means the newer build.
+ */
+function awaitSquirrelStage(next: HeldDownloadedUpdate): void {
+  const native = optionalNativeUpdater();
+  if (native === undefined) {
+    log.warn("cannot observe Squirrel.Mac staging; offering the newer update now", {
+      version: next.version,
+    });
+    promoteSupersede(next);
+    return;
+  }
+  pendingSquirrelStage?.dispose();
+  let finish!: () => void;
+  const settled = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const dispose = (): void => {
+    clearTimeout(timer);
+    native.removeListener("update-downloaded", onStaged);
+    native.removeListener("error", onFailed);
+    if (pendingSquirrelStage === stage) pendingSquirrelStage = undefined;
+    finish();
+  };
+  const settle = (staged: boolean, reason: string): void => {
+    if (pendingSquirrelStage !== stage) return;
+    dispose();
+    if (!staged) {
+      abandonSupersede(reason);
+      return;
+    }
+    log.info("Squirrel.Mac staged the newer update", { version: next.version });
+    promoteSupersede(next);
+  };
+  const onStaged = (): void => settle(true, "staged");
+  const onFailed = (): void =>
+    settle(false, "Squirrel.Mac failed to stage the newer update");
+  const stage = { ...next, dispose, settled };
+  pendingSquirrelStage = stage;
+  // Armed before the listeners, so `dispose` never reaches it uninitialized.
+  const timer = setTimeout(
+    () => settle(false, "timed out waiting for Squirrel.Mac to stage the newer update"),
+    SQUIRREL_STAGE_TIMEOUT_MS,
+  );
+  timer.unref?.();
+  native.once("update-downloaded", onStaged);
+  native.once("error", onFailed);
+}
+
 type UpdateCheckTrigger = "startup" | "periodic" | "manual" | "menu" | "selection" | "discovery";
 
 // A track change must outlive an old track's check/download, not merely join
@@ -705,8 +852,8 @@ type UpdateCheckTrigger = "startup" | "periodic" | "manual" | "menu" | "selectio
 let selectionCheckGeneration = 0;
 async function checkChangedUpdateSelection(): Promise<void> {
   const generation = ++selectionCheckGeneration;
-  while (updateCheckInFlight || activeDownload?.settled) {
-    await (updateCheckInFlight ?? activeDownload?.settled);
+  while (updateCheckInFlight || activeDownload?.settled || pendingSquirrelStage) {
+    await (updateCheckInFlight ?? activeDownload?.settled ?? pendingSquirrelStage?.settled);
     if (generation !== selectionCheckGeneration) return;
   }
   if (generation === selectionCheckGeneration) {
@@ -789,10 +936,14 @@ async function runAppUpdateCheck(
         tag?: string;
       }
     | undefined;
+  // The update this check starts from, if one is already downloaded for the
+  // selected track. A check that found nothing newer answers with it.
+  let downloadedResult:
+    | Extract<AppUpdateCheckResult, { status: "downloaded" }>
+    | undefined;
 
   updateCheckInFlight = (async (): Promise<AppUpdateCheckResult> => {
     try {
-      reserveAppReleaseCheck(trigger === "manual" || trigger === "menu" || trigger === "selection");
       const {
         channel: updateChannel,
         train: updateTrain,
@@ -800,9 +951,25 @@ async function runAppUpdateCheck(
       failureContext = { channel: updateChannel, train: updateTrain };
       const updateSelection = updateSelectionKey(updateTrain, updateChannel);
       reconcileDownloadedUpdateEligibility(updateSelection);
-      const downloadedResult = downloadedUpdateMatchesChannel(updateSelection);
-      if (downloadedResult) {
-        log.info("skipping app update check; update already downloaded", {
+      if (pendingSquirrelStage?.selection === updateSelection) {
+        // Downloaded, and Squirrel.Mac is staging it: the outcome is on its way.
+        log.info("skipping app update check; newer update is being staged", {
+          trigger,
+          version: pendingSquirrelStage.version,
+        });
+        return withDirection({
+          status: "available" as const,
+          version: pendingSquirrelStage.version,
+        });
+      }
+      // A downloaded update no longer ends the check. A newer release on the
+      // same track replaces it, so the Restart offer names the newest build
+      // rather than one the operator restarts into only to be offered another.
+      // A held switch back is the exception: the operator asked for that move,
+      // and it is not quietly replaced with a different one.
+      downloadedResult = downloadedUpdateMatchesChannel(updateSelection);
+      if (downloadedResult?.direction === "downgrade") {
+        log.info("skipping app update check; switch back already downloaded", {
           trigger,
           updateChannel,
           updateTrain,
@@ -810,7 +977,11 @@ async function runAppUpdateCheck(
         });
         return downloadedResult;
       }
-      log.info("checking for app updates", { trigger });
+      reserveAppReleaseCheck(trigger === "manual" || trigger === "menu" || trigger === "selection");
+      log.info("checking for app updates", {
+        trigger,
+        ...(downloadedResult ? { downloadedVersion: downloadedResult.version } : {}),
+      });
       configureAutoUpdaterChannel(updateChannel, updateTrain);
       const release = await readAppUpdateReleaseForChannel(
         updateChannel,
@@ -827,9 +998,30 @@ async function runAppUpdateCheck(
           updateChannel,
           updateTrain,
         });
-        return result;
+        return downloadedResult ?? result;
       }
       const selectedVersion = release.tag_name.replace(/^v/i, "");
+      if (downloadedResult) {
+        // `compareSemver` sorts an unparseable version below every real one.
+        // A tag we cannot read keeps the update we already have, and so does
+        // a held version we cannot read, or every check would download again.
+        if (
+          parseSemver(downloadedResult.version) === undefined
+          || compareSemver(selectedVersion, downloadedResult.version) <= 0
+        ) {
+          log.info("keeping downloaded update; selected release is not newer", {
+            downloadedVersion: downloadedResult.version,
+            selectedRelease: release.tag_name,
+            trigger,
+          });
+          return downloadedResult;
+        }
+        log.info("replacing downloaded update with a newer release", {
+          downloadedVersion: downloadedResult.version,
+          selectedRelease: release.tag_name,
+          trigger,
+        });
+      }
       const selectedOrder = compareSemver(selectedVersion, currentVersion);
       // `compareSemver` sorts a tag it cannot parse below every real version,
       // so an unreadable tag looks identical to a deliberate downgrade. The
@@ -895,11 +1087,19 @@ async function runAppUpdateCheck(
       };
       activeDownload = download;
       lastDownloadReleaseTag = download.releaseTag;
+      if (downloadedResult) {
+        supersedingDownload = {
+          selection: updateSelection,
+          version: downloadedResult.version,
+        };
+        syncAutoInstallOnAppQuit(updateSelection);
+      }
       let result: Awaited<ReturnType<typeof autoUpdater.checkForUpdates>>;
       try {
         result = await autoUpdater.checkForUpdates();
       } catch (err) {
         releaseActiveDownload(download);
+        abandonSupersede("update check failed");
         throw err;
       }
       adoptUpdateDownload(download, result);
@@ -907,7 +1107,9 @@ async function runAppUpdateCheck(
         recordPendingDownloadChannel(result?.updateInfo?.version, updateSelection);
       }
       const matchingDownloadedResult = downloadedUpdateMatchesChannel(updateSelection);
-      if (matchingDownloadedResult) {
+      // While a newer release is replacing it, the held update is the one
+      // being replaced, not this check's outcome.
+      if (matchingDownloadedResult && supersedingDownload === undefined) {
         return matchingDownloadedResult;
       }
       if (!result || !result.updateInfo) {
@@ -934,6 +1136,9 @@ async function runAppUpdateCheck(
             deferredUpdateCheckTimer.unref?.();
           }
         }
+        // Still `skipped` with a download held, never the held result:
+        // "downloaded" would claim this check looked for something newer,
+        // and a caller that sees it has no reason to look again.
         return withLinuxUpdateHelp({ status: "skipped" as const, reason: err.message });
       }
       const result = withLinuxUpdateHelp({
@@ -956,7 +1161,15 @@ async function runAppUpdateCheck(
         updateChannel: failureContext?.channel,
         updateTrain: failureContext?.train,
       });
-      return result;
+      // A failed look for something newer does not undo the download we
+      // have. Looked up again rather than reusing `downloadedResult`: on
+      // Windows a download that started has already deleted it.
+      const stillDownloaded = failureContext === undefined
+        ? undefined
+        : downloadedUpdateMatchesChannel(
+            updateSelectionKey(failureContext.train, failureContext.channel),
+          );
+      return stillDownloaded ?? result;
     }
   })().finally(() => {
     updateCheckChannelInFlight = undefined;
@@ -989,7 +1202,13 @@ function adoptUpdateDownload(
 ): void {
   if (!result?.downloadPromise) {
     releaseActiveDownload(download);
+    abandonSupersede("no download started");
     return;
+  }
+  if (supersedingDownload !== undefined && process.platform !== "darwin") {
+    // Starting this download empties electron-updater's pending cache dir,
+    // and the replaced installer with it. Do not offer what is gone.
+    heldDownloadedUpdate = undefined;
   }
   download.version = result.updateInfo?.version ?? download.version;
   const token = result.cancellationToken;
@@ -1003,6 +1222,7 @@ function adoptUpdateDownload(
     },
     (err: unknown) => {
       releaseActiveDownload(download);
+      abandonSupersede(download.canceled ? "download canceled" : "download failed");
       if (download.canceled) {
         log.info("update download canceled", { version: download.version });
         // Only when electron-updater did not already report it. It emits
@@ -1539,15 +1759,27 @@ export async function readAppUpdateReleaseVersions(): Promise<AppUpdateReleaseVe
     const selection = currentUpdateSelection();
     const release = releaseForSelection(selected, selection.channel, selection.train);
     const version = release?.tag_name?.replace(/^v/i, "");
+    // A downloaded update only yields to a release newer than itself, and a
+    // held switch back only to a check the operator asks for.
+    const held = downloadedUpdateMatchesChannel(
+      updateSelectionKey(selection.train, selection.channel),
+    );
     if (
       initialized
       && productionUpdatesEnabled()
       && !linuxManualUpdatesRequired()
       && !updateCheckInFlight
       && !activeDownload
+      && !pendingSquirrelStage
       && version
       && !canceledReleaseVersions.has(version)
       && compareSemver(version, autoUpdater.currentVersion?.version ?? "unknown") > 0
+      && held?.direction !== "downgrade"
+      && (
+        held === undefined
+        || (parseSemver(held.version) !== undefined
+          && compareSemver(version, held.version) > 0)
+      )
     ) {
       void checkForAppUpdatesNow("discovery");
     }
@@ -1709,11 +1941,15 @@ export function initAutoUpdater(): void {
       pendingDownloadChannelsByVersion.delete(info.version);
     }
     if (info.version && selection) {
-      heldDownloadedUpdate = {
-        selection,
-        version: info.version,
-      };
+      const next: HeldDownloadedUpdate = { selection, version: info.version };
+      if (supersedingDownload !== undefined && process.platform === "darwin") {
+        awaitSquirrelStage(next);
+        return;
+      }
+      promoteSupersede(next);
+      return;
     }
+    supersedingDownload = undefined;
     reconcileDownloadedUpdateEligibility();
   });
   autoUpdater.on("error", (err: Error) => {

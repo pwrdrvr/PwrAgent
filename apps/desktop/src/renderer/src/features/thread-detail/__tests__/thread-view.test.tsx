@@ -29,6 +29,7 @@ import { useComposerDraftStore } from "../../composer/useComposerDraftStore";
 vi.mock("../IntegratedTerminal", () => ({
   IntegratedTerminal: (props: {
     threadKey: string;
+    sessionId: string;
     cwd?: string;
     remote?: { instanceId: string; instanceLabel: string };
     height: number;
@@ -43,6 +44,7 @@ vi.mock("../IntegratedTerminal", () => ({
       data-remote-instance={props.remote?.instanceId}
       data-remote-label={props.remote?.instanceLabel}
       data-thread-key={props.threadKey}
+      data-session-id={props.sessionId}
       hidden={props.visible === false}
     >
       <button type="button" title="Close terminal" onClick={props.onClose}>
@@ -1561,10 +1563,11 @@ describe("ThreadView", () => {
     expect(closeIntegratedTerminal).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Open integrated terminal" }));
+    const sessionId = screen.getByLabelText("Integrated terminal").getAttribute("data-session-id");
     fireEvent.click(await screen.findByTitle("Close terminal"));
 
     expect(closeIntegratedTerminal).toHaveBeenCalledWith({
-      threadKey: "codex:thread-a",
+      sessionId,
     });
   });
 
@@ -2075,7 +2078,7 @@ describe("ThreadView", () => {
     );
   });
 
-  it("hides the integrated terminal when the pty exits without closing it again", async () => {
+  it("retains exited output until its terminal tab is explicitly closed", async () => {
     const selectedThread: NavigationThreadSummary = {
       id: "thread-a",
       title: "Thread A",
@@ -2090,6 +2093,7 @@ describe("ThreadView", () => {
       },
     };
     const closeIntegratedTerminal = vi.fn(async () => undefined);
+    let publishSessions: Parameters<NonNullable<DesktopApi["onIntegratedTerminalSessions"]>>[0] | undefined;
 
     render(
       <ThreadView
@@ -2099,6 +2103,10 @@ describe("ThreadView", () => {
         composerDisabled={false}
         desktopApi={{
           closeIntegratedTerminal,
+          onIntegratedTerminalSessions: (listener) => {
+            publishSessions = listener;
+            return () => undefined;
+          },
         }}
         loading={false}
         loadingMore={false}
@@ -2113,11 +2121,18 @@ describe("ThreadView", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Open integrated terminal" }));
     fireEvent.click(await screen.findByText("Simulate terminal exit"));
+    const sessionId = screen.getByLabelText("Integrated terminal").getAttribute("data-session-id")!;
+    act(() => publishSessions?.({ sessions: [{
+      sessionId, threadKey: "codex:thread-a", cwd: "/repo/a", shell: "/bin/zsh",
+      panelHidden: false, createdAt: 1, status: "exited", exitCode: 0,
+    }] }));
 
-    expect(screen.queryByLabelText("Integrated terminal")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Open integrated terminal" })).toHaveAttribute(
+    expect(screen.getByLabelText("Integrated terminal")).toBeVisible();
+    expect(screen.getByText("Shell exited")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Restart shell" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Hide integrated terminal" })).toHaveAttribute(
       "aria-pressed",
-      "false",
+      "true",
     );
     expect(closeIntegratedTerminal).not.toHaveBeenCalled();
   });

@@ -32,6 +32,7 @@ import {
   type DesktopBootInfo,
   type DesktopCodexProfileModel,
   type DesktopPwrAgentProfileSummary,
+  type DesktopSettingsSnapshot,
   type FederationInstanceId,
   type FederationTarget,
   type MessagingChannelKind,
@@ -164,6 +165,7 @@ import {
   OperatorWaitsContext,
   useOperatorRequests,
 } from "./features/operator-requests/useOperatorRequests";
+import { useOffscreenQuestionAnswers } from "./features/operator-requests/useOffscreenQuestionAnswers";
 import { copyTextAsCodeBlock } from "./lib/copy-text";
 import { resolveThreadWorkingStatePath } from "./lib/thread-working-state-path";
 import { CodexConfigWarningBanner } from "./features/codex-config/CodexConfigWarningBanner";
@@ -189,6 +191,7 @@ import {
   threadActionErrorNoticeId,
   type ThreadActionErrorKind,
 } from "./features/notifications/thread-action-error-notice";
+import { useNavigationReadErrorNotices } from "./features/notifications/navigation-read-error-notice";
 import {
   buildCodexMissingThreadsNotice,
   CODEX_MISSING_THREADS_CONFIRMATION_NOTICE_ID,
@@ -1663,11 +1666,17 @@ function DesktopAppShell(props: {
     threadJump.closeJump();
     setMainView((current) => current === "search" ? "thread" : "search");
   };
+  // Layout prefs the operator has set in this window. The startup snapshot
+  // never adopts one of these: see the adoption effect below.
+  const layoutPrefsChosenRef = useRef(
+    new Set<keyof DesktopSettingsSnapshot["ui"]>(),
+  );
   const setSidebarHiddenPersisted = useCallback(
     (next: boolean) => {
       // An explicit toggle (⌘B, the chips) is the operator stating a preference,
       // so it ends any jump-landing peek in flight.
       endSidebarPeek();
+      layoutPrefsChosenRef.current.add("sidebarHidden");
       setSidebarHidden(next);
       void writeConfig({ ui: { sidebarHidden: next } });
     },
@@ -1675,6 +1684,7 @@ function DesktopAppShell(props: {
   );
   const setContextRailPinnedPersisted = useCallback(
     (next: boolean) => {
+      layoutPrefsChosenRef.current.add("contextRailPinned");
       setContextRailPinned(next);
       void writeConfig({ ui: { contextRailPinned: next } });
     },
@@ -1690,6 +1700,7 @@ function DesktopAppShell(props: {
   });
   const setActiveContextTabPersisted = useCallback(
     (tab: ContextTabId) => {
+      layoutPrefsChosenRef.current.add("activeContextTab");
       setActiveContextTab(tab);
       void writeConfig({ ui: { activeContextTab: tab } });
     },
@@ -1697,6 +1708,7 @@ function DesktopAppShell(props: {
   );
   const setEditedFilesDockPersisted = useCallback(
     (dock: EditedFilesDock) => {
+      layoutPrefsChosenRef.current.add("editedFilesDock");
       setEditedFilesDock(dock);
       void writeConfig({ ui: { editedFilesDock: dock } });
     },
@@ -1704,6 +1716,7 @@ function DesktopAppShell(props: {
   );
   const setActionRunsDockPersisted = useCallback(
     (dock: ActionRunsDock) => {
+      layoutPrefsChosenRef.current.add("actionRunsDock");
       setActionRunsDock(dock);
       void writeConfig({ ui: { actionRunsDock: dock } });
     },
@@ -1716,6 +1729,12 @@ function DesktopAppShell(props: {
   // — the bootstrap hint read the same file before first paint — so these two
   // set what they already hold. They stay because a window that somehow got
   // no hint would otherwise never see the operator's stored layout.
+  //
+  // The bootstrap projection opens navigation before this snapshot arrives,
+  // so the operator can already have toggled a pref. Their choice wins over
+  // the stored value, even when the read resolved first: this effect runs
+  // only after the snapshot's render commits, and a click in that gap would
+  // otherwise be reset (Windows Desktop E2E lost a Pricing tab click to it).
   const uiPrefsSeededRef = useRef(false);
   const uiPrefs = settings.snapshot?.ui;
   useEffect(() => {
@@ -1723,17 +1742,31 @@ function DesktopAppShell(props: {
       return;
     }
     uiPrefsSeededRef.current = true;
-    setSidebarHidden(uiPrefs.sidebarHidden.value);
-    setContextRailPinned(uiPrefs.contextRailPinned.value);
-    if (isContextTabId(uiPrefs.activeContextTab.value)) {
+    const chosen = layoutPrefsChosenRef.current;
+    if (!chosen.has("sidebarHidden")) {
+      setSidebarHidden(uiPrefs.sidebarHidden.value);
+    }
+    if (!chosen.has("contextRailPinned")) {
+      setContextRailPinned(uiPrefs.contextRailPinned.value);
+    }
+    if (
+      !chosen.has("activeContextTab")
+      && isContextTabId(uiPrefs.activeContextTab.value)
+    ) {
       setActiveContextTab(uiPrefs.activeContextTab.value);
     }
     const editedFilesDockPref = uiPrefs.editedFilesDock?.value;
-    if (isEditedFilesDock(editedFilesDockPref)) {
+    if (
+      !chosen.has("editedFilesDock")
+      && isEditedFilesDock(editedFilesDockPref)
+    ) {
       setEditedFilesDock(editedFilesDockPref);
     }
     const actionRunsDockPref = uiPrefs.actionRunsDock?.value;
-    if (isActionRunsDock(actionRunsDockPref)) {
+    if (
+      !chosen.has("actionRunsDock")
+      && isActionRunsDock(actionRunsDockPref)
+    ) {
       setActionRunsDock(actionRunsDockPref);
     }
   }, [uiPrefs]);
@@ -1760,6 +1793,7 @@ function DesktopAppShell(props: {
     composerDraftStore,
     providerModelDefaults,
     attentionPromoteOnTurnEnd: settings.snapshot?.general.attentionPromoteOnTurnEnd?.value ?? true,
+    pinnedThreadsOnTop: settings.snapshot?.general.pinnedThreadsOnTop?.value,
     onThreadActionError: handleThreadActionError,
     progressiveInitialRefresh: true,
     threadViewVisible: mainView === "thread",
@@ -1961,6 +1995,10 @@ function DesktopAppShell(props: {
     backendErrorThreadsRef.current = navigation.threads;
     backendErrorDirectoriesRef.current = navigation.directories;
   }, [navigation.directories, navigation.threads]);
+  useNavigationReadErrorNotices({
+    admissionError: navigation.pagedNavigation.admissionError,
+    resources: navigation.pagedNavigation.resources,
+  }, dispatchAppNotice);
   /* Incident-notice inputs the live notification handler reads without
      re-subscribing: which thread is on screen, whether the operator has
      pricing display on, and the loaded thread's usage rows. */
@@ -2478,6 +2516,19 @@ function DesktopAppShell(props: {
     dismissed: settings.snapshot?.experimental.fullAccessRiskWarningDismissed.value ?? false,
     onDismiss: () => handleDismissFullAccessRiskWarning(),
   });
+  // The thread on screen, read by the To-dos panel's jumps without
+  // rebuilding the panel's view on every selection.
+  const selectedThreadKeyRef = useRef(navigation.selectedThreadKey);
+  useEffect(() => {
+    selectedThreadKeyRef.current = navigation.selectedThreadKey;
+  }, [navigation.selectedThreadKey]);
+  const offscreenQuestionAnswers = useOffscreenQuestionAnswers({
+    submitThreadReply: desktopApi?.submitThreadReply,
+    findThread: (threadKey) => navigation.threads.find((candidate) =>
+      !candidate.federation
+      && buildThreadIdentityKey(candidate.source, candidate.id) === threadKey),
+    onUserRepliedToThread: reportUserRepliedToThread,
+  });
   const threadTodosView = useMemo<ThreadTodosView | undefined>(() => {
     if (!listThreadTodos || readRendererFederationTarget()) return undefined;
     const showTodoThread = (backend: AppServerBackendKind, threadId: string): void => {
@@ -2504,8 +2555,10 @@ function DesktopAppShell(props: {
       threadTitle: (todo) =>
         localThreadTitles.get(buildThreadIdentityKey(todo.backend, todo.threadId))
           ?? "Untitled thread",
-      resolve: (todo, status, resolution) =>
-        threadTodoController.resolve(todo.id, status, resolution),
+      resolve: (todo, status, resolution, options) =>
+        threadTodoController.resolve(todo.id, status, resolution, options),
+      setItemChecked: (todo, itemId, checked) =>
+        threadTodoController.setItemChecked(todo.id, itemId, checked),
       run: (todo, options) => {
         if (
           todo.action?.type !== "start_thread"
@@ -2561,7 +2614,22 @@ function DesktopAppShell(props: {
       },
       dismissQuestion: operatorRequests.dismissQuestion,
       dismissedQuestionKeys: operatorRequests.dismissedQuestionKeys,
-      openWait: (wait) => showTodoThread(wait.backend, wait.threadId),
+      openWait: (wait) => {
+        // A question opens on its card, as a message link does.
+        const messageId = wait.question?.messageId;
+        if (messageId && wait.threadKey === selectedThreadKeyRef.current) {
+          // Already on screen: scroll only. Selecting it again would refresh
+          // its git status and clear its errors for nothing.
+          queueMessageLinkRequest({ backend: wait.backend, threadId: wait.threadId, messageId });
+          return;
+        }
+        showThreadFromLink({
+          backend: wait.backend,
+          threadId: wait.threadId,
+          ...(messageId ? { messageId } : {}),
+        });
+      },
+      ...offscreenQuestionAnswers,
       threadTitleForKey: (threadKey) => localThreadTitles.get(threadKey) ?? "Untitled thread",
       threadProjectForKey: (threadKey) => localThreadProjects.get(threadKey),
     };
@@ -2570,7 +2638,9 @@ function DesktopAppShell(props: {
     listThreadTodos,
     localThreadProjects,
     localThreadTitles,
+    offscreenQuestionAnswers,
     operatorRequests,
+    queueMessageLinkRequest,
     submitServerRequest,
     requestTodoExecutionMode,
     showThreadFromLink,
@@ -2922,13 +2992,15 @@ function DesktopAppShell(props: {
         return undefined;
       }
       const localRepository = project.repositoryKey?.toLowerCase();
+      const knownRepository = Boolean(counterpart.repositoryKey || counterpart.repositoryKeys?.length)
+        && Boolean(project.repositoryKey || project.repositoryKeys?.length);
       return {
         path: counterpart.path,
         matchedBy:
           localRepository
           && counterpart.repositoryKey?.toLowerCase() === localRepository
             ? "origin"
-            : "name",
+            : knownRepository ? "remote" : "name",
       };
     },
     [findFederatedCounterpartDirectory],
@@ -2964,6 +3036,7 @@ function DesktopAppShell(props: {
             ? { path: directoryRow?.path ?? descriptor.path }
             : {}),
           ...(repositoryKey !== undefined ? { repositoryKey } : {}),
+          ...(directoryRow?.repositoryKeys !== undefined ? { repositoryKeys: directoryRow.repositoryKeys } : {}),
         }
       : undefined;
     return {
@@ -3126,6 +3199,9 @@ function DesktopAppShell(props: {
           ...(projectRow.path !== undefined ? { path: projectRow.path } : {}),
           ...(projectRow.repositoryKey !== undefined
             ? { repositoryKey: projectRow.repositoryKey }
+            : {}),
+          ...(projectRow.repositoryKeys !== undefined
+            ? { repositoryKeys: projectRow.repositoryKeys }
             : {}),
         }
       : {
@@ -3865,6 +3941,9 @@ function DesktopAppShell(props: {
           backends={backendSummaries.backends}
           onRefreshRateLimits={backendSummaries.refreshRateLimits}
           browseMode={navigation.browseMode}
+          pinnedThreadsOnTop={navigation.pinnedThreadsOnTop}
+          pinnedGroupCollapsed={navigation.pinnedGroupCollapsed}
+          onSetPinnedGroupCollapsed={navigation.setPinnedGroupCollapsed}
           threadLensesEmpty={navigation.threadLensesEmpty}
           creatingThread={navigation.creatingThread}
           pagedNavigation={navigation.pagedNavigation}

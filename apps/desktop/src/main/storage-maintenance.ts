@@ -13,7 +13,10 @@ export async function interruptStartupStorageMaintenance(): Promise<void> {
   await interruptMaintenance?.();
 }
 
-/** Await only the job, not dismissal: a hovered result window survives startup. */
+/**
+ * Await only the job, not dismissal: the result window outlives startup and
+ * closes itself on the renderer's countdown, which pauses under the pointer.
+ */
 export async function runStartupStorageMaintenance(options: {
   state: StateDb;
   existingDatabase: boolean;
@@ -50,12 +53,10 @@ export async function runStartupStorageMaintenance(options: {
     phase: "ready", historyEnabled: policy.historyEnabled, beforeBytes: bytes,
     completedThreads: 0, eligibleThreads: 0,
   };
-  let held = false;
   let running = false;
   let stopping = false;
   let finished = false;
   let worker: Electron.UtilityProcess | undefined;
-  let closeTimer: ReturnType<typeof setTimeout> | undefined;
   let ownershipTimer: ReturnType<typeof setInterval> | undefined;
   let release: () => void = () => {};
   const done = new Promise<void>((resolve) => { release = resolve; });
@@ -70,7 +71,6 @@ export async function runStartupStorageMaintenance(options: {
     interruptMaintenance = undefined;
     if (ownershipTimer) clearInterval(ownershipTimer);
     release();
-    if (!held && !window.isDestroyed()) closeTimer = setTimeout(() => { if (!held && !window.isDestroyed()) window.close(); }, 4000);
   };
   const cancel = () => {
     if (finished) return;
@@ -135,7 +135,7 @@ export async function runStartupStorageMaintenance(options: {
   };
   ipcMain.handle(STORAGE_MAINTENANCE_CHANNEL, async (event, command: StorageMaintenanceCommand) => {
     if (event.sender !== window.webContents) throw new Error("Invalid storage maintenance sender");
-    if (command.action === "hold") { held = true; window.setAlwaysOnTop(true); if (closeTimer) clearTimeout(closeTimer); }
+    if (command.action === "hold") window.setAlwaysOnTop(true);
     if (command.action === "cancel") cancel();
     if (command.action === "dismiss") window.close();
     if (command.action === "start") void start();
@@ -146,7 +146,6 @@ export async function runStartupStorageMaintenance(options: {
     return status;
   });
   window.once("closed", () => {
-    if (closeTimer) clearTimeout(closeTimer);
     ipcMain.removeHandler(STORAGE_MAINTENANCE_CHANNEL);
     cancel();
   });

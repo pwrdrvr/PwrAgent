@@ -129,10 +129,20 @@ it("defers completed provider activity bodies only for a viewer that can resolve
     { ...activity, turn: undefined },
     { ...activity, turn: { id: "turn", status: "in_progress" as const } },
     { ...activity, id: "codex-environment-setup" },
-    { ...activity, details: [{ ...activity.details[0]!, command: { ...activity.details[0]!.command, rawCommand: "pwragent.read_thread" } }] },
+    { ...activity, summary: "test", details: [{ ...activity.details[0]!, command: { ...activity.details[0]!.command, rawCommand: "pwragent.read_thread" } }] },
   ]) {
     expect(projectThreadDisplay({ ...data, replay: { ...data.replay, entries: [inline] } }, request).replay.entries[0]).not.toHaveProperty("detailsRef");
   }
+  // Untitled dynamic tool calls are expandable now, so a run of thread reads
+  // carries every result. Only a lone read draws its chip from the result
+  // and stays inline; a run defers like any other activity.
+  const read = (id: string) => ({ ...activity.details[0]!, id, command: { ...activity.details[0]!.command, rawCommand: "pwragent/read_thread" } });
+  expect(projectThreadDisplay({ ...data, replay: { ...data.replay, entries: [{ ...activity, details: [read("one"), read("two")] }] } }, request).replay.entries[0])
+    .toMatchObject({ detailsRef: { entryId: activity.id }, details: [{ command: { output: undefined } }, { command: { output: undefined } }] });
+  // A replayed lone read summarizes as "Used 1 tool", so it draws no chip
+  // and has no reason to carry its result inline.
+  expect(projectThreadDisplay({ ...data, replay: { ...data.replay, entries: [{ ...activity, details: [read("one")] }] } }, request).replay.entries[0])
+    .toHaveProperty("detailsRef");
   const fileDiff = { kind: "update" as const, diff: "+changed line", additions: 1, removals: 0 };
   const withEdits = { ...activity, details: [...activity.details, { id: "edit", kind: "write" as const, label: "Edited file", fileDiff }] };
   const projectedEdits = projectThreadDisplay({ ...data, replay: { ...data.replay, entries: [withEdits] } }, request).replay.entries[0];

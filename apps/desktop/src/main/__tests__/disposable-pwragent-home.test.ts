@@ -31,7 +31,11 @@ import workspaceConfig from "../../../../../vitest.workspace";
 import { isPathWithin } from "../../shared/path-within";
 import { PWRAGENT_HOME_ENV, resolvePwragentRoot } from "../profile";
 
-const GUARDED_PROJECTS = ["desktop-main", "desktop-renderer"];
+const GUARDED_PROJECTS = [
+  "desktop-main",
+  "desktop-renderer",
+  "desktop-renderer-node",
+];
 const PATH_SANDBOXED_PROJECTS = ["messaging", "shared", ...GUARDED_PROJECTS];
 const POSIX_SYSTEM_PATH = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"];
 const REPOSITORY_ROOT = fileURLToPath(new URL("../../../../../", import.meta.url));

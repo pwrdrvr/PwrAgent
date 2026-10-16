@@ -158,6 +158,7 @@ export const PROVIDER_CATALOG_REFRESH_EVENT_CHANNEL =
 export const AGENT_START_THREAD_CHANNEL = "agent:start-thread";
 export const AGENT_FORK_THREAD_CHANNEL = "agent:fork-thread";
 export const AGENT_START_TURN_CHANNEL = "agent:start-turn";
+export const AGENT_SUBMIT_THREAD_REPLY_CHANNEL = "agent:submit-thread-reply";
 export const AGENT_READ_QUEUED_TURN_CHANNEL = "agent:read-queued-turn";
 export const AGENT_CANCEL_QUEUED_TURN_CHANNEL = "agent:cancel-queued-turn";
 export const AGENT_RELEASE_QUEUED_TURN_CHANNEL = "agent:release-queued-turn";
@@ -167,10 +168,13 @@ export const SCHEDULED_ACTIONS_UPDATE_CHANNEL = "scheduled-actions:update";
 export const SCHEDULED_ACTIONS_CANCEL_CHANNEL = "scheduled-actions:cancel";
 export const SCHEDULED_ACTIONS_SEND_NOW_CHANNEL = "scheduled-actions:send-now";
 export const THREAD_TODOS_LIST_CHANNEL = "thread-todos:list";
+export const THREAD_REVIEWS_LIST_CHANNEL = "thread-reviews:list";
+export const THREAD_REVIEWS_UPDATE_CHANNEL = "thread-reviews:update";
 export const THREAD_TODOS_RESOLVE_CHANNEL = "thread-todos:resolve";
 export const THREAD_TODOS_RUN_ACTION_CHANNEL = "thread-todos:run-action";
 export const THREAD_TODOS_LIST_PROJECTS_CHANNEL = "thread-todos:list-projects";
 export const THREAD_TODOS_SET_PROJECT_CHANNEL = "thread-todos:set-project";
+export const THREAD_TODOS_SET_ITEM_CHECKED_CHANNEL = "thread-todos:set-item-checked";
 /**
  * Marker event: a thread's to-do cards changed. Listeners refetch with
  * `thread-todos:list`. Sent to local windows only; a peer's cards stay on
@@ -299,6 +303,8 @@ export const NAVIGATION_QUEUE_PROJECTION_CHANNEL =
   "navigation:get-queue-projection";
 export const NAVIGATION_SET_BROWSE_MODE_CHANNEL =
   "navigation:set-browse-mode";
+export const NAVIGATION_SET_PINNED_GROUP_COLLAPSED_CHANNEL =
+  "navigation:set-pinned-group-collapsed";
 export const NAVIGATION_MARK_THREAD_SEEN_CHANNEL = "navigation:mark-thread-seen";
 export const NAVIGATION_SET_THREAD_REACTION_CHANNEL =
   "navigation:set-thread-reaction";
@@ -877,3 +883,5 @@ export const USAGE_ACTIVITY_OPEN_THREAD_CHANNEL = "usage-activity:openThreadInMa
 export const KEYBINDINGS_READ_CHANNEL = "keybindings:read";
 export const KEYBINDINGS_WRITE_CHANNEL = "keybindings:write";
 export const KEYBINDINGS_CHANGED_CHANNEL = "keybindings:changed";
+
+export const INTEGRATED_TERMINAL_RENAME_CHANNEL = "integrated-terminal:rename";

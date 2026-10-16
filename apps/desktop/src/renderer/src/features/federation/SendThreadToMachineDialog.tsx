@@ -16,8 +16,8 @@ export type ThreadHandoffOperation = "copy" | "move";
 /** The receiver's checkout for this thread's project, as its index reports it. */
 export type ThreadHandoffRepositoryMatch = {
   path: string;
-  /** Which rule found it: the checkout's origin, or only the project name. */
-  matchedBy: "origin" | "name";
+  /** Which rule found it: origin, another configured remote, or project name. */
+  matchedBy: "origin" | "remote" | "name";
 };
 
 export type FindThreadHandoffRepository = (
@@ -128,6 +128,7 @@ export function SendThreadToMachineDialog(props: {
   const projectLabel = project?.label;
   const projectPath = project?.path;
   const projectRepositoryKey = project?.repositoryKey;
+  const projectRepositoryKeys = project?.repositoryKeys?.join("\n");
   useEffect(() => {
     if (!findRepository || !projectKind || projectLabel === undefined || !availableIds) {
       return;
@@ -137,6 +138,7 @@ export function SendThreadToMachineDialog(props: {
       label: projectLabel,
       ...(projectPath !== undefined ? { path: projectPath } : {}),
       ...(projectRepositoryKey !== undefined ? { repositoryKey: projectRepositoryKey } : {}),
+      ...(projectRepositoryKeys !== undefined ? { repositoryKeys: projectRepositoryKeys.split("\n") } : {}),
     };
     const ids = availableIds.split("\n");
     let cancelled = false;
@@ -153,7 +155,7 @@ export function SendThreadToMachineDialog(props: {
     return () => {
       cancelled = true;
     };
-  }, [availableIds, findRepository, projectKind, projectLabel, projectPath, projectRepositoryKey]);
+  }, [availableIds, findRepository, projectKind, projectLabel, projectPath, projectRepositoryKey, projectRepositoryKeys]);
 
   const dialogRef = useModalDialog({
     onClose: () => {
@@ -208,7 +210,9 @@ export function SendThreadToMachineDialog(props: {
       : lookup?.state === "found"
         ? `${lookup.match.matchedBy === "origin" && project?.repositoryKey
           ? `Matched by origin ${project.repositoryKey}.`
-          : "Matched by project name. Check that it is a clone of the same repository."
+          : lookup.match.matchedBy === "remote"
+            ? "Matched by a configured Git remote."
+            : "Matched by project name. Check that it is a clone of the same repository."
         } A new worktree uses the source branch when available, or starts detached at the source commit.`
         : `${target.label} has no project ${
           project?.repositoryKey ? "with this origin" : `named ${project?.label ?? "like this one"}`

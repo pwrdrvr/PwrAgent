@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 import {
   auditChannels, distributionNeeded, ghJson, previousRelease, stableVersion,
   releaseAssets, renderPackages, verifyFile, download, compareVersions, SOURCE_REPO,
+  requireCompleteAudit, auditFailure,
 } from "./package-manager-release.mjs";
 
 const digest = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -85,10 +86,10 @@ async function writePackages(out, files) {
 }
 
 export async function buildPlan({ event, ref, tag = "", force = false, publication = true, logic, families = ["homebrew", "winget"] }, api = ghJson) {
-  const audit = auditChannels(api);
+  const audit = auditChannels(api, { families });
   const selectedAudit = families.includes("homebrew") ? audit :
     { ...audit, homebrew: { ...audit.homebrew, version: audit.stable.version, pending: [] } };
-  const needed = distributionNeeded(selectedAudit, event, tag);
+  const needed = audit.status === "complete" && distributionNeeded(selectedAudit, event, tag);
   const plan = { audit, needed, native: [], assets: [], submit: false };
   // Preserve the daily publication/pending-PR guard before asset/cache resolution.
   if (!needed) return plan;
@@ -186,6 +187,7 @@ async function main(argv) {
       artifact: await readFile("scripts/build-artifact.py", "utf8"),
       assetAction: await readFile(".github/actions/distribution-asset/action.yml", "utf8"),
       release: await readFile("scripts/package-manager-release.mjs", "utf8"),
+      sourceAudit: await readFile("scripts/package-manager-release-source-audit.mjs", "utf8"),
       planner: await readFile("scripts/package-manager-release-plan.mjs", "utf8"),
       loopback: await readFile("scripts/package-manager-release-loopback.mjs", "utf8"),
     };
@@ -195,6 +197,7 @@ async function main(argv) {
       publication: process.env.GITHUB_EVENT_NAME !== "workflow_dispatch" || process.env.SUBMIT_REQUESTED === "true",
       families: process.env.WINGET_ONLY === "true" ? ["winget"] : ["homebrew", "winget"], logic });
     await prepare(plan, dir);
+    requireCompleteAudit(plan.audit);
     const mac = plan.native.filter((p) => p.family === "homebrew" && !p.reuse);
     const windows = plan.native.find((p) => p.family === "winget");
     const outputs = { needed: plan.needed, submit: plan.submit, native: plan.assets.length > 0,
@@ -234,5 +237,14 @@ async function main(argv) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  main(process.argv.slice(2)).catch((error) => { console.error(error.message); process.exitCode = 1; });
+  main(process.argv.slice(2)).catch(async (error) => {
+    const report = auditFailure(error);
+    if (process.argv[2] === "plan") {
+      const dir = resolve(process.argv[3] ?? "distribution");
+      await mkdir(dir, { recursive: true });
+      await writeFile(resolve(dir, "preflight.json"), JSON.stringify(report, null, 2) + "\n");
+    }
+    console.log(JSON.stringify(report, null, 2));
+    process.exitCode = 1;
+  });
 }

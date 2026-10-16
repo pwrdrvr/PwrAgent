@@ -4,6 +4,7 @@ import type {
   ListThreadTodosRequest,
   ThreadTodo,
   ThreadTodoAction,
+  ThreadTodoItem,
   ThreadTodoMergeMethod,
   ThreadTodoMergeMethodPreferences,
   ThreadTodoProject,
@@ -18,8 +19,10 @@ import {
   DEFAULT_THREAD_TODO_MERGE_METHOD,
   THREAD_TODO_MAX_OPEN_PER_THREAD,
   THREAD_TODO_RESOLUTION_RESULTS,
+  mergeThreadTodoItems,
   threadTodoActionProject,
   threadTodoKindForAction,
+  threadTodoOpenItems,
 } from "@pwragent/shared";
 import type { ThreadTodoStore } from "./thread-todo-store.js";
 
@@ -63,6 +66,12 @@ export type ThreadTodoActionRunners = {
 export type AddThreadTodoInput = {
   title: string;
   detail?: string;
+  /**
+   * Step texts, already checked against the limits. Re-adding a key merges
+   * them into the open card's steps (see mergeThreadTodoItems); leaving them
+   * out keeps the card's steps as they are.
+   */
+  items?: string[];
   key?: string;
   action?: ThreadTodoAction;
   /** The project name or path the thread named, resolved by the runtime. */
@@ -86,6 +95,11 @@ export type ThreadTodoActionPatch = {
 export type UpdateThreadTodoInput = {
   title?: string;
   detail?: string | null;
+  /** The card's steps restated, merged as add_todo merges them; [] clears. */
+  items?: string[];
+  /** Step ids to tick, and to untick. */
+  check?: string[];
+  uncheck?: string[];
   /** A project name or path, resolved by the runtime; null for the thread's own. */
   project?: string | null;
   action?: ThreadTodoActionPatch;
@@ -102,7 +116,12 @@ const START_THREAD_PATCH_FIELDS = [
 
 export class ThreadTodoError extends Error {
   constructor(
-    readonly code: "not_found" | "invalid_arguments" | "limit_reached" | "conflict",
+    readonly code:
+      | "not_found"
+      | "invalid_arguments"
+      | "limit_reached"
+      | "conflict"
+      | "open_items",
     message: string,
   ) {
     super(message);
@@ -170,46 +189,54 @@ export class ThreadTodoService {
       ? params.targetProject
       : undefined;
     const now = this.now();
-    const existing = input.key
-      ? this.store.findOpenByKey({ backend, threadId, key: input.key })
-      : undefined;
-    if (existing) {
-      const todo = this.store.replaceContent({
-        id: existing.id,
+    // Read and write in one transaction: a re-raise merges into the steps
+    // the operator may be ticking from another window at the same moment.
+    const result = this.store.transaction((): { todo: ThreadTodo; created: boolean } => {
+      const existing = input.key
+        ? this.store.findOpenByKey({ backend, threadId, key: input.key })
+        : undefined;
+      if (existing) {
+        const todo = this.store.replaceContent({
+          id: existing.id,
+          kind,
+          title: input.title,
+          detail: input.detail,
+          items: input.items === undefined
+            ? existing.items
+            : mergeThreadTodoItems(existing.items, input.items, this.newId),
+          action: input.action,
+          cwd: params.cwd,
+          sourceProject,
+          targetProject,
+          now,
+        });
+        return { todo, created: false };
+      }
+      if (this.store.countOpen({ backend, threadId }) >= THREAD_TODO_MAX_OPEN_PER_THREAD) {
+        throw new ThreadTodoError(
+          "limit_reached",
+          `This thread already has ${THREAD_TODO_MAX_OPEN_PER_THREAD} open to-dos. Resolve some with resolve_todo, or reuse a key to update one.`,
+        );
+      }
+      const todo = this.store.insert({
+        id: this.newId(),
+        backend,
+        threadId,
+        key: input.key,
         kind,
         title: input.title,
         detail: input.detail,
+        items: mergeThreadTodoItems(undefined, input.items ?? [], this.newId),
         action: input.action,
         cwd: params.cwd,
         sourceProject,
         targetProject,
         now,
       });
-      this.emit(todo);
-      return { todo, created: false };
-    }
-    if (this.store.countOpen({ backend, threadId }) >= THREAD_TODO_MAX_OPEN_PER_THREAD) {
-      throw new ThreadTodoError(
-        "limit_reached",
-        `This thread already has ${THREAD_TODO_MAX_OPEN_PER_THREAD} open to-dos. Resolve some with resolve_todo, or reuse a key to update one.`,
-      );
-    }
-    const todo = this.store.insert({
-      id: this.newId(),
-      backend,
-      threadId,
-      key: input.key,
-      kind,
-      title: input.title,
-      detail: input.detail,
-      action: input.action,
-      cwd: params.cwd,
-      sourceProject,
-      targetProject,
-      now,
+      return { todo, created: true };
     });
-    this.emit(todo);
-    return { todo, created: true };
+    this.emit(result.todo);
+    return result;
   }
 
   list(request: ListThreadTodosRequest = {}): ThreadTodo[] {
@@ -228,10 +255,15 @@ export class ThreadTodoService {
     id: string;
     status: ThreadTodoStatus;
     resolution?: ThreadTodoResolution;
+    /** Complete it done although steps are unchecked. Dismiss never needs it. */
+    allowOpenItems?: boolean;
   }): ThreadTodo {
     const current = this.require(params.id);
     if (current.status === params.status) {
       return current;
+    }
+    if (params.status === "done" && !params.allowOpenItems) {
+      assertNoOpenItems(current);
     }
     // The run would write its result over this when it ends: a dismissed
     // card would come back done, or take the run's error after resolving.
@@ -270,9 +302,14 @@ export class ThreadTodoService {
     id?: string;
     key?: string;
     status: Exclude<ThreadTodoStatus, "open">;
+    allowOpenItems?: boolean;
   }): ThreadTodo {
     const target = this.findForThread(params);
-    return this.resolve({ id: target.id, status: params.status });
+    return this.resolve({
+      id: target.id,
+      status: params.status,
+      ...(params.allowOpenItems ? { allowOpenItems: true } : {}),
+    });
   }
 
   /** One of the calling thread's cards, by id or by an open card's key. */
@@ -314,20 +351,102 @@ export class ThreadTodoService {
     id: string;
     title?: string;
     detail?: string | null;
+    /** Step texts restated; merged with the card's steps. [] clears them. */
+    items?: string[];
+    /** Step ids to tick and untick, after `items` is merged. */
+    check?: string[];
+    uncheck?: string[];
     /** Resolved project; null returns the card to its thread's project. */
     targetProject?: ThreadTodoProject | null;
     action?: ThreadTodoActionPatch;
   }): ThreadTodo {
-    const current = this.require(params.id);
+    const contentChanges = params.title !== undefined
+      || params.detail !== undefined
+      || params.items !== undefined
+      || params.targetProject !== undefined
+      || (params.action !== undefined && Object.keys(params.action).length > 0);
+    // Ticking steps changes nothing a running action reads, so it is
+    // allowed while a merge or a handoff runs.
+    if (!contentChanges) {
+      return this.setItemsChecked({
+        id: params.id,
+        check: params.check ?? [],
+        uncheck: params.uncheck ?? [],
+      });
+    }
+    const todo = this.store.transaction(() => {
+      const current = this.requireOpen(params.id);
+      if (this.running.has(current.id)) {
+        throw new ThreadTodoError("conflict", "This to-do's action is running now.");
+      }
+      return this.replaceOpenContent(current, params);
+    });
+    this.emit(todo);
+    return todo;
+  }
+
+  /**
+   * Tick and untick steps by id, from the card or an agent. One commit, and
+   * none when every step already reads that way. Checking the last step does
+   * not resolve the card: Done stays the operator's click.
+   */
+  setItemsChecked(params: {
+    id: string;
+    check: readonly string[];
+    uncheck: readonly string[];
+  }): ThreadTodo {
+    const both = params.check.filter((itemId) => params.uncheck.includes(itemId));
+    if (both.length > 0) {
+      throw new ThreadTodoError(
+        "invalid_arguments",
+        `Step ${both.join(", ")} cannot be both checked and unchecked.`,
+      );
+    }
+    // Checked outside the transaction first, so a tick that changes
+    // nothing (a repeat, or an agent restating) opens no transaction.
+    const before = this.requireOpen(params.id);
+    const unchanged = applyItemChecks(before.items ?? [], params.check, params.uncheck)
+      .every((item, index) => item.checked === before.items?.[index]?.checked);
+    if (unchanged) return before;
+    const todo = this.store.transaction(() => {
+      const current = this.requireOpen(params.id);
+      return this.store.setItems({
+        id: current.id,
+        items: applyItemChecks(current.items ?? [], params.check, params.uncheck),
+        now: this.now(),
+      });
+    });
+    this.emit(todo);
+    return todo;
+  }
+
+  private requireOpen(id: string): ThreadTodo {
+    const current = this.require(id);
     if (current.status !== "open") {
       throw new ThreadTodoError(
         "conflict",
         "This to-do is already resolved. Raise a new card with add_todo instead.",
       );
     }
-    if (this.running.has(current.id)) {
-      throw new ThreadTodoError("conflict", "This to-do's action is running now.");
-    }
+    return current;
+  }
+
+  private replaceOpenContent(
+    current: ThreadTodo,
+    params: {
+      title?: string;
+      detail?: string | null;
+      items?: string[];
+      check?: string[];
+      uncheck?: string[];
+      targetProject?: ThreadTodoProject | null;
+      action?: ThreadTodoActionPatch;
+    },
+  ): ThreadTodo {
+    const merged = params.items === undefined
+      ? current.items ?? []
+      : mergeThreadTodoItems(current.items, params.items, this.newId);
+    const items = applyItemChecks(merged, params.check ?? [], params.uncheck ?? []);
     const action = patchAction(current.action, params.action);
     const targetProject = params.targetProject === undefined
       ? current.targetProject
@@ -335,17 +454,16 @@ export class ThreadTodoService {
         && params.targetProject.key !== current.sourceProject?.key
         ? params.targetProject
         : undefined;
-    const todo = this.store.replaceContent({
+    return this.store.replaceContent({
       id: current.id,
       kind: current.kind,
       title: params.title ?? current.title,
       detail: params.detail === undefined ? current.detail : params.detail ?? undefined,
+      items,
       action,
       targetProject,
       now: this.now(),
     });
-    this.emit(todo);
-    return todo;
   }
 
   /**
@@ -359,6 +477,8 @@ export class ThreadTodoService {
       mergeMethod?: ThreadTodoMergeMethod;
       rememberMergeMethod?: boolean;
       startOnInstanceId?: string;
+      /** A run that succeeds marks the card done, so it asks the same. */
+      allowOpenItems?: boolean;
     } = {},
   ): Promise<ThreadTodo> {
     const todo = this.require(id);
@@ -371,6 +491,9 @@ export class ThreadTodoService {
         "invalid_arguments",
         "This to-do has no action that runs here.",
       );
+    }
+    if (!options.allowOpenItems) {
+      assertNoOpenItems(todo);
     }
     if (this.running.has(id)) {
       throw new ThreadTodoError("conflict", "This to-do's action is already running.");
@@ -489,6 +612,42 @@ export class ThreadTodoService {
       threadId: todo.threadId,
     });
   }
+}
+
+/**
+ * The completion rule: a card with unchecked steps is not done. The message
+ * names each open step and its id, so an agent can tick the ones that are
+ * finished or say why the rest no longer apply.
+ */
+function assertNoOpenItems(todo: ThreadTodo): void {
+  const open = threadTodoOpenItems(todo);
+  if (open.length === 0) return;
+  const steps = open.map((item) => `"${item.text}" (${item.id})`).join(", ");
+  throw new ThreadTodoError(
+    "open_items",
+    `This to-do has ${open.length} unchecked ${open.length === 1 ? "step" : "steps"}: ${steps}. `
+      + "Check finished steps with update_todo check, or pass allowOpenItems: true when the operator says the rest no longer apply.",
+  );
+}
+
+function applyItemChecks(
+  items: readonly ThreadTodoItem[],
+  check: readonly string[],
+  uncheck: readonly string[],
+): ThreadTodoItem[] {
+  const known = new Set(items.map((item) => item.id));
+  const unknown = [...check, ...uncheck].filter((itemId) => !known.has(itemId));
+  if (unknown.length > 0) {
+    throw new ThreadTodoError(
+      "invalid_arguments",
+      `This to-do has no step with id ${unknown.join(", ")}. list_todos shows each step's id.`,
+    );
+  }
+  return items.map((item) => {
+    if (check.includes(item.id)) return { ...item, checked: true };
+    if (uncheck.includes(item.id)) return { ...item, checked: false };
+    return item;
+  });
 }
 
 function patchAction(

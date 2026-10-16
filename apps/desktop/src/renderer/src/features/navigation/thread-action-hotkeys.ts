@@ -52,7 +52,9 @@ export function threadHotkeyFocusContext(event: KeyboardEvent): "blocked" | "fie
 
 /** The thread action a keydown presses, or `null`. */
 export function matchThreadHotkey(event: KeyboardEvent): ThreadHotkeyAction | null {
-  if (event.defaultPrevented || event.repeat || event.isComposing) {
+  // IME processing can report keyCode 229 at composition boundaries even
+  // when Chromium has already cleared isComposing.
+  if (event.defaultPrevented || event.repeat || event.isComposing || event.keyCode === 229) {
     return null;
   }
   const context = threadHotkeyFocusContext(event);
