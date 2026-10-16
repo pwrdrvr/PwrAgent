@@ -9,7 +9,7 @@ import { formatPathRelativeToDirectories } from "@pwragent/shared";
 import { useCallback, useMemo, type MouseEvent } from "react";
 import { normalizeReviewDisplayText } from "../../../../shared/review-command";
 import { pullRequestReviewPromptUrl } from "../../../../shared/pull-request-review";
-import { parsePlainReview, withoutRedundantPriorityTag } from "../../../../shared/review-output";
+import { parsePlainReview, reviewEntryFindings } from "../../../../shared/review-output";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -216,12 +216,10 @@ export function TranscriptReview(props: TranscriptReviewProps) {
     [output, props.entry.review],
   );
   // One array feeds the rows and both copy buttons, so the tag is dropped once
-  // for all three.
+  // for all three. Review tracking records the same list, in the same order.
   const findings = useMemo(
-    () => output?.findings.map(withoutRedundantPriorityTag)
-      ?? plainReview?.findings
-      ?? [],
-    [output, plainReview],
+    () => reviewEntryFindings({ output, review: props.entry.review }),
+    [output, props.entry.review],
   );
   const findingCount = output?.findings.length;
   const displayText = props.entry.displayText;

@@ -309,3 +309,17 @@ export function parsePlainReview(review: string): {
     findings,
   };
 }
+
+/**
+ * A review entry's findings in display order, without a title's redundant
+ * priority tag. The transcript renders these and review tracking records them,
+ * so a tracked finding's index names the same row in both.
+ */
+export function reviewEntryFindings(entry: {
+  output?: AppServerReviewOutput;
+  review: string;
+}): AppServerReviewFinding[] {
+  const output = entry.output ?? parseReviewOutputText(entry.review);
+  return output?.findings.map(withoutRedundantPriorityTag)
+    ?? parsePlainReview(entry.review).findings;
+}

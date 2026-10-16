@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AgentEvent, AppServerThreadReviewEntry, ThreadTodosChangedEvent } from "@pwragent/shared";
 import { threadReviewTodo } from "@pwragent/shared";
-import { THREAD_REVIEW_TEXT_LIMITS, ThreadReviewService } from "../thread-reviews/thread-review-service";
+import {
+  THREAD_REVIEW_MAX_FINDINGS,
+  THREAD_REVIEW_TEXT_LIMITS,
+  ThreadReviewService,
+} from "../thread-reviews/thread-review-service";
 import { completedThreadReview } from "../thread-reviews/thread-review-events";
 import { StateDb } from "../state/state-db";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
@@ -156,6 +160,37 @@ describe("persistent thread reviews", () => {
     })!;
     expect(review.items).toHaveLength(1);
     expect(review.items[0]).toMatchObject({ title: "Handle cancellation", status: "open", priority: 1, codeLocation: { absolute_file_path: "/repo/index.ts", line_range: { start: 10, end: 12 } } });
+  });
+
+  it("drops a title's redundant priority tag, as the transcript does", () => {
+    const location = { absolute_file_path: "/repo/index.ts", line_range: { start: 1, end: 1 } };
+    const review = service.importEntry(THREAD, {
+      type: "review", id: "tagged", review: "Review",
+      output: {
+        overall_correctness: "patch is incorrect", overall_explanation: "Two findings.",
+        findings: [
+          { title: "[P1] Handle cancellation", body: "Abort it.", priority: 1, confidence_score: 0.9, code_location: location },
+          { title: "[P2] Release the connection", body: "Close it.", confidence_score: 0.9, code_location: location },
+        ],
+      },
+    })!;
+    expect(review.items.map(({ title, priority }) => ({ title, priority }))).toEqual([
+      { title: "Handle cancellation", priority: 1 },
+      { title: "Release the connection", priority: 2 },
+    ]);
+  });
+
+  it("tracks the first findings of a review past the cap instead of failing every read", () => {
+    const location = { absolute_file_path: "/repo/index.ts", line_range: { start: 1, end: 1 } };
+    const findings = Array.from({ length: THREAD_REVIEW_MAX_FINDINGS + 5 }, (_, index) => ({
+      title: `Finding ${index}`, body: "Body.", priority: 3, confidence_score: 0.5, code_location: location,
+    }));
+    const review = service.importEntry(THREAD, {
+      type: "review", id: "huge", review: "Review",
+      output: { overall_correctness: "patch is incorrect", overall_explanation: "Many.", findings },
+    })!;
+    expect(review.items).toHaveLength(THREAD_REVIEW_MAX_FINDINGS);
+    expect(review.items.at(-1)?.title).toBe(`Finding ${THREAD_REVIEW_MAX_FINDINGS - 1}`);
   });
 
   it("imports old managed artifacts without copying the enclosing thread payload", () => {

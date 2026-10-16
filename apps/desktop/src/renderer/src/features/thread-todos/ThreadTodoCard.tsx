@@ -196,7 +196,14 @@ function TrackedReviewCard(props: ThreadTodoCardProps) {
         setSending(true);
         void Promise.resolve(onDoHere(todo, { prompt: fixReviewFindingsPrompt(todo.title, findings) }))
           .then((sent) => {
-            if (sent !== false) setSelected(new Set());
+            if (sent === false) return;
+            // Only what was sent leaves the selection; Fix now on one row
+            // keeps the others the operator picked.
+            setSelected((current) => {
+              const next = new Set(current);
+              for (const finding of findings) next.delete(finding.id);
+              return next;
+            });
           })
           .finally(() => setSending(false));
       }

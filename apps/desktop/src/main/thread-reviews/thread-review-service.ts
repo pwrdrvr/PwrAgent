@@ -10,7 +10,7 @@ import type {
   UpdateThreadReviewRequest,
 } from "@pwragent/shared";
 import type { StateDb } from "../state/state-db";
-import { parsePlainReview, parseReviewOutputText } from "../../shared/review-output";
+import { parseReviewOutputText, reviewEntryFindings } from "../../shared/review-output";
 
 /**
  * A review is a work-queue record, not a transcript copy: it keeps enough of
@@ -19,9 +19,18 @@ import { parsePlainReview, parseReviewOutputText } from "../../shared/review-out
  * "Tracked review findings" in docs/thread-history-persistence.md.
  */
 export const THREAD_REVIEW_TEXT_LIMITS = { title: 300, summary: 1_000, body: 4_000 } as const;
+/** Findings one review may track. */
+export const THREAD_REVIEW_MAX_FINDINGS = 200;
+/** Rows one list returns, as the to-do store caps the cards it is merged with. */
+const THREAD_REVIEW_LIST_LIMIT = 500;
 
 function excerpt(text: string, limit: number): string {
   return text.length > limit ? `${text.slice(0, limit - 1).trimEnd()}…` : text;
+}
+
+/** A review's id: its source key, scoped to the thread that owns it. */
+function reviewId(identity: ThreadReviewIdentity, sourceKey: string): string {
+  return createHash("sha256").update(JSON.stringify([identity.backend, identity.threadId, sourceKey])).digest("hex");
 }
 
 export class ThreadReviewError extends Error {
@@ -42,10 +51,11 @@ export class ThreadReviewService {
     return (this.db.raw.prepare(`SELECT payload FROM thread_reviews
       WHERE (? = 'all' OR status = ?)
         AND (? IS NULL OR backend = ?) AND (? IS NULL OR thread_id = ?)
-      ORDER BY updated_at DESC, review_id`).all(
+      ORDER BY updated_at DESC, review_id LIMIT ?`).all(
       request.status ?? "open", request.status ?? "open",
       request.backend ?? null, request.backend ?? null,
       request.threadId ?? null, request.threadId ?? null,
+      THREAD_REVIEW_LIST_LIMIT,
     ) as Array<{ payload: string }>).map((row) => JSON.parse(row.payload) as ThreadReview);
   }
 
@@ -56,10 +66,13 @@ export class ThreadReviewService {
   }
 
   record(identity: ThreadReviewIdentity, input: RecordThreadReviewInput): ThreadReview {
-    if (!input.sourceKey.trim() || !input.title.trim() || input.items.length > 200) {
-      throw new ThreadReviewError("invalid_arguments", "A review needs a source key, title, and at most 200 findings.");
+    if (!input.sourceKey.trim() || !input.title.trim() || input.items.length > THREAD_REVIEW_MAX_FINDINGS) {
+      throw new ThreadReviewError(
+        "invalid_arguments",
+        `A review needs a source key, title, and at most ${THREAD_REVIEW_MAX_FINDINGS} findings.`,
+      );
     }
-    const id = createHash("sha256").update(JSON.stringify([identity.backend, identity.threadId, input.sourceKey])).digest("hex");
+    const id = reviewId(identity, input.sourceKey);
     const recorded = this.get(id);
     if (recorded) return recorded;
     let changed = false;
@@ -100,8 +113,10 @@ export class ThreadReviewService {
   importEntry(identity: ThreadReviewIdentity, entry: AppServerThreadReviewEntry): ThreadReview | undefined {
     if (entry.id.endsWith(":started") || entry.turn?.status === "in_progress"
       || (entry.displayText !== undefined && !entry.output)) return undefined;
+    // Every thread read replays its reviews; a tracked one needs no parse.
+    const tracked = this.get(reviewId(identity, entry.id));
+    if (tracked) return tracked;
     const output = entry.output ?? parseReviewOutputText(entry.review);
-    const plain = output ? undefined : parsePlainReview(entry.review);
     // An interrupted review leaves an artifact with nothing in it: no verdict,
     // no findings and no text. There is nothing to address.
     if (!output && !entry.review.trim()) return undefined;
@@ -112,10 +127,14 @@ export class ThreadReviewService {
       context: entry.context,
       createdAt: entry.createdAt,
       clean: output?.findings.length === 0,
-      items: (output?.findings ?? plain?.findings)?.map((finding) => ({
-        title: finding.title, body: finding.body, priority: finding.priority,
-        codeLocation: finding.code_location,
-      })) ?? [],
+      // Past the cap the rest stay in the transcript; recording none would
+      // fail the import again on every read.
+      items: reviewEntryFindings({ output, review: entry.review })
+        .slice(0, THREAD_REVIEW_MAX_FINDINGS)
+        .map((finding) => ({
+          title: finding.title, body: finding.body, priority: finding.priority,
+          codeLocation: finding.code_location,
+        })),
     });
   }
 

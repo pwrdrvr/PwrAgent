@@ -43,6 +43,34 @@ import { subscribersForChannel } from "../window-channels";
 import { appServerService } from "./app-server";
 import { getThreadReviewService } from "../thread-reviews/thread-review-runtime";
 
+/**
+ * The note an operator's click records, which the agent reads in
+ * `list_reviews`. Reopening records none, so a repeated Reopen stays a no-op.
+ */
+function operatorReviewNote(
+  request: Pick<UpdateThreadReviewRequest, "itemId" | "status">,
+): string | undefined {
+  switch (request.status) {
+    case "open":
+      return undefined;
+    case "addressed":
+      return "Marked addressed by operator.";
+    case "handled":
+      return "Marked handled by operator.";
+    case "dismissed":
+      return request.itemId ? "Declined by operator." : "Dismissed by operator.";
+  }
+}
+
+/** A review card's resolve or Undo, as a whole-review update. */
+function reviewResolveRequest(
+  id: string,
+  status: UpdateThreadReviewRequest["status"],
+): UpdateThreadReviewRequest {
+  const note = operatorReviewNote({ status });
+  return { id, status, ...(note ? { note } : {}) };
+}
+
 function broadcastThreadTodosChanged(event: ThreadTodosChangedEvent): void {
   for (const webContents of subscribersForChannel(
     THREAD_TODOS_CHANGED_EVENT_CHANNEL,
@@ -91,7 +119,7 @@ export function registerThreadTodoIpcHandlers(options: {
   ipcMain.handle(THREAD_REVIEWS_UPDATE_CHANNEL, (_event, request: UpdateThreadReviewRequest) => ({
     review: getThreadReviewService().update({
       ...request,
-      note: request.note ?? (request.status === "dismissed" ? "Dismissed by operator." : "Marked addressed by operator."),
+      note: request.note ?? operatorReviewNote(request),
     }, "user"),
   }));
 
@@ -122,13 +150,10 @@ export function registerThreadTodoIpcHandlers(options: {
       }
       return {
         todo: request.id.startsWith("review:")
-          ? threadReviewTodo(getThreadReviewService().update({
-              id: request.id.slice("review:".length),
-              status: request.status === "done" ? "handled" : request.status,
-              ...(request.status === "open" ? {} : {
-                note: request.status === "dismissed" ? "Dismissed by operator." : "Marked handled by operator.",
-              }),
-            }, "user"))
+          ? threadReviewTodo(getThreadReviewService().update(reviewResolveRequest(
+              request.id.slice("review:".length),
+              request.status === "done" ? "handled" : request.status,
+            ), "user"))
           : getThreadTodoService().resolve({
               id: request.id,
               status: request.status,

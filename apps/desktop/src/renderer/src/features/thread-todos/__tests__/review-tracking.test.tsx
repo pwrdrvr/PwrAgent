@@ -169,6 +169,19 @@ describe("review To-do card", () => {
     expect(select).toHaveAttribute("aria-pressed", "false");
   });
 
+  it("keeps the other selected findings when Fix now sends one", async () => {
+    const current: ThreadReview = {
+      ...review,
+      items: [finding("format", "Keep the selected output format", 2), finding("abort", "Abort pending exports", 1)],
+    };
+    renderCard(current);
+    const select = await screen.findByRole("button", { name: "Select finding: Keep the selected output format" });
+    fireEvent.click(select);
+    fireEvent.click(screen.getByRole("button", { name: "Fix now: Abort pending exports" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Fix 1 selected" })).toBeEnabled());
+    expect(select).toHaveAttribute("aria-pressed", "true");
+  });
+
   it("keeps the selection when the reply did not send", async () => {
     const onDoHere = vi.fn(async () => false);
     renderCard({ ...review, items: [finding("abort", "Abort pending exports", 1), finding("retry", "Name the retry budget", 3)] }, onDoHere);
