@@ -522,9 +522,11 @@ jobs:
         timeout-minutes: 10
         # Wide-layout specs request 1440px windows. Keep the virtual desktop
         # larger so Openbox does not constrain them to Xvfb's default width.
+        # Keep Xvfb from resetting while short-lived readiness probes disconnect
+        # and Openbox is still establishing its persistent display connection.
         run: >-
           xvfb-run --auto-servernum
-          --server-args="-screen 0 1920x1080x24"
+          --server-args="-screen 0 1920x1080x24 -noreset"
           bash .github/scripts/run-linux-desktop-e2e.sh
           --shard=${{ matrix.lane }}/4
 
