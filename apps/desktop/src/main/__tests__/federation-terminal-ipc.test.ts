@@ -1,9 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebContents } from "electron";
+import type { IntegratedTerminalSessionSummary } from "../../shared/integrated-terminal";
+import type { FederationPtyOpenResponse } from "../federation/federation-pty-service";
 import {
   INTEGRATED_TERMINAL_CLOSE_CHANNEL,
   INTEGRATED_TERMINAL_CREATE_CHANNEL,
   INTEGRATED_TERMINAL_LIST_CHANNEL,
+  INTEGRATED_TERMINAL_ERROR_CHANNEL,
+  INTEGRATED_TERMINAL_OUTPUT_CHANNEL,
   INTEGRATED_TERMINAL_RESIZE_CHANNEL,
   INTEGRATED_TERMINAL_REVEAL_CHANNEL,
   INTEGRATED_TERMINAL_SESSIONS_CHANNEL,
@@ -63,6 +67,10 @@ const mocks = vi.hoisted(() => {
       }),
     ),
     remotePtyInput: vi.fn(async () => undefined),
+    remotePtyList: vi.fn(async (): Promise<IntegratedTerminalSessionSummary[]> => []),
+    remotePtySnapshot: vi.fn(async (_request: { sessionId: string }): Promise<FederationPtyOpenResponse> => {
+      throw new Error("Unknown method: pty.snapshot");
+    }),
     remotePtyFailure: undefined as Error | undefined,
     // Shared rather than built per `remotePty()` call, so a test can count
     // the requests that actually reached the wire.
@@ -139,6 +147,8 @@ vi.mock("../federation/federation-runtime", () => ({
       if (mocks.remotePtyFailure) throw mocks.remotePtyFailure;
       return {
         open: mocks.remotePtyOpen,
+        list: mocks.remotePtyList,
+        snapshot: mocks.remotePtySnapshot,
         input: mocks.remotePtyInput,
         resize: mocks.remotePtyResize,
         ack: mocks.remotePtyAck,
@@ -189,6 +199,8 @@ function resetIpcHarness() {
   mocks.federationTargets.clear();
   mocks.remotePtyEventListener = undefined;
   mocks.remotePtyFailure = undefined;
+  mocks.remotePtyList.mockReset().mockResolvedValue([]);
+  mocks.remotePtySnapshot.mockReset().mockRejectedValue(new Error("Unknown method: pty.snapshot"));
   mocks.connectedPeers = [
     {
       target: { scope: "remote" as const, instanceId: "peer-a" },
@@ -207,6 +219,200 @@ function resetIpcHarness() {
 describe("integrated terminal IPC federation branch", () => {
   beforeEach(() => {
     resetIpcHarness();
+  });
+
+  it("reattaches to an older owner using buffered output without spawning another shell", async () => {
+    const sender = fakeWebContents(7);
+    mocks.federationWindowIds.add(7);
+    mocks.federationTargets.set(7, { scope: "remote", instanceId: "peer-a" });
+    mocks.remotePtyList.mockRejectedValue(Object.assign(new Error("No federation handler registered for pty.list"), { code: "method_not_found" }));
+    mocks.remotePtySnapshot.mockRejectedValue(Object.assign(new Error("No federation handler registered for pty.snapshot"), { code: "method_not_found" }));
+    const request = { sessionId: "legacy-viewer", threadKey: "codex:remote-thread", cols: 80, rows: 24 };
+    await invoke(INTEGRATED_TERMINAL_CREATE_CHANNEL, sender, request);
+    mocks.remotePtyEventListener?.({ kind: "output", peerId: "peer-a", params: {
+      sessionId: "remote-session", seq: 1, dataBase64: Buffer.from("legacy output").toString("base64"),
+    } });
+    expect(await invoke(INTEGRATED_TERMINAL_CREATE_CHANNEL, sender, { ...request, attachOnly: true }))
+      .toMatchObject({ sessionId: "legacy-viewer", buffer: "legacy output", bufferSeq: 1 });
+    expect(mocks.remotePtyOpen).toHaveBeenCalledTimes(1);
+    mocks.remotePtyEventListener?.({ kind: "output", peerId: "peer-a", params: {
+      sessionId: "remote-session", seq: 2, dataBase64: Buffer.from("continued").toString("base64"),
+    } });
+    expect(sender.send).toHaveBeenCalledWith(INTEGRATED_TERMINAL_OUTPUT_CHANNEL,
+      expect.objectContaining({ sessionId: "legacy-viewer", seq: 2, data: "continued" }));
+    mocks.remotePtySnapshot.mockRejectedValue(new Error("remote_pty permission denied"));
+    await expect(invoke(INTEGRATED_TERMINAL_CREATE_CHANNEL, sender, request)).rejects.toThrow("permission denied");
+    mocks.remotePtySnapshot.mockRejectedValue(new Error("Peer disconnected"));
+    await expect(invoke(INTEGRATED_TERMINAL_CREATE_CHANNEL, sender, request)).rejects.toThrow("disconnected");
+    mocks.remotePtySnapshot.mockRejectedValue(new Error("Remote method failed: terminal session not found"));
+    await expect(invoke(INTEGRATED_TERMINAL_CREATE_CHANNEL, sender, request)).rejects.toThrow("session not found");
+    expect(mocks.remotePtyOpen).toHaveBeenCalledTimes(1);
+  });
+
+  it("recovers every terminal into separate attachments in two windows", async () => {
+    const summaries = [1, 2, 3].map((id): IntegratedTerminalSessionSummary => ({
+      sessionId: `owner-${id}`, threadKey: "codex:remote-thread", cwd: "/owner/worktree",
+      shell: "/bin/zsh", createdAt: id, panelHidden: false, status: "running",
+    }));
+    mocks.remotePtyList.mockResolvedValue(summaries);
+    mocks.remotePtySnapshot.mockImplementation(async ({ sessionId }) => ({
+      sessionId, cwd: "/owner/worktree", shell: "/bin/zsh", status: "running",
+      snapshot: { data: "", seq: 0, timestamp: 1, cols: 80, rows: 24, truncated: false },
+    }));
+    const windows = [fakeWebContents(7), fakeWebContents(8)];
+    const lists: IntegratedTerminalSessionSummary[][] = [];
+    for (const sender of windows) {
+      mocks.federationWindowIds.add(sender.id);
+      mocks.federationTargets.set(sender.id, { scope: "remote", instanceId: "peer-a" });
+      await invoke(INTEGRATED_TERMINAL_CREATE_CHANNEL, sender, {
+        sessionId: `viewer-${sender.id}`, threadKey: "codex:remote-thread", cols: 80, rows: 24,
+      });
+      lists.push(await invoke(INTEGRATED_TERMINAL_LIST_CHANNEL, sender) as IntegratedTerminalSessionSummary[]);
+    }
+    expect(lists.map((list) => list.length)).toEqual([3, 3]);
+    expect(new Set(lists.flat().map((session) => session.sessionId)).size).toBe(6);
+    for (const [index, sender] of windows.entries()) {
+      const sessionId = lists[index]![2]!.sessionId;
+      await invoke(INTEGRATED_TERMINAL_CREATE_CHANNEL, sender, {
+        sessionId, attachOnly: true, threadKey: "codex:remote-thread", cols: 80, rows: 24,
+      });
+      expect(mocks.remotePtySnapshot).toHaveBeenLastCalledWith({ sessionId: "owner-3" });
+    }
+    mocks.remotePtyEventListener?.({ kind: "output", peerId: "peer-a", params: {
+      sessionId: "owner-3", seq: 1, dataBase64: Buffer.from("shared output").toString("base64"),
+    } });
+    for (const [index, sender] of windows.entries()) {
+      expect(sender.send).toHaveBeenCalledWith(INTEGRATED_TERMINAL_OUTPUT_CHANNEL,
+        expect.objectContaining({ sessionId: lists[index]![2]!.sessionId, data: "shared output" }));
+    }
+    expect(mocks.remotePtyOpen).not.toHaveBeenCalled();
+  });
+
+  it("resumes a restored remote terminal in the same tab", async () => {
+    mocks.remotePtyList.mockResolvedValue([{
+      sessionId: "owner-1", threadKey: "codex:remote-thread", cwd: "/owner/worktree",
+      shell: "/bin/zsh", createdAt: 1, panelHidden: false, status: "restored", name: "Build",
+    }]);
+    mocks.remotePtySnapshot.mockImplementation(async ({ sessionId }) => ({
+      sessionId, cwd: "/owner/worktree", shell: "/bin/zsh", status: "restored",
+      snapshot: { data: "saved", seq: 0, timestamp: 1, cols: 80, rows: 24, truncated: false },
+    }));
+    const resumedShell = {
+      sessionId: "owner-1", cwd: "/owner/worktree", shell: "/bin/zsh", status: "running",
+      snapshot: { data: "saved\r\nrestored history", seq: 1, timestamp: 2, cols: 80, rows: 24, truncated: false },
+    };
+    mocks.remotePtyOpen.mockResolvedValueOnce(resumedShell);
+    const sender = fakeWebContents(7);
+    mocks.federationWindowIds.add(sender.id);
+    mocks.federationTargets.set(sender.id, { scope: "remote", instanceId: "peer-a" });
+    const request = { sessionId: "viewer-7", threadKey: "codex:remote-thread", cols: 80, rows: 24 };
+    await invoke(INTEGRATED_TERMINAL_CREATE_CHANNEL, sender, request);
+    expect(mocks.remotePtyOpen).not.toHaveBeenCalled();
+
+    const resumed = await invoke(INTEGRATED_TERMINAL_CREATE_CHANNEL, sender, { ...request, attachOnly: true, resume: true }) as {
+      sessionId: string; status?: string;
+    };
+    expect(mocks.remotePtyOpen).toHaveBeenCalledWith(expect.objectContaining({
+      backend: "codex", threadId: "remote-thread", resumeSessionId: "owner-1",
+    }));
+    expect(resumed).toMatchObject({ sessionId: "viewer-7", status: "running" });
+    const listed = await invoke(INTEGRATED_TERMINAL_LIST_CHANNEL, sender) as IntegratedTerminalSessionSummary[];
+    expect(listed).toEqual([expect.objectContaining({ sessionId: "viewer-7", status: "running" })]);
+    mocks.remotePtyEventListener?.({ kind: "output", peerId: "peer-a", params: {
+      sessionId: "owner-1", seq: 2, dataBase64: Buffer.from("live again").toString("base64"),
+    } });
+    expect(sender.send).toHaveBeenCalledWith(INTEGRATED_TERMINAL_OUTPUT_CHANNEL,
+      expect.objectContaining({ sessionId: "viewer-7", data: "live again" }));
+  });
+
+  it("keeps output the resumed shell sends before pty.open replies", async () => {
+    mocks.remotePtyList.mockResolvedValue([{
+      sessionId: "owner-1", threadKey: "codex:remote-thread", cwd: "/owner/worktree",
+      shell: "/bin/zsh", createdAt: 1, panelHidden: false, status: "restored",
+    }]);
+    // Saved history sits far ahead of the new shell's frame numbers.
+    mocks.remotePtySnapshot.mockImplementation(async ({ sessionId }) => ({
+      sessionId, cwd: "/owner/worktree", shell: "/bin/zsh", status: "restored",
+      snapshot: { data: "saved", seq: 5000, timestamp: 1, cols: 80, rows: 24, truncated: false },
+    }));
+    const resumedShell = {
+      sessionId: "owner-1", cwd: "/owner/worktree", shell: "/bin/zsh", status: "running",
+      snapshot: { data: "saved\r\nrestored history", seq: 1, timestamp: 2, cols: 80, rows: 24, truncated: false },
+    };
+    mocks.remotePtyOpen.mockImplementationOnce(async () => {
+      mocks.remotePtyEventListener?.({ kind: "output", peerId: "peer-a", params: {
+        sessionId: "owner-1", seq: 2, dataBase64: Buffer.from("first prompt$ ").toString("base64"),
+      } });
+      return resumedShell;
+    });
+    const sender = fakeWebContents(7);
+    mocks.federationWindowIds.add(sender.id);
+    mocks.federationTargets.set(sender.id, { scope: "remote", instanceId: "peer-a" });
+    const request = { sessionId: "viewer-7", threadKey: "codex:remote-thread", cols: 80, rows: 24 };
+    await invoke(INTEGRATED_TERMINAL_CREATE_CHANNEL, sender, request);
+    await invoke(INTEGRATED_TERMINAL_CREATE_CHANNEL, sender, { ...request, attachOnly: true, resume: true });
+
+    expect(sender.send).toHaveBeenCalledWith(INTEGRATED_TERMINAL_OUTPUT_CHANNEL,
+      expect.objectContaining({ sessionId: "viewer-7", data: "first prompt$ ", seq: 2 }));
+    expect(sender.send).not.toHaveBeenCalledWith(INTEGRATED_TERMINAL_ERROR_CHANNEL, expect.anything());
+  });
+
+  it("releases the saved record when an older owner resumes under a new id", async () => {
+    mocks.remotePtyList.mockResolvedValue([{
+      sessionId: "owner-1", threadKey: "codex:remote-thread", cwd: "/owner/worktree",
+      shell: "/bin/zsh", createdAt: 1, panelHidden: false, status: "restored",
+    }]);
+    mocks.remotePtySnapshot.mockImplementation(async ({ sessionId }) => ({
+      sessionId, cwd: "/owner/worktree", shell: "/bin/zsh", status: "restored",
+      snapshot: { data: "saved", seq: 3, timestamp: 1, cols: 80, rows: 24, truncated: false },
+    }));
+    mocks.remotePtyOpen.mockResolvedValueOnce({ sessionId: "owner-9", cwd: "/owner/worktree", shell: "/bin/zsh" });
+    const sender = fakeWebContents(7);
+    mocks.federationWindowIds.add(sender.id);
+    mocks.federationTargets.set(sender.id, { scope: "remote", instanceId: "peer-a" });
+    const request = { sessionId: "viewer-7", threadKey: "codex:remote-thread", cols: 80, rows: 24 };
+    await invoke(INTEGRATED_TERMINAL_CREATE_CHANNEL, sender, request);
+    await invoke(INTEGRATED_TERMINAL_CREATE_CHANNEL, sender, { ...request, attachOnly: true, resume: true });
+
+    expect(mocks.remotePtyClose).toHaveBeenCalledWith({ sessionId: "owner-1" });
+    expect(mocks.remotePtyClose).not.toHaveBeenCalledWith({ sessionId: "owner-9" });
+  });
+
+  it("never attaches one owner shell to a window twice during discovery", async () => {
+    const summaries = [1, 2].map((id): IntegratedTerminalSessionSummary => ({
+      sessionId: `owner-${id}`, threadKey: "codex:remote-thread", cwd: "/owner/worktree",
+      shell: "/bin/zsh", createdAt: id, panelHidden: false, status: "running",
+    }));
+    mocks.remotePtyList.mockResolvedValue(summaries);
+    mocks.remotePtySnapshot.mockImplementation(async ({ sessionId }) => ({
+      sessionId, cwd: "/owner/worktree", shell: "/bin/zsh", status: "running",
+      snapshot: { data: "", seq: 0, timestamp: 1, cols: 80, rows: 24, truncated: false },
+    }));
+    mocks.remotePtyOpen.mockResolvedValueOnce({
+      sessionId: "owner-3", cwd: "/owner/worktree", shell: "/bin/zsh",
+    });
+    const sender = fakeWebContents(7);
+    mocks.federationWindowIds.add(sender.id);
+    mocks.federationTargets.set(sender.id, { scope: "remote", instanceId: "peer-a" });
+    const create = async (sessionId: string) => await invoke(INTEGRATED_TERMINAL_CREATE_CHANNEL, sender, {
+      sessionId, threadKey: "codex:remote-thread", cols: 80, rows: 24,
+    });
+    await create("viewer-a");
+    // A renderer that has not yet heard the session list asks again with a
+    // fresh id. Discovery must not hand it a shell this window already holds.
+    await create("viewer-b");
+
+    const owners = (await invoke(INTEGRATED_TERMINAL_LIST_CHANNEL, sender) as IntegratedTerminalSessionSummary[])
+      .map((session) => session.sessionId);
+    expect(owners).toHaveLength(3);
+    expect(owners).toContain("viewer-b");
+    expect(mocks.remotePtyOpen).toHaveBeenCalledTimes(1);
+    mocks.remotePtyEventListener?.({ kind: "output", peerId: "peer-a", params: {
+      sessionId: "owner-1", seq: 1, dataBase64: Buffer.from("only once").toString("base64"),
+    } });
+    const deliveries = vi.mocked(sender.send).mock.calls.filter(([channel, payload]) =>
+      channel === INTEGRATED_TERMINAL_OUTPUT_CHANNEL && (payload as { data?: string }).data === "only once");
+    expect(deliveries).toHaveLength(1);
   });
 
   it("routes a local window's create to the local PTY service", async () => {
@@ -453,14 +659,14 @@ describe("integrated terminal IPC federation branch", () => {
       // An id the viewer does not hold opens a second shell on the owner. The
       // owner still mints the id it answers to — the viewer's registry is
       // keyed by the owner's, which is what `pty.attach` will have to name.
-      await open("not-a-live-terminal");
+      await open("viewer-session-b");
       const sessions = (await invoke(
         INTEGRATED_TERMINAL_LIST_CHANNEL,
         sender,
       )) as Array<{ sessionId: string }>;
       expect(sessions.map((session) => session.sessionId)).toEqual([
         "remote-session-a",
-        "remote-session-b",
+        "viewer-session-b",
       ]);
     }
 
@@ -469,7 +675,7 @@ describe("integrated terminal IPC federation branch", () => {
       await openTwo(sender);
 
       await invoke(INTEGRATED_TERMINAL_CLOSE_CHANNEL, sender, {
-        sessionId: "remote-session-b",
+        sessionId: "viewer-session-b",
       });
 
       expect(mocks.remotePtyClose).toHaveBeenCalledTimes(1);

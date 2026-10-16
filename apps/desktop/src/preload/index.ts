@@ -602,6 +602,7 @@ import type {
   CodexProtocolCaptureStatus,
 } from "../shared/codex-protocol-capture";
 import type {
+  IntegratedTerminalRenameRequest,
   IntegratedTerminalCloseRequest,
   IntegratedTerminalContextMenuRequest,
   IntegratedTerminalCreateRequest,
@@ -769,6 +770,7 @@ import {
   DIAGNOSTICS_HEAP_SNAPSHOT_CAPTURED_EVENT_CHANNEL,
   DIAGNOSTICS_START_CODEX_PROTOCOL_CAPTURE_CHANNEL,
   DIAGNOSTICS_STOP_CODEX_PROTOCOL_CAPTURE_CHANNEL,
+  INTEGRATED_TERMINAL_RENAME_CHANNEL,
   INTEGRATED_TERMINAL_CLOSE_CHANNEL,
   INTEGRATED_TERMINAL_CONTEXT_MENU_CHANNEL,
   INTEGRATED_TERMINAL_CREATE_CHANNEL,
@@ -1891,6 +1893,8 @@ const desktopApi = Object.freeze({
       request,
     );
   },
+  renameIntegratedTerminal: async (request: IntegratedTerminalRenameRequest): Promise<void> =>
+    ipcRenderer.invoke(INTEGRATED_TERMINAL_RENAME_CHANNEL, request),
   createIntegratedTerminal: async (
     request: IntegratedTerminalCreateRequest,
   ): Promise<IntegratedTerminalCreateResponse> =>

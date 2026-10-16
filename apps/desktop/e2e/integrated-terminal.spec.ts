@@ -1,3 +1,4 @@
+import AxeBuilder from "@axe-core/playwright";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test, type Page } from "@playwright/test";
@@ -164,7 +165,7 @@ test("recovers a running terminal after the thread view unmounts", async () => {
   }
 });
 
-test("removes the integrated terminal pane when the shell exits", async () => {
+test("retains exited output until the terminal tab is explicitly closed", async () => {
   const app = await launchElectronApp({
     fixturePath: path.resolve(
       integratedTerminalSpecDir,
@@ -183,6 +184,16 @@ test("removes the integrated terminal pane when the shell exits", async () => {
     );
     await typeTerminalCommand(app.window, "exit");
 
+    const panel = app.window.getByRole("region", { name: "Thread terminals", exact: true });
+    await expect(panel.getByRole("tab")).toContainText("Exited");
+    await expect(terminalRows(app.window)).toContainText("PWRAGENT_TERMINAL_EXIT_READY");
+    await expect(panel.getByText("Shell exited", { exact: true })).toBeVisible();
+    await expect(panel.getByRole("button", { name: "Restart shell", exact: true })).toBeVisible();
+    await expect(app.window.getByRole("button", { name: "Hide integrated terminal" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await panel.getByRole("tab").press("Delete");
     await expect(app.window.getByLabel("Integrated terminal", { exact: true })).toHaveCount(0, {
       timeout: 10_000,
     });
@@ -193,4 +204,54 @@ test("removes the integrated terminal pane when the shell exits", async () => {
   } finally {
     await app.close();
   }
+});
+
+test("isolates terminal side tabs, renames, restores a renderer and retains exited output", async () => {
+  const app = await launchElectronApp({ fixturePath: path.resolve(integratedTerminalSpecDir, "fixtures/smoke/replay.fixture.json") });
+  try {
+    await openSmokeThread(app.window);
+    await openIntegratedTerminal(app.window);
+    const panel = app.window.getByRole("region", { name: "Thread terminals", exact: true });
+    const visibleTerminal = () => panel.locator('.integrated-terminal:visible');
+    const run = async (command: string) => {
+      await visibleTerminal().locator(".integrated-terminal__viewport").click();
+      await app.window.keyboard.type(command);
+      await app.window.keyboard.press("Enter");
+    };
+    await run("echo FIRST_TAB_ONLY");
+    await expect(visibleTerminal().locator(".xterm-rows")).toContainText("FIRST_TAB_ONLY");
+    await panel.getByRole("tab").press("F2");
+    await panel.getByRole("textbox", { name: "Terminal name" }).fill("Build");
+    await panel.getByRole("textbox", { name: "Terminal name" }).press("Enter");
+    await expect(panel.getByRole("tab", { name: /Build/ })).toHaveAttribute("aria-selected", "true");
+    await panel.getByRole("button", { name: "New terminal", exact: true }).click();
+    await expect(panel.getByRole("tab")).toHaveCount(2);
+    await expect(visibleTerminal().locator(".integrated-terminal__status")).not.toHaveText("Starting shell...");
+    await run("echo SECOND_TAB_ONLY");
+    await expect(visibleTerminal().locator(".xterm-rows")).toContainText("SECOND_TAB_ONLY");
+    await expect(visibleTerminal().locator(".xterm-rows")).not.toContainText("FIRST_TAB_ONLY");
+    await panel.getByRole("tab", { name: /Build/ }).click();
+    await expect(visibleTerminal().locator(".xterm-rows")).toContainText("FIRST_TAB_ONLY");
+    await expect(visibleTerminal().locator(".xterm-rows")).not.toContainText("SECOND_TAB_ONLY");
+    await panel.getByRole("tab", { name: /Build/ }).press("ArrowDown");
+    await expect(panel.getByRole("tab").nth(1)).toHaveAttribute("aria-selected", "true");
+    await app.window.reload();
+    await openSmokeThread(app.window);
+    await expect(panel.getByRole("tab")).toHaveCount(2);
+    await panel.getByRole("tab").nth(1).click();
+    await expect(visibleTerminal().locator(".xterm-rows")).toContainText("SECOND_TAB_ONLY");
+    await run("exit 7");
+    await expect(panel.getByRole("tab").nth(1)).toContainText("Exited · code 7");
+    await expect(panel.getByText("Exited with code 7", { exact: true })).toBeVisible();
+    await expect(visibleTerminal().locator(".xterm-rows")).toContainText("SECOND_TAB_ONLY");
+    const audit = await new AxeBuilder({ page: app.window }).withRules(["aria-required-children", "aria-valid-attr-value"]).setLegacyMode(true).analyze();
+    expect(audit.violations).toEqual([]);
+    await panel.getByRole("tab", { name: /Build/ }).click();
+    await expect(panel.getByText("Exited with code 7", { exact: true })).toBeHidden();
+    await panel.getByRole("tab").nth(1).click();
+    await app.window.screenshot({ path: test.info().outputPath("terminal-tabs.png") });
+    await panel.getByRole("tab").nth(1).press("Delete");
+    await expect(panel.getByRole("tab")).toHaveCount(1);
+    await expect(visibleTerminal().locator(".xterm-rows")).toContainText("FIRST_TAB_ONLY");
+  } finally { await app.close(); }
 });

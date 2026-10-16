@@ -883,3 +883,5 @@ export const USAGE_ACTIVITY_OPEN_THREAD_CHANNEL = "usage-activity:openThreadInMa
 export const KEYBINDINGS_READ_CHANNEL = "keybindings:read";
 export const KEYBINDINGS_WRITE_CHANNEL = "keybindings:write";
 export const KEYBINDINGS_CHANGED_CHANNEL = "keybindings:changed";
+
+export const INTEGRATED_TERMINAL_RENAME_CHANNEL = "integrated-terminal:rename";
