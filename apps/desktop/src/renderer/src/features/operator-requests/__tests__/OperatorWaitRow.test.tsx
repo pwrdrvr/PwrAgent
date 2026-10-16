@@ -155,4 +155,33 @@ describe("OperatorWaitRow questions", () => {
     expect(openWait).toHaveBeenCalledWith(wait);
     expect(screen.queryByRole("group")).toBeNull();
   });
+
+  it("answers another thread's question in the row when its owner can take it", async () => {
+    const wait = questionWait([{ title: "Which bucket?", options: null }]);
+    const answerQuestion = vi.fn(async (_text: string) => true);
+    const { openWait } = renderRow(wait, { current: false, answerQuestion });
+    fireEvent.click(screen.getByRole("button", { name: "Answer" }));
+    const form = screen.getByRole("group", { name: "Answer: Which bucket?" });
+    fireEvent.change(within(form).getByLabelText("Your answer"), { target: { value: "staging" } });
+    fireEvent.click(within(form).getByRole("button", { name: "Answer" }));
+    await waitFor(() => expect(answerQuestion).toHaveBeenCalledTimes(1));
+    // Answering leaves the operator where they are.
+    expect(openWait).not.toHaveBeenCalled();
+  });
+
+  it("says why the thread's owner refused the answer", async () => {
+    const wait = questionWait([{ title: "Which bucket?", options: null }]);
+    const refusal = "This thread is locked: Parked. Unlock it before starting a turn.";
+    renderRow(wait, {
+      current: false,
+      answerQuestion: vi.fn(async () => { throw new Error(refusal); }),
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Answer" }));
+    const form = screen.getByRole("group", { name: "Answer: Which bucket?" });
+    fireEvent.change(within(form).getByLabelText("Your answer"), { target: { value: "staging" } });
+    fireEvent.click(within(form).getByRole("button", { name: "Answer" }));
+    expect((await within(form).findByRole("alert")).textContent)
+      .toBe(`The answer was not sent. ${refusal}`);
+    expect(within(form).getByLabelText<HTMLTextAreaElement>("Your answer").value).toBe("staging");
+  });
 });

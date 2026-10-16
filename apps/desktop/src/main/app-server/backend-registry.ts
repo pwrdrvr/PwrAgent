@@ -18116,6 +18116,23 @@ export class DesktopBackendRegistry {
     });
   }
 
+  /**
+   * An operator's reply to a thread no composer shows, such as an answer to
+   * its question from the To-dos panel. It starts, steers or queues as a
+   * composer reply does, decided by the FIFO when it reaches the head, and
+   * carries no turn settings, so the thread's own apply.
+   */
+  async submitThreadReply(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    input: AppServerTurnInputItem[];
+  }): Promise<ThreadTurnQueueSubmissionResult> {
+    await this.assertThreadNotLocked(params.backend, params.threadId);
+    this.assertThreadNotHandingOff(params.backend, params.threadId);
+    return await this.admitThreadAttachments(params, (input, onAdmission) =>
+      this.threadTurnQueue.submitSteer({ ...params, input, origin: "manual" }, { onAdmission }));
+  }
+
   async submitHeldTurn(params: {
     queueEntryId: string;
     backend: AppServerBackendKind;

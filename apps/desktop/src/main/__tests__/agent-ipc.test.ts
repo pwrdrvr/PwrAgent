@@ -29,6 +29,7 @@ import type {
   StartReviewRequest,
   StartThreadRequest,
   StartTurnRequest,
+  SubmitThreadReplyRequest,
   SteerTurnRequest,
   SubmitServerRequestRequest,
   TrustCodexProjectRequest,
@@ -97,6 +98,23 @@ const registry = {
     }),
   ),
   submitHeldTurn: vi.fn(),
+  submitThreadReply: vi.fn(
+    async (
+      request: SubmitThreadReplyRequest,
+    ): Promise<ThreadTurnQueueSubmissionResult> => ({
+      status: "queued" as const,
+      entry: {
+        id: "reply-1",
+        backend: request.backend,
+        createdAt: 3,
+        delivery: "queued-steer" as const,
+        input: request.input,
+        origin: "manual" as const,
+        threadId: request.threadId,
+      },
+      position: 1,
+    }),
+  ),
   startReview: vi.fn(async (request: StartReviewRequest) => ({
     backend: request.backend,
     threadId: request.threadId,
@@ -1260,6 +1278,25 @@ describe("agent ipc", () => {
     });
 
     disposeAgentIpcHandlers();
+  });
+
+  it("hands an off-screen reply to the thread's FIFO and says how it was taken", async () => {
+    const { registerAgentIpcHandlers } = await import("../ipc/agent-ipc");
+    const { AGENT_SUBMIT_THREAD_REPLY_CHANNEL } = await import("../../shared/ipc");
+    registerAgentIpcHandlers();
+    const input = [{ type: "text" as const, text: "Use the staging bucket" }];
+    await expect(handlers.get(AGENT_SUBMIT_THREAD_REPLY_CHANNEL)?.({}, {
+      backend: "codex", threadId: "thread-1", input,
+    })).resolves.toEqual({
+      backend: "codex", threadId: "thread-1", queueStatus: "queued", queueEntryId: "reply-1",
+    });
+    expect(registry.submitThreadReply).toHaveBeenCalledWith({
+      backend: "codex", threadId: "thread-1", input,
+    });
+    vi.mocked(registry.submitThreadReply).mockRejectedValueOnce(new Error("This thread is locked: Parked."));
+    await expect(handlers.get(AGENT_SUBMIT_THREAD_REPLY_CHANNEL)?.({}, {
+      backend: "codex", threadId: "thread-1", input,
+    })).rejects.toThrow("This thread is locked: Parked.");
   });
 
   it("routes remote events only to subscribed windows for the owning instance", async () => {

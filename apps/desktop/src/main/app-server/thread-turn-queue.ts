@@ -284,6 +284,49 @@ export class ThreadTurnQueue {
     });
   }
 
+  /**
+   * Admits one message that joins the running turn once it reaches the FIFO
+   * head, and otherwise starts the next turn, as a composer reply that steers
+   * would. It is its own entry, so a grouped steer never absorbs it.
+   */
+  async submitSteer(
+    input: Omit<ThreadTurnQueueEntry, "id" | "createdAt" | "delivery" | "agentMessages"> &
+      Partial<Pick<ThreadTurnQueueEntry, "id" | "createdAt">>,
+    options?: { onAdmission?: () => void },
+  ): Promise<ThreadTurnQueueSubmissionResult> {
+    return await this.withDispatchSuspended(input, async () => {
+      const key = this.keyFor(input);
+      const queue = this.queueFor(key);
+      const holdReason = this.heldQueues.get(key);
+      const entry: ThreadTurnQueueEntry = {
+        ...input,
+        id: input.id ?? `thread-turn:${randomUUID()}`,
+        createdAt: input.createdAt ?? this.now(),
+        delivery: "queued-steer",
+        ...(holdReason ? { manualReleaseRequired: true, holdReason } : {}),
+      };
+      if (
+        queue.length === 0
+        && this.dispatchSuspensions.get(key) === 1
+        && !this.startingKeys.has(key)
+        && !this.runningEntries.has(key)
+        && !holdReason
+        && !(this.options.isThreadActive?.(entry) ?? false)
+      ) {
+        const starting = this.startEntry(entry);
+        options?.onAdmission?.();
+        const started = await starting;
+        return { status: "started", entry, turnId: started.turnId };
+      }
+      // The drain that ends this suspension steers it when it is the head.
+      queue.push(entry);
+      options?.onAdmission?.();
+      const position = queue.length;
+      await this.emit({ type: "queued", entry, position });
+      return { status: "queued", entry, position };
+    });
+  }
+
   close(): void {
     this.closed = true;
     for (const timer of this.drainTimers.values()) clearImmediate(timer);

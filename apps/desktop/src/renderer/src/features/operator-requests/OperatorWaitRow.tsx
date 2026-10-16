@@ -43,12 +43,12 @@ export type OperatorWaitRowProps = {
   /** Shows the wait's thread, on its card for a question. */
   openWait: (wait: OperatorWait) => void;
   /**
-   * Sends a question's answer through the composer, as the card does.
-   * Present only for a question in the thread on screen; resolves true once
-   * the composer has taken the reply.
+   * Sends a question's answer as the card does: through the composer in the
+   * thread on screen, else through the thread owner's turn FIFO. Resolves
+   * true once the reply was taken.
    */
   answerQuestion?: (text: string) => Promise<boolean>;
-  /** The composer took an answer to this question that has not landed yet. */
+  /** An answer to this question was taken but has not landed yet. */
   questionSent?: boolean;
 };
 
@@ -57,7 +57,7 @@ export type OperatorWaitRowProps = {
  * the row, since Decline and Allow are all they take. A form or a
  * questionnaire needs its card's inputs, so its row opens the thread instead.
  * A question's row opens its card in the transcript, in the thread on screen
- * too, and that thread's questions also take their answer in the row.
+ * too, and a local thread's question also takes its answer in the row.
  */
 export function OperatorWaitRow(props: OperatorWaitRowProps) {
   const { wait } = props;
@@ -212,8 +212,8 @@ export function OperatorWaitRow(props: OperatorWaitRowProps) {
         />
       );
     }
-    // Another thread's question is answered on its card: the composer that
-    // sends it is mounted only for the thread on screen.
+    // Without a send path, as before the owner could take one, another
+    // thread's question is answered on its card.
     const canAnswer = answerQuestion !== undefined || !props.current;
     return (
       <div className="thread-todos-panel__row-actions">

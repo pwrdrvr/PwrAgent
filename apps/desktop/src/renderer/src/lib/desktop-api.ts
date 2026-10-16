@@ -447,6 +447,8 @@ import type {
   StartThreadMigrationRequest,
   StartThreadMigrationResponse,
   StartTurnRequest,
+  SubmitThreadReplyRequest,
+  SubmitThreadReplyResponse,
   StartTurnResponse,
   ScheduledThreadActionIdRequest,
   ScheduledThreadActionMutationResponse,
@@ -989,6 +991,10 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
     request: RemoveCodexMcpServerRequest,
   ) => Promise<RemoveCodexMcpServerResponse>;
   startTurn?: (request: StartTurnRequest) => Promise<StartTurnResponse>;
+  /** Replies to a local thread no composer shows: start, steer or queue. */
+  submitThreadReply?: (
+    request: SubmitThreadReplyRequest,
+  ) => Promise<SubmitThreadReplyResponse>;
   readQueuedTurn?: (
     request: ReadQueuedTurnRequest,
   ) => Promise<ReadQueuedTurnResponse>;
