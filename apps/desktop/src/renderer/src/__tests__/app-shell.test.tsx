@@ -6585,6 +6585,21 @@ describe("App", () => {
   });
 
   it.each(["title button", "row padding"])("walks back and forward across threads and search after %s clicks", async (clickSurface) => {
+    // Headings and the history cursor commit separately. Observe both history
+    // destinations before the next action consumes or replaces their entries.
+    const waitForHistory = async (back?: string, forward?: string): Promise<void> => {
+      await waitFor(() => {
+        for (const [name, destination] of [["Back", back], ["Forward", forward]] as const) {
+          const button = screen.getByRole("button", { name });
+          if (destination === undefined) {
+            expect(button).toBeDisabled();
+          } else {
+            expect(button).toBeEnabled();
+            expect(button).toHaveAttribute("aria-description", destination);
+          }
+        }
+      });
+    };
     const secondThreadReady = createDeferred<void>();
     const deliveredSecondThread = vi.fn();
     const searchThreads = vi.fn(async () => ({
@@ -6792,12 +6807,13 @@ describe("App", () => {
       fireEvent.click(target, { detail: 1 });
     });
     await waitFor(() => expect(screen.getByRole("textbox", { name: "Reply" })).toHaveFocus());
-    expect(screen.getByRole("button", { name: "Back" })).toBeEnabled();
+    await waitForHistory("First cached thread");
 
     // Search unmounts Composer. Keyboard history must not replay the handled
     // mouse request when it mounts again, even with a sidebar row focused.
     await clickButton("Search threads");
     await screen.findByRole("heading", { level: 2, name: "Search" });
+    await waitForHistory("Second cached thread");
     act(() => {
       secondRow.focus();
       fireEvent.keyDown(window, { metaKey: true, code: "BracketLeft", key: "[" });
@@ -6809,9 +6825,11 @@ describe("App", () => {
       await new Promise((resolve) => requestAnimationFrame(resolve));
     });
     expect(secondRow).toHaveFocus();
+    await waitForHistory("First cached thread", "Search");
 
     // Search, then open the result (thread 1).
     await clickButton("Search threads");
+    await waitForHistory("Second cached thread");
     fireEvent.change(screen.getByRole("combobox", { name: "Search threads" }), {
       target: { value: "history" },
     });
@@ -6822,10 +6840,12 @@ describe("App", () => {
       level: 2,
       name: "First cached thread",
     });
+    await waitForHistory("Search");
 
     // Back lands on search with the results still populated — no re-query.
     await clickButton("Back");
     await screen.findByRole("heading", { level: 2, name: "Search" });
+    await waitForHistory("Second cached thread", "First cached thread");
     expect(screen.getByText("Opened from search.")).toBeInTheDocument();
     expect(searchThreads).toHaveBeenCalledTimes(1);
 
@@ -6835,6 +6855,7 @@ describe("App", () => {
       level: 2,
       name: "Second cached thread",
     });
+    await waitForHistory("First cached thread", "Search");
 
     // Back to the start, where the affordance bottoms out.
     await clickButton("Back");
@@ -6842,14 +6863,14 @@ describe("App", () => {
       level: 2,
       name: "First cached thread",
     });
-    expect(screen.getByRole("button", { name: "Back" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Forward" })).toBeEnabled();
+    await waitForHistory(undefined, "Second cached thread");
 
     await clickButton("Forward");
     await screen.findByRole("heading", {
       level: 2,
       name: "Second cached thread",
     });
+    await waitForHistory("First cached thread", "Search");
 
     // The window-level chord (⌘[) and the mouse thumb buttons drive the
     // same history.
@@ -6865,6 +6886,7 @@ describe("App", () => {
       level: 2,
       name: "First cached thread",
     });
+    await waitForHistory(undefined, "Second cached thread");
 
     await act(async () => {
       fireEvent.mouseUp(window, { button: 4 });
@@ -6874,6 +6896,7 @@ describe("App", () => {
       level: 2,
       name: "Second cached thread",
     });
+    await waitForHistory("First cached thread", "Search");
   });
 
   it("restores an unsubmitted project launchpad from thread history", async () => {

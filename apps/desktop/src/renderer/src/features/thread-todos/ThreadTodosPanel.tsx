@@ -22,7 +22,8 @@ import {
 import { OperatorWaitRow } from "../operator-requests/OperatorWaitRow";
 import { isBlockingWait, type OperatorWait } from "../operator-requests/operator-waits";
 import { ThreadTodoCard, formatTodoAge } from "./ThreadTodoCard";
-import type { ThreadTodoResolveOptions, ThreadTodosView } from "./thread-todos-view";
+import type { ThreadTodoDoHereOptions, ThreadTodoResolveOptions, ThreadTodosView } from "./thread-todos-view";
+import { operatorWaitMatchesFilter, threadTodoMatchesFilter, type ThreadTodoFilter } from "./thread-todo-filters";
 
 export type ThreadTodoScope = "thread" | "project" | "all";
 
@@ -67,6 +68,8 @@ type TodoGroup = {
 
 export type ThreadTodosPanelProps = {
   view: ThreadTodosView;
+  /** UX may supply any combination of questions, approvals, reviews, and cards. */
+  filter?: ThreadTodoFilter;
   /** `backend:threadId` of the thread on screen. */
   threadKey: string;
   /** Directory key of that thread's project, when it has one. */
@@ -74,7 +77,7 @@ export type ThreadTodosPanelProps = {
   onStartReview: (todo: ThreadTodo, options?: ThreadTodoResolveOptions) => void;
   onDoHere?: (
     todo: ThreadTodo,
-    options?: ThreadTodoResolveOptions,
+    options?: ThreadTodoDoHereOptions,
   ) => void | Promise<unknown>;
   /** Answers a question in the thread on screen, through its composer. */
   onAnswerQuestion?: (text: string) => Promise<boolean>;
@@ -148,15 +151,15 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
   };
   const openItemsIn = (lens: ThreadTodoScope): PanelItem[] => [
     ...view.waits
-      .filter((wait) => waitInScope(wait, lens))
+      .filter((wait) => waitInScope(wait, lens) && operatorWaitMatchesFilter(wait, props.filter))
       .map((wait): PanelItem => ({ type: "wait", key: wait.key, wait })),
     ...view.open
-      .filter((todo) => todoInScope(todo, lens))
+      .filter((todo) => todoInScope(todo, lens) && threadTodoMatchesFilter(todo, props.filter))
       .map((todo): PanelItem => ({ type: "todo", key: operatorTodoItemKey(todo.id), todo })),
   ];
   const items: PanelItem[] | undefined = showResolved
     ? resolved
-      ?.filter((todo) => todoInScope(todo, activeScope))
+      ?.filter((todo) => todoInScope(todo, activeScope) && threadTodoMatchesFilter(todo, props.filter))
       .map((todo) => ({ type: "todo", key: operatorTodoItemKey(todo.id), todo }))
     : openItemsIn(activeScope);
   const groups = items ? groupItems(items, activeScope, props) : undefined;
@@ -438,8 +441,11 @@ function TodoRow(props: {
             </button>
           ) : null}
           {/* A merge or a started thread happened; only a resolve can be
-              taken back, as the stack's Undo does. */}
-          {!todo.startedThread && (!todo.result || RESOLUTION_RESULTS.has(todo.result)) ? (
+              taken back, as the stack's Undo does. A handled review is
+              reopened through one of its findings, in the transcript. */}
+          {!todo.startedThread
+            && (!todo.result || RESOLUTION_RESULTS.has(todo.result))
+            && !(todo.reviewId && todo.status === "done") ? (
             <button
               type="button"
               className="thread-todos-panel__row-link"

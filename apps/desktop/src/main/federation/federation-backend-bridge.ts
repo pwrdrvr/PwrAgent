@@ -207,9 +207,25 @@ import {
   threadReplayCursorIdSpace,
 } from "../app-server/thread-replay-pagination";
 import { FEDERATION_MAX_FRAME_BYTES } from "./federation-transport";
+import type {
+  DurableTurnReceipt,
+  FederationSubmitDurableTurnRequest,
+  FederationGetDurableTurnRequest,
+  DurableSteerReceipt,
+  FederationSubmitDurableSteerRequest,
+} from "@pwragent/shared";
+import { DurableTurnRequestError, type DurableTurnRequestService } from "./durable-turn-request-service";
 
 export const FEDERATION_RESPONSE_BYTE_BUDGET =
   FEDERATION_MAX_FRAME_BYTES - 64 * 1024;
+
+/** A delegated device can only occupy its authenticated issuer's namespace. */
+export function durableFederationCallerScope(sourceInstanceId: string, callerScope?: string): string {
+  if (callerScope !== undefined && (typeof callerScope !== "string" || !callerScope || callerScope.length > 256)) {
+    throw new DurableTurnRequestError("request_invalid");
+  }
+  return JSON.stringify(["federation", sourceInstanceId, callerScope ?? ""]);
+}
 
 /**
  * Load queries answer from in-memory OS counters plus one statfs, so a
@@ -305,6 +321,23 @@ async function resolveFederationTurnInput(
   return input as AppServerTurnInputItem[];
 }
 
+/** Durable v1 cannot verify owner-local references or rewrite hashed inputs. */
+function assertDurableFederationTurnInput(input: unknown): void {
+  if (!Array.isArray(input)) throw new DurableTurnRequestError("request_invalid");
+  for (const item of input) {
+    if (!item || typeof item !== "object"
+      || item.type === "localImage" || item.type === "localFile") {
+      throw new DurableTurnRequestError("request_invalid");
+    }
+    if (item.type === "image") {
+      let protocol: string;
+      try { protocol = new URL(item.url).protocol; }
+      catch { throw new DurableTurnRequestError("request_invalid"); }
+      if (protocol === "file:") throw new DurableTurnRequestError("request_invalid");
+    }
+  }
+}
+
 export type FederationRefreshThreadPullRequestsRequest =
   RefreshOwnedThreadPullRequestsRequest;
 
@@ -340,7 +373,7 @@ type ResolvedSourceInstance = {
   celestialIcon?: CelestialIconId;
 };
 
-function authenticateMessageOrigin(params: {
+export function authenticateMessageOrigin(params: {
   messageOrigin: AppServerThreadMessageOrigin | undefined;
   resolveSourceInstance?: (
     instanceId: string,
@@ -453,6 +486,10 @@ export const FEDERATION_BACKEND_METHODS = {
   startThread: "backend.startThread",
   forkThread: "backend.forkThread",
   startTurn: "backend.startTurn",
+  submitTurnRequest: "backend.submitTurnRequest",
+  getTurnRequest: "backend.getTurnRequest",
+  submitSteerRequest: "backend.submitSteerRequest",
+  getSteerRequest: "backend.getSteerRequest",
   replaceQueuedMessage: "backend.replaceQueuedMessage",
   readQueuedTurn: "backend.readQueuedTurn",
   cancelQueuedTurn: "backend.cancelQueuedTurn",
@@ -586,6 +623,10 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.startThread]: "turn_control",
   [FEDERATION_BACKEND_METHODS.forkThread]: "turn_control",
   [FEDERATION_BACKEND_METHODS.startTurn]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.submitTurnRequest]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.getTurnRequest]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.submitSteerRequest]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.getSteerRequest]: "turn_control",
   [FEDERATION_BACKEND_METHODS.replaceQueuedMessage]: "turn_control",
   [FEDERATION_BACKEND_METHODS.readQueuedTurn]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.cancelQueuedTurn]: "turn_control",
@@ -668,6 +709,10 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
 export function additionalFederationBackendCapabilities(
   envelope: FederationRequestEnvelope,
 ): readonly FederationCapability[] {
+  if (envelope.method === FEDERATION_BACKEND_METHODS.submitTurnRequest
+    || envelope.method === FEDERATION_BACKEND_METHODS.getTurnRequest) return ["durable_turn_requests_v1"];
+  if (envelope.method === FEDERATION_BACKEND_METHODS.submitSteerRequest
+    || envelope.method === FEDERATION_BACKEND_METHODS.getSteerRequest) return ["durable_steer_requests_v1"];
   if (envelope.method !== FEDERATION_BACKEND_METHODS.steerTurn) return [];
   const request = envelope.params as Partial<SteerTurnRequest> | undefined;
   return request?.fallback ? ["scheduled_actions"] : [];
@@ -953,6 +998,7 @@ export type FederationBackendOperations = {
 export function registerFederationBackendHandlers(params: {
   router: FederationRouter;
   backend: FederationBackendOperations;
+  durableTurnRequests?: DurableTurnRequestService;
   resolveSourceInstance?: (
     instanceId: string,
   ) => ResolvedSourceInstance | undefined;
@@ -962,6 +1008,27 @@ export function registerFederationBackendHandlers(params: {
   ) => void;
   resolveTurnInput?: ResolveIncomingFederationTurnInput;
 }): void {
+  if (params.durableTurnRequests) {
+    const service = params.durableTurnRequests;
+    params.router.registerHandler(FEDERATION_BACKEND_METHODS.submitTurnRequest, async (envelope) => {
+      const request = envelope.params as FederationSubmitDurableTurnRequest;
+      assertDurableFederationTurnInput(request?.request?.input);
+      return service.submit(durableFederationCallerScope(envelope.sourceInstanceId, request?.callerScope), request);
+    });
+    params.router.registerHandler(FEDERATION_BACKEND_METHODS.getTurnRequest, async (envelope) => {
+      const request = envelope.params as FederationGetDurableTurnRequest;
+      return service.get(durableFederationCallerScope(envelope.sourceInstanceId, request?.callerScope), request);
+    });
+    params.router.registerHandler(FEDERATION_BACKEND_METHODS.submitSteerRequest, async (envelope) => {
+      const request = envelope.params as FederationSubmitDurableSteerRequest;
+      assertDurableFederationTurnInput(request?.request?.input);
+      return service.submitSteer(durableFederationCallerScope(envelope.sourceInstanceId, request?.callerScope), request);
+    });
+    params.router.registerHandler(FEDERATION_BACKEND_METHODS.getSteerRequest, async (envelope) => {
+      const request = envelope.params as FederationGetDurableTurnRequest;
+      return service.getSteer(durableFederationCallerScope(envelope.sourceInstanceId, request?.callerScope), request);
+    });
+  }
   const forwardEnvironmentSetupProgress = (
     event: CodexEnvironmentSetupProgressEvent,
     targetInstanceId: FederationInstanceId,
@@ -2319,6 +2386,23 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
       method: FEDERATION_BACKEND_METHODS.startTurn,
       params: { ...request, input },
     });
+  }
+
+  async submitTurnRequest(request: FederationSubmitDurableTurnRequest): Promise<DurableTurnReceipt> {
+    // Do not transform attachments: the canonical wire request must stay stable.
+    return this.rpc.request({ method: FEDERATION_BACKEND_METHODS.submitTurnRequest, params: request });
+  }
+
+  async getTurnRequest(request: FederationGetDurableTurnRequest): Promise<DurableTurnReceipt | null> {
+    return this.rpc.request({ method: FEDERATION_BACKEND_METHODS.getTurnRequest, params: request });
+  }
+
+  async submitSteerRequest(request: FederationSubmitDurableSteerRequest): Promise<DurableSteerReceipt> {
+    return this.rpc.request({ method: FEDERATION_BACKEND_METHODS.submitSteerRequest, params: request });
+  }
+
+  async getSteerRequest(request: FederationGetDurableTurnRequest): Promise<DurableSteerReceipt | null> {
+    return this.rpc.request({ method: FEDERATION_BACKEND_METHODS.getSteerRequest, params: request });
   }
 
   async replaceQueuedMessage(

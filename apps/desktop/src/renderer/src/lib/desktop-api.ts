@@ -15,6 +15,9 @@ import type {
   SetThreadTodoProjectRequest,
   ThreadTodoMutationResponse,
   ThreadTodosChangedEvent,
+  ThreadReview,
+  ListThreadReviewsRequest,
+  UpdateThreadReviewRequest,
   DismissOperatorQuestionRequest,
   ListOperatorRequestsResponse,
   MarkOperatorItemsSeenRequest,
@@ -998,6 +1001,8 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   listThreadTodos?: (
     request?: ListThreadTodosRequest,
   ) => Promise<ListThreadTodosResponse>;
+  listThreadReviews?: (request?: ListThreadReviewsRequest) => Promise<{ reviews: ThreadReview[] }>;
+  updateThreadReview?: (request: UpdateThreadReviewRequest) => Promise<{ review: ThreadReview }>;
   resolveThreadTodo?: (
     request: ResolveThreadTodoRequest,
   ) => Promise<ThreadTodoMutationResponse>;

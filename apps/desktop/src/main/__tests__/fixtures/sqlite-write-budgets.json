@@ -34,8 +34,20 @@
     "rowsChanged": 2,
     "statements": 2
   },
-  "agent-project-mark-read-140-threads": {"commits": 1, "note": "One explicit agent call marks 140 unread owner members across backends in one commit; observed ~0.054 MB/action (~0.54 MB/day at 10 actions), no idle writes", "observedWalBytes": 53560, "rowsChanged": 140, "statements": 140},
-  "archive-cleanup-read-only-inventory": {"commits": 0, "note": "One ownership projection and three ACP identity pages: zero SQLite writes; pacing and queue state add 0 MB/day.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "agent-project-mark-read-140-threads": {
+    "commits": 1,
+    "note": "One explicit agent call marks 140 unread owner members across backends in one commit; observed ~0.054 MB/action (~0.54 MB/day at 10 actions), no idle writes",
+    "observedWalBytes": 53560,
+    "rowsChanged": 140,
+    "statements": 140
+  },
+  "archive-cleanup-read-only-inventory": {
+    "commits": 0,
+    "note": "One ownership projection and three ACP identity pages: zero SQLite writes; pacing and queue state add 0 MB/day.",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
   "archive-retention-acp-delete": {
     "commits": 1,
     "note": "One permanent ACP deletion removes one metadata row; no recurring writes.",
@@ -127,8 +139,20 @@
     "rowsChanged": 49,
     "statements": 45
   },
-  "codex-ultrafast-profile-reset": {"commits": 3, "note": "one explicit profile reset of one Ultrafast thread, one launchpad and sticky defaults", "observedWalBytes": 16480, "rowsChanged": 13, "statements": 8},
-  "codex-ultrafast-selection": {"commits": 1, "note": "one persisted thread speed selection; no extra writes per turn or streamed event", "observedWalBytes": 16480, "rowsChanged": 1, "statements": 1},
+  "codex-ultrafast-profile-reset": {
+    "commits": 3,
+    "note": "one explicit profile reset of one Ultrafast thread, one launchpad and sticky defaults",
+    "observedWalBytes": 16480,
+    "rowsChanged": 13,
+    "statements": 8
+  },
+  "codex-ultrafast-selection": {
+    "commits": 1,
+    "note": "one persisted thread speed selection; no extra writes per turn or streamed event",
+    "observedWalBytes": 16480,
+    "rowsChanged": 1,
+    "statements": 1
+  },
   "completed-questionnaire-transcript": {
     "commits": 1,
     "note": "persist one completed questionnaire transcript summary",
@@ -220,6 +244,9 @@
     "rowsChanged": 0,
     "statements": 0
   },
+  "durable-steer-request": {"commits": 3, "note": "One explicit steer: durable admission, dispatch claim and acceptance receipt; no fallback or streamed writes.", "observedWalBytes": 24720, "rowsChanged": 3, "statements": 4},
+  "durable-turn-request": {"commits": 4, "note": "One prompt: admission, dispatch claim, dispatch receipt and terminal receipt; no payload persistence.", "observedWalBytes": 28840, "rowsChanged": 4, "statements": 5},
+  "durable-turn-request-through-queue": {"commits": 5, "note": "One prompt through the gateway and real turn queue: admission, claim, start proof, result and terminal proof.", "observedWalBytes": 32960, "rowsChanged": 5, "statements": 6},
   "existing-thread-environment-setup": {
     "commits": 2,
     "note": "one existing-thread environment selection, including setup hydration and runtime persistence; no per-event writes",
@@ -444,6 +471,13 @@
     "rowsChanged": 0,
     "statements": 0
   },
+  "mcp-automation-native-consent": {
+    "commits": 0,
+    "note": "Native automation MCP consent checks the in-memory run grant and reads the Agent selection without adding SQLite commits.",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
   "mcp-broker-request": {
     "commits": 0,
     "note": "serve 100 non-owner MCP broker list requests: read-only, 0 MB/day of SQLite writes",
@@ -451,7 +485,6 @@
     "rowsChanged": 0,
     "statements": 0
   },
-  "mcp-automation-native-consent": {"commits": 0, "note": "Native automation MCP consent checks the in-memory run grant and reads the Agent selection without adding SQLite commits.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "mcp-gateway-discovery-and-invocation": {
     "commits": 0,
     "note": "Fixed MCP gateway discovery and one scoped approved call use in-memory catalogs and the existing event flow, with no additional SQLite commits.",
@@ -459,7 +492,13 @@
     "rowsChanged": 0,
     "statements": 0
   },
-  "mcp-selection-revocation": {"commits": 1, "note": "Selection revocation shares the existing operator selection commit. No per-call or grant writes are added.", "observedWalBytes": 16480, "rowsChanged": 1, "statements": 1},
+  "mcp-selection-revocation": {
+    "commits": 1,
+    "note": "Selection revocation shares the existing operator selection commit. No per-call or grant writes are added.",
+    "observedWalBytes": 16480,
+    "rowsChanged": 1,
+    "statements": 1
+  },
   "mcp-token-rotation": {
     "commits": 1,
     "note": "persist one encrypted rotated MCP credential generation",
@@ -488,7 +527,13 @@
     "rowsChanged": 6,
     "statements": 8
   },
-  "messaging-attach-waiting-turn": {"commits": 9, "note": "one attachment with a pre-existing pending request: binding/status persistence plus one suspended activity delivery; no new timer or turn-state persistence", "observedWalBytes": 107120, "rowsChanged": 7, "statements": 9},
+  "messaging-attach-waiting-turn": {
+    "commits": 9,
+    "note": "one attachment with a pre-existing pending request: binding/status persistence plus one suspended activity delivery; no new timer or turn-state persistence",
+    "observedWalBytes": 107120,
+    "rowsChanged": 7,
+    "statements": 9
+  },
   "messaging-binding-revoke": {
     "commits": 11,
     "note": "one bus-driven binding revoke including Agent Session close status",
@@ -785,7 +830,13 @@
     "rowsChanged": 2,
     "statements": 3
   },
-  "queued-message-title-helper-row": {"commits": 6, "note": "Three queued-message title runs, two commits each: the thread's one Sub-agents row (~19 KB) plus the run's usage line (~65 KB); no running state, no idle writes. ~85 KB/title: ~4 MB/day at 50 long queued messages, ~17 MB/day at 200", "observedWalBytes": 255440, "rowsChanged": 12, "statements": 12},
+  "queued-message-title-helper-row": {
+    "commits": 6,
+    "note": "Three queued-message title runs, two commits each: the thread's one Sub-agents row (~19 KB) plus the run's usage line (~65 KB); no running state, no idle writes. ~85 KB/title: ~4 MB/day at 50 long queued messages, ~17 MB/day at 200",
+    "observedWalBytes": 255440,
+    "rowsChanged": 12,
+    "statements": 12
+  },
   "queued-scheduled-action-hold": {
     "commits": 1,
     "note": "one queued scheduled action durably held after its preceding turn fails; one boundary transition, not a timer",
@@ -940,8 +991,27 @@
     "rowsChanged": 27,
     "statements": 27
   },
-  "thread-self-rename": {"commits": 0, "note": "One ordinary-thread self-rename: zero commits/WAL bytes, projecting 0 MB/day. Notification and Undo state remain in memory, with no idle writes.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
-  "thread-self-rename-agent": {"commits": 1, "note": "One self-rename with Agent metadata: existing Agent-name overlay update, 1 commit/~16 KB WAL; 100 renames/day projects ~1.65 MB/day. Notification and Undo state remain in memory, with no idle writes.", "observedWalBytes": 16480, "rowsChanged": 1, "statements": 1},
+  "thread-review-lifecycle": {
+    "commits": 3,
+    "note": "One two-finding review, two resolutions (including automatic handling), and 100 duplicate imports/reads. One commit per boundary; no idle writes.",
+    "observedWalBytes": 28840,
+    "rowsChanged": 3,
+    "statements": 3
+  },
+  "thread-self-rename": {
+    "commits": 0,
+    "note": "One ordinary-thread self-rename: zero commits/WAL bytes, projecting 0 MB/day. Notification and Undo state remain in memory, with no idle writes.",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
+  "thread-self-rename-agent": {
+    "commits": 1,
+    "note": "One self-rename with Agent metadata: existing Agent-name overlay update, 1 commit/~16 KB WAL; 100 renames/day projects ~1.65 MB/day. Notification and Undo state remain in memory, with no idle writes.",
+    "observedWalBytes": 16480,
+    "rowsChanged": 1,
+    "statements": 1
+  },
   "thread-spend-alert-boundary": {
     "commits": 2,
     "note": "one pending total-spend alert and one renderer acknowledgement; repeated updates and acknowledgements are read-only",
@@ -1054,7 +1124,13 @@
     "rowsChanged": 1,
     "statements": 1
   },
-  "token-miser-retrieval-request": {"commits": 1, "note": "Full cached prompt attribution shares one existing retrieval commit (~5.9 MB/day at one retrieval/minute); zero additional commits or MB/day.", "observedWalBytes": 4120, "rowsChanged": 1, "statements": 1},
+  "token-miser-retrieval-request": {
+    "commits": 1,
+    "note": "Full cached prompt attribution shares one existing retrieval commit (~5.9 MB/day at one retrieval/minute); zero additional commits or MB/day.",
+    "observedWalBytes": 4120,
+    "rowsChanged": 1,
+    "statements": 1
+  },
   "token-miser-turn-flush": {
     "commits": 1,
     "note": "Flush ten gate counters in one turn-boundary transaction.",
@@ -1076,8 +1152,20 @@
     "rowsChanged": 26,
     "statements": 27
   },
-  "usage-line-account-attribution": {"commits": 1, "note": "Identity rides the existing line transaction: zero additional commits and observed WAL bytes versus the baseline; ~6.6 MB/day existing ledger cost at 100 new lines/day, 0 MB/day measured attribution overhead", "observedWalBytes": 65920, "rowsChanged": 3, "statements": 3},
-  "usage-line-without-account-attribution": {"commits": 1, "note": "Baseline line write: one existing commit; compare usage-line-account-attribution for account overhead", "observedWalBytes": 65920, "rowsChanged": 3, "statements": 3},
+  "usage-line-account-attribution": {
+    "commits": 1,
+    "note": "Identity rides the existing line transaction: zero additional commits and observed WAL bytes versus the baseline; ~6.6 MB/day existing ledger cost at 100 new lines/day, 0 MB/day measured attribution overhead",
+    "observedWalBytes": 65920,
+    "rowsChanged": 3,
+    "statements": 3
+  },
+  "usage-line-without-account-attribution": {
+    "commits": 1,
+    "note": "Baseline line write: one existing commit; compare usage-line-account-attribution for account overhead",
+    "observedWalBytes": 65920,
+    "rowsChanged": 3,
+    "statements": 3
+  },
   "usage-turn-shutdown-completion": {
     "commits": 1,
     "note": "Two turns still running at shutdown: one commit per shutdown, only when a running turn has a ledger row",
