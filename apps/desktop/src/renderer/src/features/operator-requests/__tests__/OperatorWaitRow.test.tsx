@@ -115,6 +115,32 @@ describe("OperatorWaitRow questions", () => {
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Answer" }));
   });
 
+  it("keeps focus on the row once an answer is sent", async () => {
+    const wait = questionWait([{ title: "Which bucket?", options: null }]);
+    renderRow(wait, { answerQuestion: vi.fn(async (_text: string) => true) });
+    fireEvent.click(screen.getByRole("button", { name: "Answer" }));
+    fireEvent.change(screen.getByLabelText("Your answer"), { target: { value: "staging" } });
+    fireEvent.click(within(screen.getByRole("group")).getByRole("button", { name: "Answer" }));
+    await waitFor(() => expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Show question in thread: Which bucket?" }),
+    ));
+  });
+
+  it("closes the form when the row leaves the thread on screen", () => {
+    const wait = questionWait([{ title: "Which bucket?", options: null }]);
+    const props = {
+      wait, unread: false, respond: vi.fn(), openWait: vi.fn(),
+      dismissQuestion: vi.fn(async () => undefined),
+    };
+    const answerQuestion = vi.fn(async (_text: string) => true);
+    const { rerender } = render(<OperatorWaitRow {...props} current answerQuestion={answerQuestion} />);
+    fireEvent.click(screen.getByRole("button", { name: "Answer" }));
+    expect(screen.getByRole("group")).toBeTruthy();
+    rerender(<OperatorWaitRow {...props} current={false} />);
+    rerender(<OperatorWaitRow {...props} current answerQuestion={answerQuestion} />);
+    expect(screen.queryByRole("group")).toBeNull();
+  });
+
   it("says the answer is sent until the reply lands", () => {
     const wait = questionWait([{ title: "Which bucket?", options: null }]);
     renderRow(wait, { answerQuestion: vi.fn(async () => true), questionSent: true });

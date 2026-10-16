@@ -65,17 +65,27 @@ export function OperatorWaitRow(props: OperatorWaitRowProps) {
   const [error, setError] = useState<string>();
   const [answering, setAnswering] = useState(false);
   const answerButtonRef = useRef<HTMLButtonElement | null>(null);
-  const restoreAnswerFocusRef = useRef(false);
+  const rowMainRef = useRef<HTMLButtonElement | null>(null);
+  // Where focus goes once the form closes: Answer after Cancel, the row
+  // after a send, since the form held focus and is gone.
+  const restoreFocusRef = useRef<"answer" | "row" | undefined>(undefined);
   const KindIcon = waitIcon(wait);
   const question = wait.kind === "question";
   // A question's row goes to its card, so it is a control in every thread.
   const opensWait = !props.current || question;
 
   useEffect(() => {
-    if (answering || !restoreAnswerFocusRef.current) return;
-    restoreAnswerFocusRef.current = false;
-    answerButtonRef.current?.focus();
+    const target = restoreFocusRef.current;
+    if (answering || !target) return;
+    restoreFocusRef.current = undefined;
+    (target === "answer" ? answerButtonRef : rowMainRef).current?.focus();
   }, [answering]);
+  // Leaving the thread closes the form, or coming back would reopen it and
+  // pull focus into the panel.
+  const canAnswerHere = props.answerQuestion !== undefined;
+  useEffect(() => {
+    if (!canAnswerHere) setAnswering(false);
+  }, [canAnswerHere]);
   const age = formatTodoAge(wait.createdAt);
   const sub = [wait.detail, props.threadName].filter(Boolean).join(" · ");
 
@@ -121,6 +131,7 @@ export function OperatorWaitRow(props: OperatorWaitRowProps) {
       {props.unread ? <span className="thread-todos-panel__unread" aria-hidden="true" /> : null}
       {opensWait ? (
         <button
+          ref={rowMainRef}
           type="button"
           className="thread-todos-panel__row-main"
           aria-label={mainLabel}
@@ -187,12 +198,15 @@ export function OperatorWaitRow(props: OperatorWaitRowProps) {
           question={wait.question}
           label={`Answer: ${wait.title}`}
           onCancel={() => {
-            restoreAnswerFocusRef.current = true;
+            restoreFocusRef.current = "answer";
             setAnswering(false);
           }}
           onSubmit={async (text) => {
             const accepted = await answerQuestion(text);
-            if (accepted) setAnswering(false);
+            if (accepted) {
+              restoreFocusRef.current = "row";
+              setAnswering(false);
+            }
             return accepted;
           }}
         />

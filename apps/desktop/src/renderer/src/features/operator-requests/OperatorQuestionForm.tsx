@@ -1,16 +1,12 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import type { CodexAsyncQuestion, OperatorAsyncQuestion } from "@pwragent/shared";
 import {
-  codexAsyncQuestionItemId,
-  formatCodexAsyncQuestionReply,
-  type CodexAsyncQuestion,
-  type OperatorAsyncQuestion,
-} from "@pwragent/shared";
+  asyncQuestionDraftAnswer,
+  formatAsyncQuestionDraftReply,
+  initialAsyncQuestionDrafts,
+  type AsyncQuestionDraft,
+} from "../thread-detail/async-question-drafts";
 import { resizeFreeformTextarea } from "../thread-detail/PendingQuestionnaire";
-
-type QuestionDraft = {
-  option?: string;
-  text: string;
-};
 
 export type OperatorQuestionFormProps = {
   question: OperatorAsyncQuestion;
@@ -30,8 +26,8 @@ export type OperatorQuestionFormProps = {
  */
 export function OperatorQuestionForm(props: OperatorQuestionFormProps) {
   const { question } = props;
-  const [drafts, setDrafts] = useState<QuestionDraft[]>(() =>
-    question.questions.map((entry) => ({ option: entry.options?.[0], text: "" })));
+  const [drafts, setDrafts] = useState<AsyncQuestionDraft[]>(() =>
+    initialAsyncQuestionDrafts(question.questions));
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string>();
   const formRef = useRef<HTMLDivElement | null>(null);
@@ -42,23 +38,22 @@ export function OperatorQuestionForm(props: OperatorQuestionFormProps) {
     formRef.current?.querySelector<HTMLElement>("button, textarea")?.focus();
   }, []);
 
-  const draftAnswer = (index: number): string =>
-    drafts[index]?.text.trim() || drafts[index]?.option || "";
   const readyIndexes = question.questions.flatMap((_, index) =>
-    draftAnswer(index) ? [index] : []);
+    asyncQuestionDraftAnswer(drafts[index]) ? [index] : []);
 
-  const updateDraft = (index: number, update: Partial<QuestionDraft>): void => {
+  const updateDraft = (index: number, update: Partial<AsyncQuestionDraft>): void => {
     setDrafts((current) =>
       current.map((draft, draftIndex) => (draftIndex === index ? { ...draft, ...update } : draft)));
   };
 
   const submit = async (): Promise<void> => {
     if (sending) return;
-    const text = formatCodexAsyncQuestionReply(readyIndexes.map((index) => ({
-      questionItemId: codexAsyncQuestionItemId(question.messageId, index),
-      question: question.questions[index]?.title ?? "",
-      answer: draftAnswer(index),
-    })));
+    const text = formatAsyncQuestionDraftReply(
+      question.messageId,
+      question.questions,
+      drafts,
+      readyIndexes,
+    );
     if (!text) return;
     setSending(true);
     setError(undefined);
@@ -125,9 +120,9 @@ export function OperatorQuestionForm(props: OperatorQuestionFormProps) {
 function QuestionField(props: {
   number?: number;
   busy: boolean;
-  draft: QuestionDraft;
+  draft: AsyncQuestionDraft;
   question: CodexAsyncQuestion;
-  onDraftChange: (update: Partial<QuestionDraft>) => void;
+  onDraftChange: (update: Partial<AsyncQuestionDraft>) => void;
 }) {
   const titleId = useId();
   const textRef = useRef<HTMLTextAreaElement | null>(null);
