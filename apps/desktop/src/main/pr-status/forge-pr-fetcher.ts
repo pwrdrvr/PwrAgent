@@ -8,7 +8,7 @@ import { parseForgePrRefFromUrl, type ForgePrRef } from "./forge-pr-ref";
 
 export { parseForgePrRefFromUrl, type ForgePrRef } from "./forge-pr-ref";
 
-type BranchLookup = { cwd: string; branch: string; allowPrimed?: boolean; onProviderFailure?: () => void };
+type BranchLookup = { providers?: ForgeKind[]; cwd: string; branch: string; allowPrimed?: boolean; onProviderFailure?: () => void };
 type UrlLookup = { cwd: string; url: string; onProviderFailure?: () => void };
 type PollOptions = { reconnect?: boolean; requestTokenTaken?: boolean };
 
@@ -109,7 +109,7 @@ export class ForgePrFetcher {
   async fetchAllPullRequestsForBranch(params: BranchLookup): Promise<PrSummary[]> {
     const results: PrSummary[] = [];
     for (const kind of FORGE_KINDS) {
-      if (!this.isProviderEnabled(kind)) continue;
+      if (!this.isProviderEnabled(kind) || (params.providers && !params.providers.includes(kind))) continue;
       try {
         results.push(...await this.providers[kind].fetchForBranch(params));
       } catch {

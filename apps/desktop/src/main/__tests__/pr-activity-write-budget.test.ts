@@ -10,6 +10,53 @@ import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 
 afterEach(() => vi.unstubAllEnvs());
 
+it("refunds rejected repair submissions within the existing SQLite commit boundaries", async () => {
+  vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+  const temp = createTempStateDb("pr-rejected-submission-budget-");
+  const db = StateDb.open(temp.dbPath);
+  const store = new SqliteOverlayStore(db);
+  const now = 1_000;
+  const pr: PrSummary = {
+    provider: "github.com", org: "example", repo: "project", number: 1,
+    url: "https://github.com/example/project/pull/1", state: "failing",
+    lifecycleState: "open", mergeState: "mergeable", checkState: "failing",
+    headSha: "a".repeat(40),
+  };
+  const coordinator = new PrAutoDispatchCoordinator({
+    store,
+    registry: { submitTurnIfIdle: async () => { throw new Error("Backend disconnected before turn start"); } },
+    getCurrentPr: () => pr,
+    getBudgetConfig: () => ({ capacity: 1, refillPerMinute: 0, pauseWhenEmpty: true }),
+    now: () => now,
+  });
+  try {
+    await store.setThreadPrAutoDispatchEnabled({ backend: "codex", threadId: "fixture", enabled: true });
+    const [scheduled] = await coordinator.handleStatusSnapshot({
+      pr, threadKeys: ["codex:fixture"], observedAt: now, backgroundPollingEnabled: true,
+    });
+    const { writes } = await measureSqliteWrites(async () => {
+      await coordinator.sendPendingNow({
+        backend: "codex", threadId: "fixture", fingerprint: scheduled!.fingerprint!,
+      });
+    });
+    expect(await store.getThreadPrAutoDispatchAttemptCount({
+      backend: "codex", threadId: "fixture", prKey: "github.com/example/project#1",
+    })).toBe(0);
+    expect(await store.peekPrAutoDispatchBudgetStatus({
+      config: { capacity: 1, refillPerMinute: 0, pauseWhenEmpty: true }, now,
+    })).toMatchObject({ availableTokens: 1, paused: false });
+    expectSqliteWriteBudget({
+      scenario: "pr-auto-dispatch-rejected-submission",
+      writes,
+      note: "Rejected submission: 3 commits/~61.8 KB WAL (~1.48 MB/day at one rejection/hour); the attempt refund shares the existing completion commit; no automatic retry of the same failed fingerprint",
+    });
+  } finally {
+    coordinator.close();
+    db.close();
+    removeTempStateDbDir(temp.tempDir);
+  }
+});
+
 it("keeps repeated observations and diagnostic reads free of SQLite writes", async () => {
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
   const temp = createTempStateDb("pr-activity-budget-");

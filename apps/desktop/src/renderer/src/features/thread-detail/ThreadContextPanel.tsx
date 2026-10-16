@@ -52,7 +52,11 @@ import { resolveThreadWorkingStatePath } from "../../lib/thread-working-state-pa
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { ThreadAutomationsPanel } from "../automations/ThreadAutomationsPanel";
 import { ThreadTodosPanel } from "../thread-todos/ThreadTodosPanel";
-import type { ThreadTodosView } from "../thread-todos/thread-todos-view";
+import type {
+  ThreadTodoDoHereOptions,
+  ThreadTodoResolveOptions,
+  ThreadTodosView,
+} from "../thread-todos/thread-todos-view";
 import { PrActivityPanel } from "./context-panels/PrActivityPanel";
 import { ThreadInfoPanel } from "./context-panels/ThreadInfoPanel";
 import { ProviderStatusPanel } from "./context-panels/ProviderStatusPanel";
@@ -106,8 +110,12 @@ type ThreadContextPanelProps = {
     view: ThreadTodosView;
     threadKey: string;
     projectKey?: string;
-    onStartReview: (todo: ThreadTodo) => void;
-    onDoHere?: (todo: ThreadTodo) => void;
+    onStartReview: (todo: ThreadTodo, options?: ThreadTodoResolveOptions) => void;
+    onDoHere?: (todo: ThreadTodo, options?: ThreadTodoDoHereOptions) => void;
+    /** Answers a question in this thread through its composer. */
+    onAnswerQuestion?: (text: string) => Promise<boolean>;
+    /** This thread's answers the composer took, by question item id. */
+    sentQuestionAnswers?: ReadonlyMap<string, string>;
   };
   activeTurnId?: string;
   backendError?: string;
@@ -786,6 +794,8 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             projectKey={props.todos.projectKey}
             onStartReview={props.todos.onStartReview}
             onDoHere={props.todos.onDoHere}
+            onAnswerQuestion={props.todos.onAnswerQuestion}
+            sentQuestionAnswers={props.todos.sentQuestionAnswers}
           />
         );
       case "edits":

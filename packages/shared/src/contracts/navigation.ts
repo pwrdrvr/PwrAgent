@@ -1122,6 +1122,8 @@ export type NavigationDirectoryGitStatus = {
    * origin, and for a directory that is not a Git repository at all.
    */
   originRepository?: string;
+  /** Normalized fetch remote repositories, including origin, for fork/upstream matching. */
+  remoteRepositories?: string[];
   syncState?:
     | "in-sync"
     | "ahead"
@@ -1845,6 +1847,8 @@ export type NavigationDirectoryRow = {
    * consumers must fall back to `key`.
    */
   repositoryKey?: string;
+  /** Configured fetch remote identities from `gitStatus.remoteRepositories`. */
+  repositoryKeys?: string[];
   localAvailability?: "unconfigured";
   counts: NavigationCounts;
   pinnedRootCount: number;
@@ -1908,6 +1912,16 @@ export type NavigationQuery =
       kind: "lens";
       lens: "attention" | "inbox" | "recents";
       filter?: string;
+      /**
+       * Updated and Created (`inbox`, `recents`) with pinned threads on top:
+       * split the lens by its root's pin, so the Pinned group and the
+       * time-sorted list page independently. A thread's whole
+       * subtree goes with its root. An owner that honors the split answers
+       * with `collectionSize` (the pinned bucket's root count); an older
+       * owner ignores the field and answers with every thread, which the
+       * viewer then filters by each root's own pin.
+       */
+      roots?: "pinned" | "unpinned";
     }
   | {
       kind: "directory";
@@ -1922,6 +1936,13 @@ export type NavigationQuery =
       kind: "exact";
       identities: NavigationIdentity[];
       includeAncestry?: boolean;
+      /**
+       * Viewer inventory only, and never sent to a peer: include each peer
+       * identity's row as held by this machine's peer summary cache, which
+       * reads owners in the background and keeps an offline owner's last
+       * rows. The read never waits on a peer.
+       */
+      resolveFromOwners?: true;
     }
   | {
       kind: "search";
@@ -2142,6 +2163,14 @@ export type SetNavigationBrowseModeRequest = {
 
 export type SetNavigationBrowseModeResponse = {
   browseMode: NavigationBrowseMode;
+};
+
+export type SetPinnedGroupCollapsedRequest = {
+  collapsed: boolean;
+};
+
+export type SetPinnedGroupCollapsedResponse = {
+  collapsed: boolean;
 };
 
 export type MarkThreadSeenRequest = {

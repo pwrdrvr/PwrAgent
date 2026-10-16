@@ -92,6 +92,9 @@ export class FederatedDirectoryIndexCache {
         ...(directory.repositoryKey !== undefined
           ? { repositoryKey: directory.repositoryKey }
           : {}),
+        ...(directory.repositoryKeys !== undefined
+          ? { repositoryKeys: [...directory.repositoryKeys] }
+          : {}),
         ...(directory.localAvailability !== undefined
           ? { localAvailability: directory.localAvailability }
           : {}),

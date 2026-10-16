@@ -38,8 +38,16 @@ function apiFixture({ published = false, pending = false, hit = false, cacheRef 
     if (endpoint === `repos/${SOURCE_REPO}/releases/latest`) return structuredClone(current);
     if (endpoint === `repos/${SOURCE_REPO}/releases/tags/${previous.tag_name}`) return structuredClone(previous);
     if (endpoint.includes(`${SOURCE_REPO}/releases?`)) return [current, previous];
-    if (endpoint.includes(`${TAP_REPO}/contents`)) return { content: Buffer.from(`  version "${published ? "1.1.4" : "1.1.3"}"\n`).toString("base64") };
-    if (endpoint.includes(`${WINGET_REPO}/contents/${WINGET_PATH}`)) return [{ type: "dir", name: published ? "1.1.4" : "1.1.3" }];
+    if (/^repos\/[^/]+\/[^/?]+$/.test(endpoint)) return { full_name: endpoint.slice(6), private: false, default_branch: "main" };
+    if (endpoint.includes("/commits/")) return { sha: "a".repeat(40) };
+    const sourceRelease = published ? current : previous;
+    const encode = (content) => ({ encoding: "base64", content: Buffer.from(content).toString("base64") });
+    const files = metadataPackages(sourceRelease).files;
+    if (endpoint.includes(`${TAP_REPO}/contents`)) return encode(files["Casks/pwragent.rb"]);
+    if (endpoint.includes(`${WINGET_REPO}/contents/${WINGET_PATH}`)) {
+      if (endpoint.includes(".installer.yaml")) return encode(files[`${WINGET_PATH}/${sourceRelease.tag_name.slice(1)}/PwrDrvr.PwrAgent.installer.yaml`]);
+      return [{ type: "dir", name: sourceRelease.tag_name.slice(1) }];
+    }
     if (endpoint.startsWith("search/")) return { incomplete_results: false, total_count: pending ? 1 : 0, items: pending ? [{ html_url: "pending", title: "PwrAgent" }] : [] };
     if (endpoint.startsWith("repos/Homebrew/homebrew-")) return null;
     if (endpoint.startsWith("repos/actions/runner-images/releases")) return [

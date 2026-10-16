@@ -455,6 +455,33 @@ describe("DesktopBackendRegistry usage turn ends", () => {
       expect(completedAt(acpTurnId)).toBeGreaterThanOrEqual(beforeClose);
     });
 
+    it("waits only for the turns a backend was asked to stop", async () => {
+      // This Codex has no turn/interrupt, so no terminal is coming for its
+      // turn. Only the ACP turn is worth waiting for.
+      const registry: DesktopBackendRegistry = createRegistry([], {
+        runningTurnShutdownStopTimeoutMs: 60_000,
+      });
+      const cancel = vi.spyOn(internals(registry).acpBackend, "cancelRunningSession")
+        .mockImplementation(async () => {
+          void internals(registry).emit(acpCancelled(acpTurnId));
+          return true;
+        });
+      await runTurn(registry, "codex", "turn-unstoppable");
+      await runTurn(registry, "acp:grok", acpTurnId);
+      const beforeStop = Date.now();
+
+      await registry.stopRunningTurnsForShutdown();
+
+      expect(cancel).toHaveBeenCalledTimes(1);
+      expect(Date.now() - beforeStop).toBeLessThan(1_000);
+      expect(completedAt(acpTurnId)).toBe(1_800_000_007_000);
+      expect(completedAt("turn-unstoppable")).toBeNull();
+
+      await registry.close();
+      registries.splice(registries.indexOf(registry), 1);
+      expect(completedAt("turn-unstoppable")).toBeGreaterThanOrEqual(beforeStop);
+    });
+
     it("sends nothing and writes nothing when no turn is running", async () => {
       const codex = {
         ...codexWithInterrupt(async (params) => params),

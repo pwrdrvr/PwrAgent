@@ -185,6 +185,11 @@ export async function resolveForgeReposForDirectory(
   return [...repos.values()];
 }
 
+/** Unclassified hosts require explicit product evidence from the caller. */
+export async function readForgeRepositoryRemotes(cwd: string): Promise<GitHubRepoRef[]> {
+  return (await readParsedGitRemotes(cwd, {})).flatMap(({ repo }) => repo ? [repo] : []);
+}
+
 async function readParsedGitRemotes(
   cwd: string,
   options: ResolveGitHubRepoOptions,

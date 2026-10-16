@@ -1,4 +1,5 @@
 .storage-maintenance {
+  position: relative;
   display: flex;
   flex-direction: column;
   min-height: 100vh;
@@ -23,3 +24,16 @@
 .storage-maintenance button { background: var(--bg-panel-hover); border: 1px solid var(--border-strong); color: var(--text-primary); padding: 8px 12px; border-radius: 8px; cursor: pointer; }
 .storage-maintenance button:focus-visible { outline: 2px solid var(--focus-ring); }
 .storage-maintenance .storage-maintenance__primary { background: var(--accent-soft); border-color: var(--accent-border); color: var(--accent); }
+/* The toast countdown (`.app-notice-toast__timer`) along the window's bottom
+   edge. Its duration is set inline from STORAGE_MAINTENANCE_AUTO_CLOSE_MS. */
+.storage-maintenance__timer {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 2px;
+  background: color-mix(in srgb, var(--text-muted) 42%, transparent);
+  transform-origin: left center;
+  animation: app-notice-toast-countdown linear forwards;
+}
+.storage-maintenance__timer[data-paused="true"] { animation-play-state: paused; }

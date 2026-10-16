@@ -1,5 +1,5 @@
 import type { NavigationPresentationOrder } from "./navigation-presentation-order";
-import { isNavigationPeerUnavailable, navigationIdentityKey, navigationPageErrorCopy, navigationThreadSelectionKey } from "../../lib/navigation-query-state";
+import { isNavigationPeerUnavailable, navigationIdentityKey, navigationThreadSelectionKey } from "../../lib/navigation-query-state";
 import type { NavigationPresentedThread } from "../../lib/navigation-loaded-rows";
 import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationWindow";
 import { buildPagedDirectoryPresentation, type PagedDirectoryPresentation } from "./paged-directory-presentation";
@@ -27,19 +27,15 @@ import type {
 } from "@pwragent/shared";
 import {
   comparePinnedDirectories,
-  comparePinnedThreads,
   isKeptAtTopThread,
   isPinnedDirectory,
-  isPinnedThread,
   isSubthreadLaunchpadKey,
   moveDirectoryKey,
-  moveThreadKey,
   resolveThreadParentKey,
 } from "@pwragent/shared";
 import {
   ChevronDownIcon,
   NewThreadIcon,
-  PinIcon,
   UnlinkedDotIcon,
 } from "../../icons";
 import { useEventCallback } from "../../lib/useEventCallback";
@@ -60,11 +56,9 @@ import {
 } from "../../lib/federated-thread-events";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { isFederationViewerWindow } from "../../lib/federation-window";
-import {
-  beginNativeDragInteraction,
-  endNativeDragInteraction,
-} from "../../lib/native-drag-interaction";
+import { KeepAtTopSlot } from "./KeepAtTopSlot";
 import { SidebarShowMore } from "./SidebarShowMore";
+import { useThreadPinOrdering, type ThreadPinScope } from "./useThreadPinOrdering";
 import { SubthreadPagination } from "./SubthreadPagination";
 import { ThinkingScanner } from "../thread-detail/ThinkingScanner";
 import {
@@ -77,10 +71,6 @@ import {
   NativeSubAgentsDisclosure,
 } from "./NativeSubAgentsDisclosure";
 import { ThreadRow, type ThreadRowRef } from "./ThreadRow";
-import {
-  createThreadRowPointerDragPreview,
-  type ThreadRowPointerDragPreview,
-} from "./thread-row-drag-preview";
 import {
   formatActiveThreadCount,
   formatLocalActiveThreadCount,
@@ -275,7 +265,6 @@ function buildLaunchpadSelectionKey(directoryKey: string): string {
  * frames without swallowing the user's next intentional click.
  */
 const POST_DRAG_CLICK_SUPPRESS_MS = 150;
-const POINTER_DRAG_ACTIVATION_PX = 4;
 
 const EMPTY_EXPANDED_DIRECTORY_THREAD_MODEL: PagedDirectoryPresentation = {
   unpinnedThreads: [],
@@ -336,183 +325,6 @@ type DirectoryRowContext = {
   selectionOrder: string[];
 };
 
-type ThreadPinDragSession = {
-  activated: boolean;
-  appendTargetElement?: HTMLDivElement;
-  canceled: boolean;
-  directory: NavigationDirectorySummary;
-  directoryElement: HTMLElement;
-  frame: number;
-  keepAtTopTargetElement?: HTMLDivElement;
-  lastPoint: { x: number; y: number };
-  pointerId: number;
-  preview?: ThreadRowPointerDragPreview;
-  releaseClickSuppression?: () => void;
-  removeListeners?: () => void;
-  scrollElement?: HTMLElement;
-  sourceElement: HTMLDivElement;
-  sourceWasPinned: boolean;
-  target?: ThreadPinPointerDropTarget;
-  threadKey: string;
-};
-
-type ThreadPinPointerDropTarget =
-  | {
-      element: HTMLDivElement;
-      kind: "append";
-    }
-  | {
-      element: HTMLDivElement;
-      kind: "keepAtTop";
-    }
-  | {
-      element: HTMLDivElement;
-      kind: "row";
-      position: "before" | "after";
-      threadKey: string;
-    };
-
-function setThreadPinAppendTargetActive(
-  session: ThreadPinDragSession,
-  active: boolean,
-): void {
-  for (const element of [session.appendTargetElement, session.keepAtTopTargetElement]) {
-    element?.classList.toggle("is-drag-enabled", active);
-    if (active) {
-      element?.removeAttribute("aria-hidden");
-    } else {
-      element?.setAttribute("aria-hidden", "true");
-    }
-  }
-}
-
-function isPointInsideDragSource(
-  session: ThreadPinDragSession,
-  point: { x: number; y: number },
-): boolean {
-  const sourceBounds = session.sourceElement.getBoundingClientRect();
-  if (
-    sourceBounds.right <= sourceBounds.left
-    || sourceBounds.bottom <= sourceBounds.top
-  ) {
-    return false;
-  }
-  return (
-    point.x >= sourceBounds.left
-    && point.x <= sourceBounds.right
-    && point.y >= sourceBounds.top
-    && point.y <= sourceBounds.bottom
-  );
-}
-
-function getPointInsideElement(
-  element: Element,
-  point: { x: number; y: number },
-): boolean {
-  const bounds = element.getBoundingClientRect();
-  return (
-    bounds.right > bounds.left
-    && bounds.bottom > bounds.top
-    && point.x >= bounds.left
-    && point.x <= bounds.right
-    && point.y >= bounds.top
-    && point.y <= bounds.bottom
-  );
-}
-
-function resolveThreadPinPointerDropTarget(
-  session: ThreadPinDragSession,
-): ThreadPinPointerDropTarget | undefined {
-  if (
-    session.canceled
-    || isPointInsideDragSource(session, session.lastPoint)
-  ) {
-    return undefined;
-  }
-
-  // The Keep at top slot is a box of its own between rows, never over one,
-  // so only a drop inside it means "keep". The line above the first ordinary
-  // pin stays that row's "before" target: the top of the ordinary pins.
-  if (
-    session.keepAtTopTargetElement
-    && getPointInsideElement(session.keepAtTopTargetElement, session.lastPoint)
-  ) {
-    return { element: session.keepAtTopTargetElement, kind: "keepAtTop" };
-  }
-
-  if (!session.sourceWasPinned) {
-    return session.appendTargetElement
-      ? { element: session.appendTargetElement, kind: "append" }
-      : undefined;
-  }
-
-  const buildRowTarget = (
-    row: HTMLDivElement,
-  ): ThreadPinPointerDropTarget | undefined => {
-    const threadKey = row.dataset.threadPinKey;
-    if (
-      row === session.sourceElement
-      || !threadKey
-      || threadKey === session.threadKey
-    ) {
-      return undefined;
-    }
-    const bounds = row.getBoundingClientRect();
-    return {
-      element: row,
-      kind: "row",
-      position:
-        session.lastPoint.y > bounds.top + bounds.height / 2
-          ? "after"
-          : "before",
-      threadKey,
-    };
-  };
-
-  if (typeof document.elementFromPoint === "function") {
-    const hit = document.elementFromPoint(
-      session.lastPoint.x,
-      session.lastPoint.y,
-    );
-    const hitRow = hit?.closest<HTMLDivElement>(
-      '.thread-row-shell[data-thread-pin-state="pinned"]',
-    );
-    if (
-      hitRow
-      && session.directoryElement.contains(hitRow)
-    ) {
-      return buildRowTarget(hitRow);
-    }
-    if (
-      hit
-      && session.appendTargetElement?.contains(hit)
-    ) {
-      return { element: session.appendTargetElement, kind: "append" };
-    }
-    return undefined;
-  }
-
-  const pinnedRows = session.directoryElement.querySelectorAll<HTMLDivElement>(
-    '.thread-row-shell[data-thread-pin-state="pinned"]',
-  );
-  for (const row of pinnedRows) {
-    if (
-      !getPointInsideElement(row, session.lastPoint)
-    ) {
-      continue;
-    }
-    const target = buildRowTarget(row);
-    if (target) return target;
-  }
-
-  if (
-    session.appendTargetElement
-    && getPointInsideElement(session.appendTargetElement, session.lastPoint)
-  ) {
-    return { element: session.appendTargetElement, kind: "append" };
-  }
-  return undefined;
-}
 function getDirectoryRowLinkedDirectoryMode(
   thread: NavigationThreadSummary,
 ): "kind" | "label" {
@@ -621,10 +433,6 @@ export function DirectoriesList(props: DirectoriesListProps) {
   const directoryDropIndicator = useDropIndicatorController();
   const [directoriesPinnedDividerDropTarget, setDirectoriesPinnedDividerDropTarget] =
     useState(false);
-  const threadPinDragSessionRef = useRef<ThreadPinDragSession | undefined>(
-    undefined,
-  );
-  const threadPinDragCleanupRef = useRef<(() => void) | undefined>(undefined);
   /**
    * Suppress the directory summary button's expand/collapse click
    * when the click is the trailing edge of a drag gesture. Browsers
@@ -646,283 +454,21 @@ export function DirectoriesList(props: DirectoriesListProps) {
   // pinning a thread never also minimizes the section.
   const lastDirectoryThreadDropAtRef = useRef(0);
 
-  const deactivateThreadPinDrag = (session: ThreadPinDragSession): void => {
-    if (session.frame) {
-      cancelAnimationFrame(session.frame);
-      session.frame = 0;
-    }
-    session.preview?.remove();
-    session.preview = undefined;
-    session.sourceElement.classList.remove("is-pointer-dragging");
-    setThreadPinAppendTargetActive(session, false);
-    dropIndicator.clear();
-    session.target = undefined;
-    if (session.activated) {
-      endNativeDragInteraction();
-      session.activated = false;
-    }
-  };
-
-  const finishThreadPinDrag = (session: ThreadPinDragSession): void => {
-    deactivateThreadPinDrag(session);
-    session.removeListeners?.();
-    session.removeListeners = undefined;
-    session.releaseClickSuppression?.();
-    session.releaseClickSuppression = undefined;
-    if (threadPinDragSessionRef.current === session) {
-      threadPinDragSessionRef.current = undefined;
-    }
-    if (threadPinDragCleanupRef.current) {
-      threadPinDragCleanupRef.current = undefined;
-    }
-  };
-
-  const updateThreadPinPointerTarget = (
-    session: ThreadPinDragSession,
-  ): void => {
-    session.preview?.move(session.lastPoint);
-    session.target = resolveThreadPinPointerDropTarget(session);
-    session.preview?.setDropLabel(
-      session.target?.kind === "keepAtTop" ? "Keep at top" : undefined,
-    );
-    if (!session.target) {
-      dropIndicator.clear();
-      return;
-    }
-    dropIndicator.show(session.target.element, {
-      targetKey:
-        session.target.kind === "row"
-          ? `${session.directory.key}:${session.target.threadKey}`
-          : session.target.kind === "keepAtTop"
-            ? `pinned-keep-top:${session.directory.key}`
-            : `pinned-append:${session.directory.key}`,
-      position:
-        session.target.kind === "row" ? session.target.position : "before",
-    });
-  };
-
-  const scheduleThreadPinPointerTarget = (
-    session: ThreadPinDragSession,
-  ): void => {
-    if (session.frame || !session.activated || session.canceled) return;
-    session.frame = requestAnimationFrame(() => {
-      session.frame = 0;
-      updateThreadPinPointerTarget(session);
-    });
-  };
-
-  /**
-   * Thread pinning deliberately avoids native HTML drag-and-drop. Chromium's
-   * drag processing model suppresses ordinary input events, and its macOS
-   * trackpad path can queue momentum at scroll boundaries for seconds. A
-   * pointer session leaves wheel scrolling browser-controlled while batching
-   * our preview and hit testing to one update per animation frame.
-   */
-  const beginThreadPinPointerDrag = (
-    event: ReactPointerEvent<HTMLDivElement>,
-    directory: NavigationDirectorySummary,
-    threadKey: string,
-    sourceWasPinned: boolean,
-  ): void => {
-    if (event.button !== 0 || !props.onReorderThreadPins) return;
-    threadPinDragCleanupRef.current?.();
-
-    const sourceElement = event.currentTarget;
-    const directoryElement = sourceElement.closest(".directory-row");
-    if (!(directoryElement instanceof HTMLElement)) return;
-
-    const startPoint = { x: event.clientX, y: event.clientY };
-    const session: ThreadPinDragSession = {
-      activated: false,
-      appendTargetElement:
-        directoryElement.querySelector<HTMLDivElement>(
-          ".directory-row__pin-drop-slot",
-        ) ?? undefined,
-      canceled: false,
-      directory,
-      directoryElement,
-      frame: 0,
-      keepAtTopTargetElement:
-        directoryElement.querySelector<HTMLDivElement>(
-          ".directory-row__keep-top-slot",
-        ) ?? undefined,
-      lastPoint: startPoint,
-      pointerId: event.pointerId,
-      scrollElement:
-        sourceElement.closest<HTMLElement>(".directory-list") ?? undefined,
-      sourceElement,
-      sourceWasPinned,
-      threadKey,
-    };
-    threadPinDragSessionRef.current = session;
-
-    let suppressClickTimer: number | undefined;
-    const removeClickSuppression = (): void => {
-      session.directoryElement.removeEventListener(
-        "click",
-        suppressReleaseClick,
-        true,
-      );
-      if (suppressClickTimer !== undefined) {
-        window.clearTimeout(suppressClickTimer);
-        suppressClickTimer = undefined;
-      }
-    };
-    const suppressReleaseClick = (clickEvent: globalThis.MouseEvent): void => {
-      clickEvent.preventDefault();
-      clickEvent.stopImmediatePropagation();
-      removeClickSuppression();
-    };
-    const armClickSuppression = (): void => {
-      session.directoryElement.addEventListener(
-        "click",
-        suppressReleaseClick,
-        true,
-      );
-      session.releaseClickSuppression = () => {
-        suppressClickTimer = window.setTimeout(
-          removeClickSuppression,
-          POST_DRAG_CLICK_SUPPRESS_MS,
-        );
-      };
-    };
-
-    const activate = (): void => {
-      if (session.activated || session.canceled) return;
-      session.activated = true;
-      beginNativeDragInteraction();
-      session.sourceElement.classList.add("is-pointer-dragging");
-      // Measure the held card before the targets open: the ghost Keep at
-      // top slot takes layout space and pushes the source row down.
-      session.preview = createThreadRowPointerDragPreview(
-        session.sourceElement,
-        startPoint,
-      );
-      setThreadPinAppendTargetActive(session, true);
-      armClickSuppression();
-      session.scrollElement?.addEventListener("scroll", onScroll, {
-        passive: true,
-      });
-      scheduleThreadPinPointerTarget(session);
-    };
-    const move = (pointerEvent: globalThis.PointerEvent): void => {
-      if (pointerEvent.pointerId !== session.pointerId || session.canceled) {
-        return;
-      }
-      session.lastPoint = {
-        x: pointerEvent.clientX,
-        y: pointerEvent.clientY,
-      };
-      if (
-        !session.activated
-        && Math.hypot(
-          session.lastPoint.x - startPoint.x,
-          session.lastPoint.y - startPoint.y,
-        ) < POINTER_DRAG_ACTIVATION_PX
-      ) {
-        return;
-      }
-      activate();
-      pointerEvent.preventDefault();
-      scheduleThreadPinPointerTarget(session);
-    };
-    const onScroll = (): void => scheduleThreadPinPointerTarget(session);
-    const stop = (pointerEvent: globalThis.PointerEvent): void => {
-      if (pointerEvent.pointerId !== session.pointerId) return;
-      session.lastPoint = {
-        x: pointerEvent.clientX,
-        y: pointerEvent.clientY,
-      };
-      if (session.activated && !session.canceled) {
-        if (session.frame) {
-          cancelAnimationFrame(session.frame);
-          session.frame = 0;
-        }
-        updateThreadPinPointerTarget(session);
-      }
-      const target = session.target;
-      const wasActivated = session.activated;
-      finishThreadPinDrag(session);
-      if (!target || session.canceled || !wasActivated) return;
-
+  // Drag, the Keep at top slot, and ⌘⇧↑/↓, shared with the Pinned group in
+  // Updated and Created so all of them edit the one global pin order the same way.
+  const pinOrdering = useThreadPinOrdering({
+    threads: props.threads,
+    dropIndicator,
+    onReorderThreadPins: props.onReorderThreadPins,
+    onSetThreadPin: props.onSetThreadPin,
+    onDrop: () => {
       lastDirectoryThreadDropAtRef.current = Date.now();
-      if (target.kind === "append") {
-        dropThreadAfterDirectoryPins(session.directory, session.threadKey);
-        return;
-      }
-      if (target.kind === "keepAtTop") {
-        keepDirectoryThreadAtTop(session.directory, session.threadKey);
-        return;
-      }
-      if (session.sourceWasPinned) {
-        moveDirectoryPin(
-          session.directory,
-          session.threadKey,
-          target.threadKey,
-          target.position,
-        );
-      }
-    };
-    const cancel = (): void => {
-      session.canceled = true;
-      finishThreadPinDrag(session);
-    };
-    const cancelOnPointer = (pointerEvent: globalThis.PointerEvent): void => {
-      if (pointerEvent.pointerId === session.pointerId) cancel();
-    };
-    const cancelOnEscape = (keyboardEvent: globalThis.KeyboardEvent): void => {
-      if (keyboardEvent.key !== "Escape") return;
-      session.canceled = true;
-      deactivateThreadPinDrag(session);
-    };
-    const removeListeners = (): void => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", stop);
-      window.removeEventListener("pointercancel", cancelOnPointer);
-      window.removeEventListener("blur", cancel);
-      window.removeEventListener("keydown", cancelOnEscape);
-      session.scrollElement?.removeEventListener("scroll", onScroll);
-    };
-    session.removeListeners = removeListeners;
-    threadPinDragCleanupRef.current = cancel;
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", stop);
-    window.addEventListener("pointercancel", cancelOnPointer);
-    window.addEventListener("blur", cancel);
-    window.addEventListener("keydown", cancelOnEscape);
-  };
-
-  useEffect(
-    () => () => threadPinDragCleanupRef.current?.(),
-    [],
-  );
-  const threadsByKey = useMemo(
-    () =>
-      new Map(
-        props.threads.map((thread) => [
-          threadSummaryIdentityKey(thread),
-          thread,
-        ]),
-      ),
-    [props.threads]
-  );
-  const pinnedThreads = useMemo(
-    () =>
-      props.threads
-        .filter(isPinnedThread)
-        .sort(comparePinnedThreads),
-    [props.threads],
-  );
-  const pinnedThreadKeys = useMemo(
-    () =>
-      pinnedThreads.map((thread) =>
-        threadSummaryIdentityKey(thread),
-      ),
-    [pinnedThreads],
-  );
+    },
+  });
+  const { threadsByKey, pinnedThreadKeys } = pinOrdering;
 
   // Directory pinning (plan 2026-05-09-002 Unit K). Same shape as
-  // pinnedThreads above. The `pinnedDirectoryKeys` array is the
+  // the thread pins above. The `pinnedDirectoryKeys` array is the
   // input to `moveDirectoryKey` for drag-reorder calculations.
   const directoryDragEnabled = Boolean(
     props.onSetDirectoryPin && props.onReorderDirectoryPins,
@@ -1112,11 +658,6 @@ export function DirectoriesList(props: DirectoriesListProps) {
     );
   };
 
-  // The owner resolves relative moves against its complete pin order.
-  const reorderPins = (nextThreadKeys: string[], move?: NavigationRelativePinMove): void => {
-    if (move) void props.onReorderThreadPins?.(nextThreadKeys, move);
-  };
-
   const isAdmittedDirectoryRoot = (directory: NavigationDirectorySummary, threadKey: string): boolean => {
     const entries = [
       ...(props.pagedNavigation?.resources.get(`directory-pins:${directory.key}`)?.state.page?.entries ?? []),
@@ -1144,91 +685,11 @@ export function DirectoriesList(props: DirectoriesListProps) {
       isAdmittedDirectoryRoot(directory, threadKey),
     );
 
-  const moveDirectoryPin = (
-    directory: NavigationDirectorySummary,
-    draggedKey: string,
-    targetKey: string,
-    position: "before" | "after",
-  ): void => {
-    if (!isAdmittedDirectoryRoot(directory, draggedKey) || !isAdmittedDirectoryRoot(directory, targetKey)) return;
-
-    const draggedThread = threadsByKey.get(draggedKey);
-    const targetThread = threadsByKey.get(targetKey);
-    if (!draggedThread || !targetThread) {
-      return;
-    }
-
-    const move = { key: draggedKey, anchorKey: targetKey, placement: position };
-    if (pinnedThreadKeys.includes(draggedKey)) {
-      reorderPins(moveThreadKey(pinnedThreadKeys, draggedKey, targetKey, position), move);
-      return;
-    }
-    if (!props.onSetThreadPin) return;
-    void (async () => {
-      await props.onSetThreadPin!(draggedThread, true);
-      await props.onReorderThreadPins?.([], move);
-    })();
-  };
-
-  const dropThreadAfterDirectoryPins = (
-    directory: NavigationDirectorySummary,
-    draggedKey: string,
-  ): void => {
-    if (!isAdmittedDirectoryRoot(directory, draggedKey)) return;
-
-    const draggedThread = threadsByKey.get(draggedKey);
-    if (!draggedThread) return;
-
-    // An anchor move adopts the anchor's tier, so the anchor must be an
-    // ordinary pin: the append target sits below the pins kept at top.
-    const directoryPinnedThreadKeys = buildDirectoryPinnedKeys(directory)
-      .filter((threadKey) => {
-        const thread = threadsByKey.get(threadKey);
-        return Boolean(thread) && !isKeptAtTopThread(thread!);
-      });
-    const targetKey =
-      directoryPinnedThreadKeys[directoryPinnedThreadKeys.length - 1];
-
-    if (!targetKey) {
-      if (pinnedThreadKeys.includes(draggedKey)) {
-        // Every pin here is kept: below them, the drop leaves the kept tier.
-        if (isKeptAtTopThread(draggedThread)) {
-          void props.onReorderThreadPins?.([], { key: draggedKey, keepAtTop: false });
-        }
-        return;
-      }
-      void props.onSetThreadPin?.(draggedThread, true);
-      return;
-    }
-
-    moveDirectoryPin(directory, draggedKey, targetKey, "after");
-  };
-
-  const keepDirectoryThreadAtTop = (
-    directory: NavigationDirectorySummary,
-    draggedKey: string,
-  ): void => {
-    if (!isAdmittedDirectoryRoot(directory, draggedKey)) return;
-    const draggedThread = threadsByKey.get(draggedKey);
-    if (!draggedThread) return;
-    void (async () => {
-      if (!pinnedThreadKeys.includes(draggedKey)) {
-        if (!props.onSetThreadPin) return;
-        await props.onSetThreadPin(draggedThread, true);
-      }
-      await props.onReorderThreadPins?.([], { key: draggedKey, keepAtTop: true });
-    })();
-  };
-
-  const movePinnedThreadByKeyboard = (
-    _directory: NavigationDirectorySummary,
-    thread: NavigationThreadSummary,
-    direction: "up" | "down",
-  ): void => {
-    // The adjacent pin can be unloaded. The owner resolves the neighbor and
-    // revalidates membership before changing rank.
-    void props.onReorderThreadPins?.([], { key: threadSummaryIdentityKey(thread), direction });
-  };
+  const directoryPinScope = (directory: NavigationDirectorySummary): ThreadPinScope => ({
+    key: directory.key,
+    admitsRoot: (threadKey) => isAdmittedDirectoryRoot(directory, threadKey),
+    pinnedKeys: () => buildDirectoryPinnedKeys(directory),
+  });
 
   useEffect(() => {
     const selectedItemKey = props.selectedItemKey;
@@ -1380,9 +841,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
       if (!context) {
         return;
       }
-      beginThreadPinPointerDrag(
+      pinOrdering.beginPointerDrag(
         event,
-        context.directory,
+        directoryPinScope(context.directory),
         row.threadKey,
         row.pinned,
       );
@@ -1398,7 +859,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
       if (!context) {
         return;
       }
-      movePinnedThreadByKeyboard(context.directory, thread, direction);
+      pinOrdering.movePinnedThreadByKeyboard(thread, direction);
     },
   );
   const toggleSubthreads = useEventCallback((thread: NavigationThreadSummary) => {
@@ -1835,6 +1296,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
         key={directory.key}
         className="directory-row"
         data-hover-stable-row="directory"
+        data-thread-pin-scope="directory"
         onDragOver={
           directoryDragEnabled
             ? (event) => {
@@ -2220,20 +1682,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
                                 // Same role-carrying boundary as the append
                                 // target below; see its comment. It grows to
                                 // hold the slot only while a drag is live.
-                                <div
-                                  className="directory-row__pin-drop-boundary"
-                                  role="listitem"
-                                >
-                                  <div
-                                    aria-label={`Keep thread at top of pinned threads for ${directory.label}`}
-                                    aria-hidden="true"
-                                    className="directory-row__keep-top-slot"
-                                    role="separator"
-                                  >
-                                    <PinIcon size={12} />
-                                    Keep at top
-                                  </div>
-                                </div>
+                                <KeepAtTopSlot
+                                  label={`Keep thread at top of pinned threads for ${directory.label}`}
+                                />
                               ) : null}
 	                        <ThreadRow
 	                          key={`${directory.key}:${threadKey}`}
@@ -2317,17 +1768,16 @@ export function DirectoriesList(props: DirectoriesListProps) {
                       </div>
                     ) : null}
 
-                    {pinResource && (pinResource.state.error || (pinResource.loading && !pinResource.state.page)
+                    {pinResource && ((pinResource.loading && !pinResource.state.page)
                       || pinResource.state.rebaselineRequired || pinResource.state.page?.nextCursor
                       || (pinResource.state.page?.rangeStart ?? 0) > 0) ? (
                       <div role="listitem">
-                        {pinResource.state.error ? <p className="sidebar-error">{navigationPageErrorCopy(pinResource.state.error)}</p> : null}
                         {pinResource.loading && !pinResource.state.page ? <p className="sidebar-empty">Loading pinned threads…</p> : null}
                         {(pinResource.state.page?.rangeStart ?? 0) > 0 && !pinResource.state.rebaselineRequired ? (
-                          <SidebarShowMore busy={pinResource.loading} label="Show pinned threads from beginning" onClick={() => void props.pagedNavigation?.restart(pinResourceId)} />
+                          <SidebarShowMore kind="reload" busy={pinResource.loading} label="Show pinned threads from beginning" onClick={() => void props.pagedNavigation?.restart(pinResourceId)} />
                         ) : null}
                         {pinResource.state.rebaselineRequired ? (
-                          <SidebarShowMore label="Reload pinned threads" onClick={() => void props.pagedNavigation?.restart(pinResourceId)} />
+                          <SidebarShowMore kind="reload" label="Reload pinned threads" onClick={() => void props.pagedNavigation?.restart(pinResourceId)} />
                         ) : pinResource.state.page?.nextCursor ? (
                           <SidebarShowMore busy={pinResource.loading} label="Load more pinned threads" onClick={() => void props.pagedNavigation?.loadMore(pinResourceId)} />
                         ) : null}
@@ -2391,7 +1841,6 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 ) : (
                   <p className="sidebar-empty directory-row__empty">{directory.counts ? "No threads in this directory yet." : "Loading directory counts…"}</p>
                 )}
-                {rootResource?.state.error ? <p className="sidebar-error">{navigationPageErrorCopy(rootResource.state.error)}</p> : null}
                 {/* `directory-row__empty` reads as "empty" but means "a status
                     line in a directory's lane" — the sibling above already
                     wears it for "Loading directory counts…". Without it this
@@ -2400,7 +1849,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                     left. Both render together while a directory first opens. */}
                 {rootResource?.loading && !rootResource.state.page ? <p className="sidebar-empty directory-row__empty">Loading threads…</p> : null}
                 {rootResource?.state.rebaselineRequired ? (
-                  <SidebarShowMore label="Reload this directory" onClick={() => void props.pagedNavigation?.restart(rootResourceId)} />
+                  <SidebarShowMore kind="reload" label="Reload this directory" onClick={() => void props.pagedNavigation?.restart(rootResourceId)} />
                 ) : rootResource?.state.page?.nextCursor ? (
                   <SidebarShowMore busy={rootResource.loading} label="Load more threads" onClick={() => void props.pagedNavigation?.loadMore(rootResourceId)} />
                 ) : null}

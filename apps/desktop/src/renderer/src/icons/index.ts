@@ -1,5 +1,6 @@
 export { ArrowUpIcon } from "./ArrowUpIcon";
 export { AutomationsIcon } from "./AutomationsIcon";
+export { BanIcon } from "./BanIcon";
 export { BookmarkIcon } from "./BookmarkIcon";
 export { BranchIcon } from "./BranchIcon";
 export { CelestialBlackHoleIcon } from "./celestial/CelestialBlackHoleIcon";
@@ -34,6 +35,7 @@ export { GrokIcon } from "./GrokIcon";
 export { HelpCircleIcon } from "./HelpCircleIcon";
 export { HistoryIcon } from "./HistoryIcon";
 export { InfoIcon } from "./InfoIcon";
+export { JumpToIcon } from "./JumpToIcon";
 export { LightningIcon } from "./LightningIcon";
 export { MattermostIcon } from "./MattermostIcon";
 export { MicIcon } from "./MicIcon";

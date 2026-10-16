@@ -31,9 +31,13 @@ import type {
   ListThreadTodosResponse,
   ResolveThreadTodoRequest,
   RunThreadTodoActionRequest,
+  SetThreadTodoItemCheckedRequest,
   SetThreadTodoProjectRequest,
   ThreadTodoMutationResponse,
   ThreadTodosChangedEvent,
+  ThreadReview,
+  ListThreadReviewsRequest,
+  UpdateThreadReviewRequest,
   DismissOperatorQuestionRequest,
   ListOperatorRequestsResponse,
   MarkOperatorItemsSeenRequest,
@@ -549,6 +553,8 @@ import type {
   SetDefaultDesktopPwrAgentProfileResponse,
   SetNavigationBrowseModeRequest,
   SetNavigationBrowseModeResponse,
+  SetPinnedGroupCollapsedRequest,
+  SetPinnedGroupCollapsedResponse,
   StartDesktopCodexAuthProfileLoginRequest,
   StartDesktopCodexAuthProfileLoginResponse,
   UpdateDirectoryLaunchpadRequest,
@@ -625,9 +631,12 @@ import {
   SCHEDULED_ACTIONS_UPDATE_CHANNEL,
   THREAD_TODOS_CHANGED_EVENT_CHANNEL,
   THREAD_TODOS_LIST_CHANNEL,
+  THREAD_REVIEWS_LIST_CHANNEL,
+  THREAD_REVIEWS_UPDATE_CHANNEL,
   THREAD_TODOS_LIST_PROJECTS_CHANNEL,
   THREAD_TODOS_RESOLVE_CHANNEL,
   THREAD_TODOS_RUN_ACTION_CHANNEL,
+  THREAD_TODOS_SET_ITEM_CHECKED_CHANNEL,
   THREAD_TODOS_SET_PROJECT_CHANNEL,
   OPERATOR_REQUESTS_CHANGED_EVENT_CHANNEL,
   OPERATOR_REQUESTS_DISMISS_QUESTION_CHANNEL,
@@ -916,6 +925,7 @@ import {
   NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL,
   NAVIGATION_MARK_THREAD_SEEN_CHANNEL,
   NAVIGATION_SET_BROWSE_MODE_CHANNEL,
+  NAVIGATION_SET_PINNED_GROUP_COLLAPSED_CHANNEL,
   NAVIGATION_SET_SUBTHREADS_COLLAPSED_CHANNEL,
   NAVIGATION_SET_DIRECTORY_PIN_CHANNEL,
   NAVIGATION_SET_DIRECTORY_THREADS_COLLAPSED_CHANNEL,
@@ -2157,6 +2167,10 @@ const desktopApi = Object.freeze({
     request?: ListThreadTodosRequest,
   ): Promise<ListThreadTodosResponse> =>
     await ipcRenderer.invoke(THREAD_TODOS_LIST_CHANNEL, request ?? {}),
+  listThreadReviews: async (request?: ListThreadReviewsRequest): Promise<{ reviews: ThreadReview[] }> =>
+    await ipcRenderer.invoke(THREAD_REVIEWS_LIST_CHANNEL, request ?? {}),
+  updateThreadReview: async (request: UpdateThreadReviewRequest): Promise<{ review: ThreadReview }> =>
+    await ipcRenderer.invoke(THREAD_REVIEWS_UPDATE_CHANNEL, request),
   resolveThreadTodo: async (
     request: ResolveThreadTodoRequest,
   ): Promise<ThreadTodoMutationResponse> =>
@@ -2171,6 +2185,10 @@ const desktopApi = Object.freeze({
     request: SetThreadTodoProjectRequest,
   ): Promise<ThreadTodoMutationResponse> =>
     await ipcRenderer.invoke(THREAD_TODOS_SET_PROJECT_CHANNEL, request),
+  setThreadTodoItemChecked: async (
+    request: SetThreadTodoItemCheckedRequest,
+  ): Promise<ThreadTodoMutationResponse> =>
+    await ipcRenderer.invoke(THREAD_TODOS_SET_ITEM_CHECKED_CHANNEL, request),
   onThreadTodosChanged: (
     callback: (event: ThreadTodosChangedEvent) => void,
   ): (() => void) => {
@@ -2414,6 +2432,10 @@ const desktopApi = Object.freeze({
     request: SetNavigationBrowseModeRequest,
   ): Promise<SetNavigationBrowseModeResponse> =>
     await ipcRenderer.invoke(NAVIGATION_SET_BROWSE_MODE_CHANNEL, request),
+  setPinnedGroupCollapsed: async (
+    request: SetPinnedGroupCollapsedRequest,
+  ): Promise<SetPinnedGroupCollapsedResponse> =>
+    await ipcRenderer.invoke(NAVIGATION_SET_PINNED_GROUP_COLLAPSED_CHANNEL, request),
   markThreadSeen: async (
     request: MarkThreadSeenRequest,
   ): Promise<MarkThreadSeenResponse> =>
@@ -3298,6 +3320,8 @@ const bootstrapAppearance = readBootstrapAppearance();
 const NAVIGATION_ARG_PREFIX = "--pwragent-navigation-preferences=";
 function readBootstrapNavigationPreferences(): {
   browseMode: NavigationBrowseMode;
+  pinnedGroupCollapsed: boolean;
+  pinnedThreadsOnTop: boolean;
 } {
   for (const arg of process.argv) {
     if (!arg.startsWith(NAVIGATION_ARG_PREFIX)) continue;
@@ -3307,12 +3331,16 @@ function readBootstrapNavigationPreferences(): {
       // only inbox/recents/directories, so an operator whose saved lens was
       // Attention got Inbox at first paint and then a visible jump — the
       // exact flicker this bootstrap hint exists to prevent.
-      return { browseMode: normalizeNavigationBrowseMode(raw?.browseMode) };
+      return {
+        browseMode: normalizeNavigationBrowseMode(raw?.browseMode),
+        pinnedGroupCollapsed: raw?.pinnedGroupCollapsed === true,
+        pinnedThreadsOnTop: raw?.pinnedThreadsOnTop !== false,
+      };
     } catch {
       break;
     }
   }
-  return { browseMode: DEFAULT_NAVIGATION_BROWSE_MODE };
+  return { browseMode: DEFAULT_NAVIGATION_BROWSE_MODE, pinnedGroupCollapsed: false, pinnedThreadsOnTop: true };
 }
 const bootstrapNavigationPreferences = readBootstrapNavigationPreferences();
 

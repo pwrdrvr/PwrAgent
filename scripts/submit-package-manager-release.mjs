@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { auditChannels, compareVersions, ghJson, PACKAGE_ID, WINGET_PATH, WINGET_REPO } from "./package-manager-release.mjs";
+import { auditChannels, requireCompleteAudit, compareVersions, ghJson, PACKAGE_ID, WINGET_PATH, WINGET_REPO } from "./package-manager-release.mjs";
 
 function mutate(endpoint, payload) {
   const result = spawnSync("gh", ["api", "--method", "POST", endpoint, "--input", "-"], {
@@ -91,7 +91,8 @@ async function main() {
   const dir = resolve(process.argv[2] ?? "");
   if (!process.argv[2]) throw new Error("Usage: node scripts/submit-package-manager-release.mjs <generated-dir>");
   const generated = JSON.parse(await readFile(resolve(dir, "audit.json"), "utf8"));
-  const audit = auditChannels();
+  const audit = auditChannels(ghJson, { families: ["winget"] });
+  requireCompleteAudit(audit);
   const version = audit.stable.version;
   if (version !== generated.stable.version) throw new Error("GitHub Latest changed; regenerate and revalidate inputs before submission");
   if (!process.env.DISTRIBUTION_VALIDATION_RUN) throw new Error("Set DISTRIBUTION_VALIDATION_RUN to the successful platform validation run URL");

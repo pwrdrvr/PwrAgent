@@ -2036,7 +2036,7 @@ function isVisibleCodexThreadSource(thread: RawCodexThreadSummary): boolean {
   // PwrAgent-managed workers have an inspection-only transcript. Neither is a
   // durable navigation thread. Codex source-kind variants use camelCase while
   // the durable ThreadSource marker is the lowercase string "subagent".
-  return !sourceKind?.startsWith("subagent");
+  return sourceKind !== "guardian_review" && !sourceKind?.startsWith("subagent");
 }
 
 function filterVisibleCodexThreads(
@@ -4481,11 +4481,12 @@ function buildMcpToolCommandDetail(params: {
   };
 }
 
+/** Undefined when the call has neither arguments nor a result: there is nothing to expand. */
 function buildDynamicToolCommandDetail(params: {
   item: Record<string, unknown>;
   toolName: string;
   elapsedMs: number | undefined;
-}): AppServerThreadCommandDetail {
+}): AppServerThreadCommandDetail | undefined {
   const identifier = formatToolIdentifier(
     pickString(params.item, ["namespace", "toolNamespace", "tool_namespace"]),
     params.toolName,
@@ -4494,6 +4495,9 @@ function buildDynamicToolCommandDetail(params: {
   const output = formatDynamicToolOutput(
     params.item.contentItems ?? params.item.content_items,
   );
+  if (!output && (!args || Object.keys(args).length === 0)) {
+    return undefined;
+  }
   return {
     displayCommand: formatToolInvocation(identifier, args),
     rawCommand: identifier,
@@ -4817,7 +4821,7 @@ function summarizeActivityItems(
           ? buildMcpToolCommandDetail({ item, toolName, elapsedMs })
           : undefined;
       const dynamicCommandDetail =
-        normalizedItemType === "dynamictoolcall" && explicitTitle && toolName
+        normalizedItemType === "dynamictoolcall" && toolName
           ? buildDynamicToolCommandDetail({ item, toolName, elapsedMs })
           : undefined;
       const images =
@@ -6125,6 +6129,11 @@ function readCodexThreadSourceKind(
   if (!subAgentRecord) {
     return undefined;
   }
+  // thread/list can omit the durable guardian_review marker returned by
+  // thread/read. Its session source still identifies the approval helper.
+  if (subAgentRecord.other === "guardian") {
+    return "guardian_review";
+  }
   if (asRecord(subAgentRecord.thread_spawn) || asRecord(subAgentRecord.threadSpawn)) {
     return "subAgentThreadSpawn";
   }
@@ -6903,6 +6912,8 @@ function buildThreadResumePayloads(params: {
 }, compatibility: CodexProtocolCompatibility): CodexThreadResumePayload[] {
   const base: CodexThreadResumePayload = {
     threadId: params.threadId,
+    // Transcript history is read separately through the paginated APIs.
+    excludeTurns: true,
   };
   if (compatibility.includePersistExtendedHistory) {
     base.persistExtendedHistory = false;
@@ -7761,6 +7772,20 @@ export class CodexAppServerClient {
           })
         : enrichThreadDirectory);
     this.rawConnection.setNotificationHandler(async (method, params) => {
+      if (method === "deprecationNotice") {
+        // Protocol migration guidance belongs in diagnostics, not thread UI.
+        const notice = asRecord(params) ?? {};
+        codexClientLog.warn("codex deprecation notice", {
+          summary: notice.summary,
+          details: notice.details,
+        });
+        return;
+      }
+      if (method === "thread/goal/updated" || method === "thread/goal/cleared") {
+        // Codex-native goals are not supported by this adapter. Do not forward
+        // their lifecycle as normalized PwrAgent thread-state notifications.
+        return;
+      }
       const isKnownCodexMethod = isKnownCodexNotificationMethod(method);
       // Realtime is routed to live voice below, never logged: its payloads
       // carry the operator's spoken words and session SDP, which stay memory
@@ -8410,7 +8435,7 @@ export class CodexAppServerClient {
       await requestWithFallbacks({
         client: this.rawConnection,
         methods: ["thread/resume"],
-        payloads: [{ threadId: params.threadId }],
+        payloads: [{ threadId: params.threadId, excludeTurns: true } satisfies CodexThreadResumeParams],
         timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       });
       return { recovered: recoveryResult! };
@@ -9208,13 +9233,22 @@ export class CodexAppServerClient {
       // an incomplete safety inventory, even if the provider accepts it.
       payloads: [{
         archived: params.archived, cursor: params.cursor, limit: params.limit,
-        sortKey: "updated_at", sourceKinds: CODEX_WORKTREE_SAFETY_SOURCE_KINDS, useStateDbOnly: true,
+        // Title/turn updates must not move an existing checkout user across
+        // the cursor while the paced safety inventory is being read.
+        sortKey: "created_at", sourceKinds: CODEX_WORKTREE_SAFETY_SOURCE_KINDS, useStateDbOnly: true,
       } satisfies CodexThreadListParams],
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     });
     const page = extractThreadListPage(result, this.threadListTextCache);
     if (page.threads.length > params.limit) throw new Error("Archive discovery exceeded the requested provider page budget.");
-    const threads = await this.enrichRawThreadDirectories(page.threads, "thread-list", {
+    // Completed Guardian approval reviews remain unarchived with an inherited
+    // cwd. They are not independent checkout users. Keep active or uncertain
+    // reviews, every ordinary thread/worker, and archived ownership evidence.
+    const checkoutUsers = params.archived ? page.threads : page.threads.filter((thread) =>
+      thread.codexThreadSourceKind !== "guardian_review"
+      || (thread.threadStatus !== "idle" && thread.threadStatus !== "notLoaded"),
+    );
+    const threads = await this.enrichRawThreadDirectories(checkoutUsers, "thread-list", {
       checkpoint: params.checkpoint,
       strict: true,
       concurrency: 1,

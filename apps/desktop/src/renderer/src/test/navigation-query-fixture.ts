@@ -14,6 +14,7 @@ import {
 type FixtureDirectory = Pick<NavigationDirectorySummary, "key" | "kind" | "label" | "path" | "latestUpdatedAt" | "pinnedRank" | "directoryThreadsCollapsed" | "gitStatus" | "launchpad" | "localAvailability"> & {
   threadKeys?: string[];
   repositoryKey?: string;
+  repositoryKeys?: string[];
 };
 const key = threadSummaryIdentityKey;
 const parentKey = (thread: NavigationThreadSummary) => thread.parentThreadId
@@ -79,6 +80,26 @@ export function navigationQueryFixture(
     else if (!options?.ownerLensOrder) threads = [...all].sort((left, right) => query.lens === "recents"
       ? (right.createdAt ?? 0) - (left.createdAt ?? 0) : (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
   }
+  // The lens split: a subtree follows its root's pin, the pinned bucket
+  // sorts by rank, and the owner acknowledges the split with a size.
+  let lensRootCount: number | undefined;
+  if (query.kind === "lens" && query.roots) {
+    const rootOf = (thread: NavigationThreadSummary): NavigationThreadSummary => {
+      const seen = new Set([key(thread)]);
+      let current = thread;
+      for (let parent = byKey.get(resolveParentKey(current) ?? ""); parent && !seen.has(key(parent));
+        parent = byKey.get(resolveParentKey(current) ?? "")) {
+        seen.add(key(parent));
+        current = parent;
+      }
+      return current;
+    };
+    threads = threads.filter((thread) => Boolean(rootOf(thread).pinnedRank) === (query.roots === "pinned"));
+    if (query.roots === "pinned") {
+      threads = [...threads].sort((left, right) => Number(rootOf(left).pinnedRank) - Number(rootOf(right).pinnedRank));
+    }
+    lensRootCount = threads.filter((thread) => rootOf(thread) === thread).length;
+  }
   if (query.kind === "directory") {
     const directory = population.directories?.find((directory) => directory.key === query.directoryKey);
     const members = directory ? inDirectory(directory) : [];
@@ -112,6 +133,7 @@ export function navigationQueryFixture(
       const roots = members.filter((thread) => !resolveParentKey(thread) || !memberKeys.has(resolveParentKey(thread)!));
       return { key: directory.key, kind: directory.kind, label: directory.label, path: directory.path,
         ...(directory.repositoryKey ? { repositoryKey: directory.repositoryKey } : {}),
+        ...(directory.repositoryKeys ? { repositoryKeys: directory.repositoryKeys } : {}),
         pinnedRank: directory.pinnedRank, directoryThreadsCollapsed: directory.directoryThreadsCollapsed, localAvailability: directory.localAvailability,
         gitStatus: directory.gitStatus, latestUpdatedAt: directory.latestUpdatedAt, counts: counts(members),
         pinnedRootCount: roots.filter((thread) => thread.pinnedRank).length,
@@ -133,6 +155,7 @@ export function navigationQueryFixture(
     ...(offset ? { rangeStart: offset } : {}),
     protocol: 2, queryKey: JSON.stringify(query), generation: "fixture", ownerEpoch: "fixture", countsRevision: "fixture",
     coverage: { state: "complete" }, counts: counts(query.kind === "directory-index" ? all : threads), complete: !next, nextCursor: next,
+    ...(lensRootCount !== undefined ? { collectionSize: lensRootCount } : {}),
     directories: (query.kind === "directory-index" || query.kind === "star-map-geometry") ? descriptors.slice(offset, offset + size) : [],
     entries: (query.kind === "directory-index" || query.kind === "star-map-geometry") ? [] : threads.slice(offset, offset + size).map((thread, index) => {
       const owner = thread.federation?.ref.target;

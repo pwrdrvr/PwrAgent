@@ -21,6 +21,12 @@ describe("archive cleanup provider slices", () => {
       expect(ArchiveCleanupTransport.latest.listings).toHaveLength(1);
       await client.listArchiveCleanupThreadsPage({ archived: true, cursor: first.nextCursor, limit: 25, checkpoint, directoryObservations });
       expect(ArchiveCleanupTransport.latest.listings).toHaveLength(2);
+      // Activity may change during the paced scan without changing ownership.
+      // The cursor must therefore follow creation order on every page.
+      expect(ArchiveCleanupTransport.latest.listings).toEqual([
+        expect.objectContaining({ sortKey: "created_at" }),
+        expect.objectContaining({ sortKey: "created_at", cursor: "1" }),
+      ]);
       expect(enrich).toHaveBeenCalledOnce();
       expect(checkpoint).toHaveBeenCalledOnce();
     } finally { await client.close(); }
