@@ -3409,6 +3409,46 @@ describe("useThreadSessionState", () => {
     });
   });
 
+  it("keeps the dependency id on a continuation message origin", async () => {
+    let agentEventHandler:
+      | ((event: { backend: "codex"; notification: { method: string; params: Record<string, unknown> } }) => void)
+      | undefined;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback as typeof agentEventHandler;
+        return () => undefined;
+      },
+      readThread: async () => readThreadResponse({ entries: [], hasPreviousPage: false }),
+    };
+    const { result } = renderHook(() =>
+      useThreadSessionState({ desktopApi, thread: buildThread({ id: "thread-1", updatedAt: 1_000 }) })
+    );
+    await waitForThreadHydration(result);
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              id: "continuation",
+              type: "userMessage",
+              text: "PwrAgent resumed this thread because its prerequisites were met (all of 1).",
+              origin: { kind: "pwragent", dependencyId: "dependency-1" },
+            },
+          },
+        },
+      });
+    });
+
+    expect(result.current.entries).toContainEqual(expect.objectContaining({
+      type: "message", id: "continuation", origin: { kind: "pwragent", dependencyId: "dependency-1" },
+    }));
+  });
+
   it("does not duplicate a final reported by both item and turn completion", async () => {
     let agentEventHandler:
       | ((event: {
