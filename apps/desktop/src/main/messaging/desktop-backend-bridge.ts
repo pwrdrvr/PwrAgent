@@ -759,13 +759,13 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
     turnId?: string;
   }): Promise<MessagingImagePart[]> {
     const target = request.federationTarget;
-    const remote = this.remoteBackend(target);
-    if (remote && target && isRemoteFederationTarget(target)) {
-      return await this.resolveRemoteAssistantMessageImages(
-        request,
-        target,
-        remote,
-      );
+    if (target && isRemoteFederationTarget(target)) {
+      const remote = this.remoteBackend(target);
+      // Without a peer connection there is nothing to read. A local lookup
+      // would resolve the peer's `/tmp` paths against this machine's disk.
+      return remote
+        ? await this.resolveRemoteAssistantMessageImages(request, target, remote)
+        : [];
     }
     const response = await this.registry.readThread({
       backend: request.backend,

@@ -1229,6 +1229,12 @@ describe("DesktopMessagingBackendBridge", () => {
     const ownerImageUrl = toTranscriptImageProtocolUrl(
       "file:///owner/profiles/work/state/thread-images/codex/thread-1/markdown-a.png",
     );
+    const unreadableImageUrl = toTranscriptImageProtocolUrl(
+      "file:///owner/profiles/work/state/thread-images/codex/thread-1/markdown-gone.png",
+    );
+    const textImageUrl = toTranscriptImageProtocolUrl(
+      "file:///owner/profiles/work/state/thread-images/codex/thread-1/markdown-text.png",
+    );
     const response: AppServerReadThreadResponse = {
       backend: "codex",
       fetchedAt: 1,
@@ -1251,6 +1257,14 @@ describe("DesktopMessagingBackendBridge", () => {
                 type: "image",
                 url: toFederatedTranscriptImageProtocolUrl("peer-b", ownerImageUrl),
               },
+              {
+                type: "image",
+                url: toFederatedTranscriptImageProtocolUrl("peer-a", unreadableImageUrl),
+              },
+              {
+                type: "image",
+                url: toFederatedTranscriptImageProtocolUrl("peer-a", textImageUrl),
+              },
             ],
           },
         ],
@@ -1263,10 +1277,15 @@ describe("DesktopMessagingBackendBridge", () => {
     };
     const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     const remoteReadThread = vi.fn(async () => response);
-    const readTranscriptImage = vi.fn(async () => ({
-      dataBase64: pngBytes.toString("base64"),
-      mimeType: "image/png",
-    }));
+    const readTranscriptImage = vi.fn(async ({ url }: { url: string }) => {
+      if (url === unreadableImageUrl) {
+        throw new Error("transcript image not found");
+      }
+      return {
+        dataBase64: pngBytes.toString("base64"),
+        mimeType: url === textImageUrl ? "text/html" : "image/png",
+      };
+    });
     const localReadThread = vi.fn();
     const bridge = new DesktopMessagingBackendBridge({
       getThreadTranscriptImageRoots: vi.fn(async () => []),
@@ -1302,8 +1321,11 @@ describe("DesktopMessagingBackendBridge", () => {
       limit: 20,
       threadId: "thread-1",
     });
-    expect(readTranscriptImage).toHaveBeenCalledTimes(1);
-    expect(readTranscriptImage).toHaveBeenCalledWith({ url: ownerImageUrl });
+    expect(readTranscriptImage.mock.calls.map(([request]) => request.url)).toEqual([
+      ownerImageUrl,
+      unreadableImageUrl,
+      textImageUrl,
+    ]);
     expect(localReadThread).not.toHaveBeenCalled();
   });
 
