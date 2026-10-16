@@ -2,6 +2,7 @@ import type { ServiceThread, ServiceUiRequest, ServiceUiResponse } from "@pwrage
 import { FEDERATION_SERVICE_METHODS, FEDERATION_SERVICE_CAPABILITY } from "@pwragent/shared";
 import { FederationServices, registerFederationServices, SERVICE_METHOD_CAPABILITIES, serviceThread } from "./federation-services";
 import { FederationServiceForwarder } from "./federation-service-forwarder";
+import { createTerminalHistoryStore } from "../terminal/terminal-history";
 import type {
   ListBackgroundTerminalsRequest,
   ListBackgroundTerminalsResponse,
@@ -1581,7 +1582,7 @@ export class DesktopFederationRuntime {
     this.serviceForwarder.dispose();
     this.services?.dispose();
     this.services = undefined;
-    this.ptyService?.disposeAll();
+    await this.ptyService?.disposeAll();
     this.ptyService = undefined;
     this.client?.close();
     this.client = undefined;
@@ -3435,6 +3436,7 @@ export class DesktopFederationRuntime {
     router.registerHandler(FILE_PULL_MARKDOWN_METHOD, (envelope) => filePullReader.readMarkdown(envelope.params));
     router.registerHandler(FILE_RESOLVE_TRANSCRIPT_METHOD, (envelope) => filePullReader.resolveTranscript(envelope.params));
     this.ptyService = new FederationPtyService({
+      historyStore: createTerminalHistoryStore(this.ensureLocalInstanceId()),
       allowOpen: () => this.receiverPermissions().remoteShells,
       spawnPty: async (params) => await spawnTerminalPty(params),
       resolveThreadCwd: async ({ backend, threadId }) => {

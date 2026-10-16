@@ -274,6 +274,25 @@ export type StartTurnResponse = {
   queueEntryCreatedAt?: number;
 };
 
+/**
+ * An operator's reply to a local thread no composer shows. The owner's FIFO
+ * starts it, steers it into the running turn, or queues it, as a composer
+ * reply would; it carries no turn settings.
+ */
+export type SubmitThreadReplyRequest = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  input: AppServerTurnInputItem[];
+};
+
+/** The FIFO took the reply: it started a turn, or waits to steer or start. */
+export type SubmitThreadReplyResponse = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  queueStatus: "started" | "queued";
+  queueEntryId: string;
+};
+
 export type ReadQueuedTurnRequest = {
   /** Recover portable attachment bytes before moving a peer-owned entry to a draft. */
   forEdit?: boolean;

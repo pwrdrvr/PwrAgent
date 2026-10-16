@@ -159,6 +159,7 @@ export const PROVIDER_CATALOG_REFRESH_EVENT_CHANNEL =
 export const AGENT_START_THREAD_CHANNEL = "agent:start-thread";
 export const AGENT_FORK_THREAD_CHANNEL = "agent:fork-thread";
 export const AGENT_START_TURN_CHANNEL = "agent:start-turn";
+export const AGENT_SUBMIT_THREAD_REPLY_CHANNEL = "agent:submit-thread-reply";
 export const AGENT_READ_QUEUED_TURN_CHANNEL = "agent:read-queued-turn";
 export const AGENT_CANCEL_QUEUED_TURN_CHANNEL = "agent:cancel-queued-turn";
 export const AGENT_RELEASE_QUEUED_TURN_CHANNEL = "agent:release-queued-turn";
@@ -883,3 +884,5 @@ export const USAGE_ACTIVITY_OPEN_THREAD_CHANNEL = "usage-activity:openThreadInMa
 export const KEYBINDINGS_READ_CHANNEL = "keybindings:read";
 export const KEYBINDINGS_WRITE_CHANNEL = "keybindings:write";
 export const KEYBINDINGS_CHANGED_CHANNEL = "keybindings:changed";
+
+export const INTEGRATED_TERMINAL_RENAME_CHANNEL = "integrated-terminal:rename";

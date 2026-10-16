@@ -2,7 +2,11 @@ import { act, cleanup, fireEvent, render, screen, within } from "@testing-librar
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NavigationThreadSummary, ThreadTodo, ThreadTodoProject } from "@pwragent/shared";
 import type { AppServerPendingRequestNotification } from "@pwragent/shared";
-import { operatorTodoItemKey } from "@pwragent/shared";
+import {
+  codexAsyncQuestionItemId,
+  operatorTodoItemKey,
+  parseCodexAsyncQuestionReply,
+} from "@pwragent/shared";
 import { copyText } from "../../../lib/copy-text";
 import { ThreadMetaChips } from "../../navigation/ThreadMetaChips";
 import { ThreadTodoStack } from "../ThreadTodoStack";
@@ -823,6 +827,41 @@ describe("ThreadTodosPanel waits", () => {
       threadId: "thread-b",
       messageId: "msg-1",
     }));
+  });
+
+  it("answers another thread's question in its row through that thread's owner", async () => {
+    const waits = sampleWaits();
+    const answerQuestion = vi.fn(async (_wait: OperatorWait, _text: string) => true);
+    const view = waitsView(waits, { answerQuestion });
+    render(<ThreadTodosPanel view={view} threadKey="codex:thread-a" onStartReview={vi.fn()} />);
+    fireEvent.click(screen.getByRole("tab", { name: /All/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Answer" }));
+    const form = screen.getByRole("group", { name: "Answer: Which environment?" });
+    await act(async () => {
+      fireEvent.click(within(form).getByRole("button", { name: "Answer" }));
+    });
+    expect(answerQuestion).toHaveBeenCalledTimes(1);
+    expect(answerQuestion.mock.calls[0]![0]).toBe(waits[1]);
+    expect(parseCodexAsyncQuestionReply(answerQuestion.mock.calls[0]![1])).toEqual([{
+      questionItemId: codexAsyncQuestionItemId("msg-1", 0),
+      question: "Which environment?",
+      answer: "Staging",
+    }]);
+    expect(view.openWait).not.toHaveBeenCalled();
+  });
+
+  it("shows another thread's answer as sent until it lands", () => {
+    const waits = sampleWaits();
+    const view = waitsView(waits, {
+      answerQuestion: vi.fn(async () => true),
+      sentQuestionAnswers: new Map([
+        [`codex:thread-b\0${codexAsyncQuestionItemId("msg-1", 0)}`, "Staging"],
+      ]),
+    });
+    render(<ThreadTodosPanel view={view} threadKey="codex:thread-a" onStartReview={vi.fn()} />);
+    fireEvent.click(screen.getByRole("tab", { name: /All/ }));
+    expect(screen.getByRole("status").textContent).toContain("Answer sent");
+    expect(screen.queryByRole("button", { name: "Answer" })).toBeNull();
   });
 
   it("counts unread items per lens and marks what is on screen seen while focused", () => {

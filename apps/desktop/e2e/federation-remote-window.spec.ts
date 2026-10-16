@@ -959,7 +959,8 @@ test.describe("federation remote window", () => {
       // Disarm the quit guard before releasing the mounted session and moving
       // on to the dedicated-remote-window coverage below.
       await setQuitConfirmation(window, false);
-      await window.getByRole("button", { name: "Close terminal" }).click();
+      await window.getByRole("region", { name: "Thread terminals", exact: true })
+        .getByRole("tab").press("Delete");
       await expect(
         window.getByLabel("Integrated terminal", { exact: true }),
       ).toHaveCount(0);
@@ -1041,7 +1042,8 @@ test.describe("federation remote window", () => {
 
       // Closing the pane releases the remote session (the owner reaps it
       // after its grace period).
-      await remote.getByRole("button", { name: "Close terminal" }).click();
+      await remote.getByRole("region", { name: "Thread terminals", exact: true })
+        .getByRole("tab").press("Delete");
       await expect(
         remote.getByLabel("Integrated terminal", { exact: true }),
       ).toHaveCount(0);

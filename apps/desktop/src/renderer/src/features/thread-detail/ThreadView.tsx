@@ -188,9 +188,9 @@ import {
   threadGalleryImageMatches,
 } from "./thread-image-gallery";
 
-const LazyIntegratedTerminal = lazy(async () => {
-  const module = await import("./IntegratedTerminal");
-  return { default: module.IntegratedTerminal };
+const LazyThreadTerminalPanel = lazy(async () => {
+  const module = await import("./ThreadTerminalPanel");
+  return { default: module.ThreadTerminalPanel };
 });
 
 const noop = (): void => {};
@@ -2492,14 +2492,17 @@ export function ThreadView(props: ThreadViewProps) {
         .map((key) => key.slice(prefix.length)),
     );
   }, [asyncQuestionThreadKey, dismissedAsyncQuestions]);
+  // The To-dos panel's answers count too: one sent while this thread was off
+  // screen may still be waiting to reach the transcript.
+  const panelSentAsyncQuestionAnswers = props.threadTodos?.sentQuestionAnswers;
   const threadSentAsyncQuestionAnswers = useMemo(() => {
     const prefix = `${asyncQuestionThreadKey}\0`;
     return new Map(
-      [...sentAsyncQuestionAnswers]
+      [...(panelSentAsyncQuestionAnswers ?? []), ...sentAsyncQuestionAnswers]
         .filter(([key]) => key.startsWith(prefix))
         .map(([key, answer]) => [key.slice(prefix.length), answer]),
     );
-  }, [asyncQuestionThreadKey, sentAsyncQuestionAnswers]);
+  }, [asyncQuestionThreadKey, panelSentAsyncQuestionAnswers, sentAsyncQuestionAnswers]);
   useEffect(() => {
     const settlers = asyncQuestionReplySettlers.current;
     return () => {
@@ -4416,6 +4419,9 @@ export function ThreadView(props: ThreadViewProps) {
             projectKey: threadTodos.projectKey,
             onStartReview: startTodoReview,
             onDoHere: doTodoHere,
+            // The card's own answer path: start, steer or queue.
+            onAnswerQuestion: handleAnswerAsyncQuestions,
+            sentQuestionAnswers: threadSentAsyncQuestionAnswers,
           } : undefined,
         }
       : {};
@@ -4494,31 +4500,15 @@ export function ThreadView(props: ThreadViewProps) {
                 }}
               />
             ) : null}
-            {threadView ? terminals.panes.map((terminal) => {
-              const terminalVisible =
-                terminal.threadKey === selectedThreadKey &&
-                terminals.isPanelOpen(terminal.threadKey);
-              return (
-                <Suspense key={terminal.threadKey} fallback={null}>
-                  <LazyIntegratedTerminal
-                    desktopApi={props.desktopApi}
-                    threadKey={terminal.threadKey}
-                    cwd={terminal.cwd}
-                    remote={terminal.remote}
-                    height={terminals.heightByThread[terminal.threadKey] ?? 260}
-                    visible={terminalVisible}
-                    onHeightChange={(height) => {
-                      terminals.setHeight(terminal.threadKey, height);
-                    }}
-                    onClose={() => {
-                      terminals.closeTerminal(terminal);
-                    }}
-                    onExit={() => {
-                      terminals.handleExit(terminal.threadKey);
-                    }}
-                  />
-                </Suspense>
-              );
+            {threadView ? [...new Set(terminals.panes.map((pane) => JSON.stringify([pane.threadKey, pane.remote?.instanceId ?? "local"])))].map((panelKey) => {
+              const panes = terminals.panes.filter((pane) => JSON.stringify([pane.threadKey, pane.remote?.instanceId ?? "local"]) === panelKey);
+              const first = panes[0]!;
+              return <Suspense key={panelKey} fallback={null}>
+                <LazyThreadTerminalPanel desktopApi={props.desktopApi} terminals={terminals} threadKey={first.threadKey}
+                  panes={panes} visible={first.threadKey === selectedThreadKey
+                    && first.remote?.instanceId === selectedThreadTerminalRemote?.instanceId
+                    && terminals.isPanelOpen(first.threadKey)} />
+              </Suspense>;
             }) : null}
           </div>
           <ThreadContextPanel

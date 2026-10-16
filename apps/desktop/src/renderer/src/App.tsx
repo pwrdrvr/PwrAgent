@@ -165,6 +165,7 @@ import {
   OperatorWaitsContext,
   useOperatorRequests,
 } from "./features/operator-requests/useOperatorRequests";
+import { useOffscreenQuestionAnswers } from "./features/operator-requests/useOffscreenQuestionAnswers";
 import { copyTextAsCodeBlock } from "./lib/copy-text";
 import { resolveThreadWorkingStatePath } from "./lib/thread-working-state-path";
 import { CodexConfigWarningBanner } from "./features/codex-config/CodexConfigWarningBanner";
@@ -2515,6 +2516,19 @@ function DesktopAppShell(props: {
     dismissed: settings.snapshot?.experimental.fullAccessRiskWarningDismissed.value ?? false,
     onDismiss: () => handleDismissFullAccessRiskWarning(),
   });
+  // The thread on screen, read by the To-dos panel's jumps without
+  // rebuilding the panel's view on every selection.
+  const selectedThreadKeyRef = useRef(navigation.selectedThreadKey);
+  useEffect(() => {
+    selectedThreadKeyRef.current = navigation.selectedThreadKey;
+  }, [navigation.selectedThreadKey]);
+  const offscreenQuestionAnswers = useOffscreenQuestionAnswers({
+    submitThreadReply: desktopApi?.submitThreadReply,
+    findThread: (threadKey) => navigation.threads.find((candidate) =>
+      !candidate.federation
+      && buildThreadIdentityKey(candidate.source, candidate.id) === threadKey),
+    onUserRepliedToThread: reportUserRepliedToThread,
+  });
   const threadTodosView = useMemo<ThreadTodosView | undefined>(() => {
     if (!listThreadTodos || readRendererFederationTarget()) return undefined;
     const showTodoThread = (backend: AppServerBackendKind, threadId: string): void => {
@@ -2600,7 +2614,22 @@ function DesktopAppShell(props: {
       },
       dismissQuestion: operatorRequests.dismissQuestion,
       dismissedQuestionKeys: operatorRequests.dismissedQuestionKeys,
-      openWait: (wait) => showTodoThread(wait.backend, wait.threadId),
+      openWait: (wait) => {
+        // A question opens on its card, as a message link does.
+        const messageId = wait.question?.messageId;
+        if (messageId && wait.threadKey === selectedThreadKeyRef.current) {
+          // Already on screen: scroll only. Selecting it again would refresh
+          // its git status and clear its errors for nothing.
+          queueMessageLinkRequest({ backend: wait.backend, threadId: wait.threadId, messageId });
+          return;
+        }
+        showThreadFromLink({
+          backend: wait.backend,
+          threadId: wait.threadId,
+          ...(messageId ? { messageId } : {}),
+        });
+      },
+      ...offscreenQuestionAnswers,
       threadTitleForKey: (threadKey) => localThreadTitles.get(threadKey) ?? "Untitled thread",
       threadProjectForKey: (threadKey) => localThreadProjects.get(threadKey),
     };
@@ -2609,7 +2638,9 @@ function DesktopAppShell(props: {
     listThreadTodos,
     localThreadProjects,
     localThreadTitles,
+    offscreenQuestionAnswers,
     operatorRequests,
+    queueMessageLinkRequest,
     submitServerRequest,
     requestTodoExecutionMode,
     showThreadFromLink,

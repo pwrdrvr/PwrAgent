@@ -1,4 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { TerminalHistoryStore } from "../terminal/terminal-history-store";
 import type { FederationRequestEnvelope } from "@pwragent/shared";
 import { FEDERATION_PROTOCOL_VERSION } from "@pwragent/shared";
 import {
@@ -86,6 +90,7 @@ type SentNotification = {
 };
 
 function createHarness(options?: {
+  historyStore?: TerminalHistoryStore;
   allowOpen?: () => boolean;
   graceMs?: number;
   deliverable?: () => boolean;
@@ -102,6 +107,7 @@ function createHarness(options?: {
   const sent: SentNotification[] = [];
   const audits: { peerId: string; kind: string; detail: string }[] = [];
   const service = new FederationPtyService({
+    historyStore: options?.historyStore,
     allowOpen: options?.allowOpen,
     spawnPty:
       options?.spawnPty ??
@@ -142,7 +148,7 @@ const OPEN_REQUEST = {
 describe("FederationPtyService capability map", () => {
   it("requires remote_pty for every control method", () => {
     const methods = Object.values(FEDERATION_PTY_METHODS);
-    expect(methods).toHaveLength(5);
+    expect(methods).toHaveLength(8);
     for (const method of methods) {
       expect(FEDERATION_PTY_METHOD_CAPABILITIES[method]).toBe("remote_pty");
     }
@@ -511,6 +517,38 @@ describe("FederationPtyService reaping", () => {
     }
   });
 
+  it("does not rediscover or reattach an explicitly closed shell during its reap grace", async () => {
+    vi.useFakeTimers();
+    const processes: FakePty[] = [];
+    const { service } = createHarness({
+      graceMs: 10_000,
+      spawnPty: async () => {
+        const pty = new FakePty();
+        processes.push(pty);
+        return { pty, cwd: "/owner/worktree", shell: { file: "/bin/zsh", args: ["-l"] } };
+      },
+    });
+    try {
+      const first = await service.open("peer-a", OPEN_REQUEST);
+      expect(await service.list("peer-a", OPEN_REQUEST)).toHaveLength(1);
+      service.close("peer-a", { sessionId: first.sessionId });
+      expect(processes[0]!.killed).toBe(false);
+      expect(await service.list("peer-a", OPEN_REQUEST)).toEqual([]);
+      await expect(service.snapshot("peer-a", { sessionId: first.sessionId })).rejects.toThrow("not found");
+      service.notifyPeerConnected("peer-a");
+      expect(await service.list("peer-a", OPEN_REQUEST)).toEqual([]);
+      const next = await service.open("peer-a", OPEN_REQUEST);
+      expect(next.sessionId).not.toBe(first.sessionId);
+      expect((await service.list("peer-a", OPEN_REQUEST)).map((session) => session.sessionId)).toEqual([next.sessionId]);
+      vi.advanceTimersByTime(10_000);
+      expect(processes[0]!.killed).toBe(true);
+      expect(processes[1]!.killed).toBe(false);
+    } finally {
+      await service.disposeAll();
+      vi.useRealTimers();
+    }
+  });
+
   it("does not leak a shell when the peer disconnects during spawn", async () => {
     const pty = new FakePty();
     let releaseSpawn: (() => void) | undefined;
@@ -766,5 +804,126 @@ describe("remote shell receiver permission", () => {
     expect(spawnPty).not.toHaveBeenCalled();
     expect(resolveThreadCwd).not.toHaveBeenCalled();
     service.disposeAll();
+  });
+});
+
+describe("remote terminal snapshots and ownership", () => {
+  it("retains exited history on viewer shutdown, but removes it on explicit close", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "remote-terminal-history-"));
+    const historyStore = new TerminalHistoryStore(directory);
+    const { service, pty } = createHarness({ historyStore });
+    try {
+      const opened = await service.open("peer-a", OPEN_REQUEST);
+      pty.emitData("finished output");
+      pty.emitExit(0);
+      await service.snapshot("peer-a", { sessionId: opened.sessionId });
+      service.close("peer-a", { sessionId: opened.sessionId, retainHistory: true });
+      expect(await service.list("peer-a", OPEN_REQUEST)).toHaveLength(1);
+      expect((await service.snapshot("peer-a", { sessionId: opened.sessionId })).snapshot?.data).toContain("finished output");
+      expect(await new TerminalHistoryStore(directory).load()).toHaveLength(1);
+      service.close("peer-a", { sessionId: opened.sessionId });
+      expect(await service.list("peer-a", OPEN_REQUEST)).toEqual([]);
+      await vi.waitFor(async () => expect(await new TerminalHistoryStore(directory).load()).toEqual([]));
+    } finally {
+      await service.disposeAll();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("resumes the opener's saved history under its own id, and only for that peer", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "remote-terminal-resume-"));
+    const historyStore = new TerminalHistoryStore(directory);
+    const ptys = [new FakePty(), new FakePty()];
+    let spawned = 0;
+    const { service } = createHarness({
+      historyStore,
+      spawnPty: async () => ({ pty: ptys[spawned++]!, cwd: "/owner/worktree", shell: { file: "/bin/zsh", args: ["-l"] } }),
+    });
+    try {
+      const opened = await service.open("peer-a", OPEN_REQUEST);
+      service.rename("peer-a", { sessionId: opened.sessionId, name: "Build" });
+      ptys[0]!.emitData("earlier output\r\n");
+      ptys[0]!.emitExit(0);
+      await vi.waitFor(async () => expect((await service.list("peer-a", OPEN_REQUEST))[0]?.status).toBe("exited"));
+
+      await expect(service.open("peer-b", { ...OPEN_REQUEST, resumeSessionId: opened.sessionId }))
+        .rejects.toThrow("not found");
+      await expect(service.open("peer-a", { ...OPEN_REQUEST, threadId: "thread-2", resumeSessionId: opened.sessionId }))
+        .rejects.toThrow("not found");
+      expect(spawned).toBe(1);
+
+      const resumed = await service.open("peer-a", { ...OPEN_REQUEST, resumeSessionId: opened.sessionId });
+      expect(resumed.sessionId).toBe(opened.sessionId);
+      expect(resumed.snapshot?.data).toContain("earlier output");
+      expect(resumed.snapshot?.data).toContain("restored history");
+      const listed = await service.list("peer-a", OPEN_REQUEST);
+      expect(listed).toHaveLength(1);
+      expect(listed[0]).toMatchObject({ sessionId: opened.sessionId, name: "Build", status: "running" });
+      await expect(service.open("peer-a", { ...OPEN_REQUEST, resumeSessionId: opened.sessionId }))
+        .rejects.toThrow("not found");
+    } finally {
+      await service.disposeAll();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("does not archive a deliberately closed shell that exits before its reap timer", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "remote-terminal-history-"));
+    const historyStore = new TerminalHistoryStore(directory);
+    const save = vi.spyOn(historyStore, "save");
+    const { service, pty } = createHarness({ historyStore });
+    try {
+      const opened = await service.open("peer-a", OPEN_REQUEST);
+      pty.emitData("closed output");
+      // Queue a checkpoint before close as well as a natural exit after it.
+      service.rename("peer-a", { sessionId: opened.sessionId, name: "Closing" });
+      service.close("peer-a", { sessionId: opened.sessionId });
+      pty.emitExit(0);
+      await service.disposeAll();
+      expect(await service.list("peer-a", OPEN_REQUEST)).toEqual([]);
+      await expect(service.snapshot("peer-a", { sessionId: opened.sessionId })).rejects.toThrow("not found");
+      expect(save).not.toHaveBeenCalled();
+      expect(await new TerminalHistoryStore(directory).load()).toEqual([]);
+    } finally {
+      await service.disposeAll();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("lists only the authenticated peer's current thread and rejects foreign IDs", async () => {
+    const { service, pty } = createHarness();
+    const opened = await service.open("peer-a", OPEN_REQUEST);
+    pty.emitData("owner output\r\n");
+    expect(await service.list("peer-a", OPEN_REQUEST)).toHaveLength(1);
+    expect(await service.list("peer-b", OPEN_REQUEST)).toEqual([]);
+    expect(await service.list("peer-a", { ...OPEN_REQUEST, threadId: "other" })).toEqual([]);
+    await expect(service.snapshot("peer-b", { sessionId: opened.sessionId })).rejects.toThrow("not found");
+    expect((await service.snapshot("peer-a", { sessionId: opened.sessionId })).snapshot).toMatchObject({ seq: 1, data: expect.stringContaining("owner output") });
+    pty.emitExit(7);
+    const saved = await service.snapshot("peer-a", { sessionId: opened.sessionId });
+    expect(saved.status).toBe("exited");
+    expect(saved.snapshot?.data).toContain("owner output");
+    expect(pty.written).toEqual([]);
+    service.close("peer-a", { sessionId: opened.sessionId });
+    expect(await service.list("peer-a", OPEN_REQUEST)).toEqual([]);
+  });
+
+  it("recovers missed output from its owner on reconnect without spawning or replaying commands", async () => {
+    let connected = true;
+    const { service, pty, sent } = createHarness({ deliverable: () => connected });
+    const opened = await service.open("peer-a", OPEN_REQUEST);
+    pty.emitData("before\r\n");
+    connected = false;
+    service.notifyPeerDisconnected("peer-a");
+    pty.emitData("while disconnected\r\n");
+    connected = true;
+    service.notifyPeerConnected("peer-a");
+    await vi.waitFor(() => expect(sent.some((frame) => (frame.params as FederationPtyOutputParams).snapshot?.seq === 2)).toBe(true));
+    const snapshot = sent.find((frame) => (frame.params as FederationPtyOutputParams).snapshot)?.params as FederationPtyOutputParams;
+    expect(snapshot.snapshot?.data).toContain("while disconnected");
+    expect((await service.snapshot("peer-a", { sessionId: opened.sessionId })).status).toBe("running");
+    expect(pty.killed).toBe(false);
+    expect(pty.written).toEqual([]);
+    await service.disposeAll();
   });
 });

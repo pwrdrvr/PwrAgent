@@ -1,3 +1,6 @@
+import type { IntegratedTerminalSessionSummary, TerminalSnapshot } from "../../shared/integrated-terminal";
+import { restoredHistoryPrelude, TerminalReplay } from "../terminal/terminal-replay";
+import { TerminalHistoryStore, type TerminalHistoryRecord } from "../terminal/terminal-history-store";
 import { randomUUID } from "node:crypto";
 import type {
   AppServerBackendKind,
@@ -32,6 +35,9 @@ import {
 
 export const FEDERATION_PTY_METHODS = {
   open: "pty.open",
+  list: "pty.list",
+  snapshot: "pty.snapshot",
+  rename: "pty.rename",
   input: "pty.input",
   resize: "pty.resize",
   ack: "pty.ack",
@@ -56,6 +62,9 @@ export const FEDERATION_PTY_METHOD_CAPABILITIES: Record<
   FederationCapability
 > = {
   [FEDERATION_PTY_METHODS.open]: "remote_pty",
+  [FEDERATION_PTY_METHODS.list]: "remote_pty",
+  [FEDERATION_PTY_METHODS.snapshot]: "remote_pty",
+  [FEDERATION_PTY_METHODS.rename]: "remote_pty",
   [FEDERATION_PTY_METHODS.input]: "remote_pty",
   [FEDERATION_PTY_METHODS.resize]: "remote_pty",
   [FEDERATION_PTY_METHODS.ack]: "remote_pty",
@@ -91,6 +100,12 @@ export type FederationPtyOpenRequest = {
   threadId: string;
   cols: number;
   rows: number;
+  /**
+   * Saved history this requester owns: the new shell takes that session's id
+   * and starts below its saved screen. An owner that predates this field
+   * ignores it and opens a plain new shell.
+   */
+  resumeSessionId?: string;
 };
 
 export type FederationPtyOpenResponse = {
@@ -99,6 +114,8 @@ export type FederationPtyOpenResponse = {
   shell: string;
   /** Absent from an owner that predates `pty.state`. */
   foregroundCommand?: boolean;
+  snapshot?: TerminalSnapshot;
+  status?: "running" | "exited" | "restored";
 };
 
 export type FederationPtyInputRequest = {
@@ -119,9 +136,11 @@ export type FederationPtyAckRequest = {
 
 export type FederationPtyCloseRequest = {
   sessionId: string;
+  retainHistory?: boolean;
 };
 
 export type FederationPtyOutputParams = {
+  snapshot?: TerminalSnapshot;
   sessionId: string;
   /** Gapless per-session counter. The transport is ordered, so a gap on the
    *  viewer means a bug — surfaced, never silently repaired. */
@@ -189,6 +208,7 @@ export type FederationPtyAuditEntry = {
 };
 
 type FederationPtyServiceOptions = {
+  historyStore?: TerminalHistoryStore;
   allowOpen?: () => boolean;
   /** Spawns the shell. The desktop runtime passes the shared
    *  integrated-terminal spawn core; harnesses inject their own. */
@@ -229,8 +249,12 @@ type FederationPtySession = {
   shell: string;
   pty: FederationPtyProcess;
   seq: number;
+  replay: TerminalReplay;
+  name?: string;
+  createdAt: number;
   unackedBytes: number;
   paused: boolean;
+  parsePaused?: boolean;
   disposables: { dispose(): void }[];
   reapTimer?: ReturnType<typeof setTimeout>;
   reapReason?: "close" | "disconnect";
@@ -271,13 +295,109 @@ export class FederationPtyService {
    *  per-peer cap so concurrent opens cannot slip past it. */
   private readonly spawningCountByPeer = new Map<FederationInstanceId, number>();
   private disposed = false;
+  private readonly archived = new Map<string, TerminalHistoryRecord>();
+  private readonly ready: Promise<void>;
+  /** In-flight checkpoints by session id. A snapshot waits only for its own
+   *  session's, so one peer's large saves never delay another's reattach. */
+  private readonly checkpoints = new Map<string, Set<Promise<void>>>();
 
-  constructor(private readonly options: FederationPtyServiceOptions) {}
+  constructor(private readonly options: FederationPtyServiceOptions) {
+    this.ready = options.historyStore?.load().then((records) => {
+      for (const record of records) {
+        if (!record.peerId) continue;
+        record.summary = { ...record.summary, status: "restored", pid: undefined };
+        this.archived.set(record.summary.sessionId, record);
+      }
+    }).catch((error) => options.log?.warn("terminal history load failed", { error: String(error) })) ?? Promise.resolve();
+  }
+
+  async list(peerId: FederationInstanceId, request: { backend: AppServerBackendKind; threadId: string }): Promise<IntegratedTerminalSessionSummary[]> {
+    await this.ready;
+    if (this.options.allowOpen?.() === false) throw new Error("Remote shells are disabled.");
+    const threadKey = `${request.backend}:${request.threadId}`;
+    return [
+      ...[...this.sessionsById.values()].filter((session) => session.peerId === peerId
+        && session.reapReason !== "close"
+        && session.backend === request.backend && session.threadId === request.threadId).map((session) => this.summary(session)),
+      ...[...this.archived.values()].filter((record) => record.peerId === peerId
+        && record.summary.threadKey === threadKey).map((record) => record.summary),
+    ];
+  }
+
+  async snapshot(peerId: FederationInstanceId, request: FederationPtyCloseRequest): Promise<FederationPtyOpenResponse> {
+    await this.ready;
+    await Promise.all([...this.checkpoints.get(request.sessionId) ?? []]);
+    if (this.options.allowOpen?.() === false) throw new Error("Remote shells are disabled.");
+    const record = this.archived.get(request.sessionId);
+    if (record?.peerId === peerId) return { ...record.summary, snapshot: record.snapshot };
+    const session = this.requireSession(peerId, request.sessionId);
+    if (session.reapReason === "close") throw new Error("Remote terminal session not found for this peer.");
+    if (session.reapReason === "disconnect" && session.reapTimer) {
+      clearTimeout(session.reapTimer);
+      session.reapTimer = undefined;
+      session.reapReason = undefined;
+    }
+    return { sessionId: session.sessionId, cwd: session.cwd, shell: session.shell,
+      foregroundCommand: session.foregroundCommand, status: "running", snapshot: await session.replay.snapshot() };
+  }
+
+  rename(peerId: FederationInstanceId, request: { sessionId: string; name: string }): void {
+    if (this.options.allowOpen?.() === false) throw new Error("Remote shells are disabled.");
+    if (typeof request.name !== "string") throw new Error("Invalid terminal name.");
+    const name = request.name.trim().replace(/[\x00-\x1f\x7f]/g, "").slice(0, 80);
+    const record = this.archived.get(request.sessionId);
+    if (record?.peerId === peerId) {
+      record.summary.name = name;
+      void this.options.historyStore?.save(record).catch(() => undefined);
+      return;
+    }
+    const session = this.requireSession(peerId, request.sessionId);
+    session.name = name;
+    this.checkpoint(session);
+  }
+
+  /** Plumbing for the separately authorized read-only output-tool stack. */
+  outputForThread(peerId: FederationInstanceId, backend: AppServerBackendKind, threadId: string, sessionId: string): TerminalReplay | undefined {
+    if (this.options.allowOpen?.() === false) throw new Error("Remote shells are disabled.");
+    const session = this.requireSession(peerId, sessionId);
+    return session.backend === backend && session.threadId === threadId ? session.replay : undefined;
+  }
+
+  private summary(session: FederationPtySession): IntegratedTerminalSessionSummary {
+    return { sessionId: session.sessionId, threadKey: `${session.backend}:${session.threadId}`,
+      cwd: session.cwd, shell: session.shell, name: session.name, createdAt: session.createdAt,
+      panelHidden: false, status: "running" };
+  }
+
+  private checkpoint(session: FederationPtySession, status: "exited" | "restored" = "restored", exitCode?: number): void {
+    const saving = session.replay.snapshot().then(async (snapshot) => {
+      if (session.reapReason === "close") return;
+      // Resumed under the same id before this snapshot settled: the live
+      // shell owns the id and its own checkpoints now.
+      const current = this.sessionsById.get(session.sessionId);
+      if (current && current !== session) return;
+      const record: TerminalHistoryRecord = { version: 1, peerId: session.peerId,
+        summary: { ...this.summary(session), status, exitCode }, snapshot: { ...snapshot, pendingEscape: undefined }, savedAt: this.now() };
+      if (!this.sessionsById.has(session.sessionId)) {
+        this.archived.set(session.sessionId, record);
+        while (this.archived.size > 64) this.archived.delete(this.archived.keys().next().value!);
+      }
+      await this.options.historyStore?.save(record);
+    }).catch((error) => this.options.log?.warn("terminal history save failed", { error: String(error) }));
+    const pending = this.checkpoints.get(session.sessionId) ?? new Set<Promise<void>>();
+    pending.add(saving);
+    this.checkpoints.set(session.sessionId, pending);
+    void saving.finally(() => {
+      pending.delete(saving);
+      if (!pending.size && this.checkpoints.get(session.sessionId) === pending) this.checkpoints.delete(session.sessionId);
+    });
+  }
 
   async open(
     peerId: FederationInstanceId,
     request: FederationPtyOpenRequest,
   ): Promise<FederationPtyOpenResponse> {
+    await this.ready;
     if (this.options.allowOpen?.() === false) throw new Error("This machine does not allow remote shells.");
     if (this.disposed) {
       throw new Error("Remote terminal service is shutting down.");
@@ -285,6 +405,12 @@ export class FederationPtyService {
     const threadId = typeof request.threadId === "string" ? request.threadId.trim() : "";
     if (!threadId) {
       throw new Error("A thread id is required to open a remote terminal.");
+    }
+    const resumeId = typeof request.resumeSessionId === "string" ? request.resumeSessionId : undefined;
+    const resumed = resumeId ? this.archived.get(resumeId) : undefined;
+    // Same answer for "unknown" and "not yours", as requireSession gives.
+    if (resumeId && (resumed?.peerId !== peerId || resumed.summary.threadKey !== `${request.backend}:${threadId}`)) {
+      throw new Error("Remote terminal session not found for this peer.");
     }
     if (
       this.sessionCountForPeer(peerId)
@@ -331,7 +457,12 @@ export class FederationPtyService {
       }
       throw new Error("Federation peer disconnected while the terminal was starting.");
     }
-    const sessionId = randomUUID();
+    // A second resume of the same history raced this one and won.
+    if (resumed && this.sessionsById.has(resumed.summary.sessionId)) {
+      try { spawned.pty.kill(); } catch { /* already gone */ }
+      throw new Error("That terminal was already resumed.");
+    }
+    const sessionId = resumed?.summary.sessionId ?? randomUUID();
     const session: FederationPtySession = {
       sessionId,
       peerId,
@@ -341,6 +472,8 @@ export class FederationPtyService {
       shell: spawned.shell.file,
       pty: spawned.pty,
       seq: 0,
+      replay: new TerminalReplay(request.cols, request.rows),
+      createdAt: this.now(),
       unackedBytes: 0,
       paused: false,
       disposables: [],
@@ -351,7 +484,10 @@ export class FederationPtyService {
       // viewer's resize is a network round trip before it reaches the shell,
       // so pacing matters more here than it does locally.
       resizes: new PtyResizeCoalescer({
-        apply: (cols, rows) => spawned.pty.resize(cols, rows),
+        apply: (cols, rows) => {
+          spawned.pty.resize(cols, rows);
+          session.replay.resize(cols, rows);
+        },
         // `now` is a method here, so it has to stay bound.
         now: () => this.now(),
         onDeferredError: (error) => {
@@ -364,6 +500,14 @@ export class FederationPtyService {
         spawnedRows: request.rows,
       }),
     };
+    if (resumed) {
+      session.createdAt = resumed.summary.createdAt;
+      if (resumed.summary.name) session.name = resumed.summary.name;
+      // Seeded before the PTY's first byte, so every snapshot carries the
+      // saved screen above the new prompt.
+      session.seq = session.replay.append(restoredHistoryPrelude(resumed.snapshot), this.now()).seq;
+      this.archived.delete(resumed.summary.sessionId);
+    }
     session.foregroundCommand = this.detectForegroundCommand(session);
     session.foregroundCheckedAt = this.now();
     this.sessionsById.set(session.sessionId, session);
@@ -390,6 +534,8 @@ export class FederationPtyService {
       cwd: session.cwd,
       shell: session.shell,
       foregroundCommand: session.foregroundCommand,
+      status: "running",
+      snapshot: await session.replay.snapshot(),
     };
   }
 
@@ -420,8 +566,16 @@ export class FederationPtyService {
   }
 
   close(peerId: FederationInstanceId, request: FederationPtyCloseRequest): void {
+    const record = this.archived.get(request.sessionId);
+    if (record?.peerId === peerId) {
+      if (!request.retainHistory) {
+        this.archived.delete(request.sessionId);
+        void this.options.historyStore?.remove(request.sessionId).catch(() => undefined);
+      }
+      if (!this.sessionsById.has(request.sessionId)) return;
+    }
     const session = this.requireSession(peerId, request.sessionId);
-    this.scheduleReap(session, "close");
+    this.scheduleReap(session, request.retainHistory ? "disconnect" : "close");
   }
 
   /** Live session count for a peer (diagnostics/tests). */
@@ -454,16 +608,26 @@ export class FederationPtyService {
         clearTimeout(session.reapTimer);
         session.reapTimer = undefined;
         session.reapReason = undefined;
+        void session.replay.snapshot().then((snapshot) => {
+          if (this.sessionsById.get(session.sessionId) !== session) return;
+          this.options.sendNotification(peerId, FEDERATION_PTY_OUTPUT_METHOD, {
+            sessionId: session.sessionId, seq: snapshot.seq, dataBase64: "", snapshot,
+          } satisfies FederationPtyOutputParams);
+          session.unackedBytes = 0;
+          if (session.paused) { session.paused = false; session.pty.resume(); }
+          this.clearAckWatchdog(session);
+        });
       }
     }
   }
 
   /** Owner shutdown: kill every remote session immediately. */
-  disposeAll(): void {
+  disposeAll(): Promise<void> {
     this.disposed = true;
     for (const session of Array.from(this.sessionsById.values())) {
       this.killSession(session, "owner_shutdown");
     }
+    return Promise.all([...this.checkpoints.values()].flatMap((pending) => [...pending])).then(() => undefined);
   }
 
   private requireSession(
@@ -510,7 +674,7 @@ export class FederationPtyService {
     ) {
       const chunk = data.slice(offset, offset + FEDERATION_PTY_OUTPUT_CHUNK_CHARS);
       const bytes = Buffer.from(chunk, "utf8");
-      session.seq += 1;
+      session.seq = session.replay.append(chunk, this.now()).seq;
       session.unackedBytes += bytes.length;
       // A false return means the peer link is down: the frame is lost (the
       // viewer surfaces the seq gap on resume, we never repair it) and the
@@ -534,6 +698,18 @@ export class FederationPtyService {
       session.paused = true;
       session.pty.pause();
       this.armAckWatchdog(session);
+    }
+    if (!session.parsePaused && session.replay.pendingCharacters >= 256 * 1024) {
+      session.parsePaused = true;
+      if (!session.paused) { session.paused = true; session.pty.pause(); }
+      void session.replay.whenDrained().then(() => {
+        session.parsePaused = false;
+        if (this.sessionsById.get(session.sessionId) === session
+          && session.paused && session.unackedBytes < FEDERATION_PTY_LOW_WATER_BYTES) {
+          session.paused = false;
+          session.pty.resume();
+        }
+      });
     }
     this.scheduleForegroundCheck(session);
   }
@@ -661,6 +837,12 @@ export class FederationPtyService {
       exitCode: exitCode ?? null,
       signal: signal ?? null,
     } satisfies FederationPtyExitParams);
+    if (session.reapReason === "close") {
+      this.archived.delete(session.sessionId);
+      void this.options.historyStore?.remove(session.sessionId).catch(() => undefined);
+    } else {
+      this.checkpoint(session, "exited", exitCode);
+    }
     this.deleteSession(session, "exit");
   }
 
@@ -675,6 +857,8 @@ export class FederationPtyService {
       exitCode: null,
       signal: null,
     } satisfies FederationPtyExitParams);
+    if (reason !== "close") this.checkpoint(session);
+    else void this.options.historyStore?.remove(session.sessionId).catch(() => undefined);
     // Drop the session first so the kill's own exit event can't re-notify.
     this.deleteSession(session, reason);
     try {
@@ -694,6 +878,7 @@ export class FederationPtyService {
   private deleteSession(session: FederationPtySession, reason: string): void {
     // A queued resize must not reach a PTY that is being torn down.
     session.resizes.dispose();
+    void session.replay.dispose();
     if (session.reapTimer) {
       clearTimeout(session.reapTimer);
       session.reapTimer = undefined;
@@ -758,6 +943,14 @@ export function registerFederationPtyHandlers(params: {
     }
     return originInstanceId;
   };
+  params.router.registerHandler(FEDERATION_PTY_METHODS.list, (envelope, sourcePeerId) =>
+    params.service.list(requester(envelope, sourcePeerId), envelope.params as { backend: AppServerBackendKind; threadId: string }));
+  params.router.registerHandler(FEDERATION_PTY_METHODS.snapshot, (envelope, sourcePeerId) =>
+    params.service.snapshot(requester(envelope, sourcePeerId), envelope.params as FederationPtyCloseRequest));
+  params.router.registerHandler(FEDERATION_PTY_METHODS.rename, (envelope, sourcePeerId) => {
+    params.service.rename(requester(envelope, sourcePeerId), envelope.params as { sessionId: string; name: string });
+    return {};
+  });
   params.router.registerHandler(
     FEDERATION_PTY_METHODS.open,
     async (envelope, sourcePeerId) =>
@@ -809,6 +1002,9 @@ export function registerFederationPtyHandlers(params: {
 }
 
 export type FederationRemotePtyOperations = {
+  list?(request: { backend: AppServerBackendKind; threadId: string }): Promise<IntegratedTerminalSessionSummary[]>;
+  snapshot?(request: FederationPtyCloseRequest): Promise<FederationPtyOpenResponse>;
+  rename?(request: { sessionId: string; name: string }): Promise<void>;
   open(request: FederationPtyOpenRequest): Promise<FederationPtyOpenResponse>;
   input(request: FederationPtyInputRequest): Promise<void>;
   resize(request: FederationPtyResizeRequest): Promise<void>;
@@ -820,6 +1016,15 @@ export type FederationRemotePtyOperations = {
 export class FederationRemotePtyClient implements FederationRemotePtyOperations {
   constructor(private readonly rpc: FederationRpcEndpoint) {}
 
+  async list(request: { backend: AppServerBackendKind; threadId: string }): Promise<IntegratedTerminalSessionSummary[]> {
+    return this.rpc.request({ method: FEDERATION_PTY_METHODS.list, params: request });
+  }
+  async snapshot(request: FederationPtyCloseRequest): Promise<FederationPtyOpenResponse> {
+    return this.rpc.request({ method: FEDERATION_PTY_METHODS.snapshot, params: request });
+  }
+  async rename(request: { sessionId: string; name: string }): Promise<void> {
+    await this.rpc.request({ method: FEDERATION_PTY_METHODS.rename, params: request });
+  }
   async open(request: FederationPtyOpenRequest): Promise<FederationPtyOpenResponse> {
     return await this.rpc.request<FederationPtyOpenResponse>({
       method: FEDERATION_PTY_METHODS.open,

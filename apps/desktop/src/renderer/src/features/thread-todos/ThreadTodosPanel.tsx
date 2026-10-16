@@ -9,6 +9,7 @@ import type { ThreadTodo, ThreadTodoKind } from "@pwragent/shared";
 import {
   THREAD_TODO_RESOLUTION_RESULTS,
   buildThreadIdentityKey,
+  codexAsyncQuestionItemId,
   operatorTodoItemKey,
   threadTodoItemProgress,
 } from "@pwragent/shared";
@@ -78,6 +79,10 @@ export type ThreadTodosPanelProps = {
     todo: ThreadTodo,
     options?: ThreadTodoDoHereOptions,
   ) => void | Promise<unknown>;
+  /** Answers a question in the thread on screen, through its composer. */
+  onAnswerQuestion?: (text: string) => Promise<boolean>;
+  /** Answers the composer took in that thread, by question item id. */
+  sentQuestionAnswers?: ReadonlyMap<string, string>;
 };
 
 /**
@@ -284,6 +289,26 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
                   if (item.type === "wait") {
                     const { wait } = item;
                     const mine = wait.threadKey === threadKey;
+                    const asked = wait.question;
+                    const answerOffscreen = view.answerQuestion;
+                    // The thread on screen answers through its composer, which
+                    // also draws the reply in its transcript. Any other local
+                    // thread answers through its owner's turn FIFO.
+                    const answerQuestion = !asked
+                      ? undefined
+                      : mine
+                        ? props.onAnswerQuestion
+                        : answerOffscreen
+                          ? (text: string) => answerOffscreen(wait, text)
+                          : undefined;
+                    // Any reply closes all of a message's questions. The
+                    // composer's answers include the panel's for its thread.
+                    const questionSent = asked?.questions.some((_, index) => {
+                      const itemId = codexAsyncQuestionItemId(asked.messageId, index);
+                      return mine
+                        ? props.sentQuestionAnswers?.has(itemId)
+                        : view.sentQuestionAnswers?.has(`${wait.threadKey}\0${itemId}`);
+                    }) ?? false;
                     return (
                       <li key={item.key}>
                         <OperatorWaitRow
@@ -299,6 +324,8 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
                             return question ? view.dismissQuestion(question) : Promise.resolve();
                           }}
                           openWait={view.openWait}
+                          answerQuestion={answerQuestion}
+                          questionSent={questionSent}
                         />
                       </li>
                     );
