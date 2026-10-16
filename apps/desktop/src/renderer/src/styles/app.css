@@ -32033,6 +32033,12 @@ div.composer-error-row__toggle {
   color: var(--accent-bright);
 }
 
+/* The form's 12px type; the composer primitive, declared later, is sized
+   for the composer, so this needs both classes to win. */
+.composer__checkbox.thread-dependencies__handoff {
+  font-size: 12px;
+}
+
 .thread-dependencies__actions {
   display: flex;
   justify-content: flex-end;
@@ -32124,6 +32130,12 @@ div.composer-error-row__toggle {
   color: var(--text-muted);
   font-size: 11px;
   overflow-wrap: anywhere;
+}
+
+/* Who acts when the dependency fires, beside the status chip. */
+.thread-dependencies__target {
+  color: var(--text-muted);
+  font-size: 11px;
 }
 
 .thread-dependencies__details {

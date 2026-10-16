@@ -139,6 +139,30 @@ describe("StateDb", () => {
     expect(columnNames(table)).toContain(column);
   });
 
+  it("links a v76 profile's to-do cards to the dependency that raised them, one card each", () => {
+    const dbPath = useFileStateDb();
+    stateDb.raw.exec("DROP INDEX idx_thread_todos_dependency");
+    stateDb.raw.exec("ALTER TABLE thread_todos DROP COLUMN dependency_id");
+    stateDb.raw.exec(`INSERT INTO thread_todos (todo_id, backend, thread_id, kind, status, title, created_at, updated_at)
+      VALUES ('old-card', 'codex', 'thread', 'reminder', 'open', 'Check the docs', 1, 1)`);
+    stateDb.raw.pragma("user_version = 76");
+    stateDb.close();
+    stateDb = StateDb.open(dbPath);
+    expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(CURRENT_STATE_DB_USER_VERSION);
+    expect(columnNames("thread_todos")).toContain("dependency_id");
+    expect(indexNames("thread_todos")).toContain("idx_thread_todos_dependency");
+    expect(stateDb.raw.prepare("SELECT dependency_id FROM thread_todos WHERE todo_id = 'old-card'").get()).toEqual({ dependency_id: null });
+    const insert = stateDb.raw.prepare(`INSERT INTO thread_todos (todo_id, backend, thread_id, kind, status, title, created_at, updated_at, dependency_id)
+      VALUES (?, 'codex', 'thread', 'reminder', ?, 'Reminder', 2, 2, ?)`);
+    insert.run("first", "done", "dependency-1");
+    // Unlike the open-key index, resolving the first card does not free the dependency.
+    expect(() => insert.run("second", "open", "dependency-1")).toThrow(/UNIQUE/);
+    insert.run("unlinked", "open", null);
+    stateDb.close();
+    stateDb = StateDb.open(dbPath);
+    expect(columnNames("thread_todos").filter((column) => column === "dependency_id")).toHaveLength(1);
+  });
+
   it.each([false, true])("guards corrupt automation runs when upgrading with legacy index present: %s", (legacyIndexPresent) => {
     const dbPath = useFileStateDb();
     stateDb.raw.exec("DROP INDEX IF EXISTS idx_automation_runs_execution_thread");
@@ -2563,6 +2587,7 @@ function indexNames(
   tableName:
     | "messaging_observed_surfaces"
     | "thread_message_origins"
+    | "thread_todos"
     | "thread_tool_invocations"
     | "thread_usage_lines",
 ): string[] {

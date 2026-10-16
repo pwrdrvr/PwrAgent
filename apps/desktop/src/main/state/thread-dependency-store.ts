@@ -24,6 +24,7 @@ function signature(dependency: ThreadDependency): string {
   return JSON.stringify([
     dependency.backend, dependency.threadId, dependency.mode,
     dependency.onFailure, dependency.continuation ?? "",
+    dependency.deliver ?? "agent", dependency.handoff ?? false,
     dependency.conditions.map((condition) => JSON.stringify([
       condition.backend, condition.threadId, condition.when,
       condition.turnId ?? "", condition.prUrl ?? "", condition.headSha ?? "",
@@ -96,6 +97,11 @@ export class ThreadDependencyStore {
       ).run(candidate.id, candidate.backend, candidate.threadId, candidate.status, candidate.createdAt, JSON.stringify(candidate));
       return candidate;
     }).immediate();
+  }
+
+  /** One immediate transaction: an operator card commits with its claim. */
+  transaction<T>(fn: () => T): T {
+    return this.db.transaction(fn).immediate();
   }
 
   /** Compare-and-swap also arbitrates dispatch across processes sharing a profile. */
