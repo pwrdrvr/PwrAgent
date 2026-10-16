@@ -9,11 +9,14 @@ import type {
   SetThreadTodoProjectRequest,
   ThreadTodoMutationResponse,
   ThreadTodosChangedEvent,
+  ListThreadReviewsRequest,
+  UpdateThreadReviewRequest,
 } from "@pwragent/shared";
 import {
   isThreadTodoMergeMethod,
   isThreadTodoResolution,
   isThreadTodoStatus,
+  threadReviewTodo,
 } from "@pwragent/shared";
 import {
   THREAD_TODOS_CHANGED_EVENT_CHANNEL,
@@ -23,6 +26,8 @@ import {
   THREAD_TODOS_RUN_ACTION_CHANNEL,
   THREAD_TODOS_SET_ITEM_CHECKED_CHANNEL,
   THREAD_TODOS_SET_PROJECT_CHANNEL,
+  THREAD_REVIEWS_LIST_CHANNEL,
+  THREAD_REVIEWS_UPDATE_CHANNEL,
 } from "../../shared/ipc";
 import type { PwrAgentFederationHandler } from "../agent-tools/pwragent-federation-agent-tools";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
@@ -36,6 +41,35 @@ import {
 } from "../thread-todos/thread-todo-runtime";
 import { subscribersForChannel } from "../window-channels";
 import { appServerService } from "./app-server";
+import { getThreadReviewService } from "../thread-reviews/thread-review-runtime";
+
+/**
+ * The note an operator's click records, which the agent reads in
+ * `list_reviews`. Reopening records none, so a repeated Reopen stays a no-op.
+ */
+function operatorReviewNote(
+  request: Pick<UpdateThreadReviewRequest, "itemId" | "status">,
+): string | undefined {
+  switch (request.status) {
+    case "open":
+      return undefined;
+    case "addressed":
+      return "Marked addressed by operator.";
+    case "handled":
+      return "Marked handled by operator.";
+    case "dismissed":
+      return request.itemId ? "Declined by operator." : "Dismissed by operator.";
+  }
+}
+
+/** A review card's resolve or Undo, as a whole-review update. */
+function reviewResolveRequest(
+  id: string,
+  status: UpdateThreadReviewRequest["status"],
+): UpdateThreadReviewRequest {
+  const note = operatorReviewNote({ status });
+  return { id, status, ...(note ? { note } : {}) };
+}
 
 function broadcastThreadTodosChanged(event: ThreadTodosChangedEvent): void {
   for (const webContents of subscribersForChannel(
@@ -77,13 +111,30 @@ export function registerThreadTodoIpcHandlers(options: {
     ...(options.federation ? { federation: options.federation } : {}),
   });
 
+  ipcMain.removeHandler(THREAD_REVIEWS_LIST_CHANNEL);
+  ipcMain.handle(THREAD_REVIEWS_LIST_CHANNEL, (_event, request: ListThreadReviewsRequest = {}) => ({
+    reviews: getThreadReviewService().list(request),
+  }));
+  ipcMain.removeHandler(THREAD_REVIEWS_UPDATE_CHANNEL);
+  ipcMain.handle(THREAD_REVIEWS_UPDATE_CHANNEL, (_event, request: UpdateThreadReviewRequest) => ({
+    review: getThreadReviewService().update({
+      ...request,
+      note: request.note ?? operatorReviewNote(request),
+    }, "user"),
+  }));
+
   ipcMain.removeHandler(THREAD_TODOS_LIST_CHANNEL);
   ipcMain.handle(
     THREAD_TODOS_LIST_CHANNEL,
     (_event, request: ListThreadTodosRequest = {}): ListThreadTodosResponse => {
       const todos = getThreadTodoService();
       return {
-        todos: todos.list(request),
+        todos: [
+          ...todos.list(request),
+          ...getThreadReviewService().list({
+            ...request, status: request.status === "done" ? "handled" : request.status,
+          }).map(threadReviewTodo),
+        ].sort((a, b) => b.createdAt - a.createdAt),
         mergeMethods: todos.mergeMethodPreferences(),
       };
     },
@@ -98,14 +149,19 @@ export function registerThreadTodoIpcHandlers(options: {
         throw new Error(`Unknown to-do status: ${String(request.status)}`);
       }
       return {
-        todo: getThreadTodoService().resolve({
-          id: request.id,
-          status: request.status,
-          ...(isThreadTodoResolution(request.resolution)
-            ? { resolution: request.resolution }
-            : {}),
-          ...(request.allowOpenItems === true ? { allowOpenItems: true } : {}),
-        }),
+        todo: request.id.startsWith("review:")
+          ? threadReviewTodo(getThreadReviewService().update(reviewResolveRequest(
+              request.id.slice("review:".length),
+              request.status === "done" ? "handled" : request.status,
+            ), "user"))
+          : getThreadTodoService().resolve({
+              id: request.id,
+              status: request.status,
+              ...(isThreadTodoResolution(request.resolution)
+                ? { resolution: request.resolution }
+                : {}),
+              ...(request.allowOpenItems === true ? { allowOpenItems: true } : {}),
+            }),
       };
     },
   );

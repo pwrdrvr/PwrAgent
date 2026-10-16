@@ -77,6 +77,7 @@ import {
 } from "../../lib/federated-thread-events";
 import { ThreadTodoStack } from "../thread-todos/ThreadTodoStack";
 import type {
+  ThreadTodoDoHereOptions,
   ThreadTodoResolveOptions,
   ThreadTodosView,
 } from "../thread-todos/thread-todos-view";
@@ -2577,15 +2578,20 @@ export function ThreadView(props: ThreadViewProps) {
   // The card resolves only once the composer has taken it.
   // Resolves false when the composer would not take it (disabled, or
   // another answer still sending), so the card can say so.
+  // A review card passes its own prompt and stays open: the agent settles
+  // the findings, and the review leaves To-dos when the last one is.
   const doTodoHere = useEventCallback(async (
     todo: ThreadTodo,
-    options?: ThreadTodoResolveOptions,
+    options?: ThreadTodoDoHereOptions,
   ): Promise<boolean> => {
-    if (todo.action?.type !== "start_thread") return false;
+    const { prompt, ...resolveOptions } = options ?? {};
+    const handoff = todo.action?.type === "start_thread" ? todo.action.prompt : undefined;
+    const text = prompt ?? handoff;
+    if (!text) return false;
     try {
-      const accepted = await handleAnswerAsyncQuestions(todo.action.prompt);
-      if (accepted) {
-        await props.threadTodos?.resolve(todo, "done", "sent_here", options);
+      const accepted = await handleAnswerAsyncQuestions(text);
+      if (accepted && prompt === undefined) {
+        await props.threadTodos?.resolve(todo, "done", "sent_here", resolveOptions);
       }
       return accepted;
     } catch (error) {

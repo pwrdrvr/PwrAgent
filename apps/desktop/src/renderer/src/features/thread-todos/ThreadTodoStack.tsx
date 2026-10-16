@@ -4,6 +4,7 @@ import { threadTodoItemProgress } from "@pwragent/shared";
 import { TodoIcon } from "../../icons";
 import { ThreadTodoCard } from "./ThreadTodoCard";
 import type {
+  ThreadTodoDoHereOptions,
   ThreadTodoResolveOptions,
   ThreadTodoRunOptions,
   ThreadTodosView,
@@ -33,10 +34,10 @@ export type ThreadTodoStackProps = {
   view: ThreadTodosView;
   onStartReview: (todo: ThreadTodo, options?: ThreadTodoResolveOptions) => void;
   /**
-   * Sends a handoff's prompt to this thread as a reply. Resolves false when
-   * the composer would not take it.
+   * Sends a handoff's prompt, or the given one, to this thread as a reply.
+   * Resolves false when the composer would not take it.
    */
-  onDoHere?: (todo: ThreadTodo, options?: ThreadTodoResolveOptions) => Promise<boolean>;
+  onDoHere?: (todo: ThreadTodo, options?: ThreadTodoDoHereOptions) => Promise<boolean>;
   /** Moves the stack below the find bar while it is open. */
   findOpen?: boolean;
 };
@@ -114,7 +115,7 @@ export function ThreadTodoStack(props: ThreadTodoStackProps) {
   };
   const onDoHere = props.onDoHere;
   const doHere = onDoHere
-    ? (target: ThreadTodo, options?: ThreadTodoResolveOptions): void => {
+    ? (target: ThreadTodo, options?: ThreadTodoDoHereOptions): void => {
         void onDoHere(target, options).then((sent) => {
           if (!sent) {
             showNotice({

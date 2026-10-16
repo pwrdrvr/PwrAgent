@@ -101,6 +101,8 @@ test("opens transcript source links with VS Code line metadata", async () => {
     const reviewCard = app.window.getByRole("group", { name: "Code review" }).last();
     await expect(reviewCard).toContainText("Open this source link");
     await expect(reviewCard).toContainText("Line 12");
+    await app.window.getByRole("region", { name: "To-dos for this thread" })
+      .getByRole("button", { name: "Collapse to-dos", exact: true }).click();
 
     await reviewCard.locator("a.transcript-review__location-path").click();
 

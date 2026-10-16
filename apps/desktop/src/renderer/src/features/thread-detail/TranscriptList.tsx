@@ -1547,6 +1547,8 @@ export function TranscriptList(props: TranscriptListProps) {
                   directoryPaths={stableDirectoryPaths}
                   desktopApi={props.desktopApi}
                   entry={item.entry}
+                  parentThreadId={props.parentThreadId}
+                  parentThreadBackend={props.parentThreadBackend}
                   fileViewerContext={props.fileViewerContext}
                   threadLinkSource={props.threadLinkSource}
                 />

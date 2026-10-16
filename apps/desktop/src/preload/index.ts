@@ -35,6 +35,9 @@ import type {
   SetThreadTodoProjectRequest,
   ThreadTodoMutationResponse,
   ThreadTodosChangedEvent,
+  ThreadReview,
+  ListThreadReviewsRequest,
+  UpdateThreadReviewRequest,
   DismissOperatorQuestionRequest,
   ListOperatorRequestsResponse,
   MarkOperatorItemsSeenRequest,
@@ -627,6 +630,8 @@ import {
   SCHEDULED_ACTIONS_UPDATE_CHANNEL,
   THREAD_TODOS_CHANGED_EVENT_CHANNEL,
   THREAD_TODOS_LIST_CHANNEL,
+  THREAD_REVIEWS_LIST_CHANNEL,
+  THREAD_REVIEWS_UPDATE_CHANNEL,
   THREAD_TODOS_LIST_PROJECTS_CHANNEL,
   THREAD_TODOS_RESOLVE_CHANNEL,
   THREAD_TODOS_RUN_ACTION_CHANNEL,
@@ -2158,6 +2163,10 @@ const desktopApi = Object.freeze({
     request?: ListThreadTodosRequest,
   ): Promise<ListThreadTodosResponse> =>
     await ipcRenderer.invoke(THREAD_TODOS_LIST_CHANNEL, request ?? {}),
+  listThreadReviews: async (request?: ListThreadReviewsRequest): Promise<{ reviews: ThreadReview[] }> =>
+    await ipcRenderer.invoke(THREAD_REVIEWS_LIST_CHANNEL, request ?? {}),
+  updateThreadReview: async (request: UpdateThreadReviewRequest): Promise<{ review: ThreadReview }> =>
+    await ipcRenderer.invoke(THREAD_REVIEWS_UPDATE_CHANNEL, request),
   resolveThreadTodo: async (
     request: ResolveThreadTodoRequest,
   ): Promise<ThreadTodoMutationResponse> =>

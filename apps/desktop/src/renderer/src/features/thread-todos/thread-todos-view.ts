@@ -21,6 +21,12 @@ export type ThreadTodoRunOptions = Omit<RunThreadTodoActionRequest, "id">;
 
 /** `allowOpenItems` completes a card done although steps are unchecked. */
 export type ThreadTodoResolveOptions = Pick<ResolveThreadTodoRequest, "allowOpenItems">;
+/**
+ * "Do it here" on a card: the resolve options, plus the reply a review card
+ * sends in place of a hand-off's prompt. A card that sends its own prompt
+ * stays open; the reply's work settles it.
+ */
+export type ThreadTodoDoHereOptions = ThreadTodoResolveOptions & { prompt?: string };
 
 /** What a card's project menu reads and writes. */
 export type ThreadTodoProjectMenu = {

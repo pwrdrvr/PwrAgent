@@ -53,6 +53,7 @@ import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { ThreadAutomationsPanel } from "../automations/ThreadAutomationsPanel";
 import { ThreadTodosPanel } from "../thread-todos/ThreadTodosPanel";
 import type {
+  ThreadTodoDoHereOptions,
   ThreadTodoResolveOptions,
   ThreadTodosView,
 } from "../thread-todos/thread-todos-view";
@@ -110,7 +111,7 @@ type ThreadContextPanelProps = {
     threadKey: string;
     projectKey?: string;
     onStartReview: (todo: ThreadTodo, options?: ThreadTodoResolveOptions) => void;
-    onDoHere?: (todo: ThreadTodo, options?: ThreadTodoResolveOptions) => void;
+    onDoHere?: (todo: ThreadTodo, options?: ThreadTodoDoHereOptions) => void;
   };
   activeTurnId?: string;
   backendError?: string;

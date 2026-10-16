@@ -11,7 +11,7 @@ Search when the user wants to:
 - Create or attach a worktree, link another project/repository directory, detach a directory, or move this thread into another project folder or existing checkout.
 - Run work on another machine or instance through Federation; discover connected machines, their load and projects; find remote threads or create work there.
 - Work with messaging in Telegram, Discord, Slack, LINE, Lark/Feishu, or Mattermost: inspect the current conversation, attach a thread or native child topic, rename a conversation, send a requested file or private response, or inspect/render PDF attachments. Search does not authorize sending messages.
-- Read forge cache, PR/MR status, GitHub Actions workflow runs/jobs, GitLab CI pipelines and failure logs; attach or watch pull requests, or explicitly request a code review.
+- Read forge cache, PR/MR status, GitHub Actions workflow runs/jobs, GitLab CI pipelines and failure logs; attach or watch pull requests, or explicitly request a code review; record reviews, list unresolved findings, and document addressed or dismissed review items.
 - Inspect automations, schedules, runs, alerts, artifacts, or failures; inspect PwrAgent version, updates, restart, or shutdown.
 - Manage PwrAgent MCP connections and app access; inspect what connections a thread received.
 - Discover or invoke live tools from this thread's selected MCP connections, including tools added after registration. Use search_mcp_tools and call_mcp_tool.
