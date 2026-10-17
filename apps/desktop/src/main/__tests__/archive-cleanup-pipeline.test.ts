@@ -93,6 +93,7 @@ function build(active: AppServerThreadSummary[], target = codexThread({ id: "tar
   });
   const store = new Proxy({
     getArchiveCleanupOverlayStates: readOverlays,
+    getThreadListingOverlayStates: readOverlays,
     getThreadOverlayStates: readOverlays,
     getThreadOverlayState: vi.fn(async ({ threadId }: { threadId: string }) => overlays.get(threadId)),
     setThreadParent: vi.fn(async () => {}),
