@@ -14749,6 +14749,9 @@ export class DesktopBackendRegistry {
         threadId: result.threadId,
         archivedAt,
       });
+      // A missing rollout can leave this owner in the provider's active list.
+      // Subsequent jobs must apply the new tombstone before checking sharing.
+      this.invalidateArchiveCleanupInventory();
       this.pendingStartedThreads.delete(key);
       this.invalidateThreadListCache(backend);
       backendRegistryLog.warn("codex archive tombstoned missing rollout", {

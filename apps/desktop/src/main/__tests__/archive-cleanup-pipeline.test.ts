@@ -97,7 +97,7 @@ function build(active: AppServerThreadSummary[], target = codexThread({ id: "tar
     getThreadOverlayStates: readOverlays,
     getThreadOverlayState: vi.fn(async ({ threadId }: { threadId: string }) => overlays.get(threadId)),
     setThreadParent: vi.fn(async (_request: { threadId: string }) => {}),
-    setThreadArchiveTombstone: vi.fn(async () => {}),
+    setThreadArchiveTombstone: vi.fn(async (_request: { threadId: string; archivedAt: number }) => {}),
   }, { get(object, key) {
     if (key === "then") return undefined;
     if (key in object) return object[key as keyof typeof object];
@@ -834,6 +834,29 @@ describe("archive cleanup pipeline", () => {
     expect(result.cleanup[0]?.skippedReason).toContain("another active thread: shared-user");
     expect(fixture.archiveWorktree).not.toHaveBeenCalled();
     expect(fixture.store.setThreadArchiveTombstone).toHaveBeenCalledOnce();
+  });
+
+  it("removes a shared worktree after the preceding missing-rollout owner is tombstoned", async () => {
+    vi.useFakeTimers();
+    const directory = { id: "directory", kind: "worktree" as const, label: "repo", path: "/contrived/repo", worktreePath: "/contrived/worktree" };
+    const targets = ["first", "second"].map((id) => codexThread({ id, linkedDirectories: [directory] }));
+    const fixture = build(targets, targets[0]!);
+    fixture.client.archiveThread.mockImplementation(async ({ threadId }) => {
+      throw new Error(`json-rpc error (-32600): no rollout found for thread id ${threadId}`);
+    });
+    fixture.store.setThreadArchiveTombstone.mockImplementation(async ({ threadId, archivedAt }) => {
+      fixture.overlays.set(threadId, { backend: "codex", threadId, extraLinkedDirectories: [], archiveTombstonedAt: archivedAt });
+    });
+    const requests = Promise.all(targets.map((thread) => fixture.registry.archiveThread({ backend: "codex", threadId: thread.id })));
+    const results = await drivePacer(fixture.registry, requests);
+
+    expect(results[0]?.cleanup[0]?.skippedReason).toContain("another active thread: second");
+    expect(results[1]?.cleanup[0]).toMatchObject({ removedWorktree: true });
+    expect(fixture.archiveWorktree).toHaveBeenCalledOnce();
+    expect(fixture.archiveWorktree).toHaveBeenCalledWith(expect.objectContaining({ threadId: "second" }));
+    expect(fixture.store.setThreadArchiveTombstone).toHaveBeenCalledTimes(2);
+    // Rebuild discovery after the first tombstone, then scan again at removal.
+    expect(fixture.counts.providerPages).toBe(6);
   });
 
   it("cancels missing-rollout recovery on genuine restore intent before removal", async () => {
