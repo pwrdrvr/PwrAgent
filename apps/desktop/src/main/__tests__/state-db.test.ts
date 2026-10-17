@@ -113,7 +113,7 @@ describe("StateDb", () => {
     expect(columnNames("durable_turn_requests")).toContain("receipt_json");
     expect(stateDb.raw.prepare("SELECT title, items_json FROM thread_todos WHERE todo_id = 'checklist-card'").get())
       .toEqual({ title: "Release checklist", items_json: items });
-    expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(75);
+    expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(CURRENT_STATE_DB_USER_VERSION);
     stateDb.close();
     stateDb = StateDb.open(dbPath);
     expect(columnNames("durable_turn_requests").filter((column) => column === "receipt_json")).toHaveLength(1);
@@ -131,7 +131,7 @@ describe("StateDb", () => {
     stateDb.close();
     stateDb = StateDb.open(dbPath);
     expect(columnNames(table)).toContain(column);
-    expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(75);
+    expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(CURRENT_STATE_DB_USER_VERSION);
     // A current profile that lost the table converges as well.
     stateDb.raw.exec(`DROP TABLE ${table}`);
     stateDb.close();

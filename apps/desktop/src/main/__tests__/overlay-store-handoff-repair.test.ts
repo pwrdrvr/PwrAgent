@@ -124,8 +124,8 @@ describe("StateDb — handoff navigation migration", () => {
   it("repairs a grouped handoff hidden by a native sub-agent card once during schema migration", async () => {
     await seedMisclassifiedHandoff(store);
     stateDb.raw.pragma("user_version = 56");
-    // Handoff, relationships, v65 retention, and v66 backend metadata.
-    expect(reopenAndCountImmediateTransactions()).toBe(4);
+    // Handoff, relationships, v65 retention, v66 backend metadata, and v76 generation.
+    expect(reopenAndCountImmediateTransactions()).toBe(5);
 
     expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(
       CURRENT_STATE_DB_USER_VERSION,
@@ -183,8 +183,8 @@ describe("StateDb — handoff navigation migration", () => {
   it("keeps a handoff visible when an older instance recreates the stale card", async () => {
     await seedMisclassifiedHandoff(store);
     stateDb.raw.pragma("user_version = 56");
-    // Handoff, relationships, v65 retention, and v66 backend metadata.
-    expect(reopenAndCountImmediateTransactions()).toBe(4);
+    // Handoff, relationships, v65 retention, v66 backend metadata, and v76 generation.
+    expect(reopenAndCountImmediateTransactions()).toBe(5);
 
     // Simulate a supported pre-v56 instance sharing the profile after the
     // migration has committed.
