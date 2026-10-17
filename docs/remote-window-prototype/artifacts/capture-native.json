@@ -1,0 +1,668 @@
+{
+  "note": "SCK own-window experiments; native-final runs are sequential. PNG callback includes CPU readback and synchronous disk export. Encoder bytes exclude transport/container. Energy/GPU counters unavailable.",
+  "runs": [
+    {
+      "run": "capture-1x",
+      "metadata": [
+        {
+          "accessibilityTrusted": false,
+          "kind": "permission",
+          "os": "Version 26.6.2 (Build 25G83)",
+          "screenCapturePreflight": true
+        }
+      ],
+      "streamStops": [],
+      "phases": [
+        {
+          "phase": "idle",
+          "durationSeconds": 3.966756820678711,
+          "callbacks": 123,
+          "statuses": {
+            "0": 123
+          },
+          "savedPNGs": 90,
+          "encodedFrames": 0,
+          "encodedBytes": 0,
+          "encodeErrors": 0,
+          "dropped": 0,
+          "pngCallbackMsP50": 12.01981259509921,
+          "pngCallbackMsP95": 16.4598748087883
+        },
+        {
+          "phase": "typing",
+          "durationSeconds": 4.000035047531128,
+          "callbacks": 118,
+          "statuses": {
+            "0": 118
+          },
+          "savedPNGs": 90,
+          "encodedFrames": 0,
+          "encodedBytes": 0,
+          "encodeErrors": 0,
+          "dropped": 0,
+          "pngCallbackMsP50": 12.710020877420902,
+          "pngCallbackMsP95": 16.366541385650635
+        },
+        {
+          "phase": "scroll",
+          "durationSeconds": 3.999985933303833,
+          "callbacks": 117,
+          "statuses": {
+            "0": 117
+          },
+          "savedPNGs": 90,
+          "encodedFrames": 0,
+          "encodedBytes": 0,
+          "encodeErrors": 0,
+          "dropped": 0,
+          "pngCallbackMsP50": 12.593249790370464,
+          "pngCallbackMsP95": 15.828583389520645
+        },
+        {
+          "phase": "motion",
+          "durationSeconds": 4.000038146972656,
+          "callbacks": 118,
+          "statuses": {
+            "0": 118
+          },
+          "savedPNGs": 90,
+          "encodedFrames": 0,
+          "encodedBytes": 0,
+          "encodeErrors": 0,
+          "dropped": 0,
+          "pngCallbackMsP50": 12.951499316841364,
+          "pngCallbackMsP95": 14.01654165238142
+        },
+        {
+          "phase": "obscured",
+          "durationSeconds": 4.000033855438232,
+          "callbacks": 117,
+          "statuses": {
+            "0": 117
+          },
+          "savedPNGs": 90,
+          "encodedFrames": 0,
+          "encodedBytes": 0,
+          "encodeErrors": 0,
+          "dropped": 0,
+          "pngCallbackMsP50": 13.063250109553337,
+          "pngCallbackMsP95": 15.71312453597784
+        },
+        {
+          "phase": "offscreen",
+          "durationSeconds": 4.0000319480896,
+          "callbacks": 118,
+          "statuses": {
+            "0": 118
+          },
+          "savedPNGs": 90,
+          "encodedFrames": 0,
+          "encodedBytes": 0,
+          "encodeErrors": 0,
+          "dropped": 0,
+          "pngCallbackMsP50": 13.073666486889124,
+          "pngCallbackMsP95": 13.698999769985676
+        },
+        {
+          "phase": "minimized",
+          "durationSeconds": 4.000056266784668,
+          "callbacks": 2,
+          "statuses": {
+            "0": 1,
+            "3": 1
+          },
+          "savedPNGs": 1,
+          "encodedFrames": 0,
+          "encodedBytes": 0,
+          "encodeErrors": 0,
+          "dropped": 0,
+          "pngCallbackMsP50": 17.273874953389168,
+          "pngCallbackMsP95": 17.273874953389168
+        },
+        {
+          "phase": "restored",
+          "durationSeconds": 4.00004768371582,
+          "callbacks": 100,
+          "statuses": {
+            "0": 100
+          },
+          "savedPNGs": 90,
+          "encodedFrames": 0,
+          "encodedBytes": 0,
+          "encodeErrors": 0,
+          "dropped": 0,
+          "pngCallbackMsP50": 13.081791810691357,
+          "pngCallbackMsP95": 15.952416695654392
+        },
+        {
+          "phase": "resized",
+          "durationSeconds": 3.9995312690734863,
+          "callbacks": 118,
+          "statuses": {
+            "0": 118
+          },
+          "savedPNGs": 90,
+          "encodedFrames": 0,
+          "encodedBytes": 0,
+          "encodeErrors": 0,
+          "dropped": 0,
+          "pngCallbackMsP50": 11.0813332721591,
+          "pngCallbackMsP95": 16.349416226148605
+        }
+      ],
+      "processResources": {
+        "realSeconds": 37.14,
+        "userCPUSeconds": 8.99,
+        "systemCPUSeconds": 1.6,
+        "maxRSSBytes": 105906176,
+        "energyJoules": null,
+        "gpuUtilization": null
+      }
+    },
+    {
+      "run": "capture-2x",
+      "metadata": [
+        {
+          "accessibilityTrusted": false,
+          "kind": "permission",
+          "os": "Version 26.6.2 (Build 25G83)",
+          "screenCapturePreflight": true
+        }
+      ],
+      "streamStops": [],
+      "phases": [
+        {
+          "phase": "idle",
+          "durationSeconds": 3.966710090637207,
+          "callbacks": 163,
+          "statuses": {
+            "0": 163
+          },
+          "savedPNGs": 90,
+          "encodedFrames": 0,
+          "encodedBytes": 0,
+          "encodeErrors": 0,
+          "dropped": 0,
+          "pngCallbackMsP50": 58.00481280311942,
+          "pngCallbackMsP95": 64.61504194885492
+        },
+        {
+          "phase": "typing",
+          "durationSeconds": 4.356834888458252,
+          "callbacks": 90,
+          "statuses": {
+            "0": 90
+          },
+          "savedPNGs": 90,
+          "encodedFrames": 0,
+          "encodedBytes": 0,
+          "encodeErrors": 0,
+          "dropped": 0,
+          "pngCallbackMsP50": 56.53818743303418,
+          "pngCallbackMsP95": 61.643500812351704
+        },
+        {
+          "phase": "scroll",
+          "durationSeconds": 4.397634983062744,
+          "callbacks": 92,
+          "statuses": {
+            "0": 92
+          },
+          "savedPNGs": 90,
+          "encodedFrames": 0,
+          "encodedBytes": 0,
+          "encodeErrors": 0,
+          "dropped": 0,
+          "pngCallbackMsP50": 56.42289575189352,
+          "pngCallbackMsP95": 62.7122912555933
+        },
+        {
+          "phase": "motion",
+          "durationSeconds": 3.5030899047851562,
+          "callbacks": 76,
+          "statuses": {
+            "0": 76
+          },
+          "savedPNGs": 76,
+          "encodedFrames": 0,
+          "encodedBytes": 0,
+          "encodeErrors": 0,
+          "dropped": 0,
+          "pngCallbackMsP50": 35.72495840489864,
+          "pngCallbackMsP95": 67.09099933505058
+        },
+        {
+          "phase": "obscured",
+          "durationSeconds": 4.395738124847412,
+          "callbacks": 92,
+          "statuses": {
+            "0": 92
+          },
+          "savedPNGs": 90,
+          "encodedFrames": 0,
+          "encodedBytes": 0,
+          "encodeErrors": 0,
+          "dropped": 0,
+          "pngCallbackMsP50": 56.9278122857213,
+          "pngCallbackMsP95": 62.45050020515919
+        },
+        {
+          "phase": "offscreen",
+          "durationSeconds": 4.519613027572632,
+          "callbacks": 92,
+          "statuses": {
+            "0": 92
+          },
+          "savedPNGs": 90,
+          "encodedFrames": 0,
+          "encodedBytes": 0,
+          "encodeErrors": 0,
+          "dropped": 0,
+          "pngCallbackMsP50": 58.09670779854059,
+          "pngCallbackMsP95": 65.49233384430408
+        },
+        {
+          "phase": "minimized",
+          "durationSeconds": 2.82704496383667,
+          "callbacks": 2,
+          "statuses": {
+            "0": 1,
+            "3": 1
+          },
+          "savedPNGs": 1,
+          "encodedFrames": 0,
+          "encodedBytes": 0,
+          "encodeErrors": 0,
+          "dropped": 0,
+          "pngCallbackMsP50": 31.41416609287262,
+          "pngCallbackMsP95": 31.41416609287262
+        },
+        {
+          "phase": "restored",
+          "durationSeconds": 4.370178937911987,
+          "callbacks": 79,
+          "statuses": {
+            "0": 79
+          },
+          "savedPNGs": 79,
+          "encodedFrames": 0,
+          "encodedBytes": 0,
+          "encodeErrors": 0,
+          "dropped": 0,
+          "pngCallbackMsP50": 32.91737474501133,
+          "pngCallbackMsP95": 65.75766671448946
+        },
+        {
+          "phase": "resized",
+          "durationSeconds": 3.6987152099609375,
+          "callbacks": 86,
+          "statuses": {
+            "0": 86
+          },
+          "savedPNGs": 86,
+          "encodedFrames": 0,
+          "encodedBytes": 0,
+          "encodeErrors": 0,
+          "dropped": 0,
+          "pngCallbackMsP50": 36.794708110392094,
+          "pngCallbackMsP95": 68.32445785403252
+        }
+      ],
+      "processResources": {
+        "realSeconds": 39.7,
+        "userCPUSeconds": 28.03,
+        "systemCPUSeconds": 2.96,
+        "maxRSSBytes": 114589696,
+        "energyJoules": null,
+        "gpuUtilization": null
+      }
+    },
+    {
+      "run": "native-final-1x",
+      "metadata": [
+        {
+          "accessibilityTrusted": false,
+          "kind": "permission",
+          "os": "Version 26.6.2 (Build 25G83)",
+          "screenCapturePreflight": true
+        },
+        {
+          "bitrate": 1500000,
+          "codec": "H264",
+          "hardware": "Optional(1)",
+          "kind": "encoder"
+        }
+      ],
+      "streamStops": [],
+      "phases": [
+        {
+          "phase": "idle",
+          "durationSeconds": 3.9666788578033447,
+          "callbacks": 118,
+          "statuses": {
+            "0": 118
+          },
+          "savedPNGs": 0,
+          "encodedFrames": 118,
+          "encodedBytes": 168551,
+          "encodeErrors": 0,
+          "dropped": 0,
+          "encodeMsP50": 3.395749721676111,
+          "encodeMsP95": 4.728875122964382,
+          "encodedBytesPerSecond": 42491.71814562767
+        },
+        {
+          "phase": "typing",
+          "durationSeconds": 4.000540018081665,
+          "callbacks": 117,
+          "statuses": {
+            "0": 117
+          },
+          "savedPNGs": 0,
+          "encodedFrames": 117,
+          "encodedBytes": 280449,
+          "encodeErrors": 0,
+          "dropped": 0,
+          "encodeMsP50": 3.445874899625778,
+          "encodeMsP95": 4.61516622453928,
+          "encodedBytesPerSecond": 70102.78580702227
+        },
+        {
+          "phase": "scroll",
+          "durationSeconds": 4.001139163970947,
+          "callbacks": 118,
+          "statuses": {
+            "0": 118
+          },
+          "savedPNGs": 0,
+          "encodedFrames": 118,
+          "encodedBytes": 529438,
+          "encodeErrors": 0,
+          "dropped": 0,
+          "encodeMsP50": 3.499416634440422,
+          "encodeMsP95": 4.476374946534634,
+          "encodedBytesPerSecond": 132321.81593867808
+        },
+        {
+          "phase": "motion",
+          "durationSeconds": 3.99895977973938,
+          "callbacks": 117,
+          "statuses": {
+            "0": 117
+          },
+          "savedPNGs": 0,
+          "encodedFrames": 117,
+          "encodedBytes": 345805,
+          "encodeErrors": 0,
+          "dropped": 0,
+          "encodeMsP50": 3.4278742969036102,
+          "encodeMsP95": 4.636791534721851,
+          "encodedBytesPerSecond": 86473.7379335525
+        },
+        {
+          "phase": "obscured",
+          "durationSeconds": 4.00058913230896,
+          "callbacks": 117,
+          "statuses": {
+            "0": 117
+          },
+          "savedPNGs": 0,
+          "encodedFrames": 117,
+          "encodedBytes": 339368,
+          "encodeErrors": 0,
+          "dropped": 0,
+          "encodeMsP50": 3.4184586256742477,
+          "encodeMsP95": 5.321708507835865,
+          "encodedBytesPerSecond": 84829.50604930831
+        },
+        {
+          "phase": "offscreen",
+          "durationSeconds": 3.999107837677002,
+          "callbacks": 117,
+          "statuses": {
+            "0": 117
+          },
+          "savedPNGs": 0,
+          "encodedFrames": 117,
+          "encodedBytes": 336675,
+          "encodeErrors": 0,
+          "dropped": 0,
+          "encodeMsP50": 3.433333709836006,
+          "encodeMsP95": 5.026041530072689,
+          "encodedBytesPerSecond": 84187.52723496636
+        },
+        {
+          "phase": "minimized",
+          "durationSeconds": 4.00189208984375,
+          "callbacks": 2,
+          "statuses": {
+            "0": 1,
+            "3": 1
+          },
+          "savedPNGs": 0,
+          "encodedFrames": 1,
+          "encodedBytes": 731,
+          "encodeErrors": 0,
+          "dropped": 0,
+          "encodeMsP50": 3.4035835415124893,
+          "encodeMsP95": 3.4035835415124893,
+          "encodedBytesPerSecond": 182.6635960162887
+        },
+        {
+          "phase": "restored",
+          "durationSeconds": 3.998059034347534,
+          "callbacks": 101,
+          "statuses": {
+            "0": 101
+          },
+          "savedPNGs": 0,
+          "encodedFrames": 101,
+          "encodedBytes": 315549,
+          "encodeErrors": 0,
+          "dropped": 0,
+          "encodeMsP50": 3.3685415983200073,
+          "encodeMsP95": 4.248666577041149,
+          "encodedBytesPerSecond": 78925.54794441554
+        },
+        {
+          "phase": "resized",
+          "durationSeconds": 3.9701569080352783,
+          "callbacks": 117,
+          "statuses": {
+            "0": 117
+          },
+          "savedPNGs": 0,
+          "encodedFrames": 117,
+          "encodedBytes": 362164,
+          "encodeErrors": 0,
+          "dropped": 0,
+          "encodeMsP50": 3.2393336296081543,
+          "encodeMsP95": 4.275749437510967,
+          "encodedBytesPerSecond": 91221.58352658787
+        }
+      ],
+      "processResources": {
+        "realSeconds": 36.96,
+        "userCPUSeconds": 2.22,
+        "systemCPUSeconds": 1.14,
+        "maxRSSBytes": 105316352,
+        "energyJoules": null,
+        "gpuUtilization": null
+      }
+    },
+    {
+      "run": "native-final-2x",
+      "metadata": [
+        {
+          "accessibilityTrusted": false,
+          "kind": "permission",
+          "os": "Version 26.6.2 (Build 25G83)",
+          "screenCapturePreflight": true
+        },
+        {
+          "bitrate": 1500000,
+          "codec": "H264",
+          "hardware": "Optional(1)",
+          "kind": "encoder"
+        }
+      ],
+      "streamStops": [],
+      "phases": [
+        {
+          "phase": "idle",
+          "durationSeconds": 3.9680228233337402,
+          "callbacks": 118,
+          "statuses": {
+            "0": 117,
+            "1": 1
+          },
+          "savedPNGs": 0,
+          "encodedFrames": 117,
+          "encodedBytes": 378419,
+          "encodeErrors": 0,
+          "dropped": 0,
+          "encodeMsP50": 6.731458008289337,
+          "encodeMsP95": 7.563167251646519,
+          "encodedBytesPerSecond": 95367.14299492631
+        },
+        {
+          "phase": "typing",
+          "durationSeconds": 4.0000529289245605,
+          "callbacks": 118,
+          "statuses": {
+            "0": 118
+          },
+          "savedPNGs": 0,
+          "encodedFrames": 118,
+          "encodedBytes": 625967,
+          "encodeErrors": 0,
+          "dropped": 0,
+          "encodeMsP50": 7.032521069049835,
+          "encodeMsP95": 8.310250006616116,
+          "encodedBytesPerSecond": 156489.67929239257
+        },
+        {
+          "phase": "scroll",
+          "durationSeconds": 4.000040054321289,
+          "callbacks": 118,
+          "statuses": {
+            "0": 118
+          },
+          "savedPNGs": 0,
+          "encodedFrames": 118,
+          "encodedBytes": 843065,
+          "encodeErrors": 0,
+          "dropped": 0,
+          "encodeMsP50": 7.123645860701799,
+          "encodeMsP95": 7.817625068128109,
+          "encodedBytesPerSecond": 210764.1394963601
+        },
+        {
+          "phase": "motion",
+          "durationSeconds": 4.000057220458984,
+          "callbacks": 116,
+          "statuses": {
+            "0": 116
+          },
+          "savedPNGs": 0,
+          "encodedFrames": 116,
+          "encodedBytes": 687007,
+          "encodeErrors": 0,
+          "dropped": 0,
+          "encodeMsP50": 6.655125413089991,
+          "encodeMsP95": 7.206999696791172,
+          "encodedBytesPerSecond": 171749.29310665454
+        },
+        {
+          "phase": "obscured",
+          "durationSeconds": 3.998579978942871,
+          "callbacks": 117,
+          "statuses": {
+            "0": 117
+          },
+          "savedPNGs": 0,
+          "encodedFrames": 117,
+          "encodedBytes": 737872,
+          "encodeErrors": 0,
+          "dropped": 0,
+          "encodeMsP50": 6.682749837636948,
+          "encodeMsP95": 7.52116646617651,
+          "encodedBytesPerSecond": 184533.51036761698
+        },
+        {
+          "phase": "offscreen",
+          "durationSeconds": 4.000253677368164,
+          "callbacks": 116,
+          "statuses": {
+            "0": 116
+          },
+          "savedPNGs": 0,
+          "encodedFrames": 116,
+          "encodedBytes": 736576,
+          "encodeErrors": 0,
+          "dropped": 0,
+          "encodeMsP50": 6.658896338194609,
+          "encodeMsP95": 7.0754168555140495,
+          "encodedBytesPerSecond": 184132.3224492618
+        },
+        {
+          "phase": "minimized",
+          "durationSeconds": 3.9993932247161865,
+          "callbacks": 2,
+          "statuses": {
+            "0": 1,
+            "3": 1
+          },
+          "savedPNGs": 0,
+          "encodedFrames": 1,
+          "encodedBytes": 3812,
+          "encodeErrors": 0,
+          "dropped": 0,
+          "encodeMsP50": 6.633416749536991,
+          "encodeMsP95": 6.633416749536991,
+          "encodedBytesPerSecond": 953.1445861441932
+        },
+        {
+          "phase": "restored",
+          "durationSeconds": 4.000489950180054,
+          "callbacks": 101,
+          "statuses": {
+            "0": 101
+          },
+          "savedPNGs": 0,
+          "encodedFrames": 101,
+          "encodedBytes": 1326011,
+          "encodeErrors": 0,
+          "dropped": 0,
+          "encodeMsP50": 6.638833321630955,
+          "encodeMsP95": 8.822166360914707,
+          "encodedBytesPerSecond": 331462.15001497976
+        },
+        {
+          "phase": "resized",
+          "durationSeconds": 4.000482082366943,
+          "callbacks": 118,
+          "statuses": {
+            "0": 118
+          },
+          "savedPNGs": 0,
+          "encodedFrames": 118,
+          "encodedBytes": 666926,
+          "encodeErrors": 0,
+          "dropped": 0,
+          "encodeMsP50": 6.606749724596739,
+          "encodeMsP95": 6.9825416430830956,
+          "encodedBytesPerSecond": 166711.4078424777
+        }
+      ],
+      "processResources": {
+        "realSeconds": 36.63,
+        "userCPUSeconds": 1.64,
+        "systemCPUSeconds": 0.79,
+        "maxRSSBytes": 104529920,
+        "energyJoules": null,
+        "gpuUtilization": null
+      }
+    }
+  ]
+}

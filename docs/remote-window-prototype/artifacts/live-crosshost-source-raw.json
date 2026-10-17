@@ -1,0 +1,131 @@
+{
+  "measuredAt": "2026-10-12T02:26:38.146Z",
+  "role": "source",
+  "helperCpu": {
+    "user": 3810466,
+    "system": 654526
+  },
+  "helperMaxRssKiB": 78032,
+  "elapsedMs": 927199,
+  "nativeLog": [
+    {
+      "hardware": "Optional(1)",
+      "kind": "encoder"
+    },
+    {
+      "height": 548,
+      "kind": "ready",
+      "width": 800
+    },
+    {
+      "kind": "input",
+      "revision": 1
+    },
+    {
+      "kind": "input",
+      "revision": 2
+    },
+    {
+      "kind": "input",
+      "revision": 3
+    },
+    {
+      "kind": "input",
+      "revision": 4
+    },
+    {
+      "kind": "input",
+      "revision": 5
+    },
+    {
+      "kind": "input",
+      "revision": 6
+    },
+    {
+      "kind": "input",
+      "revision": 7
+    },
+    {
+      "kind": "input",
+      "revision": 8
+    },
+    {
+      "kind": "input",
+      "revision": 9
+    },
+    {
+      "kind": "input",
+      "revision": 10
+    },
+    {
+      "kind": "input",
+      "revision": 11
+    },
+    {
+      "kind": "input",
+      "revision": 12
+    },
+    {
+      "kind": "input",
+      "revision": 13
+    },
+    {
+      "kind": "input",
+      "revision": 14
+    },
+    {
+      "kind": "input",
+      "revision": 15
+    },
+    {
+      "kind": "input",
+      "revision": 16
+    },
+    {
+      "kind": "input",
+      "revision": 17
+    },
+    {
+      "kind": "input",
+      "revision": 18
+    },
+    {
+      "kind": "input",
+      "revision": 19
+    },
+    {
+      "kind": "input",
+      "revision": 20
+    },
+    {
+      "kind": "input",
+      "revision": 21
+    },
+    {
+      "kind": "input",
+      "revision": 22
+    },
+    {
+      "kind": "input",
+      "revision": 23
+    },
+    {
+      "kind": "input",
+      "revision": 24
+    },
+    {
+      "kind": "done"
+    },
+    {
+      "stderr": "      927.17 real         8.98 user         5.25 sys\n            96960512  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n               37712  page reclaims\n                3169  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                  90  messages sent\n                  45  messages received\n                   0  signals received\n                1533  voluntary context switches\n"
+    },
+    {
+      "stderr": "              145491  involuntary context switches\n         37567815879  instructions retired\n         34328654545  cycles elapsed\n            68780896  peak memory footprint\n"
+    }
+  ],
+  "session": {
+    "frames": 18,
+    "mediaBytes": 1979123,
+    "inputs": 24
+  }
+}

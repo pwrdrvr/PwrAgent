@@ -1,0 +1,25 @@
+{
+  "measurementRevision": 2,
+  "payload": "16000 synthetic zero bytes; one media packet, 14-byte framing",
+  "scenario": {
+    "name": "emulated-2Mbps-100msRTT-3pct-stalls",
+    "mbps": 2,
+    "oneWayMs": 50,
+    "stallEvery": 33,
+    "measuredDurationMs": 3206.661582999999,
+    "produced": 82,
+    "dropped": 42,
+    "delivered": 40,
+    "payloadBytes": 640290,
+    "wireBytes": 641256,
+    "frameAgeP50Ms": 148.52270900000076,
+    "frameAgeP95Ms": 227.74941600000056,
+    "eventDelayP50Ms": 103.41754199999923,
+    "eventDelayP95Ms": 158.22620800000004,
+    "pendingFrameCap": 1,
+    "inflightFrameCap": 1,
+    "snapshotBytes": 16000
+  },
+  "serializationPlusPropagationFloorMs": 114.056,
+  "note": "Measured loopback regression for final-chunk timing; includes queueing and deterministic stalls, excludes capture/decode/photons. Unit tests separately verify deferred delivery before the serialization/stall wait resolves."
+}

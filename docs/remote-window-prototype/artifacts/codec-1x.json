@@ -1,0 +1,1038 @@
+{
+  "schema": 1,
+  "method": "offline encode of real SCK PNG callbacks; sequential 30fps replay; not live latency",
+  "phases": [
+    {
+      "phase": "idle",
+      "width": 800,
+      "height": 548,
+      "frames": 90,
+      "uniquePixels": 3,
+      "statuses": {
+        "0": 123
+      },
+      "captureCallbackWithPNGMsP50": 12.01981259509921,
+      "captureCallbackWithPNGMsP95": 16.4598748087883,
+      "encodings": [
+        {
+          "codec": "PNG",
+          "options": {
+            "compress_level": 3
+          },
+          "fullFrameBytes": 26594655,
+          "tileBytes": 613901,
+          "tileBytesPerReplaySecond": 204633.66666666666,
+          "steadyBytesPerReplaySecond": 101943.17647058822,
+          "fullFrameBytesPerReplaySecond": 8864885.0,
+          "encodeFullPlusTilesMsP50": 10.948333889245987,
+          "encodeFullPlusTilesMsP95": 12.254499830305576
+        },
+        {
+          "codec": "WEBP",
+          "options": {
+            "lossless": true,
+            "method": 1
+          },
+          "fullFrameBytes": 12067410,
+          "tileBytes": 323288,
+          "tileBytesPerReplaySecond": 107762.66666666667,
+          "steadyBytesPerReplaySecond": 55664.470588235294,
+          "fullFrameBytesPerReplaySecond": 4022470.0,
+          "encodeFullPlusTilesMsP50": 60.828750021755695,
+          "encodeFullPlusTilesMsP95": 67.89366714656353
+        },
+        {
+          "codec": "WEBP",
+          "options": {
+            "quality": 85,
+            "method": 0
+          },
+          "fullFrameBytes": 4809600,
+          "tileBytes": 133164,
+          "tileBytesPerReplaySecond": 44388.0,
+          "steadyBytesPerReplaySecond": 25717.41176470588,
+          "fullFrameBytesPerReplaySecond": 1603200.0,
+          "encodeFullPlusTilesMsP50": 12.249979190528393,
+          "encodeFullPlusTilesMsP95": 30.67320864647627
+        }
+      ],
+      "video": [
+        {
+          "name": "h264-videotoolbox",
+          "command": [
+            "ffmpeg",
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-framerate",
+            "30",
+            "-i",
+            ".local/remote-window/bench-1x/sequence-idle/%04d.png",
+            "-c:v",
+            "h264_videotoolbox",
+            "-realtime",
+            "1",
+            "-allow_sw",
+            "0",
+            "-b:v",
+            "1500k",
+            "-bf",
+            "0",
+            "-g",
+            "60",
+            "-pix_fmt",
+            "yuv420p",
+            ".local/remote-window/bench-1x/idle-h264-videotoolbox.mp4"
+          ],
+          "exitCode": 0,
+          "bytes": 168182,
+          "wallSeconds": 1.1642100000753999,
+          "framesPerWallSecond": 77.30564072991227,
+          "error": null
+        },
+        {
+          "name": "h264-software",
+          "command": [
+            "ffmpeg",
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-framerate",
+            "30",
+            "-i",
+            ".local/remote-window/bench-1x/sequence-idle/%04d.png",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-tune",
+            "zerolatency",
+            "-crf",
+            "23",
+            "-g",
+            "60",
+            "-pix_fmt",
+            "yuv420p",
+            ".local/remote-window/bench-1x/idle-h264-software.mp4"
+          ],
+          "exitCode": 0,
+          "bytes": 242210,
+          "wallSeconds": 0.264229666441679,
+          "framesPerWallSecond": 340.6127752875352,
+          "error": null
+        },
+        {
+          "name": "vp9-realtime",
+          "command": [
+            "ffmpeg",
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-framerate",
+            "30",
+            "-i",
+            ".local/remote-window/bench-1x/sequence-idle/%04d.png",
+            "-c:v",
+            "libvpx-vp9",
+            "-deadline",
+            "realtime",
+            "-cpu-used",
+            "8",
+            "-row-mt",
+            "1",
+            "-lag-in-frames",
+            "0",
+            "-crf",
+            "32",
+            "-b:v",
+            "0",
+            "-pix_fmt",
+            "yuv420p",
+            ".local/remote-window/bench-1x/idle-vp9-realtime.webm"
+          ],
+          "exitCode": 0,
+          "bytes": 81535,
+          "wallSeconds": 1.0106846252456307,
+          "framesPerWallSecond": 89.04854961865769,
+          "error": null
+        },
+        {
+          "name": "av1-svt",
+          "command": [
+            "ffmpeg",
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-framerate",
+            "30",
+            "-i",
+            ".local/remote-window/bench-1x/sequence-idle/%04d.png",
+            "-c:v",
+            "libsvtav1",
+            "-preset",
+            "12",
+            "-crf",
+            "35",
+            "-svtav1-params",
+            "lp=2:scm=1",
+            "-pix_fmt",
+            "yuv420p",
+            ".local/remote-window/bench-1x/idle-av1-svt.mp4"
+          ],
+          "exitCode": 0,
+          "bytes": 83382,
+          "wallSeconds": 0.42773620784282684,
+          "framesPerWallSecond": 210.4100572965074,
+          "error": null
+        }
+      ]
+    },
+    {
+      "phase": "typing",
+      "width": 800,
+      "height": 548,
+      "frames": 90,
+      "uniquePixels": 10,
+      "statuses": {
+        "0": 118
+      },
+      "captureCallbackWithPNGMsP50": 12.710020877420902,
+      "captureCallbackWithPNGMsP95": 16.366541385650635,
+      "encodings": [
+        {
+          "codec": "PNG",
+          "options": {
+            "compress_level": 3
+          },
+          "fullFrameBytes": 28053693,
+          "tileBytes": 3046359,
+          "tileBytesPerReplaySecond": 1015453.0,
+          "steadyBytesPerReplaySecond": 853452.0,
+          "fullFrameBytesPerReplaySecond": 9351231.0,
+          "encodeFullPlusTilesMsP50": 20.300874020904303,
+          "encodeFullPlusTilesMsP95": 64.78170771151781
+        },
+        {
+          "codec": "WEBP",
+          "options": {
+            "lossless": true,
+            "method": 1
+          },
+          "fullFrameBytes": 12689872,
+          "tileBytes": 1518470,
+          "tileBytesPerReplaySecond": 506156.6666666667,
+          "steadyBytesPerReplaySecond": 421046.82352941175,
+          "fullFrameBytesPerReplaySecond": 4229957.333333333,
+          "encodeFullPlusTilesMsP50": 81.35674986988306,
+          "encodeFullPlusTilesMsP95": 162.0519170537591
+        },
+        {
+          "codec": "WEBP",
+          "options": {
+            "quality": 85,
+            "method": 0
+          },
+          "fullFrameBytes": 4881358,
+          "tileBytes": 546560,
+          "tileBytesPerReplaySecond": 182186.66666666666,
+          "steadyBytesPerReplaySecond": 145715.29411764705,
+          "fullFrameBytesPerReplaySecond": 1627119.3333333333,
+          "encodeFullPlusTilesMsP50": 15.232562087476254,
+          "encodeFullPlusTilesMsP95": 32.364875078201294
+        }
+      ],
+      "video": [
+        {
+          "name": "h264-videotoolbox",
+          "command": [
+            "ffmpeg",
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-framerate",
+            "30",
+            "-i",
+            ".local/remote-window/bench-1x/sequence-typing/%04d.png",
+            "-c:v",
+            "h264_videotoolbox",
+            "-realtime",
+            "1",
+            "-allow_sw",
+            "0",
+            "-b:v",
+            "1500k",
+            "-bf",
+            "0",
+            "-g",
+            "60",
+            "-pix_fmt",
+            "yuv420p",
+            ".local/remote-window/bench-1x/typing-h264-videotoolbox.mp4"
+          ],
+          "exitCode": 0,
+          "bytes": 189704,
+          "wallSeconds": 0.6363159157335758,
+          "framesPerWallSecond": 141.43917789050371,
+          "error": null
+        },
+        {
+          "name": "h264-software",
+          "command": [
+            "ffmpeg",
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-framerate",
+            "30",
+            "-i",
+            ".local/remote-window/bench-1x/sequence-typing/%04d.png",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-tune",
+            "zerolatency",
+            "-crf",
+            "23",
+            "-g",
+            "60",
+            "-pix_fmt",
+            "yuv420p",
+            ".local/remote-window/bench-1x/typing-h264-software.mp4"
+          ],
+          "exitCode": 0,
+          "bytes": 262806,
+          "wallSeconds": 0.409343458712101,
+          "framesPerWallSecond": 219.86426821907202,
+          "error": null
+        },
+        {
+          "name": "vp9-realtime",
+          "command": [
+            "ffmpeg",
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-framerate",
+            "30",
+            "-i",
+            ".local/remote-window/bench-1x/sequence-typing/%04d.png",
+            "-c:v",
+            "libvpx-vp9",
+            "-deadline",
+            "realtime",
+            "-cpu-used",
+            "8",
+            "-row-mt",
+            "1",
+            "-lag-in-frames",
+            "0",
+            "-crf",
+            "32",
+            "-b:v",
+            "0",
+            "-pix_fmt",
+            "yuv420p",
+            ".local/remote-window/bench-1x/typing-vp9-realtime.webm"
+          ],
+          "exitCode": 0,
+          "bytes": 107231,
+          "wallSeconds": 0.6298958752304316,
+          "framesPerWallSecond": 142.8807578190217,
+          "error": null
+        },
+        {
+          "name": "av1-svt",
+          "command": [
+            "ffmpeg",
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-framerate",
+            "30",
+            "-i",
+            ".local/remote-window/bench-1x/sequence-typing/%04d.png",
+            "-c:v",
+            "libsvtav1",
+            "-preset",
+            "12",
+            "-crf",
+            "35",
+            "-svtav1-params",
+            "lp=2:scm=1",
+            "-pix_fmt",
+            "yuv420p",
+            ".local/remote-window/bench-1x/typing-av1-svt.mp4"
+          ],
+          "exitCode": 0,
+          "bytes": 109711,
+          "wallSeconds": 0.314689832739532,
+          "framesPerWallSecond": 285.9958938504784,
+          "error": null
+        }
+      ]
+    },
+    {
+      "phase": "scroll",
+      "width": 800,
+      "height": 548,
+      "frames": 90,
+      "uniquePixels": 40,
+      "statuses": {
+        "0": 117
+      },
+      "captureCallbackWithPNGMsP50": 12.593249790370464,
+      "captureCallbackWithPNGMsP95": 15.828583389520645,
+      "encodings": [
+        {
+          "codec": "PNG",
+          "options": {
+            "compress_level": 3
+          },
+          "fullFrameBytes": 27854256,
+          "tileBytes": 5867884,
+          "tileBytesPerReplaySecond": 1955961.3333333333,
+          "steadyBytesPerReplaySecond": 1864701.1764705882,
+          "fullFrameBytesPerReplaySecond": 9284752.0,
+          "encodeFullPlusTilesMsP50": 16.48995792493224,
+          "encodeFullPlusTilesMsP95": 47.439041547477245
+        },
+        {
+          "codec": "WEBP",
+          "options": {
+            "lossless": true,
+            "method": 1
+          },
+          "fullFrameBytes": 12563208,
+          "tileBytes": 3115614,
+          "tileBytesPerReplaySecond": 1038538.0,
+          "steadyBytesPerReplaySecond": 992150.1176470588,
+          "fullFrameBytesPerReplaySecond": 4187736.0,
+          "encodeFullPlusTilesMsP50": 78.93116632476449,
+          "encodeFullPlusTilesMsP95": 92.53837540745735
+        },
+        {
+          "codec": "WEBP",
+          "options": {
+            "quality": 85,
+            "method": 0
+          },
+          "fullFrameBytes": 4824886,
+          "tileBytes": 1192382,
+          "tileBytesPerReplaySecond": 397460.6666666667,
+          "steadyBytesPerReplaySecond": 380714.1176470588,
+          "fullFrameBytesPerReplaySecond": 1608295.3333333333,
+          "encodeFullPlusTilesMsP50": 13.288186863064766,
+          "encodeFullPlusTilesMsP95": 14.331166632473469
+        }
+      ],
+      "video": [
+        {
+          "name": "h264-videotoolbox",
+          "command": [
+            "ffmpeg",
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-framerate",
+            "30",
+            "-i",
+            ".local/remote-window/bench-1x/sequence-scroll/%04d.png",
+            "-c:v",
+            "h264_videotoolbox",
+            "-realtime",
+            "1",
+            "-allow_sw",
+            "0",
+            "-b:v",
+            "1500k",
+            "-bf",
+            "0",
+            "-g",
+            "60",
+            "-pix_fmt",
+            "yuv420p",
+            ".local/remote-window/bench-1x/scroll-h264-videotoolbox.mp4"
+          ],
+          "exitCode": 0,
+          "bytes": 248456,
+          "wallSeconds": 0.35357974935323,
+          "framesPerWallSecond": 254.53946433478865,
+          "error": null
+        },
+        {
+          "name": "h264-software",
+          "command": [
+            "ffmpeg",
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-framerate",
+            "30",
+            "-i",
+            ".local/remote-window/bench-1x/sequence-scroll/%04d.png",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-tune",
+            "zerolatency",
+            "-crf",
+            "23",
+            "-g",
+            "60",
+            "-pix_fmt",
+            "yuv420p",
+            ".local/remote-window/bench-1x/scroll-h264-software.mp4"
+          ],
+          "exitCode": 0,
+          "bytes": 350141,
+          "wallSeconds": 0.14479416608810425,
+          "framesPerWallSecond": 621.5720041181553,
+          "error": null
+        },
+        {
+          "name": "vp9-realtime",
+          "command": [
+            "ffmpeg",
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-framerate",
+            "30",
+            "-i",
+            ".local/remote-window/bench-1x/sequence-scroll/%04d.png",
+            "-c:v",
+            "libvpx-vp9",
+            "-deadline",
+            "realtime",
+            "-cpu-used",
+            "8",
+            "-row-mt",
+            "1",
+            "-lag-in-frames",
+            "0",
+            "-crf",
+            "32",
+            "-b:v",
+            "0",
+            "-pix_fmt",
+            "yuv420p",
+            ".local/remote-window/bench-1x/scroll-vp9-realtime.webm"
+          ],
+          "exitCode": 0,
+          "bytes": 199799,
+          "wallSeconds": 0.21726629044860601,
+          "framesPerWallSecond": 414.2382134576434,
+          "error": null
+        },
+        {
+          "name": "av1-svt",
+          "command": [
+            "ffmpeg",
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-framerate",
+            "30",
+            "-i",
+            ".local/remote-window/bench-1x/sequence-scroll/%04d.png",
+            "-c:v",
+            "libsvtav1",
+            "-preset",
+            "12",
+            "-crf",
+            "35",
+            "-svtav1-params",
+            "lp=2:scm=1",
+            "-pix_fmt",
+            "yuv420p",
+            ".local/remote-window/bench-1x/scroll-av1-svt.mp4"
+          ],
+          "exitCode": 0,
+          "bytes": 259475,
+          "wallSeconds": 0.22338808234781027,
+          "framesPerWallSecond": 402.8863091266973,
+          "error": null
+        }
+      ]
+    },
+    {
+      "phase": "motion",
+      "width": 800,
+      "height": 548,
+      "frames": 90,
+      "uniquePixels": 89,
+      "statuses": {
+        "0": 118
+      },
+      "captureCallbackWithPNGMsP50": 12.951499316841364,
+      "captureCallbackWithPNGMsP95": 14.01654165238142,
+      "encodings": [
+        {
+          "codec": "PNG",
+          "options": {
+            "compress_level": 3
+          },
+          "fullFrameBytes": 28129520,
+          "tileBytes": 2547570,
+          "tileBytesPerReplaySecond": 849190.0,
+          "steadyBytesPerReplaySecond": 754972.5882352941,
+          "fullFrameBytesPerReplaySecond": 9376506.666666666,
+          "encodeFullPlusTilesMsP50": 13.224332593381405,
+          "encodeFullPlusTilesMsP95": 23.258375003933907
+        },
+        {
+          "codec": "WEBP",
+          "options": {
+            "lossless": true,
+            "method": 1
+          },
+          "fullFrameBytes": 12830996,
+          "tileBytes": 1506410,
+          "tileBytesPerReplaySecond": 502136.6666666667,
+          "steadyBytesPerReplaySecond": 453543.5294117647,
+          "fullFrameBytesPerReplaySecond": 4276998.666666667,
+          "encodeFullPlusTilesMsP50": 77.99677085131407,
+          "encodeFullPlusTilesMsP95": 98.00883289426565
+        },
+        {
+          "codec": "WEBP",
+          "options": {
+            "quality": 85,
+            "method": 0
+          },
+          "fullFrameBytes": 4724834,
+          "tileBytes": 440344,
+          "tileBytesPerReplaySecond": 146781.33333333334,
+          "steadyBytesPerReplaySecond": 128970.35294117646,
+          "fullFrameBytesPerReplaySecond": 1574944.6666666667,
+          "encodeFullPlusTilesMsP50": 12.24837452173233,
+          "encodeFullPlusTilesMsP95": 15.601582825183868
+        }
+      ],
+      "video": [
+        {
+          "name": "h264-videotoolbox",
+          "command": [
+            "ffmpeg",
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-framerate",
+            "30",
+            "-i",
+            ".local/remote-window/bench-1x/sequence-motion/%04d.png",
+            "-c:v",
+            "h264_videotoolbox",
+            "-realtime",
+            "1",
+            "-allow_sw",
+            "0",
+            "-b:v",
+            "1500k",
+            "-bf",
+            "0",
+            "-g",
+            "60",
+            "-pix_fmt",
+            "yuv420p",
+            ".local/remote-window/bench-1x/motion-h264-videotoolbox.mp4"
+          ],
+          "exitCode": 0,
+          "bytes": 198856,
+          "wallSeconds": 0.4587013339623809,
+          "framesPerWallSecond": 196.20610043262073,
+          "error": null
+        },
+        {
+          "name": "h264-software",
+          "command": [
+            "ffmpeg",
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-framerate",
+            "30",
+            "-i",
+            ".local/remote-window/bench-1x/sequence-motion/%04d.png",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-tune",
+            "zerolatency",
+            "-crf",
+            "23",
+            "-g",
+            "60",
+            "-pix_fmt",
+            "yuv420p",
+            ".local/remote-window/bench-1x/motion-h264-software.mp4"
+          ],
+          "exitCode": 0,
+          "bytes": 285450,
+          "wallSeconds": 0.23037770949304104,
+          "framesPerWallSecond": 390.6627954503498,
+          "error": null
+        },
+        {
+          "name": "vp9-realtime",
+          "command": [
+            "ffmpeg",
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-framerate",
+            "30",
+            "-i",
+            ".local/remote-window/bench-1x/sequence-motion/%04d.png",
+            "-c:v",
+            "libvpx-vp9",
+            "-deadline",
+            "realtime",
+            "-cpu-used",
+            "8",
+            "-row-mt",
+            "1",
+            "-lag-in-frames",
+            "0",
+            "-crf",
+            "32",
+            "-b:v",
+            "0",
+            "-pix_fmt",
+            "yuv420p",
+            ".local/remote-window/bench-1x/motion-vp9-realtime.webm"
+          ],
+          "exitCode": 0,
+          "bytes": 128217,
+          "wallSeconds": 0.3776987912133336,
+          "framesPerWallSecond": 238.28511526574036,
+          "error": null
+        },
+        {
+          "name": "av1-svt",
+          "command": [
+            "ffmpeg",
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-framerate",
+            "30",
+            "-i",
+            ".local/remote-window/bench-1x/sequence-motion/%04d.png",
+            "-c:v",
+            "libsvtav1",
+            "-preset",
+            "12",
+            "-crf",
+            "35",
+            "-svtav1-params",
+            "lp=2:scm=1",
+            "-pix_fmt",
+            "yuv420p",
+            ".local/remote-window/bench-1x/motion-av1-svt.mp4"
+          ],
+          "exitCode": 0,
+          "bytes": 131522,
+          "wallSeconds": 0.35239883325994015,
+          "framesPerWallSecond": 255.39244601758728,
+          "error": null
+        }
+      ]
+    },
+    {
+      "phase": "obscured",
+      "width": 800,
+      "height": 548,
+      "frames": 90,
+      "uniquePixels": 88,
+      "statuses": {
+        "0": 117
+      },
+      "captureCallbackWithPNGMsP50": 13.063250109553337,
+      "captureCallbackWithPNGMsP95": 15.71312453597784,
+      "encodings": [
+        {
+          "codec": "PNG",
+          "options": {
+            "compress_level": 3
+          },
+          "fullFrameBytes": 28176149,
+          "tileBytes": 2386358,
+          "tileBytesPerReplaySecond": 795452.6666666666,
+          "steadyBytesPerReplaySecond": 711650.8235294117,
+          "fullFrameBytesPerReplaySecond": 9392049.666666666,
+          "encodeFullPlusTilesMsP50": 12.864145915955305,
+          "encodeFullPlusTilesMsP95": 14.361875131726265
+        },
+        {
+          "codec": "WEBP",
+          "options": {
+            "lossless": true,
+            "method": 1
+          },
+          "fullFrameBytes": 12842756,
+          "tileBytes": 1393006,
+          "tileBytesPerReplaySecond": 464335.3333333333,
+          "steadyBytesPerReplaySecond": 423207.5294117647,
+          "fullFrameBytesPerReplaySecond": 4280918.666666667,
+          "encodeFullPlusTilesMsP50": 72.14647904038429,
+          "encodeFullPlusTilesMsP95": 85.94079222530127
+        },
+        {
+          "codec": "WEBP",
+          "options": {
+            "quality": 85,
+            "method": 0
+          },
+          "fullFrameBytes": 4737218,
+          "tileBytes": 400160,
+          "tileBytesPerReplaySecond": 133386.66666666666,
+          "steadyBytesPerReplaySecond": 117521.64705882352,
+          "fullFrameBytesPerReplaySecond": 1579072.6666666667,
+          "encodeFullPlusTilesMsP50": 12.295374646782875,
+          "encodeFullPlusTilesMsP95": 14.744707383215427
+        }
+      ]
+    },
+    {
+      "phase": "offscreen",
+      "width": 800,
+      "height": 548,
+      "frames": 90,
+      "uniquePixels": 90,
+      "statuses": {
+        "0": 118
+      },
+      "captureCallbackWithPNGMsP50": 13.073666486889124,
+      "captureCallbackWithPNGMsP95": 13.698999769985676,
+      "encodings": [
+        {
+          "codec": "PNG",
+          "options": {
+            "compress_level": 3
+          },
+          "fullFrameBytes": 28124714,
+          "tileBytes": 2616834,
+          "tileBytesPerReplaySecond": 872278.0,
+          "steadyBytesPerReplaySecond": 748204.5882352941,
+          "fullFrameBytesPerReplaySecond": 9374904.666666666,
+          "encodeFullPlusTilesMsP50": 13.737187255173922,
+          "encodeFullPlusTilesMsP95": 21.043582819402218
+        },
+        {
+          "codec": "WEBP",
+          "options": {
+            "lossless": true,
+            "method": 1
+          },
+          "fullFrameBytes": 12827994,
+          "tileBytes": 1540906,
+          "tileBytesPerReplaySecond": 513635.3333333333,
+          "steadyBytesPerReplaySecond": 448932.0,
+          "fullFrameBytesPerReplaySecond": 4275998.0,
+          "encodeFullPlusTilesMsP50": 79.6096664853394,
+          "encodeFullPlusTilesMsP95": 156.6838752478361
+        },
+        {
+          "codec": "WEBP",
+          "options": {
+            "quality": 85,
+            "method": 0
+          },
+          "fullFrameBytes": 4720446,
+          "tileBytes": 453950,
+          "tileBytesPerReplaySecond": 151316.66666666666,
+          "steadyBytesPerReplaySecond": 127376.47058823529,
+          "fullFrameBytesPerReplaySecond": 1573482.0,
+          "encodeFullPlusTilesMsP50": 12.723646592348814,
+          "encodeFullPlusTilesMsP95": 14.704625122249126
+        }
+      ]
+    },
+    {
+      "phase": "minimized",
+      "width": 800,
+      "height": 548,
+      "frames": 1,
+      "uniquePixels": 1,
+      "statuses": {
+        "0": 1,
+        "3": 1
+      },
+      "captureCallbackWithPNGMsP50": 17.273874953389168,
+      "captureCallbackWithPNGMsP95": 17.273874953389168,
+      "encodings": [
+        {
+          "codec": "PNG",
+          "options": {
+            "compress_level": 3
+          },
+          "fullFrameBytes": 311753,
+          "tileBytes": 324492,
+          "tileBytesPerReplaySecond": 9734760.0,
+          "steadyBytesPerReplaySecond": 0.0,
+          "fullFrameBytesPerReplaySecond": 9352590.0,
+          "encodeFullPlusTilesMsP50": 25.14091692864895,
+          "encodeFullPlusTilesMsP95": 25.14091692864895
+        },
+        {
+          "codec": "WEBP",
+          "options": {
+            "lossless": true,
+            "method": 1
+          },
+          "fullFrameBytes": 143000,
+          "tileBytes": 168328,
+          "tileBytesPerReplaySecond": 5049840.0,
+          "steadyBytesPerReplaySecond": 0.0,
+          "fullFrameBytesPerReplaySecond": 4290000.0,
+          "encodeFullPlusTilesMsP50": 133.84933397173882,
+          "encodeFullPlusTilesMsP95": 133.84933397173882
+        },
+        {
+          "codec": "WEBP",
+          "options": {
+            "quality": 85,
+            "method": 0
+          },
+          "fullFrameBytes": 52168,
+          "tileBytes": 60358,
+          "tileBytesPerReplaySecond": 1810740.0,
+          "steadyBytesPerReplaySecond": 0.0,
+          "fullFrameBytesPerReplaySecond": 1565040.0,
+          "encodeFullPlusTilesMsP50": 24.895749986171722,
+          "encodeFullPlusTilesMsP95": 24.895749986171722
+        }
+      ]
+    },
+    {
+      "phase": "restored",
+      "width": 800,
+      "height": 548,
+      "frames": 90,
+      "uniquePixels": 85,
+      "statuses": {
+        "0": 100
+      },
+      "captureCallbackWithPNGMsP50": 13.081791810691357,
+      "captureCallbackWithPNGMsP95": 15.952416695654392,
+      "encodings": [
+        {
+          "codec": "PNG",
+          "options": {
+            "compress_level": 3
+          },
+          "fullFrameBytes": 28129451,
+          "tileBytes": 2378050,
+          "tileBytesPerReplaySecond": 792683.3333333334,
+          "steadyBytesPerReplaySecond": 724489.4117647058,
+          "fullFrameBytesPerReplaySecond": 9376483.666666666,
+          "encodeFullPlusTilesMsP50": 13.551520183682442,
+          "encodeFullPlusTilesMsP95": 16.7238749563694
+        },
+        {
+          "codec": "WEBP",
+          "options": {
+            "lossless": true,
+            "method": 1
+          },
+          "fullFrameBytes": 12827482,
+          "tileBytes": 1399034,
+          "tileBytesPerReplaySecond": 466344.6666666667,
+          "steadyBytesPerReplaySecond": 433834.5882352941,
+          "fullFrameBytesPerReplaySecond": 4275827.333333333,
+          "encodeFullPlusTilesMsP50": 74.93918808177114,
+          "encodeFullPlusTilesMsP95": 88.87162432074547
+        },
+        {
+          "codec": "WEBP",
+          "options": {
+            "quality": 85,
+            "method": 0
+          },
+          "fullFrameBytes": 4724596,
+          "tileBytes": 405792,
+          "tileBytesPerReplaySecond": 135264.0,
+          "steadyBytesPerReplaySecond": 121863.5294117647,
+          "fullFrameBytesPerReplaySecond": 1574865.3333333333,
+          "encodeFullPlusTilesMsP50": 11.842791922390461,
+          "encodeFullPlusTilesMsP95": 14.15354199707508
+        }
+      ]
+    },
+    {
+      "phase": "resized",
+      "width": 800,
+      "height": 548,
+      "frames": 90,
+      "uniquePixels": 3,
+      "statuses": {
+        "0": 118
+      },
+      "captureCallbackWithPNGMsP50": 11.0813332721591,
+      "captureCallbackWithPNGMsP95": 16.349416226148605,
+      "encodings": [
+        {
+          "codec": "PNG",
+          "options": {
+            "compress_level": 3
+          },
+          "fullFrameBytes": 27586039,
+          "tileBytes": 1032385,
+          "tileBytesPerReplaySecond": 344128.3333333333,
+          "steadyBytesPerReplaySecond": 102399.88235294117,
+          "fullFrameBytesPerReplaySecond": 9195346.333333334,
+          "encodeFullPlusTilesMsP50": 9.985728655010462,
+          "encodeFullPlusTilesMsP95": 14.576749876141548
+        },
+        {
+          "codec": "WEBP",
+          "options": {
+            "lossless": true,
+            "method": 1
+          },
+          "fullFrameBytes": 13009340,
+          "tileBytes": 546824,
+          "tileBytesPerReplaySecond": 182274.66666666666,
+          "steadyBytesPerReplaySecond": 55387.058823529405,
+          "fullFrameBytesPerReplaySecond": 4336446.666666667,
+          "encodeFullPlusTilesMsP50": 61.66552100330591,
+          "encodeFullPlusTilesMsP95": 86.92141715437174
+        },
+        {
+          "codec": "WEBP",
+          "options": {
+            "quality": 85,
+            "method": 0
+          },
+          "fullFrameBytes": 5875544,
+          "tileBytes": 213310,
+          "tileBytesPerReplaySecond": 71103.33333333333,
+          "steadyBytesPerReplaySecond": 26800.941176470587,
+          "fullFrameBytesPerReplaySecond": 1958514.6666666667,
+          "encodeFullPlusTilesMsP50": 12.031292077153921,
+          "encodeFullPlusTilesMsP95": 21.295790560543537
+        }
+      ]
+    }
+  ]
+}

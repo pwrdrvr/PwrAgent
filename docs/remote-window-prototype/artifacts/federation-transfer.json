@@ -1,0 +1,27 @@
+{
+  "date": "2026-10-11",
+  "mechanism": "enrolled Federation file_push",
+  "bytes": 4191302,
+  "sha256": "5ad81db0d0cdceda47b47304472f0f334336fdfd0c2c49f90e82b526878487cc",
+  "toolWallMs": 2541,
+  "reverseInput": {
+    "bytes": 159,
+    "toolWallMs": 188
+  },
+  "inputCapture": {
+    "staleCallbackAfterAcceptanceMs": 26.748291015625,
+    "visuallyVerifiedLaterCallbackAfterAcceptanceMs": 173.6,
+    "note": "Not earliest changed frame, network latency or photons"
+  },
+  "sender": {
+    "platform": "macOS 26.6.2",
+    "cpu": "Apple M2 Max",
+    "memoryGB": 32
+  },
+  "receiver": {
+    "platform": "Windows build 26200",
+    "cpu": "Intel i7-8559U VM 4 vCPU",
+    "memoryGB": 10,
+    "desktop": "disconnected; headless browser only"
+  }
+}

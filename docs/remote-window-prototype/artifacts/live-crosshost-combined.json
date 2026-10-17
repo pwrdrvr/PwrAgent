@@ -1,0 +1,429 @@
+{
+  "schema": 1,
+  "crossHost": true,
+  "sourceCommit": "67a025efd",
+  "percentileMethod": "nearest rank",
+  "path": "M2/dev owned AppKit fixture -> ScreenCaptureKit -> VideoToolbox H264/PNG -> enrolled authenticated Federation RPC -> Windows Edge WebCodecs canvas",
+  "decoderConfig": {
+    "codec": "avc1.42001F",
+    "codedWidth": 800,
+    "codedHeight": 548,
+    "optimizeForLatency": true,
+    "hardwareAcceleration": "prefer-software"
+  },
+  "phases": [
+    {
+      "name": "idle",
+      "durationSeconds": 3.0047999997138977,
+      "frames": 0,
+      "videoFrames": 0,
+      "pngFrames": 0,
+      "videoFramesPerSecond": 0.0,
+      "mediaPayloadBytes": 0,
+      "videoPayloadBytes": 0,
+      "pngPayloadBytes": 0,
+      "mediaPayloadBytesPerSecond": 0.0,
+      "sourceEncodeMs": null,
+      "viewerDecodeAndPresentMs": null,
+      "viewerTransferAndPresentMs": null
+    },
+    {
+      "name": "typing",
+      "durationSeconds": 2.6999000000953672,
+      "frames": 3,
+      "videoFrames": 3,
+      "pngFrames": 0,
+      "videoFramesPerSecond": 1.1111522648594512,
+      "mediaPayloadBytes": 12957,
+      "videoPayloadBytes": 12957,
+      "pngPayloadBytes": 0,
+      "mediaPayloadBytesPerSecond": 4799.06663192797,
+      "sourceEncodeMs": {
+        "count": 3,
+        "p50": 3.413417376577854,
+        "p95": 4.7456249594688416,
+        "max": 4.7456249594688416
+      },
+      "viewerDecodeAndPresentMs": {
+        "count": 3,
+        "p50": 11.300000190734863,
+        "p95": 26.5,
+        "max": 26.5
+      },
+      "viewerTransferAndPresentMs": {
+        "count": 3,
+        "p50": 11.600000381469727,
+        "p95": 28.90000009536743,
+        "max": 28.90000009536743
+      }
+    },
+    {
+      "name": "scroll",
+      "durationSeconds": 3.1325,
+      "frames": 0,
+      "videoFrames": 0,
+      "pngFrames": 0,
+      "videoFramesPerSecond": 0.0,
+      "mediaPayloadBytes": 0,
+      "videoPayloadBytes": 0,
+      "pngPayloadBytes": 0,
+      "mediaPayloadBytesPerSecond": 0.0,
+      "sourceEncodeMs": null,
+      "viewerDecodeAndPresentMs": null,
+      "viewerTransferAndPresentMs": null
+    },
+    {
+      "name": "motion",
+      "durationSeconds": 4.000899999618531,
+      "frames": 6,
+      "videoFrames": 5,
+      "pngFrames": 1,
+      "videoFramesPerSecond": 1.2497188133861705,
+      "mediaPayloadBytes": 396817,
+      "videoPayloadBytes": 33084,
+      "pngPayloadBytes": 363733,
+      "mediaPayloadBytesPerSecond": 99181.934074292,
+      "sourceEncodeMs": {
+        "count": 5,
+        "p50": 3.642583265900612,
+        "p95": 4.536749795079231,
+        "max": 4.536749795079231
+      },
+      "viewerDecodeAndPresentMs": {
+        "count": 5,
+        "p50": 6.199999809265137,
+        "p95": 15,
+        "max": 15
+      },
+      "viewerTransferAndPresentMs": {
+        "count": 6,
+        "p50": 7.900000095367432,
+        "p95": 6066,
+        "max": 6066
+      }
+    },
+    {
+      "name": "settled",
+      "durationSeconds": 3.001,
+      "frames": 5,
+      "videoFrames": 3,
+      "pngFrames": 2,
+      "videoFramesPerSecond": 0.9996667777407531,
+      "mediaPayloadBytes": 741138,
+      "videoPayloadBytes": 10596,
+      "pngPayloadBytes": 730542,
+      "mediaPayloadBytesPerSecond": 246963.67877374208,
+      "sourceEncodeMs": {
+        "count": 3,
+        "p50": 3.432583063840866,
+        "p95": 3.927166573703289,
+        "max": 3.927166573703289
+      },
+      "viewerDecodeAndPresentMs": {
+        "count": 3,
+        "p50": 4.799999713897705,
+        "p95": 21.700000286102295,
+        "max": 21.700000286102295
+      },
+      "viewerTransferAndPresentMs": {
+        "count": 5,
+        "p50": 22,
+        "p95": 1040,
+        "max": 1040
+      }
+    }
+  ],
+  "inputToCanvasMs": {
+    "count": 5,
+    "p50": 445.90000009536743,
+    "p95": 2176.9000000953674,
+    "max": 2176.9000000953674
+  },
+  "rpcPingMs": {
+    "count": 187,
+    "p50": 51.59999990463257,
+    "p95": 540.9000000953674,
+    "max": 824.4000000953674
+  },
+  "sourceEncodeMsVideo": {
+    "count": 12,
+    "p50": 3.432583063840866,
+    "p95": 38.73695805668831,
+    "max": 38.73695805668831
+  },
+  "viewerDecodeAndPresentMs": {
+    "count": 16,
+    "p50": 11.300000190734863,
+    "p95": 198.5,
+    "max": 198.5
+  },
+  "viewerTransferAndPresentMs": {
+    "count": 16,
+    "p50": 16.200000286102295,
+    "p95": 6066,
+    "max": 6066
+  },
+  "decodedFrames": 16,
+  "mediaPayloadBytes": 1553461,
+  "acceptedInputs": 24,
+  "visuallyAcknowledgedInputs": 5,
+  "errors": [],
+  "sourceSessionWholeRun": {
+    "frames": 18,
+    "mediaBytes": 1979123,
+    "inputs": 24
+  },
+  "sourceNativeLog": [
+    {
+      "hardware": "Optional(1)",
+      "kind": "encoder"
+    },
+    {
+      "height": 548,
+      "kind": "ready",
+      "width": 800
+    },
+    {
+      "kind": "input",
+      "revision": 1
+    },
+    {
+      "kind": "input",
+      "revision": 2
+    },
+    {
+      "kind": "input",
+      "revision": 3
+    },
+    {
+      "kind": "input",
+      "revision": 4
+    },
+    {
+      "kind": "input",
+      "revision": 5
+    },
+    {
+      "kind": "input",
+      "revision": 6
+    },
+    {
+      "kind": "input",
+      "revision": 7
+    },
+    {
+      "kind": "input",
+      "revision": 8
+    },
+    {
+      "kind": "input",
+      "revision": 9
+    },
+    {
+      "kind": "input",
+      "revision": 10
+    },
+    {
+      "kind": "input",
+      "revision": 11
+    },
+    {
+      "kind": "input",
+      "revision": 12
+    },
+    {
+      "kind": "input",
+      "revision": 13
+    },
+    {
+      "kind": "input",
+      "revision": 14
+    },
+    {
+      "kind": "input",
+      "revision": 15
+    },
+    {
+      "kind": "input",
+      "revision": 16
+    },
+    {
+      "kind": "input",
+      "revision": 17
+    },
+    {
+      "kind": "input",
+      "revision": 18
+    },
+    {
+      "kind": "input",
+      "revision": 19
+    },
+    {
+      "kind": "input",
+      "revision": 20
+    },
+    {
+      "kind": "input",
+      "revision": 21
+    },
+    {
+      "kind": "input",
+      "revision": 22
+    },
+    {
+      "kind": "input",
+      "revision": 23
+    },
+    {
+      "kind": "input",
+      "revision": 24
+    },
+    {
+      "kind": "done"
+    },
+    {
+      "stderr": "      927.17 real         8.98 user         5.25 sys\n            96960512  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n               37712  page reclaims\n                3169  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                  90  messages sent\n                  45  messages received\n                   0  signals received\n                1533  voluntary context switches\n"
+    },
+    {
+      "stderr": "              145491  involuntary context switches\n         37567815879  instructions retired\n         34328654545  cycles elapsed\n            68780896  peak memory footprint\n"
+    }
+  ],
+  "sourceHelperElapsedMsWholeRun": 927199,
+  "sourceHelperCpu": {
+    "user": 3810466,
+    "system": 654526
+  },
+  "sourceHelperMaxRssKiB": 78032,
+  "viewerHelperCpu": null,
+  "viewerHelperMaxRssKiB": null,
+  "limits": [
+    "callbackToCanvasSameHostMs invalid across unsynchronized hosts and excluded",
+    "Browser-monotonic input completion ends at canvas draw plus RAF, not photons",
+    "Media payload bytes exclude base64, RPC/encryption, gateway/WebSocket/TCP overhead; network-wire bytes unmeasured",
+    "Hardware encode requires native encoder log; WebCodecs configuration does not prove hardware decode",
+    "Source/helper CPU and session counters include operator wait and later resync, not only first benchmark phases",
+    "Synthetic fixture input only; arbitrary app/OS control unimplemented",
+    "Logical Stop/Start does not prove physical network reconnect"
+  ],
+  "windowsEvidenceCommit": "5893cbee4200b9489a2890d1b8c472c41fab71dc",
+  "canvasReview": {
+    "reviewedLocally": true,
+    "syntheticOnly": true,
+    "typedText": "LIVE123",
+    "rows": [
+      15,
+      29
+    ],
+    "inputRevision": 24,
+    "fixtureFrameCounter": 63
+  },
+  "viewerTransferAndPresentDefinition": "Timer starts after first pull response: remaining chunk fetches, reconstruction, decode, drawing and RAF. Excludes first request/wait/pull, capture/encode, final ACK, and photons. Small single-chunk values are mostly local decode/presentation.",
+  "pngFrames": 4,
+  "pngPayloadBytes": 1457300,
+  "videoPayloadBytes": 96161,
+  "logicalResync": {
+    "retainedCanvas": {
+      "lastRow": 29,
+      "text": "LIVE123",
+      "firstRow": 15,
+      "revision": 24
+    },
+    "crossHostClock": "No source/receiver wall-clock subtraction",
+    "kind": "Logical Stop/Start session resync only",
+    "browserClock": "performance.now",
+    "errors": [],
+    "session": {
+      "sessionId": "76414f2b-e0c0-4959-b631-1fc3ce37c351",
+      "epoch": 2,
+      "scene": "owned-fixture",
+      "owner": "pwr_7bd451d0-df75-4676-84f7-bbcbfc565bce",
+      "viewer": "pwr_e87183a6-755f-49be-8df2-a28b3231960d",
+      "width": 800,
+      "height": 548,
+      "control": false,
+      "protocol": "window.prototype.v1",
+      "chunkBytes": 16384,
+      "started": 242263.5
+    },
+    "firstH264Keyframe": "New decoder accepted first frame only after viewer key-frame validation; source frame packet key flag not separately persisted.",
+    "physicalNetworkReconnectTested": false,
+    "frames": [
+      {
+        "seq": 16,
+        "format": "h264",
+        "epoch": 2,
+        "bytes": 59828,
+        "time": 242482.30000019073,
+        "transferAndPresentMs": 193.30000019073486,
+        "decodeAndPresentMs": 11.900000095367432,
+        "encodeMs": 4.297750070691109,
+        "pixelRevision": 24
+      },
+      {
+        "seq": 17,
+        "format": "png",
+        "epoch": 2,
+        "bytes": 365834,
+        "time": 245588.5,
+        "transferAndPresentMs": 2987.7999997138977,
+        "decodeAndPresentMs": 18.199999809265137,
+        "encodeMs": 38.23366668075323,
+        "pixelRevision": 24
+      }
+    ],
+    "schema": 1
+  },
+  "bottleneckInference": {
+    "finding": "Serialized remaining-chunk transfer and full-frame PNG repairs dominate; not RDP-quality motion.",
+    "evidence": [
+      "Motion video encode p50/p95 3.64/4.54 ms, video decode+RAF 6.2/15 ms, versus PNG remaining-chunk+presentation 6066 ms.",
+      "No frames presented during scroll; a revision-7 PNG completed during motion, then H264 showed revision 23.",
+      "Four PNG repairs consumed 1457300 of 1553461 first-run media payload bytes.",
+      "Approximately 365 KB PNG needs 23 chunks, 22 additional sequential RPC pulls after first packet."
+    ],
+    "limits": [
+      "Initial pull latency excluded from transferAndPresentMs; never treat it as total network delay.",
+      "Capture scheduling, native readback and network-wire traffic not separately measured.",
+      "First-session input timing covers only 5 exact pixel matches; intermediate observations can be superseded or expire."
+    ]
+  },
+  "artifacts": {
+    "sourceRaw": "docs/remote-window-prototype/artifacts/live-crosshost-source-raw.json",
+    "browserRaw": "scripts/remote-window-prototype/windows/benchmarks/windows-live-crosshost-browser.json",
+    "windowsSummary": "scripts/remote-window-prototype/windows/benchmarks/windows-live-crosshost-summary.json",
+    "logicalResync": "scripts/remote-window-prototype/windows/benchmarks/windows-live-logical-resync.json",
+    "canvas": "scripts/remote-window-prototype/windows/artifacts/windows-live-crosshost.png",
+    "resyncCanvas": "scripts/remote-window-prototype/windows/artifacts/windows-live-logical-resync.png"
+  },
+  "sourceNativeWholeRunResources": {
+    "wallSeconds": 927.17,
+    "userCpuSeconds": 8.98,
+    "systemCpuSeconds": 5.25,
+    "maximumResidentSetBytes": 96960512,
+    "scope": "Entire native run including setup wait and resync, not benchmark-only"
+  },
+  "cleanup": {
+    "ownSourceHelperAndFixture": "graceful exit 0",
+    "m2DevMainPid": 62736,
+    "m2DefaultInstalledMainPid": 88599,
+    "bothM2AppsStillRunning": true,
+    "windowsRestoration": "Coordinated separately by parent and existing Windows child; no claim of completion in this evidence"
+  },
+  "environment": {
+    "source": "M2 Max, macOS, hardware VideoToolbox encoding",
+    "receiverPhysicalHostOperatorReported": "2018 Intel MacBook Pro with Touch Bar and 16 GB physical RAM; not independently inspected",
+    "receiverFederationHostFacts": {
+      "platform": "win32",
+      "osVersion": "10.0.26200",
+      "arch": "x64",
+      "cpuModel": "Intel(R) Core(TM) i7-8559U CPU @ 2.70GHz",
+      "guestLogicalCpuCount": 4,
+      "guestMemoryBytes": 10736128000,
+      "virtualMachine": true
+    },
+    "receiverMode": "Headless Edge; WebCodecs configured prefer-software; actual decoder backend not instrumented",
+    "hostFactsSampledAfterRunAt": "2026-10-12T02:36:38.298Z",
+    "limit": "Guest facts are post-run Federation metadata, not physical host capacity or benchmark-phase CPU/load measurements. Do not generalize this receiver result to current Windows hardware."
+  }
+}

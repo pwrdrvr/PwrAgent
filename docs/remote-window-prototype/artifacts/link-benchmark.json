@@ -1,0 +1,63 @@
+{
+  "measurementRevision": 2,
+  "note": "Serialization and stalls precede delivery. Measured loopback with application-level bandwidth/delay/stall injection; fixed real fixture snapshot; no capture/decode/photons; no actual packet loss",
+  "results": [
+    {
+      "name": "loopback-unshaped",
+      "mbps": 1000,
+      "oneWayMs": 0,
+      "stallEvery": 0,
+      "measuredDurationMs": 3004.0875,
+      "produced": 89,
+      "dropped": 2,
+      "delivered": 87,
+      "payloadBytes": 14724953,
+      "wireBytes": 14738757,
+      "frameAgeP50Ms": 16.892584,
+      "frameAgeP95Ms": 26.608166000000097,
+      "eventDelayP50Ms": 12.581166999999823,
+      "eventDelayP95Ms": 21.968791999999894,
+      "pendingFrameCap": 1,
+      "inflightFrameCap": 1,
+      "snapshotBytes": 169249
+    },
+    {
+      "name": "emulated-10Mbps-50msRTT",
+      "mbps": 10,
+      "oneWayMs": 25,
+      "stallEvery": 0,
+      "measuredDurationMs": 3259.914167,
+      "produced": 87,
+      "dropped": 66,
+      "delivered": 21,
+      "payloadBytes": 3554519,
+      "wireBytes": 3558159,
+      "frameAgeP50Ms": 195.25495799999953,
+      "frameAgeP95Ms": 243.86641699999927,
+      "eventDelayP50Ms": 34.48370900000009,
+      "eventDelayP95Ms": 41.58324999999968,
+      "pendingFrameCap": 1,
+      "inflightFrameCap": 1,
+      "snapshotBytes": 169249
+    },
+    {
+      "name": "emulated-2Mbps-100msRTT-3pct-stalls",
+      "mbps": 2,
+      "oneWayMs": 50,
+      "stallEvery": 33,
+      "measuredDurationMs": 4067.4635,
+      "produced": 77,
+      "dropped": 72,
+      "delivered": 5,
+      "payloadBytes": 846515,
+      "wireBytes": 847663,
+      "frameAgeP50Ms": 905.8173330000009,
+      "frameAgeP95Ms": 996.0293330000004,
+      "eventDelayP50Ms": 95.8909590000003,
+      "eventDelayP95Ms": 172.2983749999994,
+      "pendingFrameCap": 1,
+      "inflightFrameCap": 1,
+      "snapshotBytes": 169249
+    }
+  ]
+}

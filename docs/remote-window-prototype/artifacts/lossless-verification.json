@@ -1,0 +1,47 @@
+[
+  {
+    "phase": "idle",
+    "frames": 90,
+    "rgbPixelExact": true
+  },
+  {
+    "phase": "minimized",
+    "frames": 1,
+    "rgbPixelExact": true
+  },
+  {
+    "phase": "motion",
+    "frames": 90,
+    "rgbPixelExact": true
+  },
+  {
+    "phase": "obscured",
+    "frames": 90,
+    "rgbPixelExact": true
+  },
+  {
+    "phase": "offscreen",
+    "frames": 90,
+    "rgbPixelExact": true
+  },
+  {
+    "phase": "resized",
+    "frames": 90,
+    "rgbPixelExact": true
+  },
+  {
+    "phase": "restored",
+    "frames": 90,
+    "rgbPixelExact": true
+  },
+  {
+    "phase": "scroll",
+    "frames": 90,
+    "rgbPixelExact": true
+  },
+  {
+    "phase": "typing",
+    "frames": 90,
+    "rgbPixelExact": true
+  }
+]
