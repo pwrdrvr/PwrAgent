@@ -139,6 +139,33 @@ describe("StateDb", () => {
     expect(columnNames(table)).toContain(column);
   });
 
+  // The thread-dependency branch shipped its table as version 76 before main
+  // took 76 for relationship generations; both kinds of v76 profile converge.
+  it("restores thread dependencies and relationship generations to either version 76", () => {
+    const dbPath = useFileStateDb();
+    stateDb.raw.exec("DROP TABLE thread_dependencies");
+    stateDb.raw.pragma("user_version = 76");
+    stateDb.close();
+    stateDb = StateDb.open(dbPath);
+    expect(stateDb.raw.prepare("SELECT name FROM pragma_table_info('thread_dependencies')").all())
+      .toContainEqual({ name: "payload" });
+    expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(CURRENT_STATE_DB_USER_VERSION);
+
+    stateDb.raw.exec(`DROP TRIGGER thread_navigation_relationship_generation_insert;
+      DROP TRIGGER thread_navigation_relationship_generation_update;
+      DROP TRIGGER thread_navigation_relationship_generation_delete;
+      DROP TABLE thread_navigation_relationship_generation;`);
+    stateDb.raw.pragma("user_version = 76");
+    stateDb.close();
+    stateDb = StateDb.open(dbPath);
+    expect(stateDb.raw.prepare("SELECT generation FROM thread_navigation_relationship_generation").get())
+      .toEqual({ generation: 0 });
+    expect(stateDb.raw.prepare(
+      "SELECT count(*) AS count FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'thread_navigation_relationship_generation_%'",
+    ).get()).toEqual({ count: 3 });
+    expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(CURRENT_STATE_DB_USER_VERSION);
+  });
+
   it.each([false, true])("guards corrupt automation runs when upgrading with legacy index present: %s", (legacyIndexPresent) => {
     const dbPath = useFileStateDb();
     stateDb.raw.exec("DROP INDEX IF EXISTS idx_automation_runs_execution_thread");
