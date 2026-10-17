@@ -9,7 +9,8 @@ import { CountingBackendClient, codexThread, publishNotification } from "./fixtu
 import budgets from "./fixtures/archive-cleanup-budgets.json";
 import type { ArchiveCleanupCheckpointStore, ArchiveCleanupIntent } from "../state/archive-cleanup-checkpoint";
 
-vi.mock("../log", () => ({ getMainLogger: () => ({ debug() {}, info() {}, warn() {}, error() {} }) }));
+const registryLog = vi.hoisted(() => ({ debug() {}, info() {}, warn() {}, error: vi.fn() }));
+vi.mock("../log", () => ({ getMainLogger: () => registryLog }));
 vi.mock("../app-server/worktree-container-service", () => ({ WorktreeContainerService: class {
   // Every path in this harness is outside the managed root. Keep container
   // discovery free of host I/O just like the contrived Git/stat operations.
@@ -64,6 +65,7 @@ afterEach(async () => {
   await Promise.all(registries.splice(0).map((registry) => registry.close()));
   vi.mocked(stat).mockReset();
   vi.mocked(deleteThreadAssets).mockClear();
+  registryLog.error.mockClear();
   vi.useRealTimers();
 });
 
@@ -152,6 +154,37 @@ function buildArchiveBurst(active: AppServerThreadSummary[], targets: AppServerT
 }
 
 describe("archive cleanup pipeline", () => {
+  it.each([
+    { failedCalls: [1], code: "SQLITE_FULL" },
+    { failedCalls: [2], code: "SQLITE_BUSY" },
+    { failedCalls: [1, 2], code: "SQLITE_FULL" },
+  ])("finishes shutdown when checkpoint calls $failedCalls fail with $code", async ({ failedCalls, code }) => {
+    vi.useFakeTimers();
+    let attempts = 0;
+    const checkpoint = { save: vi.fn<ArchiveCleanupCheckpointStore["save"]>(() => {
+      attempts += 1;
+      if (failedCalls.includes(attempts)) throw Object.assign(new Error(code), { code });
+    }), recover: vi.fn(() => []) };
+    const fixture = build([], undefined, checkpoint);
+    const closeClient = vi.spyOn(fixture.client, "close");
+    await fixture.registry.archiveThread({ backend: "codex", threadId: "target", backgroundCleanup: true });
+    expect(fixture.registry.getArchiveCleanupCountForQuit()).toBe(1);
+    const cleanup = fixture.registry.archiveThread({ backend: "codex", threadId: "target" });
+    const closing = fixture.registry.close();
+    expect(fixture.registry.close()).toBe(closing);
+    await expect(closing).resolves.toBeUndefined();
+    await fixture.registry.close();
+    expect(closeClient).toHaveBeenCalledOnce();
+    expect(checkpoint.save).toHaveBeenCalledTimes(2);
+    expect(fixture.counts.providerPages).toBe(0);
+    await expect(cleanup).resolves.toMatchObject({ cleanup: [expect.objectContaining({ skippedReason: expect.stringContaining("cancelled") })] });
+    for (const call of failedCalls) {
+      expect(registryLog.error).toHaveBeenCalledWith("archive cleanup quit checkpoint failed", {
+        phase: call === 1 ? "before-drain" : "after-drain", error: code,
+      });
+    }
+  });
+
   it("counts queued cleanup at quit and checkpoints it after cancellation", async () => {
     vi.useFakeTimers();
     const checkpoint = { save: vi.fn(), recover: vi.fn(() => []) };

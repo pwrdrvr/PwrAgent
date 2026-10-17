@@ -14635,6 +14635,18 @@ export class DesktopBackendRegistry {
     this.archiveCleanupCheckpointStore?.save(this.runtimeInstanceId, [...this.pendingArchiveCleanupIntents.values()]);
   }
 
+  private tryCheckpointArchiveCleanupsForQuit(phase: "before-drain" | "after-drain"): void {
+    try {
+      this.checkpointArchiveCleanupsForQuit();
+    } catch (error) {
+      // Persistence failure must not prevent queue cancellation or backend
+      // disposal, nor poison the memoized shutdown operation.
+      backendRegistryLog.error("archive cleanup quit checkpoint failed", {
+        phase, error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   private enqueueArchiveCleanup(intent: ArchiveCleanupIntent, resuming = false): Promise<ArchiveThreadResponse> {
     const key = buildThreadIdentityKey(intent.backend, intent.threadId);
     const existing = this.archiveCleanupQueue.pending(key);
@@ -25824,7 +25836,7 @@ export class DesktopBackendRegistry {
   }
 
   private async closeResources(): Promise<void> {
-    this.checkpointArchiveCleanupsForQuit();
+    this.tryCheckpointArchiveCleanupsForQuit("before-drain");
     // Before anything unsubscribes or closes, so each turn's own terminal
     // still reaches every consumer. A quit has normally done this already,
     // while messaging was still running. Wait only when there is a turn to
@@ -25843,7 +25855,7 @@ export class DesktopBackendRegistry {
     this.closed = true;
     this.threadTurnQueue.close();
     await this.archiveCleanupQueue.close();
-    this.checkpointArchiveCleanupsForQuit();
+    this.tryCheckpointArchiveCleanupsForQuit("after-drain");
     this.backgroundTerminalGeneration += 1;
     this.codexBackgroundTerminals.clear();
     this.backgroundTerminalReadRevisions.clear();
