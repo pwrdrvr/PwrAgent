@@ -411,7 +411,7 @@
   "managed-relationship-delete-random-autocommit": {
     "commits": 512,
     "note": "512 thread deletions; autocommit; page frames separately bounded including trigger writes",
-    "observedWalBytes": 16710720,
+    "observedWalBytes": 18816040,
     "rowsChanged": 512,
     "statements": 512
   },
@@ -452,8 +452,8 @@
   },
   "managed-relationships-lifecycle": {
     "commits": 5,
-    "note": "5 overlay writes: add/replace parent child, group/ungroup child, clear parent; no separate relationship commits",
-    "observedWalBytes": 119480,
+    "note": "5 overlay writes: add/replace parent child, group/ungroup child, clear parent; projection and generation share those commits",
+    "observedWalBytes": 140080,
     "rowsChanged": 5,
     "statements": 5
   },

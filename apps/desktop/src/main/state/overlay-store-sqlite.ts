@@ -677,6 +677,7 @@ function managedSubAgentChildKeys(overlay: Pick<ThreadOverlayState, "backend" | 
 }
 
 export class SqliteOverlayStore implements RemoteThreadTargetStore {
+  private managedSubAgentThreadKeysCache?: { generation: number; keys: Set<string> };
   private navigationOverlayCache?: {
     dataVersion: number;
     threadChanges: number;
@@ -7952,6 +7953,16 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
   }
 
   private listManagedSubAgentThreadKeys(): Set<string> {
+    // Transactions can reuse a generation after a savepoint rollback. Never
+    // consume or publish the committed cache while reading such a snapshot.
+    const generation = this.stateDb.raw.inTransaction ? undefined : (
+      this.stateDb.raw.prepare(
+        "SELECT generation FROM thread_navigation_relationship_generation WHERE singleton = 1",
+      ).get() as { generation: number }
+    ).generation;
+    if (generation !== undefined && this.managedSubAgentThreadKeysCache?.generation === generation) {
+      return new Set(this.managedSubAgentThreadKeysCache.keys);
+    }
     // One statement reads parent references and child flags from the same
     // SQLite snapshot. Persistent triggers cover older/shared-profile writers.
     const rows = this.stateDb.raw.prepare(
@@ -7976,6 +7987,12 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     // recreates a stale native-worker card. Missing child overlays stay hidden.
     for (const key of threadKeys) {
       if (groupedKeys.has(encodeThreadIdentityKeyForStorage(key))) threadKeys.delete(key);
+    }
+    // Read the stamp BEFORE the rows: an intervening external commit may cause
+    // one redundant rebuild next time, but can never stamp old rows as current.
+    if (generation !== undefined) {
+      this.managedSubAgentThreadKeysCache = { generation, keys: threadKeys };
+      return new Set(threadKeys);
     }
     return threadKeys;
   }
