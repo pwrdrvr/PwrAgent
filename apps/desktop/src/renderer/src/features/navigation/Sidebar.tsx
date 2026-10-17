@@ -209,6 +209,7 @@ function useRevealListChange<Args extends unknown[], Result>(
 import type { NavigationDirectoryDisclosure } from "../../lib/useNavigationDirectoryDisclosure";
 import { BrandLockup } from "../chrome/BrandLockup";
 import { ThreadLockDialog } from "../thread-lock/ThreadLockDialog";
+import { useThreadDependencyIndicatorsContext } from "../thread-dependencies/useThreadDependencyIndicators";
 
 type SidebarProps = {
   /** Director voice's mic, rendered first in the masthead; it subscribes to voice itself. */
@@ -315,6 +316,11 @@ type SidebarProps = {
    * Absent when no peer could receive one, which hides the menu item.
    */
   onSendThreadToMachine?: (thread: NavigationThreadSummary) => void;
+  /**
+   * Open Continue After for a thread this window owns. Dependencies run on
+   * the owning machine, so a peer's row offers no item.
+   */
+  onContinueAfter?: (thread: NavigationThreadSummary) => void;
   /** Whether a peer has a directory row's project, for its machine menu. */
   checkFederationTargetProject?: CheckFederationTargetProject;
   newThreadFederationTargets?: readonly FederationThreadTarget[];
@@ -594,6 +600,7 @@ export function Sidebar(props: SidebarProps) {
   const pinnedGroupShown = lensHasPinnedGroup(props.browseMode, pinnedThreadsOnTop);
   const federationLabel = readRendererFederationLabel();
   const federationTarget = readRendererFederationTarget();
+  const dependencyIndicators = useThreadDependencyIndicatorsContext();
   const contextMenuRef = useRef<HTMLDivElement>(null);
   // What had focus when the thread context menu opened: the row's ⋮ button,
   // or wherever focus was for a right-click. Escape, Tab and a finished
@@ -2324,6 +2331,18 @@ export function Sidebar(props: SidebarProps) {
       !contextMenu.thread.codexNativeSubAgent &&
       !contextMenu.thread.archivedAt,
   );
+  const contextMenuCanContinueAfter = Boolean(
+    contextMenu &&
+      !contextMenuIsBulk &&
+      props.onContinueAfter &&
+      !contextMenu.thread.federation &&
+      readRendererFederationTarget()?.scope !== "remote",
+  );
+  const contextMenuDependencyCount = contextMenu && contextMenuCanContinueAfter
+    ? dependencyIndicators?.byThreadKey.get(
+        threadSummaryIdentityKey(contextMenu.thread),
+      )?.count ?? 0
+    : 0;
   const contextMenuChildThreadCount = contextMenu && !contextMenuIsBulk
     ? props.threads.filter(
         (thread) =>
@@ -2681,6 +2700,7 @@ export function Sidebar(props: SidebarProps) {
     contextMenuShowMoveItems ||
     contextMenuCanRename ||
     contextMenuCanLock ||
+    contextMenuCanContinueAfter ||
     contextMenuCanMarkRead ||
     contextMenuCanMarkUnread ||
     contextMenuCanSendToMachine ||
@@ -3569,6 +3589,27 @@ export function Sidebar(props: SidebarProps) {
                     >
                       <span>Lock Thread…</span>
                       {menuShortcut("threads.lock")}
+                    </button>
+                  ) : null}
+                  {contextMenuCanContinueAfter ? (
+                    <button
+                      aria-label={contextMenuDependencyCount > 0
+                        ? `Continue After, ${contextMenuDependencyCount} waiting`
+                        : undefined}
+                      role="menuitem"
+                      type="button"
+                      onClick={() => {
+                        const target = contextMenu.thread;
+                        setContextMenu(undefined);
+                        props.onContinueAfter!(target);
+                      }}
+                    >
+                      <span>Continue After…</span>
+                      {contextMenuDependencyCount > 0 ? (
+                        <span className="thread-context-menu__aside">
+                          {contextMenuDependencyCount} waiting
+                        </span>
+                      ) : null}
                     </button>
                   ) : null}
                   {contextMenuCanMarkUnread ? (

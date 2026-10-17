@@ -7195,6 +7195,39 @@ a.button {
   color: var(--text-primary);
 }
 
+/* Continue After: the thread waits on other threads. Neutral like the to-dos
+   chip, because waiting is the expected state. An uncertain delivery turns
+   the label and glyph red, never the fill. */
+.thread-row__chip--dependency {
+  border: 1px solid var(--border-subtle);
+  background: transparent;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.thread-row__chip--dependency .thread-row__chip-icon {
+  color: var(--text-muted);
+}
+
+.thread-row__chip--dependency.is-alert,
+.thread-row__chip--dependency.is-alert .thread-row__chip-icon {
+  color: var(--danger-text);
+}
+
+.thread-row__chip--dependency[role="button"] {
+  cursor: pointer;
+}
+
+.thread-row__chip--dependency[role="button"]:hover {
+  border-color: var(--border-strong);
+}
+
+.thread-row__chip--dependency[role="button"]:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
 /* A question the thread asked without pausing: present, not a call to act
    the way the approval and input chips are. */
 .thread-row__chip--question {
@@ -8932,6 +8965,22 @@ a.button {
   color: var(--accent-bright);
 }
 
+/* A count on the right of an item, set like the shortcut chip: Continue
+   After's waiting registrations. */
+.thread-context-menu__aside {
+  margin-left: auto;
+  padding-left: 16px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.thread-context-menu button:hover:not(:disabled) .thread-context-menu__aside,
+.thread-context-menu button:focus-visible:not(:disabled) .thread-context-menu__aside {
+  color: var(--accent-bright);
+}
+
 /* Checkable items (Pinned, Keep at Top). The labels never change; the box
    carries the state. On: solid accent box with a check. Off: muted outline
    with a muted check, so the item still reads as checkable. */
@@ -9197,6 +9246,71 @@ a.button {
   margin: 0;
   padding: 0;
   list-style: none;
+}
+
+/* Continue After: the rename dialog's frame, wide enough to pick threads on
+   the left and set each prerequisite up on the right. The body scrolls; the
+   title and actions stay put. */
+.continue-after-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(600px, 100%);
+  max-height: min(720px, calc(100vh - 48px));
+}
+
+.continue-after-dialog:focus {
+  outline: none;
+}
+
+.continue-after-dialog__lede {
+  margin: 8px 0 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.continue-after-dialog__body,
+.thread-dependencies__form.continue-after-dialog__form {
+  min-height: 0;
+  margin: 14px -4px 0;
+  padding: 0 4px 2px;
+  overflow-y: auto;
+}
+
+.thread-dependencies__form.continue-after-dialog__form {
+  gap: 10px;
+}
+
+.continue-after-dialog__columns {
+  display: grid;
+  grid-template-columns: minmax(0, 220px) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.continue-after-dialog__pick,
+.continue-after-dialog__setup {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.continue-after-dialog__pick .thread-dependencies__results {
+  max-height: 240px;
+}
+
+@media (max-width: 560px) {
+  .continue-after-dialog__columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.continue-after-dialog__actions {
+  flex: 0 0 auto;
+}
+
+.continue-after-dialog__add {
+  margin-right: auto;
 }
 
 .app-main {
@@ -31914,14 +32028,6 @@ div.composer-error-row__toggle {
   flex: 0 0 auto;
 }
 
-.thread-dependencies__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 8px;
-}
-
 .thread-dependencies__hint {
   margin: 0;
   color: var(--text-muted);
@@ -32106,19 +32212,6 @@ div.composer-error-row__toggle {
   color: var(--accent-bright);
 }
 
-.thread-dependencies__actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-.thread-dependencies__save:not([disabled]) {
-  border-color: var(--accent-border);
-  background: var(--bg-row-active);
-  color: var(--accent-bright);
-  font-weight: 600;
-}
-
 .thread-dependencies__cards,
 .thread-dependencies__conditions {
   display: grid;
@@ -32199,11 +32292,14 @@ div.composer-error-row__toggle {
   overflow-wrap: anywhere;
 }
 
-.thread-dependencies__details {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+/* The plan the resumed turn starts from, as the registering author wrote it. */
+.thread-dependencies__continuation {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .thread-dependencies__history-toggle {

@@ -3,6 +3,7 @@ import type { NavigationThreadSummary } from "@pwragent/shared";
 import { isBranchDrifted, operatorTodoItemKey } from "@pwragent/shared";
 import {
   BranchIcon,
+  ContinueAfterIcon,
   DraftIcon,
   FolderIcon,
   TerminalIcon,
@@ -21,6 +22,10 @@ import {
   type OperatorWait,
 } from "../operator-requests/operator-waits";
 import { useOperatorWaitsContext } from "../operator-requests/useOperatorRequests";
+import {
+  useThreadDependencyIndicator,
+  useThreadDependencyIndicatorsContext,
+} from "../thread-dependencies/useThreadDependencyIndicators";
 import { InstanceChip } from "../federation/InstanceGlyph";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
@@ -117,6 +122,14 @@ export function ThreadMetaChips({
     ? waitsContext?.waitsByThreadKey.get(itemThreadKey) ?? NO_WAITS
     : NO_WAITS;
   const leadWait = leadingOperatorWait(waits);
+  // Continue After registrations on this thread. The chip opens the dialog
+  // wherever one can open, and is a plain status marker elsewhere.
+  const dependency = useThreadDependencyIndicator(thread);
+  const openContinueAfter = useThreadDependencyIndicatorsContext()?.open;
+  const dependencyTooltip = useViewportTooltip({ className: "viewport-tooltip" });
+  const dependencyTooltipText = dependency
+    ? openContinueAfter ? `${dependency.tooltip}\nClick to manage` : dependency.tooltip
+    : "";
   const openItemCount = openTodos.length + waits.length;
   // "to-do" while only cards are open, so the chip names what it counts.
   const openItemNoun = waits.length === 0 ? "to-do" : "item";
@@ -383,6 +396,42 @@ export function ThreadMetaChips({
         </span>
       ) : null}
       {todoTooltip.tooltipNode}
+
+      {dependency ? (
+        <span
+          aria-label={`Continue after: ${dependency.label}`}
+          role={openContinueAfter ? "button" : "img"}
+          tabIndex={openContinueAfter ? 0 : undefined}
+          className={`thread-row__chip thread-row__chip--dependency thread-row__chip--persistent${
+            dependency.alert ? " is-alert" : ""
+          }`}
+          data-thread-dependencies={dependency.count}
+          onBlur={dependencyTooltip.hide}
+          onClick={openContinueAfter ? (event) => {
+            // The row selects its thread on click; the chip opens the dialog instead.
+            event.preventDefault();
+            event.stopPropagation();
+            dependencyTooltip.hide();
+            openContinueAfter(thread);
+          } : undefined}
+          onFocus={(event) => dependencyTooltip.show(event.currentTarget, dependencyTooltipText)}
+          onKeyDown={openContinueAfter ? (event) => {
+            if (event.key !== "Enter" && event.key !== " ") return;
+            event.preventDefault();
+            event.stopPropagation();
+            dependencyTooltip.hide();
+            openContinueAfter(thread);
+          } : undefined}
+          onMouseEnter={(event) => dependencyTooltip.show(event.currentTarget, dependencyTooltipText)}
+          onMouseLeave={dependencyTooltip.hide}
+        >
+          <span aria-hidden="true" className="thread-row__chip-icon">
+            <ContinueAfterIcon size={12} />
+          </span>
+          <span className="thread-row__chip-label">{dependency.label}</span>
+        </span>
+      ) : null}
+      {dependencyTooltip.tooltipNode}
 
       {!leadWait && hasApprovalRequest ? (
         <span

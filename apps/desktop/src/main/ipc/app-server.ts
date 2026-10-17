@@ -8241,6 +8241,10 @@ class DesktopAppServerService {
     };
   }
 
+  listActiveThreadDependencies(): ManageThreadDependenciesResponse {
+    return { dependencies: this.getThreadDependencyCoordinator().active() };
+  }
+
   async manageThreadDependencies(request: ManageThreadDependenciesRequest): Promise<ManageThreadDependenciesResponse> {
     if (!request || typeof request.backend !== "string" || !isAppServerBackendKind(request.backend) || typeof request.threadId !== "string" || !request.threadId.trim()) {
       throw new Error("A local backend and waiting threadId are required.");
@@ -8248,6 +8252,11 @@ class DesktopAppServerService {
     if (Object.keys(request).some((key) => !["action", "backend", "threadId", "conditions", "mode", "onFailure", "continuation", "dependencyId"].includes(key))) throw new Error("Unknown dependency request field.");
     if (request.action === "create") {
       validateDependencyCreate(request);
+      // The resumed turn starts from this text alone, for the operator's
+      // dialog as for an agent's tool call.
+      if (typeof request.continuation !== "string" || !request.continuation.trim()) {
+        throw new Error("Write what this thread should do when the prerequisites are met.");
+      }
       if (request.conditions?.some((condition) => !isAppServerBackendKind(condition?.backend))) throw new Error("Prerequisites must use known local backends.");
       // Validate PR-only prerequisites through the protocol before
       // registration; the coordinator already reads turn prerequisites.
@@ -8590,6 +8599,7 @@ export function registerAppServerIpcHandlers(): void {
   ipcMain.removeHandler(THREAD_DEPENDENCIES_CHANNEL);
   ipcMain.handle(THREAD_DEPENDENCIES_CHANNEL, async (event, request: ManageThreadDependenciesRequest) => {
     if (isFederationWindowWebContents(event.sender)) throw new Error("Thread dependencies currently require a local window.");
+    if (request?.action === "active") return appServerService.listActiveThreadDependencies();
     return await appServerService.manageThreadDependencies(request);
   });
   getDesktopBackendRegistry().setThreadPullRequestWatchToolHandler(

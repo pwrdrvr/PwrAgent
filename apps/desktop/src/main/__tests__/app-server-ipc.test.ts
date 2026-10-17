@@ -1728,8 +1728,29 @@ describe("app server ipc", () => {
     const handler = handlers.get("thread:dependencies")!;
     await expect(handler({ sender: { id: 999 } }, { action: "list", backend: "codex", threadId: "waiting" })).rejects.toThrow("local window");
     await expect(handler({ sender: { id: 1 } }, { action: "create", backend: "codex", threadId: "" })).rejects.toThrow("waiting threadId");
+    // The operator's dialog must write the plan down too, not only agents.
+    await expect(handler({ sender: { id: 1 } }, {
+      action: "create", backend: "codex", threadId: "waiting",
+      conditions: [{ backend: "codex", threadId: "prerequisite", when: "turn_completed" }], continuation: "  ",
+    })).rejects.toThrow("Write what this thread should do");
     const tool = setThreadDependencyToolHandler.mock.calls.at(-1)?.[0];
     await expect(tool({ action: "create", backend: "codex", threadId: "" })).resolves.toMatchObject({ ok: false, error: { code: "invalid_arguments" } });
+  });
+
+  it("lists every active registration for sidebar status, to local windows only", async () => {
+    const { appServerService } = await import("../ipc/app-server");
+    registerAppServerIpcHandlers();
+    const handler = handlers.get("thread:dependencies")!;
+    const waiting = { id: "waiting-1", backend: "codex", threadId: "consumer", status: "waiting" };
+    const agent = { active: vi.fn(() => [waiting]) } as unknown as import("../app-server/thread-dependency-coordinator").ThreadDependencyCoordinator;
+    const service = appServerService as unknown as { getThreadDependencyCoordinator: () => typeof agent };
+    const coordinator = vi.spyOn(service, "getThreadDependencyCoordinator").mockReturnValue(agent);
+    try {
+      await expect(handler({ sender: { id: 1 } }, { action: "active" })).resolves.toEqual({ dependencies: [waiting] });
+      await expect(handler({ sender: { id: 999 } }, { action: "active" })).rejects.toThrow("local window");
+    } finally {
+      coordinator.mockRestore();
+    }
   });
 
   it.each(["completed", "interrupted", "cancelled", undefined] as const)("uses prerequisite terminal status %s instead of the completion method", async (status) => {

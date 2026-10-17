@@ -17,12 +17,13 @@ There is no Job Monitor, model-driven polling, or new timer.
 }
 ```
 
-`continuation` is required when an agent creates a dependency. It is what the
-resumed turn should do, written for a reader without the registering
-conversation, which may be compacted by then. The continuation prompt leads
-with it on success. On failure the prompt asks for a failure report and quotes
-the plan as work not to start. The desktop form keeps it optional; without it
-the prompt asks the thread to continue the previously authorized work.
+`continuation` is required on every create, from an agent or from the desktop
+dialog. It is what the resumed turn should do, written for a reader without
+the registering conversation, which may be compacted by then. The continuation
+prompt leads with it on success. On failure the prompt asks for a failure
+report and quotes the plan as work not to start. A registration saved before
+the field was required has none; its prompt asks the thread to continue the
+previously authorized work.
 
 `backend` and `threadId` identify the waiting thread and default to the
 trusted calling thread. `action: "list"` returns its registrations and
@@ -33,14 +34,25 @@ registration before admission. A condition may carry a display-only `title`
 continuation prompt names the prerequisite by it. When an agent omits it,
 PwrAgent saves the thread's current title at registration.
 
-The desktop uses the same service from Thread Info's **Continue after**
-section. Searching adds a prerequisite row per chosen thread, each with its
-own condition; threads already waiting on this one are not offered. Active
-registrations show one line per prerequisite with its state, and finished
-ones collapse under **History**. The prerequisite thread lists its dependents
-under **Waiting on this thread**, and every change notifies the waiting
-thread and each prerequisite thread. A continuation turn is labeled
-**Continue after** in the transcript.
+The desktop uses the same service from **Continue After…** in a sidebar
+thread's menu, beside **Lock Thread…**. It is offered only for threads this
+window owns; a peer's thread is managed on its owner. The item shows the
+thread's waiting count, and it opens a dialog on the thread's registrations,
+or on the add form when there is nothing to show. In the form, searching
+adds a prerequisite row per chosen thread, each with its own condition;
+threads already waiting on this one are not offered. **Instructions** are
+required. Active registrations show one line per prerequisite with its state
+and the registered plan, and finished ones collapse under **History**. The
+prerequisite thread lists its dependents under **Waiting on this thread**,
+and every change notifies the waiting thread and each prerequisite thread.
+
+A sidebar row with active registrations carries a chip: progress such as
+`1 of 2` for one registration, a count for several, and a red
+**Check delivery** label when a delivery needs review. Its tooltip names each
+prerequisite and its state, and clicking it opens the dialog. The chip reads
+`action: "active"` from the desktop window's IPC channel, which lists every
+active registration without its continuation text; agents cannot call it. A
+continuation turn is labeled **Continue after** in the transcript.
 
 ## Conditions
 

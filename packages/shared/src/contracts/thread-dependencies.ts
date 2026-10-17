@@ -61,7 +61,11 @@ export function isRepairableDependencyFailure(dependency: Pick<ThreadDependency,
 }
 
 export type ManageThreadDependenciesRequest = {
-  action: "create" | "list" | "cancel" | "dismiss";
+  /**
+   * `active` lists every active registration on this instance, for sidebar
+   * status. It is a desktop-window read only, never an agent tool action.
+   */
+  action: "create" | "list" | "cancel" | "dismiss" | "active";
   backend?: AppServerBackendKind;
   threadId?: string;
   conditions?: ThreadDependencyCondition[];
