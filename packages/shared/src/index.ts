@@ -1,5 +1,6 @@
 export * from "./contracts/normalized-app-server";
 export * from "./backend-selection";
+export * from "./github-attachment-image";
 export * from "./command-action-labels";
 export * from "./codex-environment-action-runs";
 export * from "./codex-turn-error";
