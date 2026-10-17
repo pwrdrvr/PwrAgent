@@ -1,0 +1,39 @@
+{
+  "expo": {
+    "name": "PwrAgent",
+    "slug": "pwragent-mobile",
+    "scheme": "pwragent-mobile",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "ios": {
+      "bundleIdentifier": "com.pwrdrvr.pwragent.mobile",
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Talk to PwrAgent Live to inspect and direct your threads.",
+        "NSLocalNetworkUsageDescription": "Connect to your development server and trusted PwrAgent gateway."
+      },
+      "appleTeamId": "T44CNHC4UH"
+    },
+    "android": {
+      "package": "com.pwrdrvr.pwragent.mobile",
+      "permissions": [
+        "RECORD_AUDIO"
+      ]
+    },
+    "plugins": [
+      "expo-secure-store",
+      [
+        "@config-plugins/react-native-webrtc",
+        {
+          "cameraPermission": false,
+          "microphonePermission": "Talk to PwrAgent Live to inspect and direct your threads."
+        }
+      ]
+    ],
+    "extra": {
+      "gatewayProtocol": 1
+    },
+    "icon": "../desktop/build/icon.png"
+  }
+}
