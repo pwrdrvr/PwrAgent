@@ -1,3 +1,4 @@
+import { ThreadServices } from "../federation/ThreadServices";
 import type { BackgroundTerminalsViewProps } from "./BackgroundTerminalsView";
 import type { AgentCommandsStatus } from "../../lib/useThreadSessionState";
 import { useEventCallback } from "../../lib/useEventCallback";
@@ -4425,6 +4426,8 @@ export function ThreadView(props: ThreadViewProps) {
         }
       : {};
 
+  const serviceTarget = selectedThread?.federation?.ref.target ?? props.activeFederationTarget;
+  const serviceInstanceId = serviceTarget?.scope === "remote" ? serviceTarget.instanceId : undefined;
   return (
     <section
       className={`thread-view${
@@ -4443,7 +4446,6 @@ export function ThreadView(props: ThreadViewProps) {
       }
     >
       {header}
-
       {emptyView ? (
         <div className="thread-empty-state">
           <div className="thread-empty-state__content">
@@ -4465,6 +4467,14 @@ export function ThreadView(props: ThreadViewProps) {
             <CelestialWatermark
               icon={threadView ? celestialWatermarkIcon : launchpadWatermarkIcon}
             />
+            {selectedThread && props.desktopApi?.threadServices ? <ThreadServices
+              key={`${serviceInstanceId ?? "local"}:${selectedThread.source}:${selectedThread.id}`}
+              api={props.desktopApi.threadServices}
+              backend={selectedThread.source}
+              threadId={selectedThread.id}
+              instanceId={serviceInstanceId}
+              ownerLabel={props.activeFederationOwnerLabel}
+            /> : null}
             {primaryContent}
             {composerSlotElement}
             {threadLock ? (

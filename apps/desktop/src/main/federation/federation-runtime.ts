@@ -1,3 +1,7 @@
+import type { ServiceThread, ServiceUiRequest, ServiceUiResponse } from "@pwragent/shared";
+import { FEDERATION_SERVICE_METHODS, FEDERATION_SERVICE_CAPABILITY } from "@pwragent/shared";
+import { FederationServices, registerFederationServices, SERVICE_METHOD_CAPABILITIES, serviceThread } from "./federation-services";
+import { FederationServiceForwarder } from "./federation-service-forwarder";
 import { createTerminalHistoryStore } from "../terminal/terminal-history";
 import type {
   ListBackgroundTerminalsRequest,
@@ -561,6 +565,7 @@ const DEFAULT_CAPABILITIES: FederationCapability[] = [
   // permits code execution via agent turns, so the direct shell defaults to
   // granted — but stays a dedicated capability so it is revocable on its own.
   "remote_pty",
+  FEDERATION_SERVICE_CAPABILITY,
   "file_push",
   "thread_handoff",
   "file_pull",
@@ -1152,6 +1157,9 @@ export class DesktopFederationRuntime {
     event: CodexEnvironmentSetupProgressEvent,
   ) => void;
   private ptyService?: FederationPtyService;
+  private services?: FederationServices;
+  private readonly serviceForwarder = new FederationServiceForwarder();
+  private readonly serviceViews = new Map<number, { viewId: string; instanceId: string; thread: ServiceThread }>();
   private filePushReceiver?: FederationFilePushReceiver;
   private threadHandoffService?: ThreadInstanceHandoffService;
   private readonly handoffFileReceipts = new Map<string, { peerId: string; sizeBytes: number; sha256: string }>();
@@ -1570,6 +1578,10 @@ export class DesktopFederationRuntime {
     this.filePushReceiver = undefined;
     this.threadHandoffService = undefined;
     this.handoffFileReceipts.clear();
+    this.serviceViews.clear();
+    this.serviceForwarder.dispose();
+    this.services?.dispose();
+    this.services = undefined;
     await this.ptyService?.disposeAll();
     this.ptyService = undefined;
     this.client?.close();
@@ -2485,6 +2497,80 @@ export class DesktopFederationRuntime {
     return localBackendOperations();
   }
 
+  threadServices(): FederationServices {
+    this.services ??= new FederationServices({
+      instanceId: this.ensureLocalInstanceId(),
+      blockedPorts: () => [getDesktopSettingsService().readFederationConfig().listenPort ?? 47830],
+      threadExists: async (thread) => await getDesktopBackendRegistry().isThreadActiveForService(thread),
+    });
+    return this.services;
+  }
+
+  leaveThreadServices(windowId: number, thread?: ServiceThread, instanceId?: string): void {
+    this.serviceForwarder.leave(windowId, thread, instanceId);
+    if (!thread) this.serviceViews.delete(windowId);
+  }
+
+  async threadServiceAction(windowId: number, input: ServiceUiRequest): Promise<ServiceUiResponse> {
+    const thread = serviceThread(input);
+    const instanceId = input.instanceId ?? this.ensureLocalInstanceId();
+    const remote = instanceId !== this.ensureLocalInstanceId();
+    const previousView = this.serviceViews.get(windowId);
+    if (input.action === "watch" && (!previousView || previousView.viewId !== input.viewId
+      || previousView.instanceId !== instanceId || previousView.thread.backend !== thread.backend
+      || previousView.thread.threadId !== thread.threadId)) {
+      this.leaveThreadServices(windowId);
+      this.serviceViews.set(windowId, { viewId: input.viewId, instanceId, thread });
+    }
+    const view = this.serviceViews.get(windowId);
+    const assertViewing = (): void => {
+      if (!view || view.viewId !== input.viewId || view.instanceId !== instanceId
+        || view.thread.backend !== thread.backend || view.thread.threadId !== thread.threadId
+        || this.serviceViews.get(windowId) !== view) throw new Error("Service viewer closed or changed thread.");
+    };
+    if (input.action === "leave") {
+      if (view?.viewId === input.viewId) this.leaveThreadServices(windowId);
+      return { services: [], forwards: [] };
+    }
+    assertViewing();
+    if (input.action === "disconnect") {
+      if (typeof input.forwardId !== "string") throw new Error("Select a forward to disconnect.");
+      this.serviceForwarder.disconnect(windowId, input.forwardId);
+    }
+    if (remote) {
+      const peer = this.visiblePeers().find((candidate) => candidate.id === instanceId);
+      if (peer?.status !== "connected" || !this.viewerCapabilitiesFor(instanceId, peer).includes(FEDERATION_SERVICE_CAPABILITY)) {
+        throw new Error("Service forwarding requires a connected owner and gateway with service_forward_v1 support.");
+      }
+    }
+    const rpc = remote ? this.rpcFor({ scope: "remote", instanceId }) : undefined;
+    if (input.action === "remove") {
+      if (typeof input.serviceId !== "string") throw new Error("Select a service to remove.");
+      if (rpc) await rpc.request({ method: FEDERATION_SERVICE_METHODS.remove, params: { ...thread, serviceId: input.serviceId } });
+      else this.threadServices().remove(thread, input.serviceId);
+    }
+    const services = rpc
+      ? await rpc.request<import("@pwragent/shared").ThreadService[]>({ method: FEDERATION_SERVICE_METHODS.list, params: thread, timeoutMs: 5000 })
+      : await this.threadServices().list(thread);
+    assertViewing();
+    // Never use caller-supplied owner/address/protocol to construct a listener or URL.
+    if (!Array.isArray(services) || services.length > 64 || services.some((service) => service.ownerInstanceId !== instanceId
+      || service.backend !== thread.backend || service.threadId !== thread.threadId
+      || !["http", "https", "tcp"].includes(service.protocol))) throw new Error("Invalid service inventory from owner.");
+    for (const forward of this.serviceForwarder.list(windowId, instanceId, thread)) {
+      if (!services.some((service) => service.serviceId === forward.service.serviceId)) this.serviceForwarder.disconnect(windowId, forward.forwardId);
+    }
+    if (input.action === "connect") {
+      if (!rpc) throw new Error("This service already runs on this machine. Connect from a remote thread viewer.");
+      const service = services.find((entry) => entry.serviceId === input.serviceId);
+      if (!service) throw new Error("Service is no longer advertised.");
+      const forward = await this.serviceForwarder.connect(windowId, service, rpc);
+      try { assertViewing(); }
+      catch (error) { this.serviceForwarder.disconnect(windowId, forward.forwardId); throw error; }
+    }
+    return { services, forwards: this.serviceForwarder.list(windowId, instanceId, thread) };
+  }
+
   receiverPermissions() {
     const config = getDesktopSettingsService().readFederationConfig();
     return {
@@ -3256,6 +3342,7 @@ export class DesktopFederationRuntime {
       methodCapabilities: {
         ...FEDERATION_BACKEND_METHOD_CAPABILITIES,
         ...FEDERATION_PTY_METHOD_CAPABILITIES,
+        ...SERVICE_METHOD_CAPABILITIES,
         ...FILE_PUSH_METHOD_CAPABILITIES,
         [THREAD_HANDOFF_METHODS.send]: "thread_handoff",
         [THREAD_HANDOFF_METHODS.import]: "thread_handoff",
@@ -3395,6 +3482,7 @@ export class DesktopFederationRuntime {
       },
     });
     registerFederationPtyHandlers({ router, service: this.ptyService });
+    registerFederationServices(router, this.threadServices());
     this.router = router;
     this.subscribeLocalBackendEvents();
 
@@ -4221,6 +4309,8 @@ export class DesktopFederationRuntime {
   }
 
   private unregisterPeer(peerId: FederationInstanceId): void {
+    this.services?.disconnect(peerId);
+    this.serviceForwarder.disconnectPeer(peerId);
     this.shutdown.disconnected(peerId);
     this.peerDirectoryReceivers.delete(peerId);
     this.removeEventSubscriptionsForPeer(peerId);
@@ -5952,6 +6042,10 @@ export class DesktopFederationRuntime {
     status: FederationConnectionState,
     unavailableReason?: string,
   ): void {
+    if (status !== "connected") {
+      this.services?.disconnect(instanceId);
+      this.serviceForwarder.disconnectPeer(instanceId);
+    }
     const previous = this.publishedPeerStatuses.get(instanceId);
     if (
       previous?.status === status

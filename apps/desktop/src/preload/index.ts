@@ -1,3 +1,5 @@
+import type { ServiceUiRequest, ServiceUiResponse } from "@pwragent/shared";
+import { FEDERATION_SERVICES_CHANNEL } from "../shared/ipc";
 import {
   NATIVE_VOICE_CAMERA_CHANNEL, NATIVE_VOICE_CAMERA_FRAME_CHANNEL, NATIVE_VOICE_CAMERA_CUE_CHANNEL, NATIVE_VOICE_CAMERA_REPEAT_CHANNEL,
   type VoiceCameraRequest, type VoiceCameraFrame, type VoiceCameraCue, type VoiceCameraRepeatCheck,
@@ -1471,6 +1473,8 @@ const desktopApi = Object.freeze({
     request: WaitForDesktopProfileAliveRequest,
   ): Promise<WaitForDesktopProfileAliveResponse> =>
     await ipcRenderer.invoke(APP_WAIT_FOR_PROFILE_ALIVE_CHANNEL, request),
+  threadServices: async (request: ServiceUiRequest): Promise<ServiceUiResponse> =>
+    await ipcRenderer.invoke(FEDERATION_SERVICES_CHANNEL, request),
   openFederationWindow: async (
     request: OpenFederationWindowRequest,
   ): Promise<OpenFederationWindowResponse> =>

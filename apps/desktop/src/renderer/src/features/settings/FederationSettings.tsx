@@ -1876,6 +1876,7 @@ const FEDERATION_CAPABILITY_LABELS: Record<FederationCapability, string> = {
   pwrsnap_connection: "read PwrSnap availability",
   gateway_relay: "reach sibling instances",
   remote_pty: "remote terminal protocol",
+  service_forward_v1: "user-controlled service forwarding",
   file_push: "file push protocol",
   thread_handoff: "transfer existing threads",
   file_pull: "File pull",
