@@ -5421,6 +5421,40 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     }));
   }
 
+  /** Ordinary listing rows need mutable metadata, not transcript activities.
+   * Native-worker usage repair reads the required worker overlays separately.
+   * Project in SQLite so histories do not cross the native/JS boundary or get
+   * parsed into JS objects. Read afresh on every call, including in transactions
+   * and after writes from another process. Keep the full read contract separate.
+   */
+  async getThreadListingOverlayStates(params: {
+    backend: ThreadOverlayState["backend"];
+    threadIds: string[];
+  }): Promise<Record<string, ThreadOverlayState | undefined>> {
+    const ids = [...new Set(params.threadIds)];
+    const entries: Array<[string, ThreadOverlayState | undefined]> = [];
+    for (let offset = 0; offset < ids.length; offset += 500) {
+      const requested = ids.slice(offset, offset + 500).map((id) => ({
+        id, key: encodeThreadIdentityKeyForStorage(buildThreadIdentityKey(params.backend, id)),
+      }));
+      // Remove only transcript fields. Retain every metadata field (including
+      // workspace snapshots, federation parent identity and native workers).
+      // json_remove parses the source once, rather than one extract per field.
+      const rows = this.stateDb.raw.prepare(`
+        SELECT json_extract(requested.value, '$.id') AS id,
+          json_remove(threads.payload, '$.immutableUsageActivities', '$.managedReviewEntries',
+            '$.permissionTransitionLog', '$.messagingBindingTransitionLog',
+            '$.turnFailureLog', '$.questionnaireActivityLog') AS payload
+        FROM json_each(?) AS requested
+        LEFT JOIN threads ON threads.thread_id = json_extract(requested.value, '$.key')
+      `).all(JSON.stringify(requested)) as Array<{ id: string; payload: string | null }>;
+      for (const row of rows) {
+        entries.push([row.id, row.payload === null ? undefined : normalizeThreadOverlayState(JSON.parse(row.payload))]);
+      }
+    }
+    return Object.fromEntries(entries);
+  }
+
   async getThreadOverlayStates(params: {
     backend: ThreadOverlayState["backend"];
     threadIds: string[];
@@ -9619,6 +9653,7 @@ export type OverlayStoreLike = Pick<
   | "upsertDirectoryLaunchpad"
   | "resetDirectoryLaunchpad"
 > & {
+  getThreadListingOverlayStates?: SqliteOverlayStore["getThreadListingOverlayStates"];
   setThreadCodexEnvironmentRuntime?: SqliteOverlayStore["setThreadCodexEnvironmentRuntime"];
   listThreadOverlaysWithCodexEnvironmentRuntime?: SqliteOverlayStore["listThreadOverlaysWithCodexEnvironmentRuntime"];
   listThreadArchiveStates?: SqliteOverlayStore["listThreadArchiveStates"];

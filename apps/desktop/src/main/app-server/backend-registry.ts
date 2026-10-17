@@ -28270,7 +28270,8 @@ export class DesktopBackendRegistry {
       params,
     );
 
-    const overlaysByThreadId = await this.overlayStore.getThreadOverlayStates({
+    const readOverlays = this.overlayStore.getThreadListingOverlayStates ?? this.overlayStore.getThreadOverlayStates;
+    const overlaysByThreadId = await readOverlays.call(this.overlayStore, {
       backend: "codex",
       threadIds: [
         ...new Set([
@@ -28279,6 +28280,21 @@ export class DesktopBackendRegistry {
         ]),
       ],
     });
+    if (this.overlayStore.getThreadListingOverlayStates && nativeSubAgentThreads.length > 0) {
+      // Discovery repairs worker cards and parent pricing from durable child
+      // turn usage. Only these native workers need history-bearing overlays;
+      // ordinary rows keep the compact listing projection.
+      const nativeIds = new Set(nativeSubAgentThreads.map((thread) => thread.id));
+      const usageThreadIds = [...new Set(threadsWithPending.flatMap((thread) =>
+        (thread.codexNativeSubAgents ?? []).map((worker) => worker.threadId),
+      ))].filter((id) => nativeIds.has(id)
+        && overlaysByThreadId[id]?.handoffOrigin?.groupingMode !== "subthread");
+      if (usageThreadIds.length > 0) {
+        Object.assign(overlaysByThreadId, await this.overlayStore.getThreadOverlayStates({
+          backend: "codex", threadIds: usageThreadIds,
+        }));
+      }
+    }
     await this.reconcileDiscoveredCodexNativeSubAgents({
       nativeThreads: nativeSubAgentThreads,
       overlaysByThreadId,
@@ -36446,6 +36462,14 @@ export class DesktopBackendRegistry {
     callerReason?: ThreadListCallerReason;
     threadId: string;
   }): Promise<AppServerThreadSummary | undefined> {
+    if (params.backend === "codex" && this.codexClient.readThreadSummary) {
+      // Eligibility is checked before and after helper work. Read this identity
+      // each time so a late operator rename still cancels generated naming.
+      return await this.withCodexThreadClient(params.threadId, async (client) => {
+        const thread = await client.readThreadSummary!(params.threadId);
+        return thread.archivedAt === undefined ? this.withObservedThreadName(thread) : undefined;
+      }).catch(() => undefined);
+    }
     const activeThreads = await this.listThreads({
       backend: params.backend,
       archived: false,

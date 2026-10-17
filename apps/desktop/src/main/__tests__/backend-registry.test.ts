@@ -141,7 +141,7 @@ import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
-import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
+import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 import type { ProviderThreadSnapshot } from "../app-server/provider-thread-snapshot-store";
 import type { GitWorkingStateService } from "../app-server/git-working-state-service";
 import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
@@ -26298,7 +26298,7 @@ command = "pnpm dev"
     await registry.close();
   });
 
-  it("preserves an explicit Untitled thread rename while its title helper finishes", async () => {
+  it.each([false, true])("preserves an explicit Untitled thread rename while its title helper finishes (targeted=%s)", async (targeted) => {
     const titleGenerationStarted = createDeferred<void>();
     const titleGenerationRelease = createDeferred<void>();
     const titleService = {
@@ -26327,6 +26327,9 @@ command = "pnpm dev"
         },
       ],
     });
+    if (targeted) Object.assign(codexClient, { readThreadSummary: async () => ({
+      id: threadId, title: "Untitled thread", titleSource: "explicit", linkedDirectories: [], source: "codex",
+    }) });
     const renameThread = vi.spyOn(codexClient, "renameThread");
     const registry = new DesktopBackendRegistry({
       codexClient,
@@ -52737,7 +52740,7 @@ script = "printf setup"
     await registry.close();
   });
 
-  it("backfills native Codex cards and pricing from durable child turn usage", async () => {
+  it.each(["mock", "sqlite"] as const)("backfills native Codex cards and pricing from durable child turn usage (%s)", async (storeKind) => {
     const nativeThreadId = "thread-epicurus";
     const now = Date.now();
     const codexClient = new MockBackendClient({
@@ -52773,7 +52776,10 @@ script = "printf setup"
         },
       ],
     });
-    const overlayStore = createOverlayStoreMock();
+    const stateDb = storeKind === "sqlite" ? openInMemoryStateDb() : undefined;
+    const overlayStore = stateDb ? new SqliteOverlayStore(stateDb) : createOverlayStoreMock();
+    let registry: DesktopBackendRegistry | undefined;
+    onTestFinished(async () => { await registry?.close(); stateDb?.close(); });
     await overlayStore.upsertThreadUsageLine({
       line: {
         usageLineId: "codex:thread-parent:turn-parent:live-token-usage",
@@ -52830,7 +52836,8 @@ script = "printf setup"
       overlayStore,
       "upsertThreadUsageLine",
     );
-    const registry = new DesktopBackendRegistry({
+    const fullOverlayReads = vi.spyOn(overlayStore, "getThreadOverlayStates");
+    registry = new DesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -52889,6 +52896,14 @@ script = "printf setup"
     expect(nativePricing?.totalCostMicros).toBeGreaterThan(0);
     expect(upsertThreadSubAgent).toHaveBeenCalledTimes(1);
     expect(upsertThreadUsageLine).toHaveBeenCalledTimes(1);
+    if (storeKind === "sqlite") {
+      // Each listing may load the discovered worker's durable usage. Ordinary
+      // parent overlays must retain the compact projection on both passes.
+      expect(fullOverlayReads.mock.calls).toEqual([
+        [{ backend: "codex", threadIds: [nativeThreadId] }],
+        [{ backend: "codex", threadIds: [nativeThreadId] }],
+      ]);
+    }
 
     await registry.close();
   });
@@ -55456,7 +55471,8 @@ script = "printf setup"
     expect(transport.listings).toHaveLength(budget.pageRpcsForForwardedNotification);
     transport.releaseListings();
     const results = await Promise.all([first, second]);
-    expect(results[0]).toBe(results[1]);
+    expect(results[0]).toEqual(results[1]);
+    expect(results[0]).not.toBe(results[1]); // coalesced work, independently mutable results
   });
 
   it("does not borrow pre-restore archive evidence from an unrelated provider reader", async () => {

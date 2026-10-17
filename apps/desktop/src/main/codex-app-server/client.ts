@@ -7666,6 +7666,7 @@ export class CodexAppServerClient {
   >();
   private readonly threadListTextCache = new ThreadListTextCache();
   private readonly pendingThreadListings = new Map<string, Promise<AppServerThreadSummary[]>>();
+  private readonly pendingThreadInventories = new Map<string, Promise<RawCodexThreadSummary[]>>();
   private activeThreadListingGeneration = 0;
   private archivedThreadListingGeneration = 0;
   private readonly threadListingInvalidations = new WeakSet<AppServerNotification>();
@@ -8952,6 +8953,11 @@ export class CodexAppServerClient {
       if (this.threadListingInvalidations.has(notification)) return;
       this.threadListingInvalidations.add(notification);
     }
+    // These events change PwrAgent overlays, not Codex inventory or ordering.
+    // Navigation still rebuilds and rereads overlays; it may join the provider
+    // scan already in progress. Unknown and provider mutations remain fences.
+    if (notification && ["navigation/thread/seen", "thread/pin/added", "thread/pin/removed",
+      "thread/pin/reordered", "thread/subAgents/updated"].includes(notification.method)) return;
     this.activeThreadListingGeneration += 1;
     // Turn/status and viewer overlay events do not change archived inventory.
     // Keep its in-flight owner joinable while active navigation advances.
@@ -8987,7 +8993,7 @@ export class CodexAppServerClient {
     const existing = this.pendingThreadListings.get(key);
     if (existing) {
       listingDiagnostics.link("provider", "coalesced", existing, { caller: diagnostics?.callerReason });
-      return await existing;
+      return structuredClone(await existing);
     }
     const pending = listingDiagnostics.trace("provider", { provider: "codex", caller: diagnostics?.callerReason, archived: params?.archived === true },
       () => this.loadThreadListing(params, diagnostics));
@@ -8999,47 +9005,56 @@ export class CodexAppServerClient {
     }
   }
 
-  private async loadThreadListing(
+  private async readThreadInventory(
     params: Parameters<CodexAppServerClient["listThreads"]>[0],
     diagnostics?: JsonRpcObserverDiagnostics,
-  ): Promise<AppServerThreadSummary[]> {
-    const requestParams = {
-      client: this.connection,
-      diagnostics,
-      methods: ["thread/list"] as CodexClientRequestMethod[],
-      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
-    };
-    if (params?.archived === true) {
-      const archivedThreads = await requestThreadListPages({
+  ): Promise<RawCodexThreadSummary[]> {
+    // Directory enrichment and archived metadata merging happen after the
+    // physical page walk. Different consumers can share that walk without
+    // sharing mutable results or weakening limits, deadlines or mutation fences.
+    const key = JSON.stringify([
+      params?.archived ? this.archivedThreadListingGeneration : this.activeThreadListingGeneration,
+      params?.archived === true, params?.filter?.trim() || "", params?.limit,
+      params?.maxPages, params?.deadlineAt, params?.requireComplete === true,
+    ]);
+    let pending = this.pendingThreadInventories.get(key);
+    const shared = pending !== undefined;
+    if (!pending) {
+      pending = requestThreadListPages({
         textCache: this.threadListTextCache,
-        archived: true,
+        archived: params?.archived === true,
         client: this.connection,
         diagnostics,
         filter: params?.filter,
         limit: params?.limit,
         maxPages: params?.maxPages,
         requireComplete: params?.requireComplete,
-        requestTimeoutMs: requestParams.timeoutMs,
+        requestTimeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
         deadlineAt: params?.deadlineAt,
       });
+      this.pendingThreadInventories.set(key, pending);
+    }
+    try {
+      const rows = await pending;
+      return shared ? structuredClone(rows) : rows;
+    } finally {
+      if (this.pendingThreadInventories.get(key) === pending) this.pendingThreadInventories.delete(key);
+    }
+  }
+
+  private async loadThreadListing(
+    params: Parameters<CodexAppServerClient["listThreads"]>[0],
+    diagnostics?: JsonRpcObserverDiagnostics,
+  ): Promise<AppServerThreadSummary[]> {
+    if (params?.archived === true) {
+      const archivedThreads = await this.readThreadInventory(params, diagnostics);
       return await this.enrichThreads(filterVisibleCodexThreads(archivedThreads), {
         enrichDirectories: params?.enrichDirectories ?? true,
       });
     }
 
     const activeThreads = filterVisibleCodexThreads(
-      await requestThreadListPages({
-        textCache: this.threadListTextCache,
-        archived: false,
-        client: this.connection,
-        diagnostics,
-        filter: params?.filter,
-        limit: params?.limit,
-        maxPages: params?.maxPages,
-        requireComplete: params?.requireComplete,
-        requestTimeoutMs: requestParams.timeoutMs,
-        deadlineAt: params?.deadlineAt,
-      }),
+      await this.readThreadInventory(params, diagnostics),
     );
     const threads = params?.skipArchivedMetadataRefresh
       ? activeThreads
