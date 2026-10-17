@@ -145,6 +145,55 @@ describe("composer band bounds", () => {
     );
   });
 
+  it("keeps an open row's header in view while its body scrolls", () => {
+    // An open env action row (command, Output label, a 28vh box) is taller
+    // than the 300px band, so scrolling to read the output took the action's
+    // name, exit code, Dismiss and Show in sidebar out of view with it. The
+    // setup and error rows share the band and the chrome, so they pin too.
+
+    // The selector group, as app.css writes it, for one row modifier and an
+    // optional pseudo-element.
+    const headers = (row: string, pseudo = ""): string =>
+      [
+        `.composer__band ${row}[open] > .composer__queued-env-action-summary${pseudo}`,
+        `.composer__band ${row}[data-open="true"] > .environment-setup-row__header${pseudo}`,
+        `.composer__band ${row}[data-open="true"] > .composer-error-row__header${pseudo}`,
+      ].join(",\n");
+    const header = ruleBody(headers(".composer__queued--env-action"));
+    expect(header).toMatch(/position:\s*sticky;/);
+    // Flush with the band's edge: the band pads 3px for focus rings and
+    // Chromium pins inside that padding, so `top: 0` left a strip of output
+    // visible above the header.
+    expect(header).toMatch(/top:\s*-3px;/);
+    // Over the band's top fade (z-index 2), so the fade never covers the
+    // action's name.
+    const fades = [
+      ".composer__band::before",
+      ".composer__band::after",
+      ".star-map-chat-card__band::before",
+      ".star-map-chat-card__band::after",
+    ].join(",\n");
+    expect(ruleBody(fades)).toMatch(/z-index:\s*2;/);
+    expect(header).toMatch(/z-index:\s*3;/);
+    expect(header).toMatch(/container-type:\s*scroll-state;/);
+    expect(appCss).toMatch(/@container scroll-state\(stuck: top\)/);
+
+    // The surface must be opaque. A failed row's tint mixes in the
+    // translucent `--danger-soft`, so inheriting it would let scrolled output
+    // show through the pinned header.
+    const surface = ruleBody(headers(".composer__queued--env-action", "::before"));
+    expect(surface).toMatch(/background:\s*var\(--bg-panel-elevated\);/);
+    const failedSurface = ruleBody(
+      headers(".composer__queued--env-action-failed", "::before"),
+    );
+    expect(failedSurface).toMatch(
+      /linear-gradient\(var\(--env-action-failed-bg\) 0 0\),\s*var\(--rail-band-fade-color\)/,
+    );
+    expect(
+      ruleBody(".composer__queued--env-action.composer__queued--env-action-failed"),
+    ).toMatch(/background:\s*var\(--env-action-failed-bg\);/);
+  });
+
   it("insets a history error even when no transcript list was created", () => {
     expect(ruleBody(".transcript-panel > .transcript-error")).toMatch(
       /margin:\s*12px 16px/,

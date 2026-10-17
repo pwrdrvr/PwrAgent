@@ -29265,6 +29265,74 @@ div.composer-error-row__toggle {
   max-height: min(320px, 28vh);
 }
 
+/* An open row is taller than the band once its output box fills: the
+   command, the Output label and a 28vh box outgrow a 300px band. Scrolling to
+   read the output then took the row's name, exit code, Dismiss and the
+   sidebar control out of view with it, leaving an output box that names only
+   itself. The open row's header now pins to the top of the band instead. A
+   sticky box cannot leave its own row, so it lets go as the row's end scrolls
+   past and never covers the next row.
+
+   z-index 3 puts it over the band's top fade (2), so the fade never washes
+   over the action's name. The header is a scroll-state container so its own
+   surface can square off and draw a rule while stuck; at rest the row looks
+   exactly as it did. */
+.composer__band .composer__queued--env-action[open] > .composer__queued-env-action-summary,
+.composer__band .composer__queued--env-action[data-open="true"] > .environment-setup-row__header,
+.composer__band .composer__queued--env-action[data-open="true"] > .composer-error-row__header {
+  position: sticky;
+  /* Chromium pins inside the band's padding, and the band carries 3px of it
+     for focus rings. At `top: 0` a 3px strip of output showed above the
+     header. */
+  top: -3px;
+  z-index: 3;
+  container-type: scroll-state;
+}
+
+/* The header's own surface, behind its content. An open row paints
+   `--bg-panel-elevated`, which is opaque. A failed row's tint mixes in
+   `--danger-soft`, which is translucent, so the row is only about 70% opaque
+   and `background: inherit` would show scrolled output through the header.
+   Here the tint is laid over the band's surface, which is what the row
+   composites over anyway. The radius is the row's 8px less its 1px border. */
+.composer__band .composer__queued--env-action[open] > .composer__queued-env-action-summary::before,
+.composer__band .composer__queued--env-action[data-open="true"] > .environment-setup-row__header::before,
+.composer__band .composer__queued--env-action[data-open="true"] > .composer-error-row__header::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: 7px 7px 0 0;
+  background: var(--bg-panel-elevated);
+  pointer-events: none;
+}
+
+.composer__band .composer__queued--env-action-failed[open] > .composer__queued-env-action-summary::before,
+.composer__band .composer__queued--env-action-failed[data-open="true"] > .environment-setup-row__header::before,
+.composer__band .composer__queued--env-action-failed[data-open="true"] > .composer-error-row__header::before {
+  background:
+    linear-gradient(var(--env-action-failed-bg) 0 0),
+    var(--rail-band-fade-color);
+}
+
+/* Stuck: the row's top border has scrolled away, so square the corners
+   (rounded ones would show output through them) and close the header with a
+   rule in the row's border color. */
+@container scroll-state(stuck: top) {
+  .composer__band .composer__queued--env-action[open] > .composer__queued-env-action-summary::before,
+  .composer__band .composer__queued--env-action[data-open="true"] > .environment-setup-row__header::before,
+  .composer__band .composer__queued--env-action[data-open="true"] > .composer-error-row__header::before {
+    border-radius: 0;
+    box-shadow: 0 1px 0 var(--border-subtle);
+  }
+
+  .composer__band .composer__queued--env-action-failed[open] > .composer__queued-env-action-summary::before,
+  .composer__band .composer__queued--env-action-failed[data-open="true"] > .environment-setup-row__header::before,
+  .composer__band .composer__queued--env-action-failed[data-open="true"] > .composer-error-row__header::before {
+    box-shadow: 0 1px 0 var(--danger-border);
+  }
+}
+
 .transcript-activity {
   width: min(100%, 760px);
   /* 2026-08 transcript density pass: the full-width `border-top`
@@ -36948,8 +37016,9 @@ button.composer__subthread-source-parent:hover {
    these carry both classes to outrank the :hover rule above rather than
    relying on source order alone. */
 .composer__queued--env-action.composer__queued--env-action-failed {
+  --env-action-failed-bg: color-mix(in srgb, var(--danger-soft) 40%, var(--bg-panel-elevated));
   border-color: var(--danger-border);
-  background: color-mix(in srgb, var(--danger-soft) 40%, var(--bg-panel-elevated));
+  background: var(--env-action-failed-bg);
 }
 
 .composer__queued--env-action-failed .composer__queued-label {
