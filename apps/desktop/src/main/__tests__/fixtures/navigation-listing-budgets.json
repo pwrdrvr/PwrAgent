@@ -66,5 +66,23 @@
     "readsPerBatch": 3,
     "payloadBytes": 0,
     "fullOverlayParses": 0
+  },
+  "codex-create-pin-name-turn-burst": {
+    "logicalRequests": 20,
+    "providerGenerations": 7,
+    "pagesPerScan": 3,
+    "physicalPages": 21,
+    "physicalPagesAfterLaterRead": 24
+  },
+  "codex-registry-listing-projection": {
+    "refreshes": 3,
+    "pagesPerScan": 3,
+    "physicalPages": 9,
+    "overlayRows": 360,
+    "overlayParses": 360,
+    "overlayBytes": 36750,
+    "historyParses": 0,
+    "targetedMetadataReads": 2,
+    "physicalPagesAfterTitleReads": 9
   }
 }

@@ -35,6 +35,19 @@ describe("DesktopBackendRegistry usage titles", () => {
     stateDb.close();
   });
 
+  it("budgets targeted title eligibility reads without inventory scans and observes a later rename", async () => {
+    const readThreadSummary = vi.fn(async (id: string) => ({
+      id, source: "codex" as const, title: "Initial prompt", titleSource: "fallback" as const, linkedDirectories: [],
+    }));
+    Object.assign(registry["codexClient"], { readThreadSummary });
+    const lookup = () => registry["findThreadForTitleGeneration"]({ backend: "codex", threadId: "target" });
+    expect(await lookup()).toMatchObject({ id: "target", title: "Initial prompt" });
+    await rememberTitle("codex", "target", "Operator rename");
+    expect(await lookup()).toMatchObject({ id: "target", title: "Operator rename" });
+    expect(readThreadSummary).toHaveBeenCalledTimes(2);
+    expect(listThreads).not.toHaveBeenCalled();
+  });
+
   it("records the helper runner's account when its parent belongs to another backend", async () => {
     await (registry as unknown as {
       writeSystemHelperSubAgent(params: unknown): Promise<void>;

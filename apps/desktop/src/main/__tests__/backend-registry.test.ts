@@ -26298,7 +26298,7 @@ command = "pnpm dev"
     await registry.close();
   });
 
-  it("preserves an explicit Untitled thread rename while its title helper finishes", async () => {
+  it.each([false, true])("preserves an explicit Untitled thread rename while its title helper finishes (targeted=%s)", async (targeted) => {
     const titleGenerationStarted = createDeferred<void>();
     const titleGenerationRelease = createDeferred<void>();
     const titleService = {
@@ -26327,6 +26327,9 @@ command = "pnpm dev"
         },
       ],
     });
+    if (targeted) Object.assign(codexClient, { readThreadSummary: async () => ({
+      id: threadId, title: "Untitled thread", titleSource: "explicit", linkedDirectories: [], source: "codex",
+    }) });
     const renameThread = vi.spyOn(codexClient, "renameThread");
     const registry = new DesktopBackendRegistry({
       codexClient,
@@ -55456,7 +55459,8 @@ script = "printf setup"
     expect(transport.listings).toHaveLength(budget.pageRpcsForForwardedNotification);
     transport.releaseListings();
     const results = await Promise.all([first, second]);
-    expect(results[0]).toBe(results[1]);
+    expect(results[0]).toEqual(results[1]);
+    expect(results[0]).not.toBe(results[1]); // coalesced work, independently mutable results
   });
 
   it("does not borrow pre-restore archive evidence from an unrelated provider reader", async () => {
