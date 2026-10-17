@@ -641,6 +641,14 @@ describe("Tangerine Terminal theme contract", () => {
       // so the hover actions' fade matches each row tone. Every value it
       // resolves to is a theme token.
       "queued-row-bg",
+      // A failed env action row's tint, defined on the failed row so its
+      // pinned header can lay the same tint over the band's surface. It
+      // mixes two theme tokens.
+      "env-action-failed-bg",
+      // The pinned header's surface and stuck rule, defined per row state on
+      // band rows. Every value they resolve to is a theme token.
+      "env-action-header-surface",
+      "env-action-header-rule",
       // A slash command's remaining parameters, set inline on
       // `.composer-tiptap-input` as a CSS string and drawn by the last
       // paragraph's ::after. Content, not theme.

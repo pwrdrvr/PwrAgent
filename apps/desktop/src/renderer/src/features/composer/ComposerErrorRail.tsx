@@ -93,7 +93,7 @@ function ComposerErrorRow(props: {
       aria-label={props.label}
       role="alert"
     >
-      <div className="composer-error-row__header">
+      <div className="composer-error-row__header composer__queued-env-action-header">
         {detail ? (
           <button
             aria-expanded={open}
