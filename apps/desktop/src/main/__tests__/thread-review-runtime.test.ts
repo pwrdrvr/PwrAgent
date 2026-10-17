@@ -1,0 +1,80 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AgentEvent } from "@pwragent/shared";
+import type { DesktopBackendRegistry } from "../app-server/backend-registry";
+import type { PwrAgentThreadTodoHandler } from "../agent-tools/pwragent-thread-todo-agent-tools";
+import { StateDb } from "../state/state-db";
+import { getThreadReviewService } from "../thread-reviews/thread-review-runtime";
+import { installThreadTodoRuntime, resetThreadTodoServiceForTests } from "../thread-todos/thread-todo-runtime";
+import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
+
+let db: StateDb;
+vi.mock("../state/app-state", () => ({ getAppStateDb: () => db }));
+
+const THREAD = { backend: "codex" as const, threadId: "review-owner" };
+const PR = { provider: "github.com", org: "example", repo: "atlas", number: 7, url: "https://github.com/example/atlas/pull/7" };
+
+describe("review tracking runtime eligibility", () => {
+  let temp: ReturnType<typeof createTempStateDb>;
+  let onEvent: (event: AgentEvent) => void;
+  let handler: PwrAgentThreadTodoHandler;
+  const broadcast = vi.fn();
+
+  beforeEach(() => {
+    temp = createTempStateDb("pwragent-review-runtime-");
+    db = StateDb.open(temp.dbPath);
+    broadcast.mockClear();
+  });
+  afterEach(() => {
+    resetThreadTodoServiceForTests();
+    db.close();
+    removeTempStateDbDir(temp.tempDir);
+  });
+
+  function install() {
+    const registry = {
+      onEvent: (listener: typeof onEvent) => { onEvent = listener; return () => {}; },
+      setPwrAgentThreadTodoHandler: (value: PwrAgentThreadTodoHandler) => { handler = value; },
+    } as unknown as DesktopBackendRegistry;
+    installThreadTodoRuntime({ registry, broadcast, listProjects: async () => [], readDefaultMergeMethod: () => "squash" });
+  }
+
+  function complete(id: string, withPr = false) {
+    onEvent({ backend: THREAD.backend, notification: {
+      method: "item/completed", params: { threadId: THREAD.threadId, turnId: "turn", item: {
+        id, type: "exitedReviewMode", review: "Inspect this result.",
+        ...(withPr ? { data: { context: { workspacePath: "/repo", pullRequest: PR } } } : {}),
+      } },
+    } });
+  }
+
+  it("does not import startup overlays or historical thread reads, but records new completions", () => {
+    const old = { type: "review" as const, id: "managed-review:old:result", review: "Old review.", createdAt: Date.now() - 35 * 86_400_000 };
+    db.raw.prepare("INSERT INTO threads (thread_id, payload) VALUES (?, ?)")
+      .run(`codex:${THREAD.threadId}`, JSON.stringify({ ...THREAD, managedReviewEntries: [old] }));
+    install();
+    expect(getThreadReviewService().list({ status: "all" })).toEqual([]);
+    handler.importReviews!(THREAD, [old, { ...old, id: "native-old" }, { ...old, id: "native-undated", createdAt: undefined }]);
+    expect(getThreadReviewService().list({ status: "all" })).toEqual([]);
+    complete("new-live");
+    expect(getThreadReviewService().list().map((review) => review.sourceKey)).toEqual(["new-live"]);
+    expect(broadcast).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes the queue on attachment changes and archives detached reviews too", () => {
+    const setPrs = (prs: unknown[]) => db.raw.prepare("INSERT OR REPLACE INTO threads (thread_id, payload) VALUES (?, ?)")
+      .run(`codex:${THREAD.threadId}`, JSON.stringify({ ...THREAD, prs }));
+    setPrs([PR]);
+    install();
+    complete("managed-review:new:result", true);
+    expect(getThreadReviewService().list()).toHaveLength(1);
+    setPrs([]);
+    broadcast.mockClear();
+    onEvent({ backend: THREAD.backend, notification: { method: "thread/pullRequests/updated", params: { threadId: THREAD.threadId, prs: [] } } });
+    expect(broadcast).toHaveBeenCalledWith(expect.objectContaining(THREAD));
+    expect(getThreadReviewService().list()).toEqual([]);
+    onEvent({ backend: THREAD.backend, notification: { method: "thread/archived", params: { threadId: THREAD.threadId } } });
+    setPrs([PR]);
+    expect(getThreadReviewService().list()).toEqual([]);
+    expect(getThreadReviewService().list({ status: "dismissed" })[0]?.resolution?.note).toBe("Thread archived.");
+  });
+});

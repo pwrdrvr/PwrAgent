@@ -991,6 +991,7 @@
     "rowsChanged": 27,
     "statements": 27
   },
+  "thread-review-legacy-enrollment": {"commits": 1, "note": "One explicit opt-in of a legacy review and 99 repeats; preserves findings and outcomes, no idle writes.", "observedWalBytes": 4120, "rowsChanged": 1, "statements": 1},
   "thread-review-lifecycle": {
     "commits": 3,
     "note": "One two-finding review, two resolutions (including automatic handling), and 100 duplicate imports/reads. One commit per boundary; no idle writes.",
@@ -998,6 +999,7 @@
     "rowsChanged": 3,
     "statements": 3
   },
+  "thread-review-tracking-start": {"commits": 1, "note": "One profile tracking boundary; 100 service starts and reads. No repeated initialization or idle commits.", "observedWalBytes": 8240, "rowsChanged": 1, "statements": 1},
   "thread-self-rename": {
     "commits": 0,
     "note": "One ordinary-thread self-rename: zero commits/WAL bytes, projecting 0 MB/day. Notification and Undo state remain in memory, with no idle writes.",

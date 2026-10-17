@@ -116,15 +116,15 @@ export function installThreadTodoRuntime(params: {
   const todos = getThreadTodoService();
   const reviews = getThreadReviewService();
   setThreadReviewBroadcast(params.broadcast);
-  reviews.importStoredReviews();
-  // Tracking a review is a side effect of reading or finishing one. A review
+  // Tracking a review is a side effect of reading or finishing a new one. A review
   // that cannot be recorded must not fail the thread read or the event.
   const importReview = (
     identity: ThreadReviewIdentity,
     entry: AppServerThreadReviewEntry,
+    source: "live" | "replay" = "replay",
   ): void => {
     try {
-      reviews.importEntry(identity, entry);
+      reviews.importEntry(identity, entry, source);
     } catch (error) {
       threadTodoLog.warn("could not track a completed review", {
         error: error instanceof Error ? error.message : String(error),
@@ -139,14 +139,17 @@ export function installThreadTodoRuntime(params: {
   unsubscribeArchive = registry.onEvent((event) => {
     if (event.federationTarget?.scope === "remote") return;
     const completed = completedThreadReview(event);
-    if (completed) importReview(completed.identity, completed.entry);
+    if (completed) importReview(completed.identity, completed.entry, "live");
+    if (event.notification.method === "thread/pullRequests/updated") {
+      params.broadcast({ backend: event.backend, threadId: event.notification.params.threadId, at: Date.now() });
+    }
     if (event.notification.method !== "thread/archived") return;
     try {
       todos.dismissOpenForThread({
         backend: event.backend,
         threadId: event.notification.params.threadId,
       });
-      for (const review of reviews.list({ backend: event.backend, threadId: event.notification.params.threadId })) {
+      for (const review of reviews.list({ backend: event.backend, threadId: event.notification.params.threadId }, { includeDetached: true })) {
         reviews.update({ id: review.id, status: "dismissed", note: "Thread archived." }, "system");
       }
     } catch (error) {

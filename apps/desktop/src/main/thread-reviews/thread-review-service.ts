@@ -9,6 +9,7 @@ import type {
   ThreadTodosChangedEvent,
   UpdateThreadReviewRequest,
 } from "@pwragent/shared";
+import { buildLegacyEncodedThreadIdentityKey } from "@pwragent/shared";
 import type { StateDb } from "../state/state-db";
 import { parseReviewOutputText, reviewEntryFindings } from "../../shared/review-output";
 
@@ -23,6 +24,7 @@ export const THREAD_REVIEW_TEXT_LIMITS = { title: 300, summary: 1_000, body: 4_0
 export const THREAD_REVIEW_MAX_FINDINGS = 200;
 /** Rows one list returns, as the to-do store caps the cards it is merged with. */
 const THREAD_REVIEW_LIST_LIMIT = 500;
+const TRACKING_STARTED_KEY = "thread_review_tracking_started_at";
 
 function excerpt(text: string, limit: number): string {
   return text.length > limit ? `${text.slice(0, limit - 1).trimEnd()}…` : text;
@@ -41,22 +43,71 @@ export class ThreadReviewError extends Error {
 
 /** One commit per new review or status mutation; replay and no-ops write nothing. */
 export class ThreadReviewService {
+  private readonly trackingStartedAt: number;
+
   constructor(
     private readonly db: StateDb,
     private readonly onChanged: (event: ThreadTodosChangedEvent) => void = () => {},
     private readonly now: () => number = Date.now,
-  ) {}
+  ) {
+    // Shared-profile instances must agree on one boundary, including after a
+    // restart. Do not move it forward each time a window or service is opened.
+    const stored = db.getMeta(TRACKING_STARTED_KEY);
+    this.trackingStartedAt = stored === undefined ? db.raw.transaction(() => {
+      const existing = db.getMeta(TRACKING_STARTED_KEY);
+      if (existing !== undefined) return Number(existing);
+      const startedAt = now();
+      db.setMeta(TRACKING_STARTED_KEY, String(startedAt));
+      return startedAt;
+    }).immediate() : Number(stored);
+  }
 
-  list(request: ListThreadReviewsRequest = {}): ThreadReview[] {
-    return (this.db.raw.prepare(`SELECT payload FROM thread_reviews
+  list(request: ListThreadReviewsRequest = {}, options: { includeDetached?: boolean } = {}): ThreadReview[] {
+    const reviews: ThreadReview[] = [];
+    const attachments = new Map<string, Array<{ provider: string; org: string; repo: string; number: number }>>();
+    const rows = this.db.raw.prepare(`SELECT payload FROM thread_reviews
       WHERE (? = 'all' OR status = ?)
         AND (? IS NULL OR backend = ?) AND (? IS NULL OR thread_id = ?)
-      ORDER BY updated_at DESC, review_id LIMIT ?`).all(
+      ORDER BY updated_at DESC, review_id`).iterate(
       request.status ?? "open", request.status ?? "open",
       request.backend ?? null, request.backend ?? null,
       request.threadId ?? null, request.threadId ?? null,
-      THREAD_REVIEW_LIST_LIMIT,
-    ) as Array<{ payload: string }>).map((row) => JSON.parse(row.payload) as ThreadReview);
+    ) as Iterable<{ payload: string }>;
+    for (const row of rows) {
+      const review = JSON.parse(row.payload) as ThreadReview;
+      if (this.isUntriagedLegacyImport(review)) continue;
+      // Only automatic, open PR work follows the current attachment list.
+      // Explicit records and documented outcomes remain available independently.
+      const pr = review.context?.pullRequest;
+      const automatic = review.origin === "automatic"
+        || (review.origin === undefined && review.sourceKey.startsWith("managed-review:"));
+      if (review.status === "open" && automatic && pr && !options.includeDetached) {
+        const key = buildLegacyEncodedThreadIdentityKey(review.backend, review.threadId);
+        let prs = attachments.get(key);
+        if (!prs) {
+          const overlay = this.db.raw.prepare("SELECT json_extract(payload, '$.prs') AS prs FROM threads WHERE thread_id = ?")
+            .get(key) as { prs: string | null } | undefined;
+          const storedPrs = overlay?.prs ? JSON.parse(overlay.prs) as NonNullable<typeof prs> : [];
+          attachments.set(key, storedPrs);
+          prs = storedPrs;
+        }
+        if (!prs.some((attached) => attached.provider === pr.provider && attached.org === pr.org
+          && attached.repo === pr.repo && attached.number === pr.number)) continue;
+      }
+      reviews.push(review);
+      if (reviews.length === THREAD_REVIEW_LIST_LIMIT) break;
+    }
+    return reviews;
+  }
+
+  private isUntriagedLegacyImport(review: ThreadReview): boolean {
+    // #2685 stored no provenance or observation time. A generic, untouched
+    // import could be years old even when createdAt fell back to import time.
+    // Retain the record, but do not invent an outstanding obligation from it.
+    return review.origin === undefined && review.title === "Code review" && !review.sourceUrl
+      && review.updatedAt === review.createdAt
+      && review.status === "open" && !review.resolution
+      && review.items.every((item) => item.status === "open" && !item.resolution && item.updatedAt === item.createdAt);
   }
 
   get(id: string): ThreadReview | undefined {
@@ -65,7 +116,7 @@ export class ThreadReviewService {
     return row ? JSON.parse(row.payload) as ThreadReview : undefined;
   }
 
-  record(identity: ThreadReviewIdentity, input: RecordThreadReviewInput): ThreadReview {
+  record(identity: ThreadReviewIdentity, input: RecordThreadReviewInput, origin: ThreadReview["origin"] = "explicit"): ThreadReview {
     if (!input.sourceKey.trim() || !input.title.trim() || input.items.length > THREAD_REVIEW_MAX_FINDINGS) {
       throw new ThreadReviewError(
         "invalid_arguments",
@@ -74,16 +125,27 @@ export class ThreadReviewService {
     }
     const id = reviewId(identity, input.sourceKey);
     const recorded = this.get(id);
-    if (recorded) return recorded;
+    const enroll = (review: ThreadReview): boolean => origin === "explicit" && this.isUntriagedLegacyImport(review);
+    if (recorded && !enroll(recorded)) return recorded;
     let changed = false;
     const review = this.db.raw.transaction(() => {
       const existing = this.get(id);
       // An artifact is immutable. Replaying it must never reopen settled work.
-      if (existing) return existing;
+      if (existing) {
+        // Explicitly recording a legacy artifact opts it into tracking without
+        // replacing findings, ids, timestamps, or documented resolutions.
+        if (enroll(existing)) {
+          existing.origin = "explicit";
+          this.db.raw.prepare("UPDATE thread_reviews SET payload = ? WHERE review_id = ?")
+            .run(JSON.stringify(existing), id);
+          changed = true;
+        }
+        return existing;
+      }
       const now = this.now();
       const createdAt = input.createdAt ?? now;
       const review: ThreadReview = {
-        backend: identity.backend, threadId: identity.threadId,
+        backend: identity.backend, threadId: identity.threadId, origin,
         id, sourceKey: input.sourceKey, title: excerpt(input.title, THREAD_REVIEW_TEXT_LIMITS.title),
         ...(input.sourceUrl ? { sourceUrl: input.sourceUrl } : {}),
         ...(input.summary ? { summary: excerpt(input.summary, THREAD_REVIEW_TEXT_LIMITS.summary) } : {}),
@@ -110,10 +172,19 @@ export class ThreadReviewService {
     return review;
   }
 
-  importEntry(identity: ThreadReviewIdentity, entry: AppServerThreadReviewEntry): ThreadReview | undefined {
+  importEntry(
+    identity: ThreadReviewIdentity,
+    entry: AppServerThreadReviewEntry,
+    source: "live" | "replay" = "replay",
+  ): ThreadReview | undefined {
     if (entry.id.endsWith(":started") || entry.turn?.status === "in_progress"
       || (entry.displayText !== undefined && !entry.output)) return undefined;
-    // Every thread read replays its reviews; a tracked one needs no parse.
+    // Reading history is not evidence that a review is still waiting on work.
+    // A replay can recover a missed completion only after this profile began
+    // tracking. Undated history cannot establish that and stays transcript-only.
+    if (source === "replay" && (entry.createdAt === undefined
+      || !Number.isFinite(entry.createdAt) || entry.createdAt < this.trackingStartedAt)) return undefined;
+    // A tracked one needs no parse.
     const tracked = this.get(reviewId(identity, entry.id));
     if (tracked) return tracked;
     const output = entry.output ?? parseReviewOutputText(entry.review);
@@ -135,20 +206,7 @@ export class ThreadReviewService {
           title: finding.title, body: finding.body, priority: finding.priority,
           codeLocation: finding.code_location,
         })),
-    });
-  }
-
-  /** Existing managed-review artifacts are PwrAgent-owned overlay metadata. */
-  importStoredReviews(): void {
-    const rows = this.db.raw.prepare(`SELECT payload FROM threads
-      WHERE CASE WHEN json_valid(payload) THEN json_type(payload, '$.managedReviewEntries') END = 'array'`)
-      .all() as Array<{ payload: string }>;
-    // record() avoids even opening a transaction for a known artifact.
-    // This startup scan therefore makes no commits after the first import.
-    for (const row of rows) {
-      const state = JSON.parse(row.payload) as ThreadReviewIdentity & { managedReviewEntries: AppServerThreadReviewEntry[] };
-      for (const entry of state.managedReviewEntries) this.importEntry(state, entry);
-    }
+    }, "automatic");
   }
 
   update(
@@ -188,6 +246,12 @@ export class ThreadReviewService {
         throw new ThreadReviewError("conflict", "Address or dismiss each open finding before marking the review handled.");
       }
       const now = this.now();
+      // An explicit action on a legacy record establishes that it is tracked;
+      // never hide it as an untouched historical import after reopening it.
+      if (review.origin === undefined) {
+        review.origin = !this.isUntriagedLegacyImport(review) && review.sourceKey.startsWith("managed-review:")
+          ? "automatic" : "explicit";
+      }
       const resolution: ThreadReviewResolution | undefined = request.status === "open" ? undefined : {
         note: request.note!.trim(), ...(request.url ? { url: request.url } : {}), actor, at: now,
       };

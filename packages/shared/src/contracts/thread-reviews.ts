@@ -36,6 +36,8 @@ export type ThreadReviewItem = {
 
 export type ThreadReview = ThreadReviewIdentity & {
   id: string;
+  /** Absent on records written before import provenance was tracked. */
+  origin?: "automatic" | "explicit";
   /** Stable artifact id or external review URL/key; scoped to this thread. */
   sourceKey: string;
   sourceUrl?: string;
