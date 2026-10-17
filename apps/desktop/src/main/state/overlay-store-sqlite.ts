@@ -2544,6 +2544,46 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     };
   }
 
+  /**
+   * Model context only. Use the pricing ledger's two ordered indexes without
+   * materializing pricing cards, repairing prices, or enriching turn metadata.
+   * The stable createdAt sort in the former caller retained usage_line_id DESC
+   * on ties; keep that order here, including child and self-parented lines.
+   * Keep the ordering columns in the compound SELECT so SQLite can merge the
+   * ordered branches instead of materializing and sorting an outer projection.
+   */
+  async readLatestThreadUsageModel(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+  }): Promise<Pick<ThreadUsageLineRecord, "model" | "provider" | "reasoningEffort" | "serviceTier"> | undefined> {
+    const row = this.stateDb.raw.prepare(
+      `SELECT model, provider, reasoning_effort, service_tier, created_at, usage_line_id
+       FROM thread_usage_lines
+       WHERE backend = ? AND thread_id = ?
+         AND status != 'superseded' AND scope != 'monitor'
+         AND model IS NOT NULL AND model != ''
+       UNION ALL
+       SELECT model, provider, reasoning_effort, service_tier, created_at, usage_line_id
+       FROM thread_usage_lines
+       WHERE backend = ? AND parent_thread_id = ? AND thread_id != ?
+         AND status != 'superseded' AND scope != 'monitor'
+         AND model IS NOT NULL AND model != ''
+       ORDER BY created_at DESC, usage_line_id DESC
+       LIMIT 1`,
+    ).get(params.backend, params.threadId, params.backend, params.threadId, params.threadId) as {
+      model: string;
+      provider: string;
+      reasoning_effort: string | null;
+      service_tier: string | null;
+    } | undefined;
+    return row ? {
+      model: row.model,
+      provider: row.provider || "openai",
+      reasoningEffort: row.reasoning_effort || undefined,
+      ...(row.service_tier ? { serviceTier: row.service_tier } : {}),
+    } : undefined;
+  }
+
   async readThreadPricing(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;
@@ -9563,6 +9603,7 @@ export type OverlayStoreLike = Pick<
   | "consumeManagedReviewContexts"
   | "upsertThreadUsageLine"
   | "readThreadPricing"
+  | "readLatestThreadUsageModel"
   | "upsertThreadToolInvocation"
   | "markThreadToolInvocationNoisy"
   | "upsertThreadToolInvocationAlert"

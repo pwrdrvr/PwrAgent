@@ -35373,8 +35373,8 @@ export class DesktopBackendRegistry {
    * the hook reports one id, `review/start` returned another — and produces no
    * usage line, so a gate created during one has no line to price against. The
    * review record knows the reviewer's model, and while it is active it is the
-   * only thing making requests on that thread. Otherwise the newest priced turn
-   * line is the parent's current model.
+   * only thing making requests on that thread. Otherwise the newest eligible
+   * usage line is the parent's current model, regardless of price availability.
    */
   private async resolveTokenMiserParentModel(
     threadId: string,
@@ -35392,24 +35392,13 @@ export class DesktopBackendRegistry {
         };
       }
     }
-    if (typeof this.overlayStore.readThreadPricing !== "function") {
+    if (typeof this.overlayStore.readLatestThreadUsageModel !== "function") {
       return undefined;
     }
-    const pricing = await this.overlayStore.readThreadPricing({
+    return this.overlayStore.readLatestThreadUsageModel({
       backend: "codex",
       threadId,
     });
-    const line = [...pricing.lines]
-      .filter((entry) => entry.scope !== "monitor" && Boolean(entry.model))
-      .sort((left, right) => right.createdAt - left.createdAt)[0];
-    return line
-      ? {
-          model: line.model,
-          provider: line.provider,
-          reasoningEffort: line.reasoningEffort,
-          ...(line.serviceTier ? { serviceTier: line.serviceTier } : {}),
-        }
-      : undefined;
   }
 
   private async recordTokenMiserParentModelRequest(
