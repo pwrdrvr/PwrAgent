@@ -77,4 +77,17 @@ describe("review tracking runtime eligibility", () => {
     expect(getThreadReviewService().list()).toEqual([]);
     expect(getThreadReviewService().list({ status: "dismissed" })[0]?.resolution?.note).toBe("Thread archived.");
   });
+
+  it("refreshes owner projections on rename, restore, and archive even without a row mutation", () => {
+    install();
+    const notifications: AgentEvent["notification"][] = [
+      { method: "thread/name/updated", params: { threadId: THREAD.threadId, threadName: "New title" } },
+      { method: "thread/unarchived", params: { threadId: THREAD.threadId } },
+      { method: "thread/archived", params: { threadId: THREAD.threadId } },
+    ];
+    for (const notification of notifications) onEvent({ backend: THREAD.backend, notification });
+    expect(broadcast).toHaveBeenCalledTimes(3);
+    expect(broadcast).toHaveBeenLastCalledWith(expect.objectContaining(THREAD));
+    expect(getThreadReviewService().list({ status: "all" })).toEqual([]);
+  });
 });

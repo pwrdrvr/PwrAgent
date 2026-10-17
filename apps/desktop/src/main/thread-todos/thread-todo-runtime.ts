@@ -140,7 +140,9 @@ export function installThreadTodoRuntime(params: {
     if (event.federationTarget?.scope === "remote") return;
     const completed = completedThreadReview(event);
     if (completed) importReview(completed.identity, completed.entry, "live");
-    if (event.notification.method === "thread/pullRequests/updated") {
+    if (event.notification.method === "thread/pullRequests/updated"
+      || event.notification.method === "thread/unarchived"
+      || event.notification.method === "thread/name/updated") {
       params.broadcast({ backend: event.backend, threadId: event.notification.params.threadId, at: Date.now() });
     }
     if (event.notification.method !== "thread/archived") return;
@@ -157,6 +159,10 @@ export function installThreadTodoRuntime(params: {
         error: error instanceof Error ? error.message : String(error),
         threadId: event.notification.params.threadId,
       });
+    } finally {
+      // Ownership and titles are read-time projections too. Refresh even when
+      // no tracked row changed (for example, an already archived legacy card).
+      params.broadcast({ backend: event.backend, threadId: event.notification.params.threadId, at: Date.now() });
     }
   });
   // A model the catalog does not list would start the handoff on the

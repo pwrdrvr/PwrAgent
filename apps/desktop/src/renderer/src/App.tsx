@@ -2554,6 +2554,7 @@ function DesktopAppShell(props: {
       ...(todoProjectMenu ? { projectMenu: todoProjectMenu } : {}),
       threadTitle: (todo) =>
         localThreadTitles.get(buildThreadIdentityKey(todo.backend, todo.threadId))
+          ?? todo.threadTitle
           ?? "Untitled thread",
       resolve: (todo, status, resolution, options) =>
         threadTodoController.resolve(todo.id, status, resolution, options),

@@ -42,6 +42,8 @@ import {
 import { subscribersForChannel } from "../window-channels";
 import { appServerService } from "./app-server";
 import { getThreadReviewService } from "../thread-reviews/thread-review-runtime";
+import { loadLocalNavigationQueryIndex } from "../app-server/navigation-query-source";
+import { listThreadTodosForAvailableOwners } from "../thread-todos/thread-todo-owners";
 
 /**
  * The note an operator's click records, which the agent reads in
@@ -126,15 +128,17 @@ export function registerThreadTodoIpcHandlers(options: {
   ipcMain.removeHandler(THREAD_TODOS_LIST_CHANNEL);
   ipcMain.handle(
     THREAD_TODOS_LIST_CHANNEL,
-    (_event, request: ListThreadTodosRequest = {}): ListThreadTodosResponse => {
+    async (_event, request: ListThreadTodosRequest = {}): Promise<ListThreadTodosResponse> => {
       const todos = getThreadTodoService();
       return {
-        todos: [
+        todos: await listThreadTodosForAvailableOwners([
           ...todos.list(request),
           ...getThreadReviewService().list({
             ...request, status: request.status === "done" ? "handled" : request.status,
           }).map(threadReviewTodo),
-        ].sort((a, b) => b.createdAt - a.createdAt),
+        ].sort((a, b) => b.createdAt - a.createdAt), async () => (await loadLocalNavigationQueryIndex({
+          callerReason: "thread-todo-owners",
+        })).threads),
         mergeMethods: todos.mergeMethodPreferences(),
       };
     },

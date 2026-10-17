@@ -116,6 +116,8 @@ export type ThreadTodo = {
   reviewId?: string;
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
+  /** Current owner title projected when listing cards; never persisted with the card. */
+  threadTitle?: string;
   /** Re-adding an open card with the same key updates it in place. */
   key?: string;
   kind: ThreadTodoKind;

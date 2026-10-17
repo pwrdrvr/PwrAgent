@@ -50,6 +50,13 @@ An automatic PR review appears in the active queue only while that exact PR
 Detachment does not change its outcome or erase the artifact. Reattaching
 restores eligible open work. Explicit records do not depend on attachments.
 
+The To-dos list also checks the complete local owner navigation index for
+every card. Archived and absent owners are excluded even if no archive event
+was observed by this process. An overlay alone does not establish that a
+thread is active. The same read projects the current owner title, so a valid
+thread outside the sidebar's loaded window keeps its name. All cards share
+one cached owner index read, and the projection makes no SQLite writes.
+
 The initial tracking implementation (#2685) imported historical reviews without
 provenance or an observation timestamp. Untouched generic legacy imports are
 excluded from lists, preserving their stored records and transcript artifacts.
