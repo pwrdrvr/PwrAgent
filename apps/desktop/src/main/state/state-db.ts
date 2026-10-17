@@ -2036,8 +2036,9 @@ export class StateDb {
           db.pragma("user_version = 73");
         })();
       }
-      // ensureCurrentSchema creates durable turn requests (74) and tracked
-      // reviews (75) on every open; these steps only record the version.
+      // ensureCurrentSchema creates durable turn requests (74), tracked
+      // reviews (75) and thread dependencies (77) on every open; these steps
+      // only record the version.
       if ((db.pragma("user_version", { simple: true }) as number) < 74) {
         db.pragma("user_version = 74");
       }
@@ -2054,10 +2055,16 @@ export class StateDb {
         }).immediate();
       }
       if ((db.pragma("user_version", { simple: true }) as number) < 77) {
+        db.pragma("user_version = 77");
+      }
+      // A development profile that ran the thread-dependency branch while it
+      // claimed v76 skipped the relationship-generation step above. Converge
+      // it the same way. Normal opens only read sqlite_master here.
+      if (tableExists(db, "thread_navigation_relationships")
+        && !tableExists(db, "thread_navigation_relationship_generation")) {
         db.transaction(() => {
-          db.exec(THREAD_DEPENDENCY_SCHEMA);
-          db.pragma("user_version = 77");
-        })();
+          db.exec(THREAD_NAVIGATION_RELATIONSHIPS_GENERATION_SCHEMA);
+        }).immediate();
       }
       // Keep current-version databases converged without asking pre-v36 profiles
       // to install the unique index before the migration above removes duplicates.
