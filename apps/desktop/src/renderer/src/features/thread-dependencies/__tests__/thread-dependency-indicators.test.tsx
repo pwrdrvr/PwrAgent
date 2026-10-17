@@ -50,6 +50,11 @@ describe("summarizeThreadDependencies", () => {
     expect(one({ mode: "any" })).toBe("Any of 2");
     expect(one({ conditions: [waiting.conditions[0]!], evidence: [] })).toBe("Waiting");
     expect(one({ status: "ready", outcome: "success" })).toBe("Ready");
+    // A failed prerequisite resumes only to report it; the chip must not read as success.
+    expect(one({
+      status: "ready", outcome: "failure",
+      evidence: [{ ...waiting.evidence[1]!, state: "failed", reason: "PR closed without merging" }],
+    })).toBe("Failed");
     expect(one({
       status: "ready", outcome: "failure", onFailure: "wait",
       evidence: [{ ...waiting.evidence[1]!, state: "failed", reason: "CI failed" }],
@@ -103,6 +108,29 @@ describe("useThreadDependencyIndicators", () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(200); });
     expect(manage).toHaveBeenCalledTimes(2);
     expect(screen.getByRole("status")).toHaveTextContent("none");
+  });
+
+  it("keeps the same list when an update changes no chip", async () => {
+    vi.useFakeTimers();
+    let listener: ((event: AgentEvent) => void) | undefined;
+    const seen: unknown[] = [];
+    function Identity(props: { api: DesktopApi }) {
+      const indicators = useThreadDependencyIndicators(props.api);
+      if (seen.at(-1) !== indicators) seen.push(indicators);
+      return null;
+    }
+    const manage = vi.fn(async () => ({ dependencies: [{ ...waiting, updatedAt: manage.mock.calls.length }] }));
+    const api = {
+      manageThreadDependencies: manage,
+      onAgentEvent: (callback: (event: AgentEvent) => void) => { listener = callback; return () => undefined; },
+    } as unknown as DesktopApi;
+    render(<Identity api={api} />);
+    await act(async () => {});
+    expect(seen).toHaveLength(2);
+    act(() => listener!({ backend: "codex", notification: { method: "thread/dependencies/updated", params: { threadId: "consumer", dependencyId: "waiting-1" } } } as AgentEvent));
+    await act(async () => { await vi.advanceTimersByTimeAsync(200); });
+    expect(manage).toHaveBeenCalledTimes(2);
+    expect(seen).toHaveLength(2);
   });
 
   it("keeps the last list when a refresh fails", async () => {

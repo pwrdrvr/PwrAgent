@@ -1,12 +1,12 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import type { NavigationThreadSummary, ThreadDependency } from "@pwragent/shared";
-import { buildThreadIdentityKey } from "@pwragent/shared";
+import { buildThreadIdentityKey, THREAD_DEPENDENCY_CONDITION_PHRASES } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import {
   ACTIVE_DEPENDENCY_STATUSES,
-  CONDITION_PHRASES,
   evidenceFor,
+  isFailureReport,
   isRepairWait,
   needsDeliveryReview,
 } from "./dependency-labels";
@@ -68,7 +68,11 @@ export function useThreadDependencyIndicators(desktopApi?: DesktopApi): Readonly
       const sequence = ++latest;
       try {
         const response = await desktopApi.manageThreadDependencies!({ action: "active" });
-        if (!disposed && sequence === latest) setIndicators(summarizeThreadDependencies(response.dependencies));
+        if (disposed || sequence !== latest) return;
+        const next = summarizeThreadDependencies(response.dependencies);
+        // Rows read this through context; an equal list keeps its identity so
+        // an update that changes no chip re-renders no row.
+        setIndicators((current) => sameIndicators(current, next) ? current : next);
       } catch {
         // Keep the last list; the next update event retries.
       }
@@ -95,7 +99,9 @@ export function summarizeThreadDependencies(
   for (const dependency of dependencies) {
     if (!ACTIVE_DEPENDENCY_STATUSES.has(dependency.status)) continue;
     const key = buildThreadIdentityKey(dependency.backend, dependency.threadId);
-    byThread.set(key, [...(byThread.get(key) ?? []), dependency]);
+    const items = byThread.get(key);
+    if (items) items.push(dependency);
+    else byThread.set(key, [dependency]);
   }
   const indicators = new Map<string, ThreadDependencyIndicator>();
   for (const [key, items] of byThread) {
@@ -111,8 +117,23 @@ export function summarizeThreadDependencies(
   return indicators;
 }
 
+function sameIndicators(
+  left: ReadonlyMap<string, ThreadDependencyIndicator>,
+  right: ReadonlyMap<string, ThreadDependencyIndicator>,
+): boolean {
+  if (left.size !== right.size) return false;
+  for (const [key, indicator] of right) {
+    const other = left.get(key);
+    if (!other || other.count !== indicator.count || other.alert !== indicator.alert
+      || other.label !== indicator.label || other.tooltip !== indicator.tooltip) return false;
+  }
+  return true;
+}
+
 function progressLabel(dependency: ThreadDependency): string {
-  if (dependency.status === "ready") return isRepairWait(dependency) ? "CI repair" : "Ready";
+  if (dependency.status === "ready") {
+    return isRepairWait(dependency) ? "CI repair" : isFailureReport(dependency) ? "Failed" : "Ready";
+  }
   if (dependency.status === "dispatching") return "Continuing";
   const total = dependency.conditions.length;
   if (total < 2) return "Waiting";
@@ -128,7 +149,7 @@ function describeRegistration(dependency: ThreadDependency): string {
   const lines = dependency.conditions.map((condition, index) => {
     const state = evidenceFor(dependency, index)?.state;
     const mark = state === "satisfied" ? "✓" : state === "failed" ? "✗" : "○";
-    return `${mark} ${condition.title || condition.threadId} ${CONDITION_PHRASES[condition.when]}`;
+    return `${mark} ${condition.title || condition.threadId} ${THREAD_DEPENDENCY_CONDITION_PHRASES[condition.when]}`;
   });
   if (needsDeliveryReview(dependency)) lines.push("Delivery needs review.");
   return [heading, ...lines].join("\n");

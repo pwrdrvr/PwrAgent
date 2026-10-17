@@ -1739,9 +1739,15 @@ describe("app server ipc", () => {
 
   it("lists every active registration for sidebar status, to local windows only", async () => {
     const { appServerService } = await import("../ipc/app-server");
+    const appState = await import("../state/app-state");
     registerAppServerIpcHandlers();
     const handler = handlers.get("thread:dependencies")!;
     const waiting = { id: "waiting-1", backend: "codex", threadId: "consumer", status: "waiting" };
+    // Before a profile's state opens, the listing is empty rather than an error.
+    const closed = vi.spyOn(appState, "getAppStateMode").mockReturnValue(null);
+    await expect(handler({ sender: { id: 1 } }, { action: "active" })).resolves.toEqual({ dependencies: [] });
+    closed.mockRestore();
+    const mode = vi.spyOn(appState, "getAppStateMode").mockReturnValue("active-profile");
     const agent = { active: vi.fn(() => [waiting]) } as unknown as import("../app-server/thread-dependency-coordinator").ThreadDependencyCoordinator;
     const service = appServerService as unknown as { getThreadDependencyCoordinator: () => typeof agent };
     const coordinator = vi.spyOn(service, "getThreadDependencyCoordinator").mockReturnValue(agent);
@@ -1749,7 +1755,7 @@ describe("app server ipc", () => {
       await expect(handler({ sender: { id: 1 } }, { action: "active" })).resolves.toEqual({ dependencies: [waiting] });
       await expect(handler({ sender: { id: 999 } }, { action: "active" })).rejects.toThrow("local window");
     } finally {
-      coordinator.mockRestore();
+      coordinator.mockRestore(); mode.mockRestore();
     }
   });
 

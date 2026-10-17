@@ -8,6 +8,7 @@ import type {
   ThreadDependency,
   ThreadDependencyCondition,
 } from "@pwragent/shared";
+import { THREAD_DEPENDENCY_CONDITION_PHRASES } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { Select } from "../../components/Select";
 import { readRendererFederationTarget } from "../../lib/federation-window";
@@ -17,7 +18,6 @@ import { ThreadChip } from "../thread-detail/ThreadChip";
 import { RailStatusChip, type RailChipTone } from "../thread-detail/context-panels/RailStatusChip";
 import {
   ACTIVE_DEPENDENCY_STATUSES,
-  CONDITION_PHRASES,
   dependencyThreadKey as threadKey,
   evidenceFor,
   isRepairWait,
@@ -515,7 +515,7 @@ function DependencyCard(props: {
               />
               <span className="thread-dependencies__condition-head">
                 <DependencyThreadLink backend={condition.backend} threadId={condition.threadId} title={condition.title} onNavigate={props.onNavigate} />
-                <span className="thread-dependencies__when">{CONDITION_PHRASES[condition.when]}</span>
+                <span className="thread-dependencies__when">{THREAD_DEPENDENCY_CONDITION_PHRASES[condition.when]}</span>
               </span>
               {reason ? (
                 <span className="thread-dependencies__reason">

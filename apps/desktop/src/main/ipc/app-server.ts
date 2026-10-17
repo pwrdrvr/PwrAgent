@@ -8242,6 +8242,8 @@ class DesktopAppServerService {
   }
 
   listActiveThreadDependencies(): ManageThreadDependenciesResponse {
+    // Before a profile's state opens there is nothing to list, not an error.
+    if (!getAppStateMode()) return { dependencies: [] };
     return { dependencies: this.getThreadDependencyCoordinator().active() };
   }
 

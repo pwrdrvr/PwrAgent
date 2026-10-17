@@ -4,7 +4,7 @@ import type {
   ManageThreadDependenciesRequest, ManageThreadDependenciesResponse, PrSummary,
   ThreadDependency, ThreadDependencyCondition, ThreadDependencyEvidence,
 } from "@pwragent/shared";
-import { isRepairableDependencyFailure, THREAD_DEPENDENCY_CONDITIONS } from "@pwragent/shared";
+import { isRepairableDependencyFailure, THREAD_DEPENDENCY_CONDITION_PHRASES, THREAD_DEPENDENCY_CONDITIONS } from "@pwragent/shared";
 import type { ThreadDependencyStore } from "../state/thread-dependency-store";
 
 export type DependencyThreadSnapshot = {
@@ -304,13 +304,6 @@ export function evaluateCondition(condition: ThreadDependencyCondition, snapshot
   return result("waiting", "Waiting for CI to pass", pr);
 }
 
-const CONDITION_PHRASES: Record<ThreadDependencyCondition["when"], string> = {
-  turn_completed: "finishes its turn",
-  pr_attached: "has a reviewable PR",
-  ci_passed: "passes CI",
-  pr_merged: "is merged",
-};
-
 export function buildDependencyPrompt(item: ThreadDependency): string {
   const satisfied = item.outcome === "success";
   return [
@@ -319,7 +312,7 @@ export function buildDependencyPrompt(item: ThreadDependency): string {
       : "a prerequisite failed"}.`,
     ...item.evidence.map((entry) => {
       const name = entry.condition.title?.trim() ? `"${entry.condition.title.trim()}"` : `Thread ${entry.condition.threadId}`;
-      return `- ${name} ${CONDITION_PHRASES[entry.condition.when]}: ${entry.reason}${entry.prUrl ? `; PR: ${entry.prUrl}` : ""}${entry.headSha ? `; observed head: ${entry.headSha}` : ""}`;
+      return `- ${name} ${THREAD_DEPENDENCY_CONDITION_PHRASES[entry.condition.when]}: ${entry.reason}${entry.prUrl ? `; PR: ${entry.prUrl}` : ""}${entry.headSha ? `; observed head: ${entry.headSha}` : ""}`;
     }),
     "",
     ...satisfied

@@ -1,14 +1,5 @@
-import type { ThreadDependency, ThreadDependencyCondition, ThreadDependencyEvidence } from "@pwragent/shared";
+import type { ThreadDependency, ThreadDependencyEvidence } from "@pwragent/shared";
 import { isRepairableDependencyFailure } from "@pwragent/shared";
-
-type When = ThreadDependencyCondition["when"];
-
-export const CONDITION_PHRASES: Record<When, string> = {
-  turn_completed: "finishes its turn",
-  pr_attached: "has a reviewable PR",
-  ci_passed: "passes CI",
-  pr_merged: "is merged",
-};
 
 export const ACTIVE_DEPENDENCY_STATUSES = new Set<ThreadDependency["status"]>(["waiting", "ready", "dispatching"]);
 
@@ -30,3 +21,7 @@ export const needsDeliveryReview = (dependency: ThreadDependency): boolean =>
 
 export const isRepairWait = (dependency: ThreadDependency): boolean =>
   dependency.status === "ready" && dependency.outcome === "failure" && isRepairableDependencyFailure(dependency);
+
+/** Ready to resume only to report a failed prerequisite; dependent work stays blocked. */
+export const isFailureReport = (dependency: ThreadDependency): boolean =>
+  dependency.status === "ready" && dependency.outcome === "failure" && !isRepairableDependencyFailure(dependency);
