@@ -10,6 +10,7 @@ import { CodexAppServerClient } from "../codex-app-server/client";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 import { runOneTimeArchivedWorktreeRepair } from "../state/archived-worktree-repair";
+import { ArchiveCleanupCheckpointStore } from "../state/archive-cleanup-checkpoint";
 import { measureSqliteWrites } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { AcpAgentStore } from "../acp/acp-agent-store";
@@ -56,7 +57,7 @@ async function createFixture(managed = false) {
   await git(repo, ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "-c", "commit.gpgsign=false", "commit", "-m", "fixture"]);
   await git(repo, ["worktree", "add", "-b", "owned", worktree]);
   const directory = { id: "owned", kind: "worktree" as const, label: "repo", path: repo, worktreePath: worktree };
-  const reopen = (workspace = directory) => {
+  const reopen = (workspace = directory, checkpoint = false) => {
     const db = StateDb.open(path.join(root, "state.db"));
     databases.push(db);
     const store = new SqliteOverlayStore(db);
@@ -64,6 +65,8 @@ async function createFixture(managed = false) {
     const acpAgentStore = new AcpAgentStore(db);
     const acpSessionStore = new AcpSessionStore(db);
     const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: store, messagingStore: null, threadTitleGenerationService: null,
+      runtimeInstanceId: `restart-${registries.length}`, resolveLiveProfileRuntimeInstanceIds: () => [],
+      archiveCleanupCheckpointStore: checkpoint ? new ArchiveCleanupCheckpointStore(db.raw, { processAlive: () => false }) : null,
       acpAgentStore, acpSessionStore, discoverLocalAcpAgents: async () => [],
       acpWorktreeRepositoryResolver: async (cwd) => cwd === worktree ? directory : undefined });
     registries.push(registry);
@@ -73,6 +76,27 @@ async function createFixture(managed = false) {
 }
 
 describe("archive worktrees across a desktop restart", () => {
+  it("checkpoints a queued cleanup on quit and resumes it without archiving the provider again", async () => {
+    const fixture = await createFixture();
+    ArchiveWorktreeTransport.threads = [{ id: "queued", cwd: fixture.worktree, source: "cli", archived: false }];
+    await writeFile(path.join(fixture.worktree, "file.txt"), "work retained across cleanup restart\n");
+    const first = fixture.reopen(fixture.directory, true);
+    expect(await first.registry.archiveThread({ backend: "codex", threadId: "queued", backgroundCleanup: true }))
+      .toMatchObject({ cleanupPending: true });
+    await first.registry.close();
+    first.db.close();
+    databases.splice(databases.indexOf(first.db), 1);
+    expect((await stat(fixture.worktree)).isDirectory()).toBe(true);
+    const archiveCalls = ArchiveWorktreeTransport.requests.filter((request) => request.method === "thread/archive").length;
+    const second = fixture.reopen(fixture.directory, true);
+    await second.registry.resumeArchiveCleanupsAtStartup();
+    await expect(stat(fixture.worktree)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(ArchiveWorktreeTransport.requests.filter((request) => request.method === "thread/archive")).toHaveLength(archiveCalls);
+    const restored = await second.registry.restoreThread({ backend: "codex", threadId: "queued" });
+    expect(restored.worktrees).toEqual([expect.objectContaining({ restored: true })]);
+    expect(await readFile(path.join(fixture.worktree, "file.txt"), "utf8")).toBe("work retained across cleanup restart\n");
+  });
+
   it.each(["ACP only", "shared with Codex", "late ACP owner", "shared through home alias"])("preserves archived ACP checkouts during repair (%s)", async (scenario) => {
     const fixture = await createFixture(scenario === "shared through home alias");
     let codexWorktree = fixture.worktree;

@@ -34,6 +34,7 @@ export type QuitConfirmationDialogOptions = {
   automationRunCount?: number;
   terminalSessionCount: number;
   actionRunCount?: number;
+  archiveCleanupCount?: number;
   items?: QuitBlockerItem[];
   refresh?: () => Promise<QuitConfirmationDialogSnapshot>;
 };
@@ -454,12 +455,14 @@ export async function showQuitConfirmationDialog(
       options.inProgressThreadCount
       + (options.automationRunCount ?? 0)
       + options.terminalSessionCount
-      + (options.actionRunCount ?? 0);
+      + (options.actionRunCount ?? 0)
+      + (options.archiveCleanupCount ?? 0);
     let lastRefreshSignature = JSON.stringify({
       inProgressThreadCount: options.inProgressThreadCount,
       automationRunCount: options.automationRunCount ?? 0,
       terminalSessionCount: options.terminalSessionCount,
       actionRunCount: options.actionRunCount ?? 0,
+      archiveCleanupCount: options.archiveCleanupCount ?? 0,
       items,
     });
     let latestSnapshot: QuitConfirmationDialogSnapshot = {
@@ -467,6 +470,7 @@ export async function showQuitConfirmationDialog(
       automationRunCount: options.automationRunCount ?? 0,
       terminalSessionCount: options.terminalSessionCount,
       actionRunCount: options.actionRunCount ?? 0,
+      archiveCleanupCount: options.archiveCleanupCount ?? 0,
       items,
     };
 
@@ -638,6 +642,7 @@ export async function showQuitConfirmationDialog(
         automationRunCount: options.automationRunCount ?? 0,
         terminalSessionCount: options.terminalSessionCount,
         actionRunCount: options.actionRunCount ?? 0,
+        archiveCleanupCount: options.archiveCleanupCount ?? 0,
         items,
         navigationPrefix,
         colorScheme,
@@ -831,6 +836,7 @@ export function buildQuitConfirmationHtml(options: {
   automationRunCount?: number;
   terminalSessionCount: number;
   actionRunCount: number;
+  archiveCleanupCount?: number;
   items: QuitBlockerItem[];
   navigationPrefix: string;
   colorScheme: "dark" | "light";
@@ -840,18 +846,21 @@ export function buildQuitConfirmationHtml(options: {
     && options.inProgressThreadCount === 0
     && (options.automationRunCount ?? 0) === 0
     && options.terminalSessionCount === 0
-    && options.actionRunCount === 0;
+    && options.actionRunCount === 0
+    && (options.archiveCleanupCount ?? 0) === 0;
   const countText = peerOnly ? "No local work is running." : describeQuitBlockers({
     inProgressThreadCount: options.inProgressThreadCount,
     automationRunCount: options.automationRunCount,
     terminalSessionCount: options.terminalSessionCount,
     actionRunCount: options.actionRunCount,
+    archiveCleanupCount: options.archiveCleanupCount ?? 0,
   });
   const interruptionText = peerOnly ? "Work on other machines may continue after this instance disconnects." : describeQuitImpact({
     inProgressThreadCount: options.inProgressThreadCount,
     automationRunCount: options.automationRunCount,
     terminalSessionCount: options.terminalSessionCount,
     actionRunCount: options.actionRunCount,
+    archiveCleanupCount: options.archiveCleanupCount ?? 0,
     hasItems: options.items.length > 0,
   });
   const listHtml = buildQuitItemListHtml({
@@ -1252,12 +1261,14 @@ function buildQuitDialogUpdatePayload(
     automationRunCount: snapshot.automationRunCount,
     terminalSessionCount: snapshot.terminalSessionCount,
     actionRunCount: snapshot.actionRunCount,
+    archiveCleanupCount: snapshot.archiveCleanupCount ?? 0,
   };
   const totalCount =
     counts.inProgressThreadCount
     + counts.automationRunCount
     + counts.terminalSessionCount
-    + counts.actionRunCount;
+    + counts.actionRunCount
+    + counts.archiveCleanupCount;
   return {
     countText:
       totalCount === 0
@@ -1290,6 +1301,7 @@ function describeQuitBlockers(options: {
   automationRunCount?: number;
   terminalSessionCount: number;
   actionRunCount: number;
+  archiveCleanupCount?: number;
 }): string {
   const parts: string[] = [];
   if (options.inProgressThreadCount === 1) {
@@ -1312,6 +1324,10 @@ function describeQuitBlockers(options: {
   } else if (options.actionRunCount > 1) {
     parts.push(`${options.actionRunCount} environment actions are running`);
   }
+  if ((options.archiveCleanupCount ?? 0) > 0) {
+    const count = options.archiveCleanupCount!;
+    parts.push(`${count} worktree ${count === 1 ? "cleanup is" : "cleanups are"} pending`);
+  }
   if (parts.length === 0) {
     return "PwrAgent is ready to quit.";
   }
@@ -1327,6 +1343,7 @@ function describeQuitImpact(options: {
   automationRunCount?: number;
   terminalSessionCount: number;
   actionRunCount: number;
+  archiveCleanupCount?: number;
   hasItems: boolean;
 }): string {
   const consequences: string[] = [];
@@ -1341,6 +1358,9 @@ function describeQuitImpact(options: {
   }
   if (options.actionRunCount > 0) {
     consequences.push("environment action processes will be stopped");
+  }
+  if ((options.archiveCleanupCount ?? 0) > 0) {
+    consequences.push("unfinished worktree cleanups will be saved and resumed at the next start");
   }
   if (consequences.length === 0) {
     return "Nothing is running.";

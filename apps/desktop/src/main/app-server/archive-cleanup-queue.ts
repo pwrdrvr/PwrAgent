@@ -51,6 +51,10 @@ export class ArchiveCleanupQueue<T> {
     return this.jobs.get(key)?.promise;
   }
 
+  pendingKeys(): string[] {
+    return [...this.jobs.keys()];
+  }
+
   isCancelled(key: string): boolean {
     return this.jobs.get(key)?.cancelled === true;
   }
