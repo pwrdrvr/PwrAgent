@@ -5,7 +5,7 @@ import {
   CloseIcon,
   CopyIcon,
 } from "../../icons";
-import { copyText } from "../../lib/copy-text";
+import { copyTextAsCodeBlock } from "../../lib/copy-text";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ResolvedThreadLink } from "../../lib/thread-links";
 import { ThreadChip } from "../thread-detail/ThreadChip";
@@ -64,7 +64,7 @@ export type AppNoticeToastNotice = {
 
 export function AppNoticeToast(props: {
   children?: ReactNode;
-  desktopApi?: Pick<DesktopApi, "copyText">;
+  desktopApi?: Pick<DesktopApi, "copyText" | "copyRichText">;
   navigation?: {
     current: number;
     total: number;
@@ -241,7 +241,7 @@ export function AppNoticeToast(props: {
             aria-label="Copy notice"
             title="Copy notice"
             onClick={() => {
-              void copyText(copyValue, props.desktopApi);
+              void copyTextAsCodeBlock(copyValue, props.desktopApi);
             }}
           >
             <CopyIcon size={13} aria-hidden="true" />
