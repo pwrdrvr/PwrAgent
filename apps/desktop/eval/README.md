@@ -1,3 +1,6 @@
+For the isolated Linux benchmark/task driver (JSON input, pinned managed Codex,
+Token Miser on/off and durable results), see [HEADLESS.md](HEADLESS.md).
+
 # Live smoke eval (`pnpm eval:smoke`)
 
 A **local, hands-off** end-to-end check that your real, installed agents work

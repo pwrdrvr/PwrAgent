@@ -20,6 +20,7 @@ import {
   getDesktopConfigStore,
 } from "./config-store/desktop-config-store-singleton";
 import { resolveDesktopConfigPath } from "./desktop-config";
+import { readEvalManagedRuntime } from "../eval-managed-runtime";
 
 let unsubscribeAuth: (() => void) | undefined;
 let desktopSettingsService: DesktopSettingsService | undefined;
@@ -42,6 +43,9 @@ export function getDesktopSettingsService(): DesktopSettingsService {
       ? resolveBootstrapProfilePath("config.toml")
       : resolveDesktopConfigPath();
     const configStore = getDesktopConfigStore();
+    // Memoize validation for this process. A rejected pin never falls back to
+    // a downloaded binary, and both eval arms use the same managed release.
+    let evalRuntime: ReturnType<typeof readEvalManagedRuntime> | undefined;
     const secretStore = isE2eMemorySecretStorageEnabled(
       process.env,
       app.isPackaged,
@@ -64,7 +68,8 @@ export function getDesktopSettingsService(): DesktopSettingsService {
         signal,
         waitForUpdate,
       }) =>
-        await ensureManagedCodexRuntime({
+        await (evalRuntime ??= readEvalManagedRuntime(app.isPackaged))
+        ?? await ensureManagedCodexRuntime({
           channel,
           checkMode,
           requirePlatformSignature: app.isPackaged === true,
