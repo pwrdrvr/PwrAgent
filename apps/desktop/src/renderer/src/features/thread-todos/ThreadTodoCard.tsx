@@ -94,6 +94,8 @@ export type ThreadTodoCardHandlers = {
 export type ThreadTodoCardProps = ThreadTodoCardHandlers & {
   todo: ThreadTodo;
   running: boolean;
+  /** The owning thread has an active turn; another repair must wait. */
+  threadRunning?: boolean;
   mergeMethods?: ThreadTodoMergeMethodPreferences;
   instances?: ThreadTodoInstance[];
   /** Changes the project the card's action runs in. */
@@ -174,6 +176,8 @@ function TrackedReviewCard(props: ThreadTodoCardProps) {
   // One hand-off per click: a second click before the send settles would
   // queue the same reply again.
   const [sending, setSending] = useState(false);
+  const sendingRef = useRef(false);
+  const [sendError, setSendError] = useState<string>();
   const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set());
   const titleId = `thread-todo-title-${todo.id}`;
   const review = tracking.review;
@@ -191,12 +195,21 @@ function TrackedReviewCard(props: ThreadTodoCardProps) {
   const hidden = items.length - shown.length;
   const onDoHere = props.onDoHere;
   const busy = tracking.busy || sending;
+  const working = props.running || props.threadRunning === true;
+  const fixDisabled = busy || working;
   const fix = onDoHere
     ? (findings: ThreadReviewItem[]) => {
+        if (sendingRef.current || fixDisabled) return;
+        sendingRef.current = true;
         setSending(true);
-        void Promise.resolve(onDoHere(todo, { prompt: fixReviewFindingsPrompt(todo.title, findings) }))
-          .then((sent) => {
-            if (sent === false) return;
+        setSendError(undefined);
+        void (async () => {
+          try {
+            const sent = await onDoHere(todo, { prompt: fixReviewFindingsPrompt(todo.title, findings) });
+            if (sent === false) {
+              setSendError("The thread did not accept the repair request. Try again.");
+              return;
+            }
             // Only what was sent leaves the selection; Fix now on one row
             // keeps the others the operator picked.
             setSelected((current) => {
@@ -204,8 +217,13 @@ function TrackedReviewCard(props: ThreadTodoCardProps) {
               for (const finding of findings) next.delete(finding.id);
               return next;
             });
-          })
-          .finally(() => setSending(false));
+          } catch (error) {
+            setSendError(error instanceof Error ? error.message : String(error));
+          } finally {
+            sendingRef.current = false;
+            setSending(false);
+          }
+        })();
       }
     : undefined;
 
@@ -239,11 +257,15 @@ function TrackedReviewCard(props: ThreadTodoCardProps) {
       <button
         type="button"
         className="button button--primary thread-todo-card__button"
-        disabled={sending}
+        disabled={fixDisabled}
+        aria-busy={sending || working}
         onClick={() => fix(toSend)}
       >
-        <ArrowUpIcon size={12} />
-        {selectedItems.length > 0 ? `Fix ${selectedItems.length} selected` : "Fix all"}
+        {sending || working
+          ? <span className="pending-spinner pending-spinner--sm" aria-hidden="true" />
+          : <ArrowUpIcon size={12} />}
+        {sending ? "Sending…" : working ? "Working…"
+          : selectedItems.length > 0 ? `Fix ${selectedItems.length} selected` : "Fix all"}
       </button>
     ) : null;
   };
@@ -309,7 +331,7 @@ function TrackedReviewCard(props: ThreadTodoCardProps) {
                             type="button"
                             className="review-todo__chip"
                             aria-label={`Fix now: ${item.title}`}
-                            disabled={sending}
+                            disabled={fixDisabled}
                             onClick={() => fix([item])}
                           >
                             Fix now
@@ -354,6 +376,9 @@ function TrackedReviewCard(props: ThreadTodoCardProps) {
         ) : null}
         {tracking.error ? (
           <p className="thread-todo-card__error" role="alert">{tracking.error}</p>
+        ) : null}
+        {sendError ? (
+          <p className="thread-todo-card__error" role="alert">{sendError}</p>
         ) : null}
       </div>
       <div className="thread-todo-card__footer">

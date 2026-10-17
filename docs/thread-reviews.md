@@ -102,6 +102,12 @@ record each fix, so no per-turn note repeats it. The selection clears once
 the reply is sent. The card stays open until the last finding is settled. A
 review with nothing left open offers **Mark handled** instead.
 
+Fix actions show a spinner and **Sending…** while the composer takes the
+request, then **Working…** while the owning thread has an active turn. Both
+the stack and panel disable duplicate Fix actions during either phase. A
+failed submission keeps the selection, shows its error, and allows a retry;
+ending or cancelling the turn re-enables fixes for findings that remain open.
+
 The transcript review keeps the record. A status row under the verdict gives
 the open count, or how the review was handled or dismissed. Each finding's
 footer holds its two actions, or a resolution line naming the outcome, the

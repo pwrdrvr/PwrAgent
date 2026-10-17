@@ -789,6 +789,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         if (!props.thread || !props.todos) return null;
         return (
           <ThreadTodosPanel
+            threadRunning={Boolean(props.activeTurnId)}
             view={props.todos.view}
             threadKey={props.todos.threadKey}
             projectKey={props.todos.projectKey}

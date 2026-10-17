@@ -4213,6 +4213,7 @@ export function ThreadView(props: ThreadViewProps) {
           threadKey={threadTodos.threadKey}
           todos={threadTodos.todos}
           view={threadTodos.view}
+          threadRunning={Boolean(props.activeTurnId)}
           onStartReview={startTodoReview}
           onDoHere={doTodoHere}
           findOpen={props.findOpen}
