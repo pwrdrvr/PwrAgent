@@ -128,7 +128,7 @@ export function EnvironmentSetupRow(props: {
       aria-label={label}
       role={running ? undefined : "alert"}
     >
-      <div className="environment-setup-row__header">
+      <div className="environment-setup-row__header composer__queued-env-action-header">
         <button
           aria-expanded={open}
           className="composer__queued-env-action-summary environment-setup-row__toggle"

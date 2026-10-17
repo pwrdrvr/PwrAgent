@@ -226,7 +226,7 @@ export function EnvActionRunEntry(props: {
       className={`composer__queued composer__queued--env-action ${modifier} env-action-run env-action-run--${props.placement}`}
       aria-label={label}
     >
-      <summary className="composer__queued-env-action-summary">
+      <summary className="composer__queued-env-action-summary composer__queued-env-action-header">
         <span
           className="composer__queued-env-action-chevron"
           aria-hidden="true"
