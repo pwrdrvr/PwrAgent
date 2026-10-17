@@ -18,7 +18,8 @@ import type {
   CodexBackgroundTerminal,
 } from "@pwragent/shared";
 import { ArchiveCleanupReadPool } from "./archive-cleanup-read-pool";
-import { ArchiveCleanupQueue, ArchiveCleanupCancelledError, ARCHIVE_CLEANUP_SLICE_SIZE, ARCHIVE_CLEANUP_PAUSE_MS, type ArchiveCleanupContext } from "./archive-cleanup-queue";
+import { ArchiveCleanupQueue, ArchiveCleanupCancelledError, ARCHIVE_CLEANUP_SLICE_SIZE, ARCHIVE_CLEANUP_PAUSE_MS, ARCHIVE_CLEANUP_QUEUE_LIMIT, type ArchiveCleanupContext } from "./archive-cleanup-queue";
+import { ArchiveCleanupCheckpointStore, type ArchiveCleanupIntent } from "../state/archive-cleanup-checkpoint";
 import { supportsNativeVoice, type NativeVoiceBackend, type NativeVoiceToolCall } from "../codex-app-server/native-voice-protocol";
 import type { NativeVoiceCapability } from "../../shared/native-voice";
 import { analyzeUsageActivity, usageAnalysisModelBackend } from "./usage-activity-analysis";
@@ -8644,6 +8645,7 @@ export class DesktopBackendRegistry {
   private readonly worktreeContainerService: WorktreeContainerService;
   private readonly acpBackend: AcpBackendAdapter;
   private closed = false;
+  private closeOperation?: Promise<void>;
   // Resolves a managed-worktree ACP cwd to its repository checkout so ACP
   // (e.g. Grok) worktree threads group under the same directory row as their
   // repo, exactly like Codex threads do. Codex backends carry a repo-rooted
@@ -8715,6 +8717,9 @@ export class DesktopBackendRegistry {
   }>();
   private readonly archiveCleanupReads = new ArchiveCleanupReadPool(THREAD_LIST_REUSE_WINDOW_MS);
   private readonly archiveCleanupQueue = new ArchiveCleanupQueue<ArchiveThreadResponse>();
+  private readonly archiveCleanupCheckpointStore?: Pick<ArchiveCleanupCheckpointStore, "save" | "recover">;
+  private readonly pendingArchiveCleanupIntents = new Map<string, ArchiveCleanupIntent>();
+  private archiveCleanupResumeStarted = false;
   private archiveCleanupInventories = new WeakMap<object, {
     revision: number;
     includesArchived: boolean;
@@ -9567,6 +9572,7 @@ export class DesktopBackendRegistry {
       ) => Promise<unknown> | unknown,
     ) => () => void;
     runtimeInstanceId?: string;
+    archiveCleanupCheckpointStore?: Pick<ArchiveCleanupCheckpointStore, "save" | "recover"> | null;
     registrySessionId?: string;
     resolveLiveProfileRuntimeInstanceIds?: () => string[];
     runningTurnShutdownStopTimeoutMs?: number;
@@ -9582,6 +9588,8 @@ export class DesktopBackendRegistry {
     this.configStore = options?.configStore;
     this.runtimeInstanceId =
       options?.runtimeInstanceId ?? processRuntimeIdentity.instanceId;
+    this.archiveCleanupCheckpointStore = options?.archiveCleanupCheckpointStore === null ? undefined
+      : options?.archiveCleanupCheckpointStore ?? (isAppStateInitialized() ? new ArchiveCleanupCheckpointStore(getAppStateDb().raw) : undefined);
     this.registrySessionId = options?.registrySessionId ?? randomUUID();
     this.runningTurnShutdownStopTimeoutMs =
       options?.runningTurnShutdownStopTimeoutMs
@@ -14606,13 +14614,10 @@ export class DesktopBackendRegistry {
       threadId: result.threadId,
       origin: "thread-archive",
     });
-    const key = buildThreadIdentityKey(backend, result.threadId);
-    const completion = this.archiveCleanupQueue.enqueue(key, async (context) =>
-      await this.completeArchivedThreadCleanup({
-        backend, threadId: result.threadId, archivedAt, codexRolloutMissing,
-        preserveWorktrees: request.preserveWorktrees, messagingCleanup, context,
-      }),
-    );
+    const completion = this.enqueueArchiveCleanup({
+      backend, threadId: result.threadId, archivedAt, codexRolloutMissing,
+      preserveWorktrees: request.preserveWorktrees, messagingCleanup,
+    });
     // The provider mutation and critical archive bookkeeping have settled.
     // Synchronous callers now wait only for the serial cleanup queue; keeping
     // them in mutation admission would prevent independent queued removals.
@@ -14621,6 +14626,72 @@ export class DesktopBackendRegistry {
     return await this.observeArchiveCleanupCompletion(completion, {
       backend, threadId: result.threadId, archivedAt, backgroundCleanup: request.backgroundCleanup, mustComplete: codexRolloutMissing,
     });
+  }
+
+  getArchiveCleanupCountForQuit(): number {
+    return new Set([...this.pendingArchiveCleanupIntents.keys(), ...this.archiveCleanupQueue.pendingKeys()]).size;
+  }
+
+  checkpointArchiveCleanupsForQuit(): void {
+    this.archiveCleanupCheckpointStore?.save(this.runtimeInstanceId, [...this.pendingArchiveCleanupIntents.values()]);
+  }
+
+  private tryCheckpointArchiveCleanupsForQuit(phase: "before-drain" | "after-drain"): void {
+    try {
+      this.checkpointArchiveCleanupsForQuit();
+    } catch (error) {
+      // Persistence failure must not prevent queue cancellation or backend
+      // disposal, nor poison the memoized shutdown operation.
+      backendRegistryLog.error("archive cleanup quit checkpoint failed", {
+        phase, error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private enqueueArchiveCleanup(intent: ArchiveCleanupIntent, resuming = false): Promise<ArchiveThreadResponse> {
+    const key = buildThreadIdentityKey(intent.backend, intent.threadId);
+    const existing = this.archiveCleanupQueue.pending(key);
+    if (existing) return existing;
+    this.pendingArchiveCleanupIntents.set(key, intent);
+    const completion = this.archiveCleanupQueue.enqueue(key, async (context) =>
+      await this.completeArchivedThreadCleanup({ ...intent, context,
+        // A saved archive intent cannot authorize deleting a restored thread.
+        // Recovery requires current archived membership, including for formerly
+        // missing rollouts; it never repeats the provider archive operation.
+        ...(resuming ? { requireArchived: true, codexRolloutMissing: false } : {}),
+      }),
+    );
+    void completion.then(() => {
+      if (this.pendingArchiveCleanupIntents.get(key) === intent) this.pendingArchiveCleanupIntents.delete(key);
+    }, (error: unknown) => {
+      if (!(this.closed && error instanceof ArchiveCleanupCancelledError)
+        && this.pendingArchiveCleanupIntents.get(key) === intent) this.pendingArchiveCleanupIntents.delete(key);
+    });
+    return completion;
+  }
+
+  async resumeArchiveCleanupsAtStartup(): Promise<void> {
+    if (this.closed || this.archiveCleanupResumeStarted || !this.archiveCleanupCheckpointStore) return;
+    this.archiveCleanupResumeStarted = true;
+    const recovered = this.archiveCleanupCheckpointStore.recover(this.runtimeInstanceId, this.resolveLiveProfileRuntimeInstanceIdsFn);
+    const remaining = [...new Map(recovered.map((intent) => [buildThreadIdentityKey(intent.backend, intent.threadId), intent])).values()]
+      .filter((intent) => !this.pendingArchiveCleanupIntents.has(buildThreadIdentityKey(intent.backend, intent.threadId)));
+    for (const intent of remaining) this.pendingArchiveCleanupIntents.set(buildThreadIdentityKey(intent.backend, intent.threadId), intent);
+    while (remaining.length > 0 && !this.closed) {
+      const keys = this.archiveCleanupQueue.pendingKeys();
+      const room = ARCHIVE_CLEANUP_QUEUE_LIMIT - keys.length;
+      if (room <= 0) {
+        await Promise.race(keys.map((key) => this.archiveCleanupQueue.pending(key)!.catch(() => {})));
+        continue;
+      }
+      await Promise.allSettled(remaining.splice(0, room).map((intent) => {
+        const completion = this.enqueueArchiveCleanup(intent, true);
+        return this.observeArchiveCleanupCompletion(completion, { ...intent, backgroundCleanup: true });
+      }));
+      // Background acknowledgements do not drain the bounded queue. Wait for
+      // admitted jobs before taking another chunk of the durable backlog.
+      await Promise.allSettled(this.archiveCleanupQueue.pendingKeys().map((key) => this.archiveCleanupQueue.pending(key)!));
+    }
   }
 
   private async observeArchiveCleanupCompletion(completion: Promise<ArchiveThreadResponse>, params: {
@@ -14666,6 +14737,7 @@ export class DesktopBackendRegistry {
     preserveWorktrees?: boolean;
     messagingCleanup: { error?: string };
     context: ArchiveCleanupContext;
+    requireArchived?: boolean;
   }): Promise<ArchiveThreadResponse> {
     const { backend, archivedAt, codexRolloutMissing, messagingCleanup, context } = params;
     const result = { threadId: params.threadId };
@@ -14675,7 +14747,7 @@ export class DesktopBackendRegistry {
     let cleanupMetadataError: string | undefined;
     try {
       let targetThread: AppServerThreadSummary | undefined;
-      if (backend === "codex" && this.codexClient.readArchiveCleanupThreadSummary && !codexRolloutMissing) {
+      if (!params.requireArchived && backend === "codex" && this.codexClient.readArchiveCleanupThreadSummary && !codexRolloutMissing) {
         targetThread = await this.codexClient.readArchiveCleanupThreadSummary(result.threadId, context.checkpoint);
         const readOverlays = this.overlayStore.getArchiveCleanupOverlayStates ?? this.overlayStore.getThreadOverlayStates;
         await context.checkpoint();
@@ -14914,10 +14986,8 @@ export class DesktopBackendRegistry {
       threadId: params.threadId,
       origin: "thread-archive",
     });
-    const completion = this.archiveCleanupQueue.enqueue(buildThreadIdentityKey(params.backend, params.threadId), async (context) =>
-      await this.completeArchivedThreadCleanup({ ...params, archivedAt, codexRolloutMissing: false,
-        preserveWorktrees: true, messagingCleanup: {}, context }),
-    );
+    const completion = this.enqueueArchiveCleanup({ backend: params.backend, threadId: params.threadId, archivedAt, codexRolloutMissing: false,
+      preserveWorktrees: true, messagingCleanup: {} });
     finishMutation?.();
     return await this.observeArchiveCleanupCompletion(completion, { ...params, archivedAt });
   }
@@ -25761,7 +25831,13 @@ export class DesktopBackendRegistry {
     this.invalidateThreadListCache(params.backend);
   }
 
-  async close(): Promise<void> {
+  close(): Promise<void> {
+    this.closeOperation ??= this.closeResources();
+    return this.closeOperation;
+  }
+
+  private async closeResources(): Promise<void> {
+    this.tryCheckpointArchiveCleanupsForQuit("before-drain");
     // Before anything unsubscribes or closes, so each turn's own terminal
     // still reaches every consumer. A quit has normally done this already,
     // while messaging was still running. Wait only when there is a turn to
@@ -25780,6 +25856,7 @@ export class DesktopBackendRegistry {
     this.closed = true;
     this.threadTurnQueue.close();
     await this.archiveCleanupQueue.close();
+    this.tryCheckpointArchiveCleanupsForQuit("after-drain");
     this.backgroundTerminalGeneration += 1;
     this.codexBackgroundTerminals.clear();
     this.backgroundTerminalReadRevisions.clear();

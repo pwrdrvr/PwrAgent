@@ -48,6 +48,14 @@ const items: QuitBlockerItem[] = [
 ];
 
 describe("quit dialog HTML", () => {
+  it("names pending cleanup work and explains restart recovery", () => {
+    const html = buildQuitConfirmationHtml({ countdownSeconds: 10, inProgressThreadCount: 0,
+      terminalSessionCount: 0, actionRunCount: 0, archiveCleanupCount: 130, items: [],
+      navigationPrefix: "pwragent-quit-confirmation://tok/", colorScheme: "dark", palette: QUIT_DIALOG_PALETTES.dark });
+    expect(html).toContain("130 worktree cleanups are pending.");
+    expect(html).toContain("unfinished worktree cleanups will be saved and resumed at the next start");
+    expect(html).not.toContain("PwrAgent is ready to quit.");
+  });
   it("renders each blocker as a link and keeps the list scrollable", () => {
     const html = buildQuitConfirmationHtml({
       countdownSeconds: 10,

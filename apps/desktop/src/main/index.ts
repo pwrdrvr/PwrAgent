@@ -525,6 +525,7 @@ function prewarmInitialThreadList(permit: ProviderDiscoveryPermit): void {
   void startupProviderRefresh.then(async () => {
     const registry = getExistingDesktopBackendRegistry();
     if (!registry) return;
+    await registry.resumeArchiveCleanupsAtStartup();
     const report = await runOneTimeArchivedWorktreeRepair({
       db: getAppStateDb().raw,
       repair: async () => await registry.repairArchivedThreadWorktrees(),
@@ -875,6 +876,13 @@ const flushDiagnostics = createShutdownBarrier({
 
 async function disposeMainProcessResources(source: string): Promise<void> {
   mainProcessShutdownPromise ??= (async () => {
+    // Persist before any bounded shutdown wait can expire. A later registry
+    // close updates the checkpoint after safe in-flight bookkeeping drains.
+    try {
+      getExistingDesktopBackendRegistry()?.checkpointArchiveCleanupsForQuit();
+    } catch (error) {
+      mainLog.error("archive cleanup quit checkpoint failed", { error: error instanceof Error ? error.message : String(error) });
+    }
     // Diagnostics consumes the existing 2s window + 12s resource allowance;
     // it must not add another serial 10s wait to application shutdown.
     const deadline = performance.now()

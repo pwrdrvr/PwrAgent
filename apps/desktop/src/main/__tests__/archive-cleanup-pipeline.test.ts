@@ -7,8 +7,10 @@ import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { deleteThreadAssets } from "../app-server/thread-assets";
 import { CountingBackendClient, codexThread, publishNotification } from "./fixtures/thread-read-harness";
 import budgets from "./fixtures/archive-cleanup-budgets.json";
+import type { ArchiveCleanupCheckpointStore, ArchiveCleanupIntent } from "../state/archive-cleanup-checkpoint";
 
-vi.mock("../log", () => ({ getMainLogger: () => ({ debug() {}, info() {}, warn() {}, error() {} }) }));
+const registryLog = vi.hoisted(() => ({ debug() {}, info() {}, warn() {}, error: vi.fn() }));
+vi.mock("../log", () => ({ getMainLogger: () => registryLog }));
 vi.mock("../app-server/worktree-container-service", () => ({ WorktreeContainerService: class {
   // Every path in this harness is outside the managed root. Keep container
   // discovery free of host I/O just like the contrived Git/stat operations.
@@ -63,10 +65,11 @@ afterEach(async () => {
   await Promise.all(registries.splice(0).map((registry) => registry.close()));
   vi.mocked(stat).mockReset();
   vi.mocked(deleteThreadAssets).mockClear();
+  registryLog.error.mockClear();
   vi.useRealTimers();
 });
 
-function build(active: AppServerThreadSummary[], target = codexThread({ id: "target" })) {
+function build(active: AppServerThreadSummary[], target = codexThread({ id: "target" }), checkpoint?: Pick<ArchiveCleanupCheckpointStore, "save" | "recover">) {
   const overlays = new Map<string, ThreadOverlayState>();
   let archived: AppServerThreadSummary[] = [];
   const counts = { aggregateLists: 0, archiveMutations: 0, providerPages: 0, largestProviderPage: 0, overlayReads: 0, largestOverlaySlice: 0 };
@@ -111,6 +114,7 @@ function build(active: AppServerThreadSummary[], target = codexThread({ id: "tar
       createdAt: 1, archivedAt: 2, state: "archived", ignoredFilesExcluded: true };
   });
   const registry = new DesktopBackendRegistry({ codexClient: client as never, overlayStore: store as never,
+    archiveCleanupCheckpointStore: checkpoint, runtimeInstanceId: "cleanup-fixture", resolveLiveProfileRuntimeInstanceIds: () => ["cleanup-fixture"],
     worktreeArchiveService: { archive: archiveWorktree } as never, threadTitleGenerationService: null });
   registries.push(registry);
   const events: AgentEvent[] = [];
@@ -150,6 +154,122 @@ function buildArchiveBurst(active: AppServerThreadSummary[], targets: AppServerT
 }
 
 describe("archive cleanup pipeline", () => {
+  it.each([
+    { failedCalls: [1], code: "SQLITE_FULL" },
+    { failedCalls: [2], code: "SQLITE_BUSY" },
+    { failedCalls: [1, 2], code: "SQLITE_FULL" },
+  ])("finishes shutdown when checkpoint calls $failedCalls fail with $code", async ({ failedCalls, code }) => {
+    vi.useFakeTimers();
+    let attempts = 0;
+    const checkpoint = { save: vi.fn<ArchiveCleanupCheckpointStore["save"]>(() => {
+      attempts += 1;
+      if (failedCalls.includes(attempts)) throw Object.assign(new Error(code), { code });
+    }), recover: vi.fn(() => []) };
+    const fixture = build([], undefined, checkpoint);
+    const closeClient = vi.spyOn(fixture.client, "close");
+    await fixture.registry.archiveThread({ backend: "codex", threadId: "target", backgroundCleanup: true });
+    expect(fixture.registry.getArchiveCleanupCountForQuit()).toBe(1);
+    const cleanup = fixture.registry.archiveThread({ backend: "codex", threadId: "target" });
+    const closing = fixture.registry.close();
+    expect(fixture.registry.close()).toBe(closing);
+    await expect(closing).resolves.toBeUndefined();
+    await fixture.registry.close();
+    expect(closeClient).toHaveBeenCalledOnce();
+    expect(checkpoint.save).toHaveBeenCalledTimes(2);
+    expect(fixture.counts.providerPages).toBe(0);
+    await expect(cleanup).resolves.toMatchObject({ cleanup: [expect.objectContaining({ skippedReason: expect.stringContaining("cancelled") })] });
+    for (const call of failedCalls) {
+      expect(registryLog.error).toHaveBeenCalledWith("archive cleanup quit checkpoint failed", {
+        phase: call === 1 ? "before-drain" : "after-drain", error: code,
+      });
+    }
+  });
+
+  it("counts queued cleanup at quit and checkpoints it after cancellation", async () => {
+    vi.useFakeTimers();
+    const checkpoint = { save: vi.fn(), recover: vi.fn(() => []) };
+    const fixture = build([], undefined, checkpoint);
+    await fixture.registry.archiveThread({ backend: "codex", threadId: "target", backgroundCleanup: true });
+    expect(fixture.registry.getArchiveCleanupCountForQuit()).toBe(1);
+    await fixture.registry.close();
+    expect(fixture.counts.providerPages).toBe(0);
+    expect(checkpoint.save).toHaveBeenCalledWith("cleanup-fixture", [expect.objectContaining({ backend: "codex", threadId: "target" })]);
+  });
+
+  it("resumes a checkpoint in one batch without repeating the provider archive", async () => {
+    vi.useFakeTimers();
+    const directory = { id: "directory", kind: "worktree" as const, label: "repo", path: "/contrived/repo", worktreePath: "/contrived/worktree" };
+    const targets = Array.from({ length: 130 }, (_, index) => codexThread({ id: `resumed-${index}`, linkedDirectories: [directory] }));
+    const intents: ArchiveCleanupIntent[] = targets.map((thread) => ({ backend: "codex", threadId: thread.id, archivedAt: 1,
+      codexRolloutMissing: false, messagingCleanup: {} }));
+    const checkpoint = { save: vi.fn(), recover: vi.fn(() => intents) };
+    const fixture = build([codexThread({ id: "shared-user", linkedDirectories: [directory] })], undefined, checkpoint);
+    fixture.client.listArchiveCleanupThreadsPage.mockImplementation(async (params) => {
+      fixture.counts.providerPages += 1;
+      if (!params.archived) return { threads: [codexThread({ id: "shared-user", linkedDirectories: [directory] })], nextCursor: undefined };
+      const offset = Number(params.cursor ?? 0);
+      const threads = targets.slice(offset, offset + params.limit);
+      return { threads, nextCursor: offset + threads.length < targets.length ? String(offset + threads.length) : undefined };
+    });
+    const resumption = fixture.registry.resumeArchiveCleanupsAtStartup();
+    expect(fixture.registry.getArchiveCleanupCountForQuit()).toBe(130);
+    await drivePacer(fixture.registry, resumption);
+    expect(fixture.client.archiveThread).not.toHaveBeenCalled();
+    expect(fixture.archiveWorktree).not.toHaveBeenCalled();
+    expect(fixture.counts.providerPages).toBe(7);
+    expect(fixture.registry.getArchiveCleanupCountForQuit()).toBe(0);
+    await fixture.registry.resumeArchiveCleanupsAtStartup();
+    expect(checkpoint.recover).toHaveBeenCalledOnce();
+    await fixture.registry.close();
+    expect(checkpoint.save).toHaveBeenCalledWith("cleanup-fixture", []);
+  });
+
+  it.each([false, true])("does not resume removal for a restored active thread (previously missing: %s)", async (codexRolloutMissing) => {
+    vi.useFakeTimers();
+    const target = codexThread({ id: "target", linkedDirectories: [{ id: "directory", kind: "worktree", label: "repo", path: "/contrived/repo", worktreePath: "/contrived/worktree" }] });
+    const checkpoint = { save: vi.fn(), recover: vi.fn(() => [{ backend: "codex" as const, threadId: "target", archivedAt: 1,
+      codexRolloutMissing, messagingCleanup: {} }]) };
+    const fixture = build([target], target, checkpoint);
+    await drivePacer(fixture.registry, fixture.registry.resumeArchiveCleanupsAtStartup());
+    expect(fixture.client.archiveThread).not.toHaveBeenCalled();
+    expect(fixture.archiveWorktree).not.toHaveBeenCalled();
+    expect(fixture.store.setThreadArchiveTombstone).not.toHaveBeenCalled();
+    expect(fixture.events.find((event) => event.notification.method === "thread/archiveCleanup/completed")?.notification.params)
+      .toMatchObject({ cleanup: [expect.objectContaining({ removedWorktree: false, skippedReason: expect.stringContaining("active again") })] });
+  });
+
+  it("resumes an archived worktree with fresh removal admission", async () => {
+    vi.useFakeTimers();
+    const target = codexThread({ id: "target", linkedDirectories: [{ id: "directory", kind: "worktree", label: "repo", path: "/contrived/repo", worktreePath: "/contrived/worktree" }] });
+    const checkpoint = { save: vi.fn(), recover: vi.fn(() => [{ backend: "codex" as const, threadId: "target", archivedAt: 1,
+      codexRolloutMissing: false, messagingCleanup: {} }]) };
+    const fixture = build([], target, checkpoint);
+    fixture.client.listArchiveCleanupThreadsPage.mockImplementation(async (params) => {
+      fixture.counts.providerPages += 1;
+      return { threads: params.archived ? [target] : [], nextCursor: undefined };
+    });
+    await drivePacer(fixture.registry, fixture.registry.resumeArchiveCleanupsAtStartup());
+    expect(fixture.client.archiveThread).not.toHaveBeenCalled();
+    expect(fixture.archiveWorktree).toHaveBeenCalledOnce();
+    expect(fixture.counts.providerPages).toBe(4);
+    expect(fixture.events.find((event) => event.notification.method === "thread/archiveCleanup/completed")?.notification.params)
+      .toMatchObject({ cleanup: [expect.objectContaining({ removedWorktree: true })] });
+  });
+
+  it("retains replay jobs beyond queue capacity when quit interrupts recovery", async () => {
+    vi.useFakeTimers();
+    const intents: ArchiveCleanupIntent[] = Array.from({ length: 300 }, (_, index) => ({ backend: "codex", threadId: `saved-${index}`, archivedAt: 1,
+      codexRolloutMissing: false, messagingCleanup: {} }));
+    const checkpoint = { save: vi.fn(), recover: vi.fn(() => intents) };
+    const fixture = build([], undefined, checkpoint);
+    const resumption = fixture.registry.resumeArchiveCleanupsAtStartup();
+    expect(fixture.registry.getArchiveCleanupCountForQuit()).toBe(300);
+    await fixture.registry.close();
+    await resumption;
+    expect(checkpoint.save).toHaveBeenCalledWith("cleanup-fixture", intents);
+    expect(fixture.counts.providerPages).toBe(0);
+  });
+
   it("shares ownership discovery across a 130-thread archive burst", async () => {
     vi.useFakeTimers();
     const directory = { id: "shared", kind: "worktree" as const, label: "repo", path: "/contrived/repo", worktreePath: "/contrived/shared" };

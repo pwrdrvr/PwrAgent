@@ -62,6 +62,7 @@ export type QuitBlockerSnapshot = {
   threadIds: string[];
   actionRunCount: number;
   automationRunCount?: number;
+  archiveCleanupCount?: number;
   items: QuitBlockerItem[];
 };
 
@@ -73,6 +74,7 @@ export type QuitManagerDependencies = {
     inProgressThreadCount: number;
     terminalSessionCount: number;
     actionRunCount?: number;
+    archiveCleanupCount?: number;
     items?: QuitBlockerItem[];
     refresh?: () => Promise<QuitConfirmationDialogSnapshot>;
   }) => Promise<QuitConfirmationDialogResult>;
@@ -161,6 +163,7 @@ export function createQuitManager(
         {
           count: snapshot.count,
           actionRunCount: snapshot.actionRunCount,
+          ...(snapshot.archiveCleanupCount ? { archiveCleanupCount: snapshot.archiveCleanupCount } : {}),
           automationRunCount: snapshot.automationRunCount ?? 0,
           source: options.source,
           terminalSessionCount: snapshot.terminalSessionCount,
@@ -197,6 +200,7 @@ export function createQuitManager(
     dependencies.log.warn?.("quit requested with active work", {
       count: snapshot.count,
       actionRunCount: snapshot.actionRunCount,
+      ...(snapshot.archiveCleanupCount ? { archiveCleanupCount: snapshot.archiveCleanupCount } : {}),
       automationRunCount: snapshot.automationRunCount ?? 0,
       source: options.source,
       terminalSessionCount: snapshot.terminalSessionCount,
@@ -236,6 +240,7 @@ export function createQuitManager(
           automationRunCount: snapshot.automationRunCount ?? 0,
           terminalSessionCount: snapshot.terminalSessionCount,
           actionRunCount: snapshot.actionRunCount,
+          ...(snapshot.archiveCleanupCount ? { archiveCleanupCount: snapshot.archiveCleanupCount } : {}),
           items,
           refresh: async () =>
             await buildQuitConfirmationSnapshot(
@@ -258,6 +263,7 @@ export function createQuitManager(
       dependencies.log.warn?.("quit confirmation resolved", {
         count: snapshot.count,
         actionRunCount: snapshot.actionRunCount,
+        ...(snapshot.archiveCleanupCount ? { archiveCleanupCount: snapshot.archiveCleanupCount } : {}),
         automationRunCount: snapshot.automationRunCount ?? 0,
         resolution,
         source: options.source,
@@ -315,6 +321,7 @@ export async function buildQuitConfirmationSnapshot(
     automationRunCount: snapshot.automationRunCount ?? 0,
     terminalSessionCount: snapshot.terminalSessionCount,
     actionRunCount: snapshot.actionRunCount,
+    ...(snapshot.archiveCleanupCount ? { archiveCleanupCount: snapshot.archiveCleanupCount } : {}),
     items,
   };
 }
@@ -338,6 +345,7 @@ export function buildQuitBlockerSnapshot(params: {
     threads: IntegratedTerminalQuitThread[];
   };
   actionRuns?: DetachedCommandSummary[];
+  archiveCleanupCount?: number;
 }): QuitBlockerSnapshot {
   const threadIds = [...params.inProgressThreads.threadIds].sort();
   const terminalThreads = [...params.terminalSessions.threads].sort(
@@ -406,11 +414,13 @@ export function buildQuitBlockerSnapshot(params: {
       threadIds.length
       + automationRuns.length
       + params.terminalSessions.count
-      + actionRuns.length,
+      + actionRuns.length
+      + (params.archiveCleanupCount ?? 0),
     terminalSessionCount: params.terminalSessions.count,
     terminalThreadKeys,
     threadIds,
     actionRunCount: actionRuns.length,
+    ...(params.archiveCleanupCount ? { archiveCleanupCount: params.archiveCleanupCount } : {}),
     automationRunCount: automationRuns.length,
     items,
   };
@@ -643,6 +653,7 @@ export function getCurrentQuitBlockers(): QuitBlockerSnapshot {
       getDesktopBackendRegistry().getInProgressThreadSnapshotForQuit(),
     terminalSessions: getIntegratedTerminalQuitSnapshot(),
     actionRuns: listRunningDetachedCommands(),
+    archiveCleanupCount: getDesktopBackendRegistry().getArchiveCleanupCountForQuit(),
   });
 }
 
