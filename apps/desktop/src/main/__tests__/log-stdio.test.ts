@@ -191,4 +191,16 @@ describe("initializeMainLogger stdio handling", () => {
     expect(mocks.fileTransport.level).toBe("info");
     expect(mocks.electronLog.initialize).toHaveBeenCalledTimes(1);
   });
+
+  it("does not treat an unexpected synchronous write failure as output shutdown", async () => {
+    const { initializeMainLogger } = await import("../log");
+    initializeMainLogger();
+    mocks.consoleTransport.level = "info";
+    const error = Object.assign(new Error("fixture I/O failure"), { code: "EIO" });
+    mocks.consoleWriteFn.mockImplementationOnce(() => { throw error; });
+
+    expect(() => mocks.consoleTransport.writeFn(makeMessage())).toThrow(error);
+    expect(mocks.consoleTransport.level).toBe("info");
+    expect(mocks.fileTransport.level).toBe("info");
+  });
 });

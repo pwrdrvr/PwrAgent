@@ -812,6 +812,7 @@ const NOTIFICATION_CONTEXT_RECONCILIATION_LIMIT = 512;
 // rows carry enrichment whether or not the caller requested it.
 const ACP_LISTINGS_ARE_ENRICHED = true;
 const backendRegistryLog = getMainLogger("pwragent:backend-registry");
+const backendLifecycleLog = getMainLogger("pwragent:backend-lifecycle");
 class AutomaticArchiveCancelledError extends Error {}
 class ThreadAlreadyActiveError extends Error {}
 const GROK_TITLE_HELPER_SESSION_POLICY = buildMinimalGrokHelperSessionPolicy({
@@ -5774,7 +5775,7 @@ function logBackendLifecycleNotification(
   }
 
   if (notification.method === "thread/status/changed") {
-    backendRegistryLog.info("backend lifecycle notification", {
+    backendLifecycleLog.info("backend lifecycle notification", {
       backend,
       method: notification.method,
       status: readStatusType(notification.params.status),
@@ -5788,7 +5789,7 @@ function logBackendLifecycleNotification(
     notification.method === "turn/failed" ||
     notification.method === "turn/cancelled"
   ) {
-    backendRegistryLog.info("backend lifecycle notification", {
+    backendLifecycleLog.info("backend lifecycle notification", {
       backend,
       method: notification.method,
       status: readTurnStatus(notification.params.turn),
