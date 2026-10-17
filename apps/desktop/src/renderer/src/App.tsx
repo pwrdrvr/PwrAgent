@@ -65,6 +65,11 @@ import {
   type SendThreadToMachineRequest,
   type SendThreadToMachineSource,
 } from "./features/federation/SendThreadToMachineDialog";
+import { ContinueAfterDialog } from "./features/thread-dependencies/ContinueAfterDialog";
+import {
+  ThreadDependencyIndicatorsContext,
+  useThreadDependencyIndicators,
+} from "./features/thread-dependencies/useThreadDependencyIndicators";
 import type { FederationProjectDirectory } from "./features/chrome/useFederationProjectStates";
 import type {
   LaunchpadMachineControl,
@@ -2974,6 +2979,20 @@ function DesktopAppShell(props: {
   // whether a turn is running.
   const [sendToMachineThread, setSendToMachineThread] =
     useState<NavigationThreadSummary>();
+  // Continue After, from the thread menu or a row's dependency chip.
+  // Dependencies run on the owning machine, so a federation window has none.
+  const [continueAfterThread, setContinueAfterThread] =
+    useState<NavigationThreadSummary>();
+  const threadDependencyIndicators = useThreadDependencyIndicators(desktopApi);
+  const canContinueAfter = Boolean(desktopApi?.manageThreadDependencies)
+    && !readRendererFederationTarget();
+  const threadDependencyContext = useMemo(
+    () => ({
+      byThreadKey: threadDependencyIndicators,
+      ...(canContinueAfter ? { open: setContinueAfterThread } : {}),
+    }),
+    [threadDependencyIndicators, canContinueAfter],
+  );
   const threadHandoffTargets = useMemo(
     () =>
       desktopApi?.handoffThreadToInstance && !readRendererFederationTarget()
@@ -3876,6 +3895,7 @@ function DesktopAppShell(props: {
     <FederationDisplayLabelsProvider health={liveFederationHealth}>
     <ThreadTodoCountsContext.Provider value={threadTodoController.openByThreadKey}>
     <OperatorWaitsContext.Provider value={operatorWaitsContext}>
+    <ThreadDependencyIndicatorsContext.Provider value={threadDependencyContext}>
     <TranscriptLinkProvider
       localInstanceId={liveFederationHealth?.instanceId}
       activeThread={navigation.selectedThread}
@@ -3890,6 +3910,14 @@ function DesktopAppShell(props: {
           findRepository={findThreadHandoffRepository}
           onClose={() => setSendToMachineThread(undefined)}
           onSend={(request) => sendThreadToMachine(sendToMachineThread, request)}
+        />
+      ) : null}
+      {continueAfterThread ? (
+        <ContinueAfterDialog
+          key={`${continueAfterThread.source}:${continueAfterThread.id}`}
+          desktopApi={desktopApi}
+          thread={continueAfterThread}
+          onClose={() => setContinueAfterThread(undefined)}
         />
       ) : null}
       {codexLoginProfile ? (
@@ -3998,6 +4026,7 @@ function DesktopAppShell(props: {
           onSendThreadToMachine={threadHandoffTargets.length > 0
             ? setSendToMachineThread
             : undefined}
+          onContinueAfter={canContinueAfter ? setContinueAfterThread : undefined}
           onAddProjectDirectory={readRendererFederationTarget()
             ? undefined
             : addProjectDirectory}
@@ -4477,6 +4506,7 @@ function DesktopAppShell(props: {
 
       {todoFullAccessRiskDialog}
     </TranscriptLinkProvider>
+    </ThreadDependencyIndicatorsContext.Provider>
     </OperatorWaitsContext.Provider>
     </ThreadTodoCountsContext.Provider>
     </FederationDisplayLabelsProvider>

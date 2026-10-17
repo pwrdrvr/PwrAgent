@@ -382,6 +382,19 @@ describe("durable thread dependencies", () => {
     expect(changed.mock.calls[0]![0].evidence).toHaveLength(1);
   });
 
+  it("lists active registrations for sidebar status without their continuations", async () => {
+    const agent = coordinator();
+    await agent.manage({ action: "create", backend: "codex", threadId: "dependencies", conditions: [condition("foundation")], continuation: "Rebase onto main" });
+    const listed = (await create(agent, [condition("foundation", "pr_merged")])).dependencies
+      .find((item) => item.conditions[0]!.when === "pr_merged");
+    await agent.manage({ action: "cancel", backend: "codex", threadId: "dependencies", dependencyId: listed!.id });
+    const active = agent.active();
+    expect(active).toHaveLength(1);
+    expect(active[0]).toMatchObject({ threadId: "dependencies", status: "waiting" });
+    expect(active[0]).not.toHaveProperty("continuation");
+    expect(store.active()[0]!.continuation).toBe("Rebase onto main");
+  });
+
   it("makes no SQLite writes for unchanged polls or turns, including a busy consumer", async () => {
     const agent = coordinator(); busy = true;
     snapshots.get("foundation")!.prs = [{ pr: pr({ checkState: "passing", state: "passing" }), fetchedAt: now }];

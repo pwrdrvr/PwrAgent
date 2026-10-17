@@ -98,6 +98,11 @@ export class ThreadDependencyCoordinator {
     };
   }
 
+  /** Every active registration, for sidebar status. Continuations stay out: rows never show them. */
+  active(): ThreadDependency[] {
+    return this.options.store.active().map(({ continuation: _continuation, ...item }) => item);
+  }
+
   reconcile(): Promise<void> {
     return this.serialize(async () => {
       for (const item of this.options.store.active()) {

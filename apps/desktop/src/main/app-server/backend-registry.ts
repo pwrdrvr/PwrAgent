@@ -42216,7 +42216,8 @@ export class DesktopBackendRegistry {
     if (request.operation === "manage_thread_dependencies") {
       if (!this.threadDependencyToolHandler) return threadInspectionFailure("unsupported_operation", "Thread dependencies are not available.");
       // The resumed turn may have lost the plan to compaction, so an agent must
-      // write it down. The operator form keeps it optional.
+      // write it down. This message is worded for an agent; the desktop
+      // service refuses a blank plan from the operator's dialog too.
       if (request.args.action === "create"
         && (typeof request.args.continuation !== "string" || !request.args.continuation.trim())) {
         return threadInspectionFailure("invalid_arguments", "Provide continuation: the concrete steps this thread should take when the prerequisites are met, written so a reader without this conversation can act on them.");
