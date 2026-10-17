@@ -5,6 +5,14 @@ export const THREAD_DEPENDENCY_CONDITIONS = [
   "turn_completed", "pr_attached", "ci_passed", "pr_merged",
 ] as const;
 
+/** How a prerequisite reads after its thread's name: "Foundation passes CI". */
+export const THREAD_DEPENDENCY_CONDITION_PHRASES: Readonly<Record<(typeof THREAD_DEPENDENCY_CONDITIONS)[number], string>> = {
+  turn_completed: "finishes its turn",
+  pr_attached: "has a reviewable PR",
+  ci_passed: "passes CI",
+  pr_merged: "is merged",
+};
+
 export type ThreadDependencyCondition = {
   backend: AppServerBackendKind;
   threadId: string;

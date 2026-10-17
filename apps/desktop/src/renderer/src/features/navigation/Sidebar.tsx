@@ -318,9 +318,13 @@ type SidebarProps = {
   onSendThreadToMachine?: (thread: NavigationThreadSummary) => void;
   /**
    * Open Continue After for a thread this window owns. Dependencies run on
-   * the owning machine, so a peer's row offers no item.
+   * the owning machine, so a peer's row offers no item. `returnFocus` is
+   * where focus goes when the dialog closes, since the menu item is gone.
    */
-  onContinueAfter?: (thread: NavigationThreadSummary) => void;
+  onContinueAfter?: (
+    thread: NavigationThreadSummary,
+    returnFocus: RefObject<HTMLElement | null>,
+  ) => void;
   /** Whether a peer has a directory row's project, for its machine menu. */
   checkFederationTargetProject?: CheckFederationTargetProject;
   newThreadFederationTargets?: readonly FederationThreadTarget[];
@@ -3601,7 +3605,7 @@ export function Sidebar(props: SidebarProps) {
                       onClick={() => {
                         const target = contextMenu.thread;
                         setContextMenu(undefined);
-                        props.onContinueAfter!(target);
+                        props.onContinueAfter!(target, contextMenuOpenerRef);
                       }}
                     >
                       <span>Continue After…</span>

@@ -17,6 +17,7 @@ import {
   type ComponentType,
   type CSSProperties,
   type PointerEvent,
+  type RefObject,
   type SetStateAction,
 } from "react";
 import {
@@ -2981,15 +2982,19 @@ function DesktopAppShell(props: {
     useState<NavigationThreadSummary>();
   // Continue After, from the thread menu or a row's dependency chip.
   // Dependencies run on the owning machine, so a federation window has none.
-  const [continueAfterThread, setContinueAfterThread] =
-    useState<NavigationThreadSummary>();
+  const [continueAfter, setContinueAfter] = useState<{
+    thread: NavigationThreadSummary;
+    returnFocus?: RefObject<HTMLElement | null>;
+  }>();
   const threadDependencyIndicators = useThreadDependencyIndicators(desktopApi);
   const canContinueAfter = Boolean(desktopApi?.manageThreadDependencies)
     && !readRendererFederationTarget();
   const threadDependencyContext = useMemo(
     () => ({
       byThreadKey: threadDependencyIndicators,
-      ...(canContinueAfter ? { open: setContinueAfterThread } : {}),
+      ...(canContinueAfter
+        ? { open: (thread: NavigationThreadSummary) => setContinueAfter({ thread }) }
+        : {}),
     }),
     [threadDependencyIndicators, canContinueAfter],
   );
@@ -3912,12 +3917,13 @@ function DesktopAppShell(props: {
           onSend={(request) => sendThreadToMachine(sendToMachineThread, request)}
         />
       ) : null}
-      {continueAfterThread ? (
+      {continueAfter ? (
         <ContinueAfterDialog
-          key={`${continueAfterThread.source}:${continueAfterThread.id}`}
+          key={`${continueAfter.thread.source}:${continueAfter.thread.id}`}
           desktopApi={desktopApi}
-          thread={continueAfterThread}
-          onClose={() => setContinueAfterThread(undefined)}
+          thread={continueAfter.thread}
+          {...(continueAfter.returnFocus ? { returnFocus: continueAfter.returnFocus } : {})}
+          onClose={() => setContinueAfter(undefined)}
         />
       ) : null}
       {codexLoginProfile ? (
@@ -4026,7 +4032,9 @@ function DesktopAppShell(props: {
           onSendThreadToMachine={threadHandoffTargets.length > 0
             ? setSendToMachineThread
             : undefined}
-          onContinueAfter={canContinueAfter ? setContinueAfterThread : undefined}
+          onContinueAfter={canContinueAfter
+            ? (thread, returnFocus) => setContinueAfter({ thread, returnFocus })
+            : undefined}
           onAddProjectDirectory={readRendererFederationTarget()
             ? undefined
             : addProjectDirectory}

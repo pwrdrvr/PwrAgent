@@ -7350,13 +7350,17 @@ describe("Sidebar", () => {
       </ThreadDependencyIndicatorsContext.Provider>
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Open thread actions" }));
+    const trigger = screen.getByRole("button", { name: "Open thread actions" });
+    trigger.focus();
+    fireEvent.click(trigger);
     const items = within(screen.getByRole("menu")).getAllByRole("menuitem");
     const lock = items.findIndex((item) => menuItemLabel(item) === "Lock Thread…");
     expect(items[lock + 1]).toHaveAccessibleName("Continue After, 2 waiting");
     await clickElement(screen.getByRole("menuitem", { name: "Continue After, 2 waiting" }));
 
-    expect(onContinueAfter).toHaveBeenCalledWith(sharedThread);
+    // The menu item is gone once the dialog opens, so focus returns to the
+    // control that opened the menu.
+    expect(onContinueAfter).toHaveBeenCalledWith(sharedThread, expect.objectContaining({ current: trigger }));
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 
