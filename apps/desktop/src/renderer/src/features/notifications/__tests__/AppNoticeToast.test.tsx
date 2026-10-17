@@ -16,6 +16,39 @@ describe("AppNoticeToast", () => {
     detail: "/repo/.worktrees/shared: Worktree is still used by another active thread.",
   };
 
+  it.each([false, true])("copies a code block and unchanged plain text (custom handoff: %s)", (customHandoff) => {
+    const copyRichText = vi.fn(async () => undefined);
+    const copyText = vi.fn(async () => undefined);
+    const desktopApi = { copyRichText, copyText };
+    const diagnosticNotice = {
+      id: "hot-cpu:1",
+      title: "Main CPU profile captured",
+      status: { label: "Capture complete", state: "success" as const },
+      message: "Spike (1 sample >= 50%) saved main-hot-0001.cpuprofile.",
+      detail: "Profile: <fixture> & diagnostics",
+      facts: [{ label: "Session", value: "hot-cpu-fixture" }],
+      copyText: customHandoff ? "Inspect <profile> & report\n\n  Path: /tmp/main.cpuprofile" : undefined,
+    };
+    const text = customHandoff
+      ? "Inspect <profile> & report\n\n  Path: /tmp/main.cpuprofile"
+      : "Main CPU profile captured\nCapture complete\nSpike (1 sample >= 50%) saved main-hot-0001.cpuprofile.\nProfile: <fixture> & diagnostics\nSession: hot-cpu-fixture";
+    const html = customHandoff
+      ? "<pre><code>Inspect &lt;profile&gt; &amp; report\n\n  Path: /tmp/main.cpuprofile</code></pre>"
+      : "<pre><code>Main CPU profile captured\nCapture complete\nSpike (1 sample &gt;= 50%) saved main-hot-0001.cpuprofile.\nProfile: &lt;fixture&gt; &amp; diagnostics\nSession: hot-cpu-fixture</code></pre>";
+
+    render(
+      <AppNoticeToast
+        desktopApi={desktopApi}
+        notice={diagnosticNotice}
+        onDismiss={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy notice" }));
+    expect(copyRichText).toHaveBeenCalledExactlyOnceWith({ text, html });
+    expect(copyText).not.toHaveBeenCalled();
+  });
+
   it("renders selectable notice text with copy and dismiss controls", () => {
     const copyText = vi.fn(async () => undefined);
     const onDismiss = vi.fn();
