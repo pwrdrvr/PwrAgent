@@ -72,6 +72,7 @@ export type ThreadTodosPanelProps = {
   filter?: ThreadTodoFilter;
   /** `backend:threadId` of the thread on screen. */
   threadKey: string;
+  threadRunning?: boolean;
   /** Directory key of that thread's project, when it has one. */
   projectKey?: string;
   onStartReview: (todo: ThreadTodo, options?: ThreadTodoResolveOptions) => void;
@@ -338,6 +339,7 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
                         <ThreadTodoCard
                           todo={todo}
                           running={view.runningIds.has(todo.id)}
+                          threadRunning={props.threadRunning}
                           mergeMethods={view.mergeMethods}
                           instances={view.instances}
                           projectMenu={view.projectMenu}

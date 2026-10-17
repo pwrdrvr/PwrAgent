@@ -73,7 +73,7 @@ export function useTrackedReview(
     };
     void reload();
     const unsubscribe = api.onThreadTodosChanged?.((event) => {
-      if (event.backend === backend && event.threadId === threadId) void reload();
+      if (event.backend === undefined || (event.backend === backend && event.threadId === threadId)) void reload();
     });
     return () => {
       generation.current++;

@@ -100,13 +100,13 @@ describe("persistent thread reviews", () => {
 
   it("imports completed structured reviews and skips running review entries", () => {
     const entry: AppServerThreadReviewEntry = {
-      type: "review", id: "native-result", review: "Review result", createdAt: 123,
+      type: "review", id: "native-result", review: "Review result", createdAt: clock,
       output: { findings: [], overall_correctness: "patch is correct", overall_explanation: "No findings." },
     };
     expect(service.importEntry(THREAD, { ...entry, id: "started", turn: { id: "turn", status: "in_progress" } })).toBeUndefined();
     const clean = service.importEntry(THREAD, entry)!;
     expect(clean.status).toBe("handled");
-    expect(clean.createdAt).toBe(123);
+    expect(clean.createdAt).toBe(entry.createdAt);
     expect(service.list()).toEqual([]);
   });
 
@@ -124,14 +124,14 @@ describe("persistent thread reviews", () => {
       },
     } };
     const completed = completedThreadReview(event)!;
-    expect(service.importEntry(completed.identity, completed.entry)?.items[0]?.title).toBe("Abort pending work");
+    expect(service.importEntry(completed.identity, completed.entry, "live")?.items[0]?.title).toBe("Abort pending work");
     expect(completed.entry.createdAt).toBe(1_791_600_000_000);
     expect(completedThreadReview({ backend: "codex", notification: { method: "item/agentMessage/delta", params: { threadId: THREAD.threadId, turnId: "turn", itemId: "item", delta: "Review text" } } })).toBeUndefined();
     expect(completedThreadReview({ backend: "codex", notification: { method: "item/completed", params: { threadId: THREAD.threadId, turnId: "turn", item: { id: "started", type: "enteredReviewMode" } } } })).toBeUndefined();
   });
 
   it("does not track an interrupted review that left an empty artifact", () => {
-    expect(service.importEntry(THREAD, { type: "review", id: "interrupted", review: "  " })).toBeUndefined();
+    expect(service.importEntry(THREAD, { type: "review", id: "interrupted", review: "  " }, "live")).toBeUndefined();
     expect(service.list({ ...THREAD, status: "all" })).toEqual([]);
   });
 
@@ -157,7 +157,7 @@ describe("persistent thread reviews", () => {
   it("tracks native plain-text findings using the transcript's same parser", () => {
     const review = service.importEntry(THREAD, {
       type: "review", id: "native-plain", review: "A cancellation regression.\n\nReview comments:\n- [P1] Handle cancellation — /repo/index.ts:10-12\n  Abort the pending operation.",
-    })!;
+    }, "live")!;
     expect(review.items).toHaveLength(1);
     expect(review.items[0]).toMatchObject({ title: "Handle cancellation", status: "open", priority: 1, codeLocation: { absolute_file_path: "/repo/index.ts", line_range: { start: 10, end: 12 } } });
   });
@@ -173,7 +173,7 @@ describe("persistent thread reviews", () => {
           { title: "[P2] Release the connection", body: "Close it.", confidence_score: 0.9, code_location: location },
         ],
       },
-    })!;
+    }, "live")!;
     expect(review.items.map(({ title, priority }) => ({ title, priority }))).toEqual([
       { title: "Handle cancellation", priority: 1 },
       { title: "Release the connection", priority: 2 },
@@ -188,24 +188,121 @@ describe("persistent thread reviews", () => {
     const review = service.importEntry(THREAD, {
       type: "review", id: "huge", review: "Review",
       output: { overall_correctness: "patch is incorrect", overall_explanation: "Many.", findings },
-    })!;
+    }, "live")!;
     expect(review.items).toHaveLength(THREAD_REVIEW_MAX_FINDINGS);
     expect(review.items.at(-1)?.title).toBe(`Finding ${THREAD_REVIEW_MAX_FINDINGS - 1}`);
   });
 
-  it("imports old managed artifacts without copying the enclosing thread payload", () => {
-    const entry = { type: "review", id: "managed-review:turn:result", review: "An unstructured review to inspect." };
-    db.raw.prepare("INSERT INTO threads (thread_id, payload) VALUES (?, ?)").run("codex:review-owner", JSON.stringify({
-      ...THREAD, unrelatedThreadMetadata: "must not be copied", managedReviewEntries: [entry, { ...entry, id: "managed-review:turn:started" }],
-    }));
-    service.importStoredReviews();
-    const reviews = service.list();
-    expect(reviews).toHaveLength(1);
-    expect(reviews[0]).not.toHaveProperty("unrelatedThreadMetadata");
-    expect(reviews[0]).not.toHaveProperty("managedReviewEntries");
-    service.update({ id: reviews[0]!.id, status: "dismissed", note: "Superseded." }, "user");
-    service.importStoredReviews();
+  it("does not backfill old or undated native and managed reviews, even after restart", () => {
+    const boundary = clock;
+    const old = { type: "review" as const, id: "managed-review:old:result", review: "Old review.\n\nReview comments:\n- [P1] Old finding — /repo/index.ts:10-12\n  Old work.", createdAt: boundary - 1 };
+    const undated = { ...old, id: "native-undated", createdAt: undefined };
+    expect(service.importEntry(THREAD, old)).toBeUndefined();
+    expect(service.importEntry(THREAD, undated)).toBeUndefined();
+    clock += 10_000;
+    service = new ThreadReviewService(db, undefined, () => ++clock);
+    expect(service.importEntry(THREAD, old)).toBeUndefined();
+    expect(service.importEntry(THREAD, undated)).toBeUndefined();
+    // A completion missed while the app was closed can still be recovered.
+    const recovered = service.importEntry(THREAD, { ...old, id: "native-new", createdAt: boundary + 1 })!;
+    expect(recovered.items[0]?.title).toBe("Old finding");
+    expect(service.list()).toEqual([recovered]);
+  });
+
+  it("tracks undated live completions and preserves them across restart and replay", () => {
+    const entry = { type: "review" as const, id: "live-undated", review: "An unstructured review to inspect." };
+    const review = service.importEntry(THREAD, entry, "live")!;
+    expect(review.origin).toBe("automatic");
+    service = new ThreadReviewService(db, undefined, () => ++clock);
+    expect(service.list()).toEqual([review]);
+    service.importEntry(THREAD, entry);
+    expect(service.list()).toEqual([review]);
+  });
+
+  it("removes untriaged legacy imports from the queue without erasing history or explicit work", () => {
+    const old = service.record(THREAD, { ...INPUT, createdAt: 1_700_000_000_000 });
+    const documented = service.record(THREAD, { ...INPUT, sourceKey: "documented", createdAt: old.createdAt });
+    service.update({ id: documented.id, itemId: documented.items[0]!.id, status: "addressed", note: "Already fixed." }, "agent");
+    const external = service.record(THREAD, { ...INPUT, sourceKey: "external", sourceUrl: "https://example.com/review", createdAt: old.createdAt });
+    const explicit = service.record(THREAD, { ...INPUT, sourceKey: "explicit", createdAt: old.createdAt });
+    const undated = service.record(THREAD, { ...INPUT, sourceKey: "legacy-import-time" });
+    // Reproduce records written by #2685, which had no provenance field.
+    db.raw.prepare("UPDATE thread_reviews SET payload = json_remove(payload, '$.origin') WHERE review_id != ?").run(explicit.id);
+    expect(service.list().map((review) => review.id).sort()).toEqual([documented.id, external.id, explicit.id].sort());
+    expect(service.get(old.id)).toBeDefined();
+    expect(service.get(documented.id)?.items[0]?.resolution?.note).toBe("Already fixed.");
+    expect(service.list().some((review) => review.id === undated.id)).toBe(false);
+    const enrolled = service.record(THREAD, { ...INPUT, sourceKey: undated.sourceKey });
+    expect(enrolled.items).toEqual(undated.items);
+    expect(service.list().some((review) => review.id === undated.id)).toBe(true);
+    service.update({ id: old.id, status: "dismissed", note: "Obsolete." }, "user");
+    service.update({ id: old.id, status: "open" }, "user");
+    expect(service.list().some((review) => review.id === old.id)).toBe(true);
+  });
+
+  it("only presents automatic PR work while that exact PR is attached to its owning thread", () => {
+    const pr = { provider: "github.com", org: "example", repo: "atlas", number: 7, url: "https://github.com/example/atlas/pull/7" };
+    const entry = { type: "review" as const, id: "managed-review:new:result", review: "Inspect this result.", createdAt: clock,
+      context: { workspacePath: "/repo", pullRequest: pr } };
+    const review = service.importEntry(THREAD, entry)!;
+    const setPrs = (prs: unknown[]) => db.raw.prepare("INSERT OR REPLACE INTO threads (thread_id, payload) VALUES (?, ?)")
+      .run(`codex:${THREAD.threadId}`, JSON.stringify({ ...THREAD, prs }));
+    setPrs([pr]);
+    expect(service.list()).toEqual([review]);
+    // Same number on another host/repository is not the reviewed PR.
+    for (const other of [{ ...pr, provider: "gitlab.com" }, { ...pr, org: "other" }, { ...pr, repo: "other" }, { ...pr, number: 8 }]) {
+      setPrs([other]);
+      expect(service.list()).toEqual([]);
+    }
+    setPrs([]);
     expect(service.list()).toEqual([]);
+    expect(service.get(review.id)?.status).toBe("open");
+    const explicit = service.record(THREAD, { ...INPUT, context: entry.context });
+    expect(service.list()).toEqual([explicit]);
+    setPrs([pr]);
+    expect(service.list()).toHaveLength(2);
+    service.update({ id: review.id, status: "dismissed", note: "Superseded." }, "user");
+    setPrs([]);
+    expect(service.list({ status: "dismissed" })[0]?.id).toBe(review.id);
+  });
+
+  it("keeps partial resolutions and remaining controls available to full status reads after detachment", () => {
+    const pr = { provider: "github.com", org: "example", repo: "atlas", number: 7, url: "https://github.com/example/atlas/pull/7" };
+    const review = service.record(THREAD, { ...INPUT, context: { workspacePath: "/repo", pullRequest: pr } }, "automatic");
+    db.raw.prepare("INSERT INTO threads (thread_id, payload) VALUES (?, ?)")
+      .run(`codex:${THREAD.threadId}`, JSON.stringify({ ...THREAD, prs: [pr] }));
+    const partial = service.update({ id: review.id, itemId: review.items[0]!.id, status: "addressed", note: "Fixed cancellation.",
+      url: "https://github.com/example/atlas/commit/abc1234" }, "agent", THREAD);
+    expect(service.list()).toEqual([partial]);
+    db.raw.prepare("UPDATE threads SET payload = json_set(payload, '$.prs', json('[]')) WHERE thread_id = ?")
+      .run(`codex:${THREAD.threadId}`);
+    expect(service.list()).toEqual([]);
+    expect(service.list({ ...THREAD, status: "all" })).toEqual([partial]);
+    expect(partial.items[0]?.resolution?.note).toBe("Fixed cancellation.");
+    expect(partial.items[1]?.status).toBe("open");
+    service = new ThreadReviewService(db);
+    expect(service.list({ ...THREAD, status: "all" })).toEqual([partial]);
+    const settled = service.update({ id: partial.id, itemId: partial.items[1]!.id, status: "dismissed", note: "Caller owns the connection." }, "user");
+    expect(settled.status).toBe("handled");
+    expect(service.list({ ...THREAD, status: "all" })[0]?.items[0]?.resolution).toEqual(partial.items[0]?.resolution);
+  });
+
+  it("budgets the persistent tracking boundary once per profile, with no restart or read writes", async () => {
+    db.raw.prepare("DELETE FROM meta WHERE key = ?").run("thread_review_tracking_started_at");
+    const { writes } = await measureSqliteWrites(() => {
+      for (let index = 0; index < 100; index++) new ThreadReviewService(db).list();
+    });
+    expect(writes.commits).toBe(1);
+    expectSqliteWriteBudget({ scenario: "thread-review-tracking-start", note: "One profile tracking boundary; 100 service starts and reads. No repeated initialization or idle commits.", writes });
+  });
+
+  it("budgets explicit enrollment of a legacy record once without rewriting it on repeats", async () => {
+    const legacy = service.record(THREAD, INPUT);
+    db.raw.prepare("UPDATE thread_reviews SET payload = json_remove(payload, '$.origin') WHERE review_id = ?").run(legacy.id);
+    const { writes } = await measureSqliteWrites(() => {
+      for (let index = 0; index < 100; index++) service.record(THREAD, INPUT);
+    });
+    expectSqliteWriteBudget({ scenario: "thread-review-legacy-enrollment", note: "One explicit opt-in of a legacy review and 99 repeats; preserves findings and outcomes, no idle writes.", writes });
   });
 
   it("budgets creation and two item resolutions at three commits, with no replay or idle writes", async () => {

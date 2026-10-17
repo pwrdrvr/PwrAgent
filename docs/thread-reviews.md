@@ -37,10 +37,44 @@ The trusted calling context supplies backend and thread identity. An agent
 cannot inspect or mutate another thread's review by passing its id. Reusing a
 source key returns the existing record and never reopens settled findings.
 
-Final native and managed review events are imported automatically. Existing
-PwrAgent-managed artifacts are imported at startup. Older provider-owned
-reviews are imported when the App Server returns them during a thread read;
-the app does not scan provider storage or eagerly load every old thread.
+Final native and managed review events are imported automatically. Tracking
+starts once per profile, with a persistent timestamp shared across instances
+and restarts. Startup does not scan stored artifacts. Thread reads can recover
+reviews dated at or after that boundary; older or undated history stays in the
+transcript and does not become pending work. Undated live completions can be
+tracked because the completion event establishes that they are new.
+
+Records distinguish automatic imports from explicit `record_review` calls.
+An automatic PR review appears in the active queue only while that exact PR
+(host, organization, repository, and number) is attached to its owning thread.
+Detachment does not change its outcome or erase the artifact. Reattaching
+restores eligible open work. Explicit records do not depend on attachments.
+
+The To-dos list also checks the complete local owner navigation index for
+every card. Archived and absent owners are excluded even if no archive event
+was observed by this process. An overlay alone does not establish that a
+thread is active. The same read projects the current owner title, so a valid
+thread outside the sidebar's loaded window keeps its name. All cards share
+one cached owner index read, and the projection makes no SQLite writes.
+Provider discovery and authentication recovery refresh the full To-do list,
+so eligible cards return when their owners become available without requiring
+a separate card mutation.
+
+Attachment filtering applies to queue reads. Full review status reads
+(`status: "all"`) retain detached records for the transcript and agent tools,
+including partial resolutions, evidence links, and remaining review controls.
+
+The initial tracking implementation (#2685) imported historical reviews without
+provenance or an observation timestamp. Untouched generic legacy imports are
+excluded from lists, preserving their stored records and transcript artifacts.
+Even their creation date cannot prove eligibility: undated artifacts used the
+import time. Records with documented resolutions, explicit provenance, an
+external source URL, or a custom title are preserved. An old explicit record
+with the same generic title and no URL is indistinguishable from an import;
+calling `record_review` with its source key explicitly enrolls it again,
+preserving its finding ids and outcomes. No historical finding is declared
+fixed or declined by this correction.
+
 Structured reviews with no findings are handled immediately. Unstructured
 output that cannot be parsed remains open for explicit inspection and handling.
 Archiving a thread dismisses its open reviews with a recorded system reason.
@@ -75,6 +109,12 @@ record each fix, so no per-turn note repeats it. The selection clears once
 the reply is sent. The card stays open until the last finding is settled. A
 review with nothing left open offers **Mark handled** instead.
 
+Fix actions show a spinner and **Sending…** while the composer takes the
+request, then **Working…** while the owning thread has an active turn. Both
+the stack and panel disable duplicate Fix actions during either phase. A
+failed submission keeps the selection, shows its error, and allows a retry;
+ending or cancelling the turn re-enables fixes for findings that remain open.
+
 The transcript review keeps the record. A status row under the verdict gives
 the open count, or how the review was handled or dismissed. Each finding's
 footer holds its two actions, or a resolution line naming the outcome, the
@@ -90,7 +130,12 @@ Review controls use `listThreadReviews`, `updateThreadReview`, and the existing
 To-do change event. `threadReviewTodo` projects review metadata into the card
 list without duplicating persisted card state. Status changes are atomic,
 with one SQLite commit per new review or status mutation. Duplicate imports,
-reads, unchanged statuses, and idle time make no commits. The checked-in
+reads, unchanged statuses, and idle time make no commits. Starting tracking
+costs one profile-wide commit (~8 KB WAL), with no recurring writes: 0 MB/day.
+The checked-in `thread-review-tracking-start` budget verifies that restarts
+and reads do not repeat it. Explicit legacy enrollment costs one commit
+(~4 KB WAL), about 0.4 MB/day at 100 enrollments/day; repeated enrollment is a
+no-op, covered by `thread-review-legacy-enrollment`. The checked-in
 `thread-review-lifecycle` write budget measures a two-finding review and both
 resolutions at three commits and about 29 KB WAL, approximately 2.9 MB/day at
 100 such review lifecycles per day. Larger findings increase the payload cost.

@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AppServerThreadReviewEntry, ThreadReview, ThreadTodo } from "@pwragent/shared";
+import type { AppServerThreadReviewEntry, ThreadReview, ThreadTodo, ThreadTodosChangedEvent } from "@pwragent/shared";
 import { threadReviewDisplayTitle, threadReviewTodo } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { TranscriptReview } from "../../thread-detail/TranscriptReview";
@@ -38,6 +38,19 @@ afterEach(() => {
 });
 
 describe("review status controls", () => {
+  it("reloads transcript status when provider recovery refreshes all To-dos", async () => {
+    const api = installApi(review);
+    vi.mocked(api.listThreadReviews!).mockResolvedValueOnce({ reviews: [] });
+    let changed: (event: ThreadTodosChangedEvent) => void = () => {};
+    vi.mocked(api.onThreadTodosChanged!).mockImplementation((listener) => { changed = listener; return () => {}; });
+    render(<TranscriptReview entry={entry} parentThreadId="owner" />);
+    await waitFor(() => expect(api.listThreadReviews).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("button", { name: "Dismiss review" })).not.toBeInTheDocument();
+    act(() => changed({ at: 2 }));
+    await screen.findByRole("button", { name: "Mark addressed: Abort pending exports" });
+    expect(api.listThreadReviews).toHaveBeenLastCalledWith({ backend: "codex", threadId: "owner", status: "all" });
+  });
+
   it("shares one pending read across two surfaces of the same review", async () => {
     const api = installApi(review);
     render(<>
@@ -102,8 +115,11 @@ function renderCard(current: ThreadReview, onDoHere = vi.fn()) {
   const api = installApi(current, current);
   const handlers = { onRun: vi.fn(), onStartReview: vi.fn(), onResolve: vi.fn(), onDoHere, onSetItemChecked: vi.fn() };
   const todo: ThreadTodo = threadReviewTodo(current);
-  render(<ThreadTodoCard todo={todo} running={false} {...handlers} />);
-  return { api, handlers, todo };
+  const mounted = render(<ThreadTodoCard todo={todo} running={false} {...handlers} />);
+  const rerenderCard = (threadRunning: boolean) => mounted.rerender(
+    <ThreadTodoCard todo={todo} running={false} threadRunning={threadRunning} {...handlers} />,
+  );
+  return { api, handlers, todo, rerenderCard };
 }
 
 const prompt = (lines: string[]) => [...lines, "", "Use PwrAgent's `list_reviews` tool for their details and how to record each fix."].join("\n");
@@ -218,6 +234,60 @@ describe("review To-do card", () => {
     expect(screen.getByRole("button", { name: "Fix now: Abort pending exports" })).toBeDisabled();
     settle(true);
     await waitFor(() => expect(button).toBeEnabled());
+  });
+
+  it("shows Sending then Working and blocks duplicate fixes until the owning turn finishes", async () => {
+    let settle: (sent: boolean) => void = () => {};
+    const onDoHere = vi.fn(() => new Promise<boolean>((resolve) => { settle = resolve; }));
+    const { rerenderCard } = renderCard({ ...review, items: [finding("abort", "Abort pending exports", 1)] }, onDoHere);
+    fireEvent.click(await screen.findByRole("button", { name: "Fix all" }));
+    const sending = screen.getByRole("button", { name: "Sending…" });
+    expect(sending).toBeDisabled();
+    expect(sending).toHaveAttribute("aria-busy", "true");
+    expect(sending.querySelector(".pending-spinner")).toBeInTheDocument();
+    fireEvent.click(sending);
+    fireEvent.click(screen.getByRole("button", { name: "Fix now: Abort pending exports" }));
+    expect(onDoHere).toHaveBeenCalledTimes(1);
+
+    rerenderCard(true);
+    settle(true);
+    const working = await screen.findByRole("button", { name: "Working…" });
+    expect(working).toBeDisabled();
+    expect(working).toHaveAttribute("aria-busy", "true");
+    expect(screen.getByRole("button", { name: "Fix now: Abort pending exports" })).toBeDisabled();
+    fireEvent.click(working);
+    expect(onDoHere).toHaveBeenCalledTimes(1);
+
+    rerenderCard(false);
+    expect(screen.getByRole("button", { name: "Fix all" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Fix now: Abort pending exports" })).toBeEnabled();
+  });
+
+  it("starts disabled when mounting during an active owning turn", async () => {
+    const { handlers, rerenderCard } = renderCard(review);
+    rerenderCard(true);
+    const working = await screen.findByRole("button", { name: "Working…" });
+    fireEvent.click(working);
+    fireEvent.click(screen.getByRole("button", { name: "Fix now: Abort pending exports" }));
+    expect(handlers.onDoHere).not.toHaveBeenCalled();
+    expect(working).toBeDisabled();
+  });
+
+  it.each(["throw", "reject"])("recovers from a submission %s and keeps selected findings available for retry", async (failure) => {
+    const onDoHere = vi.fn().mockImplementationOnce(() => {
+      if (failure === "throw") throw new Error("Repair request failed");
+      return Promise.reject(new Error("Repair request failed"));
+    }).mockResolvedValue(true);
+    renderCard({ ...review, items: [finding("abort", "Abort pending exports", 1)] }, onDoHere);
+    fireEvent.click(await screen.findByRole("button", { name: "Select finding: Abort pending exports" }));
+    fireEvent.click(screen.getByRole("button", { name: "Fix 1 selected" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Repair request failed");
+    const retry = screen.getByRole("button", { name: "Fix 1 selected" });
+    expect(retry).toBeEnabled();
+    fireEvent.click(retry);
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+    expect(onDoHere).toHaveBeenCalledTimes(2);
+    expect(await screen.findByRole("button", { name: "Fix all" })).toBeEnabled();
   });
 
   it("declines a finding from its row", async () => {
