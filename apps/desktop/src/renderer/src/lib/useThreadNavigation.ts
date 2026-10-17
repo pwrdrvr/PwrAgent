@@ -661,7 +661,8 @@ function formatArchiveCleanupNotice(
   cleanup: ArchiveThreadCleanupResult[]
 ): ArchiveThreadNotice | undefined {
   const failures = cleanup.filter(
-    (item) => !item.removedWorktree || item.error || item.skippedReason
+    (item) => (item.error || !item.skippedReason?.startsWith("Worktree is still used by"))
+      && (!item.removedWorktree || item.error || item.skippedReason)
   );
   const firstFailure = failures[0];
   if (!firstFailure) {
@@ -669,11 +670,8 @@ function formatArchiveCleanupNotice(
   }
 
   const reason = firstFailure.error ?? firstFailure.skippedReason ?? "cleanup was skipped";
-  const sharedWorktree = reason.startsWith("Worktree is still used by");
-  const title = sharedWorktree ? "Worktree kept" : "Worktree cleanup skipped";
-  const message = sharedWorktree
-    ? "Thread archived. The worktree was kept because another active thread is still using it."
-    : "Thread archived. The worktree cleanup did not complete.";
+  const title = "Worktree cleanup skipped";
+  const message = "Thread archived. The worktree cleanup did not complete.";
   const detail = firstFailure.worktreePath
     ? `${firstFailure.worktreePath}: ${reason}`
     : reason;

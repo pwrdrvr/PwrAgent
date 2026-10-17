@@ -2032,7 +2032,12 @@ type ArchiveCleanupDiscoveryRequest = {
   context?: ArchiveCleanupContext;
   targetThread?: AppServerThreadSummary;
   codexRolloutMissing?: boolean;
+  reuseInventory?: boolean;
 };
+
+type ArchiveCleanupInventory = Pick<ArchiveCleanupMetadata,
+  "activeThreads" | "archivedThreads" | "overlaysByThreadKey" | "worktreeEvidence"
+>;
 
 export type ArchivedWorktreeRepairReport = {
   archivedThreads: number;
@@ -8709,6 +8714,11 @@ export class DesktopBackendRegistry {
   }>();
   private readonly archiveCleanupReads = new ArchiveCleanupReadPool(THREAD_LIST_REUSE_WINDOW_MS);
   private readonly archiveCleanupQueue = new ArchiveCleanupQueue<ArchiveThreadResponse>();
+  private archiveCleanupInventories = new WeakMap<object, {
+    revision: number;
+    includesArchived: boolean;
+    inventory: ArchiveCleanupInventory;
+  }>();
   private archiveWorkspaceRevision = 0;
   private readonly threadArchiveOperations = new Map<string, Promise<ArchiveThreadResponse>>();
   private readonly archiveCleanupCompletions = new Map<string, { promise: Promise<ArchiveThreadResponse>; archivedAt: number }>();
@@ -14681,6 +14691,7 @@ export class DesktopBackendRegistry {
       cleanupMetadata = await this.findThreadForArchiveCleanup({
         backend, threadId: result.threadId, context, codexRolloutMissing,
         targetThread: needsWorktreeOwnership ? undefined : targetThread,
+        reuseInventory: true,
       });
     } catch (error) {
       context.assertCurrent();
@@ -33164,6 +33175,7 @@ export class DesktopBackendRegistry {
     context?: ArchiveCleanupContext;
     targetThread?: AppServerThreadSummary;
     codexRolloutMissing?: boolean;
+    reuseInventory?: boolean;
   }): Promise<ArchiveCleanupMetadata> {
     if (this.codexClient.listArchiveCleanupThreadsPage) {
       return await this.readPacedArchiveCleanupMetadata(params);
@@ -33433,6 +33445,20 @@ export class DesktopBackendRegistry {
   > {
     if (this.isBootstrapModeFn()) throw new Error("Archive discovery is unavailable in bootstrap mode.");
     const context = params.context;
+    const revision = this.archiveWorkspaceRevision;
+    const inventories = this.archiveCleanupInventories;
+    const batch = params.reuseInventory ? context?.batch : undefined;
+    const cached = batch ? inventories.get(batch) : undefined;
+    // Reuse only preliminary discovery within one uninterrupted queue batch.
+    // Removal admission and repair always request a new authoritative scan.
+    // Workspace or membership changes fence reuse even while a scan awaits I/O.
+    if (batch && cached && cached.revision === revision
+      && (params.targetThread || cached.includesArchived)) {
+      await context?.checkpoint();
+      if (this.archiveWorkspaceRevision === revision && this.archiveCleanupInventories.get(batch) === cached) {
+        return this.selectArchiveCleanupInventory(cached.inventory, params);
+      }
+    }
     const activeThreads: AppServerThreadSummary[] = [];
     const archivedThreads: AppServerThreadSummary[] = [];
     const activeChildren: AppServerThreadSummary[] = [];
@@ -33547,11 +33573,30 @@ export class DesktopBackendRegistry {
       }
     }
     context?.assertCurrent();
-    if (params.targetThread) archivedThreads.push(params.targetThread);
+    if (batch && revision === this.archiveWorkspaceRevision && inventories === this.archiveCleanupInventories) {
+      inventories.set(batch, { revision, includesArchived: !params.targetThread,
+        inventory: { activeThreads, archivedThreads, overlaysByThreadKey, worktreeEvidence } });
+    }
     // A confirmed missing rollout can leave retained metadata in the active
     // provider listing. Use that exact identity for recovery while still
     // scanning every checkout user. Actual restore intent cancels this job.
-    return { activeThreads, archivedThreads, thread: archivedTarget, activeTarget, targetIsActive, overlaysByThreadKey, activeChildren, legacyParentBackends, worktreeEvidence };
+    return { activeThreads, archivedThreads: params.targetThread ? [...archivedThreads, params.targetThread] : archivedThreads,
+      thread: archivedTarget, activeTarget, targetIsActive, overlaysByThreadKey, activeChildren, legacyParentBackends, worktreeEvidence };
+  }
+
+  private selectArchiveCleanupInventory(inventory: ArchiveCleanupInventory, params: ArchiveCleanupDiscoveryRequest) {
+    const { activeThreads, overlaysByThreadKey } = inventory;
+    const matchesTarget = (thread: AppServerThreadSummary) => thread.source === params.backend && thread.id === params.threadId;
+    const activeTarget = activeThreads.find(matchesTarget);
+    return {
+      ...inventory,
+      archivedThreads: params.targetThread ? [...inventory.archivedThreads.filter((thread) => !matchesTarget(thread)), params.targetThread] : inventory.archivedThreads,
+      thread: params.targetThread ?? inventory.archivedThreads.find(matchesTarget),
+      activeTarget, targetIsActive: Boolean(activeTarget),
+      activeChildren: activeThreads.filter((thread) => overlaysByThreadKey?.get(buildThreadIdentityKey(thread.source, thread.id))?.parentThreadId === params.threadId),
+      legacyParentBackends: new Set([params.backend, ...[...activeThreads, ...inventory.archivedThreads]
+        .filter((thread) => thread.id === params.threadId).map((thread) => thread.source)]),
+    };
   }
 
   private async findThreadForRestoreWorktrees(params: {
@@ -33873,6 +33918,7 @@ export class DesktopBackendRegistry {
             return check;
           } : undefined,
         }).finally(() => this.archiveWorktreeRemovalAdmissions.delete(admission));
+        this.invalidateArchiveCleanupInventory();
         backendRegistryLog.info("archive thread worktree cleanup removed worktree", {
           backend: params.backend,
           threadId: params.thread.id,
@@ -44536,11 +44582,16 @@ export class DesktopBackendRegistry {
     );
   }
 
+  private invalidateArchiveCleanupInventory(): void {
+    this.archiveCleanupInventories = new WeakMap();
+  }
+
   private invalidateArchiveCleanupReads(
     backend?: AppServerBackendKind,
     notification?: AppServerNotification,
     workspaceChanged = true,
   ): void {
+    this.invalidateArchiveCleanupInventory();
     if (workspaceChanged) this.archiveWorkspaceRevision += 1;
     this.archiveCleanupReads.invalidate(backend);
     if (!backend || backend === "codex") this.codexClient.invalidateThreadListings?.(notification);
@@ -44550,6 +44601,9 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind,
     notification: AppServerNotification,
   ): void {
+    if (notification.method === "thread/parent/set" || notification.method === "thread/parent/cleared") {
+      this.invalidateArchiveCleanupInventory();
+    }
     const membershipChanged = notification.method === "thread/archived"
       || notification.method === "thread/deleted"
       || notification.method === "thread/unarchived"
