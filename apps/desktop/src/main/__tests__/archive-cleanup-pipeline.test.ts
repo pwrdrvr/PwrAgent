@@ -96,8 +96,8 @@ function build(active: AppServerThreadSummary[], target = codexThread({ id: "tar
     getThreadListingOverlayStates: readOverlays,
     getThreadOverlayStates: readOverlays,
     getThreadOverlayState: vi.fn(async ({ threadId }: { threadId: string }) => overlays.get(threadId)),
-    setThreadParent: vi.fn(async () => {}),
-    setThreadArchiveTombstone: vi.fn(async () => {}),
+    setThreadParent: vi.fn(async (_request: { threadId: string }) => {}),
+    setThreadArchiveTombstone: vi.fn(async (_request: { threadId: string; archivedAt: number }) => {}),
   }, { get(object, key) {
     if (key === "then") return undefined;
     if (key in object) return object[key as keyof typeof object];
@@ -123,7 +123,138 @@ function build(active: AppServerThreadSummary[], target = codexThread({ id: "tar
   return { registry, client, counts, events, overlays, store, archiveWorktree, completion };
 }
 
+function buildArchiveBurst(active: AppServerThreadSummary[], targets: AppServerThreadSummary[], history: AppServerThreadSummary[] = []) {
+  const fixture = build(active);
+  const archived = [...history];
+  fixture.client.archiveThread.mockImplementation(async ({ threadId }) => {
+    fixture.counts.archiveMutations += 1;
+    archived.push(targets.find((thread) => thread.id === threadId)!);
+    return { threadId };
+  });
+  fixture.client.listArchiveCleanupThreadsPage.mockImplementation(async (params) => {
+    fixture.counts.providerPages += 1;
+    const rows = params.archived ? archived : active;
+    const offset = Number(params.cursor ?? 0);
+    const threads = rows.slice(offset, offset + params.limit);
+    return { threads, nextCursor: offset + threads.length < rows.length ? String(offset + threads.length) : undefined };
+  });
+  const completions: AgentEvent[] = [];
+  const finished = new Promise<void>((resolve) => {
+    fixture.registry.onEvent((event) => {
+      if (event.notification.method !== "thread/archiveCleanup/completed") return;
+      completions.push(event);
+      if (completions.length === targets.length) resolve();
+    });
+  });
+  return { ...fixture, completions, finished };
+}
+
 describe("archive cleanup pipeline", () => {
+  it("shares ownership discovery across a 130-thread archive burst", async () => {
+    vi.useFakeTimers();
+    const directory = { id: "shared", kind: "worktree" as const, label: "repo", path: "/contrived/repo", worktreePath: "/contrived/shared" };
+    const active = Array.from({ length: 1000 }, (_, id) => codexThread({ id: `active-${id}` }));
+    active[0] = codexThread({ id: "shared-user", linkedDirectories: [directory] });
+    const targets = Array.from({ length: 130 }, (_, id) => codexThread({ id: `target-${id}`, linkedDirectories: [directory] }));
+    const fixture = buildArchiveBurst(active, targets,
+      Array.from({ length: 500 }, (_, id) => codexThread({ id: `historical-${id}` })),
+    );
+    await Promise.all(targets.map((thread) => fixture.registry.archiveThread({ backend: "codex", threadId: thread.id, backgroundCleanup: true })));
+    await drivePacer(fixture.registry, fixture.finished);
+    expect(fixture.completions).toHaveLength(130);
+    for (const event of fixture.completions) {
+      expect(event.notification.params).toMatchObject({ cleanup: [expect.objectContaining({ skippedReason: expect.stringContaining("shared-user") })] });
+    }
+    expect(fixture.archiveWorktree).not.toHaveBeenCalled();
+    // One inventory: 40 active pages and 26 archived pages, rather than
+    // rebuilding those 66 pages for each of the 130 queued threads.
+    expect(fixture.counts.providerPages).toBe(66);
+  });
+
+  it.each(["during discovery", "between jobs"])("refreshes batch discovery after a workspace change %s", async (timing) => {
+    vi.useFakeTimers();
+    const firstDirectory = { id: "first", kind: "worktree" as const, label: "repo", path: "/contrived/repo", worktreePath: "/contrived/first" };
+    const secondDirectory = { ...firstDirectory, id: "second", worktreePath: "/contrived/second" };
+    const active = [codexThread({ id: "first-user", linkedDirectories: [firstDirectory] })];
+    const targets = [codexThread({ id: "first", linkedDirectories: [firstDirectory] }), codexThread({ id: "second", linkedDirectories: [secondDirectory] })];
+    const fixture = buildArchiveBurst(active, targets);
+    const changeWorkspace = async () => {
+      active.push(codexThread({ id: "new-user", linkedDirectories: [secondDirectory] }));
+      await publishNotification(fixture.registry, { method: "navigation/threadDirectories/updated",
+        params: { reason: "selected-thread", threadIds: ["new-user"] } });
+    };
+    if (timing === "during discovery") {
+      const read = fixture.client.listArchiveCleanupThreadsPage.getMockImplementation()!;
+      let changed = false;
+      fixture.client.listArchiveCleanupThreadsPage.mockImplementation(async (params) => {
+        if (params.archived && !changed) { changed = true; await changeWorkspace(); }
+        return await read(params);
+      });
+    } else {
+      fixture.registry.onEvent((event) => {
+        if (event.notification.method === "thread/archiveCleanup/completed" && event.notification.params.threadId === "first") {
+          void changeWorkspace();
+        }
+      });
+    }
+    await Promise.all(targets.map((thread) => fixture.registry.archiveThread({ backend: "codex", threadId: thread.id, backgroundCleanup: true })));
+    await drivePacer(fixture.registry, fixture.finished);
+    expect(fixture.completions[1]?.notification.params).toMatchObject({ cleanup: [expect.objectContaining({ skippedReason: expect.stringContaining("new-user") })] });
+    expect(fixture.archiveWorktree).not.toHaveBeenCalled();
+    expect(fixture.counts.providerPages).toBe(4);
+  });
+
+  it("rechecks live ownership before removal even when preliminary discovery was reused", async () => {
+    vi.useFakeTimers();
+    const directory = { id: "second", kind: "worktree" as const, label: "repo", path: "/contrived/repo", worktreePath: "/contrived/second" };
+    const active: AppServerThreadSummary[] = [];
+    const targets = [codexThread({ id: "first" }), codexThread({ id: "second", linkedDirectories: [directory] })];
+    const fixture = buildArchiveBurst(active, targets);
+    fixture.registry.onEvent((event) => {
+      if (event.notification.method === "thread/archiveCleanup/completed" && event.notification.params.threadId === "first") {
+        // Model a provider change whose notification has not arrived yet.
+        active.push(codexThread({ id: "new-user", linkedDirectories: [directory] }));
+      }
+    });
+    await Promise.all(targets.map((thread) => fixture.registry.archiveThread({ backend: "codex", threadId: thread.id, backgroundCleanup: true })));
+    await drivePacer(fixture.registry, fixture.finished);
+    expect(fixture.completions[1]?.notification.params).toMatchObject({ cleanup: [expect.objectContaining({ removedWorktree: false, error: expect.stringContaining("still used") })] });
+    expect(fixture.counts.providerPages).toBe(4);
+    expect(fixture.archiveWorktree).toHaveBeenCalledOnce();
+  });
+
+  it("selects each parent's own children from the shared inventory", async () => {
+    vi.useFakeTimers();
+    const targets = [codexThread({ id: "first" }), codexThread({ id: "second" })];
+    const fixture = buildArchiveBurst([codexThread({ id: "child-first" }), codexThread({ id: "child-second" })], targets);
+    for (const thread of targets) fixture.overlays.set(`child-${thread.id}`, {
+      backend: "codex", threadId: `child-${thread.id}`, extraLinkedDirectories: [],
+      parentThreadId: thread.id, parentThreadBackend: "codex",
+    });
+    await Promise.all(targets.map((thread) => fixture.registry.archiveThread({ backend: "codex", threadId: thread.id, backgroundCleanup: true })));
+    await drivePacer(fixture.registry, fixture.finished);
+    expect(fixture.store.setThreadParent.mock.calls.map(([request]) => request.threadId)).toEqual(["child-first", "child-second"]);
+    expect(fixture.counts.providerPages).toBe(2);
+  });
+
+  it("refreshes cached children when a thread is regrouped between cleanup jobs", async () => {
+    vi.useFakeTimers();
+    const targets = [codexThread({ id: "first" }), codexThread({ id: "second" })];
+    const fixture = buildArchiveBurst([codexThread({ id: "child" })], targets);
+    fixture.overlays.set("child", { backend: "codex", threadId: "child", extraLinkedDirectories: [], parentThreadId: "first", parentThreadBackend: "codex" });
+    fixture.registry.onEvent((event) => {
+      if (event.notification.method === "thread/archiveCleanup/completed" && event.notification.params.threadId === "first") {
+        fixture.overlays.set("child", { backend: "codex", threadId: "child", extraLinkedDirectories: [], parentThreadId: "second", parentThreadBackend: "codex" });
+        void publishNotification(fixture.registry, { method: "thread/parent/set",
+          params: { threadId: "child", parentThreadId: "second", parentThreadBackend: "codex" } });
+      }
+    });
+    await Promise.all(targets.map((thread) => fixture.registry.archiveThread({ backend: "codex", threadId: thread.id, backgroundCleanup: true })));
+    await drivePacer(fixture.registry, fixture.finished);
+    expect(fixture.store.setThreadParent).toHaveBeenCalledTimes(2);
+    expect(fixture.counts.providerPages).toBe(4);
+  });
+
   it("retains an inaccessible historical path while discovering other repair candidates", async () => {
     vi.useFakeTimers();
     const fixture = build([]);
@@ -703,6 +834,29 @@ describe("archive cleanup pipeline", () => {
     expect(result.cleanup[0]?.skippedReason).toContain("another active thread: shared-user");
     expect(fixture.archiveWorktree).not.toHaveBeenCalled();
     expect(fixture.store.setThreadArchiveTombstone).toHaveBeenCalledOnce();
+  });
+
+  it("removes a shared worktree after the preceding missing-rollout owner is tombstoned", async () => {
+    vi.useFakeTimers();
+    const directory = { id: "directory", kind: "worktree" as const, label: "repo", path: "/contrived/repo", worktreePath: "/contrived/worktree" };
+    const targets = ["first", "second"].map((id) => codexThread({ id, linkedDirectories: [directory] }));
+    const fixture = build(targets, targets[0]!);
+    fixture.client.archiveThread.mockImplementation(async ({ threadId }) => {
+      throw new Error(`json-rpc error (-32600): no rollout found for thread id ${threadId}`);
+    });
+    fixture.store.setThreadArchiveTombstone.mockImplementation(async ({ threadId, archivedAt }) => {
+      fixture.overlays.set(threadId, { backend: "codex", threadId, extraLinkedDirectories: [], archiveTombstonedAt: archivedAt });
+    });
+    const requests = Promise.all(targets.map((thread) => fixture.registry.archiveThread({ backend: "codex", threadId: thread.id })));
+    const results = await drivePacer(fixture.registry, requests);
+
+    expect(results[0]?.cleanup[0]?.skippedReason).toContain("another active thread: second");
+    expect(results[1]?.cleanup[0]).toMatchObject({ removedWorktree: true });
+    expect(fixture.archiveWorktree).toHaveBeenCalledOnce();
+    expect(fixture.archiveWorktree).toHaveBeenCalledWith(expect.objectContaining({ threadId: "second" }));
+    expect(fixture.store.setThreadArchiveTombstone).toHaveBeenCalledTimes(2);
+    // Rebuild discovery after the first tombstone, then scan again at removal.
+    expect(fixture.counts.providerPages).toBe(6);
   });
 
   it("cancels missing-rollout recovery on genuine restore intent before removal", async () => {

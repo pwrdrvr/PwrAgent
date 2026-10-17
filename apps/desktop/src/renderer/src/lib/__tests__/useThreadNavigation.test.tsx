@@ -2715,16 +2715,17 @@ describe("useThreadNavigation", () => {
     expect(result.current.directories[0]?.counts?.total).toBe(0);
     expect(result.current.directories[0]?.counts?.unread).toBe(0);
     await act(async () => {
-      listener?.({ backend: "codex", notification: {
-        method: "thread/archiveCleanup/completed",
-        params: { threadId: "thread-archived", archivedAt: 3000, cleanup: [{
-          removedWorktree: false, deletedBranch: false,
-          skippedReason: "Worktree is still used by another active thread: sibling.",
-        }] },
-      } });
+      for (let index = 0; index < 130; index += 1) {
+        listener?.({ backend: "codex", notification: {
+          method: "thread/archiveCleanup/completed",
+          params: { threadId: `thread-archived-${index}`, archivedAt: 3000, cleanup: [{
+            removedWorktree: false, deletedBranch: false,
+            skippedReason: "Worktree is still used by another active thread: sibling.",
+          }] },
+        } });
+      }
     });
-    expect(result.current.archiveThreadNotice?.title).toBe("Worktree kept");
-    expect(result.current.archiveThreadNotice?.message).toContain("another active thread");
+    expect(result.current.archiveThreadNotice).toBeUndefined();
     expect(readPopulation).toHaveBeenCalledTimes(2);
   });
 
@@ -3749,7 +3750,7 @@ describe("useThreadNavigation", () => {
     });
   });
 
-  it("surfaces shared worktree archive cleanup skips as informational notices", async () => {
+  it("keeps expected shared-worktree results silent while surfacing cleanup failures", async () => {
     let archived = false;
     const readPopulation = vi.fn(async () => ({
       backend: "all" as const,
@@ -3814,12 +3815,23 @@ describe("useThreadNavigation", () => {
     });
 
     expect(latestThreadActionError(onThreadActionError, "archive-thread")).toBeUndefined();
+    expect(result.current.archiveThreadNotice).toBeUndefined();
+
+    archiveThread.mockImplementationOnce(async () => ({
+      backend: "codex" as const, threadId: "thread-archived", archivedAt: 3_000,
+      cleanup: [
+        { worktreePath: "/repo/.worktrees/shared", removedWorktree: false, deletedBranch: false,
+          skippedReason: "Worktree is still used by another active thread: thread-parent." },
+        { worktreePath: "/repo/.worktrees/failed", removedWorktree: false, deletedBranch: false,
+          skippedReason: "Snapshot creation failed." },
+      ],
+    }));
+    await act(async () => {
+      await result.current.archiveThread({ id: "thread-archived", source: "codex", title: "Archive me", titleSource: "explicit", linkedDirectories: [], inbox: { inInbox: false } });
+    });
     expect(result.current.archiveThreadNotice).toMatchObject({
-      title: "Worktree kept",
-      message:
-        "Thread archived. The worktree was kept because another active thread is still using it.",
-      detail:
-        "/repo/.worktrees/shared: Worktree is still used by another active thread: thread-parent.",
+      title: "Worktree cleanup skipped",
+      detail: "/repo/.worktrees/failed: Snapshot creation failed.",
     });
 
     act(() => {
