@@ -28280,6 +28280,21 @@ export class DesktopBackendRegistry {
         ]),
       ],
     });
+    if (this.overlayStore.getThreadListingOverlayStates && nativeSubAgentThreads.length > 0) {
+      // Discovery repairs worker cards and parent pricing from durable child
+      // turn usage. Only these native workers need history-bearing overlays;
+      // ordinary rows keep the compact listing projection.
+      const nativeIds = new Set(nativeSubAgentThreads.map((thread) => thread.id));
+      const usageThreadIds = [...new Set(threadsWithPending.flatMap((thread) =>
+        (thread.codexNativeSubAgents ?? []).map((worker) => worker.threadId),
+      ))].filter((id) => nativeIds.has(id)
+        && overlaysByThreadId[id]?.handoffOrigin?.groupingMode !== "subthread");
+      if (usageThreadIds.length > 0) {
+        Object.assign(overlaysByThreadId, await this.overlayStore.getThreadOverlayStates({
+          backend: "codex", threadIds: usageThreadIds,
+        }));
+      }
+    }
     await this.reconcileDiscoveredCodexNativeSubAgents({
       nativeThreads: nativeSubAgentThreads,
       overlaysByThreadId,

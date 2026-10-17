@@ -5421,7 +5421,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     }));
   }
 
-  /** Listing reconciliation needs mutable metadata, never transcript activities.
+  /** Ordinary listing rows need mutable metadata, not transcript activities.
+   * Native-worker usage repair reads the required worker overlays separately.
    * Project in SQLite so histories do not cross the native/JS boundary or get
    * parsed into JS objects. Read afresh on every call, including in transactions
    * and after writes from another process. Keep the full read contract separate.

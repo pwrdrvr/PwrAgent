@@ -141,7 +141,7 @@ import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
-import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
+import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 import type { ProviderThreadSnapshot } from "../app-server/provider-thread-snapshot-store";
 import type { GitWorkingStateService } from "../app-server/git-working-state-service";
 import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
@@ -52740,7 +52740,7 @@ script = "printf setup"
     await registry.close();
   });
 
-  it("backfills native Codex cards and pricing from durable child turn usage", async () => {
+  it.each(["mock", "sqlite"] as const)("backfills native Codex cards and pricing from durable child turn usage (%s)", async (storeKind) => {
     const nativeThreadId = "thread-epicurus";
     const now = Date.now();
     const codexClient = new MockBackendClient({
@@ -52776,7 +52776,10 @@ script = "printf setup"
         },
       ],
     });
-    const overlayStore = createOverlayStoreMock();
+    const stateDb = storeKind === "sqlite" ? openInMemoryStateDb() : undefined;
+    const overlayStore = stateDb ? new SqliteOverlayStore(stateDb) : createOverlayStoreMock();
+    let registry: DesktopBackendRegistry | undefined;
+    onTestFinished(async () => { await registry?.close(); stateDb?.close(); });
     await overlayStore.upsertThreadUsageLine({
       line: {
         usageLineId: "codex:thread-parent:turn-parent:live-token-usage",
@@ -52833,7 +52836,8 @@ script = "printf setup"
       overlayStore,
       "upsertThreadUsageLine",
     );
-    const registry = new DesktopBackendRegistry({
+    const fullOverlayReads = vi.spyOn(overlayStore, "getThreadOverlayStates");
+    registry = new DesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -52892,6 +52896,14 @@ script = "printf setup"
     expect(nativePricing?.totalCostMicros).toBeGreaterThan(0);
     expect(upsertThreadSubAgent).toHaveBeenCalledTimes(1);
     expect(upsertThreadUsageLine).toHaveBeenCalledTimes(1);
+    if (storeKind === "sqlite") {
+      // Each listing may load the discovered worker's durable usage. Ordinary
+      // parent overlays must retain the compact projection on both passes.
+      expect(fullOverlayReads.mock.calls).toEqual([
+        [{ backend: "codex", threadIds: [nativeThreadId] }],
+        [{ backend: "codex", threadIds: [nativeThreadId] }],
+      ]);
+    }
 
     await registry.close();
   });
