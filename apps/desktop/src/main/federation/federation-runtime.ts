@@ -1,3 +1,4 @@
+import type { TerminalOutputSource } from "../terminal/terminal-output-reader";
 import { createTerminalHistoryStore } from "../terminal/terminal-history";
 import type {
   ListBackgroundTerminalsRequest,
@@ -2533,6 +2534,16 @@ export class DesktopFederationRuntime {
     return await this.rpcFor({ scope: "remote", instanceId: sourceInstanceId }).request<HandoffInstanceThreadResult>({
       method: THREAD_HANDOFF_METHODS.send, params: request, timeoutMs: null,
     });
+  }
+
+  /** Local owner reads only; no peer routing or viewer control capability. */
+  ownerTerminalOutputSource(): TerminalOutputSource {
+    return {
+      ownerInstanceId: () => this.localFederationInstanceId(),
+      list: async (context) => await this.ptyService?.listForOwnerThread(context) ?? [],
+      replay: (context, terminalId) => this.ptyService?.outputForOwnerThread(context, terminalId),
+      snapshot: async (context, terminalId) => await this.ptyService?.snapshotForOwnerThread(context, terminalId),
+    };
   }
 
   /**
