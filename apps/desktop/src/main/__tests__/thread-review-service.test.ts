@@ -266,6 +266,27 @@ describe("persistent thread reviews", () => {
     expect(service.list({ status: "dismissed" })[0]?.id).toBe(review.id);
   });
 
+  it("keeps partial resolutions and remaining controls available to full status reads after detachment", () => {
+    const pr = { provider: "github.com", org: "example", repo: "atlas", number: 7, url: "https://github.com/example/atlas/pull/7" };
+    const review = service.record(THREAD, { ...INPUT, context: { workspacePath: "/repo", pullRequest: pr } }, "automatic");
+    db.raw.prepare("INSERT INTO threads (thread_id, payload) VALUES (?, ?)")
+      .run(`codex:${THREAD.threadId}`, JSON.stringify({ ...THREAD, prs: [pr] }));
+    const partial = service.update({ id: review.id, itemId: review.items[0]!.id, status: "addressed", note: "Fixed cancellation.",
+      url: "https://github.com/example/atlas/commit/abc1234" }, "agent", THREAD);
+    expect(service.list()).toEqual([partial]);
+    db.raw.prepare("UPDATE threads SET payload = json_set(payload, '$.prs', json('[]')) WHERE thread_id = ?")
+      .run(`codex:${THREAD.threadId}`);
+    expect(service.list()).toEqual([]);
+    expect(service.list({ ...THREAD, status: "all" })).toEqual([partial]);
+    expect(partial.items[0]?.resolution?.note).toBe("Fixed cancellation.");
+    expect(partial.items[1]?.status).toBe("open");
+    service = new ThreadReviewService(db);
+    expect(service.list({ ...THREAD, status: "all" })).toEqual([partial]);
+    const settled = service.update({ id: partial.id, itemId: partial.items[1]!.id, status: "dismissed", note: "Caller owns the connection." }, "user");
+    expect(settled.status).toBe("handled");
+    expect(service.list({ ...THREAD, status: "all" })[0]?.items[0]?.resolution).toEqual(partial.items[0]?.resolution);
+  });
+
   it("budgets the persistent tracking boundary once per profile, with no restart or read writes", async () => {
     db.raw.prepare("DELETE FROM meta WHERE key = ?").run("thread_review_tracking_started_at");
     const { writes } = await measureSqliteWrites(() => {

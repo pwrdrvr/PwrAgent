@@ -138,6 +138,12 @@ export function installThreadTodoRuntime(params: {
   unsubscribeArchive?.();
   unsubscribeArchive = registry.onEvent((event) => {
     if (event.federationTarget?.scope === "remote") return;
+    if (event.notification.method === "navigation/providerThreads/refreshed") {
+      // Discovery and authentication recovery can make persisted owners
+      // available without changing a card. The inventory spans backends.
+      params.broadcast({ at: Date.now() });
+      return;
+    }
     const completed = completedThreadReview(event);
     if (completed) importReview(completed.identity, completed.entry, "live");
     if (event.notification.method === "thread/pullRequests/updated"

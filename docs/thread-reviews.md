@@ -56,6 +56,13 @@ was observed by this process. An overlay alone does not establish that a
 thread is active. The same read projects the current owner title, so a valid
 thread outside the sidebar's loaded window keeps its name. All cards share
 one cached owner index read, and the projection makes no SQLite writes.
+Provider discovery and authentication recovery refresh the full To-do list,
+so eligible cards return when their owners become available without requiring
+a separate card mutation.
+
+Attachment filtering applies to queue reads. Full review status reads
+(`status: "all"`) retain detached records for the transcript and agent tools,
+including partial resolutions, evidence links, and remaining review controls.
 
 The initial tracking implementation (#2685) imported historical reviews without
 provenance or an observation timestamp. Untouched generic legacy imports are

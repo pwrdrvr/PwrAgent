@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AppServerThreadReviewEntry, ThreadReview, ThreadTodo } from "@pwragent/shared";
+import type { AppServerThreadReviewEntry, ThreadReview, ThreadTodo, ThreadTodosChangedEvent } from "@pwragent/shared";
 import { threadReviewDisplayTitle, threadReviewTodo } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { TranscriptReview } from "../../thread-detail/TranscriptReview";
@@ -38,6 +38,19 @@ afterEach(() => {
 });
 
 describe("review status controls", () => {
+  it("reloads transcript status when provider recovery refreshes all To-dos", async () => {
+    const api = installApi(review);
+    vi.mocked(api.listThreadReviews!).mockResolvedValueOnce({ reviews: [] });
+    let changed: (event: ThreadTodosChangedEvent) => void = () => {};
+    vi.mocked(api.onThreadTodosChanged!).mockImplementation((listener) => { changed = listener; return () => {}; });
+    render(<TranscriptReview entry={entry} parentThreadId="owner" />);
+    await waitFor(() => expect(api.listThreadReviews).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("button", { name: "Dismiss review" })).not.toBeInTheDocument();
+    act(() => changed({ at: 2 }));
+    await screen.findByRole("button", { name: "Mark addressed: Abort pending exports" });
+    expect(api.listThreadReviews).toHaveBeenLastCalledWith({ backend: "codex", threadId: "owner", status: "all" });
+  });
+
   it("shares one pending read across two surfaces of the same review", async () => {
     const api = installApi(review);
     render(<>

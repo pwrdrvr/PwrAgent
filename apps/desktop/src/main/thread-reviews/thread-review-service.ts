@@ -76,12 +76,12 @@ export class ThreadReviewService {
     for (const row of rows) {
       const review = JSON.parse(row.payload) as ThreadReview;
       if (this.isUntriagedLegacyImport(review)) continue;
-      // Only automatic, open PR work follows the current attachment list.
-      // Explicit records and documented outcomes remain available independently.
+      // Queue reads follow the current attachment list. Full status reads
+      // also serve the transcript, whose resolutions survive PR detachment.
       const pr = review.context?.pullRequest;
       const automatic = review.origin === "automatic"
         || (review.origin === undefined && review.sourceKey.startsWith("managed-review:"));
-      if (review.status === "open" && automatic && pr && !options.includeDetached) {
+      if (review.status === "open" && automatic && pr && request.status !== "all" && !options.includeDetached) {
         const key = buildLegacyEncodedThreadIdentityKey(review.backend, review.threadId);
         let prs = attachments.get(key);
         if (!prs) {

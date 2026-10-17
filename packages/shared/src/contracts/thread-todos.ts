@@ -346,11 +346,11 @@ export type SetThreadTodoProjectRequest = {
   projectKey: string | null;
 };
 
-export type ThreadTodosChangedEvent = {
-  at: number;
+/** An identity-less notification refreshes the whole list after owner discovery. */
+export type ThreadTodosChangedEvent = { at: number } & ({
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
-};
+} | { backend?: undefined; threadId?: undefined });
 
 export function threadTodoKindForAction(
   action: ThreadTodoAction | undefined,

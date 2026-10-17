@@ -90,4 +90,18 @@ describe("review tracking runtime eligibility", () => {
     expect(broadcast).toHaveBeenLastCalledWith(expect.objectContaining(THREAD));
     expect(getThreadReviewService().list({ status: "all" })).toEqual([]);
   });
+
+  it("refreshes all local To-dos when provider discovery or authentication recovery finishes", () => {
+    install();
+    const notification: AgentEvent["notification"] = {
+      method: "navigation/providerThreads/refreshed", params: { failedProviders: 0 },
+    };
+    onEvent({ backend: "codex", notification,
+      federationTarget: { scope: "remote", instanceId: "peer" } });
+    expect(broadcast).not.toHaveBeenCalled();
+    onEvent({ backend: "codex", notification });
+    // This global inventory event can restore ACP owners as well as Codex.
+    expect(broadcast).toHaveBeenCalledExactlyOnceWith({ at: expect.any(Number) });
+    expect(getThreadReviewService().list({ status: "all" })).toEqual([]);
+  });
 });
