@@ -3,10 +3,13 @@ import os from "node:os";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
+import { stateDbPathForHomeRoot } from "./fixtures/readme-state-seeding";
 import type { DesktopApi } from "../src/renderer/src/lib/desktop-api";
+import { StateDb } from "../src/main/state/state-db";
+import { ThreadReviewService } from "../src/main/thread-reviews/thread-review-service";
 
 /** Entirely invented data; the artifacts are safe to attach to a PR. */
-test("tracks an older review, retains dismissals, and clears To-dos after every finding is settled", async ({ browserName: _browserName }, testInfo) => {
+test("tracks a review created after tracking began, retains dismissals, and clears settled To-dos", async ({ browserName: _browserName }, testInfo) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-review-tracking-"));
   const fixturePath = path.join(root, "replay.fixture.json");
   const identity = { backend: "codex" as const, threadId: "thread-review-showcase" };
@@ -39,7 +42,20 @@ test("tracks an older review, retains dismissals, and clears To-dos after every 
       { id: "skills", kind: "response", method: "skills/list", result: { data: [] } },
     ],
   }));
-  const app = await launchElectronApp({ fixturePath, contextRailPinned: false });
+  const app = await launchElectronApp({
+    fixturePath,
+    contextRailPinned: false,
+    preLaunchHook: async (homeRoot) => {
+      // This profile was already tracking when the fixture's review finished.
+      // Opening arbitrary old history must not opt it into the work queue.
+      const db = StateDb.open(stateDbPathForHomeRoot(homeRoot));
+      try {
+        new ThreadReviewService(db, undefined, () => 1_791_600_000_000 - 1);
+      } finally {
+        db.close();
+      }
+    },
+  });
   try {
     await app.window.getByRole("button", { name: /Review the Atlas export queue/ }).first().click();
     const transcript = app.window.getByRole("region", { name: "Transcript" });
