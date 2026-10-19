@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.2.2 - 2026-10-19
+
+- Terminals - Keep multiple terminal tabs per thread, with names, activity indicators, and restored scrollback after restarting. Commands are not replayed.
+- To-dos - Add checklists to follow-ups and answer questions from other local threads directly in the panel, without switching conversations.
+- Code Reviews - Track unresolved findings in To-dos, fix or decline individual findings, and see repair progress. Stale reviews and archived threads no longer clutter the queue.
+- Forge and CI Tools - Agents can inspect GitHub/GitLab status, CI runs, jobs, checks, artifact listings, and bounded logs through built-in PwrAgent tools.
+- Archive Cleanup - Warn about pending cleanup when quitting and resume it on the next launch. Improve repair of leftover worktrees and empty containers.
+- Federation and Messaging - Deliver reply images from their owning machine, improve cross-machine fork/upstream project matching, and resolve remote drafts more reliably.
+- Performance - Reduce repeated inventory scans, bulk-archive discovery, relationship rebuilding, and Token Miser history reads in large profiles.
+
 ## v1.2.1 - 2026-10-13
 
 - Voice Activity - Group consecutive tool calls into compact, expandable rows, with clearer thread labels and inspectable arguments and results.
