@@ -730,23 +730,23 @@ MIT
 - @hono/node-server@2.0.10 | https://github.com/honojs/node-server
 - @iconify/types@2.0.0 | https://github.com/iconify/iconify
 - @iconify/utils@3.1.7 | https://github.com/iconify/iconify
-- @larksuiteoapi/node-sdk@1.74.0 | https://github.com/larksuite/node-sdk
+- @larksuiteoapi/node-sdk@1.75.0 | https://github.com/larksuite/node-sdk
 - @mattermost/client@11.9.0 | https://github.com/mattermost/mattermost
 - @mattermost/types@11.9.0 | https://github.com/mattermost/mattermost
 - @mermaid-js/parser@1.2.1 | https://github.com/mermaid-js/mermaid
 - @modelcontextprotocol/sdk@1.32.1 | https://github.com/modelcontextprotocol/typescript-sdk
-- @napi-rs/canvas@1.0.10 | https://github.com/Brooooooklyn/canvas
-- @napi-rs/canvas-android-arm64@1.0.10 | https://github.com/Brooooooklyn/canvas
-- @napi-rs/canvas-darwin-arm64@1.0.10 | https://github.com/Brooooooklyn/canvas
-- @napi-rs/canvas-darwin-x64@1.0.10 | https://github.com/Brooooooklyn/canvas
-- @napi-rs/canvas-linux-arm-gnueabihf@1.0.10 | https://github.com/Brooooooklyn/canvas
-- @napi-rs/canvas-linux-arm64-gnu@1.0.10 | https://github.com/Brooooooklyn/canvas
-- @napi-rs/canvas-linux-arm64-musl@1.0.10 | https://github.com/Brooooooklyn/canvas
-- @napi-rs/canvas-linux-riscv64-gnu@1.0.10 | https://github.com/Brooooooklyn/canvas
-- @napi-rs/canvas-linux-x64-gnu@1.0.10 | https://github.com/Brooooooklyn/canvas
-- @napi-rs/canvas-linux-x64-musl@1.0.10 | https://github.com/Brooooooklyn/canvas
-- @napi-rs/canvas-win32-arm64-msvc@1.0.10 | https://github.com/Brooooooklyn/canvas
-- @napi-rs/canvas-win32-x64-msvc@1.0.10 | https://github.com/Brooooooklyn/canvas
+- @napi-rs/canvas@1.0.11 | https://github.com/Brooooooklyn/canvas
+- @napi-rs/canvas-android-arm64@1.0.11 | https://github.com/Brooooooklyn/canvas
+- @napi-rs/canvas-darwin-arm64@1.0.11 | https://github.com/Brooooooklyn/canvas
+- @napi-rs/canvas-darwin-x64@1.0.11 | https://github.com/Brooooooklyn/canvas
+- @napi-rs/canvas-linux-arm-gnueabihf@1.0.11 | https://github.com/Brooooooklyn/canvas
+- @napi-rs/canvas-linux-arm64-gnu@1.0.11 | https://github.com/Brooooooklyn/canvas
+- @napi-rs/canvas-linux-arm64-musl@1.0.11 | https://github.com/Brooooooklyn/canvas
+- @napi-rs/canvas-linux-riscv64-gnu@1.0.11 | https://github.com/Brooooooklyn/canvas
+- @napi-rs/canvas-linux-x64-gnu@1.0.11 | https://github.com/Brooooooklyn/canvas
+- @napi-rs/canvas-linux-x64-musl@1.0.11 | https://github.com/Brooooooklyn/canvas
+- @napi-rs/canvas-win32-arm64-msvc@1.0.11 | https://github.com/Brooooooklyn/canvas
+- @napi-rs/canvas-win32-x64-msvc@1.0.11 | https://github.com/Brooooooklyn/canvas
 - @octokit/endpoint@11.0.5 | github:octokit/endpoint.js
 - @octokit/graphql@9.0.5 | github:octokit/graphql.js
 - @octokit/openapi-types@29.0.1 | https://github.com/octokit/openapi-types.ts
@@ -1020,7 +1020,7 @@ MIT
 - magic-bytes.js@1.13.0 | https://github.com/LarsKoelpin/magic-bytes
 - markdown-table@3.0.4 | wooorm/markdown-table
 - marked@16.4.2 | https://github.com/markedjs/marked
-- marked@18.1.0 | https://github.com/markedjs/marked
+- marked@18.1.1 | https://github.com/markedjs/marked
 - math-intrinsics@1.1.0 | https://github.com/es-shims/math-intrinsics
 - mdast-util-find-and-replace@3.0.2 | syntax-tree/mdast-util-find-and-replace
 - mdast-util-from-markdown@2.1.0 | syntax-tree/mdast-util-from-markdown
@@ -3320,13 +3320,13 @@ WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
 ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR
 IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
-@larksuiteoapi/node-sdk@1.74.0 (MIT)
+@larksuiteoapi/node-sdk@1.75.0 (MIT)
 ------------------------------------
 
 Applies to:
-- @larksuiteoapi/node-sdk@1.74.0 (MIT)
+- @larksuiteoapi/node-sdk@1.75.0 (MIT)
 
-Representative file: @larksuiteoapi/node-sdk@1.74.0/LICENSE
+Representative file: @larksuiteoapi/node-sdk@1.75.0/LICENSE
 
 MIT License
 
@@ -3672,24 +3672,24 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-@napi-rs/canvas@1.0.10 (MIT)
+@napi-rs/canvas@1.0.11 (MIT)
 ----------------------------
 
 Applies to:
-- @napi-rs/canvas@1.0.10 (MIT)
-- @napi-rs/canvas-android-arm64@1.0.10 (MIT)
-- @napi-rs/canvas-darwin-arm64@1.0.10 (MIT)
-- @napi-rs/canvas-darwin-x64@1.0.10 (MIT)
-- @napi-rs/canvas-linux-arm-gnueabihf@1.0.10 (MIT)
-- @napi-rs/canvas-linux-arm64-gnu@1.0.10 (MIT)
-- @napi-rs/canvas-linux-arm64-musl@1.0.10 (MIT)
-- @napi-rs/canvas-linux-riscv64-gnu@1.0.10 (MIT)
-- @napi-rs/canvas-linux-x64-gnu@1.0.10 (MIT)
-- @napi-rs/canvas-linux-x64-musl@1.0.10 (MIT)
-- @napi-rs/canvas-win32-arm64-msvc@1.0.10 (MIT)
-- @napi-rs/canvas-win32-x64-msvc@1.0.10 (MIT)
+- @napi-rs/canvas@1.0.11 (MIT)
+- @napi-rs/canvas-android-arm64@1.0.11 (MIT)
+- @napi-rs/canvas-darwin-arm64@1.0.11 (MIT)
+- @napi-rs/canvas-darwin-x64@1.0.11 (MIT)
+- @napi-rs/canvas-linux-arm-gnueabihf@1.0.11 (MIT)
+- @napi-rs/canvas-linux-arm64-gnu@1.0.11 (MIT)
+- @napi-rs/canvas-linux-arm64-musl@1.0.11 (MIT)
+- @napi-rs/canvas-linux-riscv64-gnu@1.0.11 (MIT)
+- @napi-rs/canvas-linux-x64-gnu@1.0.11 (MIT)
+- @napi-rs/canvas-linux-x64-musl@1.0.11 (MIT)
+- @napi-rs/canvas-win32-arm64-msvc@1.0.11 (MIT)
+- @napi-rs/canvas-win32-x64-msvc@1.0.11 (MIT)
 
-Representative file: @napi-rs/canvas@1.0.10/LICENSE
+Representative file: @napi-rs/canvas@1.0.11/LICENSE
 
 MIT License
 
@@ -9452,7 +9452,7 @@ marked@16.4.2 (MIT)
 
 Applies to:
 - marked@16.4.2 (MIT)
-- marked@18.1.0 (MIT)
+- marked@18.1.1 (MIT)
 
 Representative file: marked@16.4.2/LICENSE.md
 
