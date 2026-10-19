@@ -36,8 +36,9 @@ async function createSeed(root: string) {
   await git(source, "commit", "-m", "base");
   await git(root, "clone", "--bare", source, remote);
   await git(source, "remote", "add", "origin", remote);
-  await git(root, "clone", remote, receiver);
-  await git(receiver, "config", "core.autocrlf", "false");
+  // Configure LF before checkout; disabling autocrlf after a Windows clone
+  // leaves CRLF files dirty against the LF index copied into each fixture.
+  await git(root, "clone", "--config", "core.autocrlf=false", remote, receiver);
   await git(source, "switch", "-c", "feature/handoff");
   await writeFile(path.join(source, "commit.txt"), "published feature\n");
   await git(source, "add", ".");
