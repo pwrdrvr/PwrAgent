@@ -115,7 +115,7 @@
     "ws": "8.22.0"
   },
   "devDependencies": {
-    "@agentclientprotocol/sdk": "1.5.1",
+    "@agentclientprotocol/sdk": "1.8.0",
     "@axe-core/playwright": "^4.11.3",
     "@electron/asar": "^4.2.0",
     "@playwright/test": "^1.55.0",
@@ -126,7 +126,7 @@
     "@types/proper-lockfile": "^4.1.4",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
-    "@types/ws": "8.18.1",
+    "@types/ws": "8.18.2",
     "@vitejs/plugin-react": "^5.2.0",
     "axe-core": "^4.11.4",
     "electron": "^44.4.5",
