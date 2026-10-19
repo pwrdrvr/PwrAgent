@@ -1457,9 +1457,28 @@ describe("terminal history lifecycle", () => {
   it("restores an exited tab without spawning or accepting input and keeps sibling history isolated", async () => {
     const root = createTemporaryRoot("terminal-history-service-");
     const historyStore = new TerminalHistoryStore(path.join(root, "history"));
+    let releaseSave: () => void = () => undefined;
+    const saveGate = new Promise<void>((resolve) => { releaseSave = resolve; });
+    let checkpointReached: () => void = () => undefined;
+    const checkpointStarted = new Promise<void>((resolve) => { checkpointReached = resolve; });
+    let publishExit: () => void = () => undefined;
+    const exitPublished = new Promise<void>((resolve) => { publishExit = resolve; });
+    let exitAnnounced = false;
+    const save = historyStore.save.bind(historyStore);
+    vi.spyOn(historyStore, "save").mockImplementation(async (record) => {
+      if (record.summary.status === "exited") checkpointReached();
+      await saveGate;
+      await save(record);
+    });
     const pty = fakePty();
     const spawn = vi.fn(() => pty);
     const service = new IntegratedTerminalService({ historyStore,
+      onSessionsChanged: (sessions) => {
+        if (sessions.some((session) => session.sessionId === "saved-one" && session.status === "exited")) {
+          exitAnnounced = true;
+          publishExit();
+        }
+      },
       loadNodePty: async () => ({ spawn: spawn as unknown as typeof import("node-pty").spawn }),
     });
     const request = { sessionId: "saved-one", threadKey: "codex:one", cwd: os.tmpdir(), cols: 80, rows: 24 };
@@ -1467,18 +1486,31 @@ describe("terminal history lifecycle", () => {
     vi.mocked(pty.onData).mock.calls[0]![0]("retained output\r\n");
     service.rename("saved-one", "Build");
     vi.mocked(pty.onExit).mock.calls[0]![0]({ exitCode: 7 });
-    await vi.waitFor(() => expect(service.listSessions()[0]?.status).toBe("exited"));
+    await checkpointStarted;
+    try {
+      // In-memory archival precedes persistence. The exit's list publication
+      // follows the save; do not race it with filesystem polling.
+      expect(service.listSessions()[0]?.status).toBe("exited");
+      expect(await historyStore.load()).toEqual([]);
+      expect(exitAnnounced).toBe(false);
+    } finally {
+      releaseSave();
+      await exitPublished;
+    }
     const restored = await service.createOrAttach({ ...request, attachOnly: true }, fakeWebContents());
     expect(restored.snapshot?.data).toContain("retained output");
     service.write({ sessionId: "saved-one", data: "do not run" });
     expect(pty.write).not.toHaveBeenCalled();
     expect(spawn).toHaveBeenCalledTimes(1);
-    await vi.waitFor(async () => expect(await historyStore.load()).toHaveLength(1));
+    expect(await historyStore.load()).toHaveLength(1);
     const restarted = new IntegratedTerminalService({ historyStore, loadNodePty: async () => { throw new Error("must not spawn"); } });
     expect(await restarted.createOrAttach({ ...request, attachOnly: true }, fakeWebContents())).toMatchObject({ status: "restored", sessionId: "saved-one" });
     await expect(restarted.createOrAttach({ ...request, threadKey: "codex:other" }, fakeWebContents())).rejects.toThrow("mismatch");
+    const removed = vi.spyOn(historyStore, "remove");
     restarted.close({ sessionId: "saved-one" });
-    await vi.waitFor(async () => expect(await historyStore.load()).toEqual([]));
+    expect(removed).toHaveBeenCalledWith("saved-one");
+    await removed.mock.results[0]!.value;
+    expect(await historyStore.load()).toEqual([]);
   });
 
   it("never broadcasts a list without a terminal that just exited", async () => {
