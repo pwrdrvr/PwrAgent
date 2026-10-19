@@ -222,7 +222,7 @@ importers:
         version: 17.13.0
       jsdom:
         specifier: ^30.0.1
-        version: 30.1.2(@noble/hashes@1.8.0)
+        version: 30.1.1(@noble/hashes@1.8.0)
       oxc-parser:
         specifier: 0.153.0
         version: 0.153.0
@@ -246,7 +246,7 @@ importers:
         version: 7.3.7(@types/node@24.19.2)(jiti@2.7.0)(lightningcss@1.33.0)(tsx@4.23.15)
       vitest:
         specifier: ^5.0.1
-        version: 5.0.4(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(jsdom@30.1.2(@noble/hashes@1.8.0))(vite@7.3.7(@types/node@24.19.2)(jiti@2.7.0)(lightningcss@1.33.0)(tsx@4.23.15))
+        version: 5.0.4(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(jsdom@30.1.1(@noble/hashes@1.8.0))(vite@7.3.7(@types/node@24.19.2)(jiti@2.7.0)(lightningcss@1.33.0)(tsx@4.23.15))
 
   apps/desktop:
     dependencies:
@@ -433,7 +433,7 @@ importers:
         version: 1.63.0
       '@testing-library/jest-dom':
         specifier: ^7.0.0
-        version: 7.0.1(@testing-library/dom@10.4.1)(vitest@5.0.4(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(jsdom@30.1.2(@noble/hashes@1.8.0))(vite@7.3.7(@types/node@24.19.2)(jiti@2.7.0)(lightningcss@1.33.0)(tsx@4.23.15)))
+        version: 7.0.1(@testing-library/dom@10.4.1)(vitest@5.0.4(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(jsdom@30.1.1(@noble/hashes@1.8.0))(vite@7.3.7(@types/node@24.19.2)(jiti@2.7.0)(lightningcss@1.33.0)(tsx@4.23.15)))
       '@testing-library/react':
         specifier: ^16.3.2
         version: 16.3.3(@testing-library/dom@10.4.1)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -504,7 +504,7 @@ importers:
     devDependencies:
       vitest:
         specifier: ^5.0.1
-        version: 5.0.4(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(jsdom@30.1.2(@noble/hashes@1.8.0))(vite@7.3.7(@types/node@24.19.2)(jiti@2.7.0)(lightningcss@1.33.0)(tsx@4.23.15))
+        version: 5.0.4(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(jsdom@30.1.1(@noble/hashes@1.8.0))(vite@7.3.7(@types/node@24.19.2)(jiti@2.7.0)(lightningcss@1.33.0)(tsx@4.23.15))
 
   packages/messaging/providers/feishu:
     dependencies:
@@ -517,7 +517,7 @@ importers:
     devDependencies:
       vitest:
         specifier: ^5.0.1
-        version: 5.0.4(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(jsdom@30.1.2(@noble/hashes@1.8.0))(vite@7.3.7(@types/node@24.19.2)(jiti@2.7.0)(lightningcss@1.33.0)(tsx@4.23.15))
+        version: 5.0.4(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(jsdom@30.1.1(@noble/hashes@1.8.0))(vite@7.3.7(@types/node@24.19.2)(jiti@2.7.0)(lightningcss@1.33.0)(tsx@4.23.15))
 
   packages/messaging/providers/line:
     dependencies:
@@ -530,7 +530,7 @@ importers:
     devDependencies:
       vitest:
         specifier: ^5.0.1
-        version: 5.0.4(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(jsdom@30.1.2(@noble/hashes@1.8.0))(vite@7.3.7(@types/node@24.19.2)(jiti@2.7.0)(lightningcss@1.33.0)(tsx@4.23.15))
+        version: 5.0.4(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(jsdom@30.1.1(@noble/hashes@1.8.0))(vite@7.3.7(@types/node@24.19.2)(jiti@2.7.0)(lightningcss@1.33.0)(tsx@4.23.15))
 
   packages/messaging/providers/mattermost:
     dependencies:
@@ -543,7 +543,7 @@ importers:
     devDependencies:
       vitest:
         specifier: ^5.0.1
-        version: 5.0.4(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(jsdom@30.1.2(@noble/hashes@1.8.0))(vite@7.3.7(@types/node@24.19.2)(jiti@2.7.0)(lightningcss@1.33.0)(tsx@4.23.15))
+        version: 5.0.4(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(jsdom@30.1.1(@noble/hashes@1.8.0))(vite@7.3.7(@types/node@24.19.2)(jiti@2.7.0)(lightningcss@1.33.0)(tsx@4.23.15))
 
   packages/messaging/providers/slack:
     dependencies:
@@ -565,7 +565,7 @@ importers:
     devDependencies:
       vitest:
         specifier: ^5.0.1
-        version: 5.0.4(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(jsdom@30.1.2(@noble/hashes@1.8.0))(vite@7.3.7(@types/node@24.19.2)(jiti@2.7.0)(lightningcss@1.33.0)(tsx@4.23.15))
+        version: 5.0.4(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(jsdom@30.1.1(@noble/hashes@1.8.0))(vite@7.3.7(@types/node@24.19.2)(jiti@2.7.0)(lightningcss@1.33.0)(tsx@4.23.15))
 
   packages/messaging/providers/telegram:
     dependencies:
@@ -581,7 +581,7 @@ importers:
     devDependencies:
       vitest:
         specifier: ^5.0.1
-        version: 5.0.4(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(jsdom@30.1.2(@noble/hashes@1.8.0))(vite@7.3.7(@types/node@24.19.2)(jiti@2.7.0)(lightningcss@1.33.0)(tsx@4.23.15))
+        version: 5.0.4(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(jsdom@30.1.1(@noble/hashes@1.8.0))(vite@7.3.7(@types/node@24.19.2)(jiti@2.7.0)(lightningcss@1.33.0)(tsx@4.23.15))
 
   packages/pwragent: {}
 
@@ -3110,9 +3110,9 @@ packages:
   dagre-d3-es@7.0.14:
     resolution: {integrity: sha512-P4rFMVq9ESWqmOgK+dlXvOtLwYg0i7u0HBGJER0LZDJT2VHIPAMZ/riPxqJceWMStH5+E61QxFra9kIS3AqdMg==}
 
-  data-urls@8.0.0:
-    resolution: {integrity: sha512-JQUCCK+/CAGbGGx618PlFZMXH81Jtj7t73CHv9dd/zVWvxgGT2zLFRjnKb+Ng46GIwcy+f7f88qd4duqllK+WQ==}
-    engines: {node: ^22.14.0 || >=24.0.0}
+  data-urls@7.0.0:
+    resolution: {integrity: sha512-23XHcCF+coGYevirZceTVD7NdJOqVn+49IHyxgszm+JIiHLoB2TkmPtsYkNWT1pvRSGkc35L6NHs0yHkN2SumA==}
+    engines: {node: ^20.19.0 || ^22.12.0 || >=24.0.0}
 
   dayjs@1.11.23:
     resolution: {integrity: sha512-QDTCU0M0MxR3hQfnlDJfwekQiaanm1ubOD231u73WBckQ/fsamwRLiE2GBz6D3a/xF1NgfiDLJjXBa1hYOYTtQ==}
@@ -3893,8 +3893,8 @@ packages:
     resolution: {integrity: sha512-SFNOvSJ+Dgf/9An904Yx+CgSlIPCkIpao4qo51lpee25TIRejdH3rhR4EZMGoNx3/TP3O+wzWuiTFl4sqbltzA==}
     hasBin: true
 
-  jsdom@30.1.2:
-    resolution: {integrity: sha512-0FFE/jE1rppmVfUrJUgxqXjcwolZYIGtAgj1pTussMhNZxIxi7W/PvfWaMNroGi2B36X1IKHbexpZ9DhkoOPiQ==}
+  jsdom@30.1.1:
+    resolution: {integrity: sha512-FahmoPK5vbPc+jxV1iErMHmAZypCZ942NHF4+qqaWAuvaKKTBZxawnmAtrbGWLU7MtlxfqIP0qw6aSI+aWGtLg==}
     engines: {node: ^22.22.2 || ^24.15.0 || >=26.0.0}
     peerDependencies:
       canvas: ^3.2.3
@@ -5431,9 +5431,9 @@ packages:
     resolution: {integrity: sha512-sXcNcHOC51uPGF0P/D4NVtrkjSU2fNsm9iog4ZvZJsL3rjoDAzXZhkm2MWt1y+PUdggKAYVoMAIYcs78wJ51Cw==}
     engines: {node: '>=20'}
 
-  whatwg-url@17.1.2:
-    resolution: {integrity: sha512-TEZA+Zqxin7Jjsm2cjRohCmen5awh+hT6Zi3VZdqZlNRk7zvOI/9WpBFg/DWlA56bWnzwm6DuB8NS0EsxQH9uQ==}
-    engines: {node: ^22.14.0 || >=24.0.0}
+  whatwg-url@16.0.1:
+    resolution: {integrity: sha512-1to4zXBxmXHV3IiSSEInrreIlu02vUOvrhxJJH5vcxYTBDAx51cqZiKdyTxlecdKNSjj8EcxGBxNf6Vg+945gw==}
+    engines: {node: ^20.19.0 || ^22.12.0 || >=24.0.0}
 
   whatwg-url@17.2.0:
     resolution: {integrity: sha512-IhLIHNcBrzIixC5XXsbr4DxdjajyA5vQ5RwGZMtrUp+GbtE5Nrsge9QKau7jXrC0aTXLYGV0xiW7Tb4YS2aomw==}
@@ -6729,7 +6729,7 @@ snapshots:
       picocolors: 1.1.1
       pretty-format: 27.5.1
 
-  '@testing-library/jest-dom@7.0.1(@testing-library/dom@10.4.1)(vitest@5.0.4(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(jsdom@30.1.2(@noble/hashes@1.8.0))(vite@7.3.7(@types/node@24.19.2)(jiti@2.7.0)(lightningcss@1.33.0)(tsx@4.23.15)))':
+  '@testing-library/jest-dom@7.0.1(@testing-library/dom@10.4.1)(vitest@5.0.4(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(jsdom@30.1.1(@noble/hashes@1.8.0))(vite@7.3.7(@types/node@24.19.2)(jiti@2.7.0)(lightningcss@1.33.0)(tsx@4.23.15)))':
     dependencies:
       '@adobe/css-tools': 4.5.0
       '@testing-library/dom': 10.4.1
@@ -6739,7 +6739,7 @@ snapshots:
       picocolors: 1.1.1
       redent: 3.0.0
     optionalDependencies:
-      vitest: 5.0.4(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(jsdom@30.1.2(@noble/hashes@1.8.0))(vite@7.3.7(@types/node@24.19.2)(jiti@2.7.0)(lightningcss@1.33.0)(tsx@4.23.15))
+      vitest: 5.0.4(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(jsdom@30.1.1(@noble/hashes@1.8.0))(vite@7.3.7(@types/node@24.19.2)(jiti@2.7.0)(lightningcss@1.33.0)(tsx@4.23.15))
 
   '@testing-library/react@16.3.3(@testing-library/dom@10.4.1)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
     dependencies:
@@ -7998,10 +7998,10 @@ snapshots:
       d3: 7.9.0
       lodash-es: 4.18.1
 
-  data-urls@8.0.0(@noble/hashes@1.8.0):
+  data-urls@7.0.0(@noble/hashes@1.8.0):
     dependencies:
       whatwg-mimetype: 5.0.0
-      whatwg-url: 17.1.2(@noble/hashes@1.8.0)
+      whatwg-url: 16.0.1(@noble/hashes@1.8.0)
     transitivePeerDependencies:
       - '@noble/hashes'
 
@@ -8984,7 +8984,7 @@ snapshots:
     dependencies:
       argparse: 2.0.1
 
-  jsdom@30.1.2(@noble/hashes@1.8.0):
+  jsdom@30.1.1(@noble/hashes@1.8.0):
     dependencies:
       '@asamuzakjp/css-color': 7.1.5
       '@asamuzakjp/dom-selector': 9.2.4
@@ -8992,7 +8992,7 @@ snapshots:
       '@csstools/css-syntax-patches-for-csstree': 1.1.15(css-tree@3.2.1)
       '@exodus/bytes': 1.16.0(@noble/hashes@1.8.0)
       css-tree: 3.2.1
-      data-urls: 8.0.0(@noble/hashes@1.8.0)
+      data-urls: 7.0.0(@noble/hashes@1.8.0)
       decimal.js: 10.6.0
       html-encoding-sniffer: 7.0.0(@noble/hashes@1.8.0)
       is-potential-custom-element-name: 1.0.1
@@ -10838,7 +10838,7 @@ snapshots:
       lightningcss: 1.33.0
       tsx: 4.23.15
 
-  vitest@5.0.4(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(jsdom@30.1.2(@noble/hashes@1.8.0))(vite@7.3.7(@types/node@24.19.2)(jiti@2.7.0)(lightningcss@1.33.0)(tsx@4.23.15)):
+  vitest@5.0.4(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(jsdom@30.1.1(@noble/hashes@1.8.0))(vite@7.3.7(@types/node@24.19.2)(jiti@2.7.0)(lightningcss@1.33.0)(tsx@4.23.15)):
     dependencies:
       '@types/chai': 5.2.3
       '@vitest/mocker': 5.0.4(vite@7.3.7(@types/node@24.19.2)(jiti@2.7.0)(lightningcss@1.33.0)(tsx@4.23.15))
@@ -10857,7 +10857,7 @@ snapshots:
     optionalDependencies:
       '@opentelemetry/api': 1.9.1
       '@types/node': 24.19.2
-      jsdom: 30.1.2(@noble/hashes@1.8.0)
+      jsdom: 30.1.1(@noble/hashes@1.8.0)
     transitivePeerDependencies:
       - msw
 
@@ -10885,7 +10885,7 @@ snapshots:
 
   whatwg-mimetype@5.0.0: {}
 
-  whatwg-url@17.1.2(@noble/hashes@1.8.0):
+  whatwg-url@16.0.1(@noble/hashes@1.8.0):
     dependencies:
       '@exodus/bytes': 1.16.0(@noble/hashes@1.8.0)
       tr46: 6.0.0
