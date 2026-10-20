@@ -1,4 +1,6 @@
 import type { Options as ClaudeOptions, Query as ClaudeQuery, SDKMessage as ClaudeMessage } from "@anthropic-ai/claude-agent-sdk";
+import { Client as McpClient } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { ClaudeSessionStore } from "../claude/claude-session-store";
 import { DEFAULT_THREAD_ARCHIVE_POLICY } from "@pwragent/shared";
 import { threadLockRefusalMessage } from "@pwragent/shared";
@@ -3178,10 +3180,25 @@ describe("DesktopBackendRegistry", () => {
     const events: AgentEvent[] = [];
     const optionsSeen: ClaudeOptions[] = [];
     const decisions: unknown[] = [];
+    const closeQuery = vi.fn();
+    const overlayStore = createOverlayStoreMock();
+    const messagingStore = createMessagingArchiveCleanupStoreMock();
+    const deletePendingIntents = vi.spyOn(messagingStore, "deletePendingIntentsForThread").mockResolvedValue(["pending-claude"]);
+    const messagingArchiveCleaner = createMessagingArchiveCleanerMock();
+    const origins: AppServerThreadMessageOrigin[] = [
+      { kind: "messaging" },
+      { kind: "agent", sourceThread: { backend: "codex", threadId: "sender", title: "Sender" } },
+    ];
+    const imagePath = path.join(root, "attachment.png");
+    const filePath = path.join(root, "report.txt");
+    const imageBytes = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j3ioAAAAASUVORK5CYII=", "base64");
+    await writeFile(imagePath, imageBytes);
+    await writeFile(filePath, "Fixture report");
     const registry = new DesktopBackendRegistry({
       codexClient: codex,
-      overlayStore: createOverlayStoreMock(),
-      agentToolMcpServer: null,
+      overlayStore,
+      messagingStore,
+      messagingArchiveCleaner,
       pdfToolMcpServer: null,
       claudeBackendOptions: {
         store,
@@ -3196,7 +3213,7 @@ describe("DesktopBackendRegistry", () => {
             yield { type: "assistant", parent_tool_use_id: null, message: { id: `answer-${optionsSeen.length}`, content: [{ type: "text", text: "Done" }] } } as ClaudeMessage;
             yield { type: "result", subtype: "success", is_error: false, result: "Done" } as ClaudeMessage;
           }
-          return Object.assign(messages(), { close: vi.fn(), setPermissionMode: vi.fn() }) as unknown as ClaudeQuery;
+          return Object.assign(messages(), { close: closeQuery, setPermissionMode: vi.fn() }) as unknown as ClaudeQuery;
         },
       },
     });
@@ -3207,23 +3224,73 @@ describe("DesktopBackendRegistry", () => {
       expect(await registry.listThreads({ backend: "claude", forceRefresh: true })).toEqual(expect.arrayContaining([expect.objectContaining({ id: threadId, source: "claude" })]));
       for (let turn = 0; turn < 2; turn += 1) {
         events.length = 0;
-        await registry.startTurn({ backend: "claude", threadId, input: [{ type: "text", text: "Hello" }] });
+        const started = await registry.startTurn({ backend: "claude", threadId,
+          input: [
+            { type: "text", text: "Hello" },
+            ...(turn === 0 ? [
+              { type: "localImage" as const, path: imagePath, name: "Screenshot.png" },
+              { type: "localFile" as const, path: filePath, name: "Report.txt" },
+            ] : []),
+          ], messageOrigin: origins[turn] });
         await vi.waitFor(() => expect(events.map((event) => event.notification), JSON.stringify(events)).toEqual(expect.arrayContaining([expect.objectContaining({ method: "item/commandExecution/requestApproval" })])));
         const replay = await registry.readThread({ backend: "claude", threadId });
         expect(replay.pendingRequest?.method).toBe("item/commandExecution/requestApproval");
+        expect(registry.getInProgressThreadSnapshotForQuit()).toMatchObject({ count: 1, threadIds: [`claude:${threadId}`] });
+        expect(registry.getActiveTurnForThread({ backend: "claude", threadId })).toMatchObject({ turnId: started.turnId });
+        const server = optionsSeen[turn].mcpServers!.pwragent;
+        if (!("url" in server)) throw new Error("Expected HTTP MCP server");
+        const mcp = new McpClient({ name: "claude-fixture", version: "1.0.0" });
+        try {
+          await mcp.connect(new StreamableHTTPClientTransport(new URL(server.url), { requestInit: { headers: server.headers } }));
+          const status = await mcp.callTool({ name: "get_thread_status", arguments: {} });
+          expect(status.isError).not.toBe(true);
+          expect(JSON.stringify(status)).toContain(threadId);
+        } finally {
+          await mcp.close();
+        }
         await registry.submitServerRequest({ backend: "claude", threadId, requestId: replay.pendingRequest!.params.requestId, response: { decision: "accept" } });
         await vi.waitFor(() => expect(events.some((event) => event.notification.method === "turn/completed")).toBe(true));
       }
       expect(optionsSeen[1].resume).toBe(threadId);
       expect(decisions).toEqual([{ behavior: "allow", updatedInput: { command: "git status" } }, { behavior: "allow", updatedInput: { command: "git status" } }]);
       expect((await registry.readThread({ backend: "claude", threadId })).replay.messages).toHaveLength(4);
+      // Reads hydrate origins from the overlay after the turn's live events are gone.
+      const history = (await registry.readThread({ backend: "claude", threadId })).replay;
+      expect(history.messages.filter((message) => message.role === "user").map((message) => message.origin)).toEqual(origins);
+      expect(history.entries.flatMap((entry) => entry.type === "message" && entry.role === "user" ? [entry.origin] : [])).toEqual(origins);
+      await rm(imagePath);
+      await rm(filePath);
+      const retained = (await new ClaudeSessionStore(path.join(root, "sessions")).entries(threadId))[0];
+      expect(retained).toMatchObject({ parts: [
+        { type: "text", text: "Hello" },
+        { type: "image", alt: "Screenshot.png", url: expect.stringMatching(/^pwragent-image:/) },
+        { type: "file", name: "Report.txt", mimeType: "text/plain", sizeBytes: 14 },
+      ] });
+      if (retained.type !== "message") throw new Error("Expected user message");
+      const image = retained.parts?.find((part) => part.type === "image");
+      expect(image).toBeDefined();
+      const retainedFileUrl = decodeURIComponent(new URL(image!.url).pathname.slice(1));
+      expect(await readFile(fileURLToPath(retainedFileUrl))).toEqual(imageBytes);
       await registry.renameThread({ backend: "claude", threadId, name: "Claude fixture" });
       await registry.setThreadExecutionMode({ backend: "claude", threadId, executionMode: "auto" });
       expect((await store.read(threadId)).thread.executionMode).toBe("auto");
       await registry.archiveThread({ backend: "claude", threadId });
+      expect(deletePendingIntents).toHaveBeenCalledWith({ backend: "claude", threadId });
+      expect(messagingArchiveCleaner.requests).toEqual([{ backend: "claude", threadId, origin: "thread-archive" }]);
       expect(await registry.listThreads({ backend: "claude", archived: true, forceRefresh: true })).toEqual(expect.arrayContaining([expect.objectContaining({ title: "Claude fixture" })]));
       await registry.restoreThread({ backend: "claude", threadId });
       expect((await store.read(threadId)).thread.archivedAt).toBeUndefined();
+      await registry.archiveThread({ backend: "claude", threadId });
+      expect(messagingArchiveCleaner.requests).toHaveLength(2);
+      await registry.restoreThread({ backend: "claude", threadId });
+      events.length = 0;
+      await registry.startTurn({ backend: "claude", threadId, input: [{ type: "text", text: "Await approval" }] });
+      await vi.waitFor(() => expect(events.some((event) => event.notification.method === "item/commandExecution/requestApproval")).toBe(true));
+      closeQuery.mockClear();
+      await registry.stopRunningTurnsForShutdown({ timeoutMs: 1_000 });
+      expect(closeQuery).toHaveBeenCalled();
+      expect(events.some((event) => event.notification.method === "turn/cancelled")).toBe(true);
+      expect(registry.getInProgressThreadSnapshotForQuit().count).toBe(0);
     } finally {
       await registry.close();
       await rm(root, { recursive: true, force: true });

@@ -2,13 +2,15 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { query, type Options, type Query, type SDKMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type {
   AgentEvent, AppServerPendingRequestNotification, AppServerThreadEntry,
-  AppServerThreadMessageEntry, AppServerThreadReplay, AppServerThreadSummary,
+  AppServerThreadMessageEntry, AppServerThreadMessagePart, AppServerThreadReplay, AppServerThreadSummary,
   AppServerTurnInputItem, BackendSummary, ThreadExecutionMode,
 } from "@pwragent/shared";
 import { resolveActiveProfilePath } from "../profile";
+import { toTranscriptImageProtocolUrl } from "../transcript-image-protocol";
 import { CLAUDE_SETUP_INSTRUCTIONS, claudeEnvironment, inspectClaudeInstallation, type ClaudeInstallation } from "./claude-executable";
 import { createClaudePermissionHandler, claudePermissionMode } from "./claude-permissions";
 import { ClaudeSessionStore, type ClaudeSession } from "./claude-session-store";
@@ -173,9 +175,11 @@ export class ClaudeBackend {
       if (session.thread.archivedAt) throw new Error("Restore this Claude thread before sending a message.");
       const content = await claudeInput(params.input);
       running.controller.signal.throwIfAborted();
+      const parts = claudeUserMessageParts(params.input);
       const user: AppServerThreadMessageEntry = {
         type: "message", id: `user:${running.turnId}`, role: "user",
-        text: params.input.map((item) => item.type === "text" ? item.text : `[${item.type}]`).join("\n"),
+        text: parts.flatMap((part) => part.type === "text" ? [part.text] : []).join("\n"),
+        parts,
         createdAt: Date.now(), turn: { id: running.turnId, status: "in_progress" },
       };
       const firstPrompt = params.input.find((item) => item.type === "text" && item.text.trim());
@@ -193,7 +197,7 @@ export class ClaudeBackend {
       await this.emit({ method: "turn/started", params: { threadId: params.threadId, turn: { id: running.turnId, status: "in_progress" } } });
       await this.emit({ method: "item/completed", params: {
         threadId: params.threadId, turnId: running.turnId,
-        item: { id: user.id, type: "userMessage", text: user.text },
+        item: { id: user.id, type: "userMessage", text: user.text, content: parts },
       } });
       const env = claudeEnvironment(await this.options.resolveEnv?.() ?? process.env);
       const permissionMode = claudePermissionMode(params.executionMode ?? session.thread.executionMode ?? "default");
@@ -358,8 +362,8 @@ export class ClaudeBackend {
         entry.details[0].markdown = typeof block.content === "string" ? block.content : JSON.stringify(block.content);
         await this.store.append(threadId, [entry]);
         await this.emit({ method: "item/completed", params: { threadId, turnId, item: {
-          id: entry.id, type: "dynamicToolCall", toolName: entry.summary, success: !block.is_error,
-          text: entry.details[0].markdown,
+          id: entry.id, type: "dynamicToolCall", toolName: entry.summary, status: entry.status,
+          contentItems: [{ type: "inputText", text: entry.details[0].markdown ?? "" }],
         } } });
       }
     }
@@ -377,6 +381,23 @@ export class ClaudeBackend {
   async close(): Promise<void> {
     await Promise.all([...this.running.entries()].map(([threadId, running]) => this.interruptTurn({ threadId, turnId: running.turnId })));
   }
+}
+
+function claudeUserMessageParts(input: AppServerTurnInputItem[]): AppServerThreadMessagePart[] {
+  return input.flatMap((item): AppServerThreadMessagePart[] => {
+    if (item.type === "text") return [{ type: "text", text: item.text }];
+    if (item.type === "image") return [{ type: "image", url: item.url, alt: item.name }];
+    if (item.type === "localImage") return [{
+      type: "image",
+      url: toTranscriptImageProtocolUrl(pathToFileURL(item.path).toString()),
+      alt: item.name ?? path.basename(item.path),
+    }];
+    if (item.type === "localFile") return [{
+      type: "file", name: item.name ?? path.basename(item.path),
+      mimeType: item.mimeType, sizeBytes: item.sizeBytes,
+    }];
+    return [];
+  });
 }
 
 async function claudeInput(input: AppServerTurnInputItem[]): Promise<SDKUserMessage["message"]["content"]> {

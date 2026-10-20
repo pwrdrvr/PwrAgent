@@ -2836,7 +2836,7 @@ function parseActiveTurnKey(
   const backendSeparator = key.indexOf(":");
   if (backendSeparator <= 0) return undefined;
   const backend = key.slice(0, backendSeparator);
-  if (backend !== "codex") return undefined;
+  if (backend !== "codex" && backend !== "claude") return undefined;
   const parsed = parseThreadTurnKeyBody(
     key.slice(backendSeparator + 1),
   );
@@ -14617,6 +14617,11 @@ export class DesktopBackendRegistry {
       const admit = await beforeMutation?.();
       admit?.();
       await this.claudeBackend.setArchived(request.threadId, true);
+      await this.cleanupMessagingForArchivedThread({
+        backend,
+        threadId: request.threadId,
+        origin: "thread-archive",
+      });
       finishMutation?.();
       this.invalidateThreadListCache(backend);
       await this.emit({ backend, notification: { method: "thread/archived", params: { threadId: request.threadId } } });
@@ -14962,6 +14967,7 @@ export class DesktopBackendRegistry {
     const backend = request.backend ?? "codex";
     if (backend === "claude") {
       await this.claudeBackend.setArchived(request.threadId, false);
+      this.clearArchivedMessagingCleanupCache({ backend, threadId: request.threadId });
       this.invalidateThreadListCache(backend);
       await this.emit({ backend, notification: { method: "thread/unarchived", params: { threadId: request.threadId } } });
       return { backend, threadId: request.threadId, restoredAt: Date.now() };
@@ -16230,7 +16236,16 @@ export class DesktopBackendRegistry {
     const readStartedAt = performance.now();
     const backend = request.backend ?? "codex";
     if (backend === "claude") {
-      const replay = await this.claudeBackend.readThread(request.threadId);
+      const storedReplay = await this.claudeBackend.readThread(request.threadId);
+      const messageIds = storedReplay.messages.flatMap((message) =>
+        message.role === "user" ? [message.id] : [],
+      );
+      const origins = await this.overlayStore.readThreadMessageOrigins?.({
+        backend,
+        threadId: request.threadId,
+        messageIds,
+      }) ?? {};
+      const replay = mergeThreadMessageOrigins(storedReplay, origins);
       const pendingRequest = this.getPendingRequestForThread({ backend, threadId: request.threadId });
       return { backend, threadId: request.threadId, fetchedAt: Date.now(), replay, pendingRequest, threadStatus: replay.threadStatus };
     }

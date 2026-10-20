@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -7,6 +7,7 @@ import type { AgentEvent } from "@pwragent/shared";
 import { ClaudeBackend } from "../claude/claude-backend";
 import { ClaudeSessionStore } from "../claude/claude-session-store";
 import { createClaudePermissionHandler, claudePermissionMode } from "../claude/claude-permissions";
+import { buildLiveToolDetails, getNotificationItem } from "../../renderer/src/features/thread-detail/live-transcript-activity";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -57,6 +58,69 @@ async function fixture(messages?: (options: Options) => AsyncGenerator<SDKMessag
 }
 
 describe("Claude SDK backend", () => {
+  it.each([false, true])("renders completed tool output before the turn ends (is_error=%s)", async (isError) => {
+    let finish!: () => void;
+    const gate = new Promise<void>((resolve) => { finish = resolve; });
+    const f = await fixture(async function* () {
+      yield { type: "assistant", parent_tool_use_id: null, message: {
+        id: "tool-message", content: [{ type: "tool_use", id: "tool-1", name: "Bash", input: { command: "git status" } }],
+      } } as SDKMessage;
+      yield { type: "user", message: { content: [{
+        type: "tool_result", tool_use_id: "tool-1", content: "fixture output", is_error: isError,
+      }] } } as SDKMessage;
+      await gate;
+      yield { type: "result", subtype: "success", is_error: false, result: "Done" } as SDKMessage;
+    });
+    try {
+      const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Run" }] });
+      await vi.waitFor(() => expect(f.events.some((event) => event.notification.method === "item/completed"
+        && getNotificationItem(event.notification.params)?.id === "tool-1")).toBe(true));
+      const event = f.events.find((event) => event.notification.method === "item/completed"
+        && getNotificationItem(event.notification.params)?.id === "tool-1")!;
+      if (event.notification.method !== "item/completed") throw new Error("Expected tool completion");
+      expect(buildLiveToolDetails(getNotificationItem(event.notification.params)!)).toEqual([expect.objectContaining({
+        status: isError ? "failed" : "completed", command: expect.objectContaining({ output: "fixture output" }),
+      })]);
+      expect(f.events.some((event) => event.notification.method === "turn/completed")).toBe(false);
+      expect((await f.backend.readThread(threadId)).entries).toEqual(expect.arrayContaining([expect.objectContaining({
+        id: "tool-1", status: isError ? "failed" : "completed",
+        details: [expect.objectContaining({ markdown: "fixture output" })],
+      })]));
+    } finally {
+      finish();
+      await f.waitForTurn();
+      await f.backend.close();
+    }
+  });
+
+  it("preserves local images, inline images and named files in live and restarted replay", async () => {
+    const f = await fixture();
+    const imagePath = path.join(f.root, "image.png");
+    await writeFile(imagePath, Buffer.from("fixture image"));
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [
+      { type: "text", text: "Read these" },
+      { type: "localImage", path: imagePath, name: "local.png" },
+      { type: "image", url: "data:image/png;base64,aW1hZ2U=", name: "inline.png" },
+      { type: "localFile", path: path.join(f.root, "report.txt"), name: "Report.txt", mimeType: "text/plain", sizeBytes: 12, textPreview: "Hello report" },
+    ] });
+    await f.waitForTurn();
+    const restarted = new ClaudeBackend({ ...f.backendOptions, store: new ClaudeSessionStore(f.root) });
+    const replay = await restarted.readThread(threadId);
+    const parts = [
+      { type: "text", text: "Read these" },
+      { type: "image", url: expect.stringMatching(/^pwragent-image:/), alt: "local.png" },
+      { type: "image", url: "data:image/png;base64,aW1hZ2U=", alt: "inline.png" },
+      { type: "file", name: "Report.txt", mimeType: "text/plain", sizeBytes: 12 },
+    ];
+    expect(replay.messages[0]).toMatchObject({ text: "Read these", parts });
+    expect(replay.entries[0]).toMatchObject({ text: "Read these", parts });
+    expect(f.events).toEqual(expect.arrayContaining([expect.objectContaining({ notification: expect.objectContaining({
+      method: "item/completed", params: expect.objectContaining({ item: expect.objectContaining({ type: "userMessage", content: parts }) }),
+    }) })]));
+  });
+
   it("uses the local harness, streams without duplicate messages, and resumes after restart", async () => {
     const f = await fixture();
     const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
