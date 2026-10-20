@@ -11,7 +11,7 @@ import type {
   ThreadSubAgentSummary,
   ThreadUsageLineRecord,
 } from "@pwragent/shared";
-import { buildFederatedThreadRef, DEFAULT_THREAD_ARCHIVE_POLICY } from "@pwragent/shared";
+import { buildFederatedThreadRef, buildTurnUsageActivityEntryFromLine, DEFAULT_THREAD_ARCHIVE_POLICY } from "@pwragent/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { CodexEnvironmentHydrationStore } from "../app-server/codex-environment-hydration-store";
@@ -73,6 +73,47 @@ afterEach(() => {
 });
 
 describe("sqlite write metrics", () => {
+  it("budgets Claude result accounting independently of context updates and preserves provider pricing", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient(), overlayStore: store,
+      agentToolMcpServer: null, pdfToolMcpServer: null,
+    });
+    const internal = registry as unknown as {
+      emit(event: AgentEvent): Promise<void>;
+      flushLiveThreadUsageLines(): Promise<void>;
+    };
+    const target = { backend: "claude" as const, threadId: "claude-usage-fixture" };
+    try {
+      const { writes } = await measureSqliteWrites(async () => {
+        for (let index = 0; index < 100; index += 1) {
+          await internal.emit({ backend: "claude", notification: {
+            method: "thread/contextWindow/updated", params: {
+              threadId: target.threadId, turnId: "turn", usedTokens: 1000 + index, modelContextWindow: 200_000,
+            },
+          } });
+        }
+        await internal.emit({ backend: "claude", notification: {
+          method: "thread/tokenUsage/updated", params: {
+            threadId: target.threadId, turnId: "turn", model: "claude-opus-5-5",
+            tokenUsage: { last: { inputTokens: 350, cachedInputTokens: 200, cacheWriteInputTokens: 50, outputTokens: 20, totalTokens: 370 }, claudeCostUSD: 0.123456 },
+          },
+        } });
+        await internal.flushLiveThreadUsageLines();
+      });
+      const pricing = await store.readThreadPricing(target);
+      expect(pricing.lines).toHaveLength(1);
+      expect(pricing.lines[0]).toMatchObject({
+        provider: "anthropic", pricingBasis: "provider-reported", priceStatus: "priced",
+        totalCostMicros: 123456, inputTokens: 350, cachedInputTokens: 200, cacheWriteInputTokens: 50,
+        outputTokens: 20, turnUsageAttributed: true,
+      });
+      const entry = buildTurnUsageActivityEntryFromLine({ line: pricing.lines[0], turn: { id: "turn", status: "completed" } });
+      expect(entry?.details.find((detail) => detail.id.endsWith("-cost"))?.label).toContain("provider estimate");
+      expect(entry?.details.some((detail) => detail.id.endsWith("-input-cost") || detail.id.endsWith("-output-cost"))).toBe(false);
+      expectSqliteWriteBudget({ scenario: "claude-result-usage", note: "100 context updates plus one result usage event and ledger flush; context does not write SQLite; 1 commit/turn, measured 65,920 bytes: ~6.6 MB/day at 100 turns/day, zero idle writes", writes });
+    } finally { await registry.close(); }
+  });
+
   it("budgets Claude creation and operator mode changes without repeat-selection writes", async () => {
     const registry = new DesktopBackendRegistry({
       codexClient: createStubBackendClient(), overlayStore: store,

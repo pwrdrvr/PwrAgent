@@ -5221,6 +5221,10 @@ export function useThreadSessionState(params: {
 
           return {
             ...currentAfterStaleThinking,
+            ...(!currentAfterStaleThinking.contextWindow && response.replay.contextWindow
+              && response.replay.contextWindow.modelContextWindow > 0
+              ? { contextWindow: contextWindowFill(response.replay.contextWindow.usedTokens, response.replay.contextWindow.modelContextWindow) }
+              : {}),
             activeTurnId: hydratedPendingTurnId ?? (shouldClearStaleThinking
               ? undefined
               : shouldAdoptHydratedTurn

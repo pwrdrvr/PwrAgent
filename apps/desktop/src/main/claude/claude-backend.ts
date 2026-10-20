@@ -6,13 +6,14 @@ import { query, type Options, type Query, type SDKMessage, type SDKUserMessage }
 import type {
   AgentEvent, AppServerPendingRequestNotification, AppServerThreadEntry,
   AppServerThreadMessageEntry, AppServerThreadMessagePart, AppServerThreadReplay, AppServerThreadSummary,
-  AppServerTurnInputItem, BackendModelOption, BackendSummary, ThreadExecutionMode,
+  AppServerTurnInputItem, BackendModelOption, BackendSummary, ThreadExecutionMode, CodexMcpServerSummary,
 } from "@pwragent/shared";
 import { resolveActiveProfilePath } from "../profile";
 import { toTranscriptImageProtocolUrl } from "../transcript-image-protocol";
 import { CLAUDE_SETUP_INSTRUCTIONS, claudeEnvironment, inspectClaudeInstallation, type ClaudeInstallation } from "./claude-executable";
 import { createClaudePermissionHandler, claudePermissionMode } from "./claude-permissions";
 import { claudeHarnessOptions, discoverClaudeModels } from "./claude-models";
+import { claudeRateLimits, claudeStreamRateLimits, claudeTelemetry, claudeTurnUsage } from "./claude-usage";
 import { ClaudeSessionStore, type ClaudeSession } from "./claude-session-store";
 
 export type ClaudeBackendOptions = {
@@ -33,6 +34,7 @@ type RunningTurn = {
   done?: Promise<void>;
   entries: Map<string, AppServerThreadEntry>;
   started?: boolean;
+  contextWindow?: ClaudeSession["contextWindow"];
 };
 
 export class ClaudeBackend {
@@ -41,6 +43,7 @@ export class ClaudeBackend {
   private installation: ClaudeInstallation = { authStatus: "unknown", message: CLAUDE_SETUP_INSTRUCTIONS };
   private discovery?: Promise<void>;
   private models?: BackendModelOption[];
+  private rateLimits: BackendSummary["rateLimits"];
 
   constructor(private readonly options: ClaudeBackendOptions) {
     this.store = options.store ?? new ClaudeSessionStore(path.join(resolveActiveProfilePath("state"), "claude"));
@@ -65,6 +68,7 @@ export class ClaudeBackend {
     return {
       kind: "claude", source: "builtin", label: "Claude", available,
       claude: { ...this.installation },
+      rateLimits: this.rateLimits,
       unavailableReason: available ? undefined : this.installation.message,
       methods: [],
       capabilities: {
@@ -128,13 +132,14 @@ export class ClaudeBackend {
   }
 
   async readThread(threadId: string): Promise<AppServerThreadReplay> {
-    await this.store.read(threadId);
+    const session = await this.store.read(threadId);
     const entries = new Map((await this.store.entries(threadId)).map((entry) => [entry.id, entry]));
     for (const entry of this.running.get(threadId)?.entries.values() ?? []) entries.set(entry.id, entry);
     const ordered = [...entries.values()];
     const messages = ordered.filter((entry): entry is AppServerThreadMessageEntry => entry.type === "message");
     return {
       entries: ordered, messages,
+      contextWindow: this.running.get(threadId)?.contextWindow ?? session.contextWindow,
       lastUserMessage: messages.findLast((entry) => entry.role === "user")?.text,
       lastAssistantMessage: messages.findLast((entry) => entry.role === "assistant")?.text,
       pagination: { supportsPagination: false, hasPreviousPage: false },
@@ -208,6 +213,7 @@ export class ClaudeBackend {
         item: { id: user.id, type: "userMessage", text: user.text, content: parts },
       } });
       const env = claudeEnvironment(await this.options.resolveEnv?.() ?? process.env);
+      this.rateLimits = undefined;
       const permissionMode = claudePermissionMode(params.executionMode ?? session.thread.executionMode ?? "default");
       const sdkOptions: Options = {
         ...claudeHarnessOptions(executable, env),
@@ -231,10 +237,22 @@ export class ClaudeBackend {
           cancelRequest: (requestId) => this.options.cancelRequest(params.threadId, running.turnId, requestId),
         }),
       };
+      let releasePrompt!: () => void;
+      const promptReady = new Promise<void>((resolve) => { releasePrompt = resolve; });
       async function* prompt(): AsyncIterable<SDKUserMessage> {
+        await promptReady;
         yield { type: "user", session_id: session.sdkSessionId ?? params.threadId, parent_tool_use_id: null, message: { role: "user", content } };
       }
       running.query = (this.options.query ?? query)({ prompt: prompt(), options: sdkOptions });
+      // Older PwrAgent metadata has no cost baseline. Read the official
+      // session totals before releasing the prompt, so this turn cannot race
+      // its own baseline. If unavailable, the first result seeds the next turn.
+      try {
+        if (session.sdkSessionId && !session.modelUsage) {
+          const usage = await claudeTelemetry(() => running.query!.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true }));
+          if (usage?.session?.model_usage) session.modelUsage = usage.session.model_usage;
+        }
+      } finally { releasePrompt(); }
       running.done = this.consume(session, running).finally(params.onTurnFinished);
       // consume owns every error after launch, including terminal notification.
       void running.done.catch(() => {});
@@ -264,6 +282,7 @@ export class ClaudeBackend {
     let messageId = "";
     let failure: string | undefined;
     let receivedResult = false;
+    const needsUsageBaseline = Boolean(session.sdkSessionId) && !session.modelUsage;
     try {
       for await (const message of running.query!) {
         if (message.type === "system" && message.subtype === "init") {
@@ -271,6 +290,7 @@ export class ClaudeBackend {
           const current = await this.store.read(threadId);
           current.sdkSessionId = message.session_id;
           await this.store.save(current);
+          await Promise.all([this.refreshUsage(running), this.refreshContext(session, running)]);
         }
         if (message.type === "stream_event" && !message.parent_tool_use_id) {
           const event = message.event;
@@ -286,9 +306,32 @@ export class ClaudeBackend {
             await this.emit({ method: "item/agentMessage/delta", params: { threadId, turnId, itemId: messageId, delta: event.delta.text } });
           }
         }
+        if (message.type === "rate_limit_event") {
+          const limits = new Map(this.rateLimits?.map((limit) => [limit.limitId, limit]));
+          for (const limit of claudeStreamRateLimits(message.rate_limit_info)) limits.set(limit.limitId, limit);
+          this.rateLimits = [...limits.values()];
+          await this.emit({ method: "backend/providerStatus/updated", params: { backend: "claude" } });
+        }
         await this.consumeCompleteMessage(message, threadId, running);
+        if (message.type === "assistant" && !message.parent_tool_use_id) {
+          await this.refreshContext(session, running);
+        }
         if (message.type === "result") {
           receivedResult = true;
+          const hasUsage = message.modelUsage && Object.values(message.modelUsage).some((value) =>
+            value.inputTokens + value.outputTokens + value.cacheReadInputTokens + value.cacheCreationInputTokens > 0);
+          if (hasUsage) {
+            const canAttribute = !needsUsageBaseline || Boolean(session.modelUsage);
+            const tokenUsage = claudeTurnUsage(message.modelUsage, session.modelUsage);
+            session.modelUsage = message.modelUsage;
+            // Without an old session's baseline, cumulative spend cannot be
+            // attributed to this turn. Save it for the next turn, do not bill
+            // the pre-existing transcript as new work.
+            if (canAttribute) {
+              await this.emit({ method: "thread/tokenUsage/updated", params: { threadId, turnId, model: tokenUsage.model, tokenUsage } });
+            }
+          }
+          await Promise.all([this.refreshContext(session, running), this.refreshUsage(running)]);
           if (message.is_error) failure = message.subtype === "success" ? message.result : message.errors.join("\n");
           break;
         }
@@ -309,6 +352,8 @@ export class ClaudeBackend {
         // Re-read metadata so a live rename/mode change cannot be overwritten.
         const current = await this.store.read(threadId);
         current.sdkSessionId = session.sdkSessionId;
+        current.modelUsage = session.modelUsage;
+        current.contextWindow = session.contextWindow;
         current.thread.updatedAt = Date.now();
         await this.store.save(current);
       } catch (error) {
@@ -326,6 +371,39 @@ export class ClaudeBackend {
         } } });
       }
     }
+  }
+
+  private async refreshUsage(running: RunningTurn) {
+    const usage = await claudeTelemetry(() => running.query!.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true }));
+    // An unavailable optional probe must not erase windows observed on the
+    // stream during this turn. A known non-subscription account does clear them.
+    if (usage && (!usage.rate_limits_available || usage.rate_limits)) this.rateLimits = claudeRateLimits(usage);
+    await this.emit({ method: "backend/providerStatus/updated", params: { backend: "claude" } });
+    return usage;
+  }
+
+  private async refreshContext(session: ClaudeSession, running: RunningTurn): Promise<void> {
+    const context = await claudeTelemetry(() => running.query!.getContextUsage({ detail: "summary" }));
+    if (!context || !Number.isFinite(context.totalTokens) || !(context.totalTokens >= 0)
+      || !Number.isFinite(context.maxTokens) || !(context.maxTokens > 0)) return;
+    session.contextWindow = { usedTokens: context.totalTokens, modelContextWindow: context.maxTokens };
+    running.contextWindow = session.contextWindow;
+    await this.emit({ method: "thread/contextWindow/updated", params: {
+      threadId: session.thread.id, turnId: running.turnId, ...session.contextWindow,
+    } });
+  }
+
+  async listMcpServers(threadId: string): Promise<CodexMcpServerSummary[]> {
+    const query = this.running.get(threadId)?.query;
+    if (!query) throw new Error("Claude MCP inventory is available while a turn is running.");
+    const servers = await query.mcpServerStatus();
+    return servers.map((server) => ({
+      name: server.name,
+      authStatus: server.status === "needs-auth" ? "notLoggedIn" as const : "unsupported" as const,
+      startupStatus: server.status === "connected" ? "ready" as const : server.status === "pending" ? "starting" as const : "failed" as const,
+      startupError: server.error,
+      tools: server.tools?.map((tool) => tool.name) ?? [],
+    }));
   }
 
   private async consumeCompleteMessage(message: SDKMessage, threadId: string, running: RunningTurn): Promise<void> {

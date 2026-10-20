@@ -5559,7 +5559,7 @@ function buildLiveThreadUsageLine(params: {
 }
 
 function fallbackUsageProvider(backend: AppServerBackendKind): string {
-  return backend === "acp:qwen" ? "qwen" : "openai";
+  return backend === "claude" ? "anthropic" : backend === "acp:qwen" ? "qwen" : "openai";
 }
 
 /**
@@ -19303,7 +19303,7 @@ export class DesktopBackendRegistry {
       const input = await ownThreadInputAttachments(await enrichLocalFileInputs(params.input, {
         privateStorageRoots: this.localFilePrivateStorageRoots,
       }), params, this.localFilePrivateStorageRoots);
-      const registrations = await this.registerMcpConnections(overlay?.mcpConnectionIds);
+      const registrations = await this.registerMcpConnections(overlay?.mcpConnectionIds, params.threadId);
       let revoked = false;
       const revokeConnections = () => {
         if (revoked) return;
@@ -19313,7 +19313,9 @@ export class DesktopBackendRegistry {
       try {
         for (const registration of registrations) registration.bindThread(params.threadId);
         const owned = await this.claudeAgentToolMcpServer?.registerClient({ backend: "claude", threadId: params.threadId });
-        const servers = [...registrations.map((registration) => registration.server), ...(owned ? [owned.server] : [])];
+        const servers = [...registrations.map((registration) => ({
+          ...registration.server, name: buildCodexConnectionMcpServerName(registration.server),
+        })), ...(owned ? [owned.server] : [])];
         const mcpServers = Object.fromEntries(servers.map((server) => [server.name, "url" in server
           ? { type: "http" as const, url: server.url, headers: Object.fromEntries(server.headers.map(({ name, value }) => [name, value])) }
           : { type: "stdio" as const, command: server.command, args: server.args, env: server.env }]));
@@ -21792,6 +21794,9 @@ export class DesktopBackendRegistry {
       throw new Error("MCP inventory is only available for Codex threads");
     }
     const detail = params.detail ?? "toolsAndAuthOnly";
+    if (params.backend === "claude") {
+      return { ...params, detail, servers: await this.claudeBackend.listMcpServers(params.threadId) };
+    }
     const servers = await this.withCodexThreadClient(
       params.threadId,
       async (client) => {
@@ -30736,6 +30741,28 @@ export class DesktopBackendRegistry {
     });
     if (!line) {
       return;
+    }
+    if (event.backend === "claude") {
+      const reported = readRecord(tokenUsage)?.claudeCostUSD;
+      if (typeof reported === "number" && Number.isFinite(reported) && reported >= 0) {
+        // The runtime accounts for cache creation, model routing, compaction,
+        // and subagents. Its estimate outranks a catalog guess. Component
+        // prices are unavailable; never fabricate their allocation.
+        line.totalCostMicros = Math.round(reported * 1_000_000);
+        line.priceStatus = "priced";
+        line.provider = "anthropic";
+        line.pricingBasis = "provider-reported";
+        line.pricingCatalogId = undefined;
+        line.pricingCatalogVersion = undefined;
+        line.pricingRateId = undefined;
+        line.priceUnavailableReason = undefined;
+        line.uncachedInputCostMicros = 0;
+        line.cachedInputCostMicros = 0;
+        line.cacheWriteInputCostMicros = 0;
+        line.outputCostMicros = 0;
+        line.settingsSource = "event";
+        line.settingsConfidence = "exact";
+      }
     }
     const accountKey = await this.usageAccountForTurn(event.backend, threadId, turnId);
     if (accountKey) line.accountKey = accountKey;

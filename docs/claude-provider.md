@@ -106,6 +106,48 @@ Archive changes metadata and
 retains the workspace. Native fork, steering, workspace handoff, and transcript
 pagination are not advertised.
 
+## Usage, context, and MCP
+
+The Pricing rail uses the SDK's per-model result totals, including cache
+creation, cache reads, compaction, and native subagents. It subtracts the
+previous session snapshot on resume and stores one turn estimate through the
+existing usage ledger. The CLI's reported estimate is preserved on reads;
+PwrAgent does not substitute a catalog rate or invent component prices.
+These are provider estimates, not subscription charges or invoices. Costs
+arrive with a result, including error results that contain usage. A process
+that exits without a usage result cannot provide a complete cost observation.
+For sessions created before usage accounting, a bounded control request reads
+the baseline before the prompt is released. If that fails, the first result
+seeds a baseline without misattributing old transcript costs to the new turn.
+
+Context occupancy comes separately from `getContextUsage({ detail: "summary" })`
+at initialization, completed assistant messages, and the result. Summary mode
+avoids per-category token-count API calls. The latest occupancy is saved with
+session metadata and restores the composer moon after reopening a thread.
+It never enters the billed-token totals.
+
+Claude limits use the optional SDK usage control response and streamed rate
+limit events. The control response reports percentages; stream events report
+fractions and epoch-second resets. Sparse events merge by window, including
+validated `unifiedWindows` extensions from newer CLIs. A missing optional
+probe does not erase a window reported on the same turn. The rail shows only
+Claude limits for Claude threads, or explicitly says they are unavailable;
+it never falls back to the Codex account. Probes are bounded and never read
+credential files or call account endpoints outside the official CLI.
+
+Selected managed MCP connections and the PwrAgent gateway are injected into
+`query({ options: { mcpServers } })`. Changes apply on the next message. While
+a turn runs, inventory comes from `Query.mcpServerStatus()`. An idle thread
+reports that inventory is unavailable instead of querying Codex. The CLI's own
+MCP configuration remains enabled. Auto is Claude's native `auto` mode on both
+query creation and live permission changes; a callback that reaches PwrAgent
+still requires explicit approval. Host gateway connection policies also apply.
+
+The additional SQLite budget is one commit for a result usage observation and
+ledger flush, independent of 100 context updates: measured 65,920 WAL bytes.
+At 100 turns/day that is `100 / 86400 commits/s × 65920 bytes × 86400 seconds`,
+approximately 6.6 MB/day. Context updates and idle telemetry add no SQLite writes.
+
 ## Verification
 
 The provider and executable tests use injected SDK streams and temporary

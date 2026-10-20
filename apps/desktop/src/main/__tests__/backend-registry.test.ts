@@ -3181,6 +3181,11 @@ describe("DesktopBackendRegistry", () => {
     const optionsSeen: ClaudeOptions[] = [];
     const decisions: unknown[] = [];
     const closeQuery = vi.fn();
+    const revokeBridge = vi.fn();
+    const registerBridge = vi.fn(async () => ({
+      server: { name: "fixture_gateway", command: "/fixture/bridge", args: ["--stdio"], env: {} },
+      bindThread: vi.fn(), revoke: revokeBridge,
+    }));
     const overlayStore = createOverlayStoreMock();
     const messagingStore = createMessagingArchiveCleanupStoreMock();
     const deletePendingIntents = vi.spyOn(messagingStore, "deletePendingIntentsForThread").mockResolvedValue(["pending-claude"]);
@@ -3199,6 +3204,7 @@ describe("DesktopBackendRegistry", () => {
       overlayStore,
       messagingStore,
       messagingArchiveCleaner,
+      mcpConnectionService: { registerBridge },
       pdfToolMcpServer: null,
       claudeBackendOptions: {
         store,
@@ -3227,11 +3233,12 @@ describe("DesktopBackendRegistry", () => {
       await registry.listBackends({ refreshModels: "claude", includeUnavailable: true },
         issueProviderDiscoveryPermit("settings-user-action"));
       const { threadId } = await registry.startThread({ backend: "claude", cwd: root, executionMode: "default" });
+      await registry.setThreadMcpConnections({ backend: "claude", threadId, connectionIds: ["fixture-connection"] });
       expect(startCodex).not.toHaveBeenCalled();
       expect(await registry.listThreads({ backend: "claude", forceRefresh: true })).toEqual(expect.arrayContaining([expect.objectContaining({ id: threadId, source: "claude" })]));
       for (let turn = 0; turn < 2; turn += 1) {
         events.length = 0;
-        const started = await registry.startTurn({ backend: "claude", threadId,
+        const started = await registry.startTurn({ backend: "claude", threadId, executionMode: "auto",
           model: turn === 0 ? "claude-custom-fixture" : "claude-opus-4-8", reasoningEffort: "max",
           input: [
             { type: "text", text: "Hello" },
@@ -3245,6 +3252,9 @@ describe("DesktopBackendRegistry", () => {
         expect(replay.pendingRequest?.method).toBe("item/commandExecution/requestApproval");
         expect(registry.getInProgressThreadSnapshotForQuit()).toMatchObject({ count: 1, threadIds: [`claude:${threadId}`] });
         expect(registry.getActiveTurnForThread({ backend: "claude", threadId })).toMatchObject({ turnId: started.turnId });
+        expect(optionsSeen[turn].permissionMode).toBe("auto");
+        expect(registerBridge).toHaveBeenCalledWith("fixture-connection", threadId);
+        expect(Object.values(optionsSeen[turn].mcpServers ?? {})).toContainEqual(expect.objectContaining({ type: "stdio", command: "/fixture/bridge" }));
         const server = optionsSeen[turn].mcpServers!.pwragent;
         if (!("url" in server)) throw new Error("Expected HTTP MCP server");
         const mcp = new McpClient({ name: "claude-fixture", version: "1.0.0" });
@@ -3259,6 +3269,7 @@ describe("DesktopBackendRegistry", () => {
         await registry.submitServerRequest({ backend: "claude", threadId, requestId: replay.pendingRequest!.params.requestId, response: { decision: "accept" } });
         await vi.waitFor(() => expect(events.some((event) => event.notification.method === "turn/completed")).toBe(true));
       }
+      expect(revokeBridge).toHaveBeenCalledTimes(2);
       expect(optionsSeen[1].resume).toBe(threadId);
       expect(optionsSeen.map(({ model, effort }) => ({ model, effort }))).toEqual([
         { model: "claude-custom-fixture", effort: "max" }, { model: "claude-opus-4-8", effort: "max" },

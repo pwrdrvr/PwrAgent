@@ -927,6 +927,8 @@ export type AppServerThreadReplayPagination = {
 };
 
 export type AppServerThreadReplay = {
+  /** Latest context occupancy; separate from billed token totals. */
+  contextWindow?: { usedTokens: number; modelContextWindow: number };
   entries: AppServerThreadEntry[];
   messages: AppServerThreadMessage[];
   /** Native Codex nickname when a replay belongs to a delegated sub-agent. */

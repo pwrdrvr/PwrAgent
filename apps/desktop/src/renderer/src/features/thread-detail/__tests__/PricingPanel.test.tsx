@@ -581,3 +581,16 @@ it("reads a local thread's sub-thread totals, but never a peer's", async () => {
   }
   expect(readThreadFamilyPricing).not.toHaveBeenCalled();
 });
+
+
+it("shows Claude limits without requesting or displaying the Codex account pace", () => {
+  const readUsageActivity = vi.fn();
+  const { pricing } = buildTokenMiserPricingFixture();
+  const thread = { id: "claude-thread", source: "claude" as const, updatedAt: 1 };
+  const view = render(<PricingPanel pricing={pricing} thread={thread}
+    desktopApi={{ openUsageActivity: vi.fn(), readUsageActivity }}
+    backends={[{ kind: "claude", label: "Claude", rateLimits: [{ name: "Weekly limit", usedPercent: 35 }] } as import("@pwragent/shared").BackendSummary]} />);
+  expect(view.getByLabelText("Claude plan limits")).toHaveTextContent("35% used");
+  expect(view.container.querySelector(".usage-pace-card")).toBeNull();
+  expect(readUsageActivity).not.toHaveBeenCalled();
+});

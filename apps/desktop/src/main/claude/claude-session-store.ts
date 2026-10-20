@@ -1,3 +1,4 @@
+import type { ClaudeUsageTotals } from "./claude-usage";
 import { randomUUID } from "node:crypto";
 import { appendFile, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -8,6 +9,8 @@ export type ClaudeSession = {
   cwd: string;
   /** Set only after the SDK confirms initialization; used by query({ resume }). */
   sdkSessionId?: string;
+  modelUsage?: ClaudeUsageTotals;
+  contextWindow?: { usedTokens: number; modelContextWindow: number };
 };
 
 /**

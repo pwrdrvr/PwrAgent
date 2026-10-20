@@ -14,7 +14,7 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-async function fixture(messages?: (options: Options) => AsyncGenerator<SDKMessage>) {
+async function fixture(messages?: (options: Options) => AsyncGenerator<SDKMessage>, controls: Partial<Query> = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-"));
   roots.push(root);
   const store = new ClaudeSessionStore(root);
@@ -38,7 +38,7 @@ async function fixture(messages?: (options: Options) => AsyncGenerator<SDKMessag
       yield { type: "result", subtype: "success", is_error: false, result: "Hello world" } as SDKMessage;
     }
     return Object.assign(messages ? messages(options) : normal(), {
-      close, setPermissionMode: vi.fn().mockResolvedValue(undefined),
+      close, setPermissionMode: vi.fn().mockResolvedValue(undefined), ...controls,
     }) as unknown as Query;
   });
   const backendOptions = {
@@ -60,6 +60,100 @@ async function fixture(messages?: (options: Options) => AsyncGenerator<SDKMessag
 }
 
 describe("Claude SDK backend", () => {
+  it.each([true, false])("handles a legacy resumed session with baseline probe available=%s", async (available) => {
+    const model = { inputTokens: 100, outputTokens: 20, cacheReadInputTokens: 200, cacheCreationInputTokens: 50,
+      costUSD: 0.25, contextWindow: 200_000, maxOutputTokens: 32_000, webSearchRequests: 0 };
+    const probe = vi.fn(async () => {
+      if (!available) throw new Error("Unsupported control");
+      return { session: { model_usage: { opus: model } }, rate_limits_available: false, rate_limits: null };
+    });
+    const f = await fixture(async function* () {
+      yield { type: "result", subtype: "success", is_error: false,
+        modelUsage: { opus: { ...model, inputTokens: 120, costUSD: 0.30 } },
+      } as unknown as SDKMessage;
+    }, { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: probe as unknown as Query["usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET"] });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    const saved = await f.store.read(threadId);
+    saved.sdkSessionId = threadId;
+    await f.store.save(saved);
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Continue" }] });
+    await f.waitForTurn();
+    const event = f.events.find((event) => event.notification.method === "thread/tokenUsage/updated");
+    if (available) {
+      expect(event?.notification).toMatchObject({ params: { tokenUsage: { last: { totalTokens: 20 }, claudeCostUSD: expect.closeTo(0.05) } } });
+    } else expect(event).toBeUndefined();
+    expect((await f.store.read(threadId)).modelUsage?.opus.costUSD).toBe(0.30);
+  });
+
+  it("retains streamed limits when the optional usage probe returns no windows", async () => {
+    const f = await fixture(async function* () {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      yield { type: "rate_limit_event", rate_limit_info: { status: "allowed", rateLimitType: "seven_day", utilization: 0.35 } } as SDKMessage;
+      yield { type: "rate_limit_event", rate_limit_info: { status: "allowed", rateLimitType: "five_hour", utilization: 0.10 } } as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: false } as SDKMessage;
+    }, { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: vi.fn().mockResolvedValue({ rate_limits_available: true, rate_limits: null }) });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Hi" }] });
+    await f.waitForTurn();
+    expect(f.backend.summary().rateLimits).toEqual(expect.arrayContaining([
+      expect.objectContaining({ limitId: "seven_day", usedPercent: 35 }),
+      expect.objectContaining({ limitId: "five_hour", usedPercent: 10 }),
+    ]));
+  });
+
+  it("records only new resumed usage, exposes Claude limits, and restores the context moon", async () => {
+    let count = 0;
+    const context = vi.fn().mockResolvedValue({ totalTokens: 1200, maxTokens: 200_000 });
+    const usage = vi.fn().mockResolvedValue({ rate_limits_available: true, rate_limits: {
+      seven_day: { utilization: 35, resets_at: "2026-10-27T00:00:00Z" },
+    }, session: { model_usage: {} } });
+    const f = await fixture(async function* () {
+      count += 1;
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: false, result: "Done",
+        modelUsage: { "claude-opus-5-5": { inputTokens: count * 100, outputTokens: count * 20,
+          cacheReadInputTokens: count * 200, cacheCreationInputTokens: count * 50,
+          costUSD: count * 0.25, contextWindow: 200_000, maxOutputTokens: 32_000, webSearchRequests: 0 } },
+      } as unknown as SDKMessage;
+    }, { getContextUsage: context, usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: usage });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "auto" });
+    for (let turn = 0; turn < 2; turn += 1) {
+      f.events.length = 0;
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Hi" }] });
+      await f.waitForTurn();
+      expect(f.events.find((event) => event.notification.method === "thread/tokenUsage/updated")?.notification)
+        .toMatchObject({ params: { tokenUsage: { last: { inputTokens: 350, totalTokens: 370 }, claudeCostUSD: 0.25 } } });
+      expect(f.queries[turn].permissionMode).toBe("auto");
+    }
+    expect(context).toHaveBeenCalledWith({ detail: "summary" });
+    expect(usage).toHaveBeenCalledWith({ skipBehaviors: true });
+    expect(f.backend.summary().rateLimits?.[0]).toMatchObject({ usedPercent: 35, name: "Weekly limit" });
+    const restarted = new ClaudeBackend(f.backendOptions);
+    expect((await restarted.readThread(threadId)).contextWindow).toEqual({ usedTokens: 1200, modelContextWindow: 200_000 });
+  });
+
+  it("uses Claude's active query to inspect MCP inventory", async () => {
+    let finish!: () => void;
+    const gate = new Promise<void>((resolve) => { finish = resolve; });
+    const setPermissionMode = vi.fn().mockResolvedValue(undefined);
+    const mcpServerStatus = vi.fn().mockResolvedValue([{ name: "pwragent", status: "connected", tools: [{ name: "search_mcp_tools" }] }]);
+    const f = await fixture(async function* () {
+      await gate;
+      yield { type: "result", subtype: "success", is_error: false } as SDKMessage;
+    }, { mcpServerStatus, setPermissionMode });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Hi" }] });
+    await f.backend.setExecutionMode(threadId, "auto");
+    expect(setPermissionMode).toHaveBeenCalledWith("auto");
+    setPermissionMode.mockRejectedValueOnce(new Error("Unsupported mode"));
+    await expect(f.backend.setExecutionMode(threadId, "full-access")).rejects.toThrow("Unsupported mode");
+    expect(await f.backend.executionMode(threadId)).toBe("auto");
+    expect(await f.backend.listMcpServers(threadId)).toEqual([{ name: "pwragent", authStatus: "unsupported", startupStatus: "ready", tools: ["search_mcp_tools"] }]);
+    finish();
+    await f.waitForTurn();
+    await expect(f.backend.listMcpServers(threadId)).rejects.toThrow("while a turn is running");
+  });
+
   it("discovers the model catalog only on an explicit refresh and retains it when a later refresh fails", async () => {
     const f = await fixture();
     const models = [{ id: "fable", label: "Fable 5.1", current: true }];

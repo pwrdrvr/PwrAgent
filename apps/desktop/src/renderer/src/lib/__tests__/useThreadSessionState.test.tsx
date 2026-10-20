@@ -205,6 +205,21 @@ async function flushReactUpdates(): Promise<void> {
 }
 
 describe("useThreadSessionState", () => {
+  it("hydrates the Claude context moon without treating occupancy as billed tokens", async () => {
+    const response = readThreadResponse({ entries: [], hasPreviousPage: false });
+    const desktopApi: DesktopApi = {
+      readThread: async () => ({ ...response, backend: "claude", replay: {
+        ...response.replay, contextWindow: { usedTokens: 50_000, modelContextWindow: 200_000 },
+      } }),
+      onAgentEvent: () => () => undefined,
+    };
+    const thread: NavigationThreadSummary = { ...buildThread({ id: "thread-1", updatedAt: 100 }), source: "claude" };
+    const { result } = renderHook(() => useThreadSessionState({ desktopApi, thread }));
+    await waitForThreadHydration(result);
+    expect(result.current.contextWindow).toMatchObject({ totalTokens: 50_000, modelContextWindow: 200_000, usedPercent: 25 });
+    expect(result.current.contextWindow).not.toHaveProperty("cumulativeTotalTokens");
+  });
+
   it("reuses an unchanged remote owner page without clearing transcript or pagination", async () => {
     const initial = {
       ...readThreadResponse({

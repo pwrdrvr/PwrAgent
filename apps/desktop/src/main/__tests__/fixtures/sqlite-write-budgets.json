@@ -134,6 +134,7 @@
     "statements": 1
   },
   "claude-permission-selection": {"commits": 1, "note": "one operator mode selection; 100 duplicate selections add no writes", "observedWalBytes": 16480, "rowsChanged": 1, "statements": 1},
+  "claude-result-usage": {"commits": 1, "note": "100 context updates plus one result usage event and ledger flush; context does not write SQLite; 1 commit/turn, measured 65,920 bytes: ~6.6 MB/day at 100 turns/day, zero idle writes", "observedWalBytes": 65920, "rowsChanged": 3, "statements": 3},
   "claude-thread-creation": {"commits": 3, "note": "one thread creation through the registry; SDK transcripts and resume metadata use files", "observedWalBytes": 49440, "rowsChanged": 3, "statements": 3},
   "cleanup-expired-gc-pass": {
     "commits": 1,
