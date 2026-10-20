@@ -1,9 +1,9 @@
 import { execFile } from "node:child_process";
-import { lstat, mkdtemp, mkdir, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
+import { cp, lstat, mkdtemp, mkdir, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { assertGitHandoffUnchanged, exportGitHandoff, handoffRepositoryIdentity, importGitHandoff, prepareGitHandoff } from "../app-server/git-instance-handoff";
 import * as gitExecutable from "../app-server/git-executable";
 
@@ -12,9 +12,16 @@ const roots: string[] = [];
 async function git(cwd: string, ...args: string[]): Promise<string> {
   return (await execute("git", ["-C", cwd, ...args], { encoding: "utf8" })).stdout;
 }
-async function fixture() {
-  const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-instance-handoff-"));
-  roots.push(root);
+let seedRoot: string;
+beforeAll(async () => {
+  seedRoot = await mkdtemp(path.join(os.tmpdir(), "pwragent-instance-handoff-seed-"));
+  await createSeed(seedRoot);
+});
+afterAll(async () => {
+  if (seedRoot) await rm(seedRoot, { recursive: true, force: true });
+});
+
+async function createSeed(root: string) {
   const source = path.join(root, "source");
   const receiver = path.join(root, "receiver");
   const remote = path.join(root, "origin.git");
@@ -29,18 +36,58 @@ async function fixture() {
   await git(source, "commit", "-m", "base");
   await git(root, "clone", "--bare", source, remote);
   await git(source, "remote", "add", "origin", remote);
-  await git(root, "clone", remote, receiver);
-  await git(receiver, "config", "core.autocrlf", "false");
+  // Configure LF before checkout; disabling autocrlf after a Windows clone
+  // leaves CRLF files dirty against the LF index copied into each fixture.
+  await git(root, "clone", "--config", "core.autocrlf=false", remote, receiver);
   await git(source, "switch", "-c", "feature/handoff");
   await writeFile(path.join(source, "commit.txt"), "published feature\n");
   await git(source, "add", ".");
   await git(source, "commit", "-m", "feature");
   await git(source, "push", "-u", "origin", "feature/handoff");
+}
+
+async function fixture() {
+  const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-instance-handoff-"));
+  roots.push(root);
+  // Copy all Git objects, refs, indexes and files so tests can rewrite any of
+  // the three repositories without changing the seed or another test.
+  await cp(seedRoot, root, { recursive: true });
+  const source = path.join(root, "source");
+  const receiver = path.join(root, "receiver");
+  const remote = path.join(root, "origin.git");
+  await git(source, "remote", "set-url", "origin", remote);
+  await git(receiver, "remote", "set-url", "origin", remote);
   return { root, source, receiver, remote };
 }
 afterEach(async () => {
   vi.restoreAllMocks();
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
+
+it("keeps fixture repositories and published refs independent", async () => {
+  const first = await fixture();
+  const head = (await git(first.source, "rev-parse", "HEAD")).trim();
+  const main = (await git(first.receiver, "rev-parse", "HEAD")).trim();
+  await writeFile(path.join(first.source, "code.txt"), "changed source\n");
+  await git(first.source, "add", "code.txt");
+  await git(first.source, "commit", "-m", "changed fixture");
+  await git(first.source, "push");
+  await writeFile(path.join(first.receiver, "code.txt"), "staged receiver\n");
+  await git(first.receiver, "add", "code.txt");
+  await git(first.remote, "update-ref", "-d", "refs/heads/main");
+
+  const second = await fixture();
+  expect((await git(second.source, "rev-parse", "HEAD")).trim()).toBe(head);
+  expect((await git(second.receiver, "rev-parse", "HEAD")).trim()).toBe(main);
+  expect((await git(second.remote, "rev-parse", "refs/heads/main")).trim()).toBe(main);
+  expect((await git(second.remote, "rev-parse", "refs/heads/feature/handoff")).trim()).toBe(head);
+  for (const repository of [second.source, second.receiver]) {
+    expect((await git(repository, "remote", "get-url", "origin")).trim()).toBe(second.remote);
+    expect(await git(repository, "status", "--porcelain=v1", "-z")).toBe("");
+    expect(await readFile(path.join(repository, "code.txt"), "utf8")).toBe("base\n");
+  }
+  expect(await readFile(path.join(first.source, "code.txt"), "utf8")).toBe("changed source\n");
+  expect(await readFile(path.join(first.receiver, "code.txt"), "utf8")).toBe("staged receiver\n");
 });
 
 it("preflights a published ref and checks out the free source branch without transferring workspace bytes", async () => {
@@ -226,16 +273,27 @@ it("rejects a rewritten published branch even when the receiver already has the 
   expect(await git(receiver, "for-each-ref", "refs/pwragent/handoffs")).toBe("");
 });
 
-it("keeps the exact source commit when the published branch advances", async () => {
+it("keeps the exact source commit when the published branch advances", async ({ onTestFailed }) => {
+  const started = performance.now();
+  const stages: { stage: string; elapsedMs: number }[] = [];
+  const mark = (stage: string) => stages.push({ stage, elapsedMs: Math.round(performance.now() - started) });
+  onTestFailed(() => {
+    console.error("Git branch-advance handoff progress:", JSON.stringify({ stages, elapsedMs: Math.round(performance.now() - started) }));
+  });
+  mark("fixture");
   const { source, receiver, root } = await fixture();
+  mark("advance published branch");
   const head = (await git(source, "rev-parse", "HEAD")).trim();
   await git(source, "commit", "--allow-empty", "-m", "later published commit");
   await git(source, "push");
   await git(source, "reset", "--hard", head);
+  mark("export");
   const snapshot = await exportGitHandoff(source);
   expect(snapshot.head).toBe(head);
   const worktree = path.join(root, "handoff");
+  mark("import");
   await importGitHandoff({ repository: receiver, worktree, snapshot });
+  mark("assert exact heads");
   expect((await git(worktree, "rev-parse", "HEAD")).trim()).toBe(head);
   expect((await git(source, "rev-parse", "HEAD")).trim()).toBe(head);
 });

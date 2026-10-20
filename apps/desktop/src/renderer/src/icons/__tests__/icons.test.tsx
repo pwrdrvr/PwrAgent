@@ -3,6 +3,7 @@ import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ReactElement } from "react";
 import {
+  BanIcon,
   BranchIcon,
   CalendarPlusIcon,
   ChevronLeftIcon,
@@ -58,6 +59,7 @@ const ALL_ICONS = [
   ["NewThreadIcon", NewThreadIcon],
   ["CopyIcon", CopyIcon],
   ["CloseIcon", CloseIcon],
+  ["BanIcon", BanIcon],
   ["ChevronLeftIcon", ChevronLeftIcon],
   ["ChevronRightIcon", ChevronRightIcon],
   ["LockIcon", LockIcon],

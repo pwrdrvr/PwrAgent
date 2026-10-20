@@ -6,6 +6,20 @@ import {
 afterEach(() => vi.useRealTimers());
 
 describe("archive cleanup scheduling budgets", () => {
+  it("shares a batch identity only until the queue drains", async () => {
+    vi.useFakeTimers();
+    const queue = new ArchiveCleanupQueue<object | undefined>();
+    const first = queue.enqueue("first", async (context) => context.batch);
+    const second = queue.enqueue("second", async (context) => context.batch);
+    await vi.runAllTimersAsync();
+    expect(await first).toBeDefined();
+    expect(await second).toBe(await first);
+    const later = queue.enqueue("later", async (context) => context.batch);
+    await vi.runAllTimersAsync();
+    expect(await later).not.toBe(await first);
+    await queue.close();
+  });
+
   it("coalesces identities and admits exactly one slice between event-loop opportunities", async () => {
     vi.useFakeTimers();
     const queue = new ArchiveCleanupQueue<number>();

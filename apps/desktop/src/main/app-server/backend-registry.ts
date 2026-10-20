@@ -18,7 +18,8 @@ import type {
   CodexBackgroundTerminal,
 } from "@pwragent/shared";
 import { ArchiveCleanupReadPool } from "./archive-cleanup-read-pool";
-import { ArchiveCleanupQueue, ArchiveCleanupCancelledError, ARCHIVE_CLEANUP_SLICE_SIZE, ARCHIVE_CLEANUP_PAUSE_MS, type ArchiveCleanupContext } from "./archive-cleanup-queue";
+import { ArchiveCleanupQueue, ArchiveCleanupCancelledError, ARCHIVE_CLEANUP_SLICE_SIZE, ARCHIVE_CLEANUP_PAUSE_MS, ARCHIVE_CLEANUP_QUEUE_LIMIT, type ArchiveCleanupContext } from "./archive-cleanup-queue";
+import { ArchiveCleanupCheckpointStore, type ArchiveCleanupIntent } from "../state/archive-cleanup-checkpoint";
 import { supportsNativeVoice, type NativeVoiceBackend, type NativeVoiceToolCall } from "../codex-app-server/native-voice-protocol";
 import type { NativeVoiceCapability } from "../../shared/native-voice";
 import { analyzeUsageActivity, usageAnalysisModelBackend } from "./usage-activity-analysis";
@@ -812,6 +813,7 @@ const NOTIFICATION_CONTEXT_RECONCILIATION_LIMIT = 512;
 // rows carry enrichment whether or not the caller requested it.
 const ACP_LISTINGS_ARE_ENRICHED = true;
 const backendRegistryLog = getMainLogger("pwragent:backend-registry");
+const backendLifecycleLog = getMainLogger("pwragent:backend-lifecycle");
 class AutomaticArchiveCancelledError extends Error {}
 class ThreadAlreadyActiveError extends Error {}
 const GROK_TITLE_HELPER_SESSION_POLICY = buildMinimalGrokHelperSessionPolicy({
@@ -2032,7 +2034,12 @@ type ArchiveCleanupDiscoveryRequest = {
   context?: ArchiveCleanupContext;
   targetThread?: AppServerThreadSummary;
   codexRolloutMissing?: boolean;
+  reuseInventory?: boolean;
 };
+
+type ArchiveCleanupInventory = Pick<ArchiveCleanupMetadata,
+  "activeThreads" | "archivedThreads" | "overlaysByThreadKey" | "worktreeEvidence"
+>;
 
 export type ArchivedWorktreeRepairReport = {
   archivedThreads: number;
@@ -5774,7 +5781,7 @@ function logBackendLifecycleNotification(
   }
 
   if (notification.method === "thread/status/changed") {
-    backendRegistryLog.info("backend lifecycle notification", {
+    backendLifecycleLog.info("backend lifecycle notification", {
       backend,
       method: notification.method,
       status: readStatusType(notification.params.status),
@@ -5788,7 +5795,7 @@ function logBackendLifecycleNotification(
     notification.method === "turn/failed" ||
     notification.method === "turn/cancelled"
   ) {
-    backendRegistryLog.info("backend lifecycle notification", {
+    backendLifecycleLog.info("backend lifecycle notification", {
       backend,
       method: notification.method,
       status: readTurnStatus(notification.params.turn),
@@ -8638,6 +8645,7 @@ export class DesktopBackendRegistry {
   private readonly worktreeContainerService: WorktreeContainerService;
   private readonly acpBackend: AcpBackendAdapter;
   private closed = false;
+  private closeOperation?: Promise<void>;
   // Resolves a managed-worktree ACP cwd to its repository checkout so ACP
   // (e.g. Grok) worktree threads group under the same directory row as their
   // repo, exactly like Codex threads do. Codex backends carry a repo-rooted
@@ -8709,6 +8717,14 @@ export class DesktopBackendRegistry {
   }>();
   private readonly archiveCleanupReads = new ArchiveCleanupReadPool(THREAD_LIST_REUSE_WINDOW_MS);
   private readonly archiveCleanupQueue = new ArchiveCleanupQueue<ArchiveThreadResponse>();
+  private readonly archiveCleanupCheckpointStore?: Pick<ArchiveCleanupCheckpointStore, "save" | "recover">;
+  private readonly pendingArchiveCleanupIntents = new Map<string, ArchiveCleanupIntent>();
+  private archiveCleanupResumeStarted = false;
+  private archiveCleanupInventories = new WeakMap<object, {
+    revision: number;
+    includesArchived: boolean;
+    inventory: ArchiveCleanupInventory;
+  }>();
   private archiveWorkspaceRevision = 0;
   private readonly threadArchiveOperations = new Map<string, Promise<ArchiveThreadResponse>>();
   private readonly archiveCleanupCompletions = new Map<string, { promise: Promise<ArchiveThreadResponse>; archivedAt: number }>();
@@ -9556,6 +9572,7 @@ export class DesktopBackendRegistry {
       ) => Promise<unknown> | unknown,
     ) => () => void;
     runtimeInstanceId?: string;
+    archiveCleanupCheckpointStore?: Pick<ArchiveCleanupCheckpointStore, "save" | "recover"> | null;
     registrySessionId?: string;
     resolveLiveProfileRuntimeInstanceIds?: () => string[];
     runningTurnShutdownStopTimeoutMs?: number;
@@ -9571,6 +9588,8 @@ export class DesktopBackendRegistry {
     this.configStore = options?.configStore;
     this.runtimeInstanceId =
       options?.runtimeInstanceId ?? processRuntimeIdentity.instanceId;
+    this.archiveCleanupCheckpointStore = options?.archiveCleanupCheckpointStore === null ? undefined
+      : options?.archiveCleanupCheckpointStore ?? (isAppStateInitialized() ? new ArchiveCleanupCheckpointStore(getAppStateDb().raw) : undefined);
     this.registrySessionId = options?.registrySessionId ?? randomUUID();
     this.runningTurnShutdownStopTimeoutMs =
       options?.runningTurnShutdownStopTimeoutMs
@@ -14595,13 +14614,10 @@ export class DesktopBackendRegistry {
       threadId: result.threadId,
       origin: "thread-archive",
     });
-    const key = buildThreadIdentityKey(backend, result.threadId);
-    const completion = this.archiveCleanupQueue.enqueue(key, async (context) =>
-      await this.completeArchivedThreadCleanup({
-        backend, threadId: result.threadId, archivedAt, codexRolloutMissing,
-        preserveWorktrees: request.preserveWorktrees, messagingCleanup, context,
-      }),
-    );
+    const completion = this.enqueueArchiveCleanup({
+      backend, threadId: result.threadId, archivedAt, codexRolloutMissing,
+      preserveWorktrees: request.preserveWorktrees, messagingCleanup,
+    });
     // The provider mutation and critical archive bookkeeping have settled.
     // Synchronous callers now wait only for the serial cleanup queue; keeping
     // them in mutation admission would prevent independent queued removals.
@@ -14610,6 +14626,72 @@ export class DesktopBackendRegistry {
     return await this.observeArchiveCleanupCompletion(completion, {
       backend, threadId: result.threadId, archivedAt, backgroundCleanup: request.backgroundCleanup, mustComplete: codexRolloutMissing,
     });
+  }
+
+  getArchiveCleanupCountForQuit(): number {
+    return new Set([...this.pendingArchiveCleanupIntents.keys(), ...this.archiveCleanupQueue.pendingKeys()]).size;
+  }
+
+  checkpointArchiveCleanupsForQuit(): void {
+    this.archiveCleanupCheckpointStore?.save(this.runtimeInstanceId, [...this.pendingArchiveCleanupIntents.values()]);
+  }
+
+  private tryCheckpointArchiveCleanupsForQuit(phase: "before-drain" | "after-drain"): void {
+    try {
+      this.checkpointArchiveCleanupsForQuit();
+    } catch (error) {
+      // Persistence failure must not prevent queue cancellation or backend
+      // disposal, nor poison the memoized shutdown operation.
+      backendRegistryLog.error("archive cleanup quit checkpoint failed", {
+        phase, error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private enqueueArchiveCleanup(intent: ArchiveCleanupIntent, resuming = false): Promise<ArchiveThreadResponse> {
+    const key = buildThreadIdentityKey(intent.backend, intent.threadId);
+    const existing = this.archiveCleanupQueue.pending(key);
+    if (existing) return existing;
+    this.pendingArchiveCleanupIntents.set(key, intent);
+    const completion = this.archiveCleanupQueue.enqueue(key, async (context) =>
+      await this.completeArchivedThreadCleanup({ ...intent, context,
+        // A saved archive intent cannot authorize deleting a restored thread.
+        // Recovery requires current archived membership, including for formerly
+        // missing rollouts; it never repeats the provider archive operation.
+        ...(resuming ? { requireArchived: true, codexRolloutMissing: false } : {}),
+      }),
+    );
+    void completion.then(() => {
+      if (this.pendingArchiveCleanupIntents.get(key) === intent) this.pendingArchiveCleanupIntents.delete(key);
+    }, (error: unknown) => {
+      if (!(this.closed && error instanceof ArchiveCleanupCancelledError)
+        && this.pendingArchiveCleanupIntents.get(key) === intent) this.pendingArchiveCleanupIntents.delete(key);
+    });
+    return completion;
+  }
+
+  async resumeArchiveCleanupsAtStartup(): Promise<void> {
+    if (this.closed || this.archiveCleanupResumeStarted || !this.archiveCleanupCheckpointStore) return;
+    this.archiveCleanupResumeStarted = true;
+    const recovered = this.archiveCleanupCheckpointStore.recover(this.runtimeInstanceId, this.resolveLiveProfileRuntimeInstanceIdsFn);
+    const remaining = [...new Map(recovered.map((intent) => [buildThreadIdentityKey(intent.backend, intent.threadId), intent])).values()]
+      .filter((intent) => !this.pendingArchiveCleanupIntents.has(buildThreadIdentityKey(intent.backend, intent.threadId)));
+    for (const intent of remaining) this.pendingArchiveCleanupIntents.set(buildThreadIdentityKey(intent.backend, intent.threadId), intent);
+    while (remaining.length > 0 && !this.closed) {
+      const keys = this.archiveCleanupQueue.pendingKeys();
+      const room = ARCHIVE_CLEANUP_QUEUE_LIMIT - keys.length;
+      if (room <= 0) {
+        await Promise.race(keys.map((key) => this.archiveCleanupQueue.pending(key)!.catch(() => {})));
+        continue;
+      }
+      await Promise.allSettled(remaining.splice(0, room).map((intent) => {
+        const completion = this.enqueueArchiveCleanup(intent, true);
+        return this.observeArchiveCleanupCompletion(completion, { ...intent, backgroundCleanup: true });
+      }));
+      // Background acknowledgements do not drain the bounded queue. Wait for
+      // admitted jobs before taking another chunk of the durable backlog.
+      await Promise.allSettled(this.archiveCleanupQueue.pendingKeys().map((key) => this.archiveCleanupQueue.pending(key)!));
+    }
   }
 
   private async observeArchiveCleanupCompletion(completion: Promise<ArchiveThreadResponse>, params: {
@@ -14655,6 +14737,7 @@ export class DesktopBackendRegistry {
     preserveWorktrees?: boolean;
     messagingCleanup: { error?: string };
     context: ArchiveCleanupContext;
+    requireArchived?: boolean;
   }): Promise<ArchiveThreadResponse> {
     const { backend, archivedAt, codexRolloutMissing, messagingCleanup, context } = params;
     const result = { threadId: params.threadId };
@@ -14664,7 +14747,7 @@ export class DesktopBackendRegistry {
     let cleanupMetadataError: string | undefined;
     try {
       let targetThread: AppServerThreadSummary | undefined;
-      if (backend === "codex" && this.codexClient.readArchiveCleanupThreadSummary && !codexRolloutMissing) {
+      if (!params.requireArchived && backend === "codex" && this.codexClient.readArchiveCleanupThreadSummary && !codexRolloutMissing) {
         targetThread = await this.codexClient.readArchiveCleanupThreadSummary(result.threadId, context.checkpoint);
         const readOverlays = this.overlayStore.getArchiveCleanupOverlayStates ?? this.overlayStore.getThreadOverlayStates;
         await context.checkpoint();
@@ -14681,6 +14764,7 @@ export class DesktopBackendRegistry {
       cleanupMetadata = await this.findThreadForArchiveCleanup({
         backend, threadId: result.threadId, context, codexRolloutMissing,
         targetThread: needsWorktreeOwnership ? undefined : targetThread,
+        reuseInventory: true,
       });
     } catch (error) {
       context.assertCurrent();
@@ -14738,6 +14822,9 @@ export class DesktopBackendRegistry {
         threadId: result.threadId,
         archivedAt,
       });
+      // A missing rollout can leave this owner in the provider's active list.
+      // Subsequent jobs must apply the new tombstone before checking sharing.
+      this.invalidateArchiveCleanupInventory();
       this.pendingStartedThreads.delete(key);
       this.invalidateThreadListCache(backend);
       backendRegistryLog.warn("codex archive tombstoned missing rollout", {
@@ -14899,10 +14986,8 @@ export class DesktopBackendRegistry {
       threadId: params.threadId,
       origin: "thread-archive",
     });
-    const completion = this.archiveCleanupQueue.enqueue(buildThreadIdentityKey(params.backend, params.threadId), async (context) =>
-      await this.completeArchivedThreadCleanup({ ...params, archivedAt, codexRolloutMissing: false,
-        preserveWorktrees: true, messagingCleanup: {}, context }),
-    );
+    const completion = this.enqueueArchiveCleanup({ backend: params.backend, threadId: params.threadId, archivedAt, codexRolloutMissing: false,
+      preserveWorktrees: true, messagingCleanup: {} });
     finishMutation?.();
     return await this.observeArchiveCleanupCompletion(completion, { ...params, archivedAt });
   }
@@ -16079,6 +16164,8 @@ export class DesktopBackendRegistry {
     const backend = request.backend ?? "codex";
     if (isAcpBackendId(backend)) {
       const response = await this.readAcpThread(request, backend);
+      this.threadTodoHandler?.importReviews?.({ backend, threadId: request.threadId },
+        response.replay.entries.filter((entry): entry is AppServerThreadReviewEntry => entry.type === "review"));
       return {
         ...response,
         replay: request.includeTurns === false
@@ -16226,6 +16313,8 @@ export class DesktopBackendRegistry {
       replay: replayWithMessageOrigins,
       subAgents: overlay?.subAgents,
     });
+    this.threadTodoHandler?.importReviews?.({ backend, threadId: request.threadId },
+      replayWithReviewMetadata.entries.filter((entry): entry is AppServerThreadReviewEntry => entry.type === "review"));
     if (!request.viewOnly && !request.before && shouldAppendTranscriptOverlays) {
       // Hydration supersedes live rows for the same turn in sqlite. Preserve
       // that ordering now that live observations are delayed in memory: first
@@ -18110,6 +18199,23 @@ export class DesktopBackendRegistry {
         ? this.threadTurnQueue.submitGroupedSteer(prepared, { onAdmission })
         : this.threadTurnQueue.submit(prepared, { onAdmission });
     });
+  }
+
+  /**
+   * An operator's reply to a thread no composer shows, such as an answer to
+   * its question from the To-dos panel. It starts, steers or queues as a
+   * composer reply does, decided by the FIFO when it reaches the head, and
+   * carries no turn settings, so the thread's own apply.
+   */
+  async submitThreadReply(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    input: AppServerTurnInputItem[];
+  }): Promise<ThreadTurnQueueSubmissionResult> {
+    await this.assertThreadNotLocked(params.backend, params.threadId);
+    this.assertThreadNotHandingOff(params.backend, params.threadId);
+    return await this.admitThreadAttachments(params, (input, onAdmission) =>
+      this.threadTurnQueue.submitSteer({ ...params, input, origin: "manual" }, { onAdmission }));
   }
 
   async submitHeldTurn(params: {
@@ -25725,7 +25831,13 @@ export class DesktopBackendRegistry {
     this.invalidateThreadListCache(params.backend);
   }
 
-  async close(): Promise<void> {
+  close(): Promise<void> {
+    this.closeOperation ??= this.closeResources();
+    return this.closeOperation;
+  }
+
+  private async closeResources(): Promise<void> {
+    this.tryCheckpointArchiveCleanupsForQuit("before-drain");
     // Before anything unsubscribes or closes, so each turn's own terminal
     // still reaches every consumer. A quit has normally done this already,
     // while messaging was still running. Wait only when there is a turn to
@@ -25744,6 +25856,7 @@ export class DesktopBackendRegistry {
     this.closed = true;
     this.threadTurnQueue.close();
     await this.archiveCleanupQueue.close();
+    this.tryCheckpointArchiveCleanupsForQuit("after-drain");
     this.backgroundTerminalGeneration += 1;
     this.codexBackgroundTerminals.clear();
     this.backgroundTerminalReadRevisions.clear();
@@ -28249,7 +28362,8 @@ export class DesktopBackendRegistry {
       params,
     );
 
-    const overlaysByThreadId = await this.overlayStore.getThreadOverlayStates({
+    const readOverlays = this.overlayStore.getThreadListingOverlayStates ?? this.overlayStore.getThreadOverlayStates;
+    const overlaysByThreadId = await readOverlays.call(this.overlayStore, {
       backend: "codex",
       threadIds: [
         ...new Set([
@@ -28258,6 +28372,21 @@ export class DesktopBackendRegistry {
         ]),
       ],
     });
+    if (this.overlayStore.getThreadListingOverlayStates && nativeSubAgentThreads.length > 0) {
+      // Discovery repairs worker cards and parent pricing from durable child
+      // turn usage. Only these native workers need history-bearing overlays;
+      // ordinary rows keep the compact listing projection.
+      const nativeIds = new Set(nativeSubAgentThreads.map((thread) => thread.id));
+      const usageThreadIds = [...new Set(threadsWithPending.flatMap((thread) =>
+        (thread.codexNativeSubAgents ?? []).map((worker) => worker.threadId),
+      ))].filter((id) => nativeIds.has(id)
+        && overlaysByThreadId[id]?.handoffOrigin?.groupingMode !== "subthread");
+      if (usageThreadIds.length > 0) {
+        Object.assign(overlaysByThreadId, await this.overlayStore.getThreadOverlayStates({
+          backend: "codex", threadIds: usageThreadIds,
+        }));
+      }
+    }
     await this.reconcileDiscoveredCodexNativeSubAgents({
       nativeThreads: nativeSubAgentThreads,
       overlaysByThreadId,
@@ -33127,6 +33256,7 @@ export class DesktopBackendRegistry {
     context?: ArchiveCleanupContext;
     targetThread?: AppServerThreadSummary;
     codexRolloutMissing?: boolean;
+    reuseInventory?: boolean;
   }): Promise<ArchiveCleanupMetadata> {
     if (this.codexClient.listArchiveCleanupThreadsPage) {
       return await this.readPacedArchiveCleanupMetadata(params);
@@ -33396,6 +33526,20 @@ export class DesktopBackendRegistry {
   > {
     if (this.isBootstrapModeFn()) throw new Error("Archive discovery is unavailable in bootstrap mode.");
     const context = params.context;
+    const revision = this.archiveWorkspaceRevision;
+    const inventories = this.archiveCleanupInventories;
+    const batch = params.reuseInventory ? context?.batch : undefined;
+    const cached = batch ? inventories.get(batch) : undefined;
+    // Reuse only preliminary discovery within one uninterrupted queue batch.
+    // Removal admission and repair always request a new authoritative scan.
+    // Workspace or membership changes fence reuse even while a scan awaits I/O.
+    if (batch && cached && cached.revision === revision
+      && (params.targetThread || cached.includesArchived)) {
+      await context?.checkpoint();
+      if (this.archiveWorkspaceRevision === revision && this.archiveCleanupInventories.get(batch) === cached) {
+        return this.selectArchiveCleanupInventory(cached.inventory, params);
+      }
+    }
     const activeThreads: AppServerThreadSummary[] = [];
     const archivedThreads: AppServerThreadSummary[] = [];
     const activeChildren: AppServerThreadSummary[] = [];
@@ -33510,11 +33654,30 @@ export class DesktopBackendRegistry {
       }
     }
     context?.assertCurrent();
-    if (params.targetThread) archivedThreads.push(params.targetThread);
+    if (batch && revision === this.archiveWorkspaceRevision && inventories === this.archiveCleanupInventories) {
+      inventories.set(batch, { revision, includesArchived: !params.targetThread,
+        inventory: { activeThreads, archivedThreads, overlaysByThreadKey, worktreeEvidence } });
+    }
     // A confirmed missing rollout can leave retained metadata in the active
     // provider listing. Use that exact identity for recovery while still
     // scanning every checkout user. Actual restore intent cancels this job.
-    return { activeThreads, archivedThreads, thread: archivedTarget, activeTarget, targetIsActive, overlaysByThreadKey, activeChildren, legacyParentBackends, worktreeEvidence };
+    return { activeThreads, archivedThreads: params.targetThread ? [...archivedThreads, params.targetThread] : archivedThreads,
+      thread: archivedTarget, activeTarget, targetIsActive, overlaysByThreadKey, activeChildren, legacyParentBackends, worktreeEvidence };
+  }
+
+  private selectArchiveCleanupInventory(inventory: ArchiveCleanupInventory, params: ArchiveCleanupDiscoveryRequest) {
+    const { activeThreads, overlaysByThreadKey } = inventory;
+    const matchesTarget = (thread: AppServerThreadSummary) => thread.source === params.backend && thread.id === params.threadId;
+    const activeTarget = activeThreads.find(matchesTarget);
+    return {
+      ...inventory,
+      archivedThreads: params.targetThread ? [...inventory.archivedThreads.filter((thread) => !matchesTarget(thread)), params.targetThread] : inventory.archivedThreads,
+      thread: params.targetThread ?? inventory.archivedThreads.find(matchesTarget),
+      activeTarget, targetIsActive: Boolean(activeTarget),
+      activeChildren: activeThreads.filter((thread) => overlaysByThreadKey?.get(buildThreadIdentityKey(thread.source, thread.id))?.parentThreadId === params.threadId),
+      legacyParentBackends: new Set([params.backend, ...[...activeThreads, ...inventory.archivedThreads]
+        .filter((thread) => thread.id === params.threadId).map((thread) => thread.source)]),
+    };
   }
 
   private async findThreadForRestoreWorktrees(params: {
@@ -33836,6 +33999,7 @@ export class DesktopBackendRegistry {
             return check;
           } : undefined,
         }).finally(() => this.archiveWorktreeRemovalAdmissions.delete(admission));
+        this.invalidateArchiveCleanupInventory();
         backendRegistryLog.info("archive thread worktree cleanup removed worktree", {
           backend: params.backend,
           threadId: params.thread.id,
@@ -35336,8 +35500,8 @@ export class DesktopBackendRegistry {
    * the hook reports one id, `review/start` returned another — and produces no
    * usage line, so a gate created during one has no line to price against. The
    * review record knows the reviewer's model, and while it is active it is the
-   * only thing making requests on that thread. Otherwise the newest priced turn
-   * line is the parent's current model.
+   * only thing making requests on that thread. Otherwise the newest eligible
+   * usage line is the parent's current model, regardless of price availability.
    */
   private async resolveTokenMiserParentModel(
     threadId: string,
@@ -35355,24 +35519,13 @@ export class DesktopBackendRegistry {
         };
       }
     }
-    if (typeof this.overlayStore.readThreadPricing !== "function") {
+    if (typeof this.overlayStore.readLatestThreadUsageModel !== "function") {
       return undefined;
     }
-    const pricing = await this.overlayStore.readThreadPricing({
+    return this.overlayStore.readLatestThreadUsageModel({
       backend: "codex",
       threadId,
     });
-    const line = [...pricing.lines]
-      .filter((entry) => entry.scope !== "monitor" && Boolean(entry.model))
-      .sort((left, right) => right.createdAt - left.createdAt)[0];
-    return line
-      ? {
-          model: line.model,
-          provider: line.provider,
-          reasoningEffort: line.reasoningEffort,
-          ...(line.serviceTier ? { serviceTier: line.serviceTier } : {}),
-        }
-      : undefined;
   }
 
   private async recordTokenMiserParentModelRequest(
@@ -36425,6 +36578,14 @@ export class DesktopBackendRegistry {
     callerReason?: ThreadListCallerReason;
     threadId: string;
   }): Promise<AppServerThreadSummary | undefined> {
+    if (params.backend === "codex" && this.codexClient.readThreadSummary) {
+      // Eligibility is checked before and after helper work. Read this identity
+      // each time so a late operator rename still cancels generated naming.
+      return await this.withCodexThreadClient(params.threadId, async (client) => {
+        const thread = await client.readThreadSummary!(params.threadId);
+        return thread.archivedAt === undefined ? this.withObservedThreadName(thread) : undefined;
+      }).catch(() => undefined);
+    }
     const activeThreads = await this.listThreads({
       backend: params.backend,
       archived: false,
@@ -44502,11 +44663,16 @@ export class DesktopBackendRegistry {
     );
   }
 
+  private invalidateArchiveCleanupInventory(): void {
+    this.archiveCleanupInventories = new WeakMap();
+  }
+
   private invalidateArchiveCleanupReads(
     backend?: AppServerBackendKind,
     notification?: AppServerNotification,
     workspaceChanged = true,
   ): void {
+    this.invalidateArchiveCleanupInventory();
     if (workspaceChanged) this.archiveWorkspaceRevision += 1;
     this.archiveCleanupReads.invalidate(backend);
     if (!backend || backend === "codex") this.codexClient.invalidateThreadListings?.(notification);
@@ -44516,6 +44682,9 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind,
     notification: AppServerNotification,
   ): void {
+    if (notification.method === "thread/parent/set" || notification.method === "thread/parent/cleared") {
+      this.invalidateArchiveCleanupInventory();
+    }
     const membershipChanged = notification.method === "thread/archived"
       || notification.method === "thread/deleted"
       || notification.method === "thread/unarchived"

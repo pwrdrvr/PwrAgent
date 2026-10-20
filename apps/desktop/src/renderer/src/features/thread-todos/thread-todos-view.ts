@@ -21,6 +21,12 @@ export type ThreadTodoRunOptions = Omit<RunThreadTodoActionRequest, "id">;
 
 /** `allowOpenItems` completes a card done although steps are unchecked. */
 export type ThreadTodoResolveOptions = Pick<ResolveThreadTodoRequest, "allowOpenItems">;
+/**
+ * "Do it here" on a card: the resolve options, plus the reply a review card
+ * sends in place of a hand-off's prompt. A card that sends its own prompt
+ * stays open; the reply's work settles it.
+ */
+export type ThreadTodoDoHereOptions = ThreadTodoResolveOptions & { prompt?: string };
 
 /** What a card's project menu reads and writes. */
 export type ThreadTodoProjectMenu = {
@@ -87,8 +93,15 @@ export type ThreadTodosView = {
   dismissQuestion: (target: OperatorQuestionTarget) => Promise<void>;
   /** Question item keys this window dismissed, so open cards fold too. */
   dismissedQuestionKeys: ReadonlySet<string>;
-  /** Shows the wait's thread, where its card takes the answer. */
+  /** Shows the wait's thread, scrolled to a question's card. */
   openWait: (wait: OperatorWait) => void;
+  /**
+   * Answers a question in a thread no composer shows. Resolves true once the
+   * thread's owner took the reply, and throws the owner's refusal.
+   */
+  answerQuestion?: (wait: OperatorWait, text: string) => Promise<boolean>;
+  /** Answers `answerQuestion` sent, by `backend:threadId` NUL question item id. */
+  sentQuestionAnswers?: ReadonlyMap<string, string>;
   /** Name of a thread, by `backend:threadId`. */
   threadTitleForKey: (threadKey: string) => string;
   /** The project a thread belongs to, by `backend:threadId`. */

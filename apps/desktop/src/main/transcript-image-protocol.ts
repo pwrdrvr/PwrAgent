@@ -380,24 +380,35 @@ export async function materializeTranscriptMessageImagesForMessaging(
   }
 
   const approvedLocalImageRoots = await createApprovedLocalImageRootResolver(options)();
-  const imageParts = materializedMessage.parts?.filter(
+  return await resolveMessageImagePartsForMessaging(
+    materializedMessage,
+    async (url) => await transcriptImageUrlForMessaging(
+      url,
+      approvedLocalImageRoots,
+    ),
+  );
+}
+
+/**
+ * Map a message's image parts to provider-safe URLs, dropping any the
+ * resolver cannot serve. Parts resolve concurrently and keep message order.
+ */
+async function resolveMessageImagePartsForMessaging(
+  message: AppServerThreadMessage,
+  resolveUrl: (url: string) => Promise<string | undefined>,
+): Promise<AppServerThreadImagePart[]> {
+  const imageParts = message.parts?.filter(
     (part): part is AppServerThreadImagePart => part.type === "image",
   ) ?? [];
-  const output: AppServerThreadImagePart[] = [];
-  for (const part of imageParts) {
-    const providerUrl = await transcriptImageUrlForMessaging(
-      part.url,
-      approvedLocalImageRoots,
-    );
-    if (!providerUrl) {
-      continue;
-    }
-    output.push({
-      ...part,
-      url: providerUrl,
-    });
-  }
-  return output;
+  const resolved = await Promise.all(
+    imageParts.map(async (part) => {
+      const providerUrl = await resolveUrl(part.url);
+      return providerUrl ? { ...part, url: providerUrl } : undefined;
+    }),
+  );
+  return resolved.filter(
+    (part): part is AppServerThreadImagePart => part !== undefined,
+  );
 }
 
 async function transcriptImageUrlForMessaging(
@@ -436,6 +447,78 @@ async function transcriptImageUrlForMessaging(
     return undefined;
   }
   return `data:${resolution.mimeType};base64,${buffer.toString("base64")}`;
+}
+
+/**
+ * Resolve the images of one assistant message read from a federation peer.
+ * The owner already materialized the message's local and Markdown-linked
+ * images when it served the thread, and the remote client rewrote them to
+ * `pwragent-image://federation/...` URLs. Those name files on the owner's
+ * disk, so their bytes come back through `readOwnerImage` and leave here as
+ * data URLs. Nothing is resolved against this instance's filesystem: a
+ * `/tmp` path in a peer's message names a file on the peer.
+ */
+export async function materializeFederatedTranscriptMessageImagesForMessaging(
+  message: AppServerThreadMessage,
+  instanceId: FederationInstanceId,
+  readOwnerImage: (
+    request: FederatedTranscriptImageRequest,
+  ) => Promise<FederatedTranscriptImageResponse>,
+): Promise<AppServerThreadImagePart[]> {
+  return await resolveMessageImagePartsForMessaging(
+    message,
+    async (url) => await federatedTranscriptImageUrlForMessaging(
+      url,
+      instanceId,
+      readOwnerImage,
+    ),
+  );
+}
+
+async function federatedTranscriptImageUrlForMessaging(
+  url: string,
+  instanceId: FederationInstanceId,
+  readOwnerImage: (
+    request: FederatedTranscriptImageRequest,
+  ) => Promise<FederatedTranscriptImageResponse>,
+): Promise<string | undefined> {
+  if (url.startsWith("data:image/") || /^https:\/\//iu.test(url)) {
+    return url;
+  }
+
+  const request = decodeFederatedTranscriptImageProtocolRequest(url);
+  if (!request || request.instanceId !== instanceId) {
+    return undefined;
+  }
+
+  let image: { bytes: Buffer; mimeType: string } | undefined;
+  try {
+    image = decodeFederatedTranscriptImageResponse(await readOwnerImage(request));
+  } catch {
+    return undefined;
+  }
+  // Providers decode these themselves, so only the types this module can
+  // name an extension for leave as data URLs.
+  if (!image || !DATA_IMAGE_EXTENSIONS.has(image.mimeType)) {
+    return undefined;
+  }
+  return `data:${image.mimeType};base64,${image.bytes.toString("base64")}`;
+}
+
+/** The trust check every consumer applies to a peer's image bytes. */
+function decodeFederatedTranscriptImageResponse(
+  remote: FederatedTranscriptImageResponse,
+): { bytes: Buffer; mimeType: string } | undefined {
+  const mimeType = remote.mimeType.toLowerCase();
+  const bytes = Buffer.from(remote.dataBase64, "base64");
+  if (
+    !mimeType.startsWith("image/")
+    || bytes.byteLength === 0
+    || bytes.byteLength > MAX_FETCHED_TRANSCRIPT_IMAGE_BYTES
+  ) {
+    return undefined;
+  }
+  return { bytes, mimeType };
 }
 
 export function registerTranscriptImageProtocolScheme(): void {
@@ -1270,19 +1353,16 @@ export function installTranscriptImageProtocol(
       }
 
       try {
-        const remote = await options.resolveFederatedImage(federatedRequest);
-        const bytes = Buffer.from(remote.dataBase64, "base64");
-        if (
-          !remote.mimeType.startsWith("image/")
-          || bytes.byteLength === 0
-          || bytes.byteLength > MAX_FETCHED_TRANSCRIPT_IMAGE_BYTES
-        ) {
+        const image = decodeFederatedTranscriptImageResponse(
+          await options.resolveFederatedImage(federatedRequest),
+        );
+        if (!image) {
           return new Response("invalid federated transcript image response", {
             status: 502,
             headers: { "content-type": "text/plain; charset=utf-8" },
           });
         }
-        return transcriptImageResponse(bytes, remote.mimeType);
+        return transcriptImageResponse(image.bytes, image.mimeType);
       } catch (error) {
         return new Response(
           error instanceof Error ? error.message : String(error),

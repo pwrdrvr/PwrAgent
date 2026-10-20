@@ -28,8 +28,10 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
   let registry: DesktopBackendRegistry;
   let stateDb: StateDb;
   let store: SqliteOverlayStore;
+  let expectedCloseFailure: string | undefined;
 
   beforeEach(() => {
+    expectedCloseFailure = undefined;
     directory = mkdtempSync(path.join(os.tmpdir(), "pwragent-token-miser-ledger-"));
     stateDb = openInMemoryStateDb();
     store = new SqliteOverlayStore(stateDb);
@@ -46,9 +48,16 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
   });
 
   afterEach(async () => {
-    await registry.close();
-    stateDb.close();
-    rmSync(directory, { force: true, recursive: true });
+    try {
+      if (expectedCloseFailure) {
+        await expect(registry.close()).rejects.toThrow(expectedCloseFailure);
+      } else {
+        await registry.close();
+      }
+    } finally {
+      stateDb.close();
+      rmSync(directory, { force: true, recursive: true });
+    }
   });
 
   it("captures protocol commentary, excludes final answers, and seals terminal turns without writing", async () => {
@@ -205,8 +214,12 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
     const queuedUpdate = tokenMiserStore.recordParentModelRequest({ objectId: entry.objectId, cumulativeInputTokens: 300 });
     if (failClose) {
       const internals = registry as unknown as { codexClient: { close(): Promise<void> } };
-      vi.spyOn(internals.codexClient, "close").mockRejectedValueOnce(new Error("fixture close failure"));
-      await expect(registry.close()).rejects.toThrow("codex");
+      const closeClient = vi.spyOn(internals.codexClient, "close").mockRejectedValueOnce(new Error("fixture close failure"));
+      expectedCloseFailure = "codex";
+      const closing = registry.close();
+      await expect(closing).rejects.toThrow(expectedCloseFailure);
+      expect(registry.close()).toBe(closing);
+      expect(closeClient).toHaveBeenCalledOnce();
     } else {
       await registry.close();
     }

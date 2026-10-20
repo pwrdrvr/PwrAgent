@@ -4,6 +4,7 @@ import { threadTodoItemProgress } from "@pwragent/shared";
 import { TodoIcon } from "../../icons";
 import { ThreadTodoCard } from "./ThreadTodoCard";
 import type {
+  ThreadTodoDoHereOptions,
   ThreadTodoResolveOptions,
   ThreadTodoRunOptions,
   ThreadTodosView,
@@ -31,12 +32,13 @@ export type ThreadTodoStackProps = {
   /** Open cards for this thread, newest first. */
   todos: ThreadTodo[];
   view: ThreadTodosView;
+  threadRunning?: boolean;
   onStartReview: (todo: ThreadTodo, options?: ThreadTodoResolveOptions) => void;
   /**
-   * Sends a handoff's prompt to this thread as a reply. Resolves false when
-   * the composer would not take it.
+   * Sends a handoff's prompt, or the given one, to this thread as a reply.
+   * Resolves false when the composer would not take it.
    */
-  onDoHere?: (todo: ThreadTodo, options?: ThreadTodoResolveOptions) => Promise<boolean>;
+  onDoHere?: (todo: ThreadTodo, options?: ThreadTodoDoHereOptions) => Promise<boolean>;
   /** Moves the stack below the find bar while it is open. */
   findOpen?: boolean;
 };
@@ -114,7 +116,7 @@ export function ThreadTodoStack(props: ThreadTodoStackProps) {
   };
   const onDoHere = props.onDoHere;
   const doHere = onDoHere
-    ? (target: ThreadTodo, options?: ThreadTodoResolveOptions): void => {
+    ? (target: ThreadTodo, options?: ThreadTodoDoHereOptions): void => {
         void onDoHere(target, options).then((sent) => {
           if (!sent) {
             showNotice({
@@ -173,6 +175,7 @@ export function ThreadTodoStack(props: ThreadTodoStackProps) {
             key={todo.id}
             todo={todo}
             running={view.runningIds.has(todo.id)}
+            threadRunning={props.threadRunning}
             pager={{
               position: selectedIndex + 1,
               total: todos.length,

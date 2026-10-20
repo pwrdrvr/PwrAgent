@@ -9,6 +9,8 @@ export class ArchiveCleanupCancelledError extends Error {
 }
 
 export type ArchiveCleanupContext = {
+  /** Shared only until this queue drains; discovery must also fence revisions. */
+  batch?: object;
   assertCurrent: () => void;
   checkpoint: () => Promise<void>;
   /** Finish the snapshot persistence boundary after removal, even on cancel. */
@@ -31,6 +33,7 @@ export class ArchiveCleanupQueue<T> {
   private readonly waiting: Job<T>[] = [];
   private running?: Job<T>;
   private closed = false;
+  private batch: object = {};
   private wake?: () => void;
   private readonly checkpointWaiters: (() => void)[] = [];
 
@@ -48,6 +51,10 @@ export class ArchiveCleanupQueue<T> {
     return this.jobs.get(key)?.promise;
   }
 
+  pendingKeys(): string[] {
+    return [...this.jobs.keys()];
+  }
+
   isCancelled(key: string): boolean {
     return this.jobs.get(key)?.cancelled === true;
   }
@@ -62,6 +69,7 @@ export class ArchiveCleanupQueue<T> {
     let resolve!: Job<T>["resolve"];
     let reject!: Job<T>["reject"];
     const promise = new Promise<T>((accept, fail) => { resolve = accept; reject = fail; });
+    if (this.jobs.size === 0) this.batch = {};
     const job: Job<T> = { key, work, promise, resolve, reject, cancelled: false };
     this.jobs.set(key, job);
     this.waiting.push(job);
@@ -92,6 +100,7 @@ export class ArchiveCleanupQueue<T> {
   async close(): Promise<void> {
     this.closed = true;
     await Promise.all([...this.jobs.keys()].map((key) => this.cancelAndWait(key)));
+    this.batch = {};
     // Nothing parks after shutdown; release anyone still waiting for a pause.
     for (const waiter of this.checkpointWaiters.splice(0)) waiter();
   }
@@ -99,7 +108,10 @@ export class ArchiveCleanupQueue<T> {
   private startNext(): void {
     if (this.running || this.closed) return;
     const job = this.waiting.shift();
-    if (!job) return;
+    if (!job) {
+      this.batch = {};
+      return;
+    }
     this.running = job;
     const assertCurrent = () => {
       if (this.closed || job.cancelled) throw new ArchiveCleanupCancelledError();
@@ -123,7 +135,7 @@ export class ArchiveCleanupQueue<T> {
     };
     void Promise.resolve().then(async () => {
       await checkpoint();
-      return await job.work({ assertCurrent, checkpoint, settleCheckpoint });
+      return await job.work({ batch: this.batch, assertCurrent, checkpoint, settleCheckpoint });
     }).then(job.resolve, job.reject).finally(() => {
       this.jobs.delete(job.key);
       this.running = undefined;

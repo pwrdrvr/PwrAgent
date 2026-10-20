@@ -1424,6 +1424,11 @@ vi.mock("../codex-app-server/stdio-transport", () => {
   };
 });
 
+// Load the registry's desktop dependency graph during collection, after the
+// transport mock's base class is initialized. Its cold transform/import cost
+// must not consume the listing workload test's five-second execution budget.
+const { DesktopBackendRegistry } = await import("../app-server/backend-registry");
+
 async function waitForLatestTransportRequest(
   method: string,
   timeoutMs = 1_000
@@ -2881,6 +2886,145 @@ describe("CodexAppServerClient", () => {
       expect(enrich).toHaveBeenCalledTimes(50);
     } finally {
       release();
+      await client.close();
+    }
+  });
+
+  it("budgets registry listing overlay rows, history parses and targeted metadata RPCs", async () => {
+    const budget = navigationListingBudgets["codex-registry-listing-projection"];
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { SqliteOverlayStore } = await import("../state/overlay-store-sqlite");
+    const { openInMemoryStateDb } = await import("./sqlite-test-utils");
+    const db = openInMemoryStateDb();
+    const store = new SqliteOverlayStore(db);
+    const client = new CodexAppServerClient({ command: "codex" });
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: store, threadTitleGenerationService: null });
+    await registry["subAgentStartupReconciliation"];
+    await client.listThreads({ enrichDirectories: false, skipArchivedMetadataRefresh: true, maxPages: 1 });
+    const ids = Array.from({ length: 120 }, (_, index) => `overlay-budget-${index}`);
+    db.raw.transaction(() => {
+      for (const id of ids) db.raw.prepare("INSERT INTO threads(thread_id, payload) VALUES (?, ?)").run(`codex:${id}`, JSON.stringify({
+        backend: "codex", threadId: id, model: "fixture-model", extraLinkedDirectories: [],
+        immutableUsageActivities: [{ text: "contrived history ".repeat(1_000) }],
+      }));
+    })();
+    const transport = MockTransport.instances.at(-1)!;
+    const send = transport.send.bind(transport);
+    let pages = 0;
+    let metadataReads = 0;
+    let title = "Fixture title";
+    const rpc = vi.spyOn(transport, "send").mockImplementation((message) => {
+      const request = JSON.parse(message);
+      if (request.method === "thread/read") {
+        metadataReads++;
+        expect(request.params).toEqual({ threadId: ids[0], includeTurns: false });
+        transport["messageHandler"](JSON.stringify({ id: request.id, result: { thread: { id: ids[0], name: title, source: "vscode" } } }));
+        return;
+      }
+      if (request.method !== "thread/list") { send(message); return; }
+      pages++;
+      const page = Number(request.params.cursor ?? 0);
+      MockTransport.threadListResultBySearchTerm.set("overlay-budget", ids.slice(page * 40, (page + 1) * 40)
+        .map((id) => ({ id, name: "Fixture title", source: "vscode" })));
+      const previous = MockTransport.threadListNextCursor;
+      MockTransport.threadListNextCursor = page < 2 ? String(page + 1) : undefined;
+      try { send(message); } finally { MockTransport.threadListNextCursor = previous; }
+    });
+    const prepare = db.raw.prepare.bind(db.raw);
+    let overlayRows = 0;
+    let overlayBytes = 0;
+    const sql = vi.spyOn(db.raw, "prepare").mockImplementation((query) => {
+      const statement = prepare(query);
+      if (query.includes("threads.payload") && query.includes("json_each(?)")) {
+        const all = statement.all.bind(statement);
+        vi.spyOn(statement, "all").mockImplementation((...params: unknown[]) => {
+          const rows = all(...params) as Array<{ payload: string | null }>;
+          overlayRows += rows.length;
+          overlayBytes += rows.reduce((sum, row) => sum + Buffer.byteLength(row.payload ?? ""), 0);
+          return rows;
+        });
+      }
+      return statement;
+    });
+    const parse = vi.spyOn(JSON, "parse");
+    try {
+      for (let refresh = 0; refresh < budget.refreshes; refresh++) {
+        const rows = await registry["listCodexThreads"]({ filter: "overlay-budget", enrichDirectories: false, skipArchivedMetadataRefresh: true });
+        expect(rows).toHaveLength(120);
+        expect(rows.every((row) => row.model === "fixture-model")).toBe(true);
+      }
+      expect(pages).toBe(budget.physicalPages); // three legitimate three-page inventories
+      expect(overlayRows).toBe(budget.overlayRows);
+      expect(overlayBytes).toBe(budget.overlayBytes);
+      const overlayParses = parse.mock.calls.filter(([payload]) => payload.startsWith('{"backend":"codex","threadId":"overlay-budget-'));
+      expect(overlayParses).toHaveLength(budget.overlayParses);
+      expect(overlayParses.filter(([payload]) => payload.includes("contrived history"))).toHaveLength(budget.historyParses);
+      const lookup = () => registry["findThreadForTitleGeneration"]({ backend: "codex", threadId: ids[0]! });
+      expect(await lookup()).toMatchObject({ title: "Fixture title" });
+      title = "Operator rename";
+      expect(await lookup()).toMatchObject({ title: "Operator rename" });
+      expect(metadataReads).toBe(budget.targetedMetadataReads);
+      expect(pages).toBe(budget.physicalPagesAfterTitleReads);
+    } finally {
+      parse.mockRestore(); sql.mockRestore(); rpc.mockRestore();
+      await registry.close(); db.close();
+    }
+  });
+
+  it("budgets physical pages across a create, pin, name and turn burst with mixed enrichment", async () => {
+    const budget = navigationListingBudgets["codex-create-pin-name-turn-burst"];
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex" });
+    await client.listThreads({ enrichDirectories: false, skipArchivedMetadataRefresh: true, maxPages: 1 });
+    MockTransport.threadListResultBySearchTerm.set("burst-budget", Array.from({ length: 200 }, (_, index) => ({
+      id: `burst-${index}`, name: `Fixture ${index}`, source: "vscode",
+    })));
+    const transport = MockTransport.instances.at(-1)!;
+    const send = transport.send.bind(transport);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let pages = 0;
+    const rpc = vi.spyOn(transport, "send").mockImplementation((message) => {
+      const request = JSON.parse(message);
+      if (request.method !== "thread/list") { send(message); return; }
+      pages++;
+      void gate.then(() => {
+        const previous = MockTransport.threadListNextCursor;
+        const page = Number(request.params.cursor ?? 0);
+        MockTransport.threadListNextCursor = page < 2 ? String(page + 1) : undefined;
+        try { send(message); } finally { MockTransport.threadListNextCursor = previous; }
+      });
+    });
+    const reads: Array<Promise<AppServerThreadSummary[]>> = [];
+    const read = async () => {
+      reads.push(client.listThreads({ filter: "burst-budget", enrichDirectories: false, skipArchivedMetadataRefresh: true }));
+      reads.push(client.listThreads({ filter: "burst-budget", enrichDirectories: true, skipArchivedMetadataRefresh: true }));
+      await new Promise((resolve) => setImmediate(resolve));
+    };
+    try {
+      await read();
+      for (const method of ["thread/started", "thread/pin/added", "thread/name/updated", "thread/name/updated",
+        "thread/name/updated", "turn/started", "thread/status/changed", "navigation/thread/seen", "thread/subAgents/updated"]) {
+        transport.notify(method, { threadId: "target", threadName: "New name", status: { type: "active" }, turn: { id: "turn" } });
+        await read();
+      }
+      release();
+      await Promise.all(reads);
+      // Seven provider generations, three pages each; overlay-only events
+      // and enrichment choices must not cause additional physical scans.
+      expect(reads).toHaveLength(budget.logicalRequests);
+      expect(pages).toBe(budget.physicalPages);
+      const originalTitle = (await reads[1]!)[0]?.title;
+      const first = await reads[0]!;
+      if (first[0]) first[0].title = "Caller mutation";
+      expect((await reads[1]!)[0]?.title).toBe(originalTitle);
+      // Completed inventories are never retained: external changes remain visible.
+      await client.listThreads({ filter: "burst-budget", enrichDirectories: false, skipArchivedMetadataRefresh: true });
+      expect(pages).toBe(budget.physicalPagesAfterLaterRead);
+    } finally {
+      release();
+      await Promise.allSettled(reads);
+      rpc.mockRestore();
       await client.close();
     }
   });

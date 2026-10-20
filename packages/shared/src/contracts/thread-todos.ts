@@ -112,8 +112,12 @@ export type ThreadTodoItem = {
 
 export type ThreadTodo = {
   id: string;
+  /** A projected tracked review, whose status is owned by review tracking. */
+  reviewId?: string;
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
+  /** Current owner title projected when listing cards; never persisted with the card. */
+  threadTitle?: string;
   /** Re-adding an open card with the same key updates it in place. */
   key?: string;
   kind: ThreadTodoKind;
@@ -342,11 +346,11 @@ export type SetThreadTodoProjectRequest = {
   projectKey: string | null;
 };
 
-export type ThreadTodosChangedEvent = {
-  at: number;
+/** An identity-less notification refreshes the whole list after owner discovery. */
+export type ThreadTodosChangedEvent = { at: number } & ({
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
-};
+} | { backend?: undefined; threadId?: undefined });
 
 export function threadTodoKindForAction(
   action: ThreadTodoAction | undefined,

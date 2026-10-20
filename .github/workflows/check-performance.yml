@@ -57,7 +57,7 @@ jobs:
         run: node candidate/scripts/ci/benchmark-dev-checks.mjs baseline candidate .local/check-performance
       - name: Upload timings, load samples and logs
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: check-performance-${{ runner.name }}-${{ github.run_attempt }}
           path: .local/check-performance/

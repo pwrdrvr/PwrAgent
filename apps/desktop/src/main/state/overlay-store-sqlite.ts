@@ -677,6 +677,7 @@ function managedSubAgentChildKeys(overlay: Pick<ThreadOverlayState, "backend" | 
 }
 
 export class SqliteOverlayStore implements RemoteThreadTargetStore {
+  private managedSubAgentThreadKeysCache?: { generation: number; keys: Set<string> };
   private navigationOverlayCache?: {
     dataVersion: number;
     threadChanges: number;
@@ -2542,6 +2543,46 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         })),
       ],
     };
+  }
+
+  /**
+   * Model context only. Use the pricing ledger's two ordered indexes without
+   * materializing pricing cards, repairing prices, or enriching turn metadata.
+   * The stable createdAt sort in the former caller retained usage_line_id DESC
+   * on ties; keep that order here, including child and self-parented lines.
+   * Keep the ordering columns in the compound SELECT so SQLite can merge the
+   * ordered branches instead of materializing and sorting an outer projection.
+   */
+  async readLatestThreadUsageModel(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+  }): Promise<Pick<ThreadUsageLineRecord, "model" | "provider" | "reasoningEffort" | "serviceTier"> | undefined> {
+    const row = this.stateDb.raw.prepare(
+      `SELECT model, provider, reasoning_effort, service_tier, created_at, usage_line_id
+       FROM thread_usage_lines
+       WHERE backend = ? AND thread_id = ?
+         AND status != 'superseded' AND scope != 'monitor'
+         AND model IS NOT NULL AND model != ''
+       UNION ALL
+       SELECT model, provider, reasoning_effort, service_tier, created_at, usage_line_id
+       FROM thread_usage_lines
+       WHERE backend = ? AND parent_thread_id = ? AND thread_id != ?
+         AND status != 'superseded' AND scope != 'monitor'
+         AND model IS NOT NULL AND model != ''
+       ORDER BY created_at DESC, usage_line_id DESC
+       LIMIT 1`,
+    ).get(params.backend, params.threadId, params.backend, params.threadId, params.threadId) as {
+      model: string;
+      provider: string;
+      reasoning_effort: string | null;
+      service_tier: string | null;
+    } | undefined;
+    return row ? {
+      model: row.model,
+      provider: row.provider || "openai",
+      reasoningEffort: row.reasoning_effort || undefined,
+      ...(row.service_tier ? { serviceTier: row.service_tier } : {}),
+    } : undefined;
   }
 
   async readThreadPricing(params: {
@@ -5421,6 +5462,40 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     }));
   }
 
+  /** Ordinary listing rows need mutable metadata, not transcript activities.
+   * Native-worker usage repair reads the required worker overlays separately.
+   * Project in SQLite so histories do not cross the native/JS boundary or get
+   * parsed into JS objects. Read afresh on every call, including in transactions
+   * and after writes from another process. Keep the full read contract separate.
+   */
+  async getThreadListingOverlayStates(params: {
+    backend: ThreadOverlayState["backend"];
+    threadIds: string[];
+  }): Promise<Record<string, ThreadOverlayState | undefined>> {
+    const ids = [...new Set(params.threadIds)];
+    const entries: Array<[string, ThreadOverlayState | undefined]> = [];
+    for (let offset = 0; offset < ids.length; offset += 500) {
+      const requested = ids.slice(offset, offset + 500).map((id) => ({
+        id, key: encodeThreadIdentityKeyForStorage(buildThreadIdentityKey(params.backend, id)),
+      }));
+      // Remove only transcript fields. Retain every metadata field (including
+      // workspace snapshots, federation parent identity and native workers).
+      // json_remove parses the source once, rather than one extract per field.
+      const rows = this.stateDb.raw.prepare(`
+        SELECT json_extract(requested.value, '$.id') AS id,
+          json_remove(threads.payload, '$.immutableUsageActivities', '$.managedReviewEntries',
+            '$.permissionTransitionLog', '$.messagingBindingTransitionLog',
+            '$.turnFailureLog', '$.questionnaireActivityLog') AS payload
+        FROM json_each(?) AS requested
+        LEFT JOIN threads ON threads.thread_id = json_extract(requested.value, '$.key')
+      `).all(JSON.stringify(requested)) as Array<{ id: string; payload: string | null }>;
+      for (const row of rows) {
+        entries.push([row.id, row.payload === null ? undefined : normalizeThreadOverlayState(JSON.parse(row.payload))]);
+      }
+    }
+    return Object.fromEntries(entries);
+  }
+
   async getThreadOverlayStates(params: {
     backend: ThreadOverlayState["backend"];
     threadIds: string[];
@@ -7878,6 +7953,16 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
   }
 
   private listManagedSubAgentThreadKeys(): Set<string> {
+    // Transactions can reuse a generation after a savepoint rollback. Never
+    // consume or publish the committed cache while reading such a snapshot.
+    const generation = this.stateDb.raw.inTransaction ? undefined : (
+      this.stateDb.raw.prepare(
+        "SELECT generation FROM thread_navigation_relationship_generation WHERE singleton = 1",
+      ).get() as { generation: number }
+    ).generation;
+    if (generation !== undefined && this.managedSubAgentThreadKeysCache?.generation === generation) {
+      return new Set(this.managedSubAgentThreadKeysCache.keys);
+    }
     // One statement reads parent references and child flags from the same
     // SQLite snapshot. Persistent triggers cover older/shared-profile writers.
     const rows = this.stateDb.raw.prepare(
@@ -7902,6 +7987,12 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     // recreates a stale native-worker card. Missing child overlays stay hidden.
     for (const key of threadKeys) {
       if (groupedKeys.has(encodeThreadIdentityKeyForStorage(key))) threadKeys.delete(key);
+    }
+    // Read the stamp BEFORE the rows: an intervening external commit may cause
+    // one redundant rebuild next time, but can never stamp old rows as current.
+    if (generation !== undefined) {
+      this.managedSubAgentThreadKeysCache = { generation, keys: threadKeys };
+      return new Set(threadKeys);
     }
     return threadKeys;
   }
@@ -9529,6 +9620,7 @@ export type OverlayStoreLike = Pick<
   | "consumeManagedReviewContexts"
   | "upsertThreadUsageLine"
   | "readThreadPricing"
+  | "readLatestThreadUsageModel"
   | "upsertThreadToolInvocation"
   | "markThreadToolInvocationNoisy"
   | "upsertThreadToolInvocationAlert"
@@ -9619,6 +9711,7 @@ export type OverlayStoreLike = Pick<
   | "upsertDirectoryLaunchpad"
   | "resetDirectoryLaunchpad"
 > & {
+  getThreadListingOverlayStates?: SqliteOverlayStore["getThreadListingOverlayStates"];
   setThreadCodexEnvironmentRuntime?: SqliteOverlayStore["setThreadCodexEnvironmentRuntime"];
   listThreadOverlaysWithCodexEnvironmentRuntime?: SqliteOverlayStore["listThreadOverlaysWithCodexEnvironmentRuntime"];
   listThreadArchiveStates?: SqliteOverlayStore["listThreadArchiveStates"];

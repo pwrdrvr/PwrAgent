@@ -102,13 +102,18 @@ export function QuitBlockerQueueToast(props: {
     snapshot.inProgressThreadCount
     + snapshot.automationRunCount
     + snapshot.terminalSessionCount
-    + snapshot.actionRunCount;
+    + snapshot.actionRunCount
+    + (snapshot.archiveCleanupCount ?? 0);
+  const cleanupMessage = snapshot.archiveCleanupCount
+    ? `${snapshot.archiveCleanupCount} worktree ${snapshot.archiveCleanupCount === 1 ? "cleanup is" : "cleanups are"} pending. Unfinished cleanups will resume at the next start.`
+    : undefined;
   const message = total === 0
     ? "No running work."
     : `${total} ${total === 1 ? "item is" : "items are"} still running.`;
   const copyText = [
     "Running work",
     message,
+    ...(cleanupMessage ? [cleanupMessage] : []),
     ...snapshot.items.map((item) =>
       [item.title?.trim() || item.threadId, item.detail]
         .filter(Boolean)
@@ -136,6 +141,7 @@ export function QuitBlockerQueueToast(props: {
           </p>
         ) : (
           <div className="quit-blocker-queue__list">
+            {cleanupMessage ? <p className="quit-blocker-queue__heading">{cleanupMessage}</p> : null}
             {GROUPS.map((group) => {
               const items = snapshot.items.filter(
                 (item) => item.kind === group.kind,

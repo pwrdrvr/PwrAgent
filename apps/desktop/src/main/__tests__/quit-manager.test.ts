@@ -1,7 +1,8 @@
-import { createQuitManager } from "../quit-manager";
+import { createQuitManager, type QuitManagerDependencies } from "../quit-manager";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const backendRegistryMock = vi.hoisted(() => ({
+  getArchiveCleanupCountForQuit: vi.fn(() => 0),
   getThreadInfo: vi.fn(),
   getInProgressThreadSnapshotForQuit: vi.fn(() => ({
     count: 0,
@@ -60,6 +61,25 @@ beforeEach(() => {
 });
 
 describe("createQuitManager", () => {
+  it("prompts for cleanup-only work and refreshes its pending count", async () => {
+    const { buildQuitBlockerSnapshot } = await import("../quit-manager");
+    let count = 130;
+    const confirm = vi.fn(async (options: Parameters<NonNullable<QuitManagerDependencies["confirm"]>>[0]) => {
+      expect(options.archiveCleanupCount).toBe(130);
+      count = 30;
+      expect(await options.refresh!()).toMatchObject({ archiveCleanupCount: 30 });
+      return "manual-cancel" as const;
+    });
+    const performQuit = vi.fn();
+    const manager = createQuitManager({ getConfirmationEnabled: () => true,
+      getQuitBlockers: () => buildQuitBlockerSnapshot({ inProgressThreads: { count: 0, threadIds: [] },
+        terminalSessions: { count: 0, threads: [] }, archiveCleanupCount: count }),
+      confirm, performQuit, log: {},
+    });
+    expect(await manager.requestQuit({ source: "menu" })).toBe(false);
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(performQuit).not.toHaveBeenCalled();
+  });
   it.each(["no-work", "confirmation-disabled", "confirmed"] as const)("does not commit quit state when authorization fails (%s)", async (scenario) => {
     const resumeDispatch = vi.fn();
     const commitShutdown = vi.fn();

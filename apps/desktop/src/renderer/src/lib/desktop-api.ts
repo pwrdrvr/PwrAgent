@@ -15,6 +15,9 @@ import type {
   SetThreadTodoProjectRequest,
   ThreadTodoMutationResponse,
   ThreadTodosChangedEvent,
+  ThreadReview,
+  ListThreadReviewsRequest,
+  UpdateThreadReviewRequest,
   DismissOperatorQuestionRequest,
   ListOperatorRequestsResponse,
   MarkOperatorItemsSeenRequest,
@@ -62,6 +65,7 @@ import type {
   GithubPrSamlEnforcementEvent,
 } from "../../../shared/github-pr-access";
 import type {
+  IntegratedTerminalRenameRequest,
   IntegratedTerminalCloseRequest,
   IntegratedTerminalContextMenuRequest,
   IntegratedTerminalCreateRequest,
@@ -444,6 +448,8 @@ import type {
   StartThreadMigrationRequest,
   StartThreadMigrationResponse,
   StartTurnRequest,
+  SubmitThreadReplyRequest,
+  SubmitThreadReplyResponse,
   StartTurnResponse,
   ScheduledThreadActionIdRequest,
   ScheduledThreadActionMutationResponse,
@@ -986,6 +992,10 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
     request: RemoveCodexMcpServerRequest,
   ) => Promise<RemoveCodexMcpServerResponse>;
   startTurn?: (request: StartTurnRequest) => Promise<StartTurnResponse>;
+  /** Replies to a local thread no composer shows: start, steer or queue. */
+  submitThreadReply?: (
+    request: SubmitThreadReplyRequest,
+  ) => Promise<SubmitThreadReplyResponse>;
   readQueuedTurn?: (
     request: ReadQueuedTurnRequest,
   ) => Promise<ReadQueuedTurnResponse>;
@@ -998,6 +1008,8 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   listThreadTodos?: (
     request?: ListThreadTodosRequest,
   ) => Promise<ListThreadTodosResponse>;
+  listThreadReviews?: (request?: ListThreadReviewsRequest) => Promise<{ reviews: ThreadReview[] }>;
+  updateThreadReview?: (request: UpdateThreadReviewRequest) => Promise<{ review: ThreadReview }>;
   resolveThreadTodo?: (
     request: ResolveThreadTodoRequest,
   ) => Promise<ThreadTodoMutationResponse>;
@@ -1287,6 +1299,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   showThreadFromToolOutputIncidentExplorer?: (
     request: WindowShowThreadRequest
   ) => Promise<void>;
+  renameIntegratedTerminal?: (request: IntegratedTerminalRenameRequest) => Promise<void>;
   createIntegratedTerminal?: (
     request: IntegratedTerminalCreateRequest,
   ) => Promise<IntegratedTerminalCreateResponse>;

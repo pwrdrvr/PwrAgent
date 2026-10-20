@@ -814,3 +814,115 @@ describe("grouped queued steering", () => {
     queue.close();
   });
 });
+
+describe("operator reply steering", () => {
+  const target = { backend: "codex" as const, threadId: "thread-1" };
+  const result = (entry: ThreadTurnQueueEntry) => ({ ...target, turnId: `turn-${entry.id}` });
+  const reply = (id = "reply") => ({
+    ...buildEntry({ id }),
+    input: [{ type: "text" as const, text: "use the staging bucket" }],
+  });
+
+  it("starts a turn at once on an idle thread", async () => {
+    const start = vi.fn(async (entry: ThreadTurnQueueEntry) => result(entry));
+    const steer = vi.fn(async (entry: ThreadTurnQueueEntry) => result(entry));
+    const queue = new ThreadTurnQueue({ startTurn: start, steerTurn: steer });
+    const submitted = await queue.submitSteer(reply());
+    expect(submitted).toMatchObject({ status: "started", turnId: "turn-reply" });
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(start.mock.calls[0]![0]).toMatchObject({ id: "reply", delivery: "queued-steer" });
+    expect(steer).not.toHaveBeenCalled();
+    queue.close();
+  });
+
+  it("steers into the running turn when it reaches the head", async () => {
+    const start = vi.fn(async (entry: ThreadTurnQueueEntry) => result(entry));
+    const steer = vi.fn(async (entry: ThreadTurnQueueEntry) => result(entry));
+    const queue = new ThreadTurnQueue({
+      isThreadActive: () => true, canSteerThread: () => true, startTurn: start, steerTurn: steer,
+    });
+    const submitted = await queue.submitSteer(reply());
+    expect(submitted.status).toBe("queued");
+    await vi.waitFor(() => expect(steer).toHaveBeenCalledTimes(1));
+    expect(steer.mock.calls[0]![0]).toMatchObject({
+      id: "reply",
+      input: [{ type: "text", text: "use the staging bucket" }],
+    });
+    expect(steer.mock.calls[0]![0]).not.toHaveProperty("agentMessages");
+    expect(start).not.toHaveBeenCalled();
+    expect(queue.getQueuedEntries(target)).toEqual([]);
+    queue.close();
+  });
+
+  it("waits behind messages queued before it", async () => {
+    const steer = vi.fn(async (entry: ThreadTurnQueueEntry) => result(entry));
+    const queue = new ThreadTurnQueue({
+      isThreadActive: () => true, canSteerThread: () => true,
+      startTurn: async (entry) => result(entry), steerTurn: steer,
+    });
+    await queue.submit(buildEntry({ id: "operator" }));
+    await queue.submitSteer(reply());
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(steer).not.toHaveBeenCalled();
+    expect(queue.getQueuedEntries(target).map((entry) => entry.id)).toEqual(["operator", "reply"]);
+    queue.close();
+  });
+
+  it("is never absorbed into an Agent message batch", async () => {
+    const queue = new ThreadTurnQueue({
+      isThreadActive: () => true, startTurn: async (entry) => result(entry),
+    });
+    await queue.submitSteer(reply());
+    await queue.submitGroupedSteer({
+      ...buildEntry({ id: "agent" }),
+      input: [{ type: "text", text: "agent report" }],
+      messageOrigin: { kind: "agent", sourceThread: { backend: "codex", threadId: "source" } },
+    });
+    const entries = queue.getQueuedEntries(target);
+    expect(entries.map((entry) => entry.id)).toEqual(["reply", "agent"]);
+    expect(entries[0]!.input).toEqual([{ type: "text", text: "use the staging bucket" }]);
+    expect(entries[0]).not.toHaveProperty("agentMessages");
+    queue.close();
+  });
+
+  it("starts the next turn when the running one cannot take it", async () => {
+    let active = true;
+    const start = vi.fn(async (entry: ThreadTurnQueueEntry) => result(entry));
+    // The backend found nothing to steer into, as for a turn that ended first.
+    const steer = vi.fn(async () => undefined);
+    const queue = new ThreadTurnQueue({
+      isThreadActive: () => active, canSteerThread: () => active,
+      startTurn: start, steerTurn: steer,
+    });
+    await queue.submitSteer(reply());
+    await vi.waitFor(() => expect(steer).toHaveBeenCalledTimes(1));
+    expect(queue.getQueuedEntries(target).map((entry) => entry.id)).toEqual(["reply"]);
+    active = false;
+    await queue.releaseThread(target);
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(start.mock.calls[0]![0].id).toBe("reply");
+    expect(steer).toHaveBeenCalledTimes(1);
+    queue.close();
+  });
+
+  it("joins a held queue as held, behind its head", async () => {
+    const start = vi.fn(async (entry: ThreadTurnQueueEntry) => result(entry));
+    const queue = new ThreadTurnQueue({ startTurn: start });
+    await queue.submit(buildEntry({ id: "running" }));
+    await queue.submit(buildEntry({ id: "queued" }));
+    await queue.releaseThread({
+      ...target,
+      turnId: "turn-running",
+      status: "turn/failed",
+      errorMessage: "Provider unavailable",
+    });
+    await queue.submitSteer(reply());
+    // A failed turn holds the line until the operator releases it.
+    expect(queue.getQueuedEntries(target)).toMatchObject([
+      { id: "queued", manualReleaseRequired: true },
+      { id: "reply", manualReleaseRequired: true, holdReason: "Provider unavailable" },
+    ]);
+    expect(start.mock.calls.map(([entry]) => entry.id)).toEqual(["running"]);
+    queue.close();
+  });
+});

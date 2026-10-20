@@ -9,6 +9,7 @@ import type { ThreadTodo, ThreadTodoKind } from "@pwragent/shared";
 import {
   THREAD_TODO_RESOLUTION_RESULTS,
   buildThreadIdentityKey,
+  codexAsyncQuestionItemId,
   operatorTodoItemKey,
   threadTodoItemProgress,
 } from "@pwragent/shared";
@@ -21,7 +22,8 @@ import {
 import { OperatorWaitRow } from "../operator-requests/OperatorWaitRow";
 import { isBlockingWait, type OperatorWait } from "../operator-requests/operator-waits";
 import { ThreadTodoCard, formatTodoAge } from "./ThreadTodoCard";
-import type { ThreadTodoResolveOptions, ThreadTodosView } from "./thread-todos-view";
+import type { ThreadTodoDoHereOptions, ThreadTodoResolveOptions, ThreadTodosView } from "./thread-todos-view";
+import { operatorWaitMatchesFilter, threadTodoMatchesFilter, type ThreadTodoFilter } from "./thread-todo-filters";
 
 export type ThreadTodoScope = "thread" | "project" | "all";
 
@@ -66,15 +68,22 @@ type TodoGroup = {
 
 export type ThreadTodosPanelProps = {
   view: ThreadTodosView;
+  /** UX may supply any combination of questions, approvals, reviews, and cards. */
+  filter?: ThreadTodoFilter;
   /** `backend:threadId` of the thread on screen. */
   threadKey: string;
+  threadRunning?: boolean;
   /** Directory key of that thread's project, when it has one. */
   projectKey?: string;
   onStartReview: (todo: ThreadTodo, options?: ThreadTodoResolveOptions) => void;
   onDoHere?: (
     todo: ThreadTodo,
-    options?: ThreadTodoResolveOptions,
+    options?: ThreadTodoDoHereOptions,
   ) => void | Promise<unknown>;
+  /** Answers a question in the thread on screen, through its composer. */
+  onAnswerQuestion?: (text: string) => Promise<boolean>;
+  /** Answers the composer took in that thread, by question item id. */
+  sentQuestionAnswers?: ReadonlyMap<string, string>;
 };
 
 /**
@@ -143,15 +152,15 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
   };
   const openItemsIn = (lens: ThreadTodoScope): PanelItem[] => [
     ...view.waits
-      .filter((wait) => waitInScope(wait, lens))
+      .filter((wait) => waitInScope(wait, lens) && operatorWaitMatchesFilter(wait, props.filter))
       .map((wait): PanelItem => ({ type: "wait", key: wait.key, wait })),
     ...view.open
-      .filter((todo) => todoInScope(todo, lens))
+      .filter((todo) => todoInScope(todo, lens) && threadTodoMatchesFilter(todo, props.filter))
       .map((todo): PanelItem => ({ type: "todo", key: operatorTodoItemKey(todo.id), todo })),
   ];
   const items: PanelItem[] | undefined = showResolved
     ? resolved
-      ?.filter((todo) => todoInScope(todo, activeScope))
+      ?.filter((todo) => todoInScope(todo, activeScope) && threadTodoMatchesFilter(todo, props.filter))
       .map((todo) => ({ type: "todo", key: operatorTodoItemKey(todo.id), todo }))
     : openItemsIn(activeScope);
   const groups = items ? groupItems(items, activeScope, props) : undefined;
@@ -281,6 +290,26 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
                   if (item.type === "wait") {
                     const { wait } = item;
                     const mine = wait.threadKey === threadKey;
+                    const asked = wait.question;
+                    const answerOffscreen = view.answerQuestion;
+                    // The thread on screen answers through its composer, which
+                    // also draws the reply in its transcript. Any other local
+                    // thread answers through its owner's turn FIFO.
+                    const answerQuestion = !asked
+                      ? undefined
+                      : mine
+                        ? props.onAnswerQuestion
+                        : answerOffscreen
+                          ? (text: string) => answerOffscreen(wait, text)
+                          : undefined;
+                    // Any reply closes all of a message's questions. The
+                    // composer's answers include the panel's for its thread.
+                    const questionSent = asked?.questions.some((_, index) => {
+                      const itemId = codexAsyncQuestionItemId(asked.messageId, index);
+                      return mine
+                        ? props.sentQuestionAnswers?.has(itemId)
+                        : view.sentQuestionAnswers?.has(`${wait.threadKey}\0${itemId}`);
+                    }) ?? false;
                     return (
                       <li key={item.key}>
                         <OperatorWaitRow
@@ -296,6 +325,8 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
                             return question ? view.dismissQuestion(question) : Promise.resolve();
                           }}
                           openWait={view.openWait}
+                          answerQuestion={answerQuestion}
+                          questionSent={questionSent}
                         />
                       </li>
                     );
@@ -308,6 +339,7 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
                         <ThreadTodoCard
                           todo={todo}
                           running={view.runningIds.has(todo.id)}
+                          threadRunning={props.threadRunning}
                           mergeMethods={view.mergeMethods}
                           instances={view.instances}
                           projectMenu={view.projectMenu}
@@ -424,8 +456,11 @@ function TodoRow(props: {
             </button>
           ) : null}
           {/* A merge or a started thread happened; only a resolve can be
-              taken back, as the stack's Undo does. */}
-          {!todo.startedThread && (!todo.result || RESOLUTION_RESULTS.has(todo.result)) ? (
+              taken back, as the stack's Undo does. A handled review is
+              reopened through one of its findings, in the transcript. */}
+          {!todo.startedThread
+            && (!todo.result || RESOLUTION_RESULTS.has(todo.result))
+            && !(todo.reviewId && todo.status === "done") ? (
             <button
               type="button"
               className="thread-todos-panel__row-link"

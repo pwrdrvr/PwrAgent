@@ -53,6 +53,7 @@ import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { ThreadAutomationsPanel } from "../automations/ThreadAutomationsPanel";
 import { ThreadTodosPanel } from "../thread-todos/ThreadTodosPanel";
 import type {
+  ThreadTodoDoHereOptions,
   ThreadTodoResolveOptions,
   ThreadTodosView,
 } from "../thread-todos/thread-todos-view";
@@ -110,7 +111,11 @@ type ThreadContextPanelProps = {
     threadKey: string;
     projectKey?: string;
     onStartReview: (todo: ThreadTodo, options?: ThreadTodoResolveOptions) => void;
-    onDoHere?: (todo: ThreadTodo, options?: ThreadTodoResolveOptions) => void;
+    onDoHere?: (todo: ThreadTodo, options?: ThreadTodoDoHereOptions) => void;
+    /** Answers a question in this thread through its composer. */
+    onAnswerQuestion?: (text: string) => Promise<boolean>;
+    /** This thread's answers the composer took, by question item id. */
+    sentQuestionAnswers?: ReadonlyMap<string, string>;
   };
   activeTurnId?: string;
   backendError?: string;
@@ -784,11 +789,14 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         if (!props.thread || !props.todos) return null;
         return (
           <ThreadTodosPanel
+            threadRunning={Boolean(props.activeTurnId)}
             view={props.todos.view}
             threadKey={props.todos.threadKey}
             projectKey={props.todos.projectKey}
             onStartReview={props.todos.onStartReview}
             onDoHere={props.todos.onDoHere}
+            onAnswerQuestion={props.todos.onAnswerQuestion}
+            sentQuestionAnswers={props.todos.sentQuestionAnswers}
           />
         );
       case "edits":

@@ -141,7 +141,7 @@ import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
-import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
+import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 import type { ProviderThreadSnapshot } from "../app-server/provider-thread-snapshot-store";
 import type { GitWorkingStateService } from "../app-server/git-working-state-service";
 import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
@@ -3254,6 +3254,7 @@ describe("DesktopBackendRegistry", () => {
     await expect(registry.withThreadHandoff(params.threadId, async () => {
       await expect(registry.submitTurn(params)).rejects.toThrow("being handed off");
       await expect(registry.submitTurnIfIdle(params)).rejects.toThrow("being handed off");
+      await expect(registry.submitThreadReply(params)).rejects.toThrow("being handed off");
       await expect(registry.submitHeldTurn({ ...params, queueEntryId: "held", holdReason: "manual" })).rejects.toThrow("being handed off");
       await expect(registry.startTurn(params)).rejects.toThrow("being handed off");
       await expect(registry.withThreadHandoff(params.threadId, async () => {})).rejects.toThrow("being handed off");
@@ -3270,6 +3271,7 @@ describe("DesktopBackendRegistry", () => {
     const refusal = "This thread is locked: Worktree handed to the repair thread. Unlock it before starting a turn.";
 
     await expect(registry.submitTurn(params)).rejects.toThrow(refusal);
+    await expect(registry.submitThreadReply(params)).rejects.toThrow(refusal);
     // Automations see a lock as busy, so a PR watch waits without spending an attempt.
     await expect(registry.submitTurnIfIdle(params)).resolves.toEqual({ status: "busy" });
     await expect(registry.startTurn(params)).rejects.toThrow(refusal);
@@ -3280,6 +3282,31 @@ describe("DesktopBackendRegistry", () => {
 
     await registry.setThreadLock({ ...params, locked: false }, { source: "operator" });
     await expect(registry.submitTurnIfIdle(params)).resolves.toMatchObject({ status: "started" });
+  });
+
+  it("starts an off-screen reply on an idle thread and steers one into a running turn", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "turn/steer"] },
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    onTestFinished(() => registry.close());
+    const idle = { backend: "codex" as const, threadId: "answered-idle" };
+    await expect(registry.submitThreadReply({
+      ...idle, input: [{ type: "text", text: "Use the staging bucket" }],
+    })).resolves.toMatchObject({ status: "started", entry: { origin: "manual", delivery: "queued-steer" } });
+
+    const running = { backend: "codex" as const, threadId: "answered-running" };
+    const turn = await registry.startTurn({ ...running, input: [{ type: "text", text: "Export" }] });
+    const steer = vi.spyOn(registry, "steerTurn");
+    const reply = [{ type: "text" as const, text: "Keep last week's export" }];
+    await expect(registry.submitThreadReply({ ...running, input: reply }))
+      .resolves.toMatchObject({ status: "queued" });
+    await vi.waitFor(() => expect(codexClient.steerTurnCallCount).toBe(1));
+    expect(steer).toHaveBeenCalledWith(
+      expect.objectContaining({ ...running, expectedTurnId: turn.turnId, input: reply }),
+      undefined,
+    );
+    expect(registry.getQueuedTurnsForThread(running)).toEqual([]);
   });
 
   it("returns busy when a turn becomes active after immediate admission", async () => {
@@ -26271,7 +26298,7 @@ command = "pnpm dev"
     await registry.close();
   });
 
-  it("preserves an explicit Untitled thread rename while its title helper finishes", async () => {
+  it.each([false, true])("preserves an explicit Untitled thread rename while its title helper finishes (targeted=%s)", async (targeted) => {
     const titleGenerationStarted = createDeferred<void>();
     const titleGenerationRelease = createDeferred<void>();
     const titleService = {
@@ -26300,6 +26327,9 @@ command = "pnpm dev"
         },
       ],
     });
+    if (targeted) Object.assign(codexClient, { readThreadSummary: async () => ({
+      id: threadId, title: "Untitled thread", titleSource: "explicit", linkedDirectories: [], source: "codex",
+    }) });
     const renameThread = vi.spyOn(codexClient, "renameThread");
     const registry = new DesktopBackendRegistry({
       codexClient,
@@ -52710,7 +52740,7 @@ script = "printf setup"
     await registry.close();
   });
 
-  it("backfills native Codex cards and pricing from durable child turn usage", async () => {
+  it.each(["mock", "sqlite"] as const)("backfills native Codex cards and pricing from durable child turn usage (%s)", async (storeKind) => {
     const nativeThreadId = "thread-epicurus";
     const now = Date.now();
     const codexClient = new MockBackendClient({
@@ -52746,7 +52776,10 @@ script = "printf setup"
         },
       ],
     });
-    const overlayStore = createOverlayStoreMock();
+    const stateDb = storeKind === "sqlite" ? openInMemoryStateDb() : undefined;
+    const overlayStore = stateDb ? new SqliteOverlayStore(stateDb) : createOverlayStoreMock();
+    let registry: DesktopBackendRegistry | undefined;
+    onTestFinished(async () => { await registry?.close(); stateDb?.close(); });
     await overlayStore.upsertThreadUsageLine({
       line: {
         usageLineId: "codex:thread-parent:turn-parent:live-token-usage",
@@ -52803,7 +52836,8 @@ script = "printf setup"
       overlayStore,
       "upsertThreadUsageLine",
     );
-    const registry = new DesktopBackendRegistry({
+    const fullOverlayReads = vi.spyOn(overlayStore, "getThreadOverlayStates");
+    registry = new DesktopBackendRegistry({
       codexClient,
       overlayStore,
     });
@@ -52862,6 +52896,14 @@ script = "printf setup"
     expect(nativePricing?.totalCostMicros).toBeGreaterThan(0);
     expect(upsertThreadSubAgent).toHaveBeenCalledTimes(1);
     expect(upsertThreadUsageLine).toHaveBeenCalledTimes(1);
+    if (storeKind === "sqlite") {
+      // Each listing may load the discovered worker's durable usage. Ordinary
+      // parent overlays must retain the compact projection on both passes.
+      expect(fullOverlayReads.mock.calls).toEqual([
+        [{ backend: "codex", threadIds: [nativeThreadId] }],
+        [{ backend: "codex", threadIds: [nativeThreadId] }],
+      ]);
+    }
 
     await registry.close();
   });
@@ -55429,7 +55471,8 @@ script = "printf setup"
     expect(transport.listings).toHaveLength(budget.pageRpcsForForwardedNotification);
     transport.releaseListings();
     const results = await Promise.all([first, second]);
-    expect(results[0]).toBe(results[1]);
+    expect(results[0]).toEqual(results[1]);
+    expect(results[0]).not.toBe(results[1]); // coalesced work, independently mutable results
   });
 
   it("does not borrow pre-restore archive evidence from an unrelated provider reader", async () => {

@@ -221,6 +221,7 @@ export type MessagingBackendBridge = {
   }): Promise<MessagingLastAssistantReply | undefined>;
   resolveAssistantMessageImages?(request: {
     backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
     itemId?: string;
     text: string;
     threadId: string;
