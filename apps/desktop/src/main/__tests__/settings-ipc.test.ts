@@ -1740,6 +1740,42 @@ describe("settings ipc", () => {
     }
   });
 
+  it("excludes a previously installed Claude ACP adapter from the settings catalog", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-settings-ipc-"));
+    tempRoots.push(tempRoot);
+    vi.stubEnv("PWRAGENT_HOME", tempRoot);
+    const { initializeAppState, disposeAppState, getAppStateDb } = await import("../state/app-state");
+    const { AcpAgentStore } = await import("../acp/acp-agent-store");
+    const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+    const { ACP_AGENTS_LIST_CHANNEL } = await import("../../shared/ipc");
+    const service = new DesktopSettingsService({
+      configPath: path.join(tempRoot, "config.toml"),
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+    initializeAppState("bootstrap");
+    try {
+      const store = new AcpAgentStore(getAppStateDb());
+      store.upsertInstalledAgent({
+        backendId: "acp:claude-acp", registryId: "claude-acp", name: "Claude Agent",
+        distributionKind: "npx", distributionSource: "@agentclientprotocol/claude-agent-acp",
+        installStatus: "installed", authStatus: "authenticated", verificationStatus: "not-applicable",
+        allowlistRuleId: "legacy-claude-acp",
+        installedAt: 1, updatedAt: 1,
+      });
+      registerSettingsIpcHandlers(service);
+      const response = await handlers.get(ACP_AGENTS_LIST_CHANNEL)!({}, { refresh: false }) as {
+        entries: AcpAgentSettingsEntry[];
+      };
+      expect(response.entries.map((entry) => entry.registryId).sort()).toEqual(["gemini", "grok", "kimi", "qwen"]);
+      expect(localAcpDiscoveryMock.discoverLocalAcpAgentRecords).not.toHaveBeenCalled();
+      // Hiding a retired provider must not delete the user's persisted state.
+      expect(store.getInstalledAgent("acp:claude-acp")).toBeDefined();
+    } finally {
+      disposeAppState();
+    }
+  });
+
   it("never serves a vendor Grok update status for a PwrAgent build", async () => {
     const tempRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), "pwragent-settings-ipc-"),
