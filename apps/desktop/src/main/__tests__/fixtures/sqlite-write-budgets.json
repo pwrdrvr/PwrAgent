@@ -472,6 +472,7 @@
     "rowsChanged": 0,
     "statements": 0
   },
+  "manual-compaction-invalid-id-recovery": {"commits": 5, "note": "One failed manual compaction: 5 boundary commits at about 16.1 KiB/commit. At 10 repairs/day, about 0.82 MB/day; no per-item or idle writes.", "observedWalBytes": 82400, "rowsChanged": 5, "statements": 5},
   "mcp-automation-native-consent": {
     "commits": 0,
     "note": "Native automation MCP consent checks the in-memory run grant and reads the Agent selection without adding SQLite commits.",
