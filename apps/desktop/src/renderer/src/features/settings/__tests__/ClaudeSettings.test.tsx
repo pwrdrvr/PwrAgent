@@ -26,6 +26,17 @@ describe("Claude settings", () => {
     expect(screen.getByText("Signed in through the CLI")).toBeInTheDocument();
   });
 
+  it("identifies the bundled runtime and exposes its terminal login command", () => {
+    render(<ClaudeSettings onCheck={async () => {}} backend={{
+      kind: "claude",
+      claude: { executable: "/fixture/PwrAgent/claude", source: "bundled", version: "2.1.296",
+        authStatus: "sign-in-required", loginCommand: "'/fixture/PwrAgent/claude' auth login" },
+    } as BackendSummary} />);
+    expect(screen.getByText("Bundled with PwrAgent · 2.1.296")).toBeInTheDocument();
+    expect(screen.getByText("'/fixture/PwrAgent/claude' auth login")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^sign in/i })).not.toBeInTheDocument();
+  });
+
   it("reports a failed check and permits another attempt", async () => {
     render(<ClaudeSettings onCheck={async () => { throw new Error("Fixture failure"); }} />);
     fireEvent.click(screen.getByRole("button", { name: "Check installation and sign-in" }));

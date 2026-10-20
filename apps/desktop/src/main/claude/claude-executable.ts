@@ -4,6 +4,7 @@ import { access, realpath, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { resolveBundledClaudeExecutable } from "./claude-bundled-executable";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 
 const runFile = promisify(execFile);
@@ -13,6 +14,9 @@ export const CLAUDE_SETUP_INSTRUCTIONS =
 
 export type ClaudeInstallation = {
   executable?: string;
+  source?: "system" | "bundled";
+  version?: string;
+  loginCommand?: string;
   authStatus: "signed-in" | "sign-in-required" | "unknown";
   message?: string;
 };
@@ -73,54 +77,94 @@ export async function resolveClaudeExecutable(options: {
   return undefined;
 }
 
+export function parseClaudeVersion(output: string): string | undefined {
+  return /^\s*(\d+\.\d+\.\d+)\s+\(Claude Code\)\s*$/.exec(output)?.[1];
+}
+
+function compareVersions(left: string, right: string): number {
+  const a = left.split(".").map(Number);
+  const b = right.split(".").map(Number);
+  for (let i = 0; i < 3; i++) {
+    if (a[i] !== b[i]) return a[i] - b[i];
+  }
+  return 0;
+}
+
+async function runClaude(command: string, args: string[], env: NodeJS.ProcessEnv): Promise<string> {
+  const isScript = /\.(c?js|mjs)$/i.test(command);
+  const { stdout } = await runFile(isScript ? process.execPath : command,
+    [...(isScript ? [command] : []), ...args], {
+      env: isScript ? { ...env, ELECTRON_RUN_AS_NODE: "1" } : env,
+      timeout: 10_000, maxBuffer: 64 * 1024, windowsHide: true,
+    });
+  return stdout;
+}
+
+export async function selectClaudeExecutable(options: {
+  system?: string;
+  bundled?: string;
+  readVersion: (executable: string) => Promise<string>;
+}): Promise<Pick<ClaudeInstallation, "executable" | "source" | "version">> {
+  const probe = async (file?: string) => {
+    if (!file) return undefined;
+    try { return parseClaudeVersion(await options.readVersion(file)); }
+    catch { return undefined; }
+  };
+  const [systemVersion, bundledVersion] = await Promise.all([probe(options.system), probe(options.bundled)]);
+  if (options.bundled && bundledVersion
+    && (!options.system || !systemVersion || compareVersions(systemVersion, bundledVersion) < 0)) {
+    return { executable: options.bundled, source: "bundled", version: bundledVersion };
+  }
+  if (options.system) return { executable: options.system, source: "system", version: systemVersion };
+  return {};
+}
+
+export function claudeLoginCommand(executable: string, platform: NodeJS.Platform = process.platform): string {
+  // A command for the user to paste in a terminal, never executed by PwrAgent.
+  const quoted = "'" + executable.replaceAll("'", platform === "win32" ? "''" : "'\"'\"'") + "'";
+  return `${platform === "win32" ? "& " : ""}${quoted} auth login`;
+}
+
 export async function inspectClaudeInstallation(options: {
   env?: NodeJS.ProcessEnv;
   resolveExecutable?: () => Promise<string | undefined>;
+  resolveBundledExecutable?: () => Promise<string | undefined>;
+  readVersion?: (executable: string, env: NodeJS.ProcessEnv) => Promise<string>;
   readAuthStatus?: (executable: string, env: NodeJS.ProcessEnv) => Promise<string>;
 } = {}): Promise<ClaudeInstallation> {
   const env = claudeEnvironment(options.env ?? process.env);
-  const executable = await (options.resolveExecutable ?? (() => resolveClaudeExecutable({ env })))();
-  if (!executable) {
-    return { authStatus: "unknown", message: CLAUDE_SETUP_INSTRUCTIONS };
-  }
+  const [system, bundled] = await Promise.all([
+    (options.resolveExecutable ?? (() => resolveClaudeExecutable({ env })))(),
+    (options.resolveBundledExecutable ?? resolveBundledClaudeExecutable)(),
+  ]);
+  const selected = await selectClaudeExecutable({ system, bundled,
+    readVersion: (executable) => (options.readVersion ?? ((file, launchEnv) => runClaude(file, ["--version"], launchEnv)))(executable, env),
+  });
+  const executable = selected.executable;
+  if (!executable) return { authStatus: "unknown", message: CLAUDE_SETUP_INSTRUCTIONS };
+  const loginCommand = selected.source === "bundled" ? claudeLoginCommand(executable) : "claude auth login";
+  const installation = { ...selected, loginCommand };
   try {
     const readAuthStatus = options.readAuthStatus ?? (async (command, launchEnv) => {
-      const isScript = /\.(c?js|mjs)$/i.test(command);
-      const { stdout } = await runFile(
-        isScript ? process.execPath : command,
-        [...(isScript ? [command] : []), "auth", "status", "--json"],
-        {
-          env: isScript ? { ...launchEnv, ELECTRON_RUN_AS_NODE: "1" } : launchEnv,
-          timeout: 10_000,
-          maxBuffer: 64 * 1024,
-          windowsHide: true,
-        },
-      ).catch((error: unknown) => {
-        // `auth status` can exit nonzero while returning a valid logged-out
-        // response. Parse only its JSON status; never retain raw CLI output.
+      return await runClaude(command, ["auth", "status", "--json"], launchEnv).catch((error: unknown) => {
+        // Logged-out status may exit nonzero with valid JSON. Retain only the
+        // boolean below, never raw output, account identifiers, or credentials.
         if (error && typeof error === "object" && "stdout" in error
-          && typeof error.stdout === "string" && error.stdout.trim()) {
-          return { stdout: error.stdout };
-        }
+          && typeof error.stdout === "string" && error.stdout.trim()) return error.stdout;
         throw error;
       });
-      return stdout;
     });
     const status: unknown = JSON.parse(await readAuthStatus(executable, env));
     if (status && typeof status === "object" && "loggedIn" in status
       && typeof status.loggedIn === "boolean") {
-      return {
-        executable,
-        authStatus: status.loggedIn ? "signed-in" : "sign-in-required",
-        ...(!status.loggedIn ? { message: "Run `claude auth login` in your terminal, then check again." } : {}),
+      return { ...installation, authStatus: status.loggedIn ? "signed-in" : "sign-in-required",
+        ...(!status.loggedIn ? { message: `Run ${loginCommand} in your terminal, then check again.` } : {}),
       };
     }
   } catch {
     // Older CLI versions may not implement auth status. Do not claim login.
   }
-  return {
-    executable,
-    authStatus: "unknown",
-    message: "Could not verify CLI sign-in. Run `claude auth login` in your terminal.",
+  return { ...installation, authStatus: "unknown",
+    message: `Could not verify CLI sign-in. Run ${loginCommand} in your terminal.`,
   };
 }

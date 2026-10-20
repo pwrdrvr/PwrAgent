@@ -12218,6 +12218,15 @@ a.button {
   min-width: 0;
 }
 
+.claude-runtime-path {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
 .settings-field__help {
   display: block;
   margin-top: 2px;

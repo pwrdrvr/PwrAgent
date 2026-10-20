@@ -19,7 +19,11 @@ function stagedNativeFiles(platform) {
 }
 
 export function requiredPackagedRuntimeFiles(platform, arch) {
-  const stagedNatives = stagedNativeFiles(platform);
+  const claudePackage = `@anthropic-ai/claude-agent-sdk-${platform}-${arch}`;
+  const stagedNatives = [
+    ...stagedNativeFiles(platform),
+    { entry: `/node_modules/${claudePackage}/${platform === "win32" ? "claude.exe" : "claude"}`, unpacked: true },
+  ];
   if (platform !== "win32" || arch !== "x64") {
     return stagedNatives;
   }

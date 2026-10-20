@@ -86,7 +86,7 @@ describe("Claude SDK backend", () => {
     expect(f.close).toHaveBeenCalledTimes(2);
   });
 
-  it("does not start a bundled SDK binary when the local CLI is missing or logged out", async () => {
+  it("does not start a query when no usable binary exists or the selected CLI is logged out", async () => {
     const f = await fixture();
     for (const installation of [
       { authStatus: "unknown" as const },

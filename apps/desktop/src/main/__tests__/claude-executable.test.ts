@@ -2,8 +2,13 @@ import { chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { claudeEnvironment, inspectClaudeInstallation, resolveClaudeExecutable } from "../claude/claude-executable";
+import { claudeEnvironment, inspectClaudeInstallation as inspectInstallation, resolveClaudeExecutable, selectClaudeExecutable, claudeLoginCommand } from "../claude/claude-executable";
 
+const inspectClaudeInstallation = (options: Parameters<typeof inspectInstallation>[0]) => inspectInstallation({
+  resolveBundledExecutable: async () => undefined,
+  readVersion: async () => "2.1.296 (Claude Code)",
+  ...options,
+});
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
 
@@ -72,5 +77,54 @@ describe("Claude executable discovery", () => {
     const input = { PATH: "/bin", ANTHROPIC_API_KEY: "key", CLAUDE_CODE_OAUTH_TOKEN: "token" };
     expect(claudeEnvironment(input)).toEqual({ PATH: "/bin" });
     expect(input.ANTHROPIC_API_KEY).toBe("key");
+  });
+});
+
+
+describe("Claude binary selection", () => {
+  it.each([
+    [undefined, "2.1.296", "bundled"],
+    ["2.1.295", "2.1.296", "bundled"],
+    ["2.1.9", "2.1.296", "bundled"],
+    ["2.1.296", "2.1.296", "system"],
+    ["2.1.300", "2.1.296", "system"],
+    ["2.2.0", "2.1.296", "system"],
+    ["2.1.296", undefined, "system"],
+  ])("selects %s vs bundled %s as %s", async (systemVersion, bundledVersion, source) => {
+    const result = await selectClaudeExecutable({
+      system: systemVersion ? "/system/claude" : undefined,
+      bundled: bundledVersion ? "/bundled/claude" : undefined,
+      readVersion: async (file) => `${file.includes("system") ? systemVersion : bundledVersion} (Claude Code)`,
+    });
+    expect(result).toMatchObject({ source, executable: `/${source}/claude` });
+  });
+
+  it("uses the bundled binary when the system version probe fails", async () => {
+    expect(await selectClaudeExecutable({ system: "/system", bundled: "/bundled",
+      readVersion: async (file) => { if (file === "/system") throw new Error("cannot launch"); return "2.1.296 (Claude Code)"; },
+    })).toMatchObject({ executable: "/bundled", source: "bundled" });
+  });
+
+  it("does not select an unusable bundled executable", async () => {
+    expect(await selectClaudeExecutable({ bundled: "/bundled", readVersion: async () => "garbage" })).toEqual({});
+  });
+
+  it("checks auth on the selected bundled binary and supplies its own login command", async () => {
+    const readAuthStatus = vi.fn().mockResolvedValue('{"loggedIn":false}');
+    const installation = await inspectClaudeInstallation({
+      resolveExecutable: async () => undefined,
+      resolveBundledExecutable: async () => "/Applications/PwrAgent App/claude",
+      readAuthStatus,
+    });
+    expect(installation).toMatchObject({ source: "bundled", version: "2.1.296", authStatus: "sign-in-required" });
+    expect(readAuthStatus.mock.calls[0][0]).toBe("/Applications/PwrAgent App/claude");
+    expect(installation.message).toContain("/Applications/PwrAgent App/claude");
+    expect(installation.loginCommand).toContain("auth login");
+  });
+
+  it("quotes the bundled login path for POSIX shells and Windows PowerShell", () => {
+    expect(claudeLoginCommand("/app/Claude's binary", "darwin")).toBe("'/app/Claude'\"'\"'s binary' auth login");
+    expect(claudeLoginCommand("C:\\Program Files\\Claude's binary.exe", "win32"))
+      .toBe("& 'C:\\Program Files\\Claude''s binary.exe' auth login");
   });
 });

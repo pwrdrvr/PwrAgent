@@ -6,8 +6,7 @@ ACP transport, adapter installer, or application-managed CLI download.
 
 ## Provider attribution and branding
 
-Settings describes the integration in plain text: PwrAgent runs the user's
-installed Claude Code binary. The provider selector and thread chips use
+Settings describes the integration in plain text: PwrAgent runs Claude Code. The provider selector and thread chips use
 `Claude`; thread metadata records `source: "claude"`, identifying the backend
 that owns the session. This is provider attribution, not a product or feature
 name derived from Claude Code.
@@ -28,11 +27,27 @@ terminal environment and standard native installation directories. On Windows,
 it accepts a native executable or the official npm package's JavaScript entry;
 it never gives the SDK a `.cmd`, `.bat`, or `.ps1` launcher.
 
-Every query explicitly supplies `pathToClaudeCodeExecutable`. Missing CLI and
-known logged-out states fail before query creation. Settings reads only
+The SDK's pinned platform package provides an unmodified native Claude Code
+binary as a fallback. Discovery probes both candidates with `--version` and
+compares the CLI versions, not the npm SDK version. For example, SDK `0.3.296`
+contains Claude Code `2.1.296`. A system binary at least as new as the bundle
+wins, including on equal versions. A missing, older, or unprobeable system
+binary falls back to the bundled binary after its version probe succeeds.
+If the bundle is unavailable, the system installation remains usable.
+
+Packaging unpacks the native executable outside ASAR and checks that it is
+present. macOS universal packages preserve each architecture's original
+binary separately. There is no runtime installer, extraction, or binary patch.
+Settings shows the selected path, source, and CLI version.
+
+Every query explicitly supplies `pathToClaudeCodeExecutable`. No usable binary
+and known logged-out states fail before query creation. Settings reads only
 `loggedIn` from `claude auth status --json`; it retains neither account
 identifiers nor credentials. Authentication remains an operator action through
-`claude auth login`. PwrAgent does not implement Claude OAuth, read credential
+Claude Code's own `auth login`. For a bundled runtime, Settings shows its fully
+quoted executable path (PowerShell invocation on Windows), so signing in does
+not require installing a separate system CLI. Binary selection happens before
+authentication checking; a logged-out CLI never causes credential fallback. PwrAgent does not implement Claude OAuth, read credential
 files, supply OAuth tokens or API keys, or call the Messages API.
 
 The SDK starts the CLI with the `claude_code` system-prompt preset and appends
