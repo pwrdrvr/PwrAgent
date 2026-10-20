@@ -1098,6 +1098,10 @@ type BackendClient = {
   }): Promise<{ threadId: string; turnId: string }>;
   compactThread?(params: {
     threadId: string;
+    model?: string;
+    serviceTier?: string;
+    reasoningEffort?: string;
+    fastMode?: boolean;
   }): Promise<{ threadId: string; turnId: string; itemId?: string }>;
   listMcpServers?(params: {
     threadId?: string;
@@ -8354,6 +8358,7 @@ function buildSteerRequestSignature(
 }
 
 type CodexRetryableTurnStart = {
+  kind: "turn";
   params: {
     backend: "codex";
     threadId: string;
@@ -8396,7 +8401,18 @@ type BackendRegistryOverlayStoreLike = OverlayStoreLike & Partial<
   >
 >;
 
-type PendingCodexInvalidIdRecovery = CodexRetryableTurnStart & {
+type CodexRetryableCompaction = {
+  kind: "compact";
+  params: { backend: "codex"; threadId: string };
+  invalidIdRecoveryAttempted?: boolean;
+  lifecycleStarted?: boolean;
+  terminalObserved?: boolean;
+  turnId?: string;
+};
+
+type CodexRetryableOperation = CodexRetryableTurnStart | CodexRetryableCompaction;
+
+type PendingCodexInvalidIdRecovery = CodexRetryableOperation & {
   audit: ThreadCodexInvalidIdRecovery;
   failureMessage: string;
   /** The last status told to the operator was `waiting`. */
@@ -8795,9 +8811,9 @@ export class DesktopBackendRegistry {
     string,
     AcceptedActiveTurnControlRequest
   >();
-  private readonly codexRetryableTurnStarts = new Map<
+  private readonly codexRetryableOperations = new Map<
     string,
-    CodexRetryableTurnStart
+    CodexRetryableOperation
   >();
   private readonly pendingCodexInvalidIdRecoveries:
     PendingCodexInvalidIdRecovery[] = [];
@@ -19567,6 +19583,7 @@ export class DesktopBackendRegistry {
     const retryableCodexTurnStart: CodexRetryableTurnStart | undefined =
       params.backend === "codex" && !params.invalidIdRecoveryAttempted
         ? {
+            kind: "turn",
             turnId: syntheticStartedTurnId,
             params: {
               backend: "codex",
@@ -19586,7 +19603,7 @@ export class DesktopBackendRegistry {
           }
         : undefined;
     if (retryableCodexTurnStart) {
-      this.codexRetryableTurnStarts.set(
+      this.codexRetryableOperations.set(
         params.threadId,
         retryableCodexTurnStart,
       );
@@ -19705,7 +19722,7 @@ export class DesktopBackendRegistry {
         }
       }
       if (retryableCodexTurnStart) {
-        this.codexRetryableTurnStarts.delete(params.threadId);
+        this.codexRetryableOperations.delete(params.threadId);
       }
       throw error;
     }
@@ -21683,30 +21700,81 @@ export class DesktopBackendRegistry {
         "ACP backend " + params.backend + " does not support thread compaction",
       );
     }
+    await this.codexInvalidIdRecoveryBarrier;
+    return await this.compactThreadNow({ backend: "codex", threadId: params.threadId });
+  }
+
+  private async compactThreadNow(params: {
+    backend: "codex";
+    threadId: string;
+    invalidIdRecoveryAttempted?: boolean;
+  }): Promise<{
+    backend: "codex";
+    threadId: string;
+    turnId: string;
+    itemId?: string;
+  }> {
+    if (this.closed) throw new Error("Desktop backend registry is closed");
     // Compaction runs a backend turn, so a lock refuses it like any other.
     await this.assertThreadNotLocked(params.backend, params.threadId);
-    const compactWithClient = async (
-      client: BackendClient,
-    ): Promise<{ threadId: string; turnId: string; itemId?: string }> => {
-      if (!client.compactThread) {
-        throw new Error("Selected backend does not support thread compaction");
-      }
-      return await client.compactThread({
-        threadId: params.threadId,
+    if (
+      this.reservedCodexStartThreadIds.has(params.threadId)
+      || this.threadHasActiveTurn(params.threadId, "codex")
+      || this.codexRetryableOperations.has(params.threadId)
+    ) {
+      throw new Error("Cannot compact a thread while another operation is running");
+    }
+    const candidate: CodexRetryableCompaction = {
+      kind: "compact",
+      params: { backend: "codex", threadId: params.threadId },
+      invalidIdRecoveryAttempted: params.invalidIdRecoveryAttempted,
+      turnId: `pending:compact:${params.threadId}`,
+    };
+    // Notifications can arrive before the RPC response. Reserve the start so
+    // recovery cannot stop the shared process while this request is in flight.
+    this.reservedCodexStartThreadIds.add(params.threadId);
+    this.codexRetryableOperations.set(params.threadId, candidate);
+    try {
+      const result = await this.withCodexThreadClient(params.threadId, async (client) => {
+        if (!client.compactThread) {
+          throw new Error("Selected backend does not support thread compaction");
+        }
+        const overlay = await this.overlayStore.getThreadOverlayState({
+          backend: "codex", threadId: params.threadId,
+        });
+        const settings = await this.resolveModelSettings("codex", {
+          model: overlay?.model,
+          serviceTier: overlay?.serviceTier,
+          reasoningEffort: overlay?.reasoningEffort,
+          reasoningEffortsByModel: overlay?.reasoningEffortsByModel,
+          fastMode: overlay?.fastMode,
+        });
+        return await client.compactThread({ threadId: params.threadId, ...settings });
       });
-    };
-
-    const result = await this.withCodexThreadClient(
-      params.threadId,
-      compactWithClient,
-    );
-
-    return {
-      backend: params.backend,
-      threadId: result.threadId,
-      turnId: result.turnId,
-      itemId: result.itemId,
-    };
+      // The adapter's compact:<threadId> is a placeholder. Prefer the real
+      // turn ID captured from turn/started (or an early terminal notification).
+      if (candidate.turnId?.startsWith("pending:") && !result.turnId.startsWith("compact:")) {
+        candidate.turnId = result.turnId;
+      }
+      return {
+        backend: "codex",
+        ...result,
+        turnId: candidate.turnId?.startsWith("pending:") ? result.turnId : candidate.turnId!,
+      };
+    } catch (error) {
+      if (this.codexRetryableOperations.get(params.threadId) === candidate) {
+        this.codexRetryableOperations.delete(params.threadId);
+      }
+      throw error;
+    } finally {
+      this.reservedCodexStartThreadIds.delete(params.threadId);
+      if (candidate.terminalObserved) {
+        // An early terminal could not dispatch while the RPC owned its start
+        // reservation. Recheck after that last ownership boundary is released.
+        this.threadTurnQueue.scheduleThreadDrain(params);
+      }
+      this.maybeDrainCodexInvalidIdRecoveries();
+    }
   }
 
   async listThreadMcpServers(
@@ -22162,8 +22230,9 @@ export class DesktopBackendRegistry {
       parentThreadId: params.threadId,
       turnId: active.turnId,
     });
-    const activeStart = this.codexRetryableTurnStarts.get(params.threadId);
-    const customBoundary = activeStart?.turnId === active?.turnId
+    const activeStart = this.codexRetryableOperations.get(params.threadId);
+    const customBoundary = activeStart?.kind === "turn"
+      && activeStart.turnId === active?.turnId
       && ((activeStart?.params.sandbox && activeStart.params.sandbox !== "workspace-write")
         || (activeStart?.params.approvalPolicy && activeStart.params.approvalPolicy !== "on-request"));
     if (
@@ -22980,6 +23049,11 @@ export class DesktopBackendRegistry {
       return true;
     }
     if (backend === "codex") {
+      // RPC acceptance can precede turn/started. The compaction still owns
+      // this thread until its terminal notification or the process exits.
+      if (this.codexRetryableOperations.get(threadId)?.kind === "compact") {
+        return true;
+      }
       if (!ignoreCodexStartReservation && this.reservedCodexStartThreadIds.has(threadId)) {
         return true;
       }
@@ -26844,7 +26918,7 @@ export class DesktopBackendRegistry {
   ): Promise<void> {
     const threadId = notification.params.threadId;
     const turnId = turnIdFromTerminalNotification(notification);
-    const candidate = this.codexRetryableTurnStarts.get(threadId);
+    const candidate = this.codexRetryableOperations.get(threadId);
     if (
       candidate
       && (
@@ -26854,13 +26928,14 @@ export class DesktopBackendRegistry {
         || candidate.turnId === turnId
       )
     ) {
-      if (turnId && candidate.turnId?.startsWith("pending:")) {
+      if (turnId && (!candidate.turnId || candidate.turnId.startsWith("pending:"))) {
         candidate.turnId = turnId;
       }
       candidate.terminalObserved = true;
-      this.codexRetryableTurnStarts.delete(threadId);
+      this.codexRetryableOperations.delete(threadId);
       if (
         notification.method === "turn/failed"
+        && !(candidate.kind === "compact" && candidate.invalidIdRecoveryAttempted)
         && isCodexInvalidResponseMessageIdError(
           errorMessageFromTerminalNotification(notification),
         )
@@ -26896,12 +26971,17 @@ export class DesktopBackendRegistry {
           );
         }
       }
+      if (candidate.kind === "compact") {
+        // emit() already attempted terminal queue dispatch while this
+        // candidate still owned the thread. Wake it after releasing ownership.
+        this.threadTurnQueue.scheduleThreadDrain({ backend: "codex", threadId });
+      }
     }
     this.maybeDrainCodexInvalidIdRecoveries();
   }
 
   private async queueCodexInvalidIdRecovery(
-    candidate: CodexRetryableTurnStart,
+    candidate: CodexRetryableOperation,
     failureMessage: string,
   ): Promise<PendingCodexInvalidIdRecovery> {
     if (this.closed) {
@@ -27014,7 +27094,7 @@ export class DesktopBackendRegistry {
       reportedWaiting: waitingForThreadIds.length > 0,
       resolve,
     };
-    this.codexRetryableTurnStarts.delete(candidate.params.threadId);
+    this.codexRetryableOperations.delete(candidate.params.threadId);
     this.pendingCodexInvalidIdRecoveries.push(recovery);
     if (!this.codexInvalidIdRecoveryBarrier) {
       this.codexInvalidIdRecoveryBarrier = new Promise<void>((barrierResolve) => {
@@ -27161,7 +27241,8 @@ export class DesktopBackendRegistry {
         const statusMessage =
           `PwrAgent repaired ${repaired.removedMessageIdCount} invalid persisted `
           + `message ID(s) for thread ${repaired.threadId}. `
-          + `Backup: ${repaired.backupPath}. Retrying the failed turn once.`;
+          + `Backup: ${repaired.backupPath}. Retrying the failed `
+          + `${recovery.kind === "compact" ? "compaction" : "turn"} once.`;
         backendRegistryLog.warn("Codex invalid-message-ID history repaired", {
           backupPath: repaired.backupPath,
           removedMessageIdCount: repaired.removedMessageIdCount,
@@ -27197,11 +27278,16 @@ export class DesktopBackendRegistry {
           );
         }
         retrySubmitted = true;
-        const retried = await this.startTurnNow({
-          ...recovery.params,
-          invalidIdRecoveryAttempted: true,
-          messageOrigin: { kind: "pwragent" },
-        });
+        const retried = recovery.kind === "compact"
+          ? await this.compactThreadNow({
+              ...recovery.params,
+              invalidIdRecoveryAttempted: true,
+            })
+          : await this.startTurnNow({
+              ...recovery.params,
+              invalidIdRecoveryAttempted: true,
+              messageOrigin: { kind: "pwragent" },
+            });
         recovery.audit = {
           ...recovery.audit,
           retryTurnId: retried.turnId,
@@ -27328,6 +27414,9 @@ export class DesktopBackendRegistry {
 
   private listActiveCodexWorkThreadIds(): string[] {
     const threadIds = new Set(this.reservedCodexStartThreadIds);
+    for (const candidate of this.codexRetryableOperations.values()) {
+      if (candidate.kind === "compact") threadIds.add(candidate.params.threadId);
+    }
     for (const key of this.activeCodexTurnModes.keys()) {
       const parsed = parseThreadTurnKeyBody(key);
       if (parsed) threadIds.add(parsed.threadId);
@@ -27347,6 +27436,11 @@ export class DesktopBackendRegistry {
     ) {
       return true;
     }
+    // An accepted compaction may not have emitted turn/started yet. It still
+    // owns work on the process until its terminal notification is observed.
+    for (const candidate of this.codexRetryableOperations.values()) {
+      if (candidate.kind === "compact") return true;
+    }
     for (const key of this.activeTurnKeys) {
       if (key.startsWith("codex:")) {
         return true;
@@ -27359,6 +27453,18 @@ export class DesktopBackendRegistry {
     this.unsubscribers.push(
       client.onNotification(async (notification) => {
         logBackendLifecycleNotification(backend, notification);
+        // Match the client's running-turn ownership before the first await;
+        // exit can arrive while lifecycle delivery is still in progress.
+        if (backend === "codex" && notification.method === "turn/started") {
+          const started = notification as Extract<AppServerNotification, { method: "turn/started" }>;
+          const candidate = this.codexRetryableOperations.get(started.params.threadId);
+          if (candidate?.kind === "compact") {
+            candidate.lifecycleStarted = true;
+            if (candidate.turnId?.startsWith("pending:")) {
+              candidate.turnId = turnIdFromStartedNotification(started);
+            }
+          }
+        }
         this.invalidateArchiveCleanupForNotification(backend, notification);
         if (backend === "codex" && notification.method === "account/updated") {
           if (this.codexBackendSummary) {
@@ -44906,12 +45012,42 @@ export class DesktopBackendRegistry {
 
   private async handleCodexAppServerUnexpectedExit(): Promise<void> {
     this.backgroundTerminalGeneration += 1;
+    // The client synthesizes terminal failures only for turns it saw start.
+    // Settle accepted compactions it cannot know about at this same boundary.
+    const pendingCompactions: CodexRetryableCompaction[] = [];
+    for (const [threadId, candidate] of this.codexRetryableOperations) {
+      if (candidate.kind !== "compact" || candidate.lifecycleStarted) continue;
+      candidate.terminalObserved = true;
+      this.codexRetryableOperations.delete(threadId);
+      pendingCompactions.push(candidate);
+    }
     const threadIds = [...new Set([
       ...this.liveCodexToolItemsByThread.keys(), ...this.codexBackgroundTerminals.keys(),
+      ...pendingCompactions.map((candidate) => candidate.params.threadId),
     ])];
     this.liveCodexToolItemsByThread.clear();
     this.codexBackgroundTerminals.clear();
     try {
+      await Promise.all(pendingCompactions.map((candidate) => {
+        const threadId = candidate.params.threadId;
+        const turnId = candidate.turnId ?? `pending:compact:${threadId}`;
+        return this.emit({
+          backend: "codex",
+          notification: {
+            method: "turn/failed",
+            params: {
+              threadId,
+              turnId,
+              turn: {
+                id: turnId,
+                status: "failed",
+                completedAt: Date.now(),
+                error: { message: "Codex app server exited before compaction completed." },
+              },
+            },
+          },
+        });
+      }));
       await Promise.all(threadIds.map((threadId) => this.emit({
         backend: "codex",
         notification: {
@@ -44920,6 +45056,7 @@ export class DesktopBackendRegistry {
         },
       })));
     } finally {
+      this.maybeDrainCodexInvalidIdRecoveries();
       await this.maybeRestartCodexForManagedRuntimeChange();
     }
   }

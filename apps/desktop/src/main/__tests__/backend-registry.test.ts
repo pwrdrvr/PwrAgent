@@ -1822,9 +1822,7 @@ class MockBackendClient {
     config?: CodexThreadStartParams["config"];
     dynamicTools?: unknown;
   };
-  lastCompactThreadParams?: {
-    threadId: string;
-  };
+  lastCompactThreadParams?: Parameters<CodexAppServerClient["compactThread"]>[0];
   lastListMcpServersParams?: {
     threadId?: string;
     detail: "toolsAndAuthOnly" | "full";
@@ -2406,9 +2404,7 @@ class MockBackendClient {
     return { threadId: params.threadId, turnId: params.expectedTurnId };
   }
 
-  async compactThread(params: {
-    threadId: string;
-  }): Promise<{ threadId: string; turnId: string; itemId: string }> {
+  async compactThread(params: Parameters<CodexAppServerClient["compactThread"]>[0]): Promise<{ threadId: string; turnId: string; itemId: string }> {
     this.lastCompactThreadParams = params;
     return {
       threadId: params.threadId,
@@ -52075,6 +52071,10 @@ script = "printf setup"
   it("starts compaction through the single Codex client", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/read", "thread/resume", "thread/compact/start"] },
+      models: [{
+        id: "gpt-6.1-sol", label: "GPT-6.1-Sol", current: true,
+        supportsReasoning: true, reasoningEfforts: ["medium", "high"], defaultReasoningEffort: "medium",
+      }],
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
@@ -52093,10 +52093,623 @@ script = "printf setup"
       itemId: "compact-item-1",
     });
     expect(codexClient.lastCompactThreadParams).toEqual({
-      threadId: "thread-1",
+      threadId: "thread-1", model: "gpt-6.1-sol", reasoningEffort: "medium",
     });
 
     await registry.close();
+  });
+
+  it("applies the selected model when compacting directly without starting a user turn", async () => {
+    const codexClient = new MockBackendClient({ models: [{
+      id: "gpt-6.1-sol", label: "GPT-6.1-Sol", supportsReasoning: true,
+      reasoningEfforts: ["medium", "high"], defaultReasoningEffort: "medium",
+    }] });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock({ overlays: {
+        "codex:thread-direct-compact": {
+          backend: "codex", threadId: "thread-direct-compact", executionMode: "default",
+          model: "gpt-6.1-sol", reasoningEffort: "high", extraLinkedDirectories: [],
+        },
+      } }),
+      threadTitleGenerationService: null,
+    });
+    try {
+      await registry.compactThread({ backend: "codex", threadId: "thread-direct-compact" });
+      expect(codexClient.lastCompactThreadParams).toMatchObject({
+        threadId: "thread-direct-compact", model: "gpt-6.1-sol", reasoningEffort: "high",
+      });
+      expect(codexClient.startTurnCallCount).toBe(0);
+    } finally {
+      await registry.close();
+    }
+  });
+
+  describe("manual compaction invalid message-ID recovery", () => {
+    const threadId = "thread-compact-invalid-id";
+    const invalidIdFailure =
+      "Error running remote compact task: "
+      + JSON.stringify({
+        type: "error",
+        error: {
+          type: "invalid_request_error",
+          code: null,
+          message: "[ApiIdParam] [input[19].id] [invalid_id_prefix] "
+            + "Invalid 'input[19].id': 'review_rollout_user'. "
+            + "Expected an ID that begins with 'msg'.",
+          param: null,
+        },
+        status: 400,
+      });
+
+    it.each(["before", "after"])("repairs a failure %s the compact response and retries only compaction once", async (timing) => {
+      const codexClient = new MockBackendClient({ models: [{
+        id: "gpt-6.1-sol", label: "GPT-6.1-Sol", supportsReasoning: true,
+        reasoningEfforts: ["medium", "high"], defaultReasoningEffort: "medium",
+      }] });
+      const overlayStore = createOverlayStoreMock({ overlays: {
+        [`codex:${threadId}`]: {
+          backend: "codex", threadId, executionMode: "default", extraLinkedDirectories: [],
+          model: "gpt-6.1-sol", reasoningEffort: "high",
+        },
+      } });
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        overlayStore,
+        threadTitleGenerationService: null,
+      });
+      const events: AgentEvent[] = [];
+      const recovered = createDeferred<void>();
+      registry.onEvent((event) => {
+        events.push(event);
+        if (event.notification.method === "thread/codexInvalidIdRecovery/updated"
+          && event.notification.params.status === "succeeded") recovered.resolve();
+      });
+      const fail = async (turnId: string) => codexClient.emit({
+        method: "turn/failed",
+        params: {
+          threadId,
+          turnId,
+          turn: { id: turnId, status: "failed", error: { message: invalidIdFailure } },
+        },
+      });
+      const compact = vi.spyOn(codexClient, "compactThread").mockImplementation(async () => {
+        const turnId = compact.mock.calls.length === 1 ? "compact-failed" : "compact-retried";
+        await codexClient.emit({
+          method: "turn/started",
+          params: { threadId, turn: { id: turnId, status: "inProgress", output: [] } },
+        });
+        if (timing === "before" && turnId === "compact-failed") {
+          await fail(turnId);
+          expect(codexClient.invalidIdRecoveryCalls).toHaveLength(0);
+        }
+        // The real adapter returns a placeholder, not the protocol's turn ID.
+        return { threadId, turnId: `compact:${threadId}`, itemId: "compact-item" };
+      });
+      try {
+        await registry.compactThread({ backend: "codex", threadId });
+        if (timing === "after") await fail("compact-failed");
+        await recovered.promise;
+        expect(codexClient.invalidIdRecoveryCalls).toEqual([
+          { failureMessage: invalidIdFailure, threadId },
+        ]);
+        expect(compact).toHaveBeenCalledTimes(2);
+        for (const [request] of compact.mock.calls) {
+          expect(request).toMatchObject({ threadId, model: "gpt-6.1-sol", reasoningEffort: "high" });
+        }
+        expect(codexClient.startTurnCallCount).toBe(0);
+        expect((await overlayStore.getThreadOverlayState({ backend: "codex", threadId }))
+          ?.turnFailureLog?.find((failure) => failure.turnId === "compact-failed")
+          ?.codexInvalidIdRecovery).toMatchObject({
+          backupPath: expect.any(String),
+          repairedAt: expect.any(Number),
+          retrySubmittedAt: expect.any(Number),
+          retryTurnId: "compact-retried",
+        });
+        await fail("compact-retried");
+        await flushAsync();
+        expect(compact).toHaveBeenCalledTimes(2);
+        expect(codexClient.invalidIdRecoveryCalls).toHaveLength(1);
+      } finally {
+        await registry.close();
+      }
+    });
+
+    it.each(["completed", "cancelled", "unrelated-error"])("does not repair a manual compaction ending with %s", async (outcome) => {
+      const codexClient = new MockBackendClient({});
+      const registry = new DesktopBackendRegistry({
+        codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null,
+      });
+      try {
+        await registry.compactThread({ backend: "codex", threadId });
+        if (outcome === "cancelled") {
+          await codexClient.emit({
+            method: "turn/cancelled",
+            params: {
+              threadId, turnId: "compact-turn-1",
+              turn: { id: "compact-turn-1", status: "cancelled" },
+            },
+          });
+        } else if (outcome === "completed") {
+          await codexClient.emit({
+            method: "turn/completed",
+            params: { threadId, turnId: "compact-turn-1", turn: { id: "compact-turn-1", status: "completed", output: [] } },
+          });
+        } else {
+          await codexClient.emit({
+            method: "turn/failed",
+            params: {
+              threadId, turnId: "compact-turn-1",
+              turn: { id: "compact-turn-1", status: "failed", error: { message: "network disconnected" } },
+            },
+          });
+        }
+        expect(codexClient.invalidIdRecoveryCalls).toHaveLength(0);
+        // Terminal cleanup must allow a later manual compaction on this thread.
+        await expect(registry.compactThread({ backend: "codex", threadId })).resolves.toMatchObject({ threadId });
+      } finally {
+        await registry.close();
+      }
+    });
+
+    it("cleans up a rejected compaction request without repairing unrelated errors", async () => {
+      const codexClient = new MockBackendClient({});
+      const compact = vi.spyOn(codexClient, "compactThread").mockRejectedValueOnce(new Error("thread not found"));
+      const registry = new DesktopBackendRegistry({
+        codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null,
+      });
+      try {
+        await expect(registry.compactThread({ backend: "codex", threadId })).rejects.toThrow("thread not found");
+        await expect(registry.compactThread({ backend: "codex", threadId })).resolves.toMatchObject({ threadId });
+        expect(compact).toHaveBeenCalledTimes(2);
+        expect(codexClient.invalidIdRecoveryCalls).toHaveLength(0);
+        expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({ count: 0, threadIds: [] });
+      } finally {
+        await registry.close();
+      }
+    });
+
+    it("budgets SQLite writes for one manual compaction repair and retry", async () => {
+      vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+      const temp = createTempStateDb("pwragent-compact-recovery-");
+      const db = StateDb.open(temp.dbPath);
+      const codexClient = new MockBackendClient({});
+      const registry = new DesktopBackendRegistry({
+        codexClient, overlayStore: new SqliteOverlayStore(db), threadTitleGenerationService: null,
+      });
+      const recovered = createDeferred<void>();
+      registry.onEvent((event) => {
+        if (event.notification.method === "thread/codexInvalidIdRecovery/updated"
+          && event.notification.params.status === "succeeded") recovered.resolve();
+      });
+      try {
+        const { writes } = await measureSqliteWrites(async () => {
+          await registry.compactThread({ backend: "codex", threadId });
+          await codexClient.emit({
+            method: "turn/failed",
+            params: {
+              threadId, turnId: "compact-turn-1",
+              turn: { id: "compact-turn-1", status: "failed", error: { message: invalidIdFailure } },
+            },
+          });
+          await recovered.promise;
+        });
+        expectSqliteWriteBudget({
+          scenario: "manual-compaction-invalid-id-recovery",
+          writes,
+          note: "One failed manual compaction: 5 boundary commits at about 16.1 KiB/commit. At 10 repairs/day, about 0.82 MB/day; no per-item or idle writes.",
+        });
+        expect(codexClient.invalidIdRecoveryCalls).toHaveLength(1);
+        expect(codexClient.startTurnCallCount).toBe(0);
+      } finally {
+        await registry.close();
+        db.close();
+        removeTempStateDbDir(temp.tempDir);
+        vi.unstubAllEnvs();
+      }
+    });
+
+    it.each([
+      { timing: "before", outcome: "completed" },
+      { timing: "after", outcome: "completed" },
+      { timing: "before", outcome: "cancelled" },
+      { timing: "after", outcome: "cancelled" },
+    ])("drains queued follow-ups when compaction is $outcome $timing the RPC response", async ({ timing, outcome }) => {
+      const received = createDeferred<void>();
+      const respond = createDeferred<void>();
+      const followUpStarted = createDeferred<void>();
+      const codexClient = new MockBackendClient({
+        startTurnResults: [{ threadId, turnId: "queued-follow-up-turn" }],
+      });
+      vi.spyOn(codexClient, "compactThread").mockImplementation(async () => {
+        await codexClient.emit({
+          method: "turn/started",
+          params: { threadId, turnId: "compact-queued", turn: { id: "compact-queued" } },
+        });
+        received.resolve();
+        await respond.promise;
+        return { threadId, turnId: `compact:${threadId}`, itemId: "compact-item" };
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null,
+      });
+      registry.onEvent((event) => {
+        if (event.notification.method === "thread/turnQueue/updated"
+          && event.notification.params.queueEntryId === "after-compaction"
+          && event.notification.params.status === "started") followUpStarted.resolve();
+      });
+      const compaction = registry.compactThread({ backend: "codex", threadId });
+      try {
+        await received.promise;
+        expect((await registry.submitTurn({
+          backend: "codex", threadId, queueEntryId: "after-compaction",
+          input: [{ type: "text", text: "Continue after compaction" }],
+        })).status).toBe("queued");
+        if (timing === "after") {
+          respond.resolve();
+          await compaction;
+        }
+        if (outcome === "completed") {
+          await codexClient.emit({
+            method: "turn/completed",
+            params: { threadId, turnId: "compact-queued", turn: { id: "compact-queued", status: "completed", output: [] } },
+          });
+        } else {
+          await codexClient.emit({
+            method: "turn/cancelled",
+            params: { threadId, turnId: "compact-queued", turn: { id: "compact-queued", status: "cancelled" } },
+          });
+        }
+        if (timing === "before") {
+          expect(codexClient.startTurnCallCount).toBe(0);
+          respond.resolve();
+          await compaction;
+        }
+        await vi.waitFor(() => expect(codexClient.startTurnCallCount).toBe(1));
+        await followUpStarted.promise;
+        expect(registry.getQueuedTurnsForThread({ backend: "codex", threadId })).toHaveLength(0);
+        expect(codexClient.startTurnCalls[0]).toMatchObject({
+          threadId, input: [{ type: "text", text: "Continue after compaction" }],
+        });
+        await registry.submitTurn({
+          backend: "codex", threadId, queueEntryId: "second-follow-up",
+          input: [{ type: "text", text: "Wait for the first follow-up" }],
+        });
+        // A repeated compaction terminal must not end the newly queued turn.
+        await codexClient.emit({
+          method: "turn/completed",
+          params: { threadId, turnId: "compact-queued", turn: { id: "compact-queued", status: "completed", output: [] } },
+        });
+        expect(codexClient.startTurnCallCount).toBe(1);
+        expect(registry.getQueuedTurnsForThread({ backend: "codex", threadId })).toHaveLength(1);
+        await codexClient.emit({
+          method: "turn/completed",
+          params: { threadId, turnId: "queued-follow-up-turn", turn: { id: "queued-follow-up-turn", status: "completed", output: [] } },
+        });
+        await vi.waitFor(() => expect(codexClient.startTurnCallCount).toBe(2));
+      } finally {
+        respond.resolve();
+        await compaction;
+        await registry.close();
+      }
+    });
+
+    it("keeps queued follow-ups held after a failed compaction", async () => {
+      const codexClient = new MockBackendClient({});
+      const registry = new DesktopBackendRegistry({
+        codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null,
+      });
+      try {
+        await registry.compactThread({ backend: "codex", threadId });
+        await registry.submitTurn({
+          backend: "codex", threadId, queueEntryId: "held-after-compaction",
+          input: [{ type: "text", text: "Wait for error review" }],
+        });
+        await codexClient.emit({
+          method: "turn/failed",
+          params: {
+            threadId, turnId: "compact-turn-1",
+            turn: { id: "compact-turn-1", status: "failed", error: { message: "Compaction request rejected" } },
+          },
+        });
+        await flushAsync();
+        expect(codexClient.startTurnCallCount).toBe(0);
+        expect(registry.getQueuedTurnsForThread({ backend: "codex", threadId })).toEqual([
+          expect.objectContaining({ queueEntryId: "held-after-compaction", manualReleaseRequired: true }),
+        ]);
+      } finally {
+        await registry.close();
+      }
+    });
+
+    it("keeps accepted compaction occupied until its delayed terminal notification", async () => {
+      const codexClient = new MockBackendClient({});
+      const compact = vi.spyOn(codexClient, "compactThread").mockResolvedValue({
+        threadId, turnId: `compact:${threadId}`, itemId: "compact-item",
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null,
+      });
+      const recovered = createDeferred<void>();
+      registry.onEvent((event) => {
+        if (event.notification.method === "thread/codexInvalidIdRecovery/updated"
+          && event.notification.params.status === "succeeded") recovered.resolve();
+      });
+      try {
+        await registry.compactThread({ backend: "codex", threadId });
+        expect(registry.isThreadTurnOccupied({ backend: "codex", threadId })).toBe(true);
+        await expect(registry.startTurn({
+          backend: "codex", threadId, input: [{ type: "text", text: "do not replace compaction" }],
+        })).rejects.toThrow("A turn is already active");
+        expect(codexClient.startTurnCallCount).toBe(0);
+        await codexClient.emit({
+          method: "turn/failed",
+          params: {
+            threadId, turnId: "delayed-compact-failure",
+            turn: { id: "delayed-compact-failure", status: "failed", error: { message: invalidIdFailure } },
+          },
+        });
+        await recovered.promise;
+        expect(compact).toHaveBeenCalledTimes(2);
+        expect(codexClient.invalidIdRecoveryCalls).toHaveLength(1);
+        expect(registry.isThreadTurnOccupied({ backend: "codex", threadId })).toBe(true);
+        await codexClient.emit({
+          method: "turn/completed",
+          params: {
+            threadId, turnId: "delayed-compact-retry",
+            turn: { id: "delayed-compact-retry", status: "completed", output: [] },
+          },
+        });
+        expect(registry.isThreadTurnOccupied({ backend: "codex", threadId })).toBe(false);
+        await registry.startTurn({
+          backend: "codex", threadId, input: [{ type: "text", text: "continue after compaction" }],
+        });
+        expect(codexClient.startTurnCallCount).toBe(1);
+      } finally {
+        await registry.close();
+      }
+    });
+
+    it("releases accepted compaction when the process exits before lifecycle notifications", async () => {
+      const codexClient = new MockBackendClient({});
+      const compact = vi.spyOn(codexClient, "compactThread").mockResolvedValue({
+        threadId, turnId: `compact:${threadId}`, itemId: "compact-item",
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null,
+      });
+      const events: AgentEvent[] = [];
+      registry.onEvent((event) => { events.push(event); });
+      try {
+        await registry.compactThread({ backend: "codex", threadId });
+        codexClient.emitUnexpectedExit();
+        expect(registry.isThreadTurnOccupied({ backend: "codex", threadId })).toBe(false);
+        await expect(registry.compactThread({ backend: "codex", threadId })).resolves.toMatchObject({ threadId });
+        expect(compact).toHaveBeenCalledTimes(2);
+        await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({
+          notification: {
+            method: "turn/failed",
+            params: expect.objectContaining({
+              threadId, turnId: `pending:compact:${threadId}`,
+              turn: expect.objectContaining({ error: { message: expect.stringContaining("exited") } }),
+            }),
+          },
+        })));
+        expect(codexClient.invalidIdRecoveryCalls).toHaveLength(0);
+      } finally {
+        await registry.close();
+      }
+    });
+
+    it("budgets settling accepted compaction at the process-exit boundary", async () => {
+      vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+      const temp = createTempStateDb("pwragent-compact-exit-");
+      const db = StateDb.open(temp.dbPath);
+      const codexClient = new MockBackendClient({});
+      vi.spyOn(codexClient, "compactThread").mockResolvedValue({
+        threadId, turnId: `compact:${threadId}`, itemId: "compact-item",
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient, overlayStore: new SqliteOverlayStore(db), threadTitleGenerationService: null,
+      });
+      const unloaded = createDeferred<AgentEvent>();
+      registry.onEvent((event) => {
+        if (event.notification.method === "thread/status/changed"
+          && event.notification.params.threadId === threadId) unloaded.resolve(event);
+      });
+      try {
+        const { writes } = await measureSqliteWrites(async () => {
+          await registry.compactThread({ backend: "codex", threadId });
+          codexClient.emitUnexpectedExit();
+          expect(await unloaded.promise).toMatchObject({
+            notification: { params: { status: { type: "notLoaded" } } },
+          });
+        });
+        expectSqliteWriteBudget({
+          scenario: "manual-compaction-process-exit",
+          writes,
+          note: "One process-exit failure at the compaction boundary; no per-item or idle writes. At 10 interrupted compactions/day, about 0.16 MB/day.",
+        });
+      } finally {
+        await registry.close();
+        db.close();
+        removeTempStateDbDir(temp.tempDir);
+        vi.unstubAllEnvs();
+      }
+    });
+
+    it("leaves an observed compaction start to the client's process-exit failure", async () => {
+      const codexClient = new MockBackendClient({});
+      vi.spyOn(codexClient, "compactThread").mockResolvedValue({
+        threadId, turnId: `compact:${threadId}`, itemId: "compact-item",
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null,
+      });
+      const events: AgentEvent[] = [];
+      registry.onEvent((event) => { events.push(event); });
+      try {
+        await registry.compactThread({ backend: "codex", threadId });
+        // The source has observed turn/started, but delivery through the
+        // registry's async event pipeline has not necessarily finished.
+        const started = codexClient.emit({
+          method: "turn/started",
+          params: { threadId, turnId: "observed-compact", turn: { id: "observed-compact" } },
+        });
+        codexClient.emitUnexpectedExit();
+        await started;
+        await codexClient.emit({
+          method: "turn/failed",
+          params: {
+            threadId, turnId: "observed-compact",
+            turn: { id: "observed-compact", status: "failed", error: { message: "app server exited mid turn" } },
+          },
+        });
+        expect(events.filter((event) => event.notification.method === "turn/failed")).toHaveLength(1);
+        expect(registry.isThreadTurnOccupied({ backend: "codex", threadId })).toBe(false);
+        await expect(registry.compactThread({ backend: "codex", threadId })).resolves.toMatchObject({ threadId });
+      } finally {
+        await registry.close();
+      }
+    });
+
+    it("drains waiting recovery after a pending compaction's process exits", async () => {
+      const codexClient = new MockBackendClient({});
+      vi.spyOn(codexClient, "compactThread").mockResolvedValue({
+        threadId, turnId: `compact:${threadId}`, itemId: "compact-item",
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null,
+      });
+      const events: AgentEvent[] = [];
+      registry.onEvent((event) => { events.push(event); });
+      try {
+        await registry.compactThread({ backend: "codex", threadId });
+        await registry.startTurn({
+          backend: "codex", threadId: "other-failed-thread", input: [{ type: "text", text: "continue" }],
+        });
+        await codexClient.emit({
+          method: "turn/failed",
+          params: {
+            threadId: "other-failed-thread", turnId: "turn-1",
+            turn: { id: "turn-1", status: "failed", error: { message: invalidIdFailure } },
+          },
+        });
+        expect(codexClient.invalidIdRecoveryCalls).toHaveLength(0);
+        codexClient.emitUnexpectedExit();
+        await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({
+          notification: {
+            method: "thread/codexInvalidIdRecovery/updated",
+            params: expect.objectContaining({ status: "succeeded", threadId: "other-failed-thread" }),
+          },
+        })));
+        expect(codexClient.invalidIdRecoveryCalls).toHaveLength(1);
+        await expect(registry.compactThread({ backend: "codex", threadId })).resolves.toMatchObject({ threadId });
+        await expect(registry.startTurn({
+          backend: "codex", threadId: "next-thread", input: [{ type: "text", text: "next task" }],
+        })).resolves.toMatchObject({ threadId: "next-thread" });
+      } finally {
+        await registry.close();
+      }
+    });
+
+    it("holds another repair while accepted compaction awaits its lifecycle notifications", async () => {
+      const codexClient = new MockBackendClient({});
+      vi.spyOn(codexClient, "compactThread").mockResolvedValue({
+        threadId, turnId: `compact:${threadId}`, itemId: "compact-item",
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null,
+      });
+      const events: AgentEvent[] = [];
+      const recovered = createDeferred<void>();
+      registry.onEvent((event) => {
+        events.push(event);
+        if (event.notification.method === "thread/codexInvalidIdRecovery/updated"
+          && event.notification.params.status === "succeeded") recovered.resolve();
+      });
+      try {
+        await registry.compactThread({ backend: "codex", threadId });
+        await registry.startTurn({
+          backend: "codex", threadId: "other-failed-thread", input: [{ type: "text", text: "continue" }],
+        });
+        await codexClient.emit({
+          method: "turn/failed",
+          params: {
+            threadId: "other-failed-thread", turnId: "turn-1",
+            turn: { id: "turn-1", status: "failed", error: { message: invalidIdFailure } },
+          },
+        });
+        expect(events).toContainEqual(expect.objectContaining({
+          notification: {
+            method: "thread/codexInvalidIdRecovery/updated",
+            params: expect.objectContaining({ status: "waiting", waitingForThreadIds: [threadId] }),
+          },
+        }));
+        expect(codexClient.invalidIdRecoveryCalls).toHaveLength(0);
+        await codexClient.emit({
+          method: "turn/completed",
+          params: { threadId, turnId: "compact-real-id", turn: { id: "compact-real-id", status: "completed", output: [] } },
+        });
+        await recovered.promise;
+        expect(codexClient.invalidIdRecoveryCalls).toHaveLength(1);
+      } finally {
+        await registry.close();
+      }
+    });
+
+    it("waits for another live turn before repairing manual compaction", async () => {
+      const busyThreadId = "busy-beside-compaction";
+      const codexClient = new MockBackendClient({
+        startTurnResults: [{ threadId: busyThreadId, turnId: "busy-turn" }],
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        overlayStore: createOverlayStoreMock(),
+        threadTitleGenerationService: null,
+      });
+      const events: AgentEvent[] = [];
+      const recovered = createDeferred<void>();
+      registry.onEvent((event) => {
+        events.push(event);
+        if (event.notification.method === "thread/codexInvalidIdRecovery/updated"
+          && event.notification.params.status === "succeeded") recovered.resolve();
+      });
+      const compact = vi.spyOn(codexClient, "compactThread");
+      try {
+        await registry.startTurn({
+          backend: "codex", threadId: busyThreadId, input: [{ type: "text", text: "keep working" }],
+        });
+        await registry.compactThread({ backend: "codex", threadId });
+        await codexClient.emit({
+          method: "turn/failed",
+          params: {
+            threadId, turnId: "compact-turn-1",
+            turn: { id: "compact-turn-1", status: "failed", error: { message: invalidIdFailure } },
+          },
+        });
+        expect(events).toContainEqual(expect.objectContaining({
+          notification: {
+            method: "thread/codexInvalidIdRecovery/updated",
+            params: expect.objectContaining({ status: "waiting", waitingForThreadIds: [busyThreadId] }),
+          },
+        }));
+        expect(codexClient.invalidIdRecoveryCalls).toHaveLength(0);
+        expect(compact).toHaveBeenCalledTimes(1);
+        await codexClient.emit({
+          method: "turn/completed",
+          params: {
+            threadId: busyThreadId, turnId: "busy-turn",
+            turn: { id: "busy-turn", status: "completed", output: [] },
+          },
+        });
+        await recovered.promise;
+        expect(codexClient.invalidIdRecoveryCalls).toHaveLength(1);
+        expect(codexClient.startTurnCallCount).toBe(1);
+      } finally {
+        await registry.close();
+      }
+    });
   });
 
   it("lists and reloads MCP config through the thread's Codex client", async () => {
