@@ -4372,11 +4372,17 @@ export function useThreadNavigation(
 
       if (method === "thread/archiveCleanup/completed") {
         const completion = event.notification.params as {
-          threadId: string; cleanup: ArchiveThreadCleanupResult[]; error?: string;
+          threadId: string; archivedAt: number; cleanup: ArchiveThreadCleanupResult[]; error?: string;
         };
         if (completion.error) setArchiveThreadError(completion.error);
         const notice = formatArchiveCleanupNotice(completion.cleanup);
         if (notice) setArchiveThreadNotice(notice);
+        const receivedAt = Date.now();
+        void desktopApi.logRendererDiagnostic?.({
+          level: "info", message: "archive cleanup completion received",
+          details: { backend: event.backend, threadId: completion.threadId, archivedAt: completion.archivedAt,
+            receivedAt, archiveAgeMs: receivedAt - completion.archivedAt, noticeRaised: Boolean(notice), failed: Boolean(completion.error) },
+        }).catch(() => {});
         return;
       }
 
