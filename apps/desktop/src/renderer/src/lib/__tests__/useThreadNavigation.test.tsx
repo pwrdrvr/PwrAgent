@@ -6,6 +6,7 @@ import { StrictMode } from "react";
 import { DirectoriesList } from "../../features/navigation/DirectoriesList";
 import {
   buildPullRequestStatusKey,
+  canonicalizeNavigationPath,
   shortenDerivedThreadTitle,
 } from "@pwragent/shared";
 import type {
@@ -14323,6 +14324,41 @@ describe("main selected detail authority", () => {
     vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
   });
   afterEach(() => vi.restoreAllMocks());
+  it.each(["/repo/FixtureRepo", "C:\\repo\\FixtureRepo", "C:/repo/FixtureRepo/"])(
+    "preserves selected workspace branch choices across path representations (%s)",
+    async (workspacePath) => {
+      const directoryPath = canonicalizeNavigationPath(workspacePath);
+      const thread: NavigationThreadSummary = {
+        id: "handoff", source: "codex", title: "Handoff", titleSource: "explicit",
+        linkedDirectories: [{ id: "fixture-repo", kind: "local", label: "FixtureRepo", path: workspacePath }],
+        inbox: { inInbox: false }, updatedAt: 1,
+      };
+      const gitStatus = {
+        currentBranch: "feature/handoff", branches: ["feature/handoff", "main", "release"],
+        handoffBranches: ["main", "release"], syncState: "untracked" as const,
+      };
+      const api: DesktopApi = {
+        readPopulation: async () => ({
+          backend: "all", fetchedAt: 1, unchanged: false, inboxThreadKeys: [], threads: [thread],
+          launchpadDefaults: { backend: "codex", executionMode: "default" },
+          directories: [{ key: `directory:${directoryPath}`, kind: "directory", path: directoryPath,
+            label: "FixtureRepo", threadKeys: ["codex:handoff"], needsAttentionCount: 0 }],
+        }),
+        getNavigationSelectedDetail: async (request) => ({
+          protocol: 2, ref: request.ref, revision: "workspace", readiness: "ready", identity: "present", thread,
+          workspaceDirectories: [
+            { key: "other", path: `${workspacePath}-other`, label: "Other", gitStatus: { currentBranch: "unrelated" } },
+            { key: "fixture-repo", path: workspacePath, label: "FixtureRepo", gitStatus },
+          ],
+        }),
+      };
+      const { result } = renderHook(() => useThreadNavigation(api));
+      await waitFor(() => expect(result.current.selectedThreadConfigurationReady).toBe(true));
+      expect(result.current.selectedDirectory?.path).toBe(directoryPath);
+      expect(result.current.selectedDirectory?.gitStatus).toEqual(gitStatus);
+    },
+  );
+
   it.each(["secondary-first", "primary-first", "primary-missing"])(
     "selects the primary project for a multi-directory thread (%s)",
     async (order) => {

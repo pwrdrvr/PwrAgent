@@ -54,6 +54,7 @@ import {
   changedProviderModelDefaultBackends,
   buildPullRequestStatusKey,
   buildThreadIdentityKey,
+  canonicalizeNavigationPath,
   classifyDirectory,
   parseOwnedComposerScopeKey,
   compareThreadsByCreatedAtDesc,
@@ -5229,8 +5230,11 @@ export function useThreadNavigation(
     // ordering must not let a secondary link become the selected project.
     const primaryDirectoryKey = directoryKeysForThread(selectedDetail.state?.detail?.thread)[0];
     const directory = directories.find((directory) => directory.key === primaryDirectoryKey);
+    // Workspace detail retains native paths; navigation rows canonicalize
+    // separators. Compare them in the same form before applying branch data.
     const workspace = selectedDetail.state?.detail?.workspaceDirectories?.find((candidate) =>
-      candidate.path === directory?.path,
+      candidate.path !== undefined && directory?.path !== undefined
+      && canonicalizeNavigationPath(candidate.path) === canonicalizeNavigationPath(directory.path),
     );
     return directory && workspace?.gitStatus ? { ...directory, gitStatus: workspace.gitStatus } : directory;
   }, [
