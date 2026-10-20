@@ -120,14 +120,13 @@ export function QueuedRowPositionLabel(props: {
  * row has a keyboard target: the arrow keys move the row one place. The
  * pointer drag itself belongs to the row, which the handle sits inside.
  */
-export function QueuedRowGrip(props: { title: string; disabled?: boolean }): ReactNode {
+export function QueuedRowGrip(props: { title: string }): ReactNode {
   return (
     <button
       aria-label={`Reorder: ${props.title}`}
       className="composer__queued-grip tooltip-target"
       data-queued-reorder-grip=""
       data-tooltip="Drag or press ↑ ↓ to reorder"
-      disabled={props.disabled}
       type="button"
     >
       <GripVerticalIcon size={14} />

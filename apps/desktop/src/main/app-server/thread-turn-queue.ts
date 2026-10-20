@@ -524,7 +524,9 @@ export class ThreadTurnQueue {
     if (!found) return { disposition: "not_found", entryId };
     const { backend, threadId } = found.entry;
     return await this.withDispatchSuspended(found.entry, () => {
-      const queue = this.queueFor(found.key);
+      // Not queueFor: the FIFO can have drained while the move waited, and
+      // a lookup must not leave an empty one behind.
+      const queue = this.queuedEntries.get(found.key) ?? [];
       const result = (
         disposition: ThreadTurnQueueMoveResult["disposition"],
       ): ThreadTurnQueueMoveResult => ({

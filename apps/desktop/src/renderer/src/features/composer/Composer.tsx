@@ -31,9 +31,10 @@ import {
 } from "./QueuedMessageInspector";
 import {
   planQueuedTurnMove,
+  queuedMoveAnchor,
   queuedReorderGroup,
   requestOwnerQueuedTurnMove,
-  withoutPendingMove,
+  settleQueuedTurnMove,
 } from "./queued-turn-move";
 import {
   type QueuedReorderRow,
@@ -3854,17 +3855,20 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     draft.trim().length > 0 || skillTokens.length > 0;
   const queuedTurn = queuedTurns[0];
   const nextReleasableQueuedTurn = getNextReleasableQueuedTurn(queuedTurns);
-  const queuedReorder = useQueuedRowReorder({
-    rows: queuedTurns.map((queued): QueuedReorderRow => ({
+  const ownerCanMoveQueuedTurns = Boolean(props.desktopApi?.moveQueuedTurn);
+  // The composer renders on every keystroke; the rows change with the queue.
+  const queuedReorderRows = useMemo(
+    () => queuedTurns.map((queued): QueuedReorderRow => ({
       id: queued.id,
       title: queued.title ?? formatDraftPreview(queued),
-      group: queuedReorderGroup(
-        queued,
-        scheduleNow,
-        Boolean(props.desktopApi?.moveQueuedTurn),
-      ),
+      group: queuedReorderGroup(queued, scheduleNow, ownerCanMoveQueuedTurns),
     })),
-    onMove: (id, toIndex) => moveQueuedTurn(id, toIndex),
+    [queuedTurns, scheduleNow, ownerCanMoveQueuedTurns],
+  );
+  const queuedReorder = useQueuedRowReorder({
+    rows: queuedReorderRows,
+    onMove: (id, toIndex) =>
+      moveQueuedTurn(id, queuedMoveAnchor(queuedReorderRows.map((row) => row.id), id, toIndex)),
   });
   const queuedBandHasMovableRow = queuedTurns.some((queued) =>
     queuedReorder.canMove(queued.id)
@@ -4574,19 +4578,19 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     }
   };
   /**
-   * Moves the active scope's row `id` to `toIndex`. A row the owner's FIFO
-   * dispatches moves there as well. The band shows the new order at once and
-   * `pendingMove` holds it there until the owner answers; a refusal clears
-   * it, and the next queue read puts the row back where the owner has it.
+   * Moves the active scope's row `id` in front of row `beforeId` (to the end
+   * without one). A row the owner's FIFO dispatches moves there as well. The
+   * band shows the new order at once and `pendingMove` holds it there until
+   * the owner answers; a refusal puts the owner's order back.
    */
-  const moveQueuedTurn = (id: string, toIndex: number): void => {
+  const moveQueuedTurn = (id: string, beforeId: string | undefined): void => {
     const scopeKey = composerScopeKey;
     const plan = planQueuedTurnMove(
       isQueuedTurnStoreScope(scopeKey)
         ? draftStore.getQueuedTurns(scopeKey)
         : queuedTurns,
       id,
-      toIndex,
+      beforeId,
     );
     if (!plan) return;
     saveQueuedTurnSnapshots(scopeKey, plan.next);
@@ -4601,9 +4605,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       federationTarget,
       queueEntryId: plan.queueEntryId,
       beforeQueueEntryId: plan.beforeQueueEntryId,
-    }).then((failure) => {
+    }).then((answer) => {
       const settled = isQueuedTurnStoreScope(scopeKey)
-        ? withoutPendingMove(draftStore.getQueuedTurns(scopeKey), id)
+        ? settleQueuedTurnMove(draftStore.getQueuedTurns(scopeKey), id, answer, plan.ownerOrder)
         : undefined;
       if (settled) {
         saveQueuedTurnSnapshots(scopeKey, settled);
@@ -4611,8 +4615,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           setQueuedTurnsState(settled);
         }
       }
-      if (failure && activeComposerScopeKeyRef.current === scopeKey) {
-        setSendError(failure);
+      if (answer.failure && activeComposerScopeKeyRef.current === scopeKey) {
+        setSendError(answer.failure);
       }
     });
   };

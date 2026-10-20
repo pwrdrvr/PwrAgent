@@ -45,9 +45,10 @@ import {
 } from "../composer/QueuedMessageInspector";
 import {
   planQueuedTurnMove,
+  queuedMoveAnchor,
   queuedReorderGroup,
   requestOwnerQueuedTurnMove,
-  withoutPendingMove,
+  settleQueuedTurnMove,
 } from "../composer/queued-turn-move";
 import { useQueuedRowReorder } from "../composer/useQueuedRowReorder";
 import { restoreQueuedMessage } from "../composer/queued-message-content";
@@ -460,8 +461,9 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     onMove: (id, toIndex) => {
       const store = ownedComposerDraftStore;
       const scopeKey = composerScopeKey;
+      const beforeId = queuedMoveAnchor(queuedTurns.map((queued) => queued.id), id, toIndex);
       const plan = store
-        ? planQueuedTurnMove(store.getQueuedTurns(scopeKey), id, toIndex)
+        ? planQueuedTurnMove(store.getQueuedTurns(scopeKey), id, beforeId)
         : undefined;
       if (!store || !plan) return;
       store.setQueuedTurns(scopeKey, plan.next);
@@ -472,10 +474,15 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         federationTarget,
         queueEntryId: plan.queueEntryId,
         beforeQueueEntryId: plan.beforeQueueEntryId,
-      }).then((failure) => {
-        const settled = withoutPendingMove(store.getQueuedTurns(scopeKey), id);
+      }).then((answer) => {
+        const settled = settleQueuedTurnMove(
+          store.getQueuedTurns(scopeKey),
+          id,
+          answer,
+          plan.ownerOrder,
+        );
         if (settled) store.setQueuedTurns(scopeKey, settled);
-        if (failure) setSendError(failure);
+        if (answer.failure) setSendError(answer.failure);
       });
     },
   });

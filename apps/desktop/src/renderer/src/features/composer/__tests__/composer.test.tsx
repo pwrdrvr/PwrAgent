@@ -25081,9 +25081,32 @@ describe("queued message reordering", () => {
     expect(order()).toEqual(["Message a", "Message b", "Message c"]);
     // To the end: no anchor.
     expect(moveQueuedTurn).toHaveBeenLastCalledWith({ queueEntryId: "c" });
-    await act(async () => { answer({ queueEntryId: "c", disposition: "not_found" }); });
-    expect(await screen.findByText("That message already started or was removed.")).toBeInTheDocument();
-    expect(draftStore.getQueuedTurns(scopeKey)[2]).not.toHaveProperty("pendingMove");
+    await act(async () => { answer({ queueEntryId: "c", disposition: "held", queueEntryIds: ["a", "c", "b"] }); });
+    expect(await screen.findByText("A message can’t move past one that is held for retry.")).toBeInTheDocument();
+    // Nothing re-reads the queue after a refusal: the band takes the owner's order back.
+    expect(order()).toEqual(["Message a", "Message c", "Message b"]);
+    expect(draftStore.getQueuedTurns(scopeKey).some((queued) => queued.pendingMove)).toBe(false);
+  });
+
+  it("puts the owner's order back when the move request fails outright", async () => {
+    const draftStore = createComposerDraftStore();
+    const scopeKey = buildThreadComposerScopeKey("codex", "thread-1");
+    draftStore.setQueuedTurns(scopeKey, [mirror("a"), mirror("b"), mirror("c")]);
+    const moveQueuedTurn = vi.fn(async (): Promise<MoveQueuedTurnResponse> => {
+      throw new Error("Update PwrAgent on the owning instance to reorder its queued messages.");
+    });
+    render(<Composer activeTurnId="active" backends={[backendSummary("codex")]} draftStore={draftStore}
+      desktopApi={{ moveQueuedTurn, onAgentEvent: () => () => undefined }} disabled={false} skills={[]}
+      thread={thread} />);
+
+    const grip = screen.getByRole("button", { name: "Reorder: Message c" });
+    grip.focus();
+    fireEvent.keyDown(grip, { key: "ArrowUp" });
+    expect(order()).toEqual(["Message a", "Message c", "Message b"]);
+
+    expect(await screen.findByText("Update PwrAgent on the owning instance to reorder its queued messages."))
+      .toBeInTheDocument();
+    expect(order()).toEqual(["Message a", "Message b", "Message c"]);
   });
 
   it("gives held, steering and scheduled rows no grip, and keeps every chevron on one line", () => {
