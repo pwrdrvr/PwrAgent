@@ -100,6 +100,8 @@ import type {
   ReadQueuedTurnResponse,
   CancelQueuedTurnRequest,
   CancelQueuedTurnResponse,
+  MoveQueuedTurnRequest,
+  MoveQueuedTurnResponse,
   ReleaseQueuedTurnRequest,
   ReleaseQueuedTurnResponse,
   CreateScheduledThreadActionRequest,
@@ -1005,6 +1007,9 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   releaseQueuedTurn?: (
     request: ReleaseQueuedTurnRequest,
   ) => Promise<ReleaseQueuedTurnResponse>;
+  moveQueuedTurn?: (
+    request: MoveQueuedTurnRequest,
+  ) => Promise<MoveQueuedTurnResponse>;
   listThreadTodos?: (
     request?: ListThreadTodosRequest,
   ) => Promise<ListThreadTodosResponse>;

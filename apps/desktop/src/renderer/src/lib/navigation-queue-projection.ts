@@ -110,6 +110,26 @@ function isScheduledReview(entry: ComposerQueuedTurnSnapshot): boolean {
   return Boolean(entry.scheduledActionId && entry.reviewCommand);
 }
 
+/**
+ * Places each entry the operator moved, whose move the owner has not answered,
+ * in front of its anchor, as the owner will once the move lands. An anchor
+ * that is gone leaves the entry where the owner has it.
+ */
+function applyPendingMoves(mirrors: ComposerQueuedTurnSnapshot[]): void {
+  for (const moved of mirrors.filter((entry) => entry.pendingMove)) {
+    const anchorId = moved.pendingMove?.beforeQueueEntryId;
+    const from = mirrors.indexOf(moved);
+    if (anchorId === moved.queueEntryId) continue;
+    const others = mirrors.filter((entry) => entry !== moved);
+    const anchor = anchorId === undefined
+      ? others.length
+      : others.findIndex((entry) => entry.queueEntryId === anchorId);
+    if (anchor < 0) continue;
+    mirrors.splice(from, 1);
+    mirrors.splice(anchor, 0, moved);
+  }
+}
+
 /** Never prune a submission acknowledged or edited while this read was pending. */
 export function reconcileCompleteNavigationQueue(params: {
   owner: ComposerThreadOwner;
@@ -149,6 +169,7 @@ export function reconcileCompleteNavigationQueue(params: {
       holdReason: entry.holdReason,
     };
   });
+  applyPendingMoves(mirrors);
   const isMirror = (entry: ComposerQueuedTurnSnapshot): boolean =>
     Boolean(entry.queueEntryId) && belongsToOwner(entry) && ownerById.has(entry.queueEntryId!);
   const firstMirror = retained.findIndex(isMirror);

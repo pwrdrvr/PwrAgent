@@ -73,6 +73,29 @@ describe("independent complete FIFO projection", () => {
     })).toEqual([acknowledged]);
   });
 
+  it("holds an unanswered move in place until the owner's order catches up", () => {
+    const entry = (queueEntryId: string, position: number) => ({
+      queueEntryId, createdAt: 1, displayText: queueEntryId, origin: "manual" as const, position,
+    });
+    const ownerOrder = projection({ entries: [entry("a", 0), entry("b", 1), entry("c", 2)] });
+    const moved = { ...queued("c"), pendingMove: { beforeQueueEntryId: "a" } };
+    const current = [moved, queued("a"), queued("b")];
+    // The read left before the move reached the owner, so it reports the old order.
+    expect(reconcileCompleteNavigationQueue({ owner, projection: ownerOrder, atReadStart: current, current })
+      .map((turn) => turn.id)).toEqual(["c", "a", "b"]);
+    const toEnd = [queued("b"), queued("c"), { ...queued("a"), pendingMove: {} }];
+    expect(reconcileCompleteNavigationQueue({ owner, projection: ownerOrder, atReadStart: toEnd, current: toEnd })
+      .map((turn) => turn.id)).toEqual(["b", "c", "a"]);
+    // Settled (the marker dropped), the owner's order is the order.
+    const settled = [queued("c"), queued("a"), queued("b")];
+    expect(reconcileCompleteNavigationQueue({ owner, projection: ownerOrder, atReadStart: settled, current: settled })
+      .map((turn) => turn.id)).toEqual(["a", "b", "c"]);
+    // An anchor that left the owner's FIFO leaves the row where the owner has it.
+    const stale = [{ ...queued("c"), pendingMove: { beforeQueueEntryId: "started" } }, queued("a"), queued("b")];
+    expect(reconcileCompleteNavigationQueue({ owner, projection: ownerOrder, atReadStart: stale, current: stale })
+      .map((turn) => turn.id)).toEqual(["a", "b", "c"]);
+  });
+
   it("keeps a scheduled review that waits outside the turn FIFO", () => {
     const review: ComposerQueuedTurnSnapshot = {
       ...queued("pending-review:1"),

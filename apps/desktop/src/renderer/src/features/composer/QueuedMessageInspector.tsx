@@ -2,6 +2,12 @@ import { type MouseEvent as ReactMouseEvent, type ReactNode, useId, useState } f
 import type { ReadQueuedTurnResponse } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
+import { GripVerticalIcon } from "../../icons";
+import {
+  queuedPositionLabel,
+  type QueuedRowReorder,
+  useQueuedPreviewIndex,
+} from "./useQueuedRowReorder";
 import { TurnInputContent } from "../thread-detail/TurnInputContent";
 
 /**
@@ -18,6 +24,8 @@ export function QueuedMessageInspector(props: {
   desktopApi?: DesktopApi;
   actions?: ReactNode;
   detail?: ReactNode;
+  /** Ahead of the chevron: the reorder grip, on a row that can move. */
+  leading?: ReactNode;
   children?: ReactNode;
   /** Focus target when an image opened from the message outlives the row. */
   onFallbackFocus?: () => void;
@@ -43,6 +51,7 @@ export function QueuedMessageInspector(props: {
   return (
     <>
       <div className="composer__queued-line">
+        {props.leading}
         <button
           className="composer__queued-disclosure"
           type="button"
@@ -89,6 +98,40 @@ export function QueuedMessageInspector(props: {
         </div>
       ) : null}
     </>
+  );
+}
+
+/**
+ * A plain queued row's Next / #n label. It reads the drag preview, so the
+ * band renumbers while a row is dragged without its owner re-rendering.
+ */
+export function QueuedRowPositionLabel(props: {
+  reorder: QueuedRowReorder;
+  id: string;
+  index: number;
+}): ReactNode {
+  return queuedPositionLabel(
+    useQueuedPreviewIndex(props.reorder, props.id, props.index),
+  );
+}
+
+/**
+ * The handle that drags a queued row up or down the band. A button, so the
+ * row has a keyboard target: the arrow keys move the row one place. The
+ * pointer drag itself belongs to the row, which the handle sits inside.
+ */
+export function QueuedRowGrip(props: { title: string; disabled?: boolean }): ReactNode {
+  return (
+    <button
+      aria-label={`Reorder: ${props.title}`}
+      className="composer__queued-grip tooltip-target"
+      data-queued-reorder-grip=""
+      data-tooltip="Drag or press ↑ ↓ to reorder"
+      disabled={props.disabled}
+      type="button"
+    >
+      <GripVerticalIcon size={14} />
+    </button>
   );
 }
 

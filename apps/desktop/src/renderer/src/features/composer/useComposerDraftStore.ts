@@ -43,6 +43,12 @@ export type ComposerQueuedTurnSnapshot = {
   queueEntryId?: string;
   /** Owner-clock creation time used to reject older navigation snapshots. */
   queueEntryCreatedAt?: number;
+  /**
+   * The operator moved this entry and the owner has not answered yet. A queue
+   * read that lands first still places the entry in front of this anchor (at
+   * the end without one), so the band does not snap back mid-request.
+   */
+  pendingMove?: { beforeQueueEntryId?: string };
   /** Durable main-process scheduled action represented by this renderer chip. */
   scheduledActionId?: string;
   /** Terminal scheduled action converted into a locally recoverable draft. */

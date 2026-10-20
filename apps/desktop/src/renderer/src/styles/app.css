@@ -36970,6 +36970,145 @@ button.composer__subthread-source-parent:hover {
   height: 22px;
 }
 
+/* Reorder. In a band where any row can move, every row gets a 14px grip
+   slot in place of its 4px left inset, so the chevrons stay on one line and
+   nothing shifts when a grip fades in. The grip sits above the disclosure's
+   full-line hit area; the drag itself starts anywhere on a movable row's
+   line (useQueuedRowReorder). */
+.composer__queued--message.composer__queued--reorderable {
+  padding-left: 0;
+}
+
+.composer__queued-grip {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 22px;
+  margin-right: -6px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: grab;
+  opacity: 0;
+  transition: opacity 120ms ease, color 120ms ease;
+}
+
+.composer__queued-grip--empty {
+  pointer-events: none;
+}
+
+.composer__queued--movable:hover .composer__queued-grip,
+.composer__queued--movable:focus-within .composer__queued-grip,
+.composer__queued--movable.is-reorder-lifted .composer__queued-grip {
+  opacity: 1;
+}
+
+.composer__queued-grip:hover {
+  color: var(--text-primary);
+}
+
+.composer__queued-grip:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 0;
+}
+
+.composer__queued--movable > .composer__queued-line {
+  user-select: none;
+}
+
+.composer__queued--message.is-reorder-lifted {
+  z-index: 3;
+  border-color: var(--accent-border);
+  box-shadow:
+    0 10px 24px -8px var(--shadow-tint-strong),
+    0 0 0 1px var(--accent-border);
+  cursor: grabbing;
+}
+
+.composer__queued--message.is-reorder-lifted .composer__queued-label {
+  color: var(--accent);
+}
+
+/* The slot needs a containing block; the band gains one only mid-drag. */
+.is-queued-reordering {
+  position: relative;
+  user-select: none;
+}
+
+.is-queued-reordering,
+.is-queued-reordering * {
+  cursor: grabbing;
+}
+
+.is-queued-reordering > .composer__queued--message > .composer__queued-actions {
+  opacity: 0;
+}
+
+.composer__queued--message.is-reorder-sliding {
+  transition: transform 160ms cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+.composer__queued--message.is-reorder-settling {
+  transition: transform 140ms cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+/* Where the lifted row lands: the gap the other rows slid open. */
+.composer__queued-slot {
+  position: absolute;
+  z-index: 0;
+  box-sizing: border-box;
+  border: 1px dashed var(--accent-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent-soft) 30%, transparent);
+  pointer-events: none;
+}
+
+/* One beat of accent on the border where the row landed. */
+.composer__queued--message.is-reorder-landed {
+  animation: composer-queued-landed 700ms ease-out;
+}
+
+@keyframes composer-queued-landed {
+  from {
+    border-color: var(--accent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .composer__queued--message.is-reorder-sliding,
+  .composer__queued--message.is-reorder-settling {
+    transition: none;
+  }
+
+  .composer__queued--message.is-reorder-landed {
+    animation: none;
+  }
+}
+
+.composer__queued-announcer {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.composer__queued--compact .composer__queued-grip {
+  width: 12px;
+  height: 20px;
+  margin-right: -4px;
+}
+
 /* Second-line content sits under the label, past the chevron. */
 .composer__queued-detail,
 .composer__queued--message > .queued-message-inspector {
@@ -36983,6 +37122,16 @@ button.composer__subthread-source-parent:hover {
   flex-direction: column;
   gap: 2px;
   padding-bottom: 6px;
+}
+
+/* Past the grip slot as well as the chevron. */
+.composer__queued--reorderable > .composer__queued-detail,
+.composer__queued--message.composer__queued--reorderable > .queued-message-inspector {
+  margin-left: 42px;
+}
+
+.composer__queued--compact.composer__queued--reorderable > .queued-message-inspector {
+  margin-left: 38px;
 }
 
 /* Env-action anchor: collapsed-by-default <details> with chevron, body
