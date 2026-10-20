@@ -26116,20 +26116,19 @@ describe("send_messaging_file agent tool", () => {
     // several full copies of it in the main process. `url` stays empty so an
     // adapter that has not been taught about `data` skips the part rather
     // than treating a placeholder as a remote image URL.
-    expect(harness.delivered).toContainEqual(
-      expect.objectContaining({
-        kind: "message",
-        parts: [
-          expect.objectContaining({
-            type: "image",
-            url: "",
-            data: new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-            mimeType: "image/png",
-            name: "shot.png",
-          }),
-        ],
-      }),
-    );
+    const imagePart = harness.delivered
+      .flatMap((intent) => intent.kind === "message" ? intent.parts : [])
+      .find((part) => part.type === "image");
+    expect(imagePart).toMatchObject({
+      type: "image",
+      url: "",
+      data: expect.any(Uint8Array),
+      mimeType: "image/png",
+      name: "shot.png",
+    });
+    expect(imagePart?.data && Array.from(imagePart.data)).toEqual([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+    ]);
   });
 
   it("does not re-post a tool-sent image from the final assistant message", async () => {

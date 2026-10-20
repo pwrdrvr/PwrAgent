@@ -57,7 +57,7 @@
     "jsdom": "^30.0.1",
     "oxc-parser": "0.153.0",
     "oxlint": "1.87.0",
-    "oxlint-tsgolint": "7.0.2003",
+    "oxlint-tsgolint": "7.0.2004",
     "typescript": "^6.0.2",
     "typescript-eslint": "^8.62.0",
     "typescript-native": "npm:typescript@7.0.2",

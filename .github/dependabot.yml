@@ -28,6 +28,10 @@ updates:
       - dependency-name: "@types/node"
         update-types:
           - "version-update:semver-major"
+      # 30.1.2 makes the dialog Tab-walk tests 4–7x slower and times out
+      # four Linux CI tests (#2754). Keep 30.1.1; review the next patch.
+      - dependency-name: "jsdom"
+        versions: ["30.1.2"]
       # Electron majors need a planned desktop runtime migration. Packaging
       # behavior and Electron breaking changes need human review before a PR
       # is worth opening.
