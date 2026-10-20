@@ -2358,6 +2358,14 @@ export type AppServerNotification =
       };
     }
   | {
+      /** The operator moved a waiting entry; the FIFO now runs in this order. */
+      method: "thread/turnQueue/reordered";
+      params: {
+        threadId: string;
+        queueEntryIds: string[];
+      };
+    }
+  | {
       method: "thread/scheduledAction/updated";
       params: {
         action: ScheduledThreadAction;

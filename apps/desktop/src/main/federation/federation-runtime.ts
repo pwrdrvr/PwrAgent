@@ -50,6 +50,7 @@ import type {
   AppServerThreadSummary,
   AttachDirectoryToThreadResponse,
   CancelQueuedTurnResponse,
+  MoveQueuedTurnResponse,
   ReleaseQueuedTurnResponse,
   CancelThreadExecutionModeQueueResponse,
   CheckThreadBranchDriftResponse,
@@ -152,6 +153,7 @@ import {
   type AppServerBackendKind,
   type AttachDirectoryToThreadRequest,
   type CancelQueuedTurnRequest,
+  type MoveQueuedTurnRequest,
   type ReleaseQueuedTurnRequest,
   type CancelThreadExecutionModeQueueRequest,
   type CelestialIconAssignment,
@@ -684,6 +686,7 @@ const NAVIGATION_EVENT_METHODS = new Set<string>([
   "thread/subAgents/updated",
   "thread/subthreadOrder/updated",
   "thread/subthreadsCollapsed/updated",
+  "thread/turnQueue/reordered",
   "thread/turnQueue/updated",
   "thread/unarchived",
   "turn/cancelled",
@@ -6964,6 +6967,11 @@ function localBackendOperations(): FederationBackendOperations {
       return await getDesktopBackendRegistry().releaseQueuedTurnWithDisposition(
         request.queueEntryId,
       );
+    },
+    async moveQueuedTurn(
+      request: MoveQueuedTurnRequest,
+    ): Promise<MoveQueuedTurnResponse> {
+      return await getDesktopBackendRegistry().moveQueuedTurn(request);
     },
     async listScheduledThreadActions(
       request: ListScheduledThreadActionsRequest = {},

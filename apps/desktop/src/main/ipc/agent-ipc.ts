@@ -25,6 +25,8 @@ import {
   type ApplyThreadModelMigrationResponse,
   type CancelQueuedTurnRequest,
   type CancelQueuedTurnResponse,
+  type MoveQueuedTurnRequest,
+  type MoveQueuedTurnResponse,
   type ReleaseQueuedTurnRequest,
   type ReleaseQueuedTurnResponse,
   type CancelThreadExecutionModeQueueRequest,
@@ -115,6 +117,7 @@ import {
   AGENT_READ_QUEUED_TURN_CHANNEL,
   AGENT_CANCEL_QUEUED_TURN_CHANNEL,
   AGENT_RELEASE_QUEUED_TURN_CHANNEL,
+  AGENT_MOVE_QUEUED_TURN_CHANNEL,
   AGENT_CANCEL_THREAD_EXECUTION_MODE_QUEUE_CHANNEL,
   AGENT_APPLY_THREAD_MODEL_MIGRATION_CHANNEL,
   AGENT_EVENT_CHANNEL,
@@ -738,6 +741,26 @@ export function registerAgentIpcHandlers(): void {
         "Cancelled from the desktop composer.",
         request.expectedContentHash,
       );
+    },
+  );
+
+  ipcMain.removeHandler(AGENT_MOVE_QUEUED_TURN_CHANNEL);
+  ipcMain.handle(
+    AGENT_MOVE_QUEUED_TURN_CHANNEL,
+    async (
+      _event,
+      request: MoveQueuedTurnRequest,
+    ): Promise<MoveQueuedTurnResponse> => {
+      if (
+        request.federationTarget
+        && isRemoteFederationTarget(request.federationTarget)
+      ) {
+        const { federationTarget, ...remoteRequest } = request;
+        return await getDesktopFederationRuntime()
+          .remoteBackend(federationTarget)
+          .moveQueuedTurn(remoteRequest);
+      }
+      return await registry.moveQueuedTurn(request);
     },
   );
 

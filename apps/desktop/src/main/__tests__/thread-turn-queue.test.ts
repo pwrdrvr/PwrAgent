@@ -926,3 +926,93 @@ describe("operator reply steering", () => {
     queue.close();
   });
 });
+
+describe("ThreadTurnQueue.moveEntry", () => {
+  const ids = (queue: ThreadTurnQueue): string[] =>
+    queue.getQueuedEntries({ backend: "codex", threadId: "thread-1" }).map((entry) => entry.id);
+  const busyQueue = async (
+    entryIds: string[],
+    options: { isThreadActive?: () => boolean; startTurn?: ConstructorParameters<typeof ThreadTurnQueue>[0]["startTurn"] } = {},
+  ): Promise<ThreadTurnQueue> => {
+    const queue = new ThreadTurnQueue({
+      isThreadActive: options.isThreadActive ?? (() => true),
+      startTurn: options.startTurn ?? (async (entry) => ({
+        backend: entry.backend,
+        threadId: entry.threadId,
+        turnId: `turn-${entry.id}`,
+      })),
+    });
+    for (const id of entryIds) await queue.submit(buildEntry({ id }));
+    return queue;
+  };
+
+  it("moves an entry in front of its anchor, or to the end without one", async () => {
+    const queue = await busyQueue(["a", "b", "c", "d"]);
+
+    await expect(queue.moveEntry("d", "a")).resolves.toMatchObject({
+      disposition: "moved",
+      entryIds: ["d", "a", "b", "c"],
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(ids(queue)).toEqual(["d", "a", "b", "c"]);
+
+    await expect(queue.moveEntry("d", "c")).resolves.toMatchObject({ disposition: "moved" });
+    expect(ids(queue)).toEqual(["a", "b", "d", "c"]);
+
+    await expect(queue.moveEntry("a")).resolves.toMatchObject({ disposition: "moved" });
+    expect(ids(queue)).toEqual(["b", "d", "c", "a"]);
+  });
+
+  it("answers unchanged when the entry is already where it was asked to go", async () => {
+    const queue = await busyQueue(["a", "b", "c"]);
+
+    await expect(queue.moveEntry("a", "b")).resolves.toMatchObject({ disposition: "unchanged" });
+    await expect(queue.moveEntry("c")).resolves.toMatchObject({ disposition: "unchanged" });
+    await expect(queue.moveEntry("b", "b")).resolves.toMatchObject({ disposition: "unchanged" });
+    expect(ids(queue)).toEqual(["a", "b", "c"]);
+  });
+
+  it("refuses an entry or an anchor that has left the queue", async () => {
+    const queue = await busyQueue(["a", "b"]);
+
+    await expect(queue.moveEntry("gone", "a")).resolves.toEqual({
+      disposition: "not_found",
+      entryId: "gone",
+    });
+    await expect(queue.moveEntry("b", "gone")).resolves.toMatchObject({
+      disposition: "anchor_not_found",
+      entryIds: ["a", "b"],
+    });
+    expect(ids(queue)).toEqual(["a", "b"]);
+  });
+
+  it("does not move a held entry, so nothing gets around a hold", async () => {
+    const queue = await busyQueue(["queued"]);
+    await queue.submitHeld(buildEntry({ id: "held" }), "The steer target ended.");
+    expect(ids(queue)).toEqual(["held", "queued"]);
+
+    // A hold marks the whole FIFO: every entry waits for Retry.
+    await expect(queue.moveEntry("queued", "held")).resolves.toMatchObject({ disposition: "held" });
+    await expect(queue.moveEntry("held")).resolves.toMatchObject({ disposition: "held" });
+    expect(ids(queue)).toEqual(["held", "queued"]);
+  });
+
+  it("starts the new head when the thread is idle by the time the move ends", async () => {
+    let active = true;
+    const started: string[] = [];
+    const queue = await busyQueue(["a", "b", "c"], {
+      isThreadActive: () => active,
+      startTurn: async (entry) => {
+        started.push(entry.id);
+        return { backend: entry.backend, threadId: entry.threadId, turnId: `turn-${entry.id}` };
+      },
+    });
+    active = false;
+
+    await queue.moveEntry("c", "a");
+    await vi.waitFor(() => expect(started).toEqual(["c"]));
+    expect(ids(queue)).toEqual(["a", "b"]);
+    queue.close();
+  });
+});

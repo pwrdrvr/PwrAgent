@@ -162,6 +162,7 @@ export const AGENT_SUBMIT_THREAD_REPLY_CHANNEL = "agent:submit-thread-reply";
 export const AGENT_READ_QUEUED_TURN_CHANNEL = "agent:read-queued-turn";
 export const AGENT_CANCEL_QUEUED_TURN_CHANNEL = "agent:cancel-queued-turn";
 export const AGENT_RELEASE_QUEUED_TURN_CHANNEL = "agent:release-queued-turn";
+export const AGENT_MOVE_QUEUED_TURN_CHANNEL = "agent:move-queued-turn";
 export const SCHEDULED_ACTIONS_LIST_CHANNEL = "scheduled-actions:list";
 export const SCHEDULED_ACTIONS_CREATE_CHANNEL = "scheduled-actions:create";
 export const SCHEDULED_ACTIONS_UPDATE_CHANNEL = "scheduled-actions:update";
