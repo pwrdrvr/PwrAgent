@@ -11114,6 +11114,10 @@ export class CodexAppServerClient {
 
   async compactThread(params: {
     threadId: string;
+    model?: string;
+    serviceTier?: string;
+    reasoningEffort?: string;
+    fastMode?: boolean;
   }): Promise<{ threadId: string; turnId: string; itemId?: string }> {
     await this.ensureInitialized();
     const connection = this.createThreadOperationConnection();
@@ -11121,14 +11125,21 @@ export class CodexAppServerClient {
     await requestWithFallbacks({
       client: connection,
       methods: ["thread/resume"],
-      payloads: buildThreadResumePayloads(
-        {
-          threadId: params.threadId,
-        },
-        this.getProtocolCompatibility(),
-      ),
+      payloads: buildThreadResumePayloads(params, this.getProtocolCompatibility()),
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
-    }).catch(() => undefined);
+    });
+
+    // Rejoining a loaded thread can preserve its previous model. Compaction
+    // has no turn/start override, so apply the selection and await acceptance.
+    const settings = buildThreadSettingsUpdatePayload(params);
+    if (settings) {
+      await requestWithFallbacks({
+        client: connection,
+        methods: ["thread/settings/update"],
+        payloads: [settings],
+        timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      });
+    }
 
     await requestWithFallbacks({
       client: connection,

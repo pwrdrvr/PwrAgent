@@ -1098,6 +1098,10 @@ type BackendClient = {
   }): Promise<{ threadId: string; turnId: string }>;
   compactThread?(params: {
     threadId: string;
+    model?: string;
+    serviceTier?: string;
+    reasoningEffort?: string;
+    fastMode?: boolean;
   }): Promise<{ threadId: string; turnId: string; itemId?: string }>;
   listMcpServers?(params: {
     threadId?: string;
@@ -21665,7 +21669,17 @@ export class DesktopBackendRegistry {
         if (!client.compactThread) {
           throw new Error("Selected backend does not support thread compaction");
         }
-        return await client.compactThread({ threadId: params.threadId });
+        const overlay = await this.overlayStore.getThreadOverlayState({
+          backend: "codex", threadId: params.threadId,
+        });
+        const settings = await this.resolveModelSettings("codex", {
+          model: overlay?.model,
+          serviceTier: overlay?.serviceTier,
+          reasoningEffort: overlay?.reasoningEffort,
+          reasoningEffortsByModel: overlay?.reasoningEffortsByModel,
+          fastMode: overlay?.fastMode,
+        });
+        return await client.compactThread({ threadId: params.threadId, ...settings });
       });
       // The adapter's compact:<threadId> is a placeholder. Prefer the real
       // turn ID captured from turn/started (or an early terminal notification).

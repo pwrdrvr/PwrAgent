@@ -1822,9 +1822,7 @@ class MockBackendClient {
     config?: CodexThreadStartParams["config"];
     dynamicTools?: unknown;
   };
-  lastCompactThreadParams?: {
-    threadId: string;
-  };
+  lastCompactThreadParams?: Parameters<CodexAppServerClient["compactThread"]>[0];
   lastListMcpServersParams?: {
     threadId?: string;
     detail: "toolsAndAuthOnly" | "full";
@@ -2406,9 +2404,7 @@ class MockBackendClient {
     return { threadId: params.threadId, turnId: params.expectedTurnId };
   }
 
-  async compactThread(params: {
-    threadId: string;
-  }): Promise<{ threadId: string; turnId: string; itemId: string }> {
+  async compactThread(params: Parameters<CodexAppServerClient["compactThread"]>[0]): Promise<{ threadId: string; turnId: string; itemId: string }> {
     this.lastCompactThreadParams = params;
     return {
       threadId: params.threadId,
@@ -52075,6 +52071,10 @@ script = "printf setup"
   it("starts compaction through the single Codex client", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/read", "thread/resume", "thread/compact/start"] },
+      models: [{
+        id: "gpt-6.1-sol", label: "GPT-6.1-Sol", current: true,
+        supportsReasoning: true, reasoningEfforts: ["medium", "high"], defaultReasoningEffort: "medium",
+      }],
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
@@ -52093,10 +52093,36 @@ script = "printf setup"
       itemId: "compact-item-1",
     });
     expect(codexClient.lastCompactThreadParams).toEqual({
-      threadId: "thread-1",
+      threadId: "thread-1", model: "gpt-6.1-sol", reasoningEffort: "medium",
     });
 
     await registry.close();
+  });
+
+  it("applies the selected model when compacting directly without starting a user turn", async () => {
+    const codexClient = new MockBackendClient({ models: [{
+      id: "gpt-6.1-sol", label: "GPT-6.1-Sol", supportsReasoning: true,
+      reasoningEfforts: ["medium", "high"], defaultReasoningEffort: "medium",
+    }] });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock({ overlays: {
+        "codex:thread-direct-compact": {
+          backend: "codex", threadId: "thread-direct-compact", executionMode: "default",
+          model: "gpt-6.1-sol", reasoningEffort: "high", extraLinkedDirectories: [],
+        },
+      } }),
+      threadTitleGenerationService: null,
+    });
+    try {
+      await registry.compactThread({ backend: "codex", threadId: "thread-direct-compact" });
+      expect(codexClient.lastCompactThreadParams).toMatchObject({
+        threadId: "thread-direct-compact", model: "gpt-6.1-sol", reasoningEffort: "high",
+      });
+      expect(codexClient.startTurnCallCount).toBe(0);
+    } finally {
+      await registry.close();
+    }
   });
 
   describe("manual compaction invalid message-ID recovery", () => {
@@ -52117,8 +52143,16 @@ script = "printf setup"
       });
 
     it.each(["before", "after"])("repairs a failure %s the compact response and retries only compaction once", async (timing) => {
-      const codexClient = new MockBackendClient({});
-      const overlayStore = createOverlayStoreMock();
+      const codexClient = new MockBackendClient({ models: [{
+        id: "gpt-6.1-sol", label: "GPT-6.1-Sol", supportsReasoning: true,
+        reasoningEfforts: ["medium", "high"], defaultReasoningEffort: "medium",
+      }] });
+      const overlayStore = createOverlayStoreMock({ overlays: {
+        [`codex:${threadId}`]: {
+          backend: "codex", threadId, executionMode: "default", extraLinkedDirectories: [],
+          model: "gpt-6.1-sol", reasoningEffort: "high",
+        },
+      } });
       const registry = new DesktopBackendRegistry({
         codexClient,
         overlayStore,
@@ -52160,6 +52194,9 @@ script = "printf setup"
           { failureMessage: invalidIdFailure, threadId },
         ]);
         expect(compact).toHaveBeenCalledTimes(2);
+        for (const [request] of compact.mock.calls) {
+          expect(request).toMatchObject({ threadId, model: "gpt-6.1-sol", reasoningEffort: "high" });
+        }
         expect(codexClient.startTurnCallCount).toBe(0);
         expect((await overlayStore.getThreadOverlayState({ backend: "codex", threadId }))
           ?.turnFailureLog?.find((failure) => failure.turnId === "compact-failed")
