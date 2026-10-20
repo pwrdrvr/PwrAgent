@@ -705,7 +705,7 @@ ISC
 - minipass-pipeline@1.2.4 | https://www.npmjs.com/package/minipass-pipeline
 - minipass-sized@2.0.0 | https://github.com/isaacs/minipass-sized
 - once@1.4.0 | https://github.com/isaacs/once
-- pixelmatch@7.2.0 | https://github.com/mapbox/pixelmatch
+- pixelmatch@8.0.0 | https://github.com/mapbox/pixelmatch
 - proc-log@7.0.0 | https://github.com/npm/proc-log
 - semver@7.7.4 | https://github.com/npm/node-semver
 - semver@7.8.5 | https://github.com/npm/node-semver
@@ -10541,13 +10541,13 @@ Apache License
 
    END OF TERMS AND CONDITIONS
 
-pixelmatch@7.2.0 (ISC)
+pixelmatch@8.0.0 (ISC)
 ----------------------
 
 Applies to:
-- pixelmatch@7.2.0 (ISC)
+- pixelmatch@8.0.0 (ISC)
 
-Representative file: pixelmatch@7.2.0/LICENSE
+Representative file: pixelmatch@8.0.0/LICENSE
 
 ISC License
 
