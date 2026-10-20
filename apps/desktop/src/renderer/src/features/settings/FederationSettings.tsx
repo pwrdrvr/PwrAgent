@@ -1885,6 +1885,7 @@ const FEDERATION_CAPABILITY_LABELS: Record<FederationCapability, string> = {
   transport_brotli: "",
   shutdown_notice: "receive shutdown notices",
   navigation_directory_set_events: "announce directory changes",
+  turn_queue_reorder: "reorder queued messages",
 };
 
 function formatFederationCapabilities(

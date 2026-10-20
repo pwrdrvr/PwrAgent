@@ -542,7 +542,8 @@ function rewriteLiveTranscriptImagesForFederation(
   } as AgentEvent;
 }
 
-const DEFAULT_CAPABILITIES: FederationCapability[] = [
+/** What this instance advertises to every peer it connects to. */
+export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "navigation_group_invalidations",
   "remote_window",
   "thread_navigation",
@@ -572,6 +573,7 @@ const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "transport_brotli",
   "shutdown_notice",
   "navigation_directory_set_events",
+  "turn_queue_reorder",
 ];
 
 const REMOTE_THREAD_SUMMARY_EVENT_CONSUMER_ID =

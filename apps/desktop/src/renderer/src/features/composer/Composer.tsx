@@ -33,6 +33,7 @@ import {
   planQueuedTurnMove,
   queuedMoveAnchor,
   queuedReorderGroup,
+  queuedTurnOwnerCanMove,
   requestOwnerQueuedTurnMove,
   settleQueuedTurnMove,
 } from "./queued-turn-move";
@@ -700,7 +701,7 @@ type QueuedTurnDraft = {
   backendQueuePending?: boolean;
   queueEntryId?: string;
   /** See `ComposerQueuedTurnSnapshot.pendingMove`. */
-  pendingMove?: { beforeQueueEntryId?: string };
+  pendingMove?: { beforeQueueEntryId?: string; requestId?: number };
   scheduledActionId?: string;
   failedScheduledActionId?: string;
   errorMessage?: string;
@@ -3855,7 +3856,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     draft.trim().length > 0 || skillTokens.length > 0;
   const queuedTurn = queuedTurns[0];
   const nextReleasableQueuedTurn = getNextReleasableQueuedTurn(queuedTurns);
-  const ownerCanMoveQueuedTurns = Boolean(props.desktopApi?.moveQueuedTurn);
+  const ownerCanMoveQueuedTurns = queuedTurnOwnerCanMove(props.desktopApi, props.thread);
   // The composer renders on every keystroke; the rows change with the queue.
   const queuedReorderRows = useMemo(
     () => queuedTurns.map((queued): QueuedReorderRow => ({
@@ -4605,19 +4606,22 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       federationTarget,
       queueEntryId: plan.queueEntryId,
       beforeQueueEntryId: plan.beforeQueueEntryId,
+      plannedOrder: plan.plannedOrder,
     }).then((answer) => {
-      const settled = isQueuedTurnStoreScope(scopeKey)
-        ? settleQueuedTurnMove(draftStore.getQueuedTurns(scopeKey), id, answer, plan.ownerOrder)
-        : undefined;
-      if (settled) {
-        saveQueuedTurnSnapshots(scopeKey, settled);
-        if (activeComposerScopeKeyRef.current === scopeKey) {
-          setQueuedTurnsState(settled);
-        }
-      }
-      if (answer.failure && activeComposerScopeKeyRef.current === scopeKey) {
-        setSendError(answer.failure);
-      }
+      if (!isQueuedTurnStoreScope(scopeKey)) return;
+      const settled = settleQueuedTurnMove(
+        draftStore.getQueuedTurns(scopeKey),
+        id,
+        plan.requestId,
+        answer,
+        plan.ownerOrder,
+      );
+      // The row started or was removed, or a later move of it settles it.
+      if (!settled) return;
+      saveQueuedTurnSnapshots(scopeKey, settled);
+      if (activeComposerScopeKeyRef.current !== scopeKey) return;
+      setQueuedTurnsState(settled);
+      if (answer.failure) setSendError(answer.failure);
     });
   };
   const preserveCancelledQueuedTurnInScope = (

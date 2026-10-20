@@ -441,6 +441,10 @@ function authenticateScheduledTurnOrigin<
   };
 }
 
+/** What a viewer hears when the owning instance cannot reorder its queue. */
+export const QUEUED_TURN_REORDER_UNSUPPORTED_MESSAGE =
+  "Update PwrAgent on the owning instance to reorder its queued messages.";
+
 export const FEDERATION_BACKEND_METHODS = {
   getNavigationQueryPage: "backend.getNavigationQueryPage",
   removeNavigationDirectory: "backend.removeNavigationDirectory",
@@ -2496,7 +2500,7 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
       });
     } catch (error) {
       if (hasFederationErrorCode(error, "method_not_found")) {
-        throw new Error("Update PwrAgent on the owning instance to reorder its queued messages.");
+        throw new Error(QUEUED_TURN_REORDER_UNSUPPORTED_MESSAGE);
       }
       throw error;
     }

@@ -1,5 +1,10 @@
-import type { FederationTarget, MoveQueuedTurnResponse } from "@pwragent/shared";
+import type {
+  FederationTarget,
+  MoveQueuedTurnResponse,
+  NavigationThreadSummary,
+} from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { threadSupportsFederationCapability } from "../../lib/federated-thread-events";
 import type { QueuedReorderRow } from "./useQueuedRowReorder";
 
 type MovableQueuedTurn = {
@@ -7,7 +12,7 @@ type MovableQueuedTurn = {
   backendQueuePending?: boolean;
   errorMessage?: string;
   manualReleaseRequired?: boolean;
-  pendingMove?: { beforeQueueEntryId?: string };
+  pendingMove?: { beforeQueueEntryId?: string; requestId?: number };
   queueEntryId?: string;
   reviewCommand?: unknown;
   scheduledActionId?: string;
@@ -15,6 +20,21 @@ type MovableQueuedTurn = {
   steerDelivery?: "sending" | "accepted";
   waitingForScheduledActionId?: string;
 };
+
+/**
+ * Whether the instance that owns `thread`'s queue can move its entries. A
+ * peer on an older build does not advertise `turn_queue_reorder`, and its
+ * rows offer no drag rather than one that snaps back.
+ */
+export function queuedTurnOwnerCanMove(
+  desktopApi: DesktopApi | undefined,
+  thread: NavigationThreadSummary | undefined,
+): boolean {
+  if (!desktopApi?.moveQueuedTurn) return false;
+  return !thread
+    || (threadSupportsFederationCapability(thread, "turn_queue_reorder")
+      && threadSupportsFederationCapability(thread, "turn_control"));
+}
 
 /**
  * Which run of the band a queued row can move within, or none. Rows the
@@ -64,12 +84,16 @@ function ownerQueueOrder(turns: readonly MovableQueuedTurn[]): string[] {
   );
 }
 
+let nextQueuedTurnMoveRequestId = 0;
+
 /**
  * The list with row `id` in front of row `beforeId` (at the end without
  * one). A row the owner's FIFO holds carries `pendingMove` until the owner
  * answers, and lands in front of the next owner entry after it: mirrors of
  * the FIFO are one run in its order. `ownerOrder` is the FIFO order before
- * the move, to put back if the owner refuses it.
+ * the move, to put back if the owner refuses it; `plannedOrder` is the order
+ * the move asks for. `requestId` tells this move's answer from a later
+ * move's of the same row.
  */
 export function planQueuedTurnMove<T extends MovableQueuedTurn>(
   turns: readonly T[],
@@ -80,6 +104,8 @@ export function planQueuedTurnMove<T extends MovableQueuedTurn>(
   queueEntryId?: string;
   beforeQueueEntryId?: string;
   ownerOrder: string[];
+  plannedOrder: string[];
+  requestId: number;
 } | undefined {
   const from = turns.findIndex((candidate) => candidate.id === id);
   const moved = turns[from];
@@ -95,16 +121,19 @@ export function planQueuedTurnMove<T extends MovableQueuedTurn>(
         .find((candidate) => candidate.queueEntryId && !candidate.reviewCommand)
         ?.queueEntryId
     : undefined;
+  const requestId = ++nextQueuedTurnMoveRequestId;
   next.splice(
     to,
     0,
-    moved.queueEntryId ? { ...moved, pendingMove: { beforeQueueEntryId } } : moved,
+    moved.queueEntryId ? { ...moved, pendingMove: { beforeQueueEntryId, requestId } } : moved,
   );
   return {
     next,
     queueEntryId: moved.queueEntryId,
     beforeQueueEntryId,
     ownerOrder: ownerQueueOrder(turns),
+    plannedOrder: ownerQueueOrder(next),
+    requestId,
   };
 }
 
@@ -147,51 +176,83 @@ export function queuedTurnMoveFailureMessage(
   }
 }
 
+/** How many times a move re-aims after the entry it was aimed at left. */
+const QUEUED_TURN_MOVE_RETARGETS = 2;
+
 /**
  * Asks the owner to move its entry. Resolves to the reason it refused, if
  * any, and the order its FIFO is in when it answered.
+ *
+ * The entry the move lands in front of can start, or be cancelled, while the
+ * request is in transit. The owner then answers `anchor_not_found` with its
+ * current order, and the move re-aims at the next entry of `plannedOrder`
+ * that is still queued, or the end.
  */
 export async function requestOwnerQueuedTurnMove(params: {
   desktopApi?: DesktopApi;
   federationTarget?: FederationTarget;
   queueEntryId: string;
   beforeQueueEntryId?: string;
+  plannedOrder?: readonly string[];
 }): Promise<{ failure?: string; queueEntryIds?: string[] }> {
   if (!params.desktopApi?.moveQueuedTurn) {
     return { failure: "Reordering queued messages is unavailable." };
   }
+  let beforeQueueEntryId = params.beforeQueueEntryId;
   try {
-    const response = await params.desktopApi.moveQueuedTurn({
-      ...(params.federationTarget ? { federationTarget: params.federationTarget } : {}),
-      queueEntryId: params.queueEntryId,
-      ...(params.beforeQueueEntryId
-        ? { beforeQueueEntryId: params.beforeQueueEntryId }
-        : {}),
-    });
-    return {
-      failure: queuedTurnMoveFailureMessage(response.disposition),
-      queueEntryIds: response.queueEntryIds,
-    };
+    for (let attempt = 0; ; attempt += 1) {
+      const response = await params.desktopApi.moveQueuedTurn({
+        ...(params.federationTarget ? { federationTarget: params.federationTarget } : {}),
+        queueEntryId: params.queueEntryId,
+        ...(beforeQueueEntryId ? { beforeQueueEntryId } : {}),
+      });
+      const queued = response.queueEntryIds;
+      if (
+        response.disposition === "anchor_not_found"
+        && attempt < QUEUED_TURN_MOVE_RETARGETS
+        && queued
+        && params.plannedOrder
+      ) {
+        const planned = params.plannedOrder;
+        const after = planned.slice(planned.indexOf(params.queueEntryId) + 1);
+        const retarget = after.find((entryId) => queued.includes(entryId));
+        if (retarget !== beforeQueueEntryId) {
+          beforeQueueEntryId = retarget;
+          continue;
+        }
+      }
+      return {
+        failure: queuedTurnMoveFailureMessage(response.disposition),
+        queueEntryIds: queued,
+      };
+    }
   } catch (error) {
     return { failure: error instanceof Error ? error.message : String(error) };
   }
 }
 
 /**
- * The list once the owner answered a move: its marker dropped and, when the
- * owner refused, its FIFO entries back in the owner's order. Nothing re-reads
- * the queue after a refusal, so the band must not keep an order the owner
- * does not have. Undefined when nothing changes.
+ * The list once the owner answered move `requestId`: its marker dropped
+ * and, when the owner refused, its FIFO entries back in the owner's order.
+ * Nothing re-reads the queue after a refusal, so the band must not keep an
+ * order the owner does not have.
+ *
+ * Undefined when the answer no longer applies: the row has left the band (it
+ * started, or was removed), or the operator moved it again and that later
+ * move's answer settles it.
  */
 export function settleQueuedTurnMove<T extends MovableQueuedTurn>(
   turns: readonly T[],
   id: string,
+  requestId: number,
   answer: { failure?: string; queueEntryIds?: string[] },
   ownerOrder: readonly string[],
 ): T[] | undefined {
-  const cleared = withoutPendingMove(turns, id);
+  const row = turns.find((candidate) => candidate.id === id);
+  if (row?.pendingMove?.requestId !== requestId) return undefined;
+  const cleared = withoutPendingMove(turns, id) ?? [...turns];
   if (!answer.failure) return cleared;
-  return withOwnerQueueOrder(cleared ?? turns, answer.queueEntryIds ?? ownerOrder);
+  return withOwnerQueueOrder(cleared, answer.queueEntryIds ?? ownerOrder);
 }
 
 /** Drops a settled move's marker, so the next queue read is the owner's order. */

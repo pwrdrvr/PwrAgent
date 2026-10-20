@@ -110,6 +110,7 @@ import {
   federationEventClassForMethod,
   getDesktopFederationRuntime,
 } from "../federation/federation-runtime";
+import { QUEUED_TURN_REORDER_UNSUPPORTED_MESSAGE } from "../federation/federation-backend-bridge";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { buildLiveDiffActivityEntry } from "../app-server/live-diff-activity";
 import { timeStartupProfileOperation } from "../diagnostics/startup-profile-events";
@@ -756,7 +757,13 @@ export function registerAgentIpcHandlers(): void {
         && isRemoteFederationTarget(request.federationTarget)
       ) {
         const { federationTarget, ...remoteRequest } = request;
-        return await getDesktopFederationRuntime()
+        const runtime = getDesktopFederationRuntime();
+        // The renderer offers no drag without the capability; this answers a
+        // stale window without a round trip to an owner that cannot move.
+        if (!runtime.remoteTargetSupportsCapability(federationTarget, "turn_queue_reorder")) {
+          throw new Error(QUEUED_TURN_REORDER_UNSUPPORTED_MESSAGE);
+        }
+        return await runtime
           .remoteBackend(federationTarget)
           .moveQueuedTurn(remoteRequest);
       }

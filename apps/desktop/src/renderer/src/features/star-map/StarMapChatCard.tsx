@@ -47,6 +47,7 @@ import {
   planQueuedTurnMove,
   queuedMoveAnchor,
   queuedReorderGroup,
+  queuedTurnOwnerCanMove,
   requestOwnerQueuedTurnMove,
   settleQueuedTurnMove,
 } from "../composer/queued-turn-move";
@@ -456,7 +457,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     rows: queuedTurns.map((queued) => ({
       id: queued.id,
       title: queued.title ?? queuedTurnPreview(queued),
-      group: queuedReorderGroup(queued, Date.now(), Boolean(desktopApi?.moveQueuedTurn)),
+      group: queuedReorderGroup(queued, Date.now(), queuedTurnOwnerCanMove(desktopApi, thread)),
     })),
     onMove: (id, toIndex) => {
       const store = ownedComposerDraftStore;
@@ -474,14 +475,18 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         federationTarget,
         queueEntryId: plan.queueEntryId,
         beforeQueueEntryId: plan.beforeQueueEntryId,
+        plannedOrder: plan.plannedOrder,
       }).then((answer) => {
         const settled = settleQueuedTurnMove(
           store.getQueuedTurns(scopeKey),
           id,
+          plan.requestId,
           answer,
           plan.ownerOrder,
         );
-        if (settled) store.setQueuedTurns(scopeKey, settled);
+        // The row started or was removed, or a later move of it settles it.
+        if (!settled) return;
+        store.setQueuedTurns(scopeKey, settled);
         if (answer.failure) setSendError(answer.failure);
       });
     },

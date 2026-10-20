@@ -19,6 +19,7 @@ import {
   type NavigationLaunchpadDraft,
   type StartReviewRequest,
   type ModelSettingsRecent,
+  type FederationCapability,
   type MoveQueuedTurnResponse,
   type SetThreadModelSettingsRequest,
   type StartTurnRequest,
@@ -25126,6 +25127,41 @@ describe("queued message reordering", () => {
     const rows = document.querySelectorAll(".composer__queued--message");
     expect([...rows].every((row) => row.classList.contains("composer__queued--reorderable"))).toBe(true);
     expect(rows[0]?.querySelector(".composer__queued-grip--empty")).not.toBeNull();
+  });
+
+  it("reorders a peer's queue only when the peer advertises it, and asks that peer", async () => {
+    const target = { scope: "remote" as const, instanceId: "owner" };
+    const remoteThread = (capabilities: FederationCapability[]) => ({
+      ...thread,
+      federation: { instanceLabel: "Owner", ref: { backend: "codex" as const, threadId: "thread-1", target }, capabilities },
+    });
+    const draftStore = createComposerDraftStore();
+    // A peer's queue lives under its owner's scope.
+    draftStore.setQueuedTurns(buildThreadComposerScopeKey("codex", "thread-1", target), [mirror("a"), mirror("b")]);
+    const moveQueuedTurn = vi.fn(async (): Promise<MoveQueuedTurnResponse> =>
+      ({ queueEntryId: "b", disposition: "moved", queueEntryIds: ["b", "a"] }));
+    const desktopApi = { moveQueuedTurn, onAgentEvent: () => () => undefined };
+
+    // An owner on an older build: no drag to snap back, no request.
+    const { rerender } = render(<Composer activeTurnId="active" backends={[backendSummary("codex")]}
+      draftStore={draftStore} desktopApi={desktopApi} disabled={false} skills={[]}
+      thread={remoteThread(["turn_control"])} />);
+    expect(screen.queryByRole("button", { name: /^Reorder: / })).toBeNull();
+    expect(document.querySelector(".composer__queued--reorderable")).toBeNull();
+    fireEvent.keyDown(screen.getByLabelText("Queued message 2"), { key: "ArrowUp", metaKey: true, shiftKey: true });
+    expect(order()).toEqual(["Message a", "Message b"]);
+    expect(moveQueuedTurn).not.toHaveBeenCalled();
+
+    rerender(<Composer activeTurnId="active" backends={[backendSummary("codex")]}
+      draftStore={draftStore} desktopApi={desktopApi} disabled={false} skills={[]}
+      thread={remoteThread(["turn_control", "turn_queue_reorder"])} />);
+    const grip = screen.getByRole("button", { name: "Reorder: Message b" });
+    grip.focus();
+    fireEvent.keyDown(grip, { key: "ArrowUp" });
+    expect(order()).toEqual(["Message b", "Message a"]);
+    await waitFor(() => expect(moveQueuedTurn).toHaveBeenCalledWith({
+      federationTarget: target, queueEntryId: "b", beforeQueueEntryId: "a",
+    }));
   });
 
   it("shows no grip for a single message, or for an owner that cannot reorder", () => {
