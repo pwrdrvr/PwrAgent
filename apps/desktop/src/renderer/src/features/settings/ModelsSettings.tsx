@@ -50,6 +50,7 @@ import {
   CodexAuthProfileLoginButton,
 } from "./CodexAuthProfileSelect";
 import { ClaudeSettings } from "./ClaudeSettings";
+import { claudeProviderStatus } from "./claude-provider-status";
 import { AcpAgentsSettings } from "./AcpAgentsSettings";
 import { HelperModelSettings } from "./HelperModelSettings";
 import { UsageAccountSettings } from "./UsageAccountSettings";
@@ -187,6 +188,7 @@ export function ModelsSettings(props: {
     props.cachedBackends ?? [],
   );
   const claude = backends.find((backend) => backend.kind === "claude");
+  const claudeStatus = claudeProviderStatus(claude?.claude);
   const [catalogError, setCatalogError] = useState<string | undefined>();
   const [refreshingCatalog, setRefreshingCatalog] = useState(false);
   const [checkingManagedCodex, setCheckingManagedCodex] = useState(false);
@@ -654,13 +656,30 @@ export function ModelsSettings(props: {
   if (props.focus === "claude") {
     return (
       <SettingsSectionStack paneId="models-claude" aria-label="Claude provider settings">
-        <ClaudeSettings backend={claude} onCheck={async () => {
-          if (!props.desktopApi?.listBackends) throw new Error("Provider discovery is unavailable.");
-          const result = await props.desktopApi.listBackends({ includeUnavailable: true, refreshModels: "claude", discoveryIntent: "settings-user-action" });
-          setBackends(result.backends);
-          window.dispatchEvent(new Event(BACKEND_SUMMARIES_REFRESH_EVENT));
-        }} />
-        <ProviderDefaultsStrip backendKind="claude" backends={backends} defaults={props.snapshot.models.providerDefaults ?? {}} error={catalogError} onEditDefaults={editDefaults} />
+        <SettingsPanelHead
+          eyebrow="AI Providers"
+          title="Claude"
+          help="PwrAgent runs Claude Code with your CLI sign-in."
+        />
+        <ProviderDefaultsStrip
+          backendKind="claude"
+          backends={backends}
+          defaults={props.snapshot.models.providerDefaults ?? {}}
+          error={catalogError}
+          onEditDefaults={editDefaults}
+        />
+        <ClaudeSettings
+          backend={claude}
+          desktopApi={props.desktopApi}
+          onChecked={async () => {
+            // The test re-inspected Claude in main; read back the summary it
+            // left so this list, the nav, and the composer agree with it.
+            if (!props.desktopApi?.listBackends) return;
+            const result = await props.desktopApi.listBackends({ includeUnavailable: true });
+            setBackends(result.backends);
+            window.dispatchEvent(new Event(BACKEND_SUMMARIES_REFRESH_EVENT));
+          }}
+        />
       </SettingsSectionStack>
     );
   }
@@ -793,11 +812,10 @@ export function ModelsSettings(props: {
           />
           <SettingsIndexRow
             name="Claude"
-            meta={claude?.claude?.executable ?? "Install Claude Code, then run claude auth login"}
-            chip={claude?.claude?.authStatus === "signed-in"
-              ? claude.claude.authMethod === "api-key" ? "API key" : "Signed in"
-              : "Setup"}
-            chipKind={claude?.claude?.authStatus === "signed-in" ? "ok" : "muted"}
+            meta={claude?.claude?.executable
+              ?? (claude?.claude ? "Claude Code not found" : "Not checked yet")}
+            chip={claudeStatus.label}
+            chipKind={claudeStatus.tone}
             onOpen={() => props.onFocusChange?.("claude")}
           />
           {orderedAcpEntries.map((entry) => {

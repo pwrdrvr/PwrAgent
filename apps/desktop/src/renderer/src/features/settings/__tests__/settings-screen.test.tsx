@@ -9639,16 +9639,24 @@ describe("SettingsScreen", () => {
   it("updates Claude's nav status from cached installation and authentication without probing", () => {
     const listBackends = vi.fn();
     const settings = createSettingsState();
-    const view = (claude: BackendSummary["claude"]) => (
+    const view = (claude: BackendSummary["claude"] | null) => (
       <SettingsScreen initialSection="general" settings={settings}
         desktopApi={{ listBackends }}
-        cachedBackends={[{ kind: "claude", claude } as BackendSummary]} />
+        cachedBackends={claude ? [{ kind: "claude", claude } as BackendSummary] : undefined} />
     );
-    const { rerender } = render(view({ authStatus: "unknown" }));
+    // Before providers load, the row still has a dot instead of looking broken.
+    const { rerender } = render(view(null));
     const nav = screen.getByRole("navigation", { name: "Settings sections" });
     fireEvent.click(within(nav).getByRole("button", { name: /Expand AI Providers/ }));
     const claudeButton = () => within(nav).getByRole("button", { name: /^Claude/ });
     expect(claudeButton().querySelector(".settings-nav__subdot--off")).not.toBeNull();
+    expect(claudeButton().querySelector(".settings-nav__subchip")).toBeNull();
+    rerender(view({ authStatus: "unknown" }));
+    expect(claudeButton().querySelector(".settings-nav__subdot--off")).not.toBeNull();
+    expect(claudeButton()).toHaveTextContent("not installed");
+    rerender(view({ executable: "/fixture/claude", authStatus: "unknown" }));
+    expect(claudeButton().querySelector(".settings-nav__subdot--warn")).not.toBeNull();
+    expect(claudeButton()).toHaveTextContent("check failed");
     rerender(view({ executable: "/fixture/claude", authStatus: "sign-in-required" }));
     expect(claudeButton().querySelector(".settings-nav__subdot--warn")).not.toBeNull();
     expect(claudeButton()).toHaveTextContent("sign in");

@@ -2557,6 +2557,7 @@ export function isDesktopFederationMode(
  * - `telegram`  → HTTP GET https://api.telegram.org/bot<TOKEN>/getMe
  * - `discord`   → HTTP GET https://discord.com/api/v10/users/@me
  * - `codex`     → spawn `<resolved-path> --version`
+ * - `claude`    → resolve Claude Code, then read `claude auth status`
  * - `mattermost` → GET <serverUrl>/api/v4/users/me with bot token
  * - `slack`     → Slack Web API `auth.test` plus Socket Mode `apps.connections.open`
  */
@@ -2564,6 +2565,7 @@ export const SETTINGS_CREDENTIAL_TEST_KINDS = [
   "telegram",
   "discord",
   "codex",
+  "claude",
   "mattermost",
   "slack",
   "feishu",

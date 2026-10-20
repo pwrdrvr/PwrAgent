@@ -1473,6 +1473,13 @@ function getCredentialTester(
       },
       validateMessagingCredentials: (request) =>
         getDesktopMessagingRuntime().requestCredentialValidation(request),
+      checkClaude: async () => {
+        const response = await getDesktopBackendRegistry().listBackends(
+          { includeUnavailable: true, refreshModels: "claude" },
+          issueProviderDiscoveryPermit("settings-user-action"),
+        );
+        return response.backends.find((backend) => backend.kind === "claude")?.claude;
+      },
       checkDecisionProvider: async (provider) => await checkDecisionProvider(provider, {
         settings: resolveService().resolveDecisionModelSettings(),
         apiKey: await resolveService().resolveDecisionApiKey(provider),

@@ -1,60 +1,131 @@
-import { useState } from "react";
-import type { BackendSummary } from "@pwragent/shared";
-import { SettingsField, SettingsPanelHead, SettingsSection } from "./SettingsLayout";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { formatFilesystemPath, type BackendSummary, type SettingsCredentialTestResult } from "@pwragent/shared";
+import type { DesktopApi } from "../../lib/desktop-api";
+import { claudeProviderStatus } from "./claude-provider-status";
+import { SettingsField, SettingsSection } from "./SettingsLayout";
+import { SettingsCopyValue } from "./SettingsCopyValue";
+import { SettingsTestBlock } from "./SettingsTestBlock";
+
+const CLAUDE_SETUP_GUIDE_URL = "https://code.claude.com/docs/en/setup";
+const CLAUDE_SIGN_IN_COMMAND = "claude auth login";
 
 export function ClaudeSettings(props: {
   backend?: BackendSummary;
-  onCheck: () => Promise<void>;
+  desktopApi?: DesktopApi;
+  /** A connection test finished; re-read the summary it refreshed. */
+  onChecked: () => Promise<void>;
 }) {
-  const [checking, setChecking] = useState(false);
-  const [error, setError] = useState<string>();
+  // Results older than the pane are the remembered last test, not a new one.
+  const [mountedAt] = useState(() => Date.now());
+  const handledTestRef = useRef(mountedAt);
+  const onCheckedRef = useRef(props.onChecked);
+  useEffect(() => {
+    onCheckedRef.current = props.onChecked;
+  }, [props.onChecked]);
+  // Stable, and once per result: the test block reports from an effect keyed
+  // on this callback, and the refresh it starts re-renders this pane.
+  const onResult = useCallback((result: SettingsCredentialTestResult | undefined): void => {
+    if (!result || result.testedAt < handledTestRef.current) return;
+    handledTestRef.current = result.testedAt + 1;
+    void onCheckedRef.current();
+  }, []);
   const installation = props.backend?.claude;
-  const authenticated = installation?.authStatus === "signed-in";
-  const apiKey = authenticated && installation.authMethod === "api-key";
-  const signInLabel = installation?.authMethod === "api-key"
-    ? "API key configured in the CLI"
-    : installation?.authMethod === "claude-account"
-      ? "Signed in with a Claude account"
-      : installation?.authMethod === "external"
-        ? "External provider authentication configured in the CLI"
-        : "CLI reports signed in; authentication method unavailable";
+  const status = claudeProviderStatus(installation);
+  const executable = installation?.executable;
+  const loginCommand = installation?.loginCommand ?? CLAUDE_SIGN_IN_COMMAND;
+  const apiKey = installation?.authStatus === "signed-in" && installation.authMethod === "api-key";
+  const signedOut = Boolean(executable) && installation?.authStatus !== "signed-in";
+
   return (
-    <>
-      <SettingsPanelHead eyebrow="AI Providers" title="Claude" help="PwrAgent runs Claude Code with your CLI sign-in." />
-      <SettingsSection title="Runtime" description="Uses your system installation when it is at least as new as the bundled version; otherwise uses the bundled binary.">
-        <SettingsField label="Executable" control={<span className="claude-runtime-path">{installation?.executable ?? "Not found"}</span>} />
-        {installation?.executable ? <SettingsField label="Runtime" control={
-          `${installation.source === "bundled" ? "Bundled with PwrAgent" : "System installation"}${installation.version ? ` · ${installation.version}` : ""}`
-        } /> : <p>Install Claude Code from code.claude.com/docs/en/setup, then run claude auth login in your terminal.</p>}
-        {installation?.loginCommand && (!authenticated || apiKey) ? <SettingsField label={apiKey ? "Claude account sign-in" : "Sign-in command"} control={<code className="claude-runtime-path">{installation.loginCommand}{apiKey ? " --claudeai" : ""}</code>} /> : null}
-        <SettingsField label="Sign-in" control={
-          !installation?.executable
-            ? "Install the CLI to check sign-in."
-            : authenticated
-              ? signInLabel
-              : installation.loginCommand
-                ? `${installation.authStatus === "sign-in-required" ? "Sign-in required." : "Could not verify sign-in."} Run the command above in your terminal.`
-                : installation.message ?? "Run claude auth login in your terminal, then check again."
-        } />
-        {authenticated ? <SettingsField label="Usage access" control={apiKey
-          ? "API billing applies. This check does not verify credits. To use your Claude subscription, run the Claude account sign-in command above in your terminal."
-          : "This check confirms CLI sign-in only; it does not verify available credits or remaining usage."
-        } /> : null}
-        <SettingsField label="Connection check" error={error} control={
-          <div className="settings-inline-actions">
-            <button type="button" className="button button--secondary" disabled={checking}
-              onClick={async () => {
-                setChecking(true);
-                setError(undefined);
-                try { await props.onCheck(); }
-                catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
-                finally { setChecking(false); }
-              }}>
-              {checking ? "Checking…" : "Check installation and sign-in"}
-            </button>
-          </div>
-        } />
-      </SettingsSection>
-    </>
+    <SettingsSection
+      title="Runtime"
+      description="Uses your installed Claude Code, or the copy bundled with PwrAgent if yours is older."
+      chip={status.label}
+      chipKind={status.tone}
+    >
+      <div className="settings-fields">
+        {installation && !executable ? (
+          <SettingsField
+            label="Install Claude Code"
+            sub="Install it, sign in from your terminal, then test again."
+            control={
+              <div className="settings-fields">
+                <SettingsCopyValue
+                  value={CLAUDE_SIGN_IN_COMMAND}
+                  desktopApi={props.desktopApi}
+                  label="Claude sign-in command"
+                />
+                <div className="settings-inline-actions">
+                  <a
+                    className="button button--secondary"
+                    href={CLAUDE_SETUP_GUIDE_URL}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Open install guide
+                  </a>
+                </div>
+              </div>
+            }
+          />
+        ) : null}
+        {executable ? (
+          <SettingsField
+            label="Claude Code"
+            control={
+              <div className="settings-gh-status">
+                <span className="settings-pathrow__path" title={executable}>
+                  Path: {formatFilesystemPath(executable)}
+                </span>
+                <span className="settings-pathrow__path">
+                  {installation?.source === "bundled" ? "Bundled with PwrAgent" : "Installed"}
+                  {installation?.version ? ` · ${installation.version}` : ""}
+                </span>
+              </div>
+            }
+          />
+        ) : null}
+        {signedOut ? (
+          <SettingsField
+            label="Sign in"
+            sub="Run this in your terminal, then test again."
+            control={
+              <SettingsCopyValue
+                value={loginCommand}
+                desktopApi={props.desktopApi}
+                label="Claude sign-in command"
+              />
+            }
+          />
+        ) : null}
+        {apiKey ? (
+          <SettingsField
+            label="Billing"
+            sub="Billed to your API key. To use your Claude plan, sign in with your Claude account."
+            control={
+              <SettingsCopyValue
+                value={`${loginCommand} --claudeai`}
+                desktopApi={props.desktopApi}
+                label="Claude account sign-in command"
+              />
+            }
+          />
+        ) : null}
+        <SettingsField
+          label="Connection test"
+          sub="Confirms Claude Code runs and is signed in. It does not check credits or usage limits."
+          control={
+            <SettingsTestBlock
+              kind="claude"
+              desktopApi={props.desktopApi}
+              icon={<span aria-hidden="true">C</span>}
+              defaultName={formatFilesystemPath(executable ?? "claude")}
+              defaultSub={executable ? "claude auth status" : "Claude Code not found"}
+              onResult={onResult}
+            />
+          }
+        />
+      </div>
+    </SettingsSection>
   );
 }
