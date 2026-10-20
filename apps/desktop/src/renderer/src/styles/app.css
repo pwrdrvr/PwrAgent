@@ -36970,13 +36970,15 @@ button.composer__subthread-source-parent:hover {
   height: 22px;
 }
 
-/* Reorder. In a band where any row can move, every row gets a 14px grip
-   slot in place of its 4px left inset, so the chevrons stay on one line and
-   nothing shifts when a grip fades in. The grip sits above the disclosure's
-   full-line hit area; the drag itself starts anywhere on a movable row's
-   line (useQueuedRowReorder). */
+/* Reorder. In a band where any row can move, every row gets a 12px grip
+   slot, so the chevrons stay on one line and nothing shifts when a grip
+   fades in. The slot tucks 2px under the disclosure, whose chevron sits in
+   the middle of its 22px box: that leaves the same air between the row's
+   edge and the dots as between the dots and the chevron, about 6px each.
+   The grip sits above the disclosure's full-line hit area; the drag itself
+   starts anywhere on a movable row's line (useQueuedRowReorder). */
 .composer__queued--message.composer__queued--reorderable {
-  padding-left: 0;
+  padding-left: 2px;
 }
 
 .composer__queued-grip {
@@ -36986,9 +36988,9 @@ button.composer__subthread-source-parent:hover {
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  width: 14px;
+  width: 12px;
   height: 22px;
-  margin-right: -6px;
+  margin-right: -10px;
   padding: 0;
   border: 0;
   border-radius: 4px;
@@ -36997,6 +36999,11 @@ button.composer__subthread-source-parent:hover {
   cursor: grab;
   opacity: 0;
   transition: opacity 120ms ease, color 120ms ease;
+}
+
+/* The 14px icon overhangs the narrower slot rather than shrinking into it. */
+.composer__queued-grip svg {
+  flex: none;
 }
 
 .composer__queued-grip--empty {
@@ -37013,9 +37020,10 @@ button.composer__subthread-source-parent:hover {
   color: var(--text-primary);
 }
 
+/* Drawn 1px in, so the ring clears the chevron beside it. */
 .composer__queued-grip:focus-visible {
   outline: 2px solid var(--focus-ring);
-  outline-offset: 0;
+  outline-offset: -1px;
 }
 
 .composer__queued--movable > .composer__queued-line {
@@ -37104,9 +37112,9 @@ button.composer__subthread-source-parent:hover {
 }
 
 .composer__queued--compact .composer__queued-grip {
-  width: 12px;
+  width: 10px;
   height: 20px;
-  margin-right: -4px;
+  margin-right: -8px;
 }
 
 /* Second-line content sits under the label, past the chevron. */
@@ -37127,11 +37135,11 @@ button.composer__subthread-source-parent:hover {
 /* Past the grip slot as well as the chevron. */
 .composer__queued--reorderable > .composer__queued-detail,
 .composer__queued--message.composer__queued--reorderable > .queued-message-inspector {
-  margin-left: 42px;
+  margin-left: 40px;
 }
 
 .composer__queued--compact.composer__queued--reorderable > .queued-message-inspector {
-  margin-left: 38px;
+  margin-left: 36px;
 }
 
 /* Env-action anchor: collapsed-by-default <details> with chevron, body
