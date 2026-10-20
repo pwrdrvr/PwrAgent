@@ -42,7 +42,7 @@ Settings shows the selected path, source, and CLI version.
 
 Every query explicitly supplies `pathToClaudeCodeExecutable`. No usable binary
 and known logged-out states fail before query creation. Settings reads only
-`loggedIn` from `claude auth status --json`; it retains neither account
+`loggedIn` and a known authentication category from `claude auth status --json`; it retains neither account
 identifiers nor credentials. Authentication remains an operator action through
 Claude Code's own `auth login`. For a bundled runtime, Settings shows its fully
 quoted executable path (PowerShell invocation on Windows), so signing in does
@@ -62,6 +62,17 @@ under Anthropic Commercial Terms. It does not add their non-SPDX license
 declarations to the general license allowlist. First-party code remains MIT.
 
 ## Sessions and permissions
+
+Startup and explicit Settings discovery read `Query.supportedModels()` from
+the selected executable without submitting a prompt or persisting a session.
+The picker uses the CLI's versioned names and aliases, with the latest model
+in each family in the primary menu and older models under Other Models.
+Per-model effort choices come from the same catalog; Default leaves effort
+unset so the CLI's own setting applies. Explicit selections pass through to
+`query()` as `model` and `effort`. A saved model absent from the current catalog
+is passed to the CLI for validation instead of silently selecting another model.
+The catalog stays in memory; reads and ordinary turns do not start discovery
+queries. Discovery closes its query on success, failure, and timeout.
 
 PwrAgent creates a stable UUID for a new thread and passes it as `sessionId`.
 Once the SDK confirms initialization, the returned session ID is persisted and

@@ -183,6 +183,8 @@ export type BackendModelOption = {
   id: string;
   label?: string;
   current?: boolean;
+  /** Older or secondary catalog models shown in the Other Models submenu. */
+  other?: boolean;
   defaultReasoningEffort?: string;
   reasoningEfforts?: string[];
   supportsReasoning?: boolean;

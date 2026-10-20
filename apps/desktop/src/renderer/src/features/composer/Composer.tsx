@@ -10143,11 +10143,13 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const modelOptions = backend?.launchpadOptions?.models ?? [];
   const showOlderCodexModelsUnderOther = backend?.kind === "codex"
     && modelOptions.some((model) => /^gpt-6(?:[.-]|$)/iu.test(model.id));
-  const otherModelOptions = showOlderCodexModelsUnderOther
+  const otherModelOptions = backend?.kind === "claude"
+    ? modelOptions.filter((model) => model.other)
+    : showOlderCodexModelsUnderOther
     ? modelOptions.filter((model) => /^gpt-5\.(?:5|6)(?:-|$)/iu.test(model.id))
     : [];
   const visibleModelOptions = otherModelOptions.length
-    ? modelOptions.filter((model) => !/^gpt-5\.(?:5|6)(?:-|$)/iu.test(model.id))
+    ? modelOptions.filter((model) => !otherModelOptions.includes(model))
     : modelOptions;
   const selectedModelOption =
     modelOptions.find((option) => option.id === currentSettings?.model) ??
@@ -13463,6 +13465,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 label: model.label ?? model.id,
                 value: model.id,
               }))}
+              otherLabel={backend.kind === "claude" ? "Other Models" : undefined}
               onChange={(value) => {
                 const model = value;
                 const nextModelOption = backend.launchpadOptions?.models?.find(

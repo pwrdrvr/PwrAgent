@@ -60,6 +60,31 @@ async function fixture(messages?: (options: Options) => AsyncGenerator<SDKMessag
 }
 
 describe("Claude SDK backend", () => {
+  it("discovers the model catalog only on an explicit refresh and retains it when a later refresh fails", async () => {
+    const f = await fixture();
+    const models = [{ id: "fable", label: "Fable 5.1", current: true }];
+    const discoverModels = vi.fn().mockResolvedValue(models);
+    const backend = new ClaudeBackend({ ...f.backendOptions, discoverModels });
+    await backend.startThread({ cwd: f.root, executionMode: "default" });
+    expect(discoverModels).not.toHaveBeenCalled();
+    await backend.discover();
+    expect(discoverModels).toHaveBeenCalledWith({ executable: "/fixture/claude", env: { PATH: "/fixture" } });
+    expect(backend.summary().launchpadOptions?.models).toEqual(models);
+    discoverModels.mockRejectedValueOnce(new Error("Discovery failed"));
+    await expect(backend.discover()).rejects.toThrow("Discovery failed");
+    expect(backend.summary().launchpadOptions?.models).toEqual(models);
+  });
+
+  it.each(["max", "default"])("passes an explicit effort and preserves the CLI default (%s)", async (reasoningEffort) => {
+    const f = await fixture();
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, model: "claude-opus-4-8", reasoningEffort, input: [{ type: "text", text: "Hi" }] });
+    await f.waitForTurn();
+    expect(f.queries[0].model).toBe("claude-opus-4-8");
+    if (reasoningEffort === "default") expect(f.queries[0]).not.toHaveProperty("effort");
+    else expect(f.queries[0].effort).toBe("max");
+  });
+
   it.each([false, true])("renders completed tool output before the turn ends (is_error=%s)", async (isError) => {
     let finish!: () => void;
     const gate = new Promise<void>((resolve) => { finish = resolve; });

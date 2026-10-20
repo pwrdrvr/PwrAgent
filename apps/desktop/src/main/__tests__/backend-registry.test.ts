@@ -3203,6 +3203,11 @@ describe("DesktopBackendRegistry", () => {
       claudeBackendOptions: {
         store,
         inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+        discoverModels: async () => [
+          { id: "fable", label: "Fable 5.1", current: true },
+          { id: "claude-opus-4-8", label: "Opus 4.8", other: true, supportsReasoning: true,
+            reasoningEfforts: ["default", "max"], defaultReasoningEffort: "default" },
+        ],
         query: ({ options = {} }) => {
           optionsSeen.push(options);
           async function* messages(): AsyncGenerator<ClaudeMessage> {
@@ -3219,12 +3224,15 @@ describe("DesktopBackendRegistry", () => {
     });
     registry.onEvent((event) => { events.push(event); });
     try {
+      await registry.listBackends({ refreshModels: "claude", includeUnavailable: true },
+        issueProviderDiscoveryPermit("settings-user-action"));
       const { threadId } = await registry.startThread({ backend: "claude", cwd: root, executionMode: "default" });
       expect(startCodex).not.toHaveBeenCalled();
       expect(await registry.listThreads({ backend: "claude", forceRefresh: true })).toEqual(expect.arrayContaining([expect.objectContaining({ id: threadId, source: "claude" })]));
       for (let turn = 0; turn < 2; turn += 1) {
         events.length = 0;
         const started = await registry.startTurn({ backend: "claude", threadId,
+          model: turn === 0 ? "claude-custom-fixture" : "claude-opus-4-8", reasoningEffort: "max",
           input: [
             { type: "text", text: "Hello" },
             ...(turn === 0 ? [
@@ -3252,6 +3260,9 @@ describe("DesktopBackendRegistry", () => {
         await vi.waitFor(() => expect(events.some((event) => event.notification.method === "turn/completed")).toBe(true));
       }
       expect(optionsSeen[1].resume).toBe(threadId);
+      expect(optionsSeen.map(({ model, effort }) => ({ model, effort }))).toEqual([
+        { model: "claude-custom-fixture", effort: "max" }, { model: "claude-opus-4-8", effort: "max" },
+      ]);
       expect(decisions).toEqual([{ behavior: "allow", updatedInput: { command: "git status" } }, { behavior: "allow", updatedInput: { command: "git status" } }]);
       expect((await registry.readThread({ backend: "claude", threadId })).replay.messages).toHaveLength(4);
       // Reads hydrate origins from the overlay after the turn's live events are gone.

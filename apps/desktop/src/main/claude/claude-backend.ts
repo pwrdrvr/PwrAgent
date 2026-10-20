@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -7,18 +6,20 @@ import { query, type Options, type Query, type SDKMessage, type SDKUserMessage }
 import type {
   AgentEvent, AppServerPendingRequestNotification, AppServerThreadEntry,
   AppServerThreadMessageEntry, AppServerThreadMessagePart, AppServerThreadReplay, AppServerThreadSummary,
-  AppServerTurnInputItem, BackendSummary, ThreadExecutionMode,
+  AppServerTurnInputItem, BackendModelOption, BackendSummary, ThreadExecutionMode,
 } from "@pwragent/shared";
 import { resolveActiveProfilePath } from "../profile";
 import { toTranscriptImageProtocolUrl } from "../transcript-image-protocol";
 import { CLAUDE_SETUP_INSTRUCTIONS, claudeEnvironment, inspectClaudeInstallation, type ClaudeInstallation } from "./claude-executable";
 import { createClaudePermissionHandler, claudePermissionMode } from "./claude-permissions";
+import { claudeHarnessOptions, discoverClaudeModels } from "./claude-models";
 import { ClaudeSessionStore, type ClaudeSession } from "./claude-session-store";
 
 export type ClaudeBackendOptions = {
   store?: ClaudeSessionStore;
   query?: typeof query;
   inspectInstallation?: typeof inspectClaudeInstallation;
+  discoverModels?: typeof discoverClaudeModels;
   resolveEnv?: () => Promise<NodeJS.ProcessEnv>;
   emit: (event: AgentEvent) => Promise<void>;
   request: (request: AppServerPendingRequestNotification, signal: AbortSignal) => Promise<unknown>;
@@ -39,16 +40,22 @@ export class ClaudeBackend {
   private readonly running = new Map<string, RunningTurn>();
   private installation: ClaudeInstallation = { authStatus: "unknown", message: CLAUDE_SETUP_INSTRUCTIONS };
   private discovery?: Promise<void>;
+  private models?: BackendModelOption[];
 
   constructor(private readonly options: ClaudeBackendOptions) {
     this.store = options.store ?? new ClaudeSessionStore(path.join(resolveActiveProfilePath("state"), "claude"));
   }
 
-  async discover(): Promise<void> {
+  async discover(options: { models?: boolean } = {}): Promise<void> {
     if (this.discovery) return this.discovery;
     this.discovery = (async () => {
       const env = claudeEnvironment(await this.options.resolveEnv?.() ?? process.env);
       this.installation = await (this.options.inspectInstallation ?? inspectClaudeInstallation)({ env });
+      if (options.models !== false && this.installation.executable && this.installation.authStatus !== "sign-in-required") {
+        this.models = await (this.options.discoverModels ?? discoverClaudeModels)({
+          executable: this.installation.executable, env,
+        });
+      }
     })();
     try { await this.discovery; } finally { this.discovery = undefined; }
   }
@@ -72,8 +79,8 @@ export class ClaudeBackend {
         { mode: "auto", label: "Auto", available: true },
         { mode: "full-access", label: "Full Access", available: true },
       ],
-      // Stable CLI aliases select the user's current provider models.
-      launchpadOptions: { models: [
+      // Stable aliases remain usable before explicit Settings/setup discovery.
+      launchpadOptions: { models: this.models ?? [
         { id: "sonnet", label: "Sonnet", supportsImage: true },
         { id: "opus", label: "Opus", supportsImage: true },
         { id: "haiku", label: "Haiku", supportsImage: true },
@@ -82,7 +89,7 @@ export class ClaudeBackend {
   }
 
   private async requireInstallation(): Promise<string> {
-    await this.discover();
+    await this.discover({ models: false });
     if (!this.installation.executable || this.installation.authStatus === "sign-in-required") {
       throw new Error(this.installation.message ?? CLAUDE_SETUP_INSTRUCTIONS);
     }
@@ -162,7 +169,7 @@ export class ClaudeBackend {
   }
 
   async startTurn(params: {
-    threadId: string; input: AppServerTurnInputItem[]; model?: string;
+    threadId: string; input: AppServerTurnInputItem[]; model?: string; reasoningEffort?: string;
     executionMode?: ThreadExecutionMode; instructions?: string;
     mcpServers?: Options["mcpServers"];
     onTurnFinished?: () => void;
@@ -203,11 +210,10 @@ export class ClaudeBackend {
       const env = claudeEnvironment(await this.options.resolveEnv?.() ?? process.env);
       const permissionMode = claudePermissionMode(params.executionMode ?? session.thread.executionMode ?? "default");
       const sdkOptions: Options = {
+        ...claudeHarnessOptions(executable, env),
         cwd: session.cwd,
-        pathToClaudeCodeExecutable: executable,
         ...(session.sdkSessionId ? { resume: session.sdkSessionId } : { sessionId: params.threadId }),
         systemPrompt: { type: "preset", preset: "claude_code", ...(params.instructions ? { append: params.instructions } : {}) },
-        settingSources: ["user", "project", "local"],
         persistSession: true,
         includePartialMessages: true,
         permissionMode,
@@ -215,24 +221,15 @@ export class ClaudeBackend {
         // the current permissionMode still governs every tool invocation.
         allowDangerouslySkipPermissions: true,
         model: params.model ?? session.thread.model,
+        ...(["low", "medium", "high", "xhigh", "max"].includes(params.reasoningEffort ?? "")
+          ? { effort: params.reasoningEffort as Options["effort"] } : {}),
         abortController: running.controller,
-        env,
         mcpServers: params.mcpServers,
         canUseTool: createClaudePermissionHandler({
           threadId: params.threadId, turnId: running.turnId,
           request: this.options.request,
           cancelRequest: (requestId) => this.options.cancelRequest(params.threadId, running.turnId, requestId),
         }),
-        // npm CLI scripts need a Node runtime inside packaged Electron; native
-        // binaries run directly. No shell ever receives SDK JSON arguments.
-        spawnClaudeCodeProcess: (spawnOptions) => {
-          const scriptRuntime = spawnOptions.command === "node" || spawnOptions.command === "bun";
-          return spawn(scriptRuntime ? process.execPath : spawnOptions.command, spawnOptions.args, {
-            cwd: spawnOptions.cwd,
-            env: scriptRuntime ? { ...spawnOptions.env, ELECTRON_RUN_AS_NODE: "1" } : spawnOptions.env,
-            signal: spawnOptions.signal, stdio: ["pipe", "pipe", "pipe"], windowsHide: true, shell: false,
-          });
-        },
       };
       async function* prompt(): AsyncIterable<SDKUserMessage> {
         yield { type: "user", session_id: session.sdkSessionId ?? params.threadId, parent_tool_use_id: null, message: { role: "user", content } };

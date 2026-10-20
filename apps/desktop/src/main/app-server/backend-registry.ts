@@ -7386,6 +7386,12 @@ function resolveModelSettingsFromOptions(
   settings: ModelSettings,
 ): ModelSettings {
   const models = options?.models ?? [];
+  if (backend === "claude" && settings.model && !models.some((model) => model.id === settings.model)) {
+    // A saved explicit model can outlive this process's catalog or belong to
+    // the user's CLI configuration. Let the CLI validate it, never silently
+    // replace a resumed thread's model with a fallback alias.
+    return { model: settings.model, reasoningEffort: settings.reasoningEffort };
+  }
   if (models.length === 0 && isAcpBackendId(backend)) {
     return {
       model: settings.model,
@@ -19290,7 +19296,10 @@ export class DesktopBackendRegistry {
     }
     if (params.backend === "claude") {
       const overlay = await this.overlayStore.getThreadOverlayState(params);
-      const modelSettings = await this.resolveModelSettings("claude", { model: params.model ?? overlay?.model });
+      const modelSettings = await this.resolveModelSettings("claude", {
+        model: params.model ?? overlay?.model,
+        reasoningEffort: params.reasoningEffort ?? overlay?.reasoningEffort,
+      });
       const input = await ownThreadInputAttachments(await enrichLocalFileInputs(params.input, {
         privateStorageRoots: this.localFilePrivateStorageRoots,
       }), params, this.localFilePrivateStorageRoots);
@@ -19309,7 +19318,7 @@ export class DesktopBackendRegistry {
           ? { type: "http" as const, url: server.url, headers: Object.fromEntries(server.headers.map(({ name, value }) => [name, value])) }
           : { type: "stdio" as const, command: server.command, args: server.args, env: server.env }]));
         const result = await this.claudeBackend.startTurn({
-          ...params, input, model: modelSettings.model,
+          ...params, input, model: modelSettings.model, reasoningEffort: modelSettings.reasoningEffort,
           executionMode: params.executionMode ?? overlay?.executionMode,
           instructions: (await this.getThreadAgentMetadata(params))?.instructions,
           mcpServers,
