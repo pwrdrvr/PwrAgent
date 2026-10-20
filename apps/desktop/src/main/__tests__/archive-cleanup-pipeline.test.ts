@@ -9,7 +9,7 @@ import { CountingBackendClient, codexThread, publishNotification } from "./fixtu
 import budgets from "./fixtures/archive-cleanup-budgets.json";
 import type { ArchiveCleanupCheckpointStore, ArchiveCleanupIntent } from "../state/archive-cleanup-checkpoint";
 
-const registryLog = vi.hoisted(() => ({ debug() {}, info() {}, warn() {}, error: vi.fn() }));
+const registryLog = vi.hoisted(() => ({ debug() {}, info: vi.fn(), warn: vi.fn(), error: vi.fn() }));
 vi.mock("../log", () => ({ getMainLogger: () => registryLog }));
 vi.mock("../app-server/worktree-container-service", () => ({ WorktreeContainerService: class {
   // Every path in this harness is outside the managed root. Keep container
@@ -66,6 +66,8 @@ afterEach(async () => {
   vi.mocked(stat).mockReset();
   vi.mocked(deleteThreadAssets).mockClear();
   registryLog.error.mockClear();
+  registryLog.info.mockClear();
+  registryLog.warn.mockClear();
   vi.useRealTimers();
 });
 
@@ -154,6 +156,60 @@ function buildArchiveBurst(active: AppServerThreadSummary[], targets: AppServerT
 }
 
 describe("archive cleanup pipeline", () => {
+  it("does not reread 30 archived targets already present in the current batch inventory", async () => {
+    vi.useFakeTimers();
+    const directory = { id: "shared", kind: "worktree" as const, label: "repo", path: "/contrived/repo", worktreePath: "/contrived/shared" };
+    const targets = Array.from({ length: 30 }, (_, id) => codexThread({ id: `target-${id}`, linkedDirectories: [directory] }));
+    const fixture = buildArchiveBurst([codexThread({ id: "shared-user", linkedDirectories: [directory] })], targets);
+    const readSummary = vi.fn(async (threadId: string) => targets.find((thread) => thread.id === threadId)!);
+    Object.assign(fixture.client, { readArchiveCleanupThreadSummary: readSummary });
+
+    await Promise.all(targets.map((thread) => fixture.registry.archiveThread({ backend: "codex", threadId: thread.id, backgroundCleanup: true })));
+    await drivePacer(fixture.registry, fixture.finished);
+
+    expect(readSummary).toHaveBeenCalledTimes(1);
+    expect(fixture.archiveWorktree).not.toHaveBeenCalled();
+    expect(fixture.completions).toHaveLength(30);
+    expect(fixture.counts.providerPages).toBe(3);
+    expect(registryLog.info.mock.calls.filter(([message]) => message === "archive cleanup inventory reused")).toHaveLength(29);
+  });
+
+  it("logs request, queue wait, stages, shared-worktree outcome and publication after a 30-minute backlog", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-20T17:32:23.599Z"));
+    const directory = { id: "shared", kind: "worktree" as const, label: "repo", path: "/contrived/repo", worktreePath: "/contrived/shared" };
+    const targets = [codexThread({ id: "first", linkedDirectories: [directory] }), codexThread({ id: "second", linkedDirectories: [directory] })];
+    const fixture = buildArchiveBurst([codexThread({ id: "shared-user", linkedDirectories: [directory] })], targets);
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    const read = fixture.client.listArchiveCleanupThreadsPage.getMockImplementation()!;
+    fixture.client.listArchiveCleanupThreadsPage.mockImplementation(async (params) => {
+      await blocked;
+      return await read(params);
+    });
+    const requestedAt = Date.now();
+    await Promise.all(targets.map((thread) => fixture.registry.archiveThread({ backend: "codex", threadId: thread.id, backgroundCleanup: true })));
+    const fields = { backend: "codex", threadId: "second", runtimeInstanceId: "cleanup-fixture" };
+    expect(registryLog.info).toHaveBeenCalledWith("thread archive requested", expect.objectContaining({ ...fields, requestedAt }));
+    expect(registryLog.info).toHaveBeenCalledWith("archive cleanup queued", expect.objectContaining({ ...fields, queuedAt: requestedAt, queueDepth: 2 }));
+    await vi.advanceTimersByTimeAsync(30 * 60_000);
+    expect(registryLog.info).toHaveBeenCalledWith("archive cleanup stage started", expect.objectContaining({ threadId: "first", stage: "metadata" }));
+    release();
+    await drivePacer(fixture.registry, fixture.finished);
+
+    const started = registryLog.info.mock.calls.find(([message, details]) => message === "archive cleanup started" && details.threadId === "second")?.[1];
+    expect(started).toMatchObject({ ...fields, archivedAt: requestedAt });
+    expect(started?.queueWaitMs).toBeGreaterThanOrEqual(30 * 60_000);
+    expect(registryLog.info).toHaveBeenCalledWith("archive cleanup worktree outcome", expect.objectContaining({
+      ...fields, worktreePath: directory.worktreePath, removedWorktree: false,
+      skippedReason: "Worktree is still used by another active thread: shared-user.",
+    }));
+    expect(registryLog.info).toHaveBeenCalledWith("archive cleanup completed", expect.objectContaining({ ...fields, queueWaitMs: started?.queueWaitMs, cleanupDurationMs: expect.any(Number) }));
+    expect(registryLog.info).toHaveBeenCalledWith("archive cleanup completion published", expect.objectContaining({ ...fields, archivedAt: requestedAt, publishedAt: expect.any(Number) }));
+    expect(registryLog.info.mock.calls.filter(([message, details]) => message === "archive cleanup stage completed" && details.threadId === "second").map(([, details]) => details.stage))
+      .toEqual(["metadata", "ungroup", "worktrees"]);
+  });
+
   it.each([
     { failedCalls: [1], code: "SQLITE_FULL" },
     { failedCalls: [2], code: "SQLITE_BUSY" },
@@ -194,6 +250,10 @@ describe("archive cleanup pipeline", () => {
     await fixture.registry.close();
     expect(fixture.counts.providerPages).toBe(0);
     expect(checkpoint.save).toHaveBeenCalledWith("cleanup-fixture", [expect.objectContaining({ backend: "codex", threadId: "target" })]);
+    expect(registryLog.info).toHaveBeenCalledWith("archive cleanup stopped", expect.objectContaining({
+      threadId: "target", cancelled: true, cleanupDurationMs: 0,
+    }));
+    expect(registryLog.info.mock.calls.some(([message]) => message === "archive cleanup completion published")).toBe(false);
   });
 
   it("resumes a checkpoint in one batch without repeating the provider archive", async () => {
@@ -298,6 +358,8 @@ describe("archive cleanup pipeline", () => {
     const active = [codexThread({ id: "first-user", linkedDirectories: [firstDirectory] })];
     const targets = [codexThread({ id: "first", linkedDirectories: [firstDirectory] }), codexThread({ id: "second", linkedDirectories: [secondDirectory] })];
     const fixture = buildArchiveBurst(active, targets);
+    const readSummary = vi.fn(async (threadId: string) => targets.find((thread) => thread.id === threadId)!);
+    Object.assign(fixture.client, { readArchiveCleanupThreadSummary: readSummary });
     const changeWorkspace = async () => {
       active.push(codexThread({ id: "new-user", linkedDirectories: [secondDirectory] }));
       await publishNotification(fixture.registry, { method: "navigation/threadDirectories/updated",
@@ -322,6 +384,7 @@ describe("archive cleanup pipeline", () => {
     expect(fixture.completions[1]?.notification.params).toMatchObject({ cleanup: [expect.objectContaining({ skippedReason: expect.stringContaining("new-user") })] });
     expect(fixture.archiveWorktree).not.toHaveBeenCalled();
     expect(fixture.counts.providerPages).toBe(4);
+    expect(readSummary).toHaveBeenCalledTimes(2);
   });
 
   it("rechecks live ownership before removal even when preliminary discovery was reused", async () => {

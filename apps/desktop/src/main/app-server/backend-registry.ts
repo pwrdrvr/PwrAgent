@@ -14470,6 +14470,9 @@ export class DesktopBackendRegistry {
         return await this.threadLifecycleLocks.run(keys[index]!, async () => await withFamilyLocks(index + 1));
       }
       const { thread } = candidates[0]!;
+      backendRegistryLog.info("thread archive requested", {
+        backend: thread.source, threadId: thread.id, runtimeInstanceId: this.runtimeInstanceId, requestedAt: Date.now(), automatic: true,
+      });
       await this.archiveThreadWithoutLifecycleLock({ backend: thread.source, threadId: thread.id }, beforeMutation);
     };
     try {
@@ -14526,6 +14529,9 @@ export class DesktopBackendRegistry {
   async archiveThread(
     request: ArchiveThreadRequest & { preserveWorktrees?: boolean },
   ): Promise<ArchiveThreadResponse> {
+    const requestedAt = Date.now();
+    const logFields = { backend: request.backend ?? "codex", threadId: request.threadId, runtimeInstanceId: this.runtimeInstanceId, requestedAt };
+    backendRegistryLog.info("thread archive requested", { ...logFields, backgroundCleanup: request.backgroundCleanup === true });
     const key = buildThreadIdentityKey(request.backend ?? "codex", request.threadId);
     if (this.archiveCleanupQueue.isCancelled(key)) {
       // Archive after an intervening restore is a new mutation, not a
@@ -14545,6 +14551,10 @@ export class DesktopBackendRegistry {
     );
     this.threadArchiveOperations.set(key, operation);
     try { return await operation; }
+    catch (error) {
+      backendRegistryLog.warn("thread archive failed", { ...logFields, durationMs: Date.now() - requestedAt, error: error instanceof Error ? error.message : String(error) });
+      throw error;
+    }
     finally { if (this.threadArchiveOperations.get(key) === operation) this.threadArchiveOperations.delete(key); }
   }
 
@@ -14599,6 +14609,9 @@ export class DesktopBackendRegistry {
       });
       result = { threadId: request.threadId };
     }
+    backendRegistryLog.info("thread archive mutation completed", {
+      backend, threadId: result.threadId, runtimeInstanceId: this.runtimeInstanceId, archivedAt, codexRolloutMissing,
+    });
     // A successful archive supersedes the provisional active workspace kept
     // until navigation acknowledges a newly started or forked thread. Leaving
     // it pending makes cleanup rediscover the archived target as active.
@@ -14652,18 +14665,37 @@ export class DesktopBackendRegistry {
     const key = buildThreadIdentityKey(intent.backend, intent.threadId);
     const existing = this.archiveCleanupQueue.pending(key);
     if (existing) return existing;
+    const queuedAt = Date.now();
+    const logFields = { backend: intent.backend, threadId: intent.threadId, archivedAt: intent.archivedAt, runtimeInstanceId: this.runtimeInstanceId, queuedAt };
+    backendRegistryLog.info("archive cleanup queued", { ...logFields, resuming, queueDepth: this.archiveCleanupQueue.pendingKeys().length + 1 });
     this.pendingArchiveCleanupIntents.set(key, intent);
-    const completion = this.archiveCleanupQueue.enqueue(key, async (context) =>
-      await this.completeArchivedThreadCleanup({ ...intent, context,
+    let startedAt: number | undefined;
+    const completion = this.archiveCleanupQueue.enqueue(key, async (context) => {
+      startedAt = Date.now();
+      backendRegistryLog.info("archive cleanup started", { ...logFields, startedAt, queueWaitMs: startedAt - queuedAt });
+      return await this.completeArchivedThreadCleanup({ ...intent, context,
         // A saved archive intent cannot authorize deleting a restored thread.
         // Recovery requires current archived membership, including for formerly
         // missing rollouts; it never repeats the provider archive operation.
         ...(resuming ? { requireArchived: true, codexRolloutMissing: false } : {}),
-      }),
-    );
-    void completion.then(() => {
+      });
+    });
+    void completion.then((response) => {
+      const completedAt = Date.now();
+      backendRegistryLog.info("archive cleanup completed", { ...logFields, completedAt,
+        queueWaitMs: startedAt === undefined ? undefined : startedAt - queuedAt,
+        cleanupDurationMs: startedAt === undefined ? undefined : completedAt - startedAt,
+        archiveAgeMs: completedAt - intent.archivedAt, worktreeCount: response.cleanup.length,
+      });
+      for (const outcome of response.cleanup) backendRegistryLog.info("archive cleanup worktree outcome", { ...logFields, ...outcome });
       if (this.pendingArchiveCleanupIntents.get(key) === intent) this.pendingArchiveCleanupIntents.delete(key);
     }, (error: unknown) => {
+      const completedAt = Date.now();
+      backendRegistryLog.info("archive cleanup stopped", { ...logFields, completedAt,
+        queueWaitMs: (startedAt ?? completedAt) - queuedAt,
+        cleanupDurationMs: startedAt === undefined ? 0 : completedAt - startedAt,
+        cancelled: error instanceof ArchiveCleanupCancelledError, error: error instanceof Error ? error.message : String(error),
+      });
       if (!(this.closed && error instanceof ArchiveCleanupCancelledError)
         && this.pendingArchiveCleanupIntents.get(key) === intent) this.pendingArchiveCleanupIntents.delete(key);
     });
@@ -14716,17 +14748,44 @@ export class DesktopBackendRegistry {
     });
     if (!params.backgroundCleanup) return await observed;
     void observed.then(async (response) => {
-      if (!this.closed) await this.emit({ backend, notification: {
+      if (this.closed) return;
+      await this.emit({ backend, notification: {
         method: "thread/archiveCleanup/completed",
         params: { threadId, archivedAt, cleanup: response.cleanup },
       } });
+      backendRegistryLog.info("archive cleanup completion published", { backend, threadId, archivedAt,
+        runtimeInstanceId: this.runtimeInstanceId, publishedAt: Date.now(), archiveAgeMs: Date.now() - archivedAt,
+      });
     }, async (error) => {
-      if (!this.closed) await this.emit({ backend, notification: {
+      if (this.closed) return;
+      await this.emit({ backend, notification: {
         method: "thread/archiveCleanup/completed",
         params: { threadId, archivedAt, cleanup: [], error: error instanceof Error ? error.message : String(error) },
       } });
+      backendRegistryLog.info("archive cleanup completion published", { backend, threadId, archivedAt,
+        runtimeInstanceId: this.runtimeInstanceId, publishedAt: Date.now(), archiveAgeMs: Date.now() - archivedAt, failed: true,
+      });
     }).catch((error) => backendRegistryLog.warn("archive cleanup completion publication failed", { error: String(error) }));
     return { backend, threadId, archivedAt, cleanup: [], cleanupPending: true };
+  }
+
+  private async traceArchiveCleanupStage<T>(
+    identity: { backend: AppServerBackendKind; threadId: string; archivedAt: number },
+    stage: "metadata" | "ungroup" | "worktrees",
+    work: () => Promise<T>,
+  ): Promise<T> {
+    const { backend, threadId, archivedAt } = identity;
+    const fields = { backend, threadId, archivedAt, runtimeInstanceId: this.runtimeInstanceId, stage };
+    const startedAt = Date.now();
+    backendRegistryLog.info("archive cleanup stage started", fields);
+    try {
+      const result = await work();
+      backendRegistryLog.info("archive cleanup stage completed", { ...fields, durationMs: Date.now() - startedAt });
+      return result;
+    } catch (error) {
+      backendRegistryLog.info("archive cleanup stage failed", { ...fields, durationMs: Date.now() - startedAt, error: error instanceof Error ? error.message : String(error) });
+      throw error;
+    }
   }
 
   private async completeArchivedThreadCleanup(params: {
@@ -14746,25 +14805,33 @@ export class DesktopBackendRegistry {
     let cleanupMetadata: ArchiveCleanupMetadata | undefined;
     let cleanupMetadataError: string | undefined;
     try {
-      let targetThread: AppServerThreadSummary | undefined;
-      if (!params.requireArchived && backend === "codex" && this.codexClient.readArchiveCleanupThreadSummary && !codexRolloutMissing) {
-        targetThread = await this.codexClient.readArchiveCleanupThreadSummary(result.threadId, context.checkpoint);
-        const readOverlays = this.overlayStore.getArchiveCleanupOverlayStates ?? this.overlayStore.getThreadOverlayStates;
-        await context.checkpoint();
-        const overlays = await readOverlays.call(this.overlayStore, { backend, threadIds: [result.threadId] });
-        targetThread = { ...targetThread, linkedDirectories: mergeThreadLinkedDirectories([
-          ...targetThread.linkedDirectories, ...(overlays[result.threadId]?.extraLinkedDirectories ?? []),
-        ]) };
-      } else if (isAcpBackendId(backend)) {
-        const session = this.acpBackend.getSession(backend, result.threadId);
-        if (session?.archivedAt) targetThread = this.acpBackend.sessionToThreadSummary(session);
-      }
-      const needsWorktreeOwnership = !params.preserveWorktrees && (!targetThread
-        || targetThread.linkedDirectories.some((directory) => Boolean(linkedDirectoryWorktreePath(directory))));
-      cleanupMetadata = await this.findThreadForArchiveCleanup({
-        backend, threadId: result.threadId, context, codexRolloutMissing,
-        targetThread: needsWorktreeOwnership ? undefined : targetThread,
-        reuseInventory: true,
+      cleanupMetadata = await this.traceArchiveCleanupStage(params, "metadata", async () => {
+        let targetThread: AppServerThreadSummary | undefined;
+        const cached = context.batch ? this.archiveCleanupInventories.get(context.batch) : undefined;
+        // A full, current batch inventory already contains each archived target.
+        // Do not deserialize every target again through thread/read. The lookup
+        // below rechecks the revision after its checkpoint and removal still
+        // obtains its own fresh ownership admission.
+        const canReuseTarget = cached?.includesArchived && cached.revision === this.archiveWorkspaceRevision;
+        if (!canReuseTarget && !params.requireArchived && backend === "codex" && this.codexClient.readArchiveCleanupThreadSummary && !codexRolloutMissing) {
+          targetThread = await this.codexClient.readArchiveCleanupThreadSummary(result.threadId, context.checkpoint);
+          const readOverlays = this.overlayStore.getArchiveCleanupOverlayStates ?? this.overlayStore.getThreadOverlayStates;
+          await context.checkpoint();
+          const overlays = await readOverlays.call(this.overlayStore, { backend, threadIds: [result.threadId] });
+          targetThread = { ...targetThread, linkedDirectories: mergeThreadLinkedDirectories([
+            ...targetThread.linkedDirectories, ...(overlays[result.threadId]?.extraLinkedDirectories ?? []),
+          ]) };
+        } else if (isAcpBackendId(backend)) {
+          const session = this.acpBackend.getSession(backend, result.threadId);
+          if (session?.archivedAt) targetThread = this.acpBackend.sessionToThreadSummary(session);
+        }
+        const needsWorktreeOwnership = !params.preserveWorktrees && (!targetThread
+          || targetThread.linkedDirectories.some((directory) => Boolean(linkedDirectoryWorktreePath(directory))));
+        return await this.findThreadForArchiveCleanup({
+          backend, threadId: result.threadId, context, codexRolloutMissing,
+          targetThread: needsWorktreeOwnership ? undefined : targetThread,
+          reuseInventory: true,
+        });
       });
     } catch (error) {
       context.assertCurrent();
@@ -14773,23 +14840,23 @@ export class DesktopBackendRegistry {
     }
     let ungroupError: string | undefined;
     try {
-      await this.ungroupChildrenOfArchivedThread({
+      await this.traceArchiveCleanupStage(params, "ungroup", async () => await this.ungroupChildrenOfArchivedThread({
         backend, activeThreads: cleanupMetadata?.activeChildren ?? cleanupMetadata?.activeThreads ?? [], parentThreadId: result.threadId,
         overlaysByThreadKey: cleanupMetadata?.overlaysByThreadKey, context,
         legacyParentBackends: cleanupMetadata?.legacyParentBackends ?? (cleanupMetadata ? new Set([...cleanupMetadata.activeThreads, ...cleanupMetadata.archivedThreads]
           .filter((thread) => thread.id === result.threadId).map((thread) => thread.source)) : undefined),
-      });
+      }));
     } catch (error) {
       context.assertCurrent();
       ungroupError = error instanceof Error ? error.message : String(error);
       backendRegistryLog.warn("archive thread child ungrouping failed", { backend, threadId: result.threadId, error: ungroupError });
     }
-    const cleanup = params.preserveWorktrees ? [] : cleanupMetadata
+    const cleanup = await this.traceArchiveCleanupStage(params, "worktrees", async () => params.preserveWorktrees ? [] : cleanupMetadata
       ? await this.archiveThreadWorktrees({
           backend, activeThreads: cleanupMetadata.activeThreads, archivedThreads: cleanupMetadata.archivedThreads,
           thread: cleanupMetadata.thread, context, codexRolloutMissing, worktreeEvidence: cleanupMetadata.worktreeEvidence,
         })
-      : this.buildArchiveCleanupMetadataSkippedResult({ backend, threadId: result.threadId, error: cleanupMetadataError });
+      : this.buildArchiveCleanupMetadataSkippedResult({ backend, threadId: result.threadId, error: cleanupMetadataError }));
     if (codexRolloutMissing) {
       const cleanupFailures = [
         cleanupMetadataError
@@ -14964,6 +15031,9 @@ export class DesktopBackendRegistry {
       ...session,
       archivedAt,
       updatedAt: Math.max(session.updatedAt, archivedAt),
+    });
+    backendRegistryLog.info("thread archive mutation completed", {
+      backend: params.backend, threadId: params.threadId, runtimeInstanceId: this.runtimeInstanceId, archivedAt,
     });
     await this.overlayStore.observeArchivedThreads?.([{ backend: params.backend, threadId: params.threadId }], archivedAt);
     this.invalidateThreadListCache(params.backend, true);
@@ -33537,6 +33607,10 @@ export class DesktopBackendRegistry {
       && (params.targetThread || cached.includesArchived)) {
       await context?.checkpoint();
       if (this.archiveWorkspaceRevision === revision && this.archiveCleanupInventories.get(batch) === cached) {
+        backendRegistryLog.info("archive cleanup inventory reused", {
+          backend: params.backend, threadId: params.threadId, runtimeInstanceId: this.runtimeInstanceId,
+          activeThreads: cached.inventory.activeThreads.length, archivedThreads: cached.inventory.archivedThreads.length,
+        });
         return this.selectArchiveCleanupInventory(cached.inventory, params);
       }
     }
@@ -33555,6 +33629,8 @@ export class DesktopBackendRegistry {
     const agents = await this.acpBackend.listAvailableAgents();
     const directoryObservations = new Map<string, Promise<ThreadDirectoryEnrichment>>();
     const workspaceObservations = new Map<string, Promise<LinkedDirectorySummary | undefined>>();
+    const scanStartedAt = Date.now();
+    let providerPages = 0;
     const appendPage = async (backend: AppServerBackendKind, rows: AppServerThreadSummary[], archived: boolean, resolveCwd = isAcpBackendId(backend)) => {
       for (let offset = 0; offset < rows.length; offset += ARCHIVE_CLEANUP_SLICE_SIZE) {
         await context?.checkpoint();
@@ -33628,6 +33704,7 @@ export class DesktopBackendRegistry {
             checkpoint: async () => { await context?.checkpoint(); },
             directoryObservations,
           });
+          providerPages += 1;
           await appendPage("codex", page.threads, archived);
           cursor = page.nextCursor?.trim();
           if (cursor && cursors.has(cursor)) throw new Error("Archive discovery returned a repeated cursor; worktree safety is incomplete.");
@@ -33654,6 +33731,11 @@ export class DesktopBackendRegistry {
       }
     }
     context?.assertCurrent();
+    backendRegistryLog.info("archive cleanup inventory read", {
+      backend: params.backend, threadId: params.threadId, runtimeInstanceId: this.runtimeInstanceId,
+      durationMs: Date.now() - scanStartedAt, providerPages, activeThreads: activeThreads.length, archivedThreads: archivedThreads.length,
+      directoryObservations: directoryObservations.size, workspaceObservations: workspaceObservations.size,
+    });
     if (batch && revision === this.archiveWorkspaceRevision && inventories === this.archiveCleanupInventories) {
       inventories.set(batch, { revision, includesArchived: !params.targetThread,
         inventory: { activeThreads, archivedThreads, overlaysByThreadKey, worktreeEvidence } });
