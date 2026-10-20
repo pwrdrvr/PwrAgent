@@ -154,6 +154,19 @@ test("does not make the selected read thread unread after a metadata-only refres
   const app = await launchElectronApp({ fixturePath: fixture.fixturePath });
 
   try {
+    // Auto-marking a selected thread read requires a foreground renderer.
+    // Playwright clicks can reach a background Electron window on macOS;
+    // establish native focus instead of relying on launch activation.
+    const nativeWindow = await app.electronApp.browserWindow(app.window);
+    await nativeWindow.evaluate((window) => {
+      window.show();
+      window.focus();
+      window.webContents.focus();
+    });
+    await expect.poll(() => app.window.evaluate(
+      () => `${document.visibilityState}/${document.hasFocus()}`,
+    ), { message: "Unread regression requires a visible, focused renderer" }).toBe("visible/true");
+
     const browseSection = app.window.locator(".sidebar__section--fill");
     const readRow = browseSection.getByRole("button", {
       name: /Read thread/i,
