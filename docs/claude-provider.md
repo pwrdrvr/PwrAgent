@@ -103,8 +103,20 @@ mode selections add no commits. At 100 new threads and 100 permission changes
 per day, the measured projection is `(400 / 86400) commits/s × 16480 bytes ×
 86400 seconds`, or approximately 6.6 MB/day. This adds no timer-based writes.
 Archive changes metadata and
-retains the workspace. Native fork, steering, workspace handoff, and transcript
+retains the workspace. Native fork, workspace handoff, and transcript
 pagination are not advertised.
+
+Queue uses PwrAgent's shared FIFO and resumes the SDK session after the active
+turn finishes. Steer sends an additional native user message through the same
+open SDK input stream with `priority: "now"`. Claude chooses the delivery
+boundary; an input racing completion can become a subsequent native turn.
+PwrAgent keeps the query open until result UUIDs acknowledge every accepted
+steer, and treats those results as one logical desktop turn. Usage is recorded
+once from the final cumulative result. Stop closes the stream and aborts the
+query, including pending input. Request IDs deduplicate retries; attachment
+parts and message origins survive replay. A steer with an agent origin writes
+one SQLite commit (~12 KB, or ~1.24 MB/day at 100 steers/day); a duplicate
+request adds no write, and there are no idle writes.
 
 ## Usage, context, and MCP
 

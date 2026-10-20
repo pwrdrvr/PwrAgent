@@ -37,7 +37,37 @@ type RunningTurn = {
   entries: Map<string, AppServerThreadEntry>;
   started?: boolean;
   contextWindow?: ClaudeSession["contextWindow"];
+  input: ClaudeInputStream;
+  pendingSteers: Set<string>;
+  inputWrites: Promise<void>;
+  ending?: boolean;
 };
+
+/** One input pump owns the SDK's stdin until the logical turn finishes. */
+class ClaudeInputStream {
+  private readonly messages: SDKUserMessage[] = [];
+  private wake?: () => void;
+  private closed = false;
+
+  push(message: SDKUserMessage): void {
+    if (this.closed) throw new Error("Claude input is closed.");
+    this.messages.push(message);
+    this.wake?.();
+  }
+
+  close(): void {
+    this.closed = true;
+    this.wake?.();
+  }
+
+  async *[Symbol.asyncIterator](): AsyncGenerator<SDKUserMessage> {
+    while (!this.closed) {
+      const message = this.messages.shift();
+      if (message) yield message;
+      else await new Promise<void>((resolve) => { this.wake = resolve; });
+    }
+  }
+}
 
 export class ClaudeBackend {
   private readonly store: ClaudeSessionStore;
@@ -46,6 +76,12 @@ export class ClaudeBackend {
   private discovery?: Promise<void>;
   private models?: BackendModelOption[];
   private rateLimits: BackendSummary["rateLimits"];
+  // Last command list Claude reported per working directory. Project
+  // commands and skills differ by folder, so the folder is the key.
+  private readonly commandsByCwd = new Map<string, AppServerAvailableCommandSummary[]>();
+  private readonly commandProbes = new Map<string, Promise<AppServerAvailableCommandSummary[]>>();
+  private readonly commandProbeRetryAt = new Map<string, number>();
+  private terminalCommands = new Set(CLAUDE_TERMINAL_COMMANDS_SEED);
 
   constructor(private readonly options: ClaudeBackendOptions) {
     this.store = options.store ?? new ClaudeSessionStore(path.join(resolveActiveProfilePath("state"), "claude"));
@@ -75,13 +111,7 @@ export class ClaudeBackend {
       methods: [],
       capabilities: {
         listThreads: true, createThread: true, resumeThread: true, renameThread: true,
-        readThread: true, startTurn: true, interruptTurn: true, steerTurn: false,
-  // Last command list Claude reported per working directory. Project
-  // commands and skills differ by folder, so the folder is the key.
-  private readonly commandsByCwd = new Map<string, AppServerAvailableCommandSummary[]>();
-  private readonly commandProbes = new Map<string, Promise<AppServerAvailableCommandSummary[]>>();
-  private readonly commandProbeRetryAt = new Map<string, number>();
-  private terminalCommands = new Set(CLAUDE_TERMINAL_COMMANDS_SEED);
+        readThread: true, startTurn: true, interruptTurn: true, steerTurn: true,
         archiveThread: true, restoreThread: true, archiveWorktree: false,
         transcriptPagination: false, toolUse: true, approvalRequests: true,
         multiDirectoryThreads: false,
@@ -188,7 +218,10 @@ export class ClaudeBackend {
     onTurnFinished?: () => void;
   }): Promise<{ backend: "claude"; threadId: string; turnId: string }> {
     if (this.running.has(params.threadId)) throw new Error("A Claude turn is already active for this thread.");
-    const running: RunningTurn = { turnId: randomUUID(), controller: new AbortController(), entries: new Map() };
+    const running: RunningTurn = {
+      turnId: randomUUID(), controller: new AbortController(), entries: new Map(),
+      input: new ClaudeInputStream(), pendingSteers: new Set(), inputWrites: Promise.resolve(),
+    };
     this.running.set(params.threadId, running);
     try {
       const executable = await this.requireInstallation();
@@ -250,6 +283,7 @@ export class ClaudeBackend {
       async function* prompt(): AsyncIterable<SDKUserMessage> {
         await promptReady;
         yield { type: "user", session_id: session.sdkSessionId ?? params.threadId, parent_tool_use_id: null, message: { role: "user", content } };
+        yield* running.input;
       }
       running.query = (this.options.query ?? query)({ prompt: prompt(), options: sdkOptions });
       // Older PwrAgent metadata has no cost baseline. Read the official
@@ -266,6 +300,8 @@ export class ClaudeBackend {
       void running.done.catch(() => {});
       return { backend: "claude", threadId: params.threadId, turnId: running.turnId };
     } catch (error) {
+      running.ending = true;
+      running.input.close();
       this.running.delete(params.threadId);
       params.onTurnFinished?.();
       if (running.started) {
@@ -291,6 +327,7 @@ export class ClaudeBackend {
     let failure: string | undefined;
     let receivedResult = false;
     const needsUsageBaseline = Boolean(session.sdkSessionId) && !session.modelUsage;
+    const usageBaseline = session.modelUsage;
     try {
       for await (const message of running.query!) {
         if (message.type === "system" && message.subtype === "init") {
@@ -333,29 +370,40 @@ export class ClaudeBackend {
           await this.refreshContext(session, running);
         }
         if (message.type === "result") {
+          // A message arriving near a result boundary may become another native
+          // turn. Keep this query alive until its result acknowledges every
+          // accepted steer UUID; the first result alone must not discard input.
+          await this.settleInputWrites(running);
+          for (const id of message.user_message_uuids ?? []) running.pendingSteers.delete(id);
+          if (message.user_message_uuid) running.pendingSteers.delete(message.user_message_uuid);
+          const finished = message.is_error || running.pendingSteers.size === 0;
+          if (finished) running.ending = true;
           receivedResult = true;
           const hasUsage = message.modelUsage && Object.values(message.modelUsage).some((value) =>
             value.inputTokens + value.outputTokens + value.cacheReadInputTokens + value.cacheCreationInputTokens > 0);
           if (hasUsage) {
-            const canAttribute = !needsUsageBaseline || Boolean(session.modelUsage);
-            const tokenUsage = claudeTurnUsage(message.modelUsage, session.modelUsage);
+            const canAttribute = !needsUsageBaseline;
+            const tokenUsage = claudeTurnUsage(message.modelUsage, usageBaseline);
             session.modelUsage = message.modelUsage;
             // Without an old session's baseline, cumulative spend cannot be
             // attributed to this turn. Save it for the next turn, do not bill
             // the pre-existing transcript as new work.
-            if (canAttribute) {
+            if (canAttribute && finished) {
               await this.emit({ method: "thread/tokenUsage/updated", params: { threadId, turnId, model: tokenUsage.model, tokenUsage } });
             }
           }
           await Promise.all([this.refreshContext(session, running), this.refreshUsage(running)]);
           if (message.is_error) failure = message.subtype === "success" ? message.result : message.errors.join("\n");
-          break;
+          if (finished) break;
         }
       }
-      if (!receivedResult && !running.controller.signal.aborted) failure = "Claude exited before completing the turn.";
+      if ((!receivedResult || running.pendingSteers.size > 0) && !running.controller.signal.aborted) failure = "Claude exited before completing the turn.";
     } catch (error) {
       failure = error instanceof Error ? error.message : String(error);
     } finally {
+      running.ending = true;
+      running.input.close();
+      await this.settleInputWrites(running);
       try { running.query?.close(); }
       catch (error) { failure ??= error instanceof Error ? error.message : String(error); }
       const cancelled = running.controller.signal.aborted;
@@ -409,6 +457,53 @@ export class ClaudeBackend {
     } });
   }
 
+  private async publishCommands(session: ClaudeSession, commands: readonly SlashCommand[]): Promise<void> {
+    const summaries = claudeCommandSummaries(commands, this.terminalCommands);
+    if (summaries.length === 0) return;
+    this.commandsByCwd.set(session.cwd, summaries);
+    await this.emit({ method: "thread/availableCommands/updated", params: { threadId: session.thread.id, commands: summaries } });
+  }
+
+  /**
+   * Slash commands for a thread or a launchpad folder. A folder Claude has not
+   * reported for yet is asked once, through a session that receives no prompt.
+   * A failed probe waits a minute before the next try, so a `/` typed while the
+   * CLI is broken cannot spawn a process per keystroke.
+   */
+  async listCommands(params: { threadId?: string; cwd?: string }): Promise<AppServerAvailableCommandSummary[]> {
+    const cwd = (params.threadId ? await this.store.read(params.threadId).then((session) => session.cwd, () => undefined) : undefined)
+      ?? params.cwd;
+    if (!cwd) return [];
+    const known = this.commandsByCwd.get(cwd);
+    if (known) return known;
+    const inFlight = this.commandProbes.get(cwd);
+    if (inFlight) return await inFlight;
+    if (Date.now() < (this.commandProbeRetryAt.get(cwd) ?? 0)) return [];
+    const probe = (async () => {
+      try {
+        const executable = await this.requireInstallation();
+        const env = claudeEnvironment(await this.options.resolveEnv?.() ?? process.env);
+        const commands = await (this.options.readCommands ?? ((probeParams) => readClaudeMetadata({
+          ...probeParams,
+          read: (session) => session.supportedCommands(),
+          timeoutMessage: "Claude command discovery timed out.",
+        })))({ executable, env, cwd });
+        const summaries = claudeCommandSummaries(commands, this.terminalCommands);
+        // A live turn may have reported while the probe ran; it is fresher.
+        if (summaries.length > 0 && !this.commandsByCwd.has(cwd)) this.commandsByCwd.set(cwd, summaries);
+        if (summaries.length === 0) this.commandProbeRetryAt.set(cwd, Date.now() + 60_000);
+        return this.commandsByCwd.get(cwd) ?? summaries;
+      } catch {
+        this.commandProbeRetryAt.set(cwd, Date.now() + 60_000);
+        return [];
+      } finally {
+        this.commandProbes.delete(cwd);
+      }
+    })();
+    this.commandProbes.set(cwd, probe);
+    return await probe;
+  }
+
   async listMcpServers(threadId: string): Promise<CodexMcpServerSummary[]> {
     const query = this.running.get(threadId)?.query;
     if (!query) throw new Error("Claude MCP inventory is available while a turn is running.");
@@ -457,53 +552,6 @@ export class ClaudeBackend {
           id: entry.id, type: "dynamicToolCall", toolName: entry.summary, status: entry.status,
           contentItems: [{ type: "inputText", text: entry.details[0].markdown ?? "" }],
         } } });
-  private async publishCommands(session: ClaudeSession, commands: readonly SlashCommand[]): Promise<void> {
-    const summaries = claudeCommandSummaries(commands, this.terminalCommands);
-    if (summaries.length === 0) return;
-    this.commandsByCwd.set(session.cwd, summaries);
-    await this.emit({ method: "thread/availableCommands/updated", params: { threadId: session.thread.id, commands: summaries } });
-  }
-
-  /**
-   * Slash commands for a thread or a launchpad folder. A folder Claude has not
-   * reported for yet is asked once, through a session that receives no prompt.
-   * A failed probe waits a minute before the next try, so a `/` typed while the
-   * CLI is broken cannot spawn a process per keystroke.
-   */
-  async listCommands(params: { threadId?: string; cwd?: string }): Promise<AppServerAvailableCommandSummary[]> {
-    const cwd = (params.threadId ? await this.store.read(params.threadId).then((session) => session.cwd, () => undefined) : undefined)
-      ?? params.cwd;
-    if (!cwd) return [];
-    const known = this.commandsByCwd.get(cwd);
-    if (known) return known;
-    const inFlight = this.commandProbes.get(cwd);
-    if (inFlight) return await inFlight;
-    if (Date.now() < (this.commandProbeRetryAt.get(cwd) ?? 0)) return [];
-    const probe = (async () => {
-      try {
-        const executable = await this.requireInstallation();
-        const env = claudeEnvironment(await this.options.resolveEnv?.() ?? process.env);
-        const commands = await (this.options.readCommands ?? ((probeParams) => readClaudeMetadata({
-          ...probeParams,
-          read: (session) => session.supportedCommands(),
-          timeoutMessage: "Claude command discovery timed out.",
-        })))({ executable, env, cwd });
-        const summaries = claudeCommandSummaries(commands, this.terminalCommands);
-        // A live turn may have reported while the probe ran; it is fresher.
-        if (summaries.length > 0 && !this.commandsByCwd.has(cwd)) this.commandsByCwd.set(cwd, summaries);
-        if (summaries.length === 0) this.commandProbeRetryAt.set(cwd, Date.now() + 60_000);
-        return this.commandsByCwd.get(cwd) ?? summaries;
-      } catch {
-        this.commandProbeRetryAt.set(cwd, Date.now() + 60_000);
-        return [];
-      } finally {
-        this.commandProbes.delete(cwd);
-      }
-    })();
-    this.commandProbes.set(cwd, probe);
-    return await probe;
-  }
-
       }
     }
   }
@@ -511,10 +559,68 @@ export class ClaudeBackend {
   async interruptTurn(params: { threadId: string; turnId: string }): Promise<typeof params> {
     const running = this.running.get(params.threadId);
     if (running && running.turnId !== params.turnId) throw new Error("The active Claude turn has changed.");
+    if (running) running.ending = true;
+    running?.input.close();
     running?.controller.abort();
     running?.query?.close();
     await running?.done;
     return params;
+  }
+
+  async steerTurn(params: { threadId: string; expectedTurnId: string; input: AppServerTurnInputItem[] }): Promise<{
+    threadId: string; turnId: string; messageId: string;
+  }> {
+    const running = this.running.get(params.threadId);
+    if (!running) throw new Error("Claude has no active turn. Queue the message instead.");
+    const assertActive = () => {
+      if (this.running.get(params.threadId) !== running || running.ending || running.controller.signal.aborted) {
+        throw new Error("Claude has no active turn. Queue the message instead.");
+      }
+      if (running.turnId !== params.expectedTurnId) throw new Error("Claude expected active turn id has changed.");
+      if (!running.query) throw new Error("Claude is starting. Wait for the turn to start before steering.");
+    };
+    assertActive();
+    const content = await claudeInput(params.input);
+    const uuid = randomUUID();
+    const messageId = `user:${uuid}`;
+    const operation = running.inputWrites.then(async () => {
+      assertActive();
+      // Native result receipts retain at most 64 consumed UUIDs, including
+      // the original prompt. Never accept more than we can acknowledge.
+      if (running.pendingSteers.size >= 63) throw new Error("Claude has too many pending steer messages. Queue this message instead.");
+      const parts = claudeUserMessageParts(params.input);
+      const entry: AppServerThreadMessageEntry = {
+        type: "message", id: messageId, role: "user", parts,
+        text: parts.flatMap((part) => part.type === "text" ? [part.text] : []).join("\n"),
+        createdAt: Date.now(), turn: { id: running.turnId, status: "in_progress" },
+      };
+      running.entries.set(messageId, entry);
+      try {
+        await this.store.append(params.threadId, [entry]);
+        assertActive();
+        running.pendingSteers.add(uuid);
+        running.input.push({ type: "user", uuid, priority: "now", parent_tool_use_id: null,
+          message: { role: "user", content } });
+      } catch (error) {
+        running.pendingSteers.delete(uuid);
+        throw error;
+      }
+      await this.emit({ method: "item/completed", params: {
+        threadId: params.threadId, turnId: running.turnId,
+        item: { id: messageId, type: "userMessage", text: entry.text, content: parts },
+      } });
+    });
+    running.inputWrites = operation.catch(() => {});
+    await operation;
+    return { threadId: params.threadId, turnId: running.turnId, messageId };
+  }
+
+  private async settleInputWrites(running: RunningTurn): Promise<void> {
+    let writes: Promise<void>;
+    do {
+      writes = running.inputWrites;
+      await writes;
+    } while (writes !== running.inputWrites);
   }
 
   async close(): Promise<void> {

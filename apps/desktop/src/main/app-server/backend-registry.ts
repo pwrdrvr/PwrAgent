@@ -5855,7 +5855,7 @@ function inferSupportsSteering(
     return model.supportsSteering;
   }
 
-  return backend === "codex";
+  return backend === "codex" || backend === "claude";
 }
 
 function getBackendFallbackModels(backend: AppServerBackendKind): BackendModelOption[] {
@@ -22058,7 +22058,6 @@ export class DesktopBackendRegistry {
     params: SteerTurnRequest,
     messageOrigin?: AppServerThreadMessageOrigin,
   ): Promise<SteerTurnResponse> {
-    if (params.backend === "claude") throw new Error("Claude does not support steering an active turn. Queue a message or interrupt the turn.");
     const requestKey = buildSteerRequestKey(params);
     const signature = buildSteerRequestSignature(params, messageOrigin);
     const accepted = this.acceptedSteerRequests.get(requestKey);
@@ -22180,6 +22179,12 @@ export class DesktopBackendRegistry {
       params,
       this.localFilePrivateStorageRoots,
     );
+    if (params.backend === "claude") {
+      const result = await this.claudeBackend.steerTurn({ ...params, input });
+      await this.persistThreadMessageOrigin({ backend: "claude", threadId: params.threadId,
+        messageId: result.messageId, origin: messageOrigin });
+      return { backend: "claude", threadId: result.threadId, turnId: result.turnId, disposition: "steered" };
+    }
     if (isAcpBackendId(params.backend)) {
       const acpBackend = params.backend;
       const promptPayload = await inputToAcpPrompt(input);

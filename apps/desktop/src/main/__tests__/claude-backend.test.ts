@@ -60,6 +60,55 @@ async function fixture(messages?: (options: Options) => AsyncGenerator<SDKMessag
 }
 
 describe("Claude SDK backend", () => {
+  it("streams steering without losing a follow-up at the native result boundary", async () => {
+    const firstResult = Promise.withResolvers<void>();
+    const firstProcessed = Promise.withResolvers<void>();
+    const lastResult = Promise.withResolvers<void>();
+    let steerUuid: string | undefined;
+    const model = { inputTokens: 10, outputTokens: 5, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+      costUSD: 0.1, contextWindow: 200_000, maxOutputTokens: 32_000, webSearchRequests: 0 };
+    const f = await fixture(async function* () {
+      await firstResult.promise;
+      yield { type: "result", subtype: "success", is_error: false, modelUsage: { opus: model } } as unknown as SDKMessage;
+      firstProcessed.resolve();
+      await lastResult.promise;
+      yield { type: "result", subtype: "success", is_error: false, user_message_uuids: [steerUuid],
+        modelUsage: { opus: { ...model, inputTokens: 30, costUSD: 0.3 } },
+      } as unknown as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    const started = await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Start" }] });
+    const prompt = f.run.mock.calls[0][0].prompt;
+    if (typeof prompt === "string") throw new Error("Expected streaming input");
+    const iterator = prompt[Symbol.asyncIterator]();
+    expect((await iterator.next()).value.message.content).toEqual([{ type: "text", text: "Start" }]);
+    await expect(f.backend.steerTurn({ threadId, expectedTurnId: "stale", input: [] })).rejects.toThrow("expected active turn id");
+    const steered = await f.backend.steerTurn({ threadId, expectedTurnId: started.turnId,
+      input: [{ type: "text", text: "Focus on the PR" }, { type: "image", url: "data:image/png;base64,aGVsbG8=" }] });
+    const streamed = (await iterator.next()).value;
+    steerUuid = streamed.uuid;
+    expect(streamed).toMatchObject({ type: "user", priority: "now", uuid: expect.any(String),
+      message: { content: [{ type: "text", text: "Focus on the PR" }, { type: "image" }] } });
+    expect(f.backend.summary().capabilities.steerTurn).toBe(true);
+    firstResult.resolve();
+    await firstProcessed.promise;
+    expect(f.close).not.toHaveBeenCalled();
+    expect(f.events.some((event) => event.notification.method === "turn/completed")).toBe(false);
+    expect(f.events.some((event) => event.notification.method === "thread/tokenUsage/updated")).toBe(false);
+    lastResult.resolve();
+    await f.waitForTurn();
+    expect(f.events.filter((event) => event.notification.method === "turn/completed")).toHaveLength(1);
+    expect(f.events.find((event) => event.notification.method === "thread/tokenUsage/updated")?.notification)
+      .toMatchObject({ params: { tokenUsage: { claudeCostUSD: 0.3, last: { inputTokens: 30, outputTokens: 5 } } } });
+    expect((await f.backend.readThread(threadId)).messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: steered.messageId, text: "Focus on the PR", parts: [
+        { type: "text", text: "Focus on the PR" }, { type: "image", url: "data:image/png;base64,aGVsbG8=" },
+      ], turn: expect.objectContaining({ id: started.turnId, status: "completed" }) }),
+    ]));
+    expect(await iterator.next()).toMatchObject({ done: true });
+    await expect(f.backend.steerTurn({ threadId, expectedTurnId: started.turnId, input: [] })).rejects.toThrow("no active turn");
+  });
+
   it.each([true, false])("handles a legacy resumed session with baseline probe available=%s", async (available) => {
     const model = { inputTokens: 100, outputTokens: 20, cacheReadInputTokens: 200, cacheCreationInputTokens: 50,
       costUSD: 0.25, contextWindow: 200_000, maxOutputTokens: 32_000, webSearchRequests: 0 };
@@ -310,9 +359,31 @@ describe("Claude SDK backend", () => {
     const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
     const turn = await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Hello" }] });
     await expect(f.backend.interruptTurn({ threadId, turnId: "stale" })).rejects.toThrow("changed");
+    const prompt = f.run.mock.calls[0][0].prompt;
+    if (typeof prompt === "string") throw new Error("Expected streaming input");
+    const input = prompt[Symbol.asyncIterator]();
+    await input.next();
+    await f.backend.steerTurn({ threadId, expectedTurnId: turn.turnId, input: [{ type: "text", text: "Correction" }] });
     await f.backend.interruptTurn(turn);
+    expect(await input.next()).toMatchObject({ done: true });
     expect(f.events.at(-1)?.notification.method).toBe("turn/cancelled");
     expect((await f.backend.readThread(threadId)).threadStatus).toBe("idle");
+  });
+
+  it("fails rather than reporting success when the CLI exits before answering a steer", async () => {
+    const finish = Promise.withResolvers<void>();
+    const f = await fixture(async function* () {
+      await finish.promise;
+      yield { type: "result", subtype: "success", is_error: false } as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    const turn = await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Start" }] });
+    await f.backend.steerTurn({ threadId, expectedTurnId: turn.turnId, input: [{ type: "text", text: "Correction" }] });
+    finish.resolve();
+    await f.waitForTurn();
+    expect(f.events.at(-1)?.notification).toMatchObject({ method: "turn/failed", params: {
+      turn: { error: { message: "Claude exited before completing the turn." } },
+    } });
   });
 });
 
