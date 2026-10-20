@@ -2679,9 +2679,11 @@ describe("useThreadNavigation", () => {
     }));
     let listener: ((event: AgentEvent) => unknown) | undefined;
 
+    const logRendererDiagnostic = vi.fn(async () => {});
     const desktopApi: DesktopApi = {
       archiveThread,
       readPopulation,
+      logRendererDiagnostic,
       onAgentEvent: (onEvent) => { listener = onEvent; return () => undefined; },
     };
 
@@ -2727,6 +2729,12 @@ describe("useThreadNavigation", () => {
     });
     expect(result.current.archiveThreadNotice).toBeUndefined();
     expect(readPopulation).toHaveBeenCalledTimes(2);
+    expect(logRendererDiagnostic).toHaveBeenCalledTimes(130);
+    expect(logRendererDiagnostic).toHaveBeenLastCalledWith({
+      level: "info", message: "archive cleanup completion received",
+      details: expect.objectContaining({ backend: "codex", threadId: "thread-archived-129", archivedAt: 3000,
+        receivedAt: expect.any(Number), archiveAgeMs: expect.any(Number), noticeRaised: false, failed: false }),
+    });
   });
 
   it("archives a remote thread through its owning federation target", async () => {

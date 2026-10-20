@@ -1098,6 +1098,10 @@ type BackendClient = {
   }): Promise<{ threadId: string; turnId: string }>;
   compactThread?(params: {
     threadId: string;
+    model?: string;
+    serviceTier?: string;
+    reasoningEffort?: string;
+    fastMode?: boolean;
   }): Promise<{ threadId: string; turnId: string; itemId?: string }>;
   listMcpServers?(params: {
     threadId?: string;
@@ -8354,6 +8358,7 @@ function buildSteerRequestSignature(
 }
 
 type CodexRetryableTurnStart = {
+  kind: "turn";
   params: {
     backend: "codex";
     threadId: string;
@@ -8396,7 +8401,18 @@ type BackendRegistryOverlayStoreLike = OverlayStoreLike & Partial<
   >
 >;
 
-type PendingCodexInvalidIdRecovery = CodexRetryableTurnStart & {
+type CodexRetryableCompaction = {
+  kind: "compact";
+  params: { backend: "codex"; threadId: string };
+  invalidIdRecoveryAttempted?: boolean;
+  lifecycleStarted?: boolean;
+  terminalObserved?: boolean;
+  turnId?: string;
+};
+
+type CodexRetryableOperation = CodexRetryableTurnStart | CodexRetryableCompaction;
+
+type PendingCodexInvalidIdRecovery = CodexRetryableOperation & {
   audit: ThreadCodexInvalidIdRecovery;
   failureMessage: string;
   /** The last status told to the operator was `waiting`. */
@@ -8795,9 +8811,9 @@ export class DesktopBackendRegistry {
     string,
     AcceptedActiveTurnControlRequest
   >();
-  private readonly codexRetryableTurnStarts = new Map<
+  private readonly codexRetryableOperations = new Map<
     string,
-    CodexRetryableTurnStart
+    CodexRetryableOperation
   >();
   private readonly pendingCodexInvalidIdRecoveries:
     PendingCodexInvalidIdRecovery[] = [];
@@ -14470,6 +14486,9 @@ export class DesktopBackendRegistry {
         return await this.threadLifecycleLocks.run(keys[index]!, async () => await withFamilyLocks(index + 1));
       }
       const { thread } = candidates[0]!;
+      backendRegistryLog.info("thread archive requested", {
+        backend: thread.source, threadId: thread.id, runtimeInstanceId: this.runtimeInstanceId, requestedAt: Date.now(), automatic: true,
+      });
       await this.archiveThreadWithoutLifecycleLock({ backend: thread.source, threadId: thread.id }, beforeMutation);
     };
     try {
@@ -14526,6 +14545,9 @@ export class DesktopBackendRegistry {
   async archiveThread(
     request: ArchiveThreadRequest & { preserveWorktrees?: boolean },
   ): Promise<ArchiveThreadResponse> {
+    const requestedAt = Date.now();
+    const logFields = { backend: request.backend ?? "codex", threadId: request.threadId, runtimeInstanceId: this.runtimeInstanceId, requestedAt };
+    backendRegistryLog.info("thread archive requested", { ...logFields, backgroundCleanup: request.backgroundCleanup === true });
     const key = buildThreadIdentityKey(request.backend ?? "codex", request.threadId);
     if (this.archiveCleanupQueue.isCancelled(key)) {
       // Archive after an intervening restore is a new mutation, not a
@@ -14545,6 +14567,10 @@ export class DesktopBackendRegistry {
     );
     this.threadArchiveOperations.set(key, operation);
     try { return await operation; }
+    catch (error) {
+      backendRegistryLog.warn("thread archive failed", { ...logFields, durationMs: Date.now() - requestedAt, error: error instanceof Error ? error.message : String(error) });
+      throw error;
+    }
     finally { if (this.threadArchiveOperations.get(key) === operation) this.threadArchiveOperations.delete(key); }
   }
 
@@ -14599,6 +14625,9 @@ export class DesktopBackendRegistry {
       });
       result = { threadId: request.threadId };
     }
+    backendRegistryLog.info("thread archive mutation completed", {
+      backend, threadId: result.threadId, runtimeInstanceId: this.runtimeInstanceId, archivedAt, codexRolloutMissing,
+    });
     // A successful archive supersedes the provisional active workspace kept
     // until navigation acknowledges a newly started or forked thread. Leaving
     // it pending makes cleanup rediscover the archived target as active.
@@ -14652,18 +14681,37 @@ export class DesktopBackendRegistry {
     const key = buildThreadIdentityKey(intent.backend, intent.threadId);
     const existing = this.archiveCleanupQueue.pending(key);
     if (existing) return existing;
+    const queuedAt = Date.now();
+    const logFields = { backend: intent.backend, threadId: intent.threadId, archivedAt: intent.archivedAt, runtimeInstanceId: this.runtimeInstanceId, queuedAt };
+    backendRegistryLog.info("archive cleanup queued", { ...logFields, resuming, queueDepth: this.archiveCleanupQueue.pendingKeys().length + 1 });
     this.pendingArchiveCleanupIntents.set(key, intent);
-    const completion = this.archiveCleanupQueue.enqueue(key, async (context) =>
-      await this.completeArchivedThreadCleanup({ ...intent, context,
+    let startedAt: number | undefined;
+    const completion = this.archiveCleanupQueue.enqueue(key, async (context) => {
+      startedAt = Date.now();
+      backendRegistryLog.info("archive cleanup started", { ...logFields, startedAt, queueWaitMs: startedAt - queuedAt });
+      return await this.completeArchivedThreadCleanup({ ...intent, context,
         // A saved archive intent cannot authorize deleting a restored thread.
         // Recovery requires current archived membership, including for formerly
         // missing rollouts; it never repeats the provider archive operation.
         ...(resuming ? { requireArchived: true, codexRolloutMissing: false } : {}),
-      }),
-    );
-    void completion.then(() => {
+      });
+    });
+    void completion.then((response) => {
+      const completedAt = Date.now();
+      backendRegistryLog.info("archive cleanup completed", { ...logFields, completedAt,
+        queueWaitMs: startedAt === undefined ? undefined : startedAt - queuedAt,
+        cleanupDurationMs: startedAt === undefined ? undefined : completedAt - startedAt,
+        archiveAgeMs: completedAt - intent.archivedAt, worktreeCount: response.cleanup.length,
+      });
+      for (const outcome of response.cleanup) backendRegistryLog.info("archive cleanup worktree outcome", { ...logFields, ...outcome });
       if (this.pendingArchiveCleanupIntents.get(key) === intent) this.pendingArchiveCleanupIntents.delete(key);
     }, (error: unknown) => {
+      const completedAt = Date.now();
+      backendRegistryLog.info("archive cleanup stopped", { ...logFields, completedAt,
+        queueWaitMs: (startedAt ?? completedAt) - queuedAt,
+        cleanupDurationMs: startedAt === undefined ? 0 : completedAt - startedAt,
+        cancelled: error instanceof ArchiveCleanupCancelledError, error: error instanceof Error ? error.message : String(error),
+      });
       if (!(this.closed && error instanceof ArchiveCleanupCancelledError)
         && this.pendingArchiveCleanupIntents.get(key) === intent) this.pendingArchiveCleanupIntents.delete(key);
     });
@@ -14716,17 +14764,44 @@ export class DesktopBackendRegistry {
     });
     if (!params.backgroundCleanup) return await observed;
     void observed.then(async (response) => {
-      if (!this.closed) await this.emit({ backend, notification: {
+      if (this.closed) return;
+      await this.emit({ backend, notification: {
         method: "thread/archiveCleanup/completed",
         params: { threadId, archivedAt, cleanup: response.cleanup },
       } });
+      backendRegistryLog.info("archive cleanup completion published", { backend, threadId, archivedAt,
+        runtimeInstanceId: this.runtimeInstanceId, publishedAt: Date.now(), archiveAgeMs: Date.now() - archivedAt,
+      });
     }, async (error) => {
-      if (!this.closed) await this.emit({ backend, notification: {
+      if (this.closed) return;
+      await this.emit({ backend, notification: {
         method: "thread/archiveCleanup/completed",
         params: { threadId, archivedAt, cleanup: [], error: error instanceof Error ? error.message : String(error) },
       } });
+      backendRegistryLog.info("archive cleanup completion published", { backend, threadId, archivedAt,
+        runtimeInstanceId: this.runtimeInstanceId, publishedAt: Date.now(), archiveAgeMs: Date.now() - archivedAt, failed: true,
+      });
     }).catch((error) => backendRegistryLog.warn("archive cleanup completion publication failed", { error: String(error) }));
     return { backend, threadId, archivedAt, cleanup: [], cleanupPending: true };
+  }
+
+  private async traceArchiveCleanupStage<T>(
+    identity: { backend: AppServerBackendKind; threadId: string; archivedAt: number },
+    stage: "metadata" | "ungroup" | "worktrees",
+    work: () => Promise<T>,
+  ): Promise<T> {
+    const { backend, threadId, archivedAt } = identity;
+    const fields = { backend, threadId, archivedAt, runtimeInstanceId: this.runtimeInstanceId, stage };
+    const startedAt = Date.now();
+    backendRegistryLog.info("archive cleanup stage started", fields);
+    try {
+      const result = await work();
+      backendRegistryLog.info("archive cleanup stage completed", { ...fields, durationMs: Date.now() - startedAt });
+      return result;
+    } catch (error) {
+      backendRegistryLog.info("archive cleanup stage failed", { ...fields, durationMs: Date.now() - startedAt, error: error instanceof Error ? error.message : String(error) });
+      throw error;
+    }
   }
 
   private async completeArchivedThreadCleanup(params: {
@@ -14746,25 +14821,33 @@ export class DesktopBackendRegistry {
     let cleanupMetadata: ArchiveCleanupMetadata | undefined;
     let cleanupMetadataError: string | undefined;
     try {
-      let targetThread: AppServerThreadSummary | undefined;
-      if (!params.requireArchived && backend === "codex" && this.codexClient.readArchiveCleanupThreadSummary && !codexRolloutMissing) {
-        targetThread = await this.codexClient.readArchiveCleanupThreadSummary(result.threadId, context.checkpoint);
-        const readOverlays = this.overlayStore.getArchiveCleanupOverlayStates ?? this.overlayStore.getThreadOverlayStates;
-        await context.checkpoint();
-        const overlays = await readOverlays.call(this.overlayStore, { backend, threadIds: [result.threadId] });
-        targetThread = { ...targetThread, linkedDirectories: mergeThreadLinkedDirectories([
-          ...targetThread.linkedDirectories, ...(overlays[result.threadId]?.extraLinkedDirectories ?? []),
-        ]) };
-      } else if (isAcpBackendId(backend)) {
-        const session = this.acpBackend.getSession(backend, result.threadId);
-        if (session?.archivedAt) targetThread = this.acpBackend.sessionToThreadSummary(session);
-      }
-      const needsWorktreeOwnership = !params.preserveWorktrees && (!targetThread
-        || targetThread.linkedDirectories.some((directory) => Boolean(linkedDirectoryWorktreePath(directory))));
-      cleanupMetadata = await this.findThreadForArchiveCleanup({
-        backend, threadId: result.threadId, context, codexRolloutMissing,
-        targetThread: needsWorktreeOwnership ? undefined : targetThread,
-        reuseInventory: true,
+      cleanupMetadata = await this.traceArchiveCleanupStage(params, "metadata", async () => {
+        let targetThread: AppServerThreadSummary | undefined;
+        const cached = context.batch ? this.archiveCleanupInventories.get(context.batch) : undefined;
+        // A full, current batch inventory already contains each archived target.
+        // Do not deserialize every target again through thread/read. The lookup
+        // below rechecks the revision after its checkpoint and removal still
+        // obtains its own fresh ownership admission.
+        const canReuseTarget = cached?.includesArchived && cached.revision === this.archiveWorkspaceRevision;
+        if (!canReuseTarget && !params.requireArchived && backend === "codex" && this.codexClient.readArchiveCleanupThreadSummary && !codexRolloutMissing) {
+          targetThread = await this.codexClient.readArchiveCleanupThreadSummary(result.threadId, context.checkpoint);
+          const readOverlays = this.overlayStore.getArchiveCleanupOverlayStates ?? this.overlayStore.getThreadOverlayStates;
+          await context.checkpoint();
+          const overlays = await readOverlays.call(this.overlayStore, { backend, threadIds: [result.threadId] });
+          targetThread = { ...targetThread, linkedDirectories: mergeThreadLinkedDirectories([
+            ...targetThread.linkedDirectories, ...(overlays[result.threadId]?.extraLinkedDirectories ?? []),
+          ]) };
+        } else if (isAcpBackendId(backend)) {
+          const session = this.acpBackend.getSession(backend, result.threadId);
+          if (session?.archivedAt) targetThread = this.acpBackend.sessionToThreadSummary(session);
+        }
+        const needsWorktreeOwnership = !params.preserveWorktrees && (!targetThread
+          || targetThread.linkedDirectories.some((directory) => Boolean(linkedDirectoryWorktreePath(directory))));
+        return await this.findThreadForArchiveCleanup({
+          backend, threadId: result.threadId, context, codexRolloutMissing,
+          targetThread: needsWorktreeOwnership ? undefined : targetThread,
+          reuseInventory: true,
+        });
       });
     } catch (error) {
       context.assertCurrent();
@@ -14773,23 +14856,23 @@ export class DesktopBackendRegistry {
     }
     let ungroupError: string | undefined;
     try {
-      await this.ungroupChildrenOfArchivedThread({
+      await this.traceArchiveCleanupStage(params, "ungroup", async () => await this.ungroupChildrenOfArchivedThread({
         backend, activeThreads: cleanupMetadata?.activeChildren ?? cleanupMetadata?.activeThreads ?? [], parentThreadId: result.threadId,
         overlaysByThreadKey: cleanupMetadata?.overlaysByThreadKey, context,
         legacyParentBackends: cleanupMetadata?.legacyParentBackends ?? (cleanupMetadata ? new Set([...cleanupMetadata.activeThreads, ...cleanupMetadata.archivedThreads]
           .filter((thread) => thread.id === result.threadId).map((thread) => thread.source)) : undefined),
-      });
+      }));
     } catch (error) {
       context.assertCurrent();
       ungroupError = error instanceof Error ? error.message : String(error);
       backendRegistryLog.warn("archive thread child ungrouping failed", { backend, threadId: result.threadId, error: ungroupError });
     }
-    const cleanup = params.preserveWorktrees ? [] : cleanupMetadata
+    const cleanup = await this.traceArchiveCleanupStage(params, "worktrees", async () => params.preserveWorktrees ? [] : cleanupMetadata
       ? await this.archiveThreadWorktrees({
           backend, activeThreads: cleanupMetadata.activeThreads, archivedThreads: cleanupMetadata.archivedThreads,
           thread: cleanupMetadata.thread, context, codexRolloutMissing, worktreeEvidence: cleanupMetadata.worktreeEvidence,
         })
-      : this.buildArchiveCleanupMetadataSkippedResult({ backend, threadId: result.threadId, error: cleanupMetadataError });
+      : this.buildArchiveCleanupMetadataSkippedResult({ backend, threadId: result.threadId, error: cleanupMetadataError }));
     if (codexRolloutMissing) {
       const cleanupFailures = [
         cleanupMetadataError
@@ -14964,6 +15047,9 @@ export class DesktopBackendRegistry {
       ...session,
       archivedAt,
       updatedAt: Math.max(session.updatedAt, archivedAt),
+    });
+    backendRegistryLog.info("thread archive mutation completed", {
+      backend: params.backend, threadId: params.threadId, runtimeInstanceId: this.runtimeInstanceId, archivedAt,
     });
     await this.overlayStore.observeArchivedThreads?.([{ backend: params.backend, threadId: params.threadId }], archivedAt);
     this.invalidateThreadListCache(params.backend, true);
@@ -19497,6 +19583,7 @@ export class DesktopBackendRegistry {
     const retryableCodexTurnStart: CodexRetryableTurnStart | undefined =
       params.backend === "codex" && !params.invalidIdRecoveryAttempted
         ? {
+            kind: "turn",
             turnId: syntheticStartedTurnId,
             params: {
               backend: "codex",
@@ -19516,7 +19603,7 @@ export class DesktopBackendRegistry {
           }
         : undefined;
     if (retryableCodexTurnStart) {
-      this.codexRetryableTurnStarts.set(
+      this.codexRetryableOperations.set(
         params.threadId,
         retryableCodexTurnStart,
       );
@@ -19635,7 +19722,7 @@ export class DesktopBackendRegistry {
         }
       }
       if (retryableCodexTurnStart) {
-        this.codexRetryableTurnStarts.delete(params.threadId);
+        this.codexRetryableOperations.delete(params.threadId);
       }
       throw error;
     }
@@ -21613,30 +21700,81 @@ export class DesktopBackendRegistry {
         "ACP backend " + params.backend + " does not support thread compaction",
       );
     }
+    await this.codexInvalidIdRecoveryBarrier;
+    return await this.compactThreadNow({ backend: "codex", threadId: params.threadId });
+  }
+
+  private async compactThreadNow(params: {
+    backend: "codex";
+    threadId: string;
+    invalidIdRecoveryAttempted?: boolean;
+  }): Promise<{
+    backend: "codex";
+    threadId: string;
+    turnId: string;
+    itemId?: string;
+  }> {
+    if (this.closed) throw new Error("Desktop backend registry is closed");
     // Compaction runs a backend turn, so a lock refuses it like any other.
     await this.assertThreadNotLocked(params.backend, params.threadId);
-    const compactWithClient = async (
-      client: BackendClient,
-    ): Promise<{ threadId: string; turnId: string; itemId?: string }> => {
-      if (!client.compactThread) {
-        throw new Error("Selected backend does not support thread compaction");
-      }
-      return await client.compactThread({
-        threadId: params.threadId,
+    if (
+      this.reservedCodexStartThreadIds.has(params.threadId)
+      || this.threadHasActiveTurn(params.threadId, "codex")
+      || this.codexRetryableOperations.has(params.threadId)
+    ) {
+      throw new Error("Cannot compact a thread while another operation is running");
+    }
+    const candidate: CodexRetryableCompaction = {
+      kind: "compact",
+      params: { backend: "codex", threadId: params.threadId },
+      invalidIdRecoveryAttempted: params.invalidIdRecoveryAttempted,
+      turnId: `pending:compact:${params.threadId}`,
+    };
+    // Notifications can arrive before the RPC response. Reserve the start so
+    // recovery cannot stop the shared process while this request is in flight.
+    this.reservedCodexStartThreadIds.add(params.threadId);
+    this.codexRetryableOperations.set(params.threadId, candidate);
+    try {
+      const result = await this.withCodexThreadClient(params.threadId, async (client) => {
+        if (!client.compactThread) {
+          throw new Error("Selected backend does not support thread compaction");
+        }
+        const overlay = await this.overlayStore.getThreadOverlayState({
+          backend: "codex", threadId: params.threadId,
+        });
+        const settings = await this.resolveModelSettings("codex", {
+          model: overlay?.model,
+          serviceTier: overlay?.serviceTier,
+          reasoningEffort: overlay?.reasoningEffort,
+          reasoningEffortsByModel: overlay?.reasoningEffortsByModel,
+          fastMode: overlay?.fastMode,
+        });
+        return await client.compactThread({ threadId: params.threadId, ...settings });
       });
-    };
-
-    const result = await this.withCodexThreadClient(
-      params.threadId,
-      compactWithClient,
-    );
-
-    return {
-      backend: params.backend,
-      threadId: result.threadId,
-      turnId: result.turnId,
-      itemId: result.itemId,
-    };
+      // The adapter's compact:<threadId> is a placeholder. Prefer the real
+      // turn ID captured from turn/started (or an early terminal notification).
+      if (candidate.turnId?.startsWith("pending:") && !result.turnId.startsWith("compact:")) {
+        candidate.turnId = result.turnId;
+      }
+      return {
+        backend: "codex",
+        ...result,
+        turnId: candidate.turnId?.startsWith("pending:") ? result.turnId : candidate.turnId!,
+      };
+    } catch (error) {
+      if (this.codexRetryableOperations.get(params.threadId) === candidate) {
+        this.codexRetryableOperations.delete(params.threadId);
+      }
+      throw error;
+    } finally {
+      this.reservedCodexStartThreadIds.delete(params.threadId);
+      if (candidate.terminalObserved) {
+        // An early terminal could not dispatch while the RPC owned its start
+        // reservation. Recheck after that last ownership boundary is released.
+        this.threadTurnQueue.scheduleThreadDrain(params);
+      }
+      this.maybeDrainCodexInvalidIdRecoveries();
+    }
   }
 
   async listThreadMcpServers(
@@ -22092,8 +22230,9 @@ export class DesktopBackendRegistry {
       parentThreadId: params.threadId,
       turnId: active.turnId,
     });
-    const activeStart = this.codexRetryableTurnStarts.get(params.threadId);
-    const customBoundary = activeStart?.turnId === active?.turnId
+    const activeStart = this.codexRetryableOperations.get(params.threadId);
+    const customBoundary = activeStart?.kind === "turn"
+      && activeStart.turnId === active?.turnId
       && ((activeStart?.params.sandbox && activeStart.params.sandbox !== "workspace-write")
         || (activeStart?.params.approvalPolicy && activeStart.params.approvalPolicy !== "on-request"));
     if (
@@ -22910,6 +23049,11 @@ export class DesktopBackendRegistry {
       return true;
     }
     if (backend === "codex") {
+      // RPC acceptance can precede turn/started. The compaction still owns
+      // this thread until its terminal notification or the process exits.
+      if (this.codexRetryableOperations.get(threadId)?.kind === "compact") {
+        return true;
+      }
       if (!ignoreCodexStartReservation && this.reservedCodexStartThreadIds.has(threadId)) {
         return true;
       }
@@ -26774,7 +26918,7 @@ export class DesktopBackendRegistry {
   ): Promise<void> {
     const threadId = notification.params.threadId;
     const turnId = turnIdFromTerminalNotification(notification);
-    const candidate = this.codexRetryableTurnStarts.get(threadId);
+    const candidate = this.codexRetryableOperations.get(threadId);
     if (
       candidate
       && (
@@ -26784,13 +26928,14 @@ export class DesktopBackendRegistry {
         || candidate.turnId === turnId
       )
     ) {
-      if (turnId && candidate.turnId?.startsWith("pending:")) {
+      if (turnId && (!candidate.turnId || candidate.turnId.startsWith("pending:"))) {
         candidate.turnId = turnId;
       }
       candidate.terminalObserved = true;
-      this.codexRetryableTurnStarts.delete(threadId);
+      this.codexRetryableOperations.delete(threadId);
       if (
         notification.method === "turn/failed"
+        && !(candidate.kind === "compact" && candidate.invalidIdRecoveryAttempted)
         && isCodexInvalidResponseMessageIdError(
           errorMessageFromTerminalNotification(notification),
         )
@@ -26826,12 +26971,17 @@ export class DesktopBackendRegistry {
           );
         }
       }
+      if (candidate.kind === "compact") {
+        // emit() already attempted terminal queue dispatch while this
+        // candidate still owned the thread. Wake it after releasing ownership.
+        this.threadTurnQueue.scheduleThreadDrain({ backend: "codex", threadId });
+      }
     }
     this.maybeDrainCodexInvalidIdRecoveries();
   }
 
   private async queueCodexInvalidIdRecovery(
-    candidate: CodexRetryableTurnStart,
+    candidate: CodexRetryableOperation,
     failureMessage: string,
   ): Promise<PendingCodexInvalidIdRecovery> {
     if (this.closed) {
@@ -26944,7 +27094,7 @@ export class DesktopBackendRegistry {
       reportedWaiting: waitingForThreadIds.length > 0,
       resolve,
     };
-    this.codexRetryableTurnStarts.delete(candidate.params.threadId);
+    this.codexRetryableOperations.delete(candidate.params.threadId);
     this.pendingCodexInvalidIdRecoveries.push(recovery);
     if (!this.codexInvalidIdRecoveryBarrier) {
       this.codexInvalidIdRecoveryBarrier = new Promise<void>((barrierResolve) => {
@@ -27091,7 +27241,8 @@ export class DesktopBackendRegistry {
         const statusMessage =
           `PwrAgent repaired ${repaired.removedMessageIdCount} invalid persisted `
           + `message ID(s) for thread ${repaired.threadId}. `
-          + `Backup: ${repaired.backupPath}. Retrying the failed turn once.`;
+          + `Backup: ${repaired.backupPath}. Retrying the failed `
+          + `${recovery.kind === "compact" ? "compaction" : "turn"} once.`;
         backendRegistryLog.warn("Codex invalid-message-ID history repaired", {
           backupPath: repaired.backupPath,
           removedMessageIdCount: repaired.removedMessageIdCount,
@@ -27127,11 +27278,16 @@ export class DesktopBackendRegistry {
           );
         }
         retrySubmitted = true;
-        const retried = await this.startTurnNow({
-          ...recovery.params,
-          invalidIdRecoveryAttempted: true,
-          messageOrigin: { kind: "pwragent" },
-        });
+        const retried = recovery.kind === "compact"
+          ? await this.compactThreadNow({
+              ...recovery.params,
+              invalidIdRecoveryAttempted: true,
+            })
+          : await this.startTurnNow({
+              ...recovery.params,
+              invalidIdRecoveryAttempted: true,
+              messageOrigin: { kind: "pwragent" },
+            });
         recovery.audit = {
           ...recovery.audit,
           retryTurnId: retried.turnId,
@@ -27258,6 +27414,9 @@ export class DesktopBackendRegistry {
 
   private listActiveCodexWorkThreadIds(): string[] {
     const threadIds = new Set(this.reservedCodexStartThreadIds);
+    for (const candidate of this.codexRetryableOperations.values()) {
+      if (candidate.kind === "compact") threadIds.add(candidate.params.threadId);
+    }
     for (const key of this.activeCodexTurnModes.keys()) {
       const parsed = parseThreadTurnKeyBody(key);
       if (parsed) threadIds.add(parsed.threadId);
@@ -27277,6 +27436,11 @@ export class DesktopBackendRegistry {
     ) {
       return true;
     }
+    // An accepted compaction may not have emitted turn/started yet. It still
+    // owns work on the process until its terminal notification is observed.
+    for (const candidate of this.codexRetryableOperations.values()) {
+      if (candidate.kind === "compact") return true;
+    }
     for (const key of this.activeTurnKeys) {
       if (key.startsWith("codex:")) {
         return true;
@@ -27289,6 +27453,18 @@ export class DesktopBackendRegistry {
     this.unsubscribers.push(
       client.onNotification(async (notification) => {
         logBackendLifecycleNotification(backend, notification);
+        // Match the client's running-turn ownership before the first await;
+        // exit can arrive while lifecycle delivery is still in progress.
+        if (backend === "codex" && notification.method === "turn/started") {
+          const started = notification as Extract<AppServerNotification, { method: "turn/started" }>;
+          const candidate = this.codexRetryableOperations.get(started.params.threadId);
+          if (candidate?.kind === "compact") {
+            candidate.lifecycleStarted = true;
+            if (candidate.turnId?.startsWith("pending:")) {
+              candidate.turnId = turnIdFromStartedNotification(started);
+            }
+          }
+        }
         this.invalidateArchiveCleanupForNotification(backend, notification);
         if (backend === "codex" && notification.method === "account/updated") {
           if (this.codexBackendSummary) {
@@ -33537,6 +33713,10 @@ export class DesktopBackendRegistry {
       && (params.targetThread || cached.includesArchived)) {
       await context?.checkpoint();
       if (this.archiveWorkspaceRevision === revision && this.archiveCleanupInventories.get(batch) === cached) {
+        backendRegistryLog.info("archive cleanup inventory reused", {
+          backend: params.backend, threadId: params.threadId, runtimeInstanceId: this.runtimeInstanceId,
+          activeThreads: cached.inventory.activeThreads.length, archivedThreads: cached.inventory.archivedThreads.length,
+        });
         return this.selectArchiveCleanupInventory(cached.inventory, params);
       }
     }
@@ -33555,6 +33735,8 @@ export class DesktopBackendRegistry {
     const agents = await this.acpBackend.listAvailableAgents();
     const directoryObservations = new Map<string, Promise<ThreadDirectoryEnrichment>>();
     const workspaceObservations = new Map<string, Promise<LinkedDirectorySummary | undefined>>();
+    const scanStartedAt = Date.now();
+    let providerPages = 0;
     const appendPage = async (backend: AppServerBackendKind, rows: AppServerThreadSummary[], archived: boolean, resolveCwd = isAcpBackendId(backend)) => {
       for (let offset = 0; offset < rows.length; offset += ARCHIVE_CLEANUP_SLICE_SIZE) {
         await context?.checkpoint();
@@ -33628,6 +33810,7 @@ export class DesktopBackendRegistry {
             checkpoint: async () => { await context?.checkpoint(); },
             directoryObservations,
           });
+          providerPages += 1;
           await appendPage("codex", page.threads, archived);
           cursor = page.nextCursor?.trim();
           if (cursor && cursors.has(cursor)) throw new Error("Archive discovery returned a repeated cursor; worktree safety is incomplete.");
@@ -33654,6 +33837,11 @@ export class DesktopBackendRegistry {
       }
     }
     context?.assertCurrent();
+    backendRegistryLog.info("archive cleanup inventory read", {
+      backend: params.backend, threadId: params.threadId, runtimeInstanceId: this.runtimeInstanceId,
+      durationMs: Date.now() - scanStartedAt, providerPages, activeThreads: activeThreads.length, archivedThreads: archivedThreads.length,
+      directoryObservations: directoryObservations.size, workspaceObservations: workspaceObservations.size,
+    });
     if (batch && revision === this.archiveWorkspaceRevision && inventories === this.archiveCleanupInventories) {
       inventories.set(batch, { revision, includesArchived: !params.targetThread,
         inventory: { activeThreads, archivedThreads, overlaysByThreadKey, worktreeEvidence } });
@@ -44824,12 +45012,42 @@ export class DesktopBackendRegistry {
 
   private async handleCodexAppServerUnexpectedExit(): Promise<void> {
     this.backgroundTerminalGeneration += 1;
+    // The client synthesizes terminal failures only for turns it saw start.
+    // Settle accepted compactions it cannot know about at this same boundary.
+    const pendingCompactions: CodexRetryableCompaction[] = [];
+    for (const [threadId, candidate] of this.codexRetryableOperations) {
+      if (candidate.kind !== "compact" || candidate.lifecycleStarted) continue;
+      candidate.terminalObserved = true;
+      this.codexRetryableOperations.delete(threadId);
+      pendingCompactions.push(candidate);
+    }
     const threadIds = [...new Set([
       ...this.liveCodexToolItemsByThread.keys(), ...this.codexBackgroundTerminals.keys(),
+      ...pendingCompactions.map((candidate) => candidate.params.threadId),
     ])];
     this.liveCodexToolItemsByThread.clear();
     this.codexBackgroundTerminals.clear();
     try {
+      await Promise.all(pendingCompactions.map((candidate) => {
+        const threadId = candidate.params.threadId;
+        const turnId = candidate.turnId ?? `pending:compact:${threadId}`;
+        return this.emit({
+          backend: "codex",
+          notification: {
+            method: "turn/failed",
+            params: {
+              threadId,
+              turnId,
+              turn: {
+                id: turnId,
+                status: "failed",
+                completedAt: Date.now(),
+                error: { message: "Codex app server exited before compaction completed." },
+              },
+            },
+          },
+        });
+      }));
       await Promise.all(threadIds.map((threadId) => this.emit({
         backend: "codex",
         notification: {
@@ -44838,6 +45056,7 @@ export class DesktopBackendRegistry {
         },
       })));
     } finally {
+      this.maybeDrainCodexInvalidIdRecoveries();
       await this.maybeRestartCodexForManagedRuntimeChange();
     }
   }

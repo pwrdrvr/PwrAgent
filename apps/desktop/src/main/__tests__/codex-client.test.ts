@@ -1450,6 +1450,48 @@ async function waitForLatestTransportRequest(
 }
 
 describe("CodexAppServerClient", () => {
+  it.each([false, true])("applies the compaction model before compacting (already loaded: %s)", async (alreadyLoaded) => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient();
+    try {
+      if (alreadyLoaded) {
+        await client.setThreadPermissions({ threadId: "thread-2", model: "gpt-5.5" });
+        MockTransport.threadResumeResult = { threadId: "thread-2", model: "gpt-5.5" };
+      }
+      const transport = MockTransport.instances.at(-1);
+      const before = transport?.sentMessages.length ?? 0;
+      const selected = { threadId: "thread-2", model: "gpt-6.1-sol", reasoningEffort: "high" };
+      await client.compactThread(selected);
+      const requests = MockTransport.instances.at(-1)!.sentMessages.slice(before).map((message) => JSON.parse(message));
+      expect(requests.find((request) => request.method === "thread/resume")?.params).toMatchObject({
+        threadId: "thread-2", model: "gpt-6.1-sol",
+      });
+      expect(requests.find((request) => request.method === "thread/settings/update")?.params).toMatchObject({
+        threadId: "thread-2", model: "gpt-6.1-sol", effort: "high",
+      });
+      const methods = requests.map((request) => request.method);
+      expect(methods.indexOf("thread/settings/update")).toBeLessThan(methods.indexOf("thread/compact/start"));
+      expect(methods).not.toContain("turn/start");
+    } finally {
+      await client.close();
+    }
+  });
+
+  it.each(["resume", "settings"])("does not compact with stale settings when %s fails", async (failure) => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient();
+    if (failure === "resume") MockTransport.threadResumeError = { message: "model resume rejected" };
+    else MockTransport.threadSettingsUpdateError = "model settings rejected";
+    try {
+      const selected = { threadId: "thread-2", model: "gpt-6.1-sol" };
+      await expect(client.compactThread(selected)).rejects.toThrow("rejected");
+      const requests = MockTransport.instances.at(-1)!.sentMessages.map((message) => JSON.parse(message));
+      expect(requests.some((request) => request.method === "thread/compact/start")).toBe(false);
+    } finally {
+      await client.close();
+    }
+  });
+
   it("lists and terminates background terminals through Codex session handles", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     const client = new CodexAppServerClient();
