@@ -793,7 +793,7 @@ export function ModelsSettings(props: {
           />
           <SettingsIndexRow
             name="Claude"
-            meta={backends.find((backend) => backend.kind === "claude")?.claude?.executable ?? "Install the official CLI, then run claude auth login"}
+            meta={backends.find((backend) => backend.kind === "claude")?.claude?.executable ?? "Install Claude Code, then run claude auth login"}
             chip={backends.find((backend) => backend.kind === "claude")?.claude?.authStatus === "signed-in" ? "Signed in" : "Setup"}
             chipKind={backends.find((backend) => backend.kind === "claude")?.available ? "ok" : "muted"}
             onOpen={() => props.onFocusChange?.("claude")}

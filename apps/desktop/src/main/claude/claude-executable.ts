@@ -9,7 +9,7 @@ import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 const runFile = promisify(execFile);
 
 export const CLAUDE_SETUP_INSTRUCTIONS =
-  "Install the official Claude CLI from https://code.claude.com/docs/en/setup, then run `claude auth login` in your terminal.";
+  "Install Claude Code from https://code.claude.com/docs/en/setup, then run `claude auth login` in your terminal.";
 
 export type ClaudeInstallation = {
   executable?: string;

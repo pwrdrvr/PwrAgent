@@ -11,8 +11,8 @@ export function ClaudeSettings(props: {
   const installation = props.backend?.claude;
   return (
     <>
-      <SettingsPanelHead eyebrow="AI Providers" title="Claude" help="Use your installed official CLI and its existing sign-in." />
-      <SettingsSection title="Local CLI" description="Install the official CLI from code.claude.com/docs/en/setup, then run claude auth login in your terminal.">
+      <SettingsPanelHead eyebrow="AI Providers" title="Claude" help="PwrAgent runs your installed Claude Code binary with your CLI sign-in." />
+      <SettingsSection title="Local CLI" description="Install Claude Code from code.claude.com/docs/en/setup, then run claude auth login in your terminal.">
         <SettingsField label="Executable" control={installation?.executable ?? "Not found"} />
         <SettingsField label="Sign-in" control={
           !installation?.executable

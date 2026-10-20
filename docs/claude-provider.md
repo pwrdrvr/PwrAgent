@@ -4,6 +4,23 @@ Claude is a built-in desktop backend (`claude`). The main process calls the
 declared `@anthropic-ai/claude-agent-sdk` dependency directly. There is no Claude
 ACP transport, adapter installer, or application-managed CLI download.
 
+## Provider attribution and branding
+
+Settings describes the integration in plain text: PwrAgent runs the user's
+installed Claude Code binary. The provider selector and thread chips use
+`Claude`; thread metadata records `source: "claude"`, identifying the backend
+that owns the session. This is provider attribution, not a product or feature
+name derived from Claude Code.
+
+The integration includes no Anthropic or Claude logos, branded ASCII art, or
+imitations of their visual identity. PwrAgent retains its own name and branding
+and makes no partnership or endorsement claim. Keep future changes within
+these boundaries. Anthropic's [Claude Code legal page](https://code.claude.com/docs/en/legal-and-compliance#can-customers-offer-claude-code-in-their-products)
+allows factual plain-text descriptions that a product runs Claude Code;
+its [SDK branding guidance](https://code.claude.com/docs/en/agent-sdk/overview#branding-guidelines)
+separately describes provider attribution. Neither is a grant to add vendor
+logos to PwrAgent.
+
 ## Process and authentication boundary
 
 `claude-executable.ts` resolves the operator's installed official CLI from the
