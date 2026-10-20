@@ -19404,7 +19404,17 @@ export class DesktopBackendRegistry {
       };
       try {
         for (const registration of registrations) registration.bindThread(params.threadId);
-        const owned = await this.claudeAgentToolMcpServer?.registerClient({ backend: "claude", threadId: params.threadId });
+        // As for ACP, PwrAgent's own tools are optional: a server that cannot
+        // start must not block the operator's turn.
+        const owned = await this.claudeAgentToolMcpServer?.registerClient({ backend: "claude", threadId: params.threadId })
+          .catch((error: unknown) => {
+            backendRegistryLog.warn("agent_tool_mcp_start_failed", {
+              backend: "claude",
+              error: error instanceof Error ? error.message : String(error),
+              threadId: params.threadId,
+            });
+            return undefined;
+          });
         const servers = [...registrations.map((registration) => ({
           ...registration.server, name: buildCodexConnectionMcpServerName(registration.server),
         })), ...(owned ? [owned.server] : [])];

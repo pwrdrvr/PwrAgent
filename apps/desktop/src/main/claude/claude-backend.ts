@@ -39,6 +39,8 @@ type RunningTurn = {
   contextWindow?: ClaudeSession["contextWindow"];
   input: ClaudeInputStream;
   pendingSteers: Set<string>;
+  /** The SDK emits one assistant message per content block, sharing an id. */
+  completedMessageIds: Set<string>;
   inputWrites: Promise<void>;
   ending?: boolean;
 };
@@ -73,7 +75,7 @@ export class ClaudeBackend {
   private readonly store: ClaudeSessionStore;
   private readonly running = new Map<string, RunningTurn>();
   private installation: ClaudeInstallation = { authStatus: "unknown", message: CLAUDE_SETUP_INSTRUCTIONS };
-  private discovery?: Promise<void>;
+  private discovery?: { models: boolean; promise: Promise<void> };
   private models?: BackendModelOption[];
   private rateLimits: BackendSummary["rateLimits"];
   // Last command list Claude reported per working directory. Project
@@ -88,17 +90,25 @@ export class ClaudeBackend {
   }
 
   async discover(options: { models?: boolean } = {}): Promise<void> {
-    if (this.discovery) return this.discovery;
-    this.discovery = (async () => {
-      const env = claudeEnvironment(await this.options.resolveEnv?.() ?? process.env);
-      this.installation = await (this.options.inspectInstallation ?? inspectClaudeInstallation)({ env });
-      if (options.models !== false && this.installation.executable && this.installation.authStatus !== "sign-in-required") {
-        this.models = await (this.options.discoverModels ?? discoverClaudeModels)({
-          executable: this.installation.executable, env,
-        });
-      }
-    })();
-    try { await this.discovery; } finally { this.discovery = undefined; }
+    const models = options.models !== false;
+    const inFlight = this.discovery;
+    // An installation-only check cannot answer a request for the model catalog.
+    if (inFlight && (inFlight.models || !models)) return await inFlight.promise;
+    if (inFlight) await inFlight.promise.catch(() => {});
+    const discovery = {
+      models,
+      promise: (async () => {
+        const env = claudeEnvironment(await this.options.resolveEnv?.() ?? process.env);
+        this.installation = await (this.options.inspectInstallation ?? inspectClaudeInstallation)({ env });
+        if (models && this.installation.executable && this.installation.authStatus !== "sign-in-required") {
+          this.models = await (this.options.discoverModels ?? discoverClaudeModels)({
+            executable: this.installation.executable, env,
+          });
+        }
+      })(),
+    };
+    this.discovery = discovery;
+    try { await discovery.promise; } finally { if (this.discovery === discovery) this.discovery = undefined; }
   }
 
   summary(): BackendSummary {
@@ -131,6 +141,11 @@ export class ClaudeBackend {
   }
 
   private async requireInstallation(): Promise<string> {
+    // Inspection spawns the CLI three times. Reuse a usable result; an explicit
+    // Settings check or startup refresh re-inspects through discover().
+    if (this.installation.executable && this.installation.authStatus !== "sign-in-required") {
+      return this.installation.executable;
+    }
     await this.discover({ models: false });
     if (!this.installation.executable || this.installation.authStatus === "sign-in-required") {
       throw new Error(this.installation.message ?? CLAUDE_SETUP_INSTRUCTIONS);
@@ -220,7 +235,8 @@ export class ClaudeBackend {
     if (this.running.has(params.threadId)) throw new Error("A Claude turn is already active for this thread.");
     const running: RunningTurn = {
       turnId: randomUUID(), controller: new AbortController(), entries: new Map(),
-      input: new ClaudeInputStream(), pendingSteers: new Set(), inputWrites: Promise.resolve(),
+      input: new ClaudeInputStream(), pendingSteers: new Set(), completedMessageIds: new Set(),
+      inputWrites: Promise.resolve(),
     };
     this.running.set(params.threadId, running);
     try {
@@ -522,10 +538,16 @@ export class ClaudeBackend {
     if (message.type === "assistant" && !message.parent_tool_use_id) {
       const text = message.message.content.flatMap((block) => block.type === "text" ? [block.text] : []).join("\n");
       if (text) {
-        const entry: AppServerThreadMessageEntry = { type: "message", id: message.message.id, role: "assistant", text, turn: { id: turnId } };
+        // A later text block of the same message must extend, not replace,
+        // the text an earlier block completed.
+        const previous = running.entries.get(message.message.id);
+        const prior = running.completedMessageIds.has(message.message.id) && previous?.type === "message"
+          ? `${previous.text}\n` : "";
+        running.completedMessageIds.add(message.message.id);
+        const entry: AppServerThreadMessageEntry = { type: "message", id: message.message.id, role: "assistant", text: prior + text, turn: { id: turnId } };
         running.entries.set(entry.id, entry);
         await this.store.append(threadId, [entry]);
-        await this.emit({ method: "item/completed", params: { threadId, turnId, item: { id: entry.id, type: "agentMessage", text } } });
+        await this.emit({ method: "item/completed", params: { threadId, turnId, item: { id: entry.id, type: "agentMessage", text: entry.text } } });
       }
       for (const block of message.message.content) {
         if (block.type !== "tool_use") continue;
@@ -594,17 +616,15 @@ export class ClaudeBackend {
         text: parts.flatMap((part) => part.type === "text" ? [part.text] : []).join("\n"),
         createdAt: Date.now(), turn: { id: running.turnId, status: "in_progress" },
       };
+      // Hand the message to Claude before any await: the turn can end while
+      // history is written, and a rejected steer must leave no transcript row.
       running.entries.set(messageId, entry);
-      try {
-        await this.store.append(params.threadId, [entry]);
-        assertActive();
-        running.pendingSteers.add(uuid);
-        running.input.push({ type: "user", uuid, priority: "now", parent_tool_use_id: null,
-          message: { role: "user", content } });
-      } catch (error) {
-        running.pendingSteers.delete(uuid);
-        throw error;
-      }
+      running.pendingSteers.add(uuid);
+      running.input.push({ type: "user", uuid, priority: "now", parent_tool_use_id: null,
+        message: { role: "user", content } });
+      // The message is already sent; turn completion persists every entry,
+      // so an early-write failure must not report the steer as rejected.
+      await this.store.append(params.threadId, [entry]).catch(() => {});
       await this.emit({ method: "item/completed", params: {
         threadId: params.threadId, turnId: running.turnId,
         item: { id: messageId, type: "userMessage", text: entry.text, content: parts },
@@ -645,13 +665,21 @@ function claudeUserMessageParts(input: AppServerTurnInputItem[]): AppServerThrea
   });
 }
 
+const LOCAL_IMAGE_TYPES: Record<string, string> = {
+  ".png": "png", ".jpg": "jpeg", ".jpeg": "jpeg", ".gif": "gif", ".webp": "webp",
+};
+
 async function claudeInput(input: AppServerTurnInputItem[]): Promise<SDKUserMessage["message"]["content"]> {
   const content: Exclude<SDKUserMessage["message"]["content"], string> = [];
   for (const item of input) {
     if (item.type === "text") content.push({ type: "text", text: item.text });
     else if (item.type === "localFile") content.push({ type: "text", text: `Attached file: ${item.path}${item.textPreview ? `\n${item.textPreview}` : ""}` });
     else if (item.type === "image" || item.type === "localImage") {
-      const url = item.type === "image" ? item.url : `data:image/${/\.jpe?g$/i.test(item.path) ? "jpeg" : /\.webp$/i.test(item.path) ? "webp" : "png"};base64,${(await readFile(item.path)).toString("base64")}`;
+      // The API rejects a media type that does not match the bytes, so an
+      // unknown extension must fail here rather than be labelled PNG.
+      const localType = item.type === "localImage" ? LOCAL_IMAGE_TYPES[path.extname(item.path).toLowerCase()] : undefined;
+      if (item.type === "localImage" && !localType) throw new Error("Claude image input must be a PNG, JPEG, GIF, or WebP attachment.");
+      const url = item.type === "image" ? item.url : `data:image/${localType};base64,${(await readFile(item.path)).toString("base64")}`;
       const match = /^data:(image\/(?:png|jpeg|gif|webp));base64,([A-Za-z0-9+/=\s]+)$/.exec(url);
       if (!match) throw new Error("Claude image input must be a PNG, JPEG, GIF, or WebP attachment.");
       content.push({ type: "image", source: { type: "base64", media_type: match[1] as "image/png", data: match[2] } });

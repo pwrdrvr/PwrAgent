@@ -53,8 +53,10 @@ export class ClaudeSessionStore {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
       throw error;
     }
-    return await Promise.all(names.filter((name) => /^[0-9a-f-]{36}\.json$/i.test(name))
+    // One unreadable metadata file must not hide every other Claude thread.
+    const sessions = await Promise.allSettled(names.filter((name) => /^[0-9a-f-]{36}\.json$/i.test(name))
       .map((name) => this.read(name.slice(0, -5))));
+    return sessions.flatMap((session) => session.status === "fulfilled" ? [session.value] : []);
   }
 
   async append(id: string, entries: AppServerThreadEntry[]): Promise<void> {
@@ -69,7 +71,11 @@ export class ClaudeSessionStore {
       // Revisions of a tool entry append rather than rewriting history.
       const entries = new Map<string, AppServerThreadEntry>();
       for (const line of text.split("\n").filter(Boolean)) {
-        const entry = JSON.parse(line) as AppServerThreadEntry;
+        // appendFile is not atomic: a crash can leave a torn final line.
+        // Skip it rather than make the whole transcript unreadable.
+        let entry: AppServerThreadEntry;
+        try { entry = JSON.parse(line) as AppServerThreadEntry; }
+        catch { continue; }
         entries.set(entry.id, entry);
       }
       return [...entries.values()];
