@@ -1539,15 +1539,23 @@ describe("terminal history lifecycle", () => {
     const historyStore = new TerminalHistoryStore(path.join(root, "history"));
     const launchDir = createTemporaryRoot("terminal-history-launch-");
     const first = fakePty();
+    let checkpointFinished!: () => void;
+    const exited = new Promise<void>((resolve) => { checkpointFinished = resolve; });
     const service = new IntegratedTerminalService({ historyStore,
       loadNodePty: async () => ({ spawn: (() => first) as unknown as typeof import("node-pty").spawn }),
+      // Natural exit publishes the archived session after its checkpoint
+      // settles. Wait for that owner boundary before opening the history file.
+      onSessionsChanged: (sessions) => {
+        if (sessions.some((session) => session.sessionId === "saved-one" && session.status === "exited")) checkpointFinished();
+      },
     });
     const request = { sessionId: "saved-one", threadKey: "codex:one", cwd: launchDir, cols: 80, rows: 24 };
     await service.createOrAttach(request, fakeWebContents());
     vi.mocked(first.onData).mock.calls[0]![0]("retained output\r\n");
     service.rename("saved-one", "Build");
     vi.mocked(first.onExit).mock.calls[0]![0]({ exitCode: 0 });
-    await vi.waitFor(async () => expect(await historyStore.load()).toHaveLength(1));
+    await exited;
+    expect(await historyStore.load()).toHaveLength(1);
 
     const second = fakePty();
     const spawn = vi.fn((_file: string, _args: string[], _options: { cwd?: string }) => second);

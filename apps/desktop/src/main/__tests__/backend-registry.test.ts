@@ -10923,6 +10923,10 @@ describe("DesktopBackendRegistry", () => {
       value: "yolo",
     });
 
+    // Selected detail reads remembered summaries before the next full listing.
+    expect(registry.getCachedThreadSummary({ backend: acpBackendId, threadId: "session-1" }))
+      .toMatchObject({ executionMode: "full-access", acpRuntime: { currentModeId: "yolo" } });
+
     await expect(
       registry.listThreads({ backend: acpBackendId }),
     ).resolves.toEqual([

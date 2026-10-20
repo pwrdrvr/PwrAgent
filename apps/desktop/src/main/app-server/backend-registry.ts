@@ -12144,13 +12144,22 @@ export class DesktopBackendRegistry {
     if (!threadId) {
       return undefined;
     }
-    return this.findThreadListCachedSummary({
+    const summary = this.findThreadListCachedSummary({
       ...params,
       threadId,
     }) ?? this.threadInfoStore.findLocalSummary({
       ...(params.backend ? { backend: params.backend } : {}),
       threadId,
     });
+    // Remembered summaries survive list-cache invalidation. ACP mode changes
+    // are owned by the session store; a selected-detail read must not restore
+    // the old mode from a remembered row after its canonical update event.
+    const session = summary && isAcpBackendId(summary.source)
+      ? this.acpBackend.getSession(summary.source, threadId)
+      : undefined;
+    return summary && session
+      ? { ...summary, acpRuntime: session.acpRuntime, executionMode: session.executionMode ?? summary.executionMode }
+      : summary;
   }
 
   private findThreadListCachedSummary(
