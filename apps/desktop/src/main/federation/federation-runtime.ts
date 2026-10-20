@@ -50,6 +50,7 @@ import type {
   AppServerThreadSummary,
   AttachDirectoryToThreadResponse,
   CancelQueuedTurnResponse,
+  MoveQueuedTurnResponse,
   ReleaseQueuedTurnResponse,
   CancelThreadExecutionModeQueueResponse,
   CheckThreadBranchDriftResponse,
@@ -152,6 +153,7 @@ import {
   type AppServerBackendKind,
   type AttachDirectoryToThreadRequest,
   type CancelQueuedTurnRequest,
+  type MoveQueuedTurnRequest,
   type ReleaseQueuedTurnRequest,
   type CancelThreadExecutionModeQueueRequest,
   type CelestialIconAssignment,
@@ -540,7 +542,8 @@ function rewriteLiveTranscriptImagesForFederation(
   } as AgentEvent;
 }
 
-const DEFAULT_CAPABILITIES: FederationCapability[] = [
+/** What this instance advertises to every peer it connects to. */
+export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "navigation_group_invalidations",
   "remote_window",
   "thread_navigation",
@@ -570,6 +573,7 @@ const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "transport_brotli",
   "shutdown_notice",
   "navigation_directory_set_events",
+  "turn_queue_reorder",
 ];
 
 const REMOTE_THREAD_SUMMARY_EVENT_CONSUMER_ID =
@@ -684,6 +688,7 @@ const NAVIGATION_EVENT_METHODS = new Set<string>([
   "thread/subAgents/updated",
   "thread/subthreadOrder/updated",
   "thread/subthreadsCollapsed/updated",
+  "thread/turnQueue/reordered",
   "thread/turnQueue/updated",
   "thread/unarchived",
   "turn/cancelled",
@@ -6964,6 +6969,11 @@ function localBackendOperations(): FederationBackendOperations {
       return await getDesktopBackendRegistry().releaseQueuedTurnWithDisposition(
         request.queueEntryId,
       );
+    },
+    async moveQueuedTurn(
+      request: MoveQueuedTurnRequest,
+    ): Promise<MoveQueuedTurnResponse> {
+      return await getDesktopBackendRegistry().moveQueuedTurn(request);
     },
     async listScheduledThreadActions(
       request: ListScheduledThreadActionsRequest = {},

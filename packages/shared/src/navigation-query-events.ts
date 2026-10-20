@@ -41,7 +41,8 @@ const THREAD_ROW_ONLY_METHODS = new Set([
   "thread/pullRequests/updated", "thread/reactions/updated", "thread/lock/updated", "thread/agent/updated",
   "thread/modelSettings/updated", "thread/executionMode/updated", "thread/executionMode/queued",
   "thread/executionMode/queueCleared", "thread/prAutoDispatch/updated", "thread/prAutoDispatch/pendingUpdated",
-  "thread/turnQueue/updated", "navigation/threadGitWorkingState/updated", "navigation/directoryGitStatus/updated",
+  "thread/turnQueue/updated", "thread/turnQueue/reordered",
+  "navigation/threadGitWorkingState/updated", "navigation/directoryGitStatus/updated",
   // Subagent detail and native-group presence belong to the named parent.
   // Ordinary child discovery uses thread/started and thread/parent/set.
   "thread/subAgents/updated",

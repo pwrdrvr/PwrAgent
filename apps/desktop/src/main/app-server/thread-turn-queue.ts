@@ -103,6 +103,15 @@ export type ThreadTurnQueueReleaseResult =
       entryId: string;
     };
 
+export type ThreadTurnQueueMoveResult = {
+  disposition: "moved" | "unchanged" | "not_found" | "anchor_not_found" | "held";
+  entryId: string;
+  /** Dispatch order after the move, when the entry's FIFO still exists. */
+  entryIds?: string[];
+  backend?: AppServerBackendKind;
+  threadId?: ThreadIdentifier;
+};
+
 export type ThreadTurnQueueLifecycleEvent =
   | {
       type: "queued";
@@ -498,6 +507,58 @@ export class ThreadTurnQueue {
       return entry;
     }
     return undefined;
+  }
+
+  /**
+   * Moves a waiting entry in front of `beforeEntryId`, or to the end of its
+   * FIFO when that is omitted. A held entry stays where it is, and nothing
+   * moves in front of one: a hold waits on the operator's Retry. Dispatch is
+   * suspended for the move, so the head cannot start between the lookup and
+   * the splice; the drain that ends the suspension starts the new head.
+   */
+  async moveEntry(
+    entryId: string,
+    beforeEntryId?: string,
+  ): Promise<ThreadTurnQueueMoveResult> {
+    const found = this.findQueuedEntry(entryId);
+    if (!found) return { disposition: "not_found", entryId };
+    const { backend, threadId } = found.entry;
+    return await this.withDispatchSuspended(found.entry, () => {
+      // Not queueFor: the FIFO can have drained while the move waited, and
+      // a lookup must not leave an empty one behind.
+      const queue = this.queuedEntries.get(found.key) ?? [];
+      const result = (
+        disposition: ThreadTurnQueueMoveResult["disposition"],
+      ): ThreadTurnQueueMoveResult => ({
+        disposition,
+        entryId,
+        entryIds: queue.map((entry) => entry.id),
+        backend,
+        threadId,
+      });
+      // The suspension waited for earlier edits; any of them can have
+      // started, cancelled or moved this entry.
+      const from = queue.findIndex((entry) => entry.id === entryId);
+      const entry = queue[from];
+      if (!entry) return { disposition: "not_found", entryId };
+      if (entry.manualReleaseRequired) return result("held");
+      if (beforeEntryId === entryId) return result("unchanged");
+      const anchor = beforeEntryId === undefined
+        ? queue.length
+        : queue.findIndex((candidate) => candidate.id === beforeEntryId);
+      if (anchor < 0) return result("anchor_not_found");
+      const passed = anchor > from
+        ? queue.slice(from + 1, anchor)
+        : queue.slice(anchor, from);
+      if (passed.some((candidate) => candidate.manualReleaseRequired)) {
+        return result("held");
+      }
+      const to = anchor > from ? anchor - 1 : anchor;
+      if (to === from) return result("unchanged");
+      queue.splice(from, 1);
+      queue.splice(to, 0, entry);
+      return result("moved");
+    });
   }
 
   cancelEntryWithDisposition(

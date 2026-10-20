@@ -210,6 +210,8 @@ import {
   type DesktopSpendAlertPolicy,
   type DesktopToolOutputAlertPolicy,
   type CancelQueuedTurnResponse,
+  type MoveQueuedTurnRequest,
+  type MoveQueuedTurnResponse,
   type ReleaseQueuedTurnResponse,
   type CheckThreadBranchDriftRequest,
   type CheckThreadBranchDriftResponse,
@@ -18432,6 +18434,41 @@ export class DesktopBackendRegistry {
       ...(result.disposition === "already_admitted" && result.turnId
         ? { turnId: result.turnId }
         : {}),
+    };
+  }
+
+  /**
+   * Moves a waiting entry within its thread's FIFO. Every window and viewer
+   * re-reads the queue on `thread/turnQueue/reordered`; the order lives in
+   * the in-memory FIFO only, so a move writes nothing to sqlite.
+   */
+  async moveQueuedTurn(
+    request: Omit<MoveQueuedTurnRequest, "federationTarget">,
+  ): Promise<MoveQueuedTurnResponse> {
+    const result = await this.threadTurnQueue.moveEntry(
+      request.queueEntryId,
+      request.beforeQueueEntryId,
+    );
+    if (result.disposition === "moved" && result.backend && result.threadId) {
+      await this.emit({
+        backend: result.backend,
+        notification: {
+          method: "thread/turnQueue/reordered",
+          params: {
+            threadId: result.threadId,
+            queueEntryIds: result.entryIds ?? [],
+          },
+        },
+      }).catch((error) => {
+        backendRegistryLog.error("Could not publish queued turn order", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
+    return {
+      queueEntryId: request.queueEntryId,
+      disposition: result.disposition,
+      ...(result.entryIds ? { queueEntryIds: result.entryIds } : {}),
     };
   }
 

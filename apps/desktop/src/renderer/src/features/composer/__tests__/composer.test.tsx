@@ -19,6 +19,8 @@ import {
   type NavigationLaunchpadDraft,
   type StartReviewRequest,
   type ModelSettingsRecent,
+  type FederationCapability,
+  type MoveQueuedTurnResponse,
   type SetThreadModelSettingsRequest,
   type StartTurnRequest,
   type StartTurnResponse,
@@ -25038,4 +25040,145 @@ it("refits skill autocomplete when its composer resizes without a window resize"
   } finally {
     vi.unstubAllGlobals();
   }
+});
+
+describe("queued message reordering", () => {
+  const thread = {
+    id: "thread-1", title: "Recipient", titleSource: "explicit" as const, source: "codex" as const,
+    linkedDirectories: [], inbox: { inInbox: false },
+  };
+  const mirror = (id: string, extra: Partial<ComposerQueuedTurnSnapshot> = {}): ComposerQueuedTurnSnapshot => ({
+    id, queueEntryId: id, title: `Message ${id}`, text: id, imageAttachments: [], fileAttachments: [], ...extra,
+  });
+  const order = (): string[] =>
+    screen.getAllByLabelText(/^Queued message|^Held queued message/).map((row) =>
+      row.querySelector(".composer__queued-text")?.textContent ?? "");
+
+  it("moves an owner's queued message with the keyboard and asks the owner to move it", async () => {
+    const draftStore = createComposerDraftStore();
+    const scopeKey = buildThreadComposerScopeKey("codex", "thread-1");
+    draftStore.setQueuedTurns(scopeKey, [mirror("a"), mirror("b"), mirror("c")]);
+    let answer!: (response: MoveQueuedTurnResponse) => void;
+    const moveQueuedTurn = vi.fn(() => new Promise<MoveQueuedTurnResponse>((resolve) => { answer = resolve; }));
+    render(<Composer activeTurnId="active" backends={[backendSummary("codex")]} draftStore={draftStore}
+      desktopApi={{ moveQueuedTurn, onAgentEvent: () => () => undefined }} disabled={false} skills={[]}
+      thread={thread} />);
+
+    const grip = screen.getByRole("button", { name: "Reorder: Message c" });
+    grip.focus();
+    fireEvent.keyDown(grip, { key: "ArrowUp" });
+
+    expect(order()).toEqual(["Message a", "Message c", "Message b"]);
+    expect(within(screen.getByLabelText("Queued message 2")).getByRole("status")).toHaveTextContent("#2");
+    expect(grip).toHaveFocus();
+    expect(moveQueuedTurn).toHaveBeenCalledWith({ queueEntryId: "c", beforeQueueEntryId: "b" });
+    // Until the owner answers, a queue read that left first cannot undo it.
+    expect(draftStore.getQueuedTurns(scopeKey)[1]).toMatchObject({ id: "c", pendingMove: { beforeQueueEntryId: "b" } });
+
+    await act(async () => { answer({ queueEntryId: "c", disposition: "moved", queueEntryIds: ["a", "c", "b"] }); });
+    expect(draftStore.getQueuedTurns(scopeKey)[1]).not.toHaveProperty("pendingMove");
+
+    fireEvent.keyDown(grip, { key: "ArrowDown", metaKey: true, shiftKey: true });
+    expect(order()).toEqual(["Message a", "Message b", "Message c"]);
+    // To the end: no anchor.
+    expect(moveQueuedTurn).toHaveBeenLastCalledWith({ queueEntryId: "c" });
+    await act(async () => { answer({ queueEntryId: "c", disposition: "held", queueEntryIds: ["a", "c", "b"] }); });
+    expect(await screen.findByText("A message can’t move past one that is held for retry.")).toBeInTheDocument();
+    // Nothing re-reads the queue after a refusal: the band takes the owner's order back.
+    expect(order()).toEqual(["Message a", "Message c", "Message b"]);
+    expect(draftStore.getQueuedTurns(scopeKey).some((queued) => queued.pendingMove)).toBe(false);
+  });
+
+  it("puts the owner's order back when the move request fails outright", async () => {
+    const draftStore = createComposerDraftStore();
+    const scopeKey = buildThreadComposerScopeKey("codex", "thread-1");
+    draftStore.setQueuedTurns(scopeKey, [mirror("a"), mirror("b"), mirror("c")]);
+    const moveQueuedTurn = vi.fn(async (): Promise<MoveQueuedTurnResponse> => {
+      throw new Error("Update PwrAgent on the owning instance to reorder its queued messages.");
+    });
+    render(<Composer activeTurnId="active" backends={[backendSummary("codex")]} draftStore={draftStore}
+      desktopApi={{ moveQueuedTurn, onAgentEvent: () => () => undefined }} disabled={false} skills={[]}
+      thread={thread} />);
+
+    const grip = screen.getByRole("button", { name: "Reorder: Message c" });
+    grip.focus();
+    fireEvent.keyDown(grip, { key: "ArrowUp" });
+    expect(order()).toEqual(["Message a", "Message c", "Message b"]);
+
+    expect(await screen.findByText("Update PwrAgent on the owning instance to reorder its queued messages."))
+      .toBeInTheDocument();
+    expect(order()).toEqual(["Message a", "Message b", "Message c"]);
+  });
+
+  it("gives held, steering and scheduled rows no grip, and keeps every chevron on one line", () => {
+    const draftStore = createComposerDraftStore();
+    draftStore.setQueuedTurns(buildThreadComposerScopeKey("codex", "thread-1"), [
+      mirror("held", { manualReleaseRequired: true, holdReason: "Retry when ready." }),
+      mirror("a"),
+      mirror("b"),
+      mirror("later", { scheduledActionId: "later", scheduledSendAt: Date.now() + 60_000, queueEntryId: undefined }),
+    ]);
+    render(<Composer activeTurnId="active" backends={[backendSummary("codex")]} draftStore={draftStore}
+      desktopApi={{ moveQueuedTurn: vi.fn(), onAgentEvent: () => () => undefined }} disabled={false} skills={[]}
+      thread={thread} />);
+
+    expect(screen.getAllByRole("button", { name: /^Reorder: / }).map((grip) => grip.getAttribute("aria-label")))
+      .toEqual(["Reorder: Message a", "Reorder: Message b"]);
+    const rows = document.querySelectorAll(".composer__queued--message");
+    expect([...rows].every((row) => row.classList.contains("composer__queued--reorderable"))).toBe(true);
+    expect(rows[0]?.querySelector(".composer__queued-grip--empty")).not.toBeNull();
+  });
+
+  it("reorders a peer's queue only when the peer advertises it, and asks that peer", async () => {
+    const target = { scope: "remote" as const, instanceId: "owner" };
+    const remoteThread = (capabilities: FederationCapability[]) => ({
+      ...thread,
+      federation: { instanceLabel: "Owner", ref: { backend: "codex" as const, threadId: "thread-1", target }, capabilities },
+    });
+    const draftStore = createComposerDraftStore();
+    // A peer's queue lives under its owner's scope.
+    draftStore.setQueuedTurns(buildThreadComposerScopeKey("codex", "thread-1", target), [mirror("a"), mirror("b")]);
+    const moveQueuedTurn = vi.fn(async (): Promise<MoveQueuedTurnResponse> =>
+      ({ queueEntryId: "b", disposition: "moved", queueEntryIds: ["b", "a"] }));
+    const desktopApi = { moveQueuedTurn, onAgentEvent: () => () => undefined };
+
+    // An owner on an older build: no drag to snap back, no request.
+    const { rerender } = render(<Composer activeTurnId="active" backends={[backendSummary("codex")]}
+      draftStore={draftStore} desktopApi={desktopApi} disabled={false} skills={[]}
+      thread={remoteThread(["turn_control"])} />);
+    expect(screen.queryByRole("button", { name: /^Reorder: / })).toBeNull();
+    expect(document.querySelector(".composer__queued--reorderable")).toBeNull();
+    fireEvent.keyDown(screen.getByLabelText("Queued message 2"), { key: "ArrowUp", metaKey: true, shiftKey: true });
+    expect(order()).toEqual(["Message a", "Message b"]);
+    expect(moveQueuedTurn).not.toHaveBeenCalled();
+
+    rerender(<Composer activeTurnId="active" backends={[backendSummary("codex")]}
+      draftStore={draftStore} desktopApi={desktopApi} disabled={false} skills={[]}
+      thread={remoteThread(["turn_control", "turn_queue_reorder"])} />);
+    const grip = screen.getByRole("button", { name: "Reorder: Message b" });
+    grip.focus();
+    fireEvent.keyDown(grip, { key: "ArrowUp" });
+    expect(order()).toEqual(["Message b", "Message a"]);
+    await waitFor(() => expect(moveQueuedTurn).toHaveBeenCalledWith({
+      federationTarget: target, queueEntryId: "b", beforeQueueEntryId: "a",
+    }));
+  });
+
+  it("shows no grip for a single message, or for an owner that cannot reorder", () => {
+    const draftStore = createComposerDraftStore();
+    const scopeKey = buildThreadComposerScopeKey("codex", "thread-1");
+    draftStore.setQueuedTurns(scopeKey, [mirror("a")]);
+    const { unmount } = render(<Composer activeTurnId="active" backends={[backendSummary("codex")]} draftStore={draftStore}
+      desktopApi={{ moveQueuedTurn: vi.fn(), onAgentEvent: () => () => undefined }} disabled={false} skills={[]}
+      thread={thread} />);
+    expect(screen.queryByRole("button", { name: /^Reorder: / })).toBeNull();
+    expect(document.querySelector(".composer__queued--reorderable")).toBeNull();
+    unmount();
+
+    draftStore.setQueuedTurns(scopeKey, [mirror("a"), mirror("b")]);
+    render(<Composer activeTurnId="active" backends={[backendSummary("codex")]} draftStore={draftStore}
+      desktopApi={{ onAgentEvent: () => () => undefined }} disabled={false} skills={[]}
+      thread={thread} />);
+    expect(screen.queryByRole("button", { name: /^Reorder: / })).toBeNull();
+  });
 });

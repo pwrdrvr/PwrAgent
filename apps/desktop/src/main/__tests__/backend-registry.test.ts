@@ -62674,3 +62674,43 @@ describe("mark_project_read dynamic tool", () => {
     expect(markProjectRead).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("DesktopBackendRegistry queued turn reordering", () => {
+  it("moves a waiting entry and tells every window the new order", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      threads: [{ id: "busy", title: "busy", titleSource: "explicit" as const, source: "codex" as const, linkedDirectories: [] }],
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    onTestFinished(() => registry.close());
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => { events.push(event); });
+    await registry.publishLocalEvent({ backend: "codex", notification: {
+      method: "turn/started", params: { threadId: "busy", turnId: "active", turn: { id: "active" } },
+    } });
+    for (const id of ["first", "second", "third"]) {
+      expect(await registry.submitTurn({
+        backend: "codex", threadId: "busy", queueEntryId: id, input: [{ type: "text", text: id }],
+      })).toMatchObject({ status: "queued" });
+    }
+    const order = (): string[] =>
+      (registry.getQueuedTurnsSnapshot()[buildThreadIdentityKey("codex", "busy")] ?? [])
+        .map((entry) => entry.queueEntryId);
+
+    await expect(registry.moveQueuedTurn({ queueEntryId: "third", beforeQueueEntryId: "first" }))
+      .resolves.toEqual({ queueEntryId: "third", disposition: "moved", queueEntryIds: ["third", "first", "second"] });
+    expect(order()).toEqual(["third", "first", "second"]);
+    expect(events).toContainEqual({ backend: "codex", notification: {
+      method: "thread/turnQueue/reordered",
+      params: { threadId: "busy", queueEntryIds: ["third", "first", "second"] },
+    } });
+
+    const reorders = events.filter((event) => event.notification.method === "thread/turnQueue/reordered").length;
+    await expect(registry.moveQueuedTurn({ queueEntryId: "third", beforeQueueEntryId: "first" }))
+      .resolves.toMatchObject({ disposition: "unchanged" });
+    await expect(registry.moveQueuedTurn({ queueEntryId: "gone" }))
+      .resolves.toEqual({ queueEntryId: "gone", disposition: "not_found" });
+    // Only an actual move is news.
+    expect(events.filter((event) => event.notification.method === "thread/turnQueue/reordered")).toHaveLength(reorders);
+  });
+});

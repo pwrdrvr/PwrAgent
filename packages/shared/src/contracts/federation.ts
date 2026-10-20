@@ -42,6 +42,11 @@ export const FEDERATION_CAPABILITIES = [
    * `NAVIGATION_DIRECTORY_SET_CHANGED_METHOD`.
    */
   "navigation_directory_set_events",
+  /**
+   * The owner answers `backend.moveQueuedTurn`, so a viewer can reorder the
+   * thread's queued messages. A viewer offers no drag without it.
+   */
+  "turn_queue_reorder",
 ] as const;
 
 export const FEDERATION_SHUTDOWN_METHOD = "federation/shutdown";

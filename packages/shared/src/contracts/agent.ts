@@ -328,6 +328,29 @@ export type CancelQueuedTurnResponse = {
   turnId?: string;
 };
 
+export type MoveQueuedTurnRequest = {
+  federationTarget?: FederationTarget;
+  queueEntryId: string;
+  /**
+   * The entry to land in front of. Omitted, the entry moves to the end of
+   * its FIFO. An anchor rather than an index, so a head that starts while the
+   * operator drags cannot shift the target by one place.
+   */
+  beforeQueueEntryId?: string;
+};
+
+export type MoveQueuedTurnResponse = {
+  queueEntryId: string;
+  /**
+   * `held`: the entry, or a place in front of the anchor, is held for
+   * retry; nothing moves past a hold. `anchor_not_found`: the anchor left
+   * the queue (it started, or was cancelled) before the move ran.
+   */
+  disposition: "moved" | "unchanged" | "not_found" | "anchor_not_found" | "held";
+  /** The FIFO's entry ids in dispatch order after the request. */
+  queueEntryIds?: string[];
+};
+
 export type ReleaseQueuedTurnRequest = {
   federationTarget?: FederationTarget;
   queueEntryId: string;
