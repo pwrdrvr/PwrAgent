@@ -26,6 +26,29 @@ export async function discoverClaudeModels(params: {
   env: NodeJS.ProcessEnv;
   query?: typeof query;
 }): Promise<BackendModelOption[]> {
+  const models = await readClaudeMetadata({
+    ...params,
+    read: (session) => session.supportedModels(),
+    timeoutMessage: "Claude model discovery timed out. Check the CLI and try again.",
+  });
+  if (models.length === 0) throw new Error("Claude returned no available models.");
+  return claudeModelOptions(models);
+}
+
+/**
+ * Open a Claude session that never receives a prompt, read what its
+ * initialize handshake reports, and close it. No turn runs and nothing is
+ * persisted.
+ */
+export async function readClaudeMetadata<T>(params: {
+  executable: string;
+  env: NodeJS.ProcessEnv;
+  cwd?: string;
+  query?: typeof query;
+  read: (session: Query) => Promise<T>;
+  timeoutMessage: string;
+  timeoutMs?: number;
+}): Promise<T> {
   const controller = new AbortController();
   let release!: () => void;
   const finished = new Promise<void>((resolve) => { release = resolve; });
@@ -40,21 +63,20 @@ export async function discoverClaudeModels(params: {
       prompt: prompt(),
       options: {
         ...claudeHarnessOptions(params.executable, params.env),
+        ...(params.cwd ? { cwd: params.cwd } : {}),
         abortController: controller,
         persistSession: false,
-        // Model discovery needs no tools or MCP connections.
+        // Metadata reads need no tools or MCP connections.
         tools: [], strictMcpConfig: true, mcpServers: {},
       },
     });
     const timeout = new Promise<never>((_resolve, reject) => {
       timer = setTimeout(() => {
         controller.abort();
-        reject(new Error("Claude model discovery timed out. Check the CLI and try again."));
-      }, 15_000);
+        reject(new Error(params.timeoutMessage));
+      }, params.timeoutMs ?? 15_000);
     });
-    const models = await Promise.race([session.supportedModels(), timeout]);
-    if (models.length === 0) throw new Error("Claude returned no available models.");
-    return claudeModelOptions(models);
+    return await Promise.race([params.read(session), timeout]);
   } finally {
     clearTimeout(timer);
     release();

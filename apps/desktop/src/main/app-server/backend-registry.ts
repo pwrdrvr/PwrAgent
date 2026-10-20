@@ -13267,7 +13267,13 @@ export class DesktopBackendRegistry {
       return { data: [{ commands, skills: [] }] };
     }
 
-    if (backend === "claude") return { data: [] };
+    if (backend === "claude") {
+      const commands = await this.claudeBackend.listCommands({
+        threadId: params.threadId,
+        cwd: params.cwd ?? params.cwds?.[0],
+      });
+      return { data: commands.length > 0 ? [{ commands, skills: [] }] : [] };
+    }
     const client = this.getClient(backend);
     const data = await client.listSkills({
       cwd: params.cwd,

@@ -3419,8 +3419,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       const commandName = command.name.startsWith("/")
         ? command.name.slice(1)
         : command.name;
+      // Claude runs `/compact` itself when it arrives as a prompt; the
+      // compaction API below is Codex's.
       return (
         commandName === "compact" &&
+        command.backend !== "claude" &&
         (!props.thread || !command.backend || command.backend === props.thread.source)
       );
     })

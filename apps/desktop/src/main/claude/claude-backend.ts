@@ -2,9 +2,9 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { query, type Options, type Query, type SDKMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import { query, type Options, type Query, type SDKMessage, type SDKUserMessage, type SlashCommand } from "@anthropic-ai/claude-agent-sdk";
 import type {
-  AgentEvent, AppServerPendingRequestNotification, AppServerThreadEntry,
+  AgentEvent, AppServerAvailableCommandSummary, AppServerPendingRequestNotification, AppServerThreadEntry,
   AppServerThreadMessageEntry, AppServerThreadMessagePart, AppServerThreadReplay, AppServerThreadSummary,
   AppServerTurnInputItem, BackendModelOption, BackendSummary, ThreadExecutionMode, CodexMcpServerSummary,
 } from "@pwragent/shared";
@@ -12,7 +12,8 @@ import { resolveActiveProfilePath } from "../profile";
 import { toTranscriptImageProtocolUrl } from "../transcript-image-protocol";
 import { CLAUDE_SETUP_INSTRUCTIONS, claudeEnvironment, inspectClaudeInstallation, type ClaudeInstallation } from "./claude-executable";
 import { createClaudePermissionHandler, claudePermissionMode } from "./claude-permissions";
-import { claudeHarnessOptions, discoverClaudeModels } from "./claude-models";
+import { claudeHarnessOptions, discoverClaudeModels, readClaudeMetadata } from "./claude-models";
+import { CLAUDE_TERMINAL_COMMANDS_SEED, claudeCommandSummaries } from "./claude-commands";
 import { claudeRateLimits, claudeStreamRateLimits, claudeTelemetry, claudeTurnUsage } from "./claude-usage";
 import { ClaudeSessionStore, type ClaudeSession } from "./claude-session-store";
 
@@ -21,6 +22,7 @@ export type ClaudeBackendOptions = {
   query?: typeof query;
   inspectInstallation?: typeof inspectClaudeInstallation;
   discoverModels?: typeof discoverClaudeModels;
+  readCommands?: (params: { executable: string; env: NodeJS.ProcessEnv; cwd: string }) => Promise<SlashCommand[]>;
   resolveEnv?: () => Promise<NodeJS.ProcessEnv>;
   emit: (event: AgentEvent) => Promise<void>;
   request: (request: AppServerPendingRequestNotification, signal: AbortSignal) => Promise<unknown>;
@@ -74,6 +76,12 @@ export class ClaudeBackend {
       capabilities: {
         listThreads: true, createThread: true, resumeThread: true, renameThread: true,
         readThread: true, startTurn: true, interruptTurn: true, steerTurn: false,
+  // Last command list Claude reported per working directory. Project
+  // commands and skills differ by folder, so the folder is the key.
+  private readonly commandsByCwd = new Map<string, AppServerAvailableCommandSummary[]>();
+  private readonly commandProbes = new Map<string, Promise<AppServerAvailableCommandSummary[]>>();
+  private readonly commandProbeRetryAt = new Map<string, number>();
+  private terminalCommands = new Set(CLAUDE_TERMINAL_COMMANDS_SEED);
         archiveThread: true, restoreThread: true, archiveWorktree: false,
         transcriptPagination: false, toolUse: true, approvalRequests: true,
         multiDirectoryThreads: false,
@@ -290,7 +298,15 @@ export class ClaudeBackend {
           const current = await this.store.read(threadId);
           current.sdkSessionId = message.session_id;
           await this.store.save(current);
-          await Promise.all([this.refreshUsage(running), this.refreshContext(session, running)]);
+          if (message.terminal_slash_commands) this.terminalCommands = new Set(message.terminal_slash_commands);
+          await Promise.all([
+            this.refreshUsage(running), this.refreshContext(session, running),
+            claudeTelemetry(() => running.query!.supportedCommands())
+              .then((commands) => commands && this.publishCommands(session, commands)),
+          ]);
+        }
+        if (message.type === "system" && message.subtype === "commands_changed") {
+          await this.publishCommands(session, message.commands);
         }
         if (message.type === "stream_event" && !message.parent_tool_use_id) {
           const event = message.event;
@@ -441,6 +457,53 @@ export class ClaudeBackend {
           id: entry.id, type: "dynamicToolCall", toolName: entry.summary, status: entry.status,
           contentItems: [{ type: "inputText", text: entry.details[0].markdown ?? "" }],
         } } });
+  private async publishCommands(session: ClaudeSession, commands: readonly SlashCommand[]): Promise<void> {
+    const summaries = claudeCommandSummaries(commands, this.terminalCommands);
+    if (summaries.length === 0) return;
+    this.commandsByCwd.set(session.cwd, summaries);
+    await this.emit({ method: "thread/availableCommands/updated", params: { threadId: session.thread.id, commands: summaries } });
+  }
+
+  /**
+   * Slash commands for a thread or a launchpad folder. A folder Claude has not
+   * reported for yet is asked once, through a session that receives no prompt.
+   * A failed probe waits a minute before the next try, so a `/` typed while the
+   * CLI is broken cannot spawn a process per keystroke.
+   */
+  async listCommands(params: { threadId?: string; cwd?: string }): Promise<AppServerAvailableCommandSummary[]> {
+    const cwd = (params.threadId ? await this.store.read(params.threadId).then((session) => session.cwd, () => undefined) : undefined)
+      ?? params.cwd;
+    if (!cwd) return [];
+    const known = this.commandsByCwd.get(cwd);
+    if (known) return known;
+    const inFlight = this.commandProbes.get(cwd);
+    if (inFlight) return await inFlight;
+    if (Date.now() < (this.commandProbeRetryAt.get(cwd) ?? 0)) return [];
+    const probe = (async () => {
+      try {
+        const executable = await this.requireInstallation();
+        const env = claudeEnvironment(await this.options.resolveEnv?.() ?? process.env);
+        const commands = await (this.options.readCommands ?? ((probeParams) => readClaudeMetadata({
+          ...probeParams,
+          read: (session) => session.supportedCommands(),
+          timeoutMessage: "Claude command discovery timed out.",
+        })))({ executable, env, cwd });
+        const summaries = claudeCommandSummaries(commands, this.terminalCommands);
+        // A live turn may have reported while the probe ran; it is fresher.
+        if (summaries.length > 0 && !this.commandsByCwd.has(cwd)) this.commandsByCwd.set(cwd, summaries);
+        if (summaries.length === 0) this.commandProbeRetryAt.set(cwd, Date.now() + 60_000);
+        return this.commandsByCwd.get(cwd) ?? summaries;
+      } catch {
+        this.commandProbeRetryAt.set(cwd, Date.now() + 60_000);
+        return [];
+      } finally {
+        this.commandProbes.delete(cwd);
+      }
+    })();
+    this.commandProbes.set(cwd, probe);
+    return await probe;
+  }
+
       }
     }
   }
