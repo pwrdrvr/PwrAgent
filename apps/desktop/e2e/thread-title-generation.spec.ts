@@ -93,6 +93,8 @@ async function createThreadTitleGenerationFixture(): Promise<{
             id: "thread-list-title-current",
             kind: "response",
             method: "thread/list",
+            // Startup refreshes must not consume the title-generation lookups.
+            afterResponseId: "turn-start-1",
             result: [
               {
                 id: "thread-title",
@@ -110,6 +112,7 @@ async function createThreadTitleGenerationFixture(): Promise<{
             id: "thread-list-title-latest-empty",
             kind: "response",
             method: "thread/list",
+            afterResponseId: "thread-list-title-current",
             result: [],
           },
         ],
