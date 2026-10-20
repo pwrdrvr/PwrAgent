@@ -5354,20 +5354,25 @@ export function useThreadNavigation(
     releaseRetainedUnreadThread(selectedItemKey);
   }, [releaseRetainedUnreadThread, retainedUnreadThread, selectedItemKey]);
 
+  // Sidebar unread state can advance independently of selected detail when an
+  // unrelated thread event refreshes the population. Mark the row's revision
+  // seen; the detail snapshot remains authoritative for thread configuration.
+  const selectedThreadForSeen = selectedRow ?? selectedThread;
+
   useEffect(() => {
     const submitMarkThreadSeen = markThreadSeen;
 
     if (
       !pendingSeenThreadKey ||
-      !selectedThread ||
-      pendingSeenThreadKey !== threadSummaryIdentityKey(selectedThread) ||
+      !selectedThreadForSeen ||
+      pendingSeenThreadKey !== threadSummaryIdentityKey(selectedThreadForSeen) ||
       !submitMarkThreadSeen
     ) {
       return;
     }
 
     const markThreadSeenRequest = submitMarkThreadSeen;
-    const threadToMarkSeen = selectedThread;
+    const threadToMarkSeen = selectedThreadForSeen;
 
     async function markSeen(): Promise<void> {
       const threadKey = threadSummaryIdentityKey(threadToMarkSeen);
@@ -5416,7 +5421,7 @@ export function useThreadNavigation(
     }
 
     void markSeen();
-  }, [markThreadSeen, pendingSeenThreadKey, selectedThread, submittedSeenUpdatedAtByThreadKeyRef]);
+  }, [markThreadSeen, pendingSeenThreadKey, selectedThreadForSeen, submittedSeenUpdatedAtByThreadKeyRef]);
 
   const refreshThreadDirectoryGitStatuses = useCallback(
     (threadKey: string): void => {
@@ -5438,8 +5443,8 @@ export function useThreadNavigation(
 
   useEffect(() => {
     if (
-      !selectedThread ||
-      selectedThread.inbox.reason !== "updated-since-seen" ||
+      !selectedThreadForSeen ||
+      selectedThreadForSeen.inbox.reason !== "updated-since-seen" ||
       !viewForeground ||
       !threadViewVisible ||
       // The Attention lens is a work queue: opening something to look at it
@@ -5450,7 +5455,7 @@ export function useThreadNavigation(
       return;
     }
 
-    const threadKey = threadSummaryIdentityKey(selectedThread);
+    const threadKey = threadSummaryIdentityKey(selectedThreadForSeen);
     if (!manuallySelectedThreadKeysRef.current.has(threadKey)) {
       return;
     }
@@ -5460,16 +5465,16 @@ export function useThreadNavigation(
 
     if (
       retainedThreadKey === threadKey &&
-      retainedUnreadThread?.updatedAt !== selectedThread.updatedAt
+      retainedUnreadThread?.updatedAt !== selectedThreadForSeen.updatedAt
     ) {
-      setRetainedUnreadThread(selectedThread);
+      setRetainedUnreadThread(selectedThreadForSeen);
     }
 
     if (
       pendingSeenThreadKey === threadKey ||
-      selectedThread.inbox.lastSeenUpdatedAt === selectedThread.updatedAt ||
+      selectedThreadForSeen.inbox.lastSeenUpdatedAt === selectedThreadForSeen.updatedAt ||
       submittedSeenUpdatedAtByThreadKeyRef.current.get(threadKey) ===
-        selectedThread.updatedAt
+        selectedThreadForSeen.updatedAt
     ) {
       return;
     }
@@ -5479,7 +5484,7 @@ export function useThreadNavigation(
     browseMode,
     pendingSeenThreadKey,
     retainedUnreadThread,
-    selectedThread,
+    selectedThreadForSeen,
     threadViewVisible,
     viewForeground,
     manuallySelectedThreadKeysRef,

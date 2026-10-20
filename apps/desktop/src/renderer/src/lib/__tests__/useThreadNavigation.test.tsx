@@ -1452,7 +1452,7 @@ describe("useThreadNavigation", () => {
     });
   });
 
-  it("marks the selected thread seen again when a refresh advances it", async () => {
+  it.each([false, true])("marks the selected thread seen again when a refresh advances it (stale detail: %s)", async (withStaleDetail) => {
     const listeners = new Set<(event: AgentEvent) => void>();
     const markThreadSeen = vi.fn(
       async (
@@ -1510,8 +1510,19 @@ describe("useThreadNavigation", () => {
       },
     }));
 
+    const initialThread = (await readPopulation()).threads[0]!;
+    const getNavigationSelectedDetail = vi.fn<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>(async (request) => ({
+      protocol: 2,
+      ref: request.ref,
+      revision: "initial",
+      readiness: "ready",
+      identity: "present",
+      thread: initialThread,
+      workspaceDirectories: [],
+    }));
     const desktopApi: DesktopApi = {
       readPopulation,
+      ...(withStaleDetail ? { getNavigationSelectedDetail } : {}),
       markThreadSeen,
       onAgentEvent: (callback) => {
         listeners.add(callback);
@@ -1538,6 +1549,13 @@ describe("useThreadNavigation", () => {
         seenUpdatedAt: 1_000,
       });
     });
+
+    if (withStaleDetail) {
+      await waitFor(() => {
+        expect(result.current.selectedThreadConfigurationReady).toBe(true);
+        expect(getNavigationSelectedDetail).toHaveBeenCalled();
+      });
+    }
 
     refreshed = true;
     await act(async () => {
@@ -1568,6 +1586,10 @@ describe("useThreadNavigation", () => {
       });
       expect(result.current.threads[0]?.inbox.inInbox).toBe(false);
     });
+    if (withStaleDetail) {
+      // An unrelated event refreshes the sidebar without changing selected detail.
+      expect(result.current.selectedThread?.updatedAt).toBe(1_000);
+    }
   });
 
   it("contains a failed remote seen write and retries it on reselection", async () => {
