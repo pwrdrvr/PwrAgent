@@ -8401,6 +8401,7 @@ type CodexRetryableCompaction = {
   kind: "compact";
   params: { backend: "codex"; threadId: string };
   invalidIdRecoveryAttempted?: boolean;
+  lifecycleStarted?: boolean;
   terminalObserved?: boolean;
   turnId?: string;
 };
@@ -22959,6 +22960,11 @@ export class DesktopBackendRegistry {
       return true;
     }
     if (backend === "codex") {
+      // RPC acceptance can precede turn/started. The compaction still owns
+      // this thread until its terminal notification or the process exits.
+      if (this.codexRetryableOperations.get(threadId)?.kind === "compact") {
+        return true;
+      }
       if (!ignoreCodexStartReservation && this.reservedCodexStartThreadIds.has(threadId)) {
         return true;
       }
@@ -27353,6 +27359,18 @@ export class DesktopBackendRegistry {
     this.unsubscribers.push(
       client.onNotification(async (notification) => {
         logBackendLifecycleNotification(backend, notification);
+        // Match the client's running-turn ownership before the first await;
+        // exit can arrive while lifecycle delivery is still in progress.
+        if (backend === "codex" && notification.method === "turn/started") {
+          const started = notification as Extract<AppServerNotification, { method: "turn/started" }>;
+          const candidate = this.codexRetryableOperations.get(started.params.threadId);
+          if (candidate?.kind === "compact") {
+            candidate.lifecycleStarted = true;
+            if (candidate.turnId?.startsWith("pending:")) {
+              candidate.turnId = turnIdFromStartedNotification(started);
+            }
+          }
+        }
         this.invalidateArchiveCleanupForNotification(backend, notification);
         if (backend === "codex" && notification.method === "account/updated") {
           if (this.codexBackendSummary) {
@@ -44888,12 +44906,42 @@ export class DesktopBackendRegistry {
 
   private async handleCodexAppServerUnexpectedExit(): Promise<void> {
     this.backgroundTerminalGeneration += 1;
+    // The client synthesizes terminal failures only for turns it saw start.
+    // Settle accepted compactions it cannot know about at this same boundary.
+    const pendingCompactions: CodexRetryableCompaction[] = [];
+    for (const [threadId, candidate] of this.codexRetryableOperations) {
+      if (candidate.kind !== "compact" || candidate.lifecycleStarted) continue;
+      candidate.terminalObserved = true;
+      this.codexRetryableOperations.delete(threadId);
+      pendingCompactions.push(candidate);
+    }
     const threadIds = [...new Set([
       ...this.liveCodexToolItemsByThread.keys(), ...this.codexBackgroundTerminals.keys(),
+      ...pendingCompactions.map((candidate) => candidate.params.threadId),
     ])];
     this.liveCodexToolItemsByThread.clear();
     this.codexBackgroundTerminals.clear();
     try {
+      await Promise.all(pendingCompactions.map((candidate) => {
+        const threadId = candidate.params.threadId;
+        const turnId = candidate.turnId ?? `pending:compact:${threadId}`;
+        return this.emit({
+          backend: "codex",
+          notification: {
+            method: "turn/failed",
+            params: {
+              threadId,
+              turnId,
+              turn: {
+                id: turnId,
+                status: "failed",
+                completedAt: Date.now(),
+                error: { message: "Codex app server exited before compaction completed." },
+              },
+            },
+          },
+        });
+      }));
       await Promise.all(threadIds.map((threadId) => this.emit({
         backend: "codex",
         notification: {
@@ -44902,6 +44950,7 @@ export class DesktopBackendRegistry {
         },
       })));
     } finally {
+      this.maybeDrainCodexInvalidIdRecoveries();
       await this.maybeRestartCodexForManagedRuntimeChange();
     }
   }
@@ -44912,10 +44961,6 @@ export class DesktopBackendRegistry {
       const notification = event.notification as {
         params: { threadId: string; turnId?: string; turn: { id: string } };
       };
-      const candidate = this.codexRetryableOperations.get(notification.params.threadId);
-      if (candidate?.kind === "compact" && candidate.turnId?.startsWith("pending:")) {
-        candidate.turnId = turnIdFromStartedNotification(notification);
-      }
       this.tokenMiserStore?.startTurn(
         notification.params.threadId,
         turnIdFromStartedNotification(notification),
