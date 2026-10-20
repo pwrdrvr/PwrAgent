@@ -649,6 +649,14 @@ export class ThreadTurnQueue {
     return { disposition: "busy", entryId };
   }
 
+  /** Recheck the FIFO after external occupancy changes, preserving running entries and error holds. */
+  scheduleThreadDrain(params: {
+    backend: AppServerBackendKind;
+    threadId: ThreadIdentifier;
+  }): void {
+    this.scheduleDrain(this.keyFor(params));
+  }
+
   async releaseThread(params: {
     backend: AppServerBackendKind;
     threadId: ThreadIdentifier;

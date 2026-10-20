@@ -52309,6 +52309,119 @@ script = "printf setup"
       }
     });
 
+    it.each([
+      { timing: "before", outcome: "completed" },
+      { timing: "after", outcome: "completed" },
+      { timing: "before", outcome: "cancelled" },
+      { timing: "after", outcome: "cancelled" },
+    ])("drains queued follow-ups when compaction is $outcome $timing the RPC response", async ({ timing, outcome }) => {
+      const received = createDeferred<void>();
+      const respond = createDeferred<void>();
+      const followUpStarted = createDeferred<void>();
+      const codexClient = new MockBackendClient({
+        startTurnResults: [{ threadId, turnId: "queued-follow-up-turn" }],
+      });
+      vi.spyOn(codexClient, "compactThread").mockImplementation(async () => {
+        await codexClient.emit({
+          method: "turn/started",
+          params: { threadId, turnId: "compact-queued", turn: { id: "compact-queued" } },
+        });
+        received.resolve();
+        await respond.promise;
+        return { threadId, turnId: `compact:${threadId}`, itemId: "compact-item" };
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null,
+      });
+      registry.onEvent((event) => {
+        if (event.notification.method === "thread/turnQueue/updated"
+          && event.notification.params.queueEntryId === "after-compaction"
+          && event.notification.params.status === "started") followUpStarted.resolve();
+      });
+      const compaction = registry.compactThread({ backend: "codex", threadId });
+      try {
+        await received.promise;
+        expect((await registry.submitTurn({
+          backend: "codex", threadId, queueEntryId: "after-compaction",
+          input: [{ type: "text", text: "Continue after compaction" }],
+        })).status).toBe("queued");
+        if (timing === "after") {
+          respond.resolve();
+          await compaction;
+        }
+        if (outcome === "completed") {
+          await codexClient.emit({
+            method: "turn/completed",
+            params: { threadId, turnId: "compact-queued", turn: { id: "compact-queued", status: "completed", output: [] } },
+          });
+        } else {
+          await codexClient.emit({
+            method: "turn/cancelled",
+            params: { threadId, turnId: "compact-queued", turn: { id: "compact-queued", status: "cancelled" } },
+          });
+        }
+        if (timing === "before") {
+          expect(codexClient.startTurnCallCount).toBe(0);
+          respond.resolve();
+          await compaction;
+        }
+        await vi.waitFor(() => expect(codexClient.startTurnCallCount).toBe(1));
+        await followUpStarted.promise;
+        expect(registry.getQueuedTurnsForThread({ backend: "codex", threadId })).toHaveLength(0);
+        expect(codexClient.startTurnCalls[0]).toMatchObject({
+          threadId, input: [{ type: "text", text: "Continue after compaction" }],
+        });
+        await registry.submitTurn({
+          backend: "codex", threadId, queueEntryId: "second-follow-up",
+          input: [{ type: "text", text: "Wait for the first follow-up" }],
+        });
+        // A repeated compaction terminal must not end the newly queued turn.
+        await codexClient.emit({
+          method: "turn/completed",
+          params: { threadId, turnId: "compact-queued", turn: { id: "compact-queued", status: "completed", output: [] } },
+        });
+        expect(codexClient.startTurnCallCount).toBe(1);
+        expect(registry.getQueuedTurnsForThread({ backend: "codex", threadId })).toHaveLength(1);
+        await codexClient.emit({
+          method: "turn/completed",
+          params: { threadId, turnId: "queued-follow-up-turn", turn: { id: "queued-follow-up-turn", status: "completed", output: [] } },
+        });
+        await vi.waitFor(() => expect(codexClient.startTurnCallCount).toBe(2));
+      } finally {
+        respond.resolve();
+        await compaction;
+        await registry.close();
+      }
+    });
+
+    it("keeps queued follow-ups held after a failed compaction", async () => {
+      const codexClient = new MockBackendClient({});
+      const registry = new DesktopBackendRegistry({
+        codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null,
+      });
+      try {
+        await registry.compactThread({ backend: "codex", threadId });
+        await registry.submitTurn({
+          backend: "codex", threadId, queueEntryId: "held-after-compaction",
+          input: [{ type: "text", text: "Wait for error review" }],
+        });
+        await codexClient.emit({
+          method: "turn/failed",
+          params: {
+            threadId, turnId: "compact-turn-1",
+            turn: { id: "compact-turn-1", status: "failed", error: { message: "Compaction request rejected" } },
+          },
+        });
+        await flushAsync();
+        expect(codexClient.startTurnCallCount).toBe(0);
+        expect(registry.getQueuedTurnsForThread({ backend: "codex", threadId })).toEqual([
+          expect.objectContaining({ queueEntryId: "held-after-compaction", manualReleaseRequired: true }),
+        ]);
+      } finally {
+        await registry.close();
+      }
+    });
+
     it("keeps accepted compaction occupied until its delayed terminal notification", async () => {
       const codexClient = new MockBackendClient({});
       const compact = vi.spyOn(codexClient, "compactThread").mockResolvedValue({

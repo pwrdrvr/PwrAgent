@@ -21698,6 +21698,11 @@ export class DesktopBackendRegistry {
       throw error;
     } finally {
       this.reservedCodexStartThreadIds.delete(params.threadId);
+      if (candidate.terminalObserved) {
+        // An early terminal could not dispatch while the RPC owned its start
+        // reservation. Recheck after that last ownership boundary is released.
+        this.threadTurnQueue.scheduleThreadDrain(params);
+      }
       this.maybeDrainCodexInvalidIdRecoveries();
     }
   }
@@ -26895,6 +26900,11 @@ export class DesktopBackendRegistry {
             { threadId, turnId },
           );
         }
+      }
+      if (candidate.kind === "compact") {
+        // emit() already attempted terminal queue dispatch while this
+        // candidate still owned the thread. Wake it after releasing ownership.
+        this.threadTurnQueue.scheduleThreadDrain({ backend: "codex", threadId });
       }
     }
     this.maybeDrainCodexInvalidIdRecoveries();
