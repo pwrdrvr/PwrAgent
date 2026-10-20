@@ -1556,6 +1556,16 @@ function createProviderCatalogRefresh(
       const models = codex.launchpadOptions?.models;
       return models ? { modelCount: models.length } : {};
     },
+    refreshClaude: async () => {
+      const response = await getDesktopBackendRegistry().listBackends(
+        { includeUnavailable: true, refreshModels: "claude" },
+        issueProviderDiscoveryPermit("settings-user-action"),
+      );
+      const claude = response.backends.find((backend) => backend.kind === "claude");
+      return claude?.available
+        ? { status: "succeeded", modelCount: claude.launchpadOptions?.models?.length }
+        : { status: "skipped", detail: claude?.unavailableReason ?? "Claude is not installed." };
+    },
     refreshAcp: async (progress) => {
       // A pass this request joins, or a result it reuses, reports nothing
       // per provider; answer those from the listing it returns.

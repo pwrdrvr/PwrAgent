@@ -2782,6 +2782,7 @@ describe("settings ipc", () => {
         ?.({})) as ProviderCatalogRefreshState;
       expect(started.providers.map((provider) => provider.id)).toEqual([
         "codex",
+        "claude",
         "gemini",
         "grok",
         "kimi",

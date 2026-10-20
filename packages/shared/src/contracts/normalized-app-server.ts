@@ -31,7 +31,7 @@ import type {
 } from "../token-usage-pricing";
 import type { ThreadToolIncidentNoticeState } from "./tool-output-incidents";
 
-export type AppServerBuiltinBackendKind = "codex";
+export type AppServerBuiltinBackendKind = "codex" | "claude";
 export type AcpBackendId = `acp:${string}`;
 export type AppServerBackendKind = AppServerBuiltinBackendKind | AcpBackendId;
 export type AppServerBackendScope = AppServerBackendKind | "all";

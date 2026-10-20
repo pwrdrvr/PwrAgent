@@ -133,6 +133,8 @@
     "rowsChanged": 1,
     "statements": 1
   },
+  "claude-permission-selection": {"commits": 1, "note": "one operator mode selection; 100 duplicate selections add no writes", "observedWalBytes": 16480, "rowsChanged": 1, "statements": 1},
+  "claude-thread-creation": {"commits": 3, "note": "one thread creation through the registry; SDK transcripts and resume metadata use files", "observedWalBytes": 49440, "rowsChanged": 3, "statements": 3},
   "cleanup-expired-gc-pass": {
     "commits": 1,
     "note": "one whole cleanupExpired GC pass doing real work in both composer sweeps: ageing out 20 drafts past 180 days AND collapsing a 30-row journal prefix chain to 1. commits is the assertion that matters (every sweep rides one transaction); statements/rows legitimately move when a sweep is added, so re-record rather than reading it as a composer regression",

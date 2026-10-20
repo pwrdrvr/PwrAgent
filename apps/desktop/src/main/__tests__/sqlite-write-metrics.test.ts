@@ -1,3 +1,4 @@
+import { ClaudeSessionStore } from "../claude/claude-session-store";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -72,6 +73,28 @@ afterEach(() => {
 });
 
 describe("sqlite write metrics", () => {
+  it("budgets Claude creation and operator mode changes without repeat-selection writes", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient(), overlayStore: store,
+      agentToolMcpServer: null, pdfToolMcpServer: null,
+      claudeBackendOptions: {
+        store: new ClaudeSessionStore(path.join(tempDir, "claude")),
+        inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+      },
+    });
+    try {
+      const { result, writes: creation } = await measureSqliteWrites(async () =>
+        await registry.startThread({ backend: "claude", cwd: tempDir, executionMode: "default" }));
+      expectSqliteWriteBudget({ scenario: "claude-thread-creation", note: "one thread creation through the registry; SDK transcripts and resume metadata use files", writes: creation });
+      const target = { backend: "claude" as const, threadId: result.threadId, executionMode: "auto" as const };
+      const { writes } = await measureSqliteWrites(async () => {
+        await registry.setThreadExecutionMode(target);
+        for (let i = 0; i < 100; i++) await registry.setThreadExecutionMode(target);
+      });
+      expectSqliteWriteBudget({ scenario: "claude-permission-selection", note: "one operator mode selection; 100 duplicate selections add no writes", writes });
+    } finally { await registry.close(); }
+  });
+
   it("keeps 24 hourly inactive-thread sweeps read-only", async () => {
     const thread: AppServerThreadSummary = {
       id: "recently-restored", title: "Restored thread", titleSource: "explicit", source: "codex", threadStatus: "notLoaded",

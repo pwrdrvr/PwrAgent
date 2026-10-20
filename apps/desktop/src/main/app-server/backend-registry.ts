@@ -1,3 +1,5 @@
+import { ClaudeBackend, type ClaudeBackendOptions } from "../claude/claude-backend";
+import { inspectClaudeInstallation } from "../claude/claude-executable";
 import type { ForgeReadHandler } from "../agent-tools/pwragent-forge-agent-tools";
 import { ForgeReadError, validateForgeReadArgs, type ForgeReadRequest } from "../pr-status/forge-tool-contract";
 import { sweepThreadArchiveRetention, archivedThreadFamily, archiveRetentionFamilyEligible } from "./thread-archive-retention";
@@ -2089,6 +2091,7 @@ function normalizeWorktreePathForComparison(worktreePath: string): string {
 
 const BACKEND_LABELS: Record<AppServerBackendKind, string> = {
   codex: "OpenAI",
+  claude: "Claude",
 };
 
 /** Who publishes each Codex channel's builds. Deliberately not
@@ -8644,6 +8647,8 @@ export class DesktopBackendRegistry {
   private readonly worktreeArchiveService: WorktreeArchiveService;
   private readonly worktreeContainerService: WorktreeContainerService;
   private readonly acpBackend: AcpBackendAdapter;
+  private readonly claudeBackend: ClaudeBackend;
+  private readonly claudeAgentToolMcpServer?: AgentToolMcpServerLike;
   private closed = false;
   private closeOperation?: Promise<void>;
   // Resolves a managed-worktree ACP cwd to its repository checkout so ACP
@@ -9510,6 +9515,8 @@ export class DesktopBackendRegistry {
      * forgetting an option.
      */
     useMachineAcpDiscovery?: boolean;
+    useMachineClaudeDiscovery?: boolean;
+    claudeBackendOptions?: Partial<ClaudeBackendOptions>;
     isAcpAgentEnabled?: (registryId: string) => boolean;
     createAcpClient?: AcpClientFactory;
     /** The transport of an ACP helper's own agent process. */
@@ -10183,6 +10190,25 @@ export class DesktopBackendRegistry {
                 ],
               })
             : undefined);
+    this.claudeAgentToolMcpServer = agentToolMcpServer;
+    this.claudeBackend = new ClaudeBackend({
+      inspectInstallation: options?.useMachineClaudeDiscovery
+        ? async () => inspectClaudeInstallation({ env: await settingsService?.resolveTerminalSpawnEnvAsync() })
+        : async () => ({ authStatus: "unknown" }),
+      resolveEnv: async () => await settingsService?.resolveTerminalSpawnEnvAsync() ?? process.env,
+      emit: async (event) => { await this.emit(event); },
+      request: async (request, signal) => await this.handleServerRequest("claude", request, signal),
+      cancelRequest: async (threadId, turnId, requestId) => {
+        const key = buildPendingRequestKey({ backend: "claude", threadId, requestId });
+        const pending = this.pendingServerRequests.get(key);
+        this.pendingServerRequests.delete(key);
+        pending?.resolve({ decision: "cancel" });
+        await this.emit({ backend: "claude", notification: {
+          method: "serverRequest/resolved", params: { threadId, turnId, requestId },
+        } });
+      },
+      ...options?.claudeBackendOptions,
+    });
     this.acpBackend = new AcpBackendAdapter({
       acpAgentStore: options?.acpAgentStore,
       acpRolloutStore: options?.acpRolloutStore,
@@ -10699,6 +10725,11 @@ export class DesktopBackendRegistry {
         return;
       }
       try {
+        if (turn.backend === "claude") {
+          await this.claudeBackend.interruptTurn(turn);
+          counts.requested += 1;
+          return;
+        }
         if (isAcpBackendId(turn.backend)) {
           if (!(await cancelAcpSession(turn.backend, turn.threadId))) {
             unasked.add(key);
@@ -11696,7 +11727,10 @@ export class DesktopBackendRegistry {
       request.refreshModels === true || request.refreshModels === "codex"
         ? await this.discoverCodexBackend(discoveryPermit!, observer)
         : this.readCodexBackendSummary();
-    const summaries = [codexSummary];
+    if (request.refreshModels === true || request.refreshModels === "claude") {
+      await this.claudeBackend.discover();
+    }
+    const summaries = [codexSummary, this.claudeBackend.summary()];
     const acpSummaries = await this.acpBackend.describeInstalledBackends();
 
     return {
@@ -11856,6 +11890,9 @@ export class DesktopBackendRegistry {
       threads.push(...this.withPendingStartedThreads("codex", codexThreads, params));
     }
     checkDeadline();
+    if (!params.backend || params.backend === "claude") {
+      threads.push(...await this.claudeBackend.listThreads(params));
+    }
     const acpBackends = params.backend
       ? (isAcpBackendId(params.backend) ? [params.backend] : [])
       : (await this.acpBackend.listAvailableAgents()).map((agent) => agent.backendId);
@@ -12395,6 +12432,12 @@ export class DesktopBackendRegistry {
       callerReason: params.callerReason ?? "thread-list",
       ownerId: this.threadListCacheOwnerId,
     };
+    if (params.backend === "claude") {
+      const threads = await this.claudeBackend.listThreads(params);
+      this.rememberThreadListContexts(threads, displayMetadataObservationSequence, true, params.archived);
+      this.persistProviderThreadSnapshot("claude", threads, params);
+      return threads;
+    }
     if (params.backend === "codex") {
       const archiveGeneration = this.archiveCleanupReads.generation("codex");
       const threads = await this.filterArchivedThreadsPresentInActiveList({
@@ -12452,7 +12495,7 @@ export class DesktopBackendRegistry {
       return threads;
     }
 
-    const [codexThreads, acpThreads] = await Promise.all([
+    const [codexThreads, acpThreads, claudeThreads] = await Promise.all([
       this.listThreads({
         backend: "codex",
         archived: params.archived,
@@ -12465,6 +12508,7 @@ export class DesktopBackendRegistry {
         skipArchivedMetadataRefresh: params.skipArchivedMetadataRefresh,
       }),
       this.listAllInstalledAcpThreads(params.filter, params.archived),
+      this.listThreads({ ...params, backend: "claude" }),
     ]);
 
     // Only the ACP half is recorded here. The Codex half went through
@@ -12479,7 +12523,7 @@ export class DesktopBackendRegistry {
       ACP_LISTINGS_ARE_ENRICHED,
       params.archived,
     );
-    return [...codexThreads, ...acpThreads].sort(
+    return [...codexThreads, ...acpThreads, ...claudeThreads].sort(
       (left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0),
     );
   }
@@ -12574,6 +12618,10 @@ export class DesktopBackendRegistry {
       const results = await Promise.allSettled([
         this.refreshCodexProviderAtStartup(permit),
         this.refreshAcpProviderThreadsAtStartup(permit),
+        this.claudeBackend.discover().then(async () => ({
+          backends: ["claude" as const],
+          threads: await this.listThreads({ backend: "claude", forceRefresh: true }),
+        })),
       ]);
       if (this.closed) {
         return;
@@ -13188,6 +13236,7 @@ export class DesktopBackendRegistry {
       return { data: [{ commands, skills: [] }] };
     }
 
+    if (backend === "claude") return { data: [] };
     const client = this.getClient(backend);
     const data = await client.listSkills({
       cwd: params.cwd,
@@ -14564,6 +14613,15 @@ export class DesktopBackendRegistry {
         throw new Error("Thread grouping changed before archive. Refresh the group and try again.");
       }
     }
+    if (backend === "claude") {
+      const admit = await beforeMutation?.();
+      admit?.();
+      await this.claudeBackend.setArchived(request.threadId, true);
+      finishMutation?.();
+      this.invalidateThreadListCache(backend);
+      await this.emit({ backend, notification: { method: "thread/archived", params: { threadId: request.threadId } } });
+      return { backend, threadId: request.threadId, archivedAt: Date.now(), cleanup: [] };
+    }
     if (isAcpBackendId(backend)) {
       return await this.archiveAcpThread({
         backend,
@@ -14902,6 +14960,12 @@ export class DesktopBackendRegistry {
 
   private async restoreThreadWithoutLifecycleLock(request: RestoreThreadRequest): Promise<RestoreThreadResponse> {
     const backend = request.backend ?? "codex";
+    if (backend === "claude") {
+      await this.claudeBackend.setArchived(request.threadId, false);
+      this.invalidateThreadListCache(backend);
+      await this.emit({ backend, notification: { method: "thread/unarchived", params: { threadId: request.threadId } } });
+      return { backend, threadId: request.threadId, restoredAt: Date.now() };
+    }
     if (isAcpBackendId(backend)) {
       return await this.restoreAcpThread({
         backend,
@@ -15098,6 +15162,7 @@ export class DesktopBackendRegistry {
   async handoffThreadWorkspace(
     request: HandoffThreadWorkspaceRequest,
   ): Promise<HandoffThreadWorkspaceResponse> {
+    if (request.backend === "claude") throw new Error("Start a new Claude thread in the target workspace.");
     return await this.withThreadLifecycleMutation(request, async () => await this.handoffThreadWorkspaceWithoutArchiveLock(request));
   }
 
@@ -15364,6 +15429,8 @@ export class DesktopBackendRegistry {
         request.name,
         options,
       );
+    } else if (backend === "claude") {
+      result = await this.claudeBackend.renameThread(request.threadId, request.name);
     } else if (backend === "codex") {
       result = await this.withCodexThreadClient(request.threadId, async (client) =>
         await this.renameWithClient(client, request.threadId, request.name),
@@ -16162,6 +16229,11 @@ export class DesktopBackendRegistry {
     this.assertNotBootstrap("readThread");
     const readStartedAt = performance.now();
     const backend = request.backend ?? "codex";
+    if (backend === "claude") {
+      const replay = await this.claudeBackend.readThread(request.threadId);
+      const pendingRequest = this.getPendingRequestForThread({ backend, threadId: request.threadId });
+      return { backend, threadId: request.threadId, fetchedAt: Date.now(), replay, pendingRequest, threadStatus: replay.threadStatus };
+    }
     if (isAcpBackendId(backend)) {
       const response = await this.readAcpThread(request, backend);
       this.threadTodoHandler?.importReviews?.({ backend, threadId: request.threadId },
@@ -17474,7 +17546,9 @@ export class DesktopBackendRegistry {
 
     let result: { threadId: string };
     try {
-      result = isAcpBackendId(backend)
+      result = backend === "claude"
+        ? await this.claudeBackend.startThread({ cwd: cwd!, executionMode: effectiveExecutionMode, model: modelSettings.model, linkedDirectories: resolvedLinkedDirectories })
+        : isAcpBackendId(backend)
         ? await this.startAcpSession({
             backend,
             cwd,
@@ -17581,6 +17655,9 @@ export class DesktopBackendRegistry {
     }
     this.invalidateThreadListCache(backend, true);
 
+    if (backend === "claude") {
+      await this.overlayStore.setThreadExecutionMode({ backend, threadId: result.threadId, executionMode: effectiveExecutionMode });
+    }
     if (backend === "codex") {
       await this.overlayStore.setThreadExecutionMode({
         backend,
@@ -19185,6 +19262,41 @@ export class DesktopBackendRegistry {
       await this.codexInvalidIdRecoveryBarrier;
       if (this.closed) {
         throw new Error("Desktop backend registry closed before turn start");
+      }
+    }
+    if (params.backend === "claude") {
+      const overlay = await this.overlayStore.getThreadOverlayState(params);
+      const modelSettings = await this.resolveModelSettings("claude", { model: params.model ?? overlay?.model });
+      const input = await ownThreadInputAttachments(await enrichLocalFileInputs(params.input, {
+        privateStorageRoots: this.localFilePrivateStorageRoots,
+      }), params, this.localFilePrivateStorageRoots);
+      const registrations = await this.registerMcpConnections(overlay?.mcpConnectionIds);
+      let revoked = false;
+      const revokeConnections = () => {
+        if (revoked) return;
+        revoked = true;
+        for (const registration of registrations) registration.revoke();
+      };
+      try {
+        for (const registration of registrations) registration.bindThread(params.threadId);
+        const owned = await this.claudeAgentToolMcpServer?.registerClient({ backend: "claude", threadId: params.threadId });
+        const servers = [...registrations.map((registration) => registration.server), ...(owned ? [owned.server] : [])];
+        const mcpServers = Object.fromEntries(servers.map((server) => [server.name, "url" in server
+          ? { type: "http" as const, url: server.url, headers: Object.fromEntries(server.headers.map(({ name, value }) => [name, value])) }
+          : { type: "stdio" as const, command: server.command, args: server.args, env: server.env }]));
+        const result = await this.claudeBackend.startTurn({
+          ...params, input, model: modelSettings.model,
+          executionMode: params.executionMode ?? overlay?.executionMode,
+          instructions: (await this.getThreadAgentMetadata(params))?.instructions,
+          mcpServers,
+          onTurnFinished: revokeConnections,
+        });
+        await this.persistThreadMessageOrigin({ backend: "claude", threadId: params.threadId,
+          messageId: `user:${result.turnId}`, origin: resolveThreadMessageOrigin(params) });
+        return result;
+      } catch (error) {
+        revokeConnections();
+        throw error;
       }
     }
     // A selection already in flight must finish before this turn reads its runtime.
@@ -21301,6 +21413,7 @@ export class DesktopBackendRegistry {
     turnId: string;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
     this.mcpGatewayTools?.cancel(params.backend, params.threadId, params.turnId);
+    if (params.backend === "claude") return { backend: "claude", ...await this.claudeBackend.interruptTurn(params) };
     const review = this.findReviewForParentTurn({
       backend: params.backend,
       parentThreadId: params.threadId,
@@ -21763,6 +21876,7 @@ export class DesktopBackendRegistry {
     params: SteerTurnRequest,
     messageOrigin?: AppServerThreadMessageOrigin,
   ): Promise<SteerTurnResponse> {
+    if (params.backend === "claude") throw new Error("Claude does not support steering an active turn. Queue a message or interrupt the turn.");
     const requestKey = buildSteerRequestKey(params);
     const signature = buildSteerRequestSignature(params, messageOrigin);
     const accepted = this.acceptedSteerRequests.get(requestKey);
@@ -22020,6 +22134,13 @@ export class DesktopBackendRegistry {
   private async setThreadExecutionModeOnce(
     params: SetThreadExecutionModeRequest,
   ): Promise<SetThreadExecutionModeResponse> {
+    if (params.backend === "claude") {
+      if (await this.claudeBackend.executionMode(params.threadId) === params.executionMode) return params;
+      await this.claudeBackend.setExecutionMode(params.threadId, params.executionMode);
+      await this.overlayStore.setThreadExecutionMode(params);
+      await this.emit({ backend: "claude", notification: { method: "thread/executionMode/updated", params } });
+      return params;
+    }
     if (params.backend !== "codex") {
       if (params.executionMode === "auto") {
         throw new Error("Auto access is supported only by Codex.");
@@ -22324,6 +22445,7 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind,
     threadId: string,
   ): Promise<ThreadExecutionMode> {
+    if (backend === "claude") return this.claudeBackend.executionMode(threadId);
     if (backend === "codex") {
       const overlay = await this.overlayStore.getThreadOverlayState({
         backend,
@@ -25942,6 +26064,7 @@ export class DesktopBackendRegistry {
     const recoveryDrain = this.codexInvalidIdRecoveryDrain;
     const resources = [
       { name: "acp", close: () => this.acpBackend.close() },
+      { name: "claude", close: () => this.claudeBackend.close() },
       {
         name: "codex-protocol-capture",
         close: () => this.codexProtocolCaptureSession?.close(),
@@ -26758,6 +26881,7 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind,
     callerReason: BackendModelCatalogCallerReason,
   ): Promise<BackendLaunchpadOptions | undefined> {
+    if (backend === "claude") return this.claudeBackend.summary().launchpadOptions;
     if (isAcpBackendId(backend)) {
       return this.acpBackend.getLaunchpadOptions(backend);
     }
@@ -36620,6 +36744,7 @@ export class DesktopBackendRegistry {
   private async handleServerRequest(
     backend: AppServerBackendKind,
     request: AppServerPendingRequestNotification,
+    signal?: AbortSignal,
   ): Promise<unknown> {
     const callId = request.method === "item/tool/call"
       && typeof request.params.callId === "string"
@@ -36635,7 +36760,7 @@ export class DesktopBackendRegistry {
       return await this.observeNativeVoiceToolCall(
         backend,
         request,
-        this.performServerRequest(backend, request),
+        this.performServerRequest(backend, request, signal),
       );
     }
     const key = [backend, request.params.threadId, request.params.turnId, callId]
@@ -36673,7 +36798,7 @@ export class DesktopBackendRegistry {
       return await accepted.promise;
     }
 
-    const promise = this.performServerRequest(backend, request);
+    const promise = this.performServerRequest(backend, request, signal);
     this.acceptedDynamicToolCalls.set(key, { promise, signature });
     return await this.observeNativeVoiceToolCall(backend, request, promise);
   }
@@ -36705,6 +36830,7 @@ export class DesktopBackendRegistry {
   private async performServerRequest(
     backend: AppServerBackendKind,
     request: AppServerPendingRequestNotification,
+    signal?: AbortSignal,
   ): Promise<unknown> {
     if (isAcpBackendId(backend) && isAcpPermissionRequest(request)) {
       const session = this.acpBackend.getSession(backend, request.params.threadId);
@@ -37257,6 +37383,7 @@ export class DesktopBackendRegistry {
       requestId: routedRequest.params.requestId,
     });
 
+    if (signal?.aborted) return { decision: "cancel" };
     return await new Promise<SubmitServerRequestRequest["response"]>((resolve, reject) => {
       this.pendingServerRequests.set(key, {
         backend: routedBackend,
@@ -46392,6 +46519,7 @@ export function getDesktopBackendRegistry(): DesktopBackendRegistry {
     registry = new DesktopBackendRegistry({
       configStore: getDesktopConfigStore(),
       useMachineAcpDiscovery: true,
+      useMachineClaudeDiscovery: true,
     });
   }
 

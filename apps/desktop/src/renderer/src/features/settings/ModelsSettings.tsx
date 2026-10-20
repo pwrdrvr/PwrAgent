@@ -49,6 +49,7 @@ import {
   CodexAuthProfileCreateButton,
   CodexAuthProfileLoginButton,
 } from "./CodexAuthProfileSelect";
+import { ClaudeSettings } from "./ClaudeSettings";
 import { AcpAgentsSettings } from "./AcpAgentsSettings";
 import { HelperModelSettings } from "./HelperModelSettings";
 import { UsageAccountSettings } from "./UsageAccountSettings";
@@ -649,6 +650,21 @@ export function ModelsSettings(props: {
     );
   }
 
+  if (props.focus === "claude") {
+    const claude = backends.find((backend) => backend.kind === "claude");
+    return (
+      <SettingsSectionStack paneId="models-claude" aria-label="Claude provider settings">
+        <ClaudeSettings backend={claude} onCheck={async () => {
+          if (!props.desktopApi?.listBackends) throw new Error("Provider discovery is unavailable.");
+          const result = await props.desktopApi.listBackends({ includeUnavailable: true, refreshModels: "claude", discoveryIntent: "settings-user-action" });
+          setBackends(result.backends);
+          window.dispatchEvent(new Event(BACKEND_SUMMARIES_REFRESH_EVENT));
+        }} />
+        <ProviderDefaultsStrip backendKind="claude" backends={backends} defaults={props.snapshot.models.providerDefaults ?? {}} error={catalogError} onEditDefaults={editDefaults} />
+      </SettingsSectionStack>
+    );
+  }
+
   if (props.focus === "codex") {
     return (
       <SettingsSectionStack
@@ -774,6 +790,13 @@ export function ModelsSettings(props: {
             chip={codex.discovery.selectedCommand ? "Discovered" : "Not found"}
             chipKind={codex.discovery.selectedCommand ? "ok" : "muted"}
             onOpen={() => props.onFocusChange?.("codex")}
+          />
+          <SettingsIndexRow
+            name="Claude"
+            meta={backends.find((backend) => backend.kind === "claude")?.claude?.executable ?? "Install the official CLI, then run claude auth login"}
+            chip={backends.find((backend) => backend.kind === "claude")?.claude?.authStatus === "signed-in" ? "Signed in" : "Setup"}
+            chipKind={backends.find((backend) => backend.kind === "claude")?.available ? "ok" : "muted"}
+            onOpen={() => props.onFocusChange?.("claude")}
           />
           {orderedAcpEntries.map((entry) => {
             const enabled = acpAgentEnabledInSnapshot(

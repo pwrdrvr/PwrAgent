@@ -9624,7 +9624,7 @@ describe("SettingsScreen", () => {
       nav.querySelectorAll("#settings-nav-sublist-models .settings-nav__sublabel"),
     ).map((label) => label.textContent);
     // Providers only: the Helper model row lives on the AI Providers page.
-    expect(subLabels).toEqual(["Codex", "Grok", "Gemini CLI"]);
+    expect(subLabels).toEqual(["Codex", "Claude", "Grok", "Gemini CLI"]);
     const geminiButton = within(nav).getByRole("button", {
       name: /Gemini CLI/,
     });

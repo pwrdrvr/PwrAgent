@@ -534,6 +534,7 @@ export function SettingsScreen(props: {
           sub: "codex",
           dot: snapshot ? (codexConfigured ? "ok" : "off") : undefined,
         },
+        { key: "claude", label: "Claude", sub: "claude" },
         ...displayOrderedAcpEntries(acpCatalog.entries).map((entry) => {
           const enabled = acpAgentEnabledInSnapshot(snapshot, entry.registryId);
           return {

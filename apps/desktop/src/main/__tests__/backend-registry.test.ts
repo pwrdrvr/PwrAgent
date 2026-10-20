@@ -1,3 +1,5 @@
+import type { Options as ClaudeOptions, Query as ClaudeQuery, SDKMessage as ClaudeMessage } from "@anthropic-ai/claude-agent-sdk";
+import { ClaudeSessionStore } from "../claude/claude-session-store";
 import { DEFAULT_THREAD_ARCHIVE_POLICY } from "@pwragent/shared";
 import { threadLockRefusalMessage } from "@pwragent/shared";
 import { ThreadCorrespondenceStore } from "../app-server/thread-correspondence-store";
@@ -3168,6 +3170,66 @@ afterEach(() => {
 });
 
 describe("DesktopBackendRegistry", () => {
+  it("routes Claude creation, replay, approvals, resume and lifecycle without a Codex or ACP client", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-registry-"));
+    const store = new ClaudeSessionStore(path.join(root, "sessions"));
+    const codex = new MockBackendClient({});
+    const startCodex = vi.spyOn(codex, "startThread");
+    const events: AgentEvent[] = [];
+    const optionsSeen: ClaudeOptions[] = [];
+    const decisions: unknown[] = [];
+    const registry = new DesktopBackendRegistry({
+      codexClient: codex,
+      overlayStore: createOverlayStoreMock(),
+      agentToolMcpServer: null,
+      pdfToolMcpServer: null,
+      claudeBackendOptions: {
+        store,
+        inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+        query: ({ options = {} }) => {
+          optionsSeen.push(options);
+          async function* messages(): AsyncGenerator<ClaudeMessage> {
+            yield { type: "system", subtype: "init", session_id: options.sessionId ?? options.resume } as ClaudeMessage;
+            decisions.push(await options.canUseTool!("Bash", { command: "git status" }, {
+              signal: options.abortController!.signal, toolUseID: "tool", requestId: "sdk-request",
+            }));
+            yield { type: "assistant", parent_tool_use_id: null, message: { id: `answer-${optionsSeen.length}`, content: [{ type: "text", text: "Done" }] } } as ClaudeMessage;
+            yield { type: "result", subtype: "success", is_error: false, result: "Done" } as ClaudeMessage;
+          }
+          return Object.assign(messages(), { close: vi.fn(), setPermissionMode: vi.fn() }) as unknown as ClaudeQuery;
+        },
+      },
+    });
+    registry.onEvent((event) => { events.push(event); });
+    try {
+      const { threadId } = await registry.startThread({ backend: "claude", cwd: root, executionMode: "default" });
+      expect(startCodex).not.toHaveBeenCalled();
+      expect(await registry.listThreads({ backend: "claude", forceRefresh: true })).toEqual(expect.arrayContaining([expect.objectContaining({ id: threadId, source: "claude" })]));
+      for (let turn = 0; turn < 2; turn += 1) {
+        events.length = 0;
+        await registry.startTurn({ backend: "claude", threadId, input: [{ type: "text", text: "Hello" }] });
+        await vi.waitFor(() => expect(events.map((event) => event.notification), JSON.stringify(events)).toEqual(expect.arrayContaining([expect.objectContaining({ method: "item/commandExecution/requestApproval" })])));
+        const replay = await registry.readThread({ backend: "claude", threadId });
+        expect(replay.pendingRequest?.method).toBe("item/commandExecution/requestApproval");
+        await registry.submitServerRequest({ backend: "claude", threadId, requestId: replay.pendingRequest!.params.requestId, response: { decision: "accept" } });
+        await vi.waitFor(() => expect(events.some((event) => event.notification.method === "turn/completed")).toBe(true));
+      }
+      expect(optionsSeen[1].resume).toBe(threadId);
+      expect(decisions).toEqual([{ behavior: "allow", updatedInput: { command: "git status" } }, { behavior: "allow", updatedInput: { command: "git status" } }]);
+      expect((await registry.readThread({ backend: "claude", threadId })).replay.messages).toHaveLength(4);
+      await registry.renameThread({ backend: "claude", threadId, name: "Claude fixture" });
+      await registry.setThreadExecutionMode({ backend: "claude", threadId, executionMode: "auto" });
+      expect((await store.read(threadId)).thread.executionMode).toBe("auto");
+      await registry.archiveThread({ backend: "claude", threadId });
+      expect(await registry.listThreads({ backend: "claude", archived: true, forceRefresh: true })).toEqual(expect.arrayContaining([expect.objectContaining({ title: "Claude fixture" })]));
+      await registry.restoreThread({ backend: "claude", threadId });
+      expect((await store.read(threadId)).thread.archivedAt).toBeUndefined();
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("exports the authoritative handoff workspace while provider cwd synchronization is pending", async () => {
     const thread: AppServerThreadSummary = {
       id: "handoff-source", title: "Source", titleSource: "explicit", source: "codex", updatedAt: 1000,
@@ -7589,7 +7651,8 @@ describe("DesktopBackendRegistry", () => {
           reasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max", "ultra"],
           supportsFastMode: true,
         },
-      },    ]);
+      },      { kind: "claude", label: "Claude", available: false, source: "builtin" },
+    ]);
 
     await registry.close();
   });
