@@ -186,6 +186,7 @@ export function ModelsSettings(props: {
   const [backends, setBackends] = useState<BackendSummary[]>(
     props.cachedBackends ?? [],
   );
+  const claude = backends.find((backend) => backend.kind === "claude");
   const [catalogError, setCatalogError] = useState<string | undefined>();
   const [refreshingCatalog, setRefreshingCatalog] = useState(false);
   const [checkingManagedCodex, setCheckingManagedCodex] = useState(false);
@@ -651,7 +652,6 @@ export function ModelsSettings(props: {
   }
 
   if (props.focus === "claude") {
-    const claude = backends.find((backend) => backend.kind === "claude");
     return (
       <SettingsSectionStack paneId="models-claude" aria-label="Claude provider settings">
         <ClaudeSettings backend={claude} onCheck={async () => {
@@ -793,9 +793,11 @@ export function ModelsSettings(props: {
           />
           <SettingsIndexRow
             name="Claude"
-            meta={backends.find((backend) => backend.kind === "claude")?.claude?.executable ?? "Install Claude Code, then run claude auth login"}
-            chip={backends.find((backend) => backend.kind === "claude")?.claude?.authStatus === "signed-in" ? "Signed in" : "Setup"}
-            chipKind={backends.find((backend) => backend.kind === "claude")?.available ? "ok" : "muted"}
+            meta={claude?.claude?.executable ?? "Install Claude Code, then run claude auth login"}
+            chip={claude?.claude?.authStatus === "signed-in"
+              ? claude.claude.authMethod === "api-key" ? "API key" : "Signed in"
+              : "Setup"}
+            chipKind={claude?.claude?.authStatus === "signed-in" ? "ok" : "muted"}
             onOpen={() => props.onFocusChange?.("claude")}
           />
           {orderedAcpEntries.map((entry) => {

@@ -18,6 +18,7 @@ export type ClaudeInstallation = {
   version?: string;
   loginCommand?: string;
   authStatus: "signed-in" | "sign-in-required" | "unknown";
+  authMethod?: "api-key" | "claude-account" | "external";
   message?: string;
 };
 
@@ -148,7 +149,7 @@ export async function inspectClaudeInstallation(options: {
     const readAuthStatus = options.readAuthStatus ?? (async (command, launchEnv) => {
       return await runClaude(command, ["auth", "status", "--json"], launchEnv).catch((error: unknown) => {
         // Logged-out status may exit nonzero with valid JSON. Retain only the
-        // boolean below, never raw output, account identifiers, or credentials.
+        // status fields below, never raw output, account identifiers, or credentials.
         if (error && typeof error === "object" && "stdout" in error
           && typeof error.stdout === "string" && error.stdout.trim()) return error.stdout;
         throw error;
@@ -157,7 +158,18 @@ export async function inspectClaudeInstallation(options: {
     const status: unknown = JSON.parse(await readAuthStatus(executable, env));
     if (status && typeof status === "object" && "loggedIn" in status
       && typeof status.loggedIn === "boolean") {
+      // Project only a known authentication category. The CLI owns credentials;
+      // loggedIn does not prove subscription access or a positive API balance.
+      const authMethod = "authMethod" in status && status.authMethod === "api_key"
+        ? "api-key" as const
+        : "authMethod" in status && status.authMethod === "claude.ai"
+          ? "claude-account" as const
+          : "apiProvider" in status && typeof status.apiProvider === "string"
+            && ["bedrock", "vertex", "foundry", "anthropicAws", "anthropicGoogleCloud", "mantle", "gateway"].includes(status.apiProvider)
+            ? "external" as const
+            : undefined;
       return { ...installation, authStatus: status.loggedIn ? "signed-in" : "sign-in-required",
+        ...(status.loggedIn && authMethod ? { authMethod } : {}),
         ...(!status.loggedIn ? { message: `Run ${loginCommand} in your terminal, then check again.` } : {}),
       };
     }

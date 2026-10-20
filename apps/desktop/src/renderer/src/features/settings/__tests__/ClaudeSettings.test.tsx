@@ -23,7 +23,30 @@ describe("Claude settings", () => {
       claude: { executable: "/Users/example/.local/bin/claude", authStatus: "signed-in" },
     } as BackendSummary} />);
     expect(screen.getByText("/Users/example/.local/bin/claude")).toBeInTheDocument();
-    expect(screen.getByText("Signed in through the CLI")).toBeInTheDocument();
+    expect(screen.getByText("CLI reports signed in; authentication method unavailable")).toBeInTheDocument();
+    expect(screen.getByText(/does not verify available credits/)).toBeInTheDocument();
+  });
+
+  it("distinguishes API billing from Claude account sign-in", () => {
+    render(<ClaudeSettings onCheck={async () => {}} backend={{
+      kind: "claude",
+      claude: { executable: "/fixture/claude", authStatus: "signed-in", authMethod: "api-key",
+        loginCommand: "claude auth login" },
+    } as BackendSummary} />);
+    expect(screen.getByText("API key configured in the CLI")).toBeInTheDocument();
+    expect(screen.getByText(/API billing applies/)).toBeInTheDocument();
+    expect(screen.getByText("claude auth login --claudeai")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /sign in/i })).not.toBeInTheDocument();
+  });
+
+  it("identifies Claude account sign-in without claiming remaining usage", () => {
+    render(<ClaudeSettings onCheck={async () => {}} backend={{
+      kind: "claude",
+      claude: { executable: "/fixture/claude", authStatus: "signed-in", authMethod: "claude-account" },
+    } as BackendSummary} />);
+    expect(screen.getByText("Signed in with a Claude account")).toBeInTheDocument();
+    expect(screen.getByText(/does not verify available credits or remaining usage/)).toBeInTheDocument();
+    expect(screen.queryByText(/API billing applies/)).not.toBeInTheDocument();
   });
 
   it("identifies the bundled runtime and exposes its terminal login command", () => {

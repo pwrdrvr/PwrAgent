@@ -44,7 +44,9 @@ async function fixture(messages?: (options: Options) => AsyncGenerator<SDKMessag
   const backendOptions = {
     store,
     query: run,
-    inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" as const }),
+    inspectInstallation: vi.fn(async (_options?: Parameters<typeof import("../claude/claude-executable").inspectClaudeInstallation>[0]) => ({
+      executable: "/fixture/claude", authStatus: "signed-in" as const,
+    })),
     emit: async (event: AgentEvent) => { events.push(event); },
     request: async () => ({ decision: "accept" }),
     cancelRequest: async () => {},
@@ -136,6 +138,8 @@ describe("Claude SDK backend", () => {
     });
     expect(f.queries[0].env).not.toHaveProperty("ANTHROPIC_API_KEY");
     expect(f.queries[0].env).not.toHaveProperty("CLAUDE_CODE_OAUTH_TOKEN");
+    expect(f.backendOptions.inspectInstallation).toHaveBeenCalledWith({ env: f.queries[0].env });
+    expect(f.queries[0].env?.PATH).toBe("/fixture");
     expect(f.queries[0]).not.toHaveProperty("bare");
     expect(f.events.some((event) => event.notification.method === "item/agentMessage/delta")).toBe(true);
     const replay = await f.backend.readThread(threadId);

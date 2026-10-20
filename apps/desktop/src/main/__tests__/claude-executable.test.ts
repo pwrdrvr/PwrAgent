@@ -73,6 +73,23 @@ describe("Claude executable discovery", () => {
     }
   });
 
+  it.each([
+    [{ authMethod: "api_key", apiProvider: "firstParty" }, "api-key"],
+    [{ authMethod: "claude.ai", subscriptionType: "max" }, "claude-account"],
+    [{ apiProvider: "bedrock" }, "external"],
+    [{ authMethod: "unexpected-private-value" }, undefined],
+  ] as const)("reports only known CLI authentication categories (%j)", async (status, authMethod) => {
+    const installation = await inspectClaudeInstallation({
+      resolveExecutable: async () => "/fixture/claude",
+      readAuthStatus: async () => JSON.stringify({
+        loggedIn: true, ...status, apiKey: "secret-key", accessToken: "secret-token", email: "private-email",
+      }),
+    });
+    expect(installation).toMatchObject({ authStatus: "signed-in" });
+    expect(installation.authMethod).toBe(authMethod);
+    expect(JSON.stringify(installation)).not.toMatch(/secret-key|secret-token|private-email|unexpected-private-value/);
+  });
+
   it("does not pass application credentials to the CLI", () => {
     const input = { PATH: "/bin", ANTHROPIC_API_KEY: "key", CLAUDE_CODE_OAUTH_TOKEN: "token" };
     expect(claudeEnvironment(input)).toEqual({ PATH: "/bin" });

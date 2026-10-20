@@ -527,6 +527,7 @@ export function SettingsScreen(props: {
       const codexConfigured = Boolean(
         snapshot?.models.codex.discovery.selectedCommand,
       );
+      const claude = props.cachedBackends?.find((backend) => backend.kind === "claude")?.claude;
       return [
         {
           key: "codex",
@@ -534,7 +535,15 @@ export function SettingsScreen(props: {
           sub: "codex",
           dot: snapshot ? (codexConfigured ? "ok" : "off") : undefined,
         },
-        { key: "claude", label: "Claude", sub: "claude" },
+        {
+          key: "claude", label: "Claude", sub: "claude",
+          dot: claude
+            ? !claude.executable ? "off" : claude.authStatus === "signed-in" ? "ok" : "warn"
+            : undefined,
+          ...(claude?.executable && claude.authStatus !== "signed-in"
+            ? { chip: claude.authStatus === "sign-in-required" ? "sign in" : "check sign-in" }
+            : {}),
+        },
         ...displayOrderedAcpEntries(acpCatalog.entries).map((entry) => {
           const enabled = acpAgentEnabledInSnapshot(snapshot, entry.registryId);
           return {

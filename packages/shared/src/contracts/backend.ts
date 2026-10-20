@@ -281,7 +281,15 @@ export type BackendSummary = {
    * discovery. Never set alongside `available: true`.
    */
   discoveryPending?: boolean;
-  claude?: { executable?: string; source?: "system" | "bundled"; version?: string; loginCommand?: string; authStatus: "signed-in" | "sign-in-required" | "unknown"; message?: string };
+  claude?: {
+    executable?: string;
+    source?: "system" | "bundled";
+    version?: string;
+    loginCommand?: string;
+    authStatus: "signed-in" | "sign-in-required" | "unknown";
+    authMethod?: "api-key" | "claude-account" | "external";
+    message?: string;
+  };
   acp?: BackendAcpSummary;
   /**
    * Provenance of the executable serving this backend. Absent until PwrAgent

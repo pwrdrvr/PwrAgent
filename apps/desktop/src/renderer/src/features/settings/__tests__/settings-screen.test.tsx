@@ -9636,6 +9636,28 @@ describe("SettingsScreen", () => {
     ).not.toBeNull();
   });
 
+  it("updates Claude's nav status from cached installation and authentication without probing", () => {
+    const listBackends = vi.fn();
+    const settings = createSettingsState();
+    const view = (claude: BackendSummary["claude"]) => (
+      <SettingsScreen initialSection="general" settings={settings}
+        desktopApi={{ listBackends }}
+        cachedBackends={[{ kind: "claude", claude } as BackendSummary]} />
+    );
+    const { rerender } = render(view({ authStatus: "unknown" }));
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+    fireEvent.click(within(nav).getByRole("button", { name: /Expand AI Providers/ }));
+    const claudeButton = () => within(nav).getByRole("button", { name: /^Claude/ });
+    expect(claudeButton().querySelector(".settings-nav__subdot--off")).not.toBeNull();
+    rerender(view({ executable: "/fixture/claude", authStatus: "sign-in-required" }));
+    expect(claudeButton().querySelector(".settings-nav__subdot--warn")).not.toBeNull();
+    expect(claudeButton()).toHaveTextContent("sign in");
+    rerender(view({ executable: "/fixture/claude", authStatus: "signed-in", authMethod: "api-key" }));
+    expect(claudeButton().querySelector(".settings-nav__subdot--ok")).not.toBeNull();
+    expect(claudeButton().querySelector(".settings-nav__subchip")).toBeNull();
+    expect(listBackends).not.toHaveBeenCalled();
+  });
+
   it("relogs and removes MCP servers from the Plugins settings pane", async () => {
     const codexHome = "/home/example/.codex";
     const listCodexMcpServers = vi.fn(async () => ({

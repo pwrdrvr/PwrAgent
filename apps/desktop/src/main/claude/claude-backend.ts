@@ -18,7 +18,7 @@ import { ClaudeSessionStore, type ClaudeSession } from "./claude-session-store";
 export type ClaudeBackendOptions = {
   store?: ClaudeSessionStore;
   query?: typeof query;
-  inspectInstallation?: () => Promise<ClaudeInstallation>;
+  inspectInstallation?: typeof inspectClaudeInstallation;
   resolveEnv?: () => Promise<NodeJS.ProcessEnv>;
   emit: (event: AgentEvent) => Promise<void>;
   request: (request: AppServerPendingRequestNotification, signal: AbortSignal) => Promise<unknown>;
@@ -47,7 +47,8 @@ export class ClaudeBackend {
   async discover(): Promise<void> {
     if (this.discovery) return this.discovery;
     this.discovery = (async () => {
-      this.installation = await (this.options.inspectInstallation ?? (() => inspectClaudeInstallation()))();
+      const env = claudeEnvironment(await this.options.resolveEnv?.() ?? process.env);
+      this.installation = await (this.options.inspectInstallation ?? inspectClaudeInstallation)({ env });
     })();
     try { await this.discovery; } finally { this.discovery = undefined; }
   }
