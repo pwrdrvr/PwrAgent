@@ -13,7 +13,7 @@ import { resolveActiveProfilePath } from "../profile";
 import { toTranscriptImageProtocolUrl } from "../transcript-image-protocol";
 import { CLAUDE_SETUP_INSTRUCTIONS, claudeEnvironment, inspectClaudeInstallation, type ClaudeInstallation } from "./claude-executable";
 import { createClaudePermissionHandler, claudePermissionMode } from "./claude-permissions";
-import { claudeHarnessOptions, discoverClaudeModels, readClaudeMetadata } from "./claude-models";
+import { claudeHarnessOptions, claudeModelOptions, discoverClaudeModels, readClaudeMetadata } from "./claude-models";
 import { CLAUDE_TERMINAL_COMMANDS_SEED, claudeCommandSummaries } from "./claude-commands";
 import {
   claudeRateLimits, claudeStreamRateLimits, claudeTelemetry, claudeTurnUsage, liveClaudeRateLimits,
@@ -128,12 +128,16 @@ export class ClaudeBackend {
     const discovery = {
       models,
       promise: (async () => {
+        const previousModels = this.models;
         const env = claudeEnvironment(await this.options.resolveEnv?.() ?? process.env);
         this.installation = await (this.options.inspectInstallation ?? inspectClaudeInstallation)({ env });
         if (models && this.installation.executable && this.installation.authStatus !== "sign-in-required") {
-          this.models = await (this.options.discoverModels ?? discoverClaudeModels)({
+          const catalog = await (this.options.discoverModels ?? discoverClaudeModels)({
             executable: this.installation.executable, env,
           });
+          // A working session can recover discovery while this probe is still
+          // running. Its authenticated catalog takes precedence.
+          if (this.models === previousModels) await this.publishModels(catalog);
         }
         if (claudeHasNoPlanLimits(this.installation)) {
           this.setRateLimits([]);
@@ -167,7 +171,7 @@ export class ClaudeBackend {
         { mode: "auto", label: "Auto", available: true },
         { mode: "full-access", label: "Full Access", available: true },
       ],
-      // Stable aliases remain usable before explicit Settings/setup discovery.
+      // Stable aliases remain usable until startup or a live session reports models.
       launchpadOptions: { models: this.models ?? [
         { id: "sonnet", label: "Sonnet", supportsImage: true },
         { id: "opus", label: "Opus", supportsImage: true },
@@ -374,6 +378,18 @@ export class ClaudeBackend {
     await this.options.emit({ backend: "claude", notification });
   }
 
+  private async publishModels(models: BackendModelOption[]): Promise<void> {
+    if (models.length === 0) return;
+    const changed = JSON.stringify(this.models) !== JSON.stringify(models);
+    this.models = models;
+    if (changed) await this.emit({ method: "backend/providerStatus/updated", params: { backend: "claude" } });
+  }
+
+  private async refreshSessionModels(session: Query): Promise<void> {
+    const models = await claudeTelemetry(() => session.supportedModels());
+    if (models?.length) await this.publishModels(claudeModelOptions(models));
+  }
+
   private async consume(session: ClaudeSession, running: RunningTurn): Promise<void> {
     const threadId = session.thread.id;
     const turnId = running.turnId;
@@ -385,6 +401,10 @@ export class ClaudeBackend {
     try {
       for await (const message of running.query!) {
         if (message.type === "system" && message.subtype === "init") {
+          // Startup may precede CLI sign-in or fail transiently. Recover from
+          // this already-running session, without spawning a probe or waiting
+          // for metadata before consuming the response stream.
+          void this.refreshSessionModels(running.query!).catch(() => {});
           session.sdkSessionId = message.session_id;
           const current = await this.store.read(threadId);
           current.sdkSessionId = message.session_id;

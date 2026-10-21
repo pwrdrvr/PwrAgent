@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Options, Query, SDKMessage, query } from "@anthropic-ai/claude-agent-sdk";
+import type { ModelInfo, Options, Query, SDKMessage, query } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentEvent } from "@pwragent/shared";
 import { ClaudeBackend } from "../claude/claude-backend";
 import { ClaudeSessionStore } from "../claude/claude-session-store";
@@ -476,7 +476,7 @@ describe("Claude SDK backend", () => {
     await expect(f.backend.listMcpServers(threadId)).rejects.toThrow("while a turn is running");
   });
 
-  it("discovers the model catalog only on an explicit refresh and retains it when a later refresh fails", async () => {
+  it("publishes discovery immediately and retains the catalog when a later refresh fails", async () => {
     const f = await fixture();
     const models = [{ id: "fable", label: "Fable 5.1", current: true }];
     const discoverModels = vi.fn().mockResolvedValue(models);
@@ -486,9 +486,82 @@ describe("Claude SDK backend", () => {
     await backend.discover();
     expect(discoverModels).toHaveBeenCalledWith({ executable: "/fixture/claude", env: { PATH: "/fixture" } });
     expect(backend.summary().launchpadOptions?.models).toEqual(models);
+    expect(f.events).toEqual([{ backend: "claude", notification: {
+      method: "backend/providerStatus/updated", params: { backend: "claude" },
+    } }]);
     discoverModels.mockRejectedValueOnce(new Error("Discovery failed"));
     await expect(backend.discover()).rejects.toThrow("Discovery failed");
     expect(backend.summary().launchpadOptions?.models).toEqual(models);
+  });
+
+  it("keeps the live catalog when an older startup probe finishes afterward", async () => {
+    const f = await fixture(undefined, { supportedModels: async () => [
+      { value: "opus", displayName: "Opus 5.5", description: "Fixture" },
+    ] });
+    let resolveDiscovery!: (models: { id: string; label: string }[]) => void;
+    const discoverModels = vi.fn(() => new Promise<{ id: string; label: string }[]>((resolve) => { resolveDiscovery = resolve; }));
+    const backend = new ClaudeBackend({ ...f.backendOptions, discoverModels });
+    const discovery = backend.discover();
+    await vi.waitFor(() => expect(discoverModels).toHaveBeenCalledTimes(1));
+    const { threadId } = await backend.startThread({ cwd: f.root, executionMode: "default" });
+    await backend.startTurn({ threadId, input: [{ type: "text", text: "Hi" }] });
+    await f.waitForTurn();
+    expect(backend.summary().launchpadOptions?.models?.[0].label).toBe("Opus 5.5");
+    resolveDiscovery([{ id: "opus", label: "Opus" }]);
+    await discovery;
+    expect(backend.summary().launchpadOptions?.models?.[0].label).toBe("Opus 5.5");
+  });
+
+  it.each(["failed", "signed-out"])("recovers the catalog from a live session after %s startup discovery", async (startup) => {
+    const supportedModels = vi.fn().mockResolvedValue([
+      { value: "opus", displayName: "Opus 5.5", description: "Fixture" },
+      { value: "fable", displayName: "Fable 5.1", description: "Fixture", supportsEffort: true, supportedEffortLevels: ["high"] },
+      { value: "claude-opus-4-8", displayName: "Opus 4.8", description: "Fixture" },
+    ]);
+    const f = await fixture(undefined, { supportedModels });
+    const discoverModels = vi.fn().mockRejectedValue(new Error("Startup discovery unavailable"));
+    const inspectInstallation = vi.fn()
+      .mockResolvedValueOnce({ executable: "/fixture/claude", authStatus: startup === "signed-out" ? "sign-in-required" : "signed-in" })
+      .mockResolvedValue({ executable: "/fixture/claude", authStatus: "signed-in" });
+    const backend = new ClaudeBackend({ ...f.backendOptions, inspectInstallation, discoverModels });
+    if (startup === "failed") await expect(backend.discover()).rejects.toThrow("Startup discovery unavailable");
+    else await backend.discover();
+    expect(backend.summary().launchpadOptions?.models?.map((model) => model.label)).toEqual(["Sonnet", "Opus", "Haiku"]);
+    const { threadId } = await backend.startThread({ cwd: f.root, executionMode: "default" });
+    await backend.startTurn({ threadId, input: [{ type: "text", text: "Hi" }] });
+    await f.waitForTurn();
+    expect(backend.summary().launchpadOptions?.models).toEqual([
+      expect.objectContaining({ id: "opus", label: "Opus 5.5" }),
+      expect.objectContaining({ id: "fable", label: "Fable 5.1", reasoningEfforts: ["default", "high"] }),
+      expect.objectContaining({ id: "claude-opus-4-8", label: "Opus 4.8", other: true }),
+    ]);
+    expect(f.events).toContainEqual({ backend: "claude", notification: {
+      method: "backend/providerStatus/updated", params: { backend: "claude" },
+    } });
+    expect(supportedModels).toHaveBeenCalledTimes(1);
+    expect(f.run).toHaveBeenCalledTimes(1);
+    expect(discoverModels).toHaveBeenCalledTimes(startup === "failed" ? 1 : 0);
+  });
+
+  it("streams the answer while the live catalog is pending, and retains it on later failed or empty reads", async () => {
+    let resolveModels!: (models: ModelInfo[]) => void;
+    const supportedModels = vi.fn().mockImplementationOnce(() => new Promise<ModelInfo[]>((resolve) => { resolveModels = resolve; }))
+      .mockRejectedValueOnce(new Error("Metadata unavailable")).mockResolvedValue([]);
+    const f = await fixture(undefined, { supportedModels });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Hi" }] });
+    await f.waitForTurn();
+    expect((await f.backend.readThread(threadId)).lastAssistantMessage).toBe("Hello world");
+    expect(supportedModels).toHaveBeenCalledTimes(1);
+    resolveModels([{ value: "opus", displayName: "Opus 5.5", description: "Fixture" }]);
+    await vi.waitFor(() => expect(f.backend.summary().launchpadOptions?.models?.[0].label).toBe("Opus 5.5"));
+    for (const _attempt of [1, 2]) {
+      f.events.length = 0;
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Continue" }] });
+      await f.waitForTurn();
+      expect(f.backend.summary().launchpadOptions?.models?.[0].label).toBe("Opus 5.5");
+    }
+    expect(supportedModels).toHaveBeenCalledTimes(3);
   });
 
   it.each(["max", "default"])("passes an explicit effort and preserves the CLI default (%s)", async (reasoningEffort) => {
