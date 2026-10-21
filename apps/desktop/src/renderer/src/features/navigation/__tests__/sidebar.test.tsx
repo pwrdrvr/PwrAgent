@@ -24,6 +24,7 @@ import type { FederationThreadTarget } from "../../chrome/federation-thread-targ
 import type { FederationProjectDirectory } from "../../chrome/useFederationProjectStates";
 import { HOVER_TRANSITION_GRACE_MS } from "../../../lib/useHoverTransitionGrace";
 import { threadSummaryIdentityKey } from "../../../lib/federated-thread-events";
+import { ThreadDependencyIndicatorsContext } from "../../thread-dependencies/useThreadDependencyIndicators";
 import { FixtureSidebar as Sidebar } from "../../../test/navigation-presentation-fixture";
 import { useState, type ComponentProps } from "react";
 import type { Editor } from "@tiptap/react";
@@ -7322,6 +7323,103 @@ describe("Sidebar", () => {
     fireEvent.contextMenu(screen.getByRole("button", { name: "Peer thread" }));
     expect(screen.getByRole("menu")).toBeInTheDocument();
     expect(screen.queryByRole("menuitem", { name: "Send to Another Machine…" })).toBeNull();
+  });
+
+  it("offers Continue After beside Lock Thread, counting the thread's waiting registrations", async () => {
+    const onContinueAfter = vi.fn();
+    render(
+      <ThreadDependencyIndicatorsContext.Provider value={{
+        byThreadKey: new Map([[threadSummaryIdentityKey(sharedThread), { count: 2, label: "2 waiting", alert: false, tooltip: "" }]]),
+      }}>
+        <Sidebar
+          backends={backends}
+          browseMode="recents"
+          directories={directories}
+          inboxThreads={[sharedThread]}
+          loading={false}
+          creatingThread={undefined}
+          selectedItemKey="codex:thread-1"
+          threads={[sharedThread]}
+          onBrowseModeChange={() => undefined}
+          onContinueAfter={onContinueAfter}
+          onCreateThread={async () => undefined}
+          onOpenLaunchpad={async () => undefined}
+          onSelectThread={() => undefined}
+          onSetThreadLock={async () => undefined}
+        />
+      </ThreadDependencyIndicatorsContext.Provider>
+    );
+
+    const trigger = screen.getByRole("button", { name: "Open thread actions" });
+    trigger.focus();
+    fireEvent.click(trigger);
+    const items = within(screen.getByRole("menu")).getAllByRole("menuitem");
+    const lock = items.findIndex((item) => menuItemLabel(item) === "Lock Thread…");
+    expect(items[lock + 1]).toHaveAccessibleName("Continue After, 2 waiting");
+    await clickElement(screen.getByRole("menuitem", { name: "Continue After, 2 waiting" }));
+
+    // The menu item is gone once the dialog opens, so focus returns to the
+    // control that opened the menu.
+    expect(onContinueAfter).toHaveBeenCalledWith(sharedThread, expect.objectContaining({ current: trigger }));
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  it("omits Continue After without a dialog to open or for a peer's thread", () => {
+    const peerThread: NavigationThreadSummary = {
+      ...sharedThread,
+      id: "thread-peer",
+      title: "Peer thread",
+      federation: {
+        ref: {
+          backend: "codex",
+          target: { scope: "remote", instanceId: "peer-laptop" },
+          threadId: "thread-peer",
+        },
+        instanceLabel: "Laptop",
+        peerStatus: "connected",
+        capabilities: ["turn_control"],
+      },
+    };
+    const { rerender } = render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Open thread actions" }));
+    expect(screen.queryByRole("menuitem", { name: /Continue After/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Open thread actions" }));
+
+    rerender(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        directories={directories}
+        inboxThreads={[peerThread]}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-peer"
+        threads={[peerThread]}
+        onBrowseModeChange={() => undefined}
+        onContinueAfter={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />
+    );
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Peer thread" }));
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: /Continue After/ })).toBeNull();
   });
 
   it("flips the thread actions menu above the overflow button near the viewport bottom", () => {
