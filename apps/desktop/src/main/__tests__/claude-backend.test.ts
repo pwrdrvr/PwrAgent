@@ -109,6 +109,75 @@ describe("Claude SDK backend", () => {
     await expect(f.backend.steerTurn({ threadId, expectedTurnId: started.turnId, input: [] })).rejects.toThrow("no active turn");
   });
 
+  it("accepts a steer sent after turn/started but before the query launches", async () => {
+    const result = Promise.withResolvers<void>();
+    let steerUuid: string | undefined;
+    const f = await fixture(async function* () {
+      await result.promise;
+      yield { type: "result", subtype: "success", is_error: false, user_message_uuids: [steerUuid] } as unknown as SDKMessage;
+    });
+    const envHeld = Promise.withResolvers<void>();
+    let holdEnv = false;
+    const backend = new ClaudeBackend({ ...f.backendOptions,
+      emit: async (event: AgentEvent) => {
+        f.events.push(event);
+        if (event.notification.method === "turn/started") holdEnv = true;
+      },
+      resolveEnv: async () => {
+        if (holdEnv) await envHeld.promise;
+        return { PATH: "/fixture" };
+      },
+    });
+    const { threadId } = await backend.startThread({ cwd: f.root, executionMode: "default" });
+    const starting = backend.startTurn({ threadId, input: [{ type: "text", text: "Start" }] });
+    await vi.waitFor(() => expect(holdEnv).toBe(true));
+    const started = f.events.find((event) => event.notification.method === "turn/started")!.notification;
+    const turnId = (started.params as { turn: { id: string } }).turn.id;
+    expect(f.run).not.toHaveBeenCalled();
+    const steered = await backend.steerTurn({ threadId, expectedTurnId: turnId,
+      input: [{ type: "text", text: "Early correction" }] });
+    envHeld.resolve();
+    await starting;
+    const prompt = f.run.mock.calls[0][0].prompt;
+    if (typeof prompt === "string") throw new Error("Expected streaming input");
+    const iterator = prompt[Symbol.asyncIterator]();
+    expect((await iterator.next()).value.message.content).toEqual([{ type: "text", text: "Start" }]);
+    const streamed = (await iterator.next()).value;
+    steerUuid = streamed.uuid;
+    expect(streamed.message.content).toEqual([{ type: "text", text: "Early correction" }]);
+    result.resolve();
+    await f.waitForTurn();
+    expect(f.events.some((event) => event.notification.method === "turn/completed")).toBe(true);
+    expect((await backend.readThread(threadId)).messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: steered.messageId, text: "Early correction" }),
+    ]));
+  });
+
+  it("does not hold the message stream for a context probe", async () => {
+    const probe = Promise.withResolvers<{ totalTokens: number; maxTokens: number }>();
+    const nextPulled = Promise.withResolvers<void>();
+    const context = vi.fn()
+      .mockReturnValueOnce(probe.promise)
+      .mockResolvedValue({ totalTokens: 900, maxTokens: 200_000 });
+    const f = await fixture(async function* () {
+      yield { type: "assistant", parent_tool_use_id: null, message: {
+        id: "answer", content: [{ type: "text", text: "Working" }],
+      } } as SDKMessage;
+      nextPulled.resolve();
+      yield { type: "result", subtype: "success", is_error: false, result: "Done" } as SDKMessage;
+    }, { getContextUsage: context });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Hi" }] });
+    await nextPulled.promise;
+    // The result waits for the in-flight probe, then reads the final value.
+    expect(f.events.some((event) => event.notification.method === "turn/completed")).toBe(false);
+    probe.resolve({ totalTokens: 500, maxTokens: 200_000 });
+    await f.waitForTurn();
+    const windows = f.events.flatMap((event) => event.notification.method === "thread/contextWindow/updated"
+      ? [event.notification.params.usedTokens] : []);
+    expect(windows).toEqual([500, 900]);
+  });
+
   it.each([true, false])("handles a legacy resumed session with baseline probe available=%s", async (available) => {
     const model = { inputTokens: 100, outputTokens: 20, cacheReadInputTokens: 200, cacheCreationInputTokens: 50,
       costUSD: 0.25, contextWindow: 200_000, maxOutputTokens: 32_000, webSearchRequests: 0 };
@@ -255,7 +324,10 @@ describe("Claude SDK backend", () => {
       expect(f.events.some((event) => event.notification.method === "turn/completed")).toBe(false);
       expect((await f.backend.readThread(threadId)).entries).toEqual(expect.arrayContaining([expect.objectContaining({
         id: "tool-1", status: isError ? "failed" : "completed",
-        details: [expect.objectContaining({ markdown: "fixture output" })],
+        details: [
+          expect.objectContaining({ markdown: JSON.stringify({ command: "git status" }) }),
+          expect.objectContaining({ markdown: "fixture output" }),
+        ],
       })]));
     } finally {
       finish();

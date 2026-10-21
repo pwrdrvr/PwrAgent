@@ -323,9 +323,7 @@ export const PricingPanel = memo(function PricingPanel(props: PricingPanelProps)
           and every thread's spend across instances is the window it opens. */}
       {source === "claude"
         ? <ClaudeUsageLimits backend={props.backends?.find((backend) => backend.kind === "claude")} />
-        : !source || source === "codex"
-          ? <UsagePaceCard desktopApi={props.desktopApi} backends={props.backends} />
-          : null}
+        : <UsagePaceCard desktopApi={props.desktopApi} backends={props.backends} />}
 
       {/* Under the spend breakdown, above the turn rows: the gate's result is
           part of reading the bill, not a footnote to one turn of it. */}

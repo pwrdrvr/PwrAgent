@@ -594,3 +594,11 @@ it("shows Claude limits without requesting or displaying the Codex account pace"
   expect(view.container.querySelector(".usage-pace-card")).toBeNull();
   expect(readUsageActivity).not.toHaveBeenCalled();
 });
+
+it("keeps the Usage Activity card on ACP threads", () => {
+  const { pricing } = buildTokenMiserPricingFixture();
+  const thread = { id: "acp-thread", source: "acp:gemini" as const, updatedAt: 1 };
+  const view = render(<PricingPanel pricing={pricing} thread={thread}
+    desktopApi={{ openUsageActivity: vi.fn(), readUsageActivity: vi.fn() }} />);
+  expect(view.container.querySelector(".usage-pace-card")).not.toBeNull();
+});

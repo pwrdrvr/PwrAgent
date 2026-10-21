@@ -43,6 +43,8 @@ type RunningTurn = {
   completedMessageIds: Set<string>;
   inputWrites: Promise<void>;
   ending?: boolean;
+  /** One background context probe at a time; a request while it runs reruns it once. */
+  contextRefresh?: { promise: Promise<void>; again: boolean };
 };
 
 /** One input pump owns the SDK's stdin until the logical turn finishes. */
@@ -318,6 +320,9 @@ export class ClaudeBackend {
     } catch (error) {
       running.ending = true;
       running.input.close();
+      // A steer accepted during startup writes its own row; let it land
+      // before the failed status, so the failed status is final.
+      await this.settleInputWrites(running);
       this.running.delete(params.threadId);
       params.onTurnFinished?.();
       if (running.started) {
@@ -382,8 +387,10 @@ export class ClaudeBackend {
           await this.emit({ method: "backend/providerStatus/updated", params: { backend: "claude" } });
         }
         await this.consumeCompleteMessage(message, threadId, running);
+        // The probe is a control round-trip that can wait 1.5s; never hold
+        // the stream for it. The result boundary below reads it in order.
         if (message.type === "assistant" && !message.parent_tool_use_id) {
-          await this.refreshContext(session, running);
+          this.scheduleContextRefresh(session, running);
         }
         if (message.type === "result") {
           // A message arriving near a result boundary may become another native
@@ -408,6 +415,7 @@ export class ClaudeBackend {
               await this.emit({ method: "thread/tokenUsage/updated", params: { threadId, turnId, model: tokenUsage.model, tokenUsage } });
             }
           }
+          await running.contextRefresh?.promise;
           await Promise.all([this.refreshContext(session, running), this.refreshUsage(running)]);
           if (message.is_error) failure = message.subtype === "success" ? message.result : message.errors.join("\n");
           if (finished) break;
@@ -420,6 +428,7 @@ export class ClaudeBackend {
       running.ending = true;
       running.input.close();
       await this.settleInputWrites(running);
+      await running.contextRefresh?.promise;
       try { running.query?.close(); }
       catch (error) { failure ??= error instanceof Error ? error.message : String(error); }
       const cancelled = running.controller.signal.aborted;
@@ -460,6 +469,27 @@ export class ClaudeBackend {
     if (usage && (!usage.rate_limits_available || usage.rate_limits)) this.rateLimits = claudeRateLimits(usage);
     await this.emit({ method: "backend/providerStatus/updated", params: { backend: "claude" } });
     return usage;
+  }
+
+  private scheduleContextRefresh(session: ClaudeSession, running: RunningTurn): void {
+    if (running.contextRefresh) {
+      running.contextRefresh.again = true;
+      return;
+    }
+    const refresh = { again: false, promise: Promise.resolve() };
+    refresh.promise = (async () => {
+      try {
+        do {
+          refresh.again = false;
+          await this.refreshContext(session, running);
+        } while (refresh.again && !running.ending);
+      } catch {
+        // A meter update must never fail the turn.
+      } finally {
+        running.contextRefresh = undefined;
+      }
+    })();
+    running.contextRefresh = refresh;
   }
 
   private async refreshContext(session: ClaudeSession, running: RunningTurn): Promise<void> {
@@ -568,11 +598,16 @@ export class ClaudeBackend {
         const entry = running.entries.get(block.tool_use_id);
         if (entry?.type !== "activity") continue;
         entry.status = block.is_error ? "failed" : "completed";
-        entry.details[0].markdown = typeof block.content === "string" ? block.content : JSON.stringify(block.content);
+        // Keep the input detail; saved history must still show what ran.
+        const output = typeof block.content === "string" ? block.content : JSON.stringify(block.content);
+        const outputId = `${entry.id}:output`;
+        entry.details = [...entry.details.filter((detail) => detail.id !== outputId), {
+          id: outputId, kind: entry.details[0].kind, label: `${entry.summary} output`, markdown: output, status: entry.status,
+        }];
         await this.store.append(threadId, [entry]);
         await this.emit({ method: "item/completed", params: { threadId, turnId, item: {
           id: entry.id, type: "dynamicToolCall", toolName: entry.summary, status: entry.status,
-          contentItems: [{ type: "inputText", text: entry.details[0].markdown ?? "" }],
+          contentItems: [{ type: "inputText", text: output }],
         } } });
       }
     }
@@ -599,7 +634,8 @@ export class ClaudeBackend {
         throw new Error("Claude has no active turn. Queue the message instead.");
       }
       if (running.turnId !== params.expectedTurnId) throw new Error("Claude expected active turn id has changed.");
-      if (!running.query) throw new Error("Claude is starting. Wait for the turn to start before steering.");
+      // Before the query launches, the input stream buffers the steer; the
+      // prompt generator sends it right after the first prompt.
     };
     assertActive();
     const content = await claudeInput(params.input);
