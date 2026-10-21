@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.3.0-prerelease.1 - 2026-10-21
+
+- Claude - Added built-in Claude support through the official Agent SDK, with model and effort selection, approvals, questionnaires, MCP connections, resumable conversations, and usage reporting.
+- Continue After - Resume a thread when another turn finishes, a PR becomes reviewable, CI passes, or a PR merges. Dependencies survive restarts without model-driven polling.
+- Dependency Reminders - Choose a reminder instead of an automatic continuation, with an optional action to start a new thread.
+- Message Queues - Drag queued messages into a new order in the composer and Star Map, with keyboard controls.
+- Context Compaction - Honor the selected model and reasoning settings, recover from known invalid-message-ID failures, and release queued follow-ups after compaction.
+- Archive Performance - Reduce redundant work during bulk cleanup and improve diagnostics for delayed cleanup.
+
 ## v1.2.2 - 2026-10-19
 
 - Terminals - Keep multiple terminal tabs per thread, with names, activity indicators, and restored scrollback after restarting. Commands are not replayed.
