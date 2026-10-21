@@ -1,3 +1,4 @@
+import type { BigIntStats } from "node:fs";
 import { lstat, readdir, realpath, rmdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,8 +9,14 @@ export type WorktreeContainerCleanup = {
   removed: boolean;
   skippedReason?: string;
   error?: string;
-  identity?: { dev: number; ino: number };
+  /** Decimal device and file IDs. NTFS file IDs are 64-bit and exceed 2^53,
+   * so a JS number can round two directories to one identity. */
+  identity?: { dev: string; ino: string };
 };
+
+function containerIdentity(stats: BigIntStats): NonNullable<WorktreeContainerCleanup["identity"]> {
+  return { dev: stats.dev.toString(), ino: stats.ino.toString() };
+}
 
 /** Removes only the empty id directory directly below the selected Codex
  * worktree root. Never removes a checkout, follows a container symlink, climbs
@@ -59,11 +66,11 @@ export class WorktreeContainerService {
       const containerPath = await this.containerPath(worktreePath);
       if (!containerPath) return undefined;
       result = { ...result, containerPath };
-      const container = await lstat(containerPath);
+      const container = await lstat(containerPath, { bigint: true });
       if (!container.isDirectory() || container.isSymbolicLink()) {
         return { ...result, skippedReason: "Container is not an ordinary directory." };
       }
-      result = { ...result, identity: { dev: container.dev, ino: container.ino } };
+      result = { ...result, identity: containerIdentity(container) };
       const root = await realpath(this.root);
       if (path.dirname(await realpath(containerPath)) !== root) {
         return { ...result, skippedReason: "Container is outside the selected worktree root." };
@@ -88,14 +95,14 @@ export class WorktreeContainerService {
       const containerPath = await this.containerPath(worktreePath);
       if (!containerPath) return undefined;
       result = { ...result, containerPath };
-      const before = await lstat(containerPath);
-      if (expectedIdentity && (before.dev !== expectedIdentity.dev || before.ino !== expectedIdentity.ino)) {
+      const before = await lstat(containerPath, { bigint: true });
+      if (expectedIdentity && (before.dev.toString() !== expectedIdentity.dev || before.ino.toString() !== expectedIdentity.ino)) {
         return { ...result, skippedReason: "Container identity changed since discovery." };
       }
       const root = await realpath(this.root);
       const inspection = await this.inspect(worktreePath);
       if (!inspection || inspection.skippedReason || inspection.error) return inspection;
-      const current = await lstat(containerPath);
+      const current = await lstat(containerPath, { bigint: true });
       if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== before.dev || current.ino !== before.ino
         || await realpath(this.root) !== root || path.dirname(await realpath(containerPath)) !== root) {
         return { ...result, skippedReason: "Container identity changed before removal." };

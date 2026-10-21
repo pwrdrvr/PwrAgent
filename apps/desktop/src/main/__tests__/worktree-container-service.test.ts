@@ -6,11 +6,12 @@ import { WorktreeContainerService } from "../app-server/worktree-container-servi
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
-  return { ...actual, readdir: vi.fn(actual.readdir), rmdir: vi.fn(actual.rmdir) };
+  return { ...actual, lstat: vi.fn(actual.lstat), readdir: vi.fn(actual.readdir), rmdir: vi.fn(actual.rmdir) };
 });
 
 const roots: string[] = [];
 afterEach(async () => {
+  vi.mocked(lstat).mockRestore();
   vi.mocked(readdir).mockRestore();
   vi.mocked(rmdir).mockRestore();
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
@@ -24,6 +25,25 @@ async function fixture() {
   await mkdir(container, { recursive: true });
   const worktree = path.join(container, "repo");
   return { root, codexHome, container, worktree, service: new WorktreeContainerService({ codexHome }) };
+}
+
+// NTFS file IDs carry a sequence number in their high 16 bits, so a reused MFT
+// record can exceed 2^53. These two IDs differ only in the lowest bit and round
+// to the same JS number.
+const NTFS_FILE_ID = (64n << 48n) | 0x1234n;
+const NEIGHBOR_NTFS_FILE_ID = NTFS_FILE_ID + 1n;
+
+/** Reports `fileId()` as the container's inode, in whichever precision the
+ * caller asked lstat for. */
+async function mockContainerFileId(container: string, fileId: () => bigint) {
+  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+  vi.mocked(lstat).mockImplementation((async (target: string, options?: { bigint?: boolean }) => {
+    const stats = await actual.lstat(target, options as { bigint: true });
+    if (target === container) {
+      Object.assign(stats, { ino: options?.bigint ? fileId() : Number(fileId()) });
+    }
+    return stats;
+  }) as typeof lstat);
 }
 
 describe("empty archived worktree containers", () => {
@@ -129,5 +149,32 @@ describe("empty archived worktree containers", () => {
     expect(await f.service.prune(f.worktree, undefined, inspected!.identity))
       .toMatchObject({ removed: false, skippedReason: "Container identity changed since discovery." });
     expect(rmdir).not.toHaveBeenCalled();
+  });
+
+  it("distinguishes 64-bit file IDs that differ below JS number precision", async () => {
+    expect(Number(NEIGHBOR_NTFS_FILE_ID)).toBe(Number(NTFS_FILE_ID));
+    const f = await fixture();
+    let fileId = NTFS_FILE_ID;
+    await mockContainerFileId(f.container, () => fileId);
+    const inspected = await f.service.inspect(f.worktree);
+    fileId = NEIGHBOR_NTFS_FILE_ID;
+    expect(await f.service.prune(f.worktree, undefined, inspected!.identity))
+      .toMatchObject({ removed: false, skippedReason: "Container identity changed since discovery." });
+    expect(rmdir).not.toHaveBeenCalled();
+    expect((await lstat(f.container)).isDirectory()).toBe(true);
+    expect(inspected?.identity).toEqual({ dev: expect.any(String), ino: NTFS_FILE_ID.toString() });
+  });
+
+  it("distinguishes a replacement whose 64-bit file ID rounds to the inspected one", async () => {
+    const f = await fixture();
+    let fileId = NTFS_FILE_ID;
+    await mockContainerFileId(f.container, () => fileId);
+    vi.mocked(readdir).mockImplementationOnce(async () => {
+      fileId = NEIGHBOR_NTFS_FILE_ID;
+      return [];
+    });
+    expect(await f.service.prune(f.worktree)).toMatchObject({ removed: false, skippedReason: "Container identity changed before removal." });
+    expect(rmdir).not.toHaveBeenCalled();
+    expect((await lstat(f.container)).isDirectory()).toBe(true);
   });
 });
