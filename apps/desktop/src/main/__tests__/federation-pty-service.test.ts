@@ -1009,6 +1009,36 @@ describe("remote terminal snapshots and ownership", () => {
 
 
 describe("Federation owner-thread read facade", () => {
+  it("waits for the final checkpoint before discovering or reading an exited shell", async () => {
+    const { service, pty } = createHarness();
+    const context = { backend: "codex" as const, threadId: "thread-1" };
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    try {
+      const opened = await service.open("peer-a", OPEN_REQUEST);
+      const replay = service.outputForOwnerThread(context, opened.sessionId)!;
+      const snapshot = replay.snapshot.bind(replay);
+      vi.spyOn(replay, "snapshot").mockImplementationOnce(async () => {
+        await gate;
+        return snapshot();
+      });
+      pty.emitData("final output");
+      pty.emitExit(7);
+      expect(service.outputForOwnerThread(context, opened.sessionId)).toBeUndefined();
+      let listed = false;
+      let read = false;
+      const listing = service.listForOwnerThread(context).then((result) => { listed = true; return result; });
+      const reading = service.snapshotForOwnerThread(context, opened.sessionId).then((result) => { read = true; return result; });
+      // Allow both calls to reach their checkpoint wait while capture is held.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(listed).toBe(false);
+      expect(read).toBe(false);
+      release();
+      expect(await listing).toMatchObject([{ sessionId: opened.sessionId, status: "exited", exitCode: 7 }]);
+      expect(await reading).toMatchObject({ data: expect.stringContaining("final output"), seq: 1 });
+    } finally { release(); await service.disposeAll(); }
+  });
+
   it("lets the owning agent read viewer-opened output without granting another peer access", async () => {
     const { service, pty } = createHarness();
     try {

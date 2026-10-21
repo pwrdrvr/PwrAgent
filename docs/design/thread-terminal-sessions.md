@@ -98,7 +98,10 @@ of 64 Ki characters, with five-minute expiry, and reports cursor expiry rather
 than silently switching to newer output. Paging itself is not loss; `truncated`
 reports screen capture limits or an explicitly skipped surrogate pair when a
 one-code-unit budget cannot carry it. Cursors are authenticated and bound to
-owner, backend/thread, terminal creation, format and runtime. Closing a session
+owner, backend/thread, terminal creation, format and runtime. Raw cursors also
+bind to the replay generation: resuming a shell under the same terminal ID
+invalidates its previous raw cursors, even when the new sequence catches up.
+Closing a session
 revokes reads even for cached pages. All terminal metadata and output remain
 untrusted. This layer writes no history and introduces no SQLite commits or
 periodic work (0 MB/day of persistence).
