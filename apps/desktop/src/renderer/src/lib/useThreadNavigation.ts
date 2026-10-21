@@ -3373,46 +3373,14 @@ export function useThreadNavigation(
       message: renameThreadError,
     });
   }, [renameThreadError]);
-  // Discard has no slot of its own. `discardLaunchpad` clears the selection
-  // before it persists the discard, so the launchpad composer that renders
-  // `launchpadError` is already unmounted when the persistence call rejects —
-  // the message would land on a surface nobody is looking at (or, worse, on
-  // the next unrelated launchpad the operator opens). Publish it directly.
-  const publishDiscardLaunchpadError = useCallback((error?: unknown): void => {
-    onThreadActionErrorRef.current?.({
-      kind: "discard-launchpad",
-      message:
-        error === undefined
-          ? undefined
-          : error instanceof Error
-            ? error.message
-            : String(error),
-    });
-  }, []);
-  // Same shape for the masthead's "Add project directory" entry. It lives in
-  // the sidebar / title bar, and `pickDirectoryError`'s only inline surface is
-  // the launchpad composer's project picker — not mounted behind that menu, so
-  // a rejected pick ("not a git repository") would land nowhere. The ref
-  // carries what `pickDirectoryForReference` last recorded, since the state
-  // setter cannot be read back inside the same call.
-  const lastPickDirectoryErrorRef = useRef<string>(undefined);
-  const publishAddDirectoryError = useCallback((message?: string): void => {
-    onThreadActionErrorRef.current?.({ kind: "add-directory", message });
-  }, []);
-  // Sidebar grouping and ordering actions (unlink, pin, reorder, collapse)
-  // start from a row or a context menu, so their failures go to the notice
-  // stack too. They used to write `setThreadModelSettingsError`, which only an
-  // open ThreadView renders: with the launchpad or another thread open, a
-  // failed unlink silently did nothing. Pass no error to clear the kind.
-  const publishSidebarActionError = useCallback((
-    kind: Extract<
-      ThreadActionErrorKind,
-      | "reorder-sidebar"
-      | "save-collapsed"
-      | "set-thread-parent"
-      | "unlink-thread"
-      | "update-pin"
-    >,
+  // Publishes one action's failure straight to the notice stack, for actions
+  // with no error slot of their own. Pass no error to clear the kind. The
+  // sidebar's grouping and ordering actions (unlink, pin, reorder, collapse)
+  // use it too: they used to write `setThreadModelSettingsError`, which only
+  // an open ThreadView renders, so with the launchpad or another thread open
+  // a failed unlink silently did nothing.
+  const publishThreadActionError = useCallback((
+    kind: ThreadActionErrorKind,
     error?: unknown,
   ): void => {
     onThreadActionErrorRef.current?.({
@@ -3424,6 +3392,24 @@ export function useThreadNavigation(
             ? error.message
             : String(error),
     });
+  }, []);
+  // Discard has no slot of its own. `discardLaunchpad` clears the selection
+  // before it persists the discard, so the launchpad composer that renders
+  // `launchpadError` is already unmounted when the persistence call rejects —
+  // the message would land on a surface nobody is looking at (or, worse, on
+  // the next unrelated launchpad the operator opens). Publish it directly.
+  const publishDiscardLaunchpadError = useCallback((error?: unknown): void => {
+    publishThreadActionError("discard-launchpad", error);
+  }, [publishThreadActionError]);
+  // Same shape for the masthead's "Add project directory" entry. It lives in
+  // the sidebar / title bar, and `pickDirectoryError`'s only inline surface is
+  // the launchpad composer's project picker — not mounted behind that menu, so
+  // a rejected pick ("not a git repository") would land nowhere. The ref
+  // carries what `pickDirectoryForReference` last recorded, since the state
+  // setter cannot be read back inside the same call.
+  const lastPickDirectoryErrorRef = useRef<string>(undefined);
+  const publishAddDirectoryError = useCallback((message?: string): void => {
+    onThreadActionErrorRef.current?.({ kind: "add-directory", message });
   }, []);
   const [updatingThreadExecutionMode, setUpdatingThreadExecutionMode] =
     useState<ThreadExecutionMode>();
@@ -8686,13 +8672,13 @@ export function useThreadNavigation(
         // Never cleared at the start of a pin: the sidebar pins a selection
         // one call per thread, and a later success must not hide an earlier
         // failure. A new failure replaces it; the operator dismisses it.
-        publishSidebarActionError("update-pin", error);
+        publishThreadActionError("update-pin", error);
         await refresh(threadSummaryIdentityKey(thread));
       }
     },
     [
       refresh,
-      publishSidebarActionError,
+      publishThreadActionError,
       setRemoteThreadLocalPinRequest,
       setThreadPinRequest,
       invalidateNavigation,
@@ -8705,9 +8691,9 @@ export function useThreadNavigation(
         return;
       }
 
-      publishSidebarActionError("reorder-sidebar");
+      publishThreadActionError("reorder-sidebar");
       if (!move) {
-        publishSidebarActionError("reorder-sidebar", "A pin move requires an owner-relative destination. Refresh the list and try again.");
+        publishThreadActionError("reorder-sidebar", "A pin move requires an owner-relative destination. Refresh the list and try again.");
         return;
       }
 
@@ -8725,11 +8711,11 @@ export function useThreadNavigation(
           }),
         }));
       } catch (error) {
-        publishSidebarActionError("reorder-sidebar", error);
+        publishThreadActionError("reorder-sidebar", error);
         await refresh();
       }
     },
-    [refresh, publishSidebarActionError, reorderThreadPinsRequest, invalidateNavigation],
+    [refresh, publishThreadActionError, reorderThreadPinsRequest, invalidateNavigation],
   );
 
   const setThreadParent = useCallback(
@@ -8777,20 +8763,20 @@ export function useThreadNavigation(
       } catch (error) {
         // Not cleared at the start: the sidebar's fallback unlinks a
         // selection one call per thread, like a bulk pin.
-        publishSidebarActionError(
+        publishThreadActionError(
           parentThreadId === undefined ? "unlink-thread" : "set-thread-parent",
           error,
         );
         await refresh(threadSummaryIdentityKey(thread));
       }
     },
-    [refresh, publishSidebarActionError, setThreadParentRequest],
+    [refresh, publishThreadActionError, setThreadParentRequest],
   );
 
   const unlinkThreads = useCallback(
     async (threadsToUnlink: NavigationThreadSummary[]): Promise<void> => {
       if (!desktopApi || !setThreadParentRequest || threadsToUnlink.length === 0) return;
-      publishSidebarActionError("unlink-thread");
+      publishThreadActionError("unlink-thread");
       try {
         const windowTarget = readRendererFederationTarget();
         const members = await readNavigationUnlinkPlan({ api: desktopApi, threads: threadsToUnlink,
@@ -8829,11 +8815,11 @@ export function useThreadNavigation(
           }) }));
         }
       } catch (error) {
-        publishSidebarActionError("unlink-thread", error);
+        publishThreadActionError("unlink-thread", error);
       }
       await refresh();
     },
-    [desktopApi, refresh, invalidateNavigation, publishSidebarActionError, reorderThreadPinsRequest,
+    [desktopApi, refresh, invalidateNavigation, publishThreadActionError, reorderThreadPinsRequest,
       setThreadParentRequest, setThreadPinRequest, setRemoteThreadLocalPinRequest],
   );
 
@@ -8851,7 +8837,7 @@ export function useThreadNavigation(
       const federationTarget = parent.federation?.ref.target
         ?? readRendererFederationTarget();
 
-      publishSidebarActionError("reorder-sidebar");
+      publishThreadActionError("reorder-sidebar");
       try {
         await updateSubthreadOrderRequest({
           backend: parent.source,
@@ -8861,11 +8847,11 @@ export function useThreadNavigation(
         });
         invalidateNavigation();
       } catch (error) {
-        publishSidebarActionError("reorder-sidebar", error);
+        publishThreadActionError("reorder-sidebar", error);
         await refresh(threadSummaryIdentityKey(parent));
       }
     },
-    [refresh, invalidateNavigation, publishSidebarActionError, updateSubthreadOrderRequest],
+    [refresh, invalidateNavigation, publishThreadActionError, updateSubthreadOrderRequest],
   );
 
   const setSubthreadsCollapsed = useCallback(
@@ -8892,7 +8878,7 @@ export function useThreadNavigation(
         }),
       }));
 
-      publishSidebarActionError("save-collapsed");
+      publishThreadActionError("save-collapsed");
       try {
         const result = await setSubthreadsCollapsedRequest({
           backend: parent.source,
@@ -8910,11 +8896,11 @@ export function useThreadNavigation(
           }),
         }));
       } catch (error) {
-        publishSidebarActionError("save-collapsed", error);
+        publishThreadActionError("save-collapsed", error);
         await refresh(threadSummaryIdentityKey(parent));
       }
     },
-    [refresh, publishSidebarActionError, setSubthreadsCollapsedRequest],
+    [refresh, publishThreadActionError, setSubthreadsCollapsedRequest],
   );
 
   const setThreadAgent = useCallback(
@@ -8991,11 +8977,11 @@ export function useThreadNavigation(
           }),
         }));
       } catch (error) {
-        publishSidebarActionError("update-pin", error);
+        publishThreadActionError("update-pin", error);
         await refresh();
       }
     },
-    [refresh, publishSidebarActionError, setDirectoryPinRequest],
+    [refresh, publishThreadActionError, setDirectoryPinRequest],
   );
 
   const reorderDirectoryPins = useCallback(
@@ -9004,9 +8990,9 @@ export function useThreadNavigation(
         return;
       }
 
-      publishSidebarActionError("reorder-sidebar");
+      publishThreadActionError("reorder-sidebar");
       if (!move) {
-        publishSidebarActionError("reorder-sidebar", "A directory pin move requires an owner-relative destination. Refresh the list and try again.");
+        publishThreadActionError("reorder-sidebar", "A directory pin move requires an owner-relative destination. Refresh the list and try again.");
         return;
       }
 
@@ -9020,11 +9006,11 @@ export function useThreadNavigation(
           }),
         }));
       } catch (error) {
-        publishSidebarActionError("reorder-sidebar", error);
+        publishThreadActionError("reorder-sidebar", error);
         await refresh();
       }
     },
-    [refresh, publishSidebarActionError, reorderDirectoryPinsRequest, invalidateNavigation],
+    [refresh, publishThreadActionError, reorderDirectoryPinsRequest, invalidateNavigation],
   );
 
   const setDirectoryThreadsCollapsed = useCallback(
@@ -9050,7 +9036,7 @@ export function useThreadNavigation(
         ),
       }));
 
-      publishSidebarActionError("save-collapsed");
+      publishThreadActionError("save-collapsed");
       try {
         const result = await setDirectoryThreadsCollapsedRequest({
           directoryKey: directory.key,
@@ -9070,10 +9056,10 @@ export function useThreadNavigation(
       } catch (error) {
         // Disclosure still controls this window's query demand if saving the
         // preference fails. Owner configuration cannot undo a viewer choice.
-        publishSidebarActionError("save-collapsed", error);
+        publishThreadActionError("save-collapsed", error);
       }
     },
-    [publishSidebarActionError, setDirectoryThreadsCollapsedRequest, setUnpinnedExpandedByKey],
+    [publishThreadActionError, setDirectoryThreadsCollapsedRequest, setUnpinnedExpandedByKey],
   );
 
   const updateThreadExecutionMode = useCallback(
