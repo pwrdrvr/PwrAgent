@@ -189,20 +189,14 @@ function RateLimitRow({ limit, now, pace }: {
 
 /**
  * The status column is a short label. Why a provider is unavailable can be a
- * sentence — Claude's names the bundled CLI's full path — so it goes on its
- * own line under the name, where it can wrap.
+ * sentence, so it goes on its own line under the name, where it can wrap.
  */
 function unavailableLabel(backend: BackendSummary): string {
   return backend.kind === "claude" ? claudeProviderStatus(backend.claude).label : "Unavailable";
 }
 
 function UnavailableDetail({ backend }: { backend: BackendSummary }) {
-  // The sign-in command can be a long path to the bundled CLI. The Claude
-  // pane shows it with a Copy button; this panel only says where to go.
-  const detail = backend.kind === "claude" && backend.claude?.executable
-    && backend.claude.authStatus === "sign-in-required"
-    ? "Sign in from Settings → AI Providers → Claude."
-    : backend.unavailableReason?.trim();
+  const detail = backend.unavailableReason?.trim();
   return detail ? <p className="backend-status-list__reason">{detail}</p> : null;
 }
 

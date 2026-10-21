@@ -267,8 +267,8 @@ describe("ProviderStatusPanel", () => {
     expect(screen.getByText("Grok CLI is not installed")).toHaveClass("backend-status-list__reason");
   });
 
-  it("names a signed-out Claude's state and points at its Settings pane, not the CLI path", () => {
-    const loginCommand = "'/Applications/PwrAgent.app/Contents/Resources/app.asar.unpacked/claude' auth login";
+  it("names a signed-out Claude's state the way Settings does", () => {
+    const reason = "Claude Code sign-in required. Sign in from Settings → AI Providers → Claude.";
     render(<ProviderStatusPanel backends={[{
       ...grokBackend,
       kind: "claude",
@@ -276,14 +276,15 @@ describe("ProviderStatusPanel", () => {
       claude: {
         executable: "/Applications/PwrAgent.app/Contents/Resources/app.asar.unpacked/claude",
         source: "bundled",
-        loginCommand,
+        loginCommand: "'/Applications/PwrAgent.app/Contents/Resources/app.asar.unpacked/claude' auth login",
         authStatus: "sign-in-required",
+        message: reason,
       },
-      unavailableReason: `Run ${loginCommand} in your terminal, then check again.`,
+      unavailableReason: reason,
     }]} />);
 
     expect(screen.getByText("Sign-in required")).toHaveClass("backend-status-list__state");
-    expect(screen.getByText("Sign in from Settings → AI Providers → Claude.")).toBeInTheDocument();
+    expect(screen.getByText(reason)).toHaveClass("backend-status-list__reason");
     expect(screen.queryByText(/app\.asar\.unpacked/)).not.toBeInTheDocument();
   });
 
