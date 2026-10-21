@@ -34613,6 +34613,14 @@ div.composer-error-row__toggle {
   margin-top: 4px;
 }
 
+/* The same limit rows, standalone in a Pricing rail card. */
+.rail-limit-grid {
+  grid-column: auto;
+  grid-template-columns: max-content minmax(0, 1fr);
+  row-gap: 8px;
+  margin-top: 10px;
+}
+
 /* Shared subheading inside a rail panel (e.g. "Linked pull requests"). */
 .context-subheading {
   margin: 16px 0 8px;
