@@ -10,6 +10,7 @@ import {
   type BackendRateLimitSummary,
 } from "../../../lib/backend-status-format";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../../lib/useBackendSummaries";
+import { claudeProviderStatus } from "../../settings/claude-provider-status";
 import { limitSeriesFor, sinceResetSeries } from "../../federation-activity/usage-limits";
 import { describeLimitPace } from "../../federation-activity/usage-activity-presentation";
 import {
@@ -82,11 +83,12 @@ export const ProviderStatusPanel = memo(function ProviderStatusPanel(props: Prov
                     backend.available ? "" : " is-unavailable"
                   }`}
                 >
-                  {backend.available
-                    ? "Available"
-                    : backend.unavailableReason ?? "Unavailable"}
+                  {backend.available ? "Available" : unavailableLabel(backend)}
                 </span>
               </div>
+              {!backend.available && unavailableDetail(backend) ? (
+                <p className="backend-status-list__reason">{unavailableDetail(backend)}</p>
+              ) : null}
               {backend.available && hasProviderMetadata(backend) ? (
                 <dl className="backend-status-list__metadata-grid">
                   {backendVersion(backend) ? (
@@ -185,6 +187,25 @@ function RateLimitRow({ limit, now, pace }: {
       </dd>
     </div>
   );
+}
+
+/**
+ * The status column is a short label. Why a provider is unavailable can be a
+ * sentence — Claude's names the bundled CLI's full path — so it goes on its
+ * own line under the name, where it can wrap.
+ */
+function unavailableLabel(backend: BackendSummary): string {
+  return backend.kind === "claude" ? claudeProviderStatus(backend.claude).label : "Unavailable";
+}
+
+function unavailableDetail(backend: BackendSummary): string | undefined {
+  // The sign-in command can be a long path to the bundled CLI. The Claude
+  // pane shows it with a Copy button; this panel only says where to go.
+  if (backend.kind === "claude" && backend.claude?.executable
+    && backend.claude.authStatus === "sign-in-required") {
+    return "Sign in from Settings → AI Providers → Claude.";
+  }
+  return backend.unavailableReason?.trim() || undefined;
 }
 
 /**

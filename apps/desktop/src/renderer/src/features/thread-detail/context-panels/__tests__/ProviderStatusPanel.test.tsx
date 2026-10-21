@@ -263,7 +263,28 @@ describe("ProviderStatusPanel", () => {
     render(<ProviderStatusPanel backends={[grokBackend]} />);
 
     expect(screen.getByText("Grok")).toBeInTheDocument();
-    expect(screen.getByText("Grok CLI is not installed")).toBeInTheDocument();
+    expect(screen.getByText("Unavailable")).toHaveClass("backend-status-list__state");
+    expect(screen.getByText("Grok CLI is not installed")).toHaveClass("backend-status-list__reason");
+  });
+
+  it("names a signed-out Claude's state and points at its Settings pane, not the CLI path", () => {
+    const loginCommand = "'/Applications/PwrAgent.app/Contents/Resources/app.asar.unpacked/claude' auth login";
+    render(<ProviderStatusPanel backends={[{
+      ...grokBackend,
+      kind: "claude",
+      label: "Claude",
+      claude: {
+        executable: "/Applications/PwrAgent.app/Contents/Resources/app.asar.unpacked/claude",
+        source: "bundled",
+        loginCommand,
+        authStatus: "sign-in-required",
+      },
+      unavailableReason: `Run ${loginCommand} in your terminal, then check again.`,
+    }]} />);
+
+    expect(screen.getByText("Sign-in required")).toHaveClass("backend-status-list__state");
+    expect(screen.getByText("Sign in from Settings → AI Providers → Claude.")).toBeInTheDocument();
+    expect(screen.queryByText(/app\.asar\.unpacked/)).not.toBeInTheDocument();
   });
 
   it("shows ACP runtime and authentication metadata without a limits API", () => {
