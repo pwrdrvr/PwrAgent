@@ -14664,15 +14664,26 @@ export class DesktopBackendRegistry {
       const admit = await beforeMutation?.();
       admit?.();
       await this.claudeBackend.setArchived(request.threadId, true);
+      const archivedAt = Date.now();
+      backendRegistryLog.info("thread archive mutation completed", {
+        backend, threadId: request.threadId, runtimeInstanceId: this.runtimeInstanceId, archivedAt,
+      });
+      // Same bookkeeping as ACP: record the archive, then let the cleanup
+      // queue ungroup children. Like ACP, Claude keeps its worktrees.
+      await this.overlayStore.observeArchivedThreads?.([{ backend, threadId: request.threadId }], archivedAt);
+      this.invalidateThreadListCache(backend);
+      await this.emit({ backend, notification: { method: "thread/archived", params: { threadId: request.threadId } } });
       await this.cleanupMessagingForArchivedThread({
         backend,
         threadId: request.threadId,
         origin: "thread-archive",
       });
+      const completion = this.enqueueArchiveCleanup({ backend, threadId: request.threadId, archivedAt, codexRolloutMissing: false,
+        preserveWorktrees: true, messagingCleanup: {} });
       finishMutation?.();
-      this.invalidateThreadListCache(backend);
-      await this.emit({ backend, notification: { method: "thread/archived", params: { threadId: request.threadId } } });
-      return { backend, threadId: request.threadId, archivedAt: Date.now(), cleanup: [] };
+      return await this.observeArchiveCleanupCompletion(completion, {
+        backend, threadId: request.threadId, archivedAt, backgroundCleanup: request.backgroundCleanup,
+      });
     }
     if (isAcpBackendId(backend)) {
       return await this.archiveAcpThread({
@@ -14924,6 +14935,9 @@ export class DesktopBackendRegistry {
         } else if (isAcpBackendId(backend)) {
           const session = this.acpBackend.getSession(backend, result.threadId);
           if (session?.archivedAt) targetThread = this.acpBackend.sessionToThreadSummary(session);
+        } else if (backend === "claude") {
+          targetThread = (await this.claudeBackend.listThreads({ archived: true }))
+            .find((thread) => thread.id === result.threadId);
         }
         const needsWorktreeOwnership = !params.preserveWorktrees && (!targetThread
           || targetThread.linkedDirectories.some((directory) => Boolean(linkedDirectoryWorktreePath(directory))));

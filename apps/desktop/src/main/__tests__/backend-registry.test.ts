@@ -55012,6 +55012,52 @@ script = "printf setup"
     await registry.close();
   });
 
+  it("records the archive and ungroups active children when archiving a Claude parent", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-archive-"));
+    const parentId = "0f7b3c1e-2d4a-4e5f-9a6b-7c8d9e0f1a2b";
+    const store = new ClaudeSessionStore(path.join(root, "sessions"));
+    await store.save({ cwd: root, thread: {
+      id: parentId, title: "Claude parent", titleSource: "explicit", linkedDirectories: [], source: "claude", updatedAt: 1,
+    } });
+    const childThread: AppServerThreadSummary = {
+      id: "codex-child", title: "Codex child", titleSource: "explicit", linkedDirectories: [], source: "codex", updatedAt: 2,
+    };
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:codex-child": {
+          backend: "codex", threadId: "codex-child", executionMode: "default", extraLinkedDirectories: [],
+          parentThreadId: parentId, parentThreadBackend: "claude",
+        },
+      },
+    });
+    const observeArchivedThreads = vi.fn(async () => {});
+    Object.assign(overlayStore, { observeArchivedThreads });
+    const setThreadParent = vi.spyOn(overlayStore, "setThreadParent");
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ initializeResult: { methods: ["thread/list"] }, threads: [childThread] }),
+      overlayStore,
+      pdfToolMcpServer: null,
+      claudeBackendOptions: {
+        store,
+        inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+        discoverModels: async () => [],
+      },
+    });
+    try {
+      await registry.archiveThread({ backend: "claude", threadId: parentId });
+      expect(observeArchivedThreads).toHaveBeenCalledWith([{ backend: "claude", threadId: parentId }], expect.any(Number));
+      expect(setThreadParent).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "codex-child",
+        parentThreadId: undefined,
+        expectedParent: { threadId: parentId, backend: "claude", instanceId: undefined },
+      });
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("removes a linked worktree when only archived threads still reference it", async () => {
     const activeThread: AppServerThreadSummary = {
       id: "thread-active",
