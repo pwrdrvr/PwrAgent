@@ -288,7 +288,8 @@ describe("backend status formatting", () => {
     const resetAt = new Date(2026, 9, 5, 8).getTime();
     const row = describeRateLimitRow({ name: "Weekly limit", usedPercent: 53, resetAt }, now);
     expect(row).toMatchObject({ label: "Weekly limit", figure: "53%", text: "used", usedPercent: 53 });
-    expect(row.reset).toBe(`resets ${new Intl.DateTimeFormat(undefined, { weekday: "short", hour: "numeric" }).format(resetAt)}`);
+    expect(row.reset).toBe(`resets ${new Intl.DateTimeFormat(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" }).format(resetAt)}`);
+    expect(row.reset).toMatch(/:00/);
   });
 
   it("describes individual usage as used of total, and remaining percent as used", () => {

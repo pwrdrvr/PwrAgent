@@ -314,7 +314,7 @@ function formatRateLimitReset(resetAt: number | undefined): string | undefined {
   }).format(date);
 }
 
-/** Today's time, a weekday and hour within the week, else the date. */
+/** Today's time, a weekday and time within the week, else the date. */
 function formatRateLimitResetCompact(
   resetAt: number | undefined,
   now: number,
@@ -336,7 +336,7 @@ function formatRateLimitResetCompact(
   return new Intl.DateTimeFormat(
     undefined,
     resetAt >= now && resetAt - now < sixDaysMs
-      ? { weekday: "short", hour: "numeric" }
+      ? { weekday: "short", hour: "numeric", minute: "2-digit" }
       : { month: "short", day: "numeric" },
   ).format(date);
 }
