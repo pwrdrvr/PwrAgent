@@ -10,6 +10,7 @@ import {
   type BackendRateLimitSummary,
 } from "../../../lib/backend-status-format";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../../lib/useBackendSummaries";
+import { claudeProviderStatus } from "../../settings/claude-provider-status";
 import { limitSeriesFor, sinceResetSeries } from "../../federation-activity/usage-limits";
 import { describeLimitPace } from "../../federation-activity/usage-activity-presentation";
 import {
@@ -82,11 +83,10 @@ export const ProviderStatusPanel = memo(function ProviderStatusPanel(props: Prov
                     backend.available ? "" : " is-unavailable"
                   }`}
                 >
-                  {backend.available
-                    ? "Available"
-                    : backend.unavailableReason ?? "Unavailable"}
+                  {backend.available ? "Available" : unavailableLabel(backend)}
                 </span>
               </div>
+              {backend.available ? null : <UnavailableDetail backend={backend} />}
               {backend.available && hasProviderMetadata(backend) ? (
                 <dl className="backend-status-list__metadata-grid">
                   {backendVersion(backend) ? (
@@ -185,6 +185,19 @@ function RateLimitRow({ limit, now, pace }: {
       </dd>
     </div>
   );
+}
+
+/**
+ * The status column is a short label. Why a provider is unavailable can be a
+ * sentence, so it goes on its own line under the name, where it can wrap.
+ */
+function unavailableLabel(backend: BackendSummary): string {
+  return backend.kind === "claude" ? claudeProviderStatus(backend.claude).label : "Unavailable";
+}
+
+function UnavailableDetail({ backend }: { backend: BackendSummary }) {
+  const detail = backend.unavailableReason?.trim();
+  return detail ? <p className="backend-status-list__reason">{detail}</p> : null;
 }
 
 /**

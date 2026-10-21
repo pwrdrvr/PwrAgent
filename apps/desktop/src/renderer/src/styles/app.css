@@ -34525,13 +34525,14 @@ div.composer-error-row__toggle {
 
 .backend-status-list__name {
   min-width: 0;
+  overflow-wrap: anywhere;
   color: var(--text-primary);
   font-size: 13px;
   font-weight: 600;
 }
 
 .backend-status-list__state {
-  min-width: 0;
+  flex: 0 0 auto;
   margin-left: auto;
   color: var(--text-muted);
   font-size: 11px;
@@ -34540,6 +34541,16 @@ div.composer-error-row__toggle {
 
 .backend-status-list__state.is-unavailable {
   color: var(--danger-text);
+}
+
+.backend-status-list__reason {
+  grid-column: 2 / -1;
+  min-width: 0;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
 }
 
 .backend-status-list__metadata-grid {
