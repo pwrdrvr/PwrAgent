@@ -480,12 +480,13 @@ export class ClaudeBackend {
     // timed out or returned nothing keeps the last good reading. Only an
     // account Claude does not meter by subscription clears it.
     const limits = usage?.rate_limits_available && usage.rate_limits ? claudeRateLimits(usage) : [];
-    let changed = false;
-    if (limits.length > 0) changed = this.setRateLimits(limits);
+    if (limits.length > 0) this.setRateLimits(limits);
     else if (usage && !usage.rate_limits_available && this.installation.authMethod !== "claude-account") {
-      changed = this.setRateLimits([]);
+      this.setRateLimits([]);
     }
-    if (changed) await this.emit({ method: "backend/providerStatus/updated", params: { backend: "claude" } });
+    // Emitted after every probe, changed or not: it marks the turn's provider
+    // refresh as settled for listeners.
+    await this.emit({ method: "backend/providerStatus/updated", params: { backend: "claude" } });
     return usage;
   }
 
