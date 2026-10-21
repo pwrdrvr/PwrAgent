@@ -89,7 +89,7 @@ describe("Claude SDK backend", () => {
   it("displays and persists local slash-command output", async () => {
     const f = await fixture(async function* () {
       yield { type: "system", subtype: "local_command_output", content: "Weekly usage: 25%",
-        uuid: "local-output", session_id: "session" } as SDKMessage;
+        uuid: "00c0bd21-53cf-49c9-b918-3d2d2b84e913", session_id: "session" } as SDKMessage;
       yield { type: "result", subtype: "success", is_error: false, result: "" } as SDKMessage;
     });
     const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
@@ -387,14 +387,15 @@ describe("Claude SDK backend", () => {
         && getNotificationItem(event.notification.params)?.id === "tool-1")!;
       if (event.notification.method !== "item/completed") throw new Error("Expected tool completion");
       expect(buildLiveToolDetails(getNotificationItem(event.notification.params)!)).toEqual([expect.objectContaining({
-        status: isError ? "failed" : "completed", command: expect.objectContaining({ output: "fixture output" }),
+        status: isError ? "failed" : "completed", command: expect.objectContaining({ displayCommand: "git status", rawCommand: "git status", output: "fixture output" }),
       })]);
       expect(f.events.some((event) => event.notification.method === "turn/completed")).toBe(false);
       expect((await f.backend.readThread(threadId)).entries).toEqual(expect.arrayContaining([expect.objectContaining({
         id: "tool-1", status: isError ? "failed" : "completed",
         details: [
-          expect.objectContaining({ markdown: JSON.stringify({ command: "git status" }) }),
-          expect.objectContaining({ markdown: "fixture output" }),
+          expect.objectContaining({ command: expect.objectContaining({
+            rawCommand: "git status", output: "fixture output",
+          }) }),
         ],
       })]));
     } finally {
@@ -402,6 +403,64 @@ describe("Claude SDK backend", () => {
       await f.waitForTurn();
       await f.backend.close();
     }
+  });
+
+  it("groups adjacent Bash calls in replay without crossing messages", async () => {
+    const f = await fixture(async function* () {
+      for (const [index, command] of ["git status", "git diff", "git log"].entries()) {
+        if (index === 2) yield { type: "assistant", parent_tool_use_id: null, message: {
+          id: "commentary", content: [{ type: "text", text: "Checking history next." }],
+        } } as SDKMessage;
+        yield { type: "assistant", parent_tool_use_id: null, message: {
+          id: `call-${index}`, content: [{ type: "tool_use", id: `bash-${index}`, name: "Bash", input: { command } }],
+        } } as SDKMessage;
+        yield { type: "user", message: { content: [{
+          type: "tool_result", tool_use_id: `bash-${index}`, content: `output-${index}`,
+        }] } } as SDKMessage;
+      }
+      yield { type: "result", subtype: "success", is_error: false, result: "Done" } as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Inspect" }] });
+    await f.waitForTurn();
+    for (const backend of [f.backend, new ClaudeBackend(f.backendOptions)]) {
+      const replay = await backend.readThread(threadId);
+      expect(replay.entries.map((entry) => entry.type)).toEqual(["message", "activity", "message", "activity"]);
+      expect(replay.entries[1]).toMatchObject({
+        summary: "Ran 2 commands", details: [
+          { id: "bash-0", command: { rawCommand: "git status", output: "output-0" } },
+          { id: "bash-1", command: { rawCommand: "git diff", output: "output-1" } },
+        ],
+      });
+    }
+    const starts = f.events.filter((event) => event.notification.method === "item/started");
+    expect(starts).toHaveLength(3);
+    expect(starts.map((event) => buildLiveToolDetails(getNotificationItem(event.notification.params)!)[0].command?.rawCommand))
+      .toEqual(["git status", "git diff", "git log"]);
+  });
+
+  it("recovers saved Bash invocations and groups them without rewriting old records", async () => {
+    const f = await fixture();
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    const saved = ["git status", "git diff"].map((command, index) => ({
+      type: "activity" as const, id: `old-${index}`, summary: "Bash",
+      status: index === 0 ? "completed" as const : "failed" as const,
+      turn: { id: "old-turn" },
+      details: [
+        { id: `old-${index}`, kind: "command" as const, label: "Bash", markdown: JSON.stringify({ command }) },
+        { id: `old-${index}:output`, kind: "command" as const, label: "Bash output", markdown: `output-${index}` },
+      ],
+    }));
+    await f.store.append(threadId, saved);
+    const replay = await f.backend.readThread(threadId);
+    expect(replay.entries).toHaveLength(1);
+    expect(replay.entries[0]).toMatchObject({
+      summary: "Ran 2 commands", status: "failed", details: [
+        { command: { rawCommand: "git status", output: "output-0" } },
+        { command: { rawCommand: "git diff", output: "output-1" } },
+      ],
+    });
+    expect(await f.store.entries(threadId)).toEqual(saved);
   });
 
   it("preserves local images, inline images and named files in live and restarted replay", async () => {

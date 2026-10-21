@@ -15,6 +15,7 @@ import { createClaudePermissionHandler, claudePermissionMode } from "./claude-pe
 import { claudeHarnessOptions, discoverClaudeModels, readClaudeMetadata } from "./claude-models";
 import { CLAUDE_TERMINAL_COMMANDS_SEED, claudeCommandSummaries } from "./claude-commands";
 import { claudeRateLimits, claudeStreamRateLimits, claudeTelemetry, claudeTurnUsage } from "./claude-usage";
+import { claudeCommandActivity, groupClaudeActivities } from "./claude-activity";
 import { ClaudeSessionStore, type ClaudeSession } from "./claude-session-store";
 
 export type ClaudeBackendOptions = {
@@ -190,7 +191,7 @@ export class ClaudeBackend {
     const session = await this.store.read(threadId);
     const entries = new Map((await this.store.entries(threadId)).map((entry) => [entry.id, entry]));
     for (const entry of this.running.get(threadId)?.entries.values() ?? []) entries.set(entry.id, entry);
-    const ordered = [...entries.values()];
+    const ordered = groupClaudeActivities([...entries.values()]);
     const messages = ordered.filter((entry): entry is AppServerThreadMessageEntry => entry.type === "message");
     return {
       entries: ordered, messages,
@@ -593,14 +594,23 @@ export class ClaudeBackend {
       for (const block of message.message.content) {
         if (block.type !== "tool_use") continue;
         const input = block.input as Record<string, unknown>;
+        const command = block.name === "Bash" && typeof input.command === "string" ? input.command : undefined;
         running.entries.set(block.id, {
-          type: "activity", id: block.id, summary: block.name, status: "in_progress", turn: { id: turnId },
-          details: [{ id: block.id, kind: block.name === "Bash" ? "command" : "read", label: block.name, markdown: JSON.stringify(input) }],
+          ...(command !== undefined
+            ? claudeCommandActivity({ id: block.id, command, status: "in_progress" })
+            : {
+              type: "activity" as const, id: block.id, summary: block.name, status: "in_progress" as const,
+              details: [{ id: block.id, kind: "read" as const, label: block.name, markdown: JSON.stringify(input) }],
+            }),
+          createdAt: Date.now(), turn: { id: turnId },
         });
         await this.store.append(threadId, [running.entries.get(block.id)!]);
-        await this.emit({ method: "item/started", params: { threadId, turnId, item: {
-          id: block.id, type: "dynamicToolCall", toolName: block.name, arguments: input,
-        } } });
+        const item = {
+          id: block.id, status: "in_progress",
+          ...(command !== undefined ? { type: "commandExecution", command }
+            : { type: "dynamicToolCall", toolName: block.name, arguments: input }),
+        };
+        await this.emit({ method: "item/started", params: { threadId, turnId, item } });
       }
     }
     if (message.type === "user" && Array.isArray(message.message.content)) {
@@ -609,17 +619,25 @@ export class ClaudeBackend {
         const entry = running.entries.get(block.tool_use_id);
         if (entry?.type !== "activity") continue;
         entry.status = block.is_error ? "failed" : "completed";
-        // Keep the input detail; saved history must still show what ran.
         const output = typeof block.content === "string" ? block.content : JSON.stringify(block.content);
-        const outputId = `${entry.id}:output`;
-        entry.details = [...entry.details.filter((detail) => detail.id !== outputId), {
-          id: outputId, kind: entry.details[0].kind, label: `${entry.summary} output`, markdown: output, status: entry.status,
-        }];
+        const command = entry.details[0].command?.rawCommand;
+        if (command !== undefined) {
+          entry.details = claudeCommandActivity({ id: entry.id, command, status: entry.status, output }).details;
+        } else {
+          // Keep the invocation when updating generic tools, too.
+          const outputId = `${entry.id}:output`;
+          entry.details = [...entry.details.filter((detail) => detail.id !== outputId), {
+            id: outputId, kind: entry.details[0].kind, label: `${entry.summary} output`, markdown: output, status: entry.status,
+          }];
+        }
         await this.store.append(threadId, [entry]);
-        await this.emit({ method: "item/completed", params: { threadId, turnId, item: {
-          id: entry.id, type: "dynamicToolCall", toolName: entry.summary, status: entry.status,
-          contentItems: [{ type: "inputText", text: output }],
-        } } });
+        const item = {
+          id: entry.id, status: entry.status,
+          ...(command !== undefined ? { type: "commandExecution", command, aggregatedOutput: output }
+            : { type: "dynamicToolCall", toolName: entry.summary,
+              contentItems: [{ type: "inputText", text: output }] }),
+        };
+        await this.emit({ method: "item/completed", params: { threadId, turnId, item } });
       }
     }
   }
