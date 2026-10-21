@@ -220,6 +220,16 @@ async function readImageMetrics(image: Locator) {
   });
 }
 
+async function readLoadedImageMetrics(image: Locator) {
+  // A lazy image can have a visible placeholder before its intrinsic size is
+  // available. Fit assertions need loaded pixels, unlike the lazy-load probes.
+  await expect.poll(() => image.evaluate((element) => {
+    const img = element as HTMLImageElement;
+    return img.complete && img.naturalWidth > 0 && img.naturalHeight > 0;
+  }), { message: "Transcript image must load before measuring its fit" }).toBe(true);
+  return await readImageMetrics(image);
+}
+
 test("fits wide, small, and tiny pasted transcript images", async () => {
   const fixture = await createThreadImageFitFixture();
   const app = await launchElectronApp({
@@ -249,7 +259,7 @@ test("fits wide, small, and tiny pasted transcript images", async () => {
       const image = app.window.getByAltText("Thread rename focus screenshot");
       await expect(image).toBeVisible();
 
-      const metrics = await readImageMetrics(image);
+      const metrics = await readLoadedImageMetrics(image);
       const naturalRatio = metrics.naturalWidth / metrics.naturalHeight;
       const renderedRatio = metrics.renderedWidth / metrics.renderedHeight;
 
@@ -264,7 +274,7 @@ test("fits wide, small, and tiny pasted transcript images", async () => {
       const image = app.window.getByAltText("Small intrinsic screenshot");
       await expect(image).toBeVisible();
 
-      const metrics = await readImageMetrics(image);
+      const metrics = await readLoadedImageMetrics(image);
       expect(metrics.naturalWidth).toBe(80);
       expect(metrics.naturalHeight).toBe(40);
       expect(metrics.renderedWidth).toBeCloseTo(80, 0);
@@ -277,7 +287,7 @@ test("fits wide, small, and tiny pasted transcript images", async () => {
       const image = app.window.getByAltText("Tiny intrinsic screenshot");
       await expect(image).toBeVisible();
 
-      const metrics = await readImageMetrics(image);
+      const metrics = await readLoadedImageMetrics(image);
       expect(metrics.naturalWidth).toBe(12);
       expect(metrics.naturalHeight).toBe(8);
       expect(metrics.renderedWidth).toBeCloseTo(12, 0);
