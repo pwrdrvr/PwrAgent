@@ -52,14 +52,14 @@ export function ThreadServices({ api, backend, threadId, instanceId, ownerLabel 
   };
   if (!instanceId && state.services.length === 0) return null;
   return (
-    <section className="thread-services" aria-label="Thread services">
+    <section className="thread-services" aria-label="Thread ports">
       <button className="button button--ghost thread-services__toggle" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
-        Services · {state.services.length}{state.forwards.length ? ` · ${state.forwards.length} connected` : ""}
+        Ports · {state.services.length}{state.forwards.length ? ` · ${state.forwards.length} forwarded` : ""}
       </button>
       {expanded ? <div className="thread-services__body">
         {actionError ? <p role="alert">{actionError}</p> : null}
         {error ? <p role="alert">{error}</p> : null}
-        {!state.services.length && !error ? <p>No services advertised for this thread.</p> : null}
+        {!state.services.length && !error ? <p>No ports advertised for this thread.</p> : null}
         {state.services.map((service) => {
           const forward = state.forwards.find((entry) => entry.service.serviceId === service.serviceId);
           return <div className="thread-services__row" key={service.serviceId}>
@@ -73,14 +73,14 @@ export function ThreadServices({ api, backend, threadId, instanceId, ownerLabel 
             </div>
             <div className="thread-services__actions">
               {instanceId ? <button className="button button--secondary" disabled={busy} onClick={() => { void act(forward ? "disconnect" : "connect", service.serviceId, forward?.forwardId); }}>
-                {forward ? "Disconnect" : "Connect"}
+                {forward ? "Stop Forwarding" : "Forward Port"}
               </button> : null}
-              {forward?.url ? <button className="button button--secondary" disabled={busy} onClick={() => { void act("open", service.serviceId, forward.forwardId); }}>Open</button> : null}
-              <button className="button button--ghost" disabled={busy} onClick={() => { void act("remove", service.serviceId); }}>Remove</button>
+              {forward?.url ? <button className="button button--secondary" disabled={busy} onClick={() => { void act("open", service.serviceId, forward.forwardId); }}>Open in Browser</button> : null}
+              <button className="button button--ghost" disabled={busy} onClick={() => { void act("remove", service.serviceId); }}>Remove Advertisement</button>
             </div>
           </div>;
         })}
-        {state.services.length ? <p className="thread-services__note">Connect forwards only to this machine’s loopback. Apps must accept the assigned local origin. HTTPS uses the app’s certificate.</p> : null}
+        {state.services.length ? <p className="thread-services__note">Forwarded ports are available only on this machine’s loopback address. Apps must accept the assigned local origin. HTTPS uses the app’s certificate.</p> : null}
       </div> : null}
     </section>
   );

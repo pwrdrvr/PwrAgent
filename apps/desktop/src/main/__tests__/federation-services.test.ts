@@ -23,11 +23,55 @@ async function listen(server: Server, host = "127.0.0.1"): Promise<number> {
   cleanups.push(() => new Promise<void>((resolve) => server.close(() => resolve())));
   return (server.address() as AddressInfo).port;
 }
-function owner(options: { now?: () => number; threadExists?: (value: ServiceThread) => Promise<boolean>; blockedPorts?: () => number[] } = {}) {
-  const service = new FederationServices({ instanceId: "owner", threadExists: async (value) => value.threadId === thread.threadId, ...options });
+function owner(options: { allowForwarding?: () => boolean; now?: () => number; threadExists?: (value: ServiceThread) => Promise<boolean>; blockedPorts?: () => number[] } = {}) {
+  const service = new FederationServices({ instanceId: "owner", allowForwarding: () => true, threadExists: async (value) => value.threadId === thread.threadId, ...options });
   cleanups.push(() => service.dispose());
   return service;
 }
+
+it("allows declarations while disabled but denies forwarding even with the protocol capability", async () => {
+  const service = owner({ allowForwarding: () => false });
+  const declaration = await service.advertise(thread, { port: 3000, name: "Preview", protocol: "http" });
+  const { rpc } = routed(service, true);
+  await expect(rpc.request({ method: METHODS.list, params: thread })).resolves.toEqual([declaration]);
+  const forwarder = new FederationServiceForwarder();
+  cleanups.push(() => forwarder.dispose());
+  await expect(forwarder.connect(1, declaration, rpc)).rejects.toThrow("Allow port forwarding");
+  expect(forwarder.list(1, "owner", thread)).toEqual([]);
+});
+
+it("checks permission again after an in-flight thread lookup", async () => {
+  let allowed = true;
+  const service = owner({ allowForwarding: () => allowed });
+  const declaration = await service.advertise(thread, { port: 3000, name: "Preview", protocol: "http" });
+  const pending = service.lease("viewer", thread, declaration.serviceId);
+  allowed = false;
+  await expect(pending).rejects.toThrow("Allow port forwarding");
+});
+
+it("revokes idle sockets and leases when permission changes without restoring them on enable", async () => {
+  let allowed = true;
+  const server = createServer();
+  const port = await listen(server);
+  const service = owner({ allowForwarding: () => allowed });
+  const declaration = await service.advertise(thread, { port, name: "Preview", protocol: "tcp" });
+  const { leaseId } = await service.lease("viewer", thread, declaration.serviceId);
+  const accepted = once(server, "connection");
+  const { streamId } = await service.open("viewer", leaseId);
+  const [socket] = await accepted;
+  socket.resume();
+  const closed = once(socket, "close");
+  // The owner reaper notices revocation even without a further client request.
+  allowed = false;
+  await closed;
+  expect(() => service.renew("viewer", leaseId)).toThrow("Allow port forwarding");
+  await expect(service.open("viewer", leaseId)).rejects.toThrow("Allow port forwarding");
+  await expect(service.exchange("viewer", { streamId, seq: 0, data: "", fin: false, receive: true })).rejects.toThrow();
+  allowed = true;
+  expect(() => service.renew("viewer", leaseId)).toThrow("revoked");
+  await expect(service.list(thread)).resolves.toEqual([declaration]);
+  await expect(service.lease("viewer", thread, declaration.serviceId)).resolves.toHaveProperty("leaseId");
+});
 
 it("skips thread discovery for empty inventories even when other threads declare services", async () => {
   const threadExists = vi.fn(async () => true);

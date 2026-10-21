@@ -65,6 +65,7 @@ export class FederationServices {
 
   constructor(private readonly options: {
     instanceId: string;
+    allowForwarding: () => boolean;
     threadExists: (thread: ServiceThread) => Promise<boolean>;
     now?: () => number;
     blockedPorts?: () => readonly number[];
@@ -118,7 +119,9 @@ export class FederationServices {
   }
 
   async lease(peerId: string, thread: ServiceThread, serviceId: string): Promise<{ leaseId: string }> {
+    this.assertForwardingAllowed();
     const service = (await this.list(thread)).find((entry) => entry.serviceId === id(serviceId));
+    this.assertForwardingAllowed();
     if (!service || this.disposed) throw new Error("Service is no longer advertised.");
     if (this.leases.size >= 64 || [...this.leases.values()].filter((entry) => entry.peerId === peerId).length >= 16) {
       throw new Error("Service forwarding lease limit reached.");
@@ -231,7 +234,16 @@ export class FederationServices {
   }
 
   private now(): number { return this.options.now?.() ?? Date.now(); }
+  private revokeForwards(): void {
+    for (const lease of this.leases.values()) this.release(lease.peerId, lease.leaseId);
+  }
+  private assertForwardingAllowed(): void {
+    if (this.options.allowForwarding()) return;
+    this.revokeForwards();
+    throw new Error("Port forwarding is disabled on the owning machine. Enable Allow port forwarding in its Federation settings.");
+  }
   private getLease(peerId: string, leaseId: string): Lease {
+    this.assertForwardingAllowed();
     const lease = this.leases.get(id(leaseId));
     if (!lease || lease.peerId !== peerId || lease.expiresAt <= this.now()
       || (this.services.get(lease.service.serviceId)?.expiresAt ?? 0) <= this.now()) throw new Error("Service forwarding permission expired or was revoked.");
@@ -244,6 +256,7 @@ export class FederationServices {
     return stream;
   }
   private prune(): void {
+    if (!this.options.allowForwarding()) this.revokeForwards();
     for (const service of this.services.values()) if (service.expiresAt <= this.now()) this.remove(service, service.serviceId);
     for (const lease of this.leases.values()) if (lease.expiresAt <= this.now()) this.release(lease.peerId, lease.leaseId);
     for (const stream of this.streams.values()) if (stream.touchedAt + SERVICE_LEASE_MS <= this.now()) this.close(stream.lease.peerId, stream.streamId);

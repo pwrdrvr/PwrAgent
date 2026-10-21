@@ -581,6 +581,7 @@ export async function startInProcessFederationGateway(params: {
   registerFederationBackendHandlers({ router, backend });
   const threadServices = new FederationServices({
     instanceId: gatewayInstanceId,
+    allowForwarding: () => true,
     threadExists: async ({ threadId }) => threads.some((thread) => thread.id === threadId),
   });
   registerFederationServices(router, threadServices);

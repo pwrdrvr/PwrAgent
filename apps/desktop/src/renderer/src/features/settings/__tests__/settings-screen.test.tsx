@@ -263,6 +263,7 @@ function createSnapshot(
       listenPort: { value: 47830, source: "default" },
       compressionEnabled: { value: true, source: "default" },
       allowRemoteShells: { value: true, source: "default" },
+      allowPortForwarding: { value: false, source: "default" },
       allowFilePush: { value: false, source: "default" },
       allowFilePull: { value: false, source: "default" },
       allowFilePullOutsideThreadDirectories: { value: false, source: "default" },

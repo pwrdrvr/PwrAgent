@@ -2575,6 +2575,7 @@ export class DesktopFederationRuntime {
   threadServices(): FederationServices {
     this.services ??= new FederationServices({
       instanceId: this.ensureLocalInstanceId(),
+      allowForwarding: () => this.receiverPermissions().portForwarding,
       blockedPorts: () => [getDesktopSettingsService().readFederationConfig().listenPort ?? 47830],
       threadExists: async (thread) => await getDesktopBackendRegistry().isThreadActiveForService(thread),
     });
@@ -2618,6 +2619,10 @@ export class DesktopFederationRuntime {
         throw new Error("Service forwarding requires a connected owner and gateway with service_forward_v1 support.");
       }
     }
+    if (remote && input.action === "connect"
+      && this.visiblePeers().find((peer) => peer.id === instanceId)?.receiverPermissions?.portForwarding === false) {
+      throw new Error("Port forwarding is disabled on the owning machine. Enable Allow port forwarding in its Federation settings.");
+    }
     const rpc = remote ? this.rpcFor({ scope: "remote", instanceId }) : undefined;
     if (input.action === "remove") {
       if (typeof input.serviceId !== "string") throw new Error("Select a service to remove.");
@@ -2650,6 +2655,7 @@ export class DesktopFederationRuntime {
     const config = getDesktopSettingsService().readFederationConfig();
     return {
       remoteShells: config.allowRemoteShells !== false,
+      portForwarding: config.allowPortForwarding === true,
       filePush: config.allowFilePush === true,
       filePull: config.allowFilePull === true,
       filePullOutsideThreadDirectories: config.allowFilePullOutsideThreadDirectories === true,

@@ -47,7 +47,15 @@ new SQLite commits and projected WAL cost are zero (0 MB/day).
 
 ## Wire protocol v1
 
-Additive `service_forward_v1` capability gates `services.v1.*` RPCs. Unknown/old
+Additive `service_forward_v1` capability gates `services.v1.*` RPCs.
+Protocol support is separate from owner permission: **Settings → Federation →
+Capabilities → Allow port forwarding** writes `federation.allow_port_forwarding`,
+off when absent or malformed. The owner checks it before and after lease creation
+and on every open, renewal, and exchange. Declarations and discovery remain
+available while disabled. Changing the setting restarts Federation and closes
+active forwards and remote terminals; enabling it never restores forwards.
+The owner also reaps revoked leases and sockets without waiting for client traffic.
+Peer permission summaries expose `portForwarding` separately from protocol support. Unknown/old
 owners show an upgrade-required state. No change to the Federation envelope,
 gateway, Noise, enrollment, or global protocol version is needed. Every hop must
 understand/grant the capability. Existing router origin checks accept only a
@@ -86,6 +94,17 @@ This favors correctness and reviewable integration over bulk throughput. WAN
 throughput is limited to roughly one quantum per round trip per stream. A later
 negotiated v2 can use binary frames and window credits with shared-transport
 priority scheduling. Do not silently claim v1 has that throughput.
+
+## Familiar port-forwarding terminology
+
+The UI uses **Ports**, **Forward Port**, **Stop Forwarding**, and **Open in Browser**,
+following the terminology of the [VS Code Ports workflow](https://code.visualstudio.com/docs/remote/ssh#_forwarding-a-port-creating-ssh-tunnel).
+The local-to-owner address mapping stays visible. An advertisement is a separate
+step and opens no listener; the agent tool names retain that distinction.
+This is terminology and workflow alignment, not VS Code protocol interoperability.
+Unlike VS Code’s optional restored forwards and configurable local port, v1 always
+requires a fresh user action and assigns an available loopback port. It provides
+no public URL or Microsoft dev-tunnel visibility modes.
 
 ## Browser and other protocols
 
@@ -149,8 +168,10 @@ thread to call the normal tool:
 
 That is `advertise_service` input. `list_services` takes `{}`;
 `remove_service` takes `{"serviceId":"<returned-id>"}`. From a compatible
-remote desktop, select the thread, expand **Services**, click **Connect**, then
-**Open**. A local owner shows declarations and Remove; it does not create a
+remote desktop, first enable **Allow port forwarding** on the owner. Select the
+thread, expand **Ports**, click **Forward Port**, then **Open in Browser**.
+**Stop Forwarding** closes only this viewer’s forward. **Remove Advertisement**
+withdraws the declaration for every viewer. A local owner shows declarations and Remove Advertisement; it does not create a
 redundant local tunnel. Open is available only for HTTP(S). Leaving the thread or
 closing the window disconnects its forwards. Removal revokes all viewers.
 

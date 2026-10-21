@@ -35,12 +35,12 @@ test("remote thread services explicitly connect real HTTP and WS and release on 
     const remote = await opened;
     await remote.waitForLoadState("domcontentloaded");
     await remote.getByRole("button", { name: "Preview development app", exact: true }).click();
-    const services = remote.getByRole("region", { name: "Thread services" });
+    const services = remote.getByRole("region", { name: "Thread ports" });
     const rail = remote.locator(".context-rail");
     await expect(rail).toBeVisible();
     const railBefore = await rail.boundingBox();
     expect(railBefore).not.toBeNull();
-    await services.getByRole("button", { name: "Services · 1" }).click();
+    await services.getByRole("button", { name: "Ports · 1" }).click();
     await expect(services.getByText("Development preview", { exact: true })).toBeVisible();
     const railAfter = await rail.boundingBox();
     const servicesBox = await services.boundingBox();
@@ -49,10 +49,10 @@ test("remote thread services explicitly connect real HTTP and WS and release on 
     // Expanding services must neither move the rail nor put controls beneath it.
     expect(railAfter!.y).toBeCloseTo(railBefore!.y, 0);
     expect(servicesBox!.x + servicesBox!.width).toBeLessThanOrEqual(railAfter!.x + 1);
-    await expect(services.getByRole("button", { name: "Open", exact: true })).toHaveCount(0);
+    await expect(services.getByRole("button", { name: "Open in Browser", exact: true })).toHaveCount(0);
     await remote.screenshot({ path: testInfo.outputPath("services-available.png") });
-    await services.getByRole("button", { name: "Connect", exact: true }).click();
-    await expect(services.getByRole("button", { name: "Disconnect", exact: true })).toBeVisible();
+    await services.getByRole("button", { name: "Forward Port", exact: true }).click();
+    await expect(services.getByRole("button", { name: "Stop Forwarding", exact: true })).toBeVisible();
     const mapping = await services.locator(".thread-services__identity").innerText();
     const localPort = Number(mapping.match(/127\.0\.0\.1:(\d+) →/)?.[1]);
     expect(localPort).toBeGreaterThan(0);
@@ -66,12 +66,12 @@ test("remote thread services explicitly connect real HTTP and WS and release on 
     expect(String((await message)[0])).toBe("reload:fixture-change");
     await remote.screenshot({ path: testInfo.outputPath("services-connected.png") });
     const closed = once(browserSocket, "close");
-    await services.getByRole("button", { name: "Disconnect", exact: true }).click();
+    await services.getByRole("button", { name: "Stop Forwarding", exact: true }).click();
     await closed;
-    await expect(services.getByRole("button", { name: "Connect", exact: true })).toBeVisible();
+    await expect(services.getByRole("button", { name: "Forward Port", exact: true })).toBeVisible();
     await expect(fetch(url)).rejects.toThrow();
-    await services.getByRole("button", { name: "Remove", exact: true }).click();
-    await expect(services.getByText("No services advertised for this thread.")).toBeVisible();
+    await services.getByRole("button", { name: "Remove Advertisement", exact: true }).click();
+    await expect(services.getByText("No ports advertised for this thread.")).toBeVisible();
   } finally {
     browserSocket?.terminate();
     await app?.close();

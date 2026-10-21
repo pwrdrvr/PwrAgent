@@ -29,7 +29,7 @@ it("carries HTTP and WS through two signed, Noise-encrypted clients and a real g
   const capabilities: FederationCapability[] = ["gateway_relay", "service_forward_v1", "transport_brotli"];
   const gateway = new FederationRouter({ localInstanceId: "gateway", methodCapabilities: SERVICE_METHOD_CAPABILITIES });
   const owner = new FederationRouter({ localInstanceId: "owner", trustedRelayPeerId: "gateway", methodCapabilities: SERVICE_METHOD_CAPABILITIES });
-  const service = new FederationServices({ instanceId: "owner", threadExists: async () => true });
+  const service = new FederationServices({ instanceId: "owner", allowForwarding: () => true, threadExists: async () => true });
   cleanups.push(() => service.dispose());
   registerFederationServices(owner, service);
   const server = new FederationGatewayWebSocketServer({

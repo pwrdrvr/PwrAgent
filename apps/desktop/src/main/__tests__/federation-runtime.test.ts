@@ -301,6 +301,30 @@ function applyEventSubscription(params: {
 }
 
 describe("DesktopFederationRuntime", () => {
+  it("advertises owner permission separately from support and enforces the disabled default", async () => {
+    const config: { allowPortForwarding?: boolean } = {};
+    const settings = vi.spyOn(desktopSettingsSingleton, "getDesktopSettingsService").mockReturnValue({
+      readFederationConfig: () => config,
+    } as unknown as ReturnType<typeof desktopSettingsSingleton.getDesktopSettingsService>);
+    const runtime = new DesktopFederationRuntime();
+    (runtime as unknown as RuntimeHarness).localInstanceId = "service-owner";
+    try {
+      expect(DEFAULT_CAPABILITIES).toContain("service_forward_v1");
+      expect(runtime.receiverPermissions().portForwarding).toBe(false);
+      const services = runtime.threadServices();
+      const thread = { backend: "codex" as const, threadId: "service-thread" };
+      await expect(services.lease("viewer", thread, "service")).rejects.toThrow("Allow port forwarding");
+      config.allowPortForwarding = true;
+      expect(runtime.receiverPermissions().portForwarding).toBe(true);
+      await expect(services.lease("viewer", thread, "service")).rejects.toThrow("no longer advertised");
+      config.allowPortForwarding = false;
+      await expect(services.lease("viewer", thread, "service")).rejects.toThrow("Allow port forwarding");
+    } finally {
+      await runtime.stop();
+      settings.mockRestore();
+    }
+  });
+
   it("keeps repeated service watches intact and registers them again after stop", async () => {
     const runtime = new DesktopFederationRuntime();
     (runtime as unknown as RuntimeHarness).localInstanceId = "service-owner";

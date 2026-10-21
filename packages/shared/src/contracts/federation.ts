@@ -213,6 +213,7 @@ export type FederationCapabilitySet = {
  */
 export type FederationReceiverPermissions = {
   remoteShells: boolean;
+  portForwarding?: boolean;
   filePush: boolean;
   filePull?: boolean;
   filePullOutsideThreadDirectories?: boolean;
