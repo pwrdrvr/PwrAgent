@@ -2,7 +2,7 @@ import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import type { McpConnectionGatewayService } from "./mcp-connection-gateway-service";
 import { validateGatewayArguments, type McpGatewayInvocation, type McpGatewayTool, type McpGatewaySource } from "./mcp-gateway-catalog";
-import { MCP_CONNECTION_TOOL_LIST_TIMEOUT_MS, MCP_CONNECTION_TOOL_TIMEOUT_MS } from "./mcp-connection-timeouts";
+import { MCP_GATEWAY_TOOL_SEARCH_TIMEOUT_MS, MCP_CONNECTION_TOOL_TIMEOUT_MS } from "./mcp-connection-timeouts";
 
 export type McpGatewayCallArgs = Omit<McpGatewayInvocation, "serverName">;
 export type McpGatewaySearch = { query: string; connectionId?: string; limit?: number };
@@ -42,7 +42,7 @@ export class McpGatewayToolService {
   }
 
   async search(args: McpGatewaySearch, context: AgentToolCallContext): Promise<McpGatewaySearchResult> {
-    return await this.run(context, MCP_CONNECTION_TOOL_LIST_TIMEOUT_MS, async (signal) => {
+    return await this.run(context, MCP_GATEWAY_TOOL_SEARCH_TIMEOUT_MS, async (signal) => {
       const selected = await this.options.selectedConnections(context);
       if (args.connectionId && !selected.includes(args.connectionId)) throw new Error("This connection is not selected for the calling thread.");
       const ids = args.connectionId ? [args.connectionId] : [...new Set(selected)];
