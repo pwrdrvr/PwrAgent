@@ -9269,11 +9269,15 @@ a.button {
   line-height: 1.45;
 }
 
+/* The scroll box clips anything outside its padding, and a control's focus
+   ring sits 4px outside it (2px outline at 2px offset). Pad every side by
+   that much and pull the box out by the same amount, so the controls still
+   line up with the title and the ring of an edge control is never cut. */
 .continue-after-dialog__body,
 .thread-dependencies__form.continue-after-dialog__form {
   min-height: 0;
-  margin: 14px -4px 0;
-  padding: 0 4px 2px;
+  margin: 10px -4px 0;
+  padding: 4px;
   overflow-y: auto;
 }
 
@@ -9288,9 +9292,13 @@ a.button {
   align-items: start;
 }
 
+/* One track that may shrink below its content. An `auto` track takes the
+   min-content width of a prerequisite's unbreakable title, which pushed the
+   column, and the dialog, into a horizontal scroll. */
 .continue-after-dialog__pick,
 .continue-after-dialog__setup {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
   min-width: 0;
 }
@@ -32077,6 +32085,7 @@ div.composer-error-row__toggle {
    second click removes its prerequisite row. */
 .thread-dependencies__results {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   max-height: 176px;
   margin: 0;
   padding: 3px;
@@ -32143,6 +32152,7 @@ div.composer-error-row__toggle {
 
 .thread-dependencies__row {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 6px;
   padding: 8px;
   border: 1px solid var(--border-subtle);
@@ -32175,11 +32185,13 @@ div.composer-error-row__toggle {
   color: var(--text-muted);
 }
 
+/* The buttons drop below their label when the column is too narrow for both. */
 .thread-dependencies__choice {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 6px 10px;
   color: var(--text-secondary);
   font-size: 12px;
 }
@@ -34513,13 +34525,14 @@ div.composer-error-row__toggle {
 
 .backend-status-list__name {
   min-width: 0;
+  overflow-wrap: anywhere;
   color: var(--text-primary);
   font-size: 13px;
   font-weight: 600;
 }
 
 .backend-status-list__state {
-  min-width: 0;
+  flex: 0 0 auto;
   margin-left: auto;
   color: var(--text-muted);
   font-size: 11px;
@@ -34528,6 +34541,16 @@ div.composer-error-row__toggle {
 
 .backend-status-list__state.is-unavailable {
   color: var(--danger-text);
+}
+
+.backend-status-list__reason {
+  grid-column: 2 / -1;
+  min-width: 0;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
 }
 
 .backend-status-list__metadata-grid {

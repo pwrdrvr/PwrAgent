@@ -263,7 +263,47 @@ describe("ProviderStatusPanel", () => {
     render(<ProviderStatusPanel backends={[grokBackend]} />);
 
     expect(screen.getByText("Grok")).toBeInTheDocument();
-    expect(screen.getByText("Grok CLI is not installed")).toBeInTheDocument();
+    expect(screen.getByText("Unavailable")).toHaveClass("backend-status-list__state");
+    expect(screen.getByText("Grok CLI is not installed")).toHaveClass("backend-status-list__reason");
+  });
+
+  it("names a signed-out Claude's state the way Settings does", () => {
+    const reason = "Claude Code sign-in required. Sign in from Settings → AI Providers → Claude.";
+    render(<ProviderStatusPanel backends={[{
+      ...grokBackend,
+      kind: "claude",
+      label: "Claude",
+      claude: {
+        executable: "/Applications/PwrAgent.app/Contents/Resources/app.asar.unpacked/claude",
+        source: "bundled",
+        loginCommand: "'/Applications/PwrAgent.app/Contents/Resources/app.asar.unpacked/claude' auth login",
+        authStatus: "sign-in-required",
+        message: reason,
+      },
+      unavailableReason: reason,
+    }]} />);
+
+    expect(screen.getByText("Sign-in required")).toHaveClass("backend-status-list__state");
+    expect(screen.getByText(reason)).toHaveClass("backend-status-list__reason");
+    expect(screen.queryByText(/app\.asar\.unpacked/)).not.toBeInTheDocument();
+  });
+
+  it("labels an uninstalled or unchecked Claude the way Settings does", () => {
+    const claudeBackend: BackendSummary = {
+      ...grokBackend,
+      kind: "claude",
+      label: "Claude",
+      claude: { authStatus: "unknown", message: "Install Claude Code, then sign in." },
+      unavailableReason: "Install Claude Code, then sign in.",
+    };
+    const { rerender } = render(<ProviderStatusPanel backends={[claudeBackend]} />);
+
+    expect(screen.getByText("Not installed")).toHaveClass("backend-status-list__state");
+    expect(screen.getByText("Install Claude Code, then sign in.")).toHaveClass("backend-status-list__reason");
+
+    rerender(<ProviderStatusPanel backends={[{ ...claudeBackend, claude: undefined, unavailableReason: undefined }]} />);
+    expect(screen.getByText("Not checked")).toHaveClass("backend-status-list__state");
+    expect(document.querySelector(".backend-status-list__reason")).toBeNull();
   });
 
   it("shows ACP runtime and authentication metadata without a limits API", () => {

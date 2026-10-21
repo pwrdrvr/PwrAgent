@@ -5,8 +5,9 @@ type ClaudeInstallation = BackendSummary["claude"];
 
 /**
  * The one reading of Claude's setup state. The Settings nav, the AI Providers
- * list, and the Claude pane all render from this, so the three cannot
- * describe the same installation in different words or tones.
+ * list, the Claude pane, and the thread's AI providers panel all render from
+ * this, so they cannot describe the same installation in different words or
+ * tones.
  */
 export type ClaudeProviderStatus = {
   /** Sentence-case label for the provider list chip and the pane's status. */

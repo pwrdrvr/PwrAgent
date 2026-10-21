@@ -56,14 +56,36 @@ describe("bounded unlink planning", () => {
     expect(member?.expectedParent.instanceId).toBe("peer");
   });
 
-  it("releases query demand when parent pin coverage is incomplete", async () => {
+  it("trusts a returned parent pin while providers are still listing", async () => {
+    const api = navigationOwnerApiFixture({ readPopulation: async () => population([
+      { ...thread("parent"), pinnedRank: "1024" }, { ...thread("child"), parentThreadId: "parent" },
+    ]) });
+    const originalPage = api.getNavigationQueryPage!;
+    api.getNavigationQueryPage = async (request) => ({ ...await originalPage(request), coverage: { state: "checking" } });
+    const [member] = await readNavigationUnlinkPlan({ api, threads: [thread("child")] });
+    expect(member?.pinBefore).toBe("codex:parent");
+  });
+
+  it("releases query demand when an absent local parent may still be unlisted", async () => {
     const api = navigationOwnerApiFixture({ readPopulation: async () => population([
       thread("parent"), { ...thread("child"), parentThreadId: "parent" },
     ]) });
     const originalPage = api.getNavigationQueryPage!;
-    api.getNavigationQueryPage = async (request) => ({ ...await originalPage(request), coverage: { state: "degraded" } });
+    api.getNavigationQueryPage = async (request) => ({ ...await originalPage(request), entries: [], coverage: { state: "degraded" } });
     api.releaseNavigationQuery = vi.fn(async () => undefined);
     await expect(readNavigationUnlinkPlan({ api, threads: [thread("child")] })).rejects.toThrow("pin placement is not ready");
     expect(api.releaseNavigationQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads an unpinned peer parent from viewer pins while providers are still listing", async () => {
+    const target = { scope: "remote" as const, instanceId: "peer" };
+    const parent = { ...thread("parent"), federation: { ref: { target, backend: "codex" as const, threadId: "parent" }, instanceLabel: "Peer" } };
+    const child = { ...thread("child"), parentThreadId: "parent", parentThreadInstanceId: "peer" };
+    const api = navigationOwnerApiFixture({ readPopulation: async () => population([parent, child]) });
+    const originalPage = api.getNavigationQueryPage!;
+    api.getNavigationQueryPage = async (request) => ({ ...await originalPage(request), entries: [], coverage: { state: "checking" } });
+    const [member] = await readNavigationUnlinkPlan({ api, threads: [child] });
+    expect(member?.pinBefore).toBeUndefined();
+    expect(member?.expectedParent.instanceId).toBe("peer");
   });
 });

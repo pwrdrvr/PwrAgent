@@ -1687,6 +1687,25 @@ test.describe("federation remote window", () => {
       expect(relationship.childThread?.parentThreadId).toBeUndefined();
       expect(relationship.childThread?.parentThreadInstanceId).toBeUndefined();
 
+      // Unlink above must not wait for provider listing; on CI it routinely
+      // runs while the relaunched viewer is still checking. Archive must wait.
+      // It discovers the viewer's own children of this parent, and an
+      // unlisted child would be left behind, so it requires complete
+      // coverage. Startup discovery spawns each provider CLI.
+      await expect
+        .poll(
+          async () => await viewer!.window.evaluate(async (parentInstanceId) => {
+            const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+            const page = await api.getNavigationQueryPage!({ protocol: 2, consumer: "main-sidebar", inventory: "viewer",
+              query: { kind: "exact", identities: [
+                { backend: "acp:kimi", threadId: "federated-kimi-parent", ownerInstanceId: parentInstanceId },
+              ] },
+            });
+            return page.coverage.state;
+          }, ownerInstanceId!),
+          { timeout: 60_000 },
+        )
+        .toBe("complete");
       await rightClickThreadRow(viewer.window, /^Remote Kimi parent(, pinned)?$/);
       await viewer.window.getByRole("menuitem", {
         name: "Archive Thread",
