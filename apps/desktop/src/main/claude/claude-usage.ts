@@ -7,7 +7,28 @@ const LIMIT_LABELS: Record<string, string> = {
   five_hour: "5-hour limit", seven_day: "Weekly limit",
   seven_day_opus: "Weekly Opus limit", seven_day_sonnet: "Weekly Sonnet limit",
   seven_day_oauth_apps: "Weekly app limit",
+  seven_day_overage_included: "Weekly limit with extra usage",
+  overage: "Extra usage",
+  // Undocumented. Matched to Claude's "Cloud session credits" by its
+  // utilization and expiry; the SDK types and CLI never name it.
+  iguana_necktie: "Cloud session credits",
 };
+/** Grants that end on their date instead of renewing. */
+const EXPIRING_LIMITS = new Set(["iguana_necktie"]);
+/** Handled on their own: a per-model array, and a credit balance that is not a limit. */
+const NON_WINDOW_KEYS = new Set(["model_scoped", "extra_usage"]);
+
+function limitRow(key: string, usedPercent: number, resetAt: number | undefined): BackendRateLimitSummary {
+  const label = LIMIT_LABELS[key];
+  return {
+    // A key Claude adds later is an internal codename; never show it raw.
+    name: label ?? "Other plan limit", limitId: key,
+    ...(label ? {} : { limitName: key }),
+    usedPercent,
+    ...(resetAt !== undefined && Number.isFinite(resetAt) ? { resetAt } : {}),
+    ...(EXPIRING_LIMITS.has(key) ? { expires: true } : {}),
+  };
+}
 
 // Model totals include subagents and compaction. They survive SDK resume;
 // subtract our last observation rather than charging the transcript again.
@@ -44,14 +65,27 @@ export function claudeTurnUsage(current: ClaudeUsageTotals, previous: ClaudeUsag
 
 export function claudeRateLimits(usage: SDKControlGetUsageResponse): BackendRateLimitSummary[] {
   if (!usage.rate_limits_available || !usage.rate_limits) return [];
-  return Object.entries(usage.rate_limits).flatMap(([name, value]) => {
-    if (!value || typeof value !== "object" || !("utilization" in value)
+  const parseReset = (value: unknown): number | undefined =>
+    typeof value === "string" ? Date.parse(value) : undefined;
+  const windows = Object.entries(usage.rate_limits).flatMap(([name, value]) => {
+    if (NON_WINDOW_KEYS.has(name) || !value || typeof value !== "object" || !("utilization" in value)
       || typeof value.utilization !== "number" || !Number.isFinite(value.utilization)) return [];
-    const resetAt = "resets_at" in value && typeof value.resets_at === "string" ? Date.parse(value.resets_at) : NaN;
-    return [{ name: LIMIT_LABELS[name] ?? name.replaceAll("_", " "), limitId: name,
-      usedPercent: value.utilization, ...(Number.isFinite(resetAt) ? { resetAt } : {}),
-    }];
+    return [limitRow(name, value.utilization, parseReset("resets_at" in value ? value.resets_at : undefined))];
   });
+  // Per-model weekly windows (Fable, ...), labelled by the server.
+  const modelScoped = Array.isArray(usage.rate_limits.model_scoped) ? usage.rate_limits.model_scoped : [];
+  for (const entry of modelScoped) {
+    if (!entry || typeof entry.display_name !== "string" || !entry.display_name.trim()
+      || typeof entry.utilization !== "number" || !Number.isFinite(entry.utilization)) continue;
+    const resetAt = parseReset(entry.resets_at);
+    windows.push({
+      name: `Weekly ${entry.display_name.trim()} limit`,
+      limitId: `model_scoped:${entry.display_name.trim()}`,
+      usedPercent: entry.utilization,
+      ...(resetAt !== undefined && Number.isFinite(resetAt) ? { resetAt } : {}),
+    });
+  }
+  return windows;
 }
 
 /** Stream utilization is a fraction; the control response above uses percent. */
@@ -68,9 +102,7 @@ export function claudeStreamRateLimits(info: SDKRateLimitInfo): BackendRateLimit
       || typeof raw.utilization !== "number" || !Number.isFinite(raw.utilization) || raw.utilization < 0) return [];
     const resetAt = "resetsAt" in raw && typeof raw.resetsAt === "number" && Number.isFinite(raw.resetsAt)
       ? raw.resetsAt * 1000 : undefined;
-    return [{ name: LIMIT_LABELS[name] ?? name.replaceAll("_", " "), limitId: name,
-      usedPercent: raw.utilization * 100, ...(resetAt !== undefined ? { resetAt } : {}),
-    }];
+    return [limitRow(name, raw.utilization * 100, resetAt)];
   });
 }
 

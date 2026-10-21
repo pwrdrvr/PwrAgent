@@ -40,7 +40,7 @@ type RunningTurn = {
   input: ClaudeInputStream;
   pendingSteers: Set<string>;
   /** The SDK emits one assistant message per content block, sharing an id. */
-  completedMessageIds: Set<string>;
+  completedMessageText: Map<string, string>;
   inputWrites: Promise<void>;
   ending?: boolean;
   /** One background context probe at a time; a request while it runs reruns it once. */
@@ -237,7 +237,7 @@ export class ClaudeBackend {
     if (this.running.has(params.threadId)) throw new Error("A Claude turn is already active for this thread.");
     const running: RunningTurn = {
       turnId: randomUUID(), controller: new AbortController(), entries: new Map(),
-      input: new ClaudeInputStream(), pendingSteers: new Set(), completedMessageIds: new Set(),
+      input: new ClaudeInputStream(), pendingSteers: new Set(), completedMessageText: new Map(),
       inputWrites: Promise.resolve(),
     };
     this.running.set(params.threadId, running);
@@ -565,15 +565,26 @@ export class ClaudeBackend {
 
   private async consumeCompleteMessage(message: SDKMessage, threadId: string, running: RunningTurn): Promise<void> {
     const turnId = running.turnId;
+    if (message.type === "system" && message.subtype === "local_command_output") {
+      const entry: AppServerThreadMessageEntry = {
+        type: "message", id: message.uuid, role: "assistant", text: message.content, turn: { id: turnId },
+      };
+      running.entries.set(entry.id, entry);
+      await this.store.append(threadId, [entry]);
+      await this.emit({ method: "item/completed", params: {
+        threadId, turnId, item: { id: entry.id, type: "agentMessage", text: entry.text },
+      } });
+    }
     if (message.type === "assistant" && !message.parent_tool_use_id) {
       const text = message.message.content.flatMap((block) => block.type === "text" ? [block.text] : []).join("\n");
       if (text) {
         // A later text block of the same message must extend, not replace,
         // the text an earlier block completed.
-        const previous = running.entries.get(message.message.id);
-        const prior = running.completedMessageIds.has(message.message.id) && previous?.type === "message"
-          ? `${previous.text}\n` : "";
-        running.completedMessageIds.add(message.message.id);
+        // Streamed deltas already include the current block. Only completed
+        // blocks may contribute to the prefix when its final frame arrives.
+        const completed = running.completedMessageText.get(message.message.id);
+        const prior = completed ? `${completed}\n` : "";
+        running.completedMessageText.set(message.message.id, prior + text);
         const entry: AppServerThreadMessageEntry = { type: "message", id: message.message.id, role: "assistant", text: prior + text, turn: { id: turnId } };
         running.entries.set(entry.id, entry);
         await this.store.append(threadId, [entry]);

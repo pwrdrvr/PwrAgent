@@ -178,8 +178,15 @@ export function ClaudeUsageLimits({ backend }: { backend?: BackendSummary }) {
       <span className="rail-summary-card__eyebrow">Claude plan limits</span>
       {limits?.length ? limits.map((limit) => (
         <p key={limit.limitId ?? limit.name}>
-          {limit.name}: <strong>{usagePercent(limit.usedPercent ?? 0)}% used</strong>
-          {limit.resetAt !== undefined ? ` · Resets ${usageWhen(limit.resetAt, Date.now(), true)}` : ""}
+          {limit.limitName ? (
+            <span className="tooltip-target" data-tooltip={`Claude reports this limit as “${limit.limitName}”.`}>
+              {limit.name}
+            </span>
+          ) : limit.name}
+          : <strong>{usagePercent(limit.usedPercent ?? 0)}% used</strong>
+          {limit.resetAt !== undefined
+            ? ` · ${limit.expires ? "Expires" : "Resets"} ${usageWhen(limit.resetAt, Date.now(), true)}`
+            : ""}
         </p>
       )) : <p>{backend?.claude?.authMethod === "api-key"
         ? "API-key usage has no Claude subscription limit."

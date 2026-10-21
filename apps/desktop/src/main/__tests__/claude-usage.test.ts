@@ -44,4 +44,31 @@ describe("Claude usage normalization", () => {
       usedPercent: 22, resetAt: Date.parse("2026-10-27T00:00:00Z") }]);
     expect(claudeRateLimits({ ...usage, rate_limits_available: false })).toEqual([]);
   });
+  it("reads per-model weekly windows and names cloud credits and unknown keys", () => {
+    const usage = { rate_limits_available: true, rate_limits: {
+      seven_day: { utilization: 25, resets_at: "2026-10-27T11:00:00Z" },
+      iguana_necktie: { utilization: 30, resets_at: "2026-11-05T07:59:00Z" },
+      walrus_monocle: { utilization: 5, resets_at: null },
+      model_scoped: [
+        { display_name: "Fable", utilization: 40, resets_at: "2026-10-27T11:00:00Z" },
+        { display_name: "Haiku", utilization: null, resets_at: null },
+      ],
+    } } as unknown as SDKControlGetUsageResponse;
+    expect(claudeRateLimits(usage)).toEqual([
+      { name: "Weekly limit", limitId: "seven_day", usedPercent: 25, resetAt: Date.parse("2026-10-27T11:00:00Z") },
+      { name: "Cloud session credits", limitId: "iguana_necktie", usedPercent: 30,
+        resetAt: Date.parse("2026-11-05T07:59:00Z"), expires: true },
+      { name: "Other plan limit", limitId: "walrus_monocle", limitName: "walrus_monocle", usedPercent: 5 },
+      { name: "Weekly Fable limit", limitId: "model_scoped:Fable", usedPercent: 40,
+        resetAt: Date.parse("2026-10-27T11:00:00Z") },
+    ]);
+  });
+  it("labels the streamed overage windows instead of printing their keys", () => {
+    const names = claudeStreamRateLimits({ status: "allowed", unifiedWindows: {
+      seven_day_overage_included: { utilization: 0.1, resetsAt: 1789005600 },
+    } } as never).map((limit) => limit.name);
+    expect(names).toEqual(["Weekly limit with extra usage"]);
+    expect(claudeStreamRateLimits({ status: "allowed", rateLimitType: "overage", utilization: 0.2 })[0].name)
+      .toBe("Extra usage");
+  });
 });

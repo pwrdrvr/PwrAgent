@@ -224,6 +224,8 @@ export type BackendRateLimitSummary = {
   limitId?: string;
   /** Provider label retained so a sparse update cannot erase it. */
   limitName?: string;
+  /** `resetAt` ends the allowance (a credit grant) instead of renewing it. */
+  expires?: boolean;
   /** Provider slot used to merge sparse rolling updates with a full snapshot. */
   windowKey?: "primary" | "secondary" | "individual" | "credits";
   remaining?: number;

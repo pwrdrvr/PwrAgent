@@ -60,6 +60,74 @@ async function fixture(messages?: (options: Options) => AsyncGenerator<SDKMessag
 }
 
 describe("Claude SDK backend", () => {
+  it.each([false, true])("preserves all completed text blocks without duplicating deltas (streaming=%s)", async (streaming) => {
+    const f = await fixture(async function* () {
+      yield { type: "stream_event", parent_tool_use_id: null, event: {
+        type: "message_start", message: { id: "multi" },
+      } } as SDKMessage;
+      for (const [index, text] of ["First block", "Second block"].entries()) {
+        if (streaming) yield { type: "stream_event", parent_tool_use_id: null, event: {
+          type: "content_block_delta", index, delta: { type: "text_delta", text },
+        } } as SDKMessage;
+        yield { type: "assistant", parent_tool_use_id: null, message: {
+          id: "multi", content: [{ type: "text", text }],
+        } } as SDKMessage;
+      }
+      yield { type: "result", subtype: "success", is_error: false, result: "Done" } as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Hello" }] });
+    await f.waitForTurn();
+    expect((await f.backend.readThread(threadId)).lastAssistantMessage).toBe("First block\nSecond block");
+    const restarted = new ClaudeBackend(f.backendOptions);
+    expect((await restarted.readThread(threadId)).lastAssistantMessage).toBe("First block\nSecond block");
+    expect(f.events.filter((event) => event.notification.method === "item/completed"
+      && getNotificationItem(event.notification.params)?.id === "multi").at(-1)?.notification)
+      .toMatchObject({ params: { item: { text: "First block\nSecond block" } } });
+  });
+
+  it("displays and persists local slash-command output", async () => {
+    const f = await fixture(async function* () {
+      yield { type: "system", subtype: "local_command_output", content: "Weekly usage: 25%",
+        uuid: "local-output", session_id: "session" } as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: false, result: "" } as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "/usage" }] });
+    await f.waitForTurn();
+    expect((await new ClaudeBackend(f.backendOptions).readThread(threadId)).lastAssistantMessage).toBe("Weekly usage: 25%");
+    expect(f.events).toContainEqual(expect.objectContaining({ notification: {
+      method: "item/completed", params: expect.objectContaining({
+        item: expect.objectContaining({ type: "agentMessage", text: "Weekly usage: 25%" }),
+      }),
+    } }));
+  });
+
+  it.each([["gif", "image/gif"], ["GIF", "image/gif"], ["jpeg", "image/jpeg"], ["webp", "image/webp"]])(
+    "sends local %s attachments with their media type", async (extension, mediaType) => {
+      const f = await fixture();
+      const file = path.join(f.root, `image.${extension}`);
+      const bytes = Buffer.from("GIF89a");
+      await writeFile(file, bytes);
+      const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+      await f.backend.startTurn({ threadId, input: [{ type: "localImage", path: file }] });
+      const prompt = f.run.mock.calls[0][0].prompt;
+      if (typeof prompt === "string") throw new Error("Expected streaming input");
+      expect((await prompt[Symbol.asyncIterator]().next()).value.message.content).toEqual([{
+        type: "image", source: { type: "base64", media_type: mediaType, data: bytes.toString("base64") },
+      }]);
+      await f.waitForTurn();
+    },
+  );
+
+  it("rejects unsupported local image extensions before launching Claude", async () => {
+    const f = await fixture();
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await expect(f.backend.startTurn({ threadId, input: [{ type: "localImage", path: path.join(f.root, "image.bmp") }] }))
+      .rejects.toThrow("PNG, JPEG, GIF, or WebP");
+    expect(f.run).not.toHaveBeenCalled();
+  });
+
   it("streams steering without losing a follow-up at the native result boundary", async () => {
     const firstResult = Promise.withResolvers<void>();
     const firstProcessed = Promise.withResolvers<void>();
