@@ -86,9 +86,7 @@ export const ProviderStatusPanel = memo(function ProviderStatusPanel(props: Prov
                   {backend.available ? "Available" : unavailableLabel(backend)}
                 </span>
               </div>
-              {!backend.available && unavailableDetail(backend) ? (
-                <p className="backend-status-list__reason">{unavailableDetail(backend)}</p>
-              ) : null}
+              {backend.available ? null : <UnavailableDetail backend={backend} />}
               {backend.available && hasProviderMetadata(backend) ? (
                 <dl className="backend-status-list__metadata-grid">
                   {backendVersion(backend) ? (
@@ -198,14 +196,14 @@ function unavailableLabel(backend: BackendSummary): string {
   return backend.kind === "claude" ? claudeProviderStatus(backend.claude).label : "Unavailable";
 }
 
-function unavailableDetail(backend: BackendSummary): string | undefined {
+function UnavailableDetail({ backend }: { backend: BackendSummary }) {
   // The sign-in command can be a long path to the bundled CLI. The Claude
   // pane shows it with a Copy button; this panel only says where to go.
-  if (backend.kind === "claude" && backend.claude?.executable
-    && backend.claude.authStatus === "sign-in-required") {
-    return "Sign in from Settings → AI Providers → Claude.";
-  }
-  return backend.unavailableReason?.trim() || undefined;
+  const detail = backend.kind === "claude" && backend.claude?.executable
+    && backend.claude.authStatus === "sign-in-required"
+    ? "Sign in from Settings → AI Providers → Claude."
+    : backend.unavailableReason?.trim();
+  return detail ? <p className="backend-status-list__reason">{detail}</p> : null;
 }
 
 /**

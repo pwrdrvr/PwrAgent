@@ -287,6 +287,24 @@ describe("ProviderStatusPanel", () => {
     expect(screen.queryByText(/app\.asar\.unpacked/)).not.toBeInTheDocument();
   });
 
+  it("labels an uninstalled or unchecked Claude the way Settings does", () => {
+    const claudeBackend: BackendSummary = {
+      ...grokBackend,
+      kind: "claude",
+      label: "Claude",
+      claude: { authStatus: "unknown", message: "Install Claude Code, then sign in." },
+      unavailableReason: "Install Claude Code, then sign in.",
+    };
+    const { rerender } = render(<ProviderStatusPanel backends={[claudeBackend]} />);
+
+    expect(screen.getByText("Not installed")).toHaveClass("backend-status-list__state");
+    expect(screen.getByText("Install Claude Code, then sign in.")).toHaveClass("backend-status-list__reason");
+
+    rerender(<ProviderStatusPanel backends={[{ ...claudeBackend, claude: undefined, unavailableReason: undefined }]} />);
+    expect(screen.getByText("Not checked")).toHaveClass("backend-status-list__state");
+    expect(document.querySelector(".backend-status-list__reason")).toBeNull();
+  });
+
   it("shows ACP runtime and authentication metadata without a limits API", () => {
     render(<ProviderStatusPanel backends={[kimiBackend]} />);
 
