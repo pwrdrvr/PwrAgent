@@ -3,6 +3,7 @@ import { stat } from "node:fs/promises";
 import path from "node:path";
 import type { AgentEvent, AppServerThreadSummary, ThreadOverlayState } from "@pwragent/shared";
 import { ARCHIVE_CLEANUP_PAUSE_MS } from "../app-server/archive-cleanup-queue";
+import { ClaudeSessionStore } from "../claude/claude-session-store";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { deleteThreadAssets } from "../app-server/thread-assets";
 import { CountingBackendClient, codexThread, publishNotification } from "./fixtures/thread-read-harness";
@@ -115,7 +116,12 @@ function build(active: AppServerThreadSummary[], target = codexThread({ id: "tar
       repositoryPath: "/contrived/repo", snapshotRef: "refs/codex/snapshots/test", snapshotCommit: "abc",
       createdAt: 1, archivedAt: 2, state: "archived", ignoredFilesExcluded: true };
   });
+  // Inventory scans include Claude even when the archived thread is Codex.
+  // Keep this fake-timer harness independent of filesystem session discovery.
+  const claudeStore = new ClaudeSessionStore("/contrived/claude");
+  vi.spyOn(claudeStore, "list").mockResolvedValue([]);
   const registry = new DesktopBackendRegistry({ codexClient: client as never, overlayStore: store as never,
+    claudeBackendOptions: { store: claudeStore },
     archiveCleanupCheckpointStore: checkpoint, runtimeInstanceId: "cleanup-fixture", resolveLiveProfileRuntimeInstanceIds: () => ["cleanup-fixture"],
     worktreeArchiveService: { archive: archiveWorktree } as never, threadTitleGenerationService: null });
   registries.push(registry);
