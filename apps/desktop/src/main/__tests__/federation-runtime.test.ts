@@ -32,6 +32,7 @@ import {
   FEDERATION_ENVIRONMENT_SETUP_PROGRESS_METHOD,
 } from "../federation/federation-backend-bridge";
 import {
+  DEFAULT_CAPABILITIES,
   DesktopFederationRuntime,
   disposeDesktopFederationRuntime,
   getDesktopFederationRuntime,
@@ -1824,16 +1825,28 @@ describe("DesktopFederationRuntime", () => {
         sourceMethod: "turn/completed", threadId: "A", automationId: undefined, runId: undefined,
       },
     });
+    // A reorder tells viewers to re-read the queue; the order itself stays
+    // with the owner's queue projection.
+    owner.forwardLocalBackendEvent({ backend: "codex", notification: {
+      method: "thread/turnQueue/reordered", params: { threadId: "A", queueEntryIds: ["private-entry-c", "private-entry-a"] },
+    } } as AgentEvent);
+    expect(ownerFrames).toHaveLength(beforeLarge + 2);
+    expect(published.at(-1)?.notification).toEqual({
+      method: "navigation/invalidated", params: {
+        sourceMethod: "thread/turnQueue/reordered", threadId: "A", automationId: undefined, runId: undefined,
+      },
+    });
+    expect(JSON.stringify(ownerFrames.at(-1))).not.toContain("private-entry");
     owner.forwardLocalBackendEvent({ backend: "codex", notification: {
       method: "turn/completed", params: { threadId: "B", turnId: "completed-turn", turn: { id: "completed-turn", status: "completed", output: [{ type: "text", text: hugeOutput }] } },
     } } as AgentEvent);
-    expect(ownerFrames).toHaveLength(beforeLarge + 3);
+    expect(ownerFrames).toHaveLength(beforeLarge + 4);
     expect(published.at(-1)?.notification).toMatchObject({
       method: "turn/completed", params: { threadId: "B", turnId: "completed-turn", turn: { id: "completed-turn", status: "completed", output: [{ type: "text", text: hugeOutput }] } },
     });
     viewer.setEventSubscriptions("chat", []);
     emit("item/agentMessage/delta", "B");
-    expect(ownerFrames).toHaveLength(beforeLarge + 3);
+    expect(ownerFrames).toHaveLength(beforeLarge + 4);
   });
 
   it("fails closed for missing or malformed per-class selectors", () => {
@@ -4187,6 +4200,13 @@ describe("DesktopFederationRuntime", () => {
   });
 });
 
+
+describe("advertised capabilities", () => {
+  it("advertises queue reordering, which viewers need before they offer a drag", () => {
+    expect(DEFAULT_CAPABILITIES).toContain("turn_queue_reorder");
+    expect(DEFAULT_CAPABILITIES).toContain("turn_control");
+  });
+});
 
 describe("Cloudflare listener reachability", () => {
   it.each(["127.0.0.1", "0.0.0.0"])("accepts the loopback origin through %s", (host) => {

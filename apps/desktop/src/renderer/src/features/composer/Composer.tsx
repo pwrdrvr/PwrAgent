@@ -23,7 +23,24 @@ import {
   getLaunchpadScopeDirectoryKey,
   isStartingLaunchpadComposerScopeKey,
 } from "./launchpad-composer-scope";
-import { QueuedMessageInspector, QueuedRowIconButton } from "./QueuedMessageInspector";
+import {
+  QueuedMessageInspector,
+  QueuedRowGrip,
+  QueuedRowIconButton,
+  QueuedRowPositionLabel,
+} from "./QueuedMessageInspector";
+import {
+  planQueuedTurnMove,
+  queuedMoveAnchor,
+  queuedReorderGroup,
+  queuedTurnOwnerCanMove,
+  requestOwnerQueuedTurnMove,
+  settleQueuedTurnMove,
+} from "./queued-turn-move";
+import {
+  type QueuedReorderRow,
+  useQueuedRowReorder,
+} from "./useQueuedRowReorder";
 import { notificationIncludesDraftContent, restoreQueuedMessage } from "./queued-message-content";
 import {
   Fragment,
@@ -683,6 +700,8 @@ type QueuedTurnDraft = {
   steerDelivery?: "sending" | "accepted";
   backendQueuePending?: boolean;
   queueEntryId?: string;
+  /** See `ComposerQueuedTurnSnapshot.pendingMove`. */
+  pendingMove?: { beforeQueueEntryId?: string; requestId?: number };
   scheduledActionId?: string;
   failedScheduledActionId?: string;
   errorMessage?: string;
@@ -3419,8 +3438,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       const commandName = command.name.startsWith("/")
         ? command.name.slice(1)
         : command.name;
+      // Claude runs `/compact` itself when it arrives as a prompt; the
+      // compaction API below is Codex's.
       return (
         commandName === "compact" &&
+        command.backend !== "claude" &&
         (!props.thread || !command.backend || command.backend === props.thread.source)
       );
     })
@@ -3837,6 +3859,24 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     draft.trim().length > 0 || skillTokens.length > 0;
   const queuedTurn = queuedTurns[0];
   const nextReleasableQueuedTurn = getNextReleasableQueuedTurn(queuedTurns);
+  const ownerCanMoveQueuedTurns = queuedTurnOwnerCanMove(props.desktopApi, props.thread);
+  // The composer renders on every keystroke; the rows change with the queue.
+  const queuedReorderRows = useMemo(
+    () => queuedTurns.map((queued): QueuedReorderRow => ({
+      id: queued.id,
+      title: queued.title ?? formatDraftPreview(queued),
+      group: queuedReorderGroup(queued, scheduleNow, ownerCanMoveQueuedTurns),
+    })),
+    [queuedTurns, scheduleNow, ownerCanMoveQueuedTurns],
+  );
+  const queuedReorder = useQueuedRowReorder({
+    rows: queuedReorderRows,
+    onMove: (id, toIndex) =>
+      moveQueuedTurn(id, queuedMoveAnchor(queuedReorderRows.map((row) => row.id), id, toIndex)),
+  });
+  const queuedBandHasMovableRow = queuedTurns.some((queued) =>
+    queuedReorder.canMove(queued.id)
+  );
   const futureScheduledDraftSendAt = getFutureScheduledSendAt(
     scheduledDraftSendAt,
     scheduleNow,
@@ -4540,6 +4580,52 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     if (activeComposerScopeKeyRef.current === scopeKey) {
       setQueuedTurnsState(nextQueuedTurns);
     }
+  };
+  /**
+   * Moves the active scope's row `id` in front of row `beforeId` (to the end
+   * without one). A row the owner's FIFO dispatches moves there as well. The
+   * band shows the new order at once and `pendingMove` holds it there until
+   * the owner answers; a refusal puts the owner's order back.
+   */
+  const moveQueuedTurn = (id: string, beforeId: string | undefined): void => {
+    const scopeKey = composerScopeKey;
+    const plan = planQueuedTurnMove(
+      isQueuedTurnStoreScope(scopeKey)
+        ? draftStore.getQueuedTurns(scopeKey)
+        : queuedTurns,
+      id,
+      beforeId,
+    );
+    if (!plan) return;
+    saveQueuedTurnSnapshots(scopeKey, plan.next);
+    setQueuedTurnsState(plan.next);
+    setSendError(undefined);
+    if (!plan.queueEntryId) return;
+    const federationTarget =
+      props.thread?.federation?.ref.target
+      ?? readRendererFederationTarget();
+    void requestOwnerQueuedTurnMove({
+      desktopApi: props.desktopApi,
+      federationTarget,
+      queueEntryId: plan.queueEntryId,
+      beforeQueueEntryId: plan.beforeQueueEntryId,
+      plannedOrder: plan.plannedOrder,
+    }).then((answer) => {
+      if (!isQueuedTurnStoreScope(scopeKey)) return;
+      const settled = settleQueuedTurnMove(
+        draftStore.getQueuedTurns(scopeKey),
+        id,
+        plan.requestId,
+        answer,
+        plan.ownerOrder,
+      );
+      // The row started or was removed, or a later move of it settles it.
+      if (!settled) return;
+      saveQueuedTurnSnapshots(scopeKey, settled);
+      if (activeComposerScopeKeyRef.current !== scopeKey) return;
+      setQueuedTurnsState(settled);
+      if (answer.failure) setSendError(answer.failure);
+    });
   };
   const preserveCancelledQueuedTurnInScope = (
     scopeKey: string,
@@ -10143,11 +10229,13 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const modelOptions = backend?.launchpadOptions?.models ?? [];
   const showOlderCodexModelsUnderOther = backend?.kind === "codex"
     && modelOptions.some((model) => /^gpt-6(?:[.-]|$)/iu.test(model.id));
-  const otherModelOptions = showOlderCodexModelsUnderOther
+  const otherModelOptions = backend?.kind === "claude"
+    ? modelOptions.filter((model) => model.other)
+    : showOlderCodexModelsUnderOther
     ? modelOptions.filter((model) => /^gpt-5\.(?:5|6)(?:-|$)/iu.test(model.id))
     : [];
   const visibleModelOptions = otherModelOptions.length
-    ? modelOptions.filter((model) => !/^gpt-5\.(?:5|6)(?:-|$)/iu.test(model.id))
+    ? modelOptions.filter((model) => !otherModelOptions.includes(model))
     : modelOptions;
   const selectedModelOption =
     modelOptions.find((option) => option.id === currentSettings?.model) ??
@@ -11828,10 +11916,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           ? "Failed to send"
           : scheduledSendAt
           ? `Scheduled · sends in ${formatScheduledSendCountdown(scheduledSendAt, scheduleNow)}`
-          : index === 0
-            ? "Next"
-            : `#${index + 1}`;
+          : undefined;
         const failed = Boolean(queued.errorMessage || queued.manualReleaseRequired);
+        const movable = queuedReorder.canMove(queued.id);
 
         return (
           <div
@@ -11842,9 +11929,14 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               failed ? "composer__queued--failed" : "",
               // Rows waiting on an answer keep their actions on screen.
               failed || scheduledSendAt ? "composer__queued--pinned-actions" : "",
+              queuedBandHasMovableRow ? "composer__queued--reorderable" : "",
+              movable ? "composer__queued--movable" : "",
             ]
               .filter(Boolean)
               .join(" ")}
+            data-queued-reorder-id={queued.id}
+            onKeyDown={(event) => queuedReorder.onKeyDown(event, queued.id)}
+            onPointerDown={(event) => queuedReorder.onPointerDown(event, queued.id)}
             aria-label={
               queued.manualReleaseRequired
                 ? index === 0
@@ -11864,6 +11956,15 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               load={() => readQueuedMessage(queued)}
               desktopApi={props.desktopApi}
               onFallbackFocus={focusComposerInput}
+              leading={queuedBandHasMovableRow ? (
+                // A row that cannot move keeps the slot, so every chevron in
+                // the band stays on one line.
+                movable ? (
+                  <QueuedRowGrip title={queued.title ?? formatDraftPreview(queued)} />
+                ) : (
+                  <span className="composer__queued-grip composer__queued-grip--empty" aria-hidden="true" />
+                )
+              ) : null}
               detail={
                 queued.errorMessage || queued.holdReason ? (
                   <div className="composer__queued-detail">
@@ -12038,7 +12139,13 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               </>}
             >
               <span className="composer__queued-label" role="status">
-                {queuedLabel}
+                {queuedLabel ?? (
+                  <QueuedRowPositionLabel
+                    reorder={queuedReorder}
+                    id={queued.id}
+                    index={index}
+                  />
+                )}
               </span>
               {/* Ahead of the title, not after it: the row's actions cover the
                   end of the line on hover, and stay over it on scheduled,
@@ -12078,6 +12185,14 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         />
       ) : null}
       </div>
+      {/* Outside the band, which hides itself when it is empty. A bare live
+          region, not role="status": several E2E specs expect the window's
+          only status to be the turn's own. */}
+      <span
+        className="composer__queued-announcer"
+        aria-live="polite"
+        ref={queuedReorder.announcerRef}
+      />
 
       {hasVisibleAttachments ? (
         <div
@@ -13463,6 +13578,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 label: model.label ?? model.id,
                 value: model.id,
               }))}
+              otherLabel={backend.kind === "claude" ? "Other Models" : undefined}
               onChange={(value) => {
                 const model = value;
                 const nextModelOption = backend.launchpadOptions?.models?.find(

@@ -9624,7 +9624,7 @@ describe("SettingsScreen", () => {
       nav.querySelectorAll("#settings-nav-sublist-models .settings-nav__sublabel"),
     ).map((label) => label.textContent);
     // Providers only: the Helper model row lives on the AI Providers page.
-    expect(subLabels).toEqual(["Codex", "Grok", "Gemini CLI"]);
+    expect(subLabels).toEqual(["Codex", "Claude", "Grok", "Gemini CLI"]);
     const geminiButton = within(nav).getByRole("button", {
       name: /Gemini CLI/,
     });
@@ -9634,6 +9634,36 @@ describe("SettingsScreen", () => {
     expect(
       geminiButton.querySelector(".settings-nav__subdot--off"),
     ).not.toBeNull();
+  });
+
+  it("updates Claude's nav status from cached installation and authentication without probing", () => {
+    const listBackends = vi.fn();
+    const settings = createSettingsState();
+    const view = (claude: BackendSummary["claude"] | null) => (
+      <SettingsScreen initialSection="general" settings={settings}
+        desktopApi={{ listBackends }}
+        cachedBackends={claude ? [{ kind: "claude", claude } as BackendSummary] : undefined} />
+    );
+    // Before providers load, the row still has a dot instead of looking broken.
+    const { rerender } = render(view(null));
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+    fireEvent.click(within(nav).getByRole("button", { name: /Expand AI Providers/ }));
+    const claudeButton = () => within(nav).getByRole("button", { name: /^Claude/ });
+    expect(claudeButton().querySelector(".settings-nav__subdot--off")).not.toBeNull();
+    expect(claudeButton().querySelector(".settings-nav__subchip")).toBeNull();
+    rerender(view({ authStatus: "unknown" }));
+    expect(claudeButton().querySelector(".settings-nav__subdot--off")).not.toBeNull();
+    expect(claudeButton()).toHaveTextContent("not installed");
+    rerender(view({ executable: "/fixture/claude", authStatus: "unknown" }));
+    expect(claudeButton().querySelector(".settings-nav__subdot--warn")).not.toBeNull();
+    expect(claudeButton()).toHaveTextContent("check failed");
+    rerender(view({ executable: "/fixture/claude", authStatus: "sign-in-required" }));
+    expect(claudeButton().querySelector(".settings-nav__subdot--warn")).not.toBeNull();
+    expect(claudeButton()).toHaveTextContent("sign in");
+    rerender(view({ executable: "/fixture/claude", authStatus: "signed-in", authMethod: "api-key" }));
+    expect(claudeButton().querySelector(".settings-nav__subdot--ok")).not.toBeNull();
+    expect(claudeButton().querySelector(".settings-nav__subchip")).toBeNull();
+    expect(listBackends).not.toHaveBeenCalled();
   });
 
   it("relogs and removes MCP servers from the Plugins settings pane", async () => {

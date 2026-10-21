@@ -3,6 +3,9 @@ import type { BackendSummary } from "@pwragent/shared";
 import { formatBackendLabel } from "../backend-label";
 
 describe("formatBackendLabel", () => {
+  it("labels the native Claude provider without a backend summary", () => {
+    expect(formatBackendLabel("claude")).toBe("Claude");
+  });
   it("uses canonical labels for known ACP providers", () => {
     expect(
       formatBackendLabel("acp:gemini", [

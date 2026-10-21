@@ -721,6 +721,8 @@ ISC
 MIT
 ~~~
 - @antfu/install-pkg@2.0.1 | https://github.com/antfu-collective/install-pkg
+- @anthropic-ai/sdk@0.133.0 | github:anthropics/anthropic-sdk-typescript
+- @babel/runtime@7.29.7 | https://github.com/babel/babel
 - @braintree/sanitize-url@7.1.2 | https://github.com/braintree/sanitize-url
 - @floating-ui/core@1.8.0 | https://github.com/floating-ui/floating-ui
 - @floating-ui/dom@1.8.0 | https://github.com/floating-ui/floating-ui
@@ -782,6 +784,7 @@ MIT
 - @slack/socket-mode@3.1.0 | https://github.com/slackapi/node-slack-sdk
 - @slack/types@3.2.0 | https://github.com/slackapi/node-slack-sdk
 - @slack/web-api@8.2.0 | https://github.com/slackapi/node-slack-sdk
+- @stablelib/base64@1.0.1 | https://github.com/StableLib/stablelib
 - @tiptap/core@3.32.0 | https://github.com/ueberdosis/tiptap
 - @tiptap/extension-blockquote@3.32.0 | https://github.com/ueberdosis/tiptap
 - @tiptap/extension-bold@3.32.0 | https://github.com/ueberdosis/tiptap
@@ -997,6 +1000,7 @@ MIT
 - is-promise@4.0.0 | https://github.com/then/is-promise
 - jose@6.2.12 | panva/jose
 - js-yaml@4.3.2 | nodeca/js-yaml
+- json-schema-to-ts@3.1.1 | https://github.com/ThomasAribart/json-schema-to-ts
 - json-schema-traverse@1.0.0 | https://github.com/epoberezkin/json-schema-traverse
 - json-with-bigint@3.5.12 | https://github.com/Ivan-Korolenko/json-with-bigint
 - jsonfile@6.2.1 | https://github.com/jprichardson/node-jsonfile
@@ -1157,6 +1161,7 @@ MIT
 - socks@2.8.9 | https://github.com/JoshGlazebrook/socks
 - socks-proxy-agent@10.1.0 | https://github.com/TooTallNate/proxy-agents
 - space-separated-tokens@2.0.2 | wooorm/space-separated-tokens
+- standardwebhooks@1.1.1 | https://github.com/standard-webhooks/standard-webhooks
 - statuses@2.0.2 | jshttp/statuses
 - streamx@2.28.1 | https://github.com/mafintosh/streamx
 - strictdom@1.0.1 | https://github.com/wilsonpage/strictdom
@@ -1173,6 +1178,7 @@ MIT
 - tr46@0.0.3 | https://github.com/Sebmaster/tr46.js
 - trim-lines@3.0.1 | wooorm/trim-lines
 - trough@2.2.0 | wooorm/trough
+- ts-algebra@2.0.0 | https://github.com/ThomasAribart/ts-algebra
 - ts-dedent@2.3.0 | https://github.com/tamino-martinius/node-ts-dedent
 - ts-mixer@6.0.4 | https://github.com/tannerntannern/ts-mixer
 - tsyringe@4.10.0 | https://github.com/Microsoft/tsyringe
@@ -1213,8 +1219,21 @@ Python-2.0
 ~~~~~~~~~~
 - argparse@2.0.1 | nodeca/argparse
 
+SEE LICENSE IN README.md
+~~~~~~~~~~~~~~~~~~~~~~~~
+- @anthropic-ai/claude-agent-sdk@0.3.296 | https://github.com/anthropics/claude-agent-sdk-typescript
+- @anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.296 | https://github.com/anthropics/claude-agent-sdk-typescript
+- @anthropic-ai/claude-agent-sdk-darwin-x64@0.3.296 | https://github.com/anthropics/claude-agent-sdk-typescript
+- @anthropic-ai/claude-agent-sdk-linux-arm64@0.3.296 | https://github.com/anthropics/claude-agent-sdk-typescript
+- @anthropic-ai/claude-agent-sdk-linux-arm64-musl@0.3.296 | https://github.com/anthropics/claude-agent-sdk-typescript
+- @anthropic-ai/claude-agent-sdk-linux-x64@0.3.296 | https://github.com/anthropics/claude-agent-sdk-typescript
+- @anthropic-ai/claude-agent-sdk-linux-x64-musl@0.3.296 | https://github.com/anthropics/claude-agent-sdk-typescript
+- @anthropic-ai/claude-agent-sdk-win32-arm64@0.3.296 | https://github.com/anthropics/claude-agent-sdk-typescript
+- @anthropic-ai/claude-agent-sdk-win32-x64@0.3.296 | https://github.com/anthropics/claude-agent-sdk-typescript
+
 Unlicense
 ~~~~~~~~~
+- fast-sha256@1.3.0 | https://github.com/dchest/fast-sha256-js
 - robust-predicates@3.0.3 | https://github.com/mourner/robust-predicates
 
 License Texts
@@ -1448,6 +1467,71 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+@anthropic-ai/claude-agent-sdk@0.3.296 (SEE LICENSE IN README.md)
+-----------------------------------------------------------------
+
+Applies to:
+- @anthropic-ai/claude-agent-sdk@0.3.296 (SEE LICENSE IN README.md)
+- @anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.296 (SEE LICENSE IN README.md)
+- @anthropic-ai/claude-agent-sdk-darwin-x64@0.3.296 (SEE LICENSE IN README.md)
+- @anthropic-ai/claude-agent-sdk-linux-arm64@0.3.296 (SEE LICENSE IN README.md)
+- @anthropic-ai/claude-agent-sdk-linux-arm64-musl@0.3.296 (SEE LICENSE IN README.md)
+- @anthropic-ai/claude-agent-sdk-linux-x64@0.3.296 (SEE LICENSE IN README.md)
+- @anthropic-ai/claude-agent-sdk-linux-x64-musl@0.3.296 (SEE LICENSE IN README.md)
+- @anthropic-ai/claude-agent-sdk-win32-arm64@0.3.296 (SEE LICENSE IN README.md)
+- @anthropic-ai/claude-agent-sdk-win32-x64@0.3.296 (SEE LICENSE IN README.md)
+
+Representative file: @anthropic-ai/claude-agent-sdk@0.3.296/LICENSE.md
+
+© Anthropic PBC. All rights reserved. Use is subject to the Legal Agreements outlined here: https://code.claude.com/docs/en/legal-and-compliance.
+
+@anthropic-ai/sdk@0.133.0 (MIT)
+-------------------------------
+
+Applies to:
+- @anthropic-ai/sdk@0.133.0 (MIT)
+
+Representative file: @anthropic-ai/sdk@0.133.0/LICENSE
+
+Copyright 2023 Anthropic, PBC.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+@babel/runtime@7.29.7 (MIT)
+---------------------------
+
+Applies to:
+- @babel/runtime@7.29.7 (MIT)
+
+Representative file: @babel/runtime@7.29.7/LICENSE
+
+MIT License
+
+Copyright (c) 2014-present Sebastian McKenzie and other contributors
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 @braintree/sanitize-url@7.1.2 (MIT)
 -----------------------------------
@@ -4469,6 +4553,36 @@ NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
 LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+@stablelib/base64@1.0.1 (MIT)
+-----------------------------
+
+Applies to:
+- @stablelib/base64@1.0.1 (MIT)
+
+Representative file: @stablelib/base64@1.0.1/LICENSE
+
+This software is licensed under the MIT license:
+
+Copyright (C) 2016 Dmitry Chestnykh
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+of the Software, and to permit persons to whom the Software is furnished to do
+so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
 @tiptap/core@3.32.0 (MIT)
 -------------------------
@@ -7759,6 +7873,40 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
+fast-sha256@1.3.0 (Unlicense)
+-----------------------------
+
+Applies to:
+- fast-sha256@1.3.0 (Unlicense)
+- robust-predicates@3.0.3 (Unlicense)
+
+Representative file: fast-sha256@1.3.0/LICENSE
+
+This is free and unencumbered software released into the public domain.
+
+Anyone is free to copy, modify, publish, use, compile, sell, or
+distribute this software, either in source code form or as a compiled
+binary, for any purpose, commercial or non-commercial, and by any
+means.
+
+In jurisdictions that recognize copyright laws, the author or authors
+of this software dedicate any and all copyright interest in the
+software to the public domain. We make this dedication for the benefit
+of the public at large and to the detriment of our heirs and
+successors. We intend this dedication to be an overt act of
+relinquishment in perpetuity of all present and future rights to this
+software under copyright law.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR
+OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE.
+
+For more information, please refer to <http://unlicense.org>
+
 fast-uri@3.1.8 (BSD-3-Clause)
 -----------------------------
 
@@ -8812,6 +8960,37 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
+
+json-schema-to-ts@3.1.1 (MIT)
+-----------------------------
+
+Applies to:
+- json-schema-to-ts@3.1.1 (MIT)
+- ts-algebra@2.0.0 (MIT)
+
+Representative file: json-schema-to-ts@3.1.1/LICENSE
+
+MIT License
+
+Copyright (c) 2020 Thomas Aribart
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
 json-schema-typed@8.0.2 (BSD-2-Clause)
 --------------------------------------
@@ -11299,39 +11478,6 @@ Felix Geisendörfer (felix@debuggable.com)
  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  THE SOFTWARE.
 
-robust-predicates@3.0.3 (Unlicense)
------------------------------------
-
-Applies to:
-- robust-predicates@3.0.3 (Unlicense)
-
-Representative file: robust-predicates@3.0.3/LICENSE
-
-This is free and unencumbered software released into the public domain.
-
-Anyone is free to copy, modify, publish, use, compile, sell, or
-distribute this software, either in source code form or as a compiled
-binary, for any purpose, commercial or non-commercial, and by any
-means.
-
-In jurisdictions that recognize copyright laws, the author or authors
-of this software dedicate any and all copyright interest in the
-software to the public domain. We make this dedication for the benefit
-of the public at large and to the detriment of our heirs and
-successors. We intend this dedication to be an overt act of
-relinquishment in perpetuity of all present and future rights to this
-software under copyright law.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
-IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR
-OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
-ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
-OTHER DEALINGS IN THE SOFTWARE.
-
-For more information, please refer to <http://unlicense.org>
-
 rope-sequence@1.3.4 (MIT)
 -------------------------
 
@@ -11731,6 +11877,38 @@ CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS
 OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE
 OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE
 USE OR PERFORMANCE OF THIS SOFTWARE.
+
+standardwebhooks@1.1.1 (MIT)
+----------------------------
+
+Applies to:
+- standardwebhooks@1.1.1 (MIT)
+
+Representative file: standardwebhooks@1.1.1/package metadata
+
+The installed package does not include a separate license file. Its package metadata declares MIT.
+
+MIT License
+
+Copyright (c) Standard Webhooks
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
 statuses@2.0.2 (MIT)
 --------------------

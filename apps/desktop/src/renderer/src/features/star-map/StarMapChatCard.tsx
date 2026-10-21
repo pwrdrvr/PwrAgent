@@ -39,8 +39,19 @@ import {
 } from "../composer/CompactComposer";
 import {
   QueuedMessageInspector,
+  QueuedRowGrip,
   QueuedRowIconButton,
+  QueuedRowPositionLabel,
 } from "../composer/QueuedMessageInspector";
+import {
+  planQueuedTurnMove,
+  queuedMoveAnchor,
+  queuedReorderGroup,
+  queuedTurnOwnerCanMove,
+  requestOwnerQueuedTurnMove,
+  settleQueuedTurnMove,
+} from "../composer/queued-turn-move";
+import { useQueuedRowReorder } from "../composer/useQueuedRowReorder";
 import { restoreQueuedMessage } from "../composer/queued-message-content";
 import { useOwnedComposerDraftStore } from "../composer/useOwnedComposerDraftStore";
 import { useNavigationSelectedDetail } from "../../lib/useNavigationSelectedDetail";
@@ -442,6 +453,47 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
   );
   const queuedTurns =
     ownedComposerDraftStore?.getQueuedTurns(composerScopeKey) ?? [];
+  const queuedReorder = useQueuedRowReorder({
+    rows: queuedTurns.map((queued) => ({
+      id: queued.id,
+      title: queued.title ?? queuedTurnPreview(queued),
+      group: queuedReorderGroup(queued, Date.now(), queuedTurnOwnerCanMove(desktopApi, thread)),
+    })),
+    onMove: (id, toIndex) => {
+      const store = ownedComposerDraftStore;
+      const scopeKey = composerScopeKey;
+      const beforeId = queuedMoveAnchor(queuedTurns.map((queued) => queued.id), id, toIndex);
+      const plan = store
+        ? planQueuedTurnMove(store.getQueuedTurns(scopeKey), id, beforeId)
+        : undefined;
+      if (!store || !plan) return;
+      store.setQueuedTurns(scopeKey, plan.next);
+      setSendError(undefined);
+      if (!plan.queueEntryId) return;
+      void requestOwnerQueuedTurnMove({
+        desktopApi,
+        federationTarget,
+        queueEntryId: plan.queueEntryId,
+        beforeQueueEntryId: plan.beforeQueueEntryId,
+        plannedOrder: plan.plannedOrder,
+      }).then((answer) => {
+        const settled = settleQueuedTurnMove(
+          store.getQueuedTurns(scopeKey),
+          id,
+          plan.requestId,
+          answer,
+          plan.ownerOrder,
+        );
+        // The row started or was removed, or a later move of it settles it.
+        if (!settled) return;
+        store.setQueuedTurns(scopeKey, settled);
+        if (answer.failure) setSendError(answer.failure);
+      });
+    },
+  });
+  const queuedBandHasMovableRow = queuedTurns.some((queued) =>
+    queuedReorder.canMove(queued.id)
+  );
   useEffect(() => {
     if (!desktopApi?.onAgentEvent || !ownedComposerDraftStore) {
       return;
@@ -1996,12 +2048,26 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
               aria-label={
                 index === 0 ? "Queued message" : `Queued message ${index + 1}`
               }
-              className="composer__queued composer__queued--message composer__queued--compact"
+              className={[
+                "composer__queued composer__queued--message composer__queued--compact",
+                queuedBandHasMovableRow ? "composer__queued--reorderable" : "",
+                queuedReorder.canMove(queued.id) ? "composer__queued--movable" : "",
+              ].filter(Boolean).join(" ")}
+              data-queued-reorder-id={queued.id}
               key={queued.id}
+              onKeyDown={(event) => queuedReorder.onKeyDown(event, queued.id)}
+              onPointerDown={(event) => queuedReorder.onPointerDown(event, queued.id)}
             >
               <QueuedMessageInspector
                 load={() => readQueuedMessage(queued)}
                 desktopApi={desktopApi}
+                leading={queuedBandHasMovableRow ? (
+                  queuedReorder.canMove(queued.id) ? (
+                    <QueuedRowGrip title={queued.title ?? queuedTurnPreview(queued)} />
+                  ) : (
+                    <span className="composer__queued-grip composer__queued-grip--empty" aria-hidden="true" />
+                  )
+                ) : null}
                 actions={
                   <>
                     <QueuedRowIconButton
@@ -2036,9 +2102,13 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
                 <span className="composer__queued-label">
                   {queued.backendQueuePending
                     ? "Sending…"
-                    : index === 0
-                      ? "Next"
-                      : `#${index + 1}`}
+                    : (
+                      <QueuedRowPositionLabel
+                        reorder={queuedReorder}
+                        id={queued.id}
+                        index={index}
+                      />
+                    )}
                 </span>
                 <span
                   className={[
@@ -2052,6 +2122,11 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
             </div>
           ))}
         </div>
+        <span
+          className="composer__queued-announcer"
+          aria-live="polite"
+          ref={queuedReorder.announcerRef}
+        />
 
         <MemoizedCompactComposer
           busy={session.threadBusy}

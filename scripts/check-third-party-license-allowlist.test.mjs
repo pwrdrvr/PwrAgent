@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   ALLOWED_LICENSE_IDS,
+  ANTHROPIC_COMMERCIAL_TERMS_PACKAGES,
   SpdxParseError,
   checkNoticeDevDependencyLicenses,
   checkNpmDependencyLicenses,
@@ -42,6 +43,24 @@ function records(licenseToPackages) {
 }
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+
+describe("Anthropic Commercial Terms exception", () => {
+  it("allows only the named SDK and platform packages with the expected declaration", () => {
+    expect(checkNpmDependencyLicenses(records({
+      "SEE LICENSE IN README.md": [...ANTHROPIC_COMMERCIAL_TERMS_PACKAGES],
+    }))).toEqual([]);
+    expect(checkNpmDependencyLicenses(records({
+      "SEE LICENSE IN LICENSE.md": [...ANTHROPIC_COMMERCIAL_TERMS_PACKAGES].filter((name) => name !== "@anthropic-ai/claude-agent-sdk"),
+    }))).toEqual([]);
+    expect(ALLOWED_LICENSE_IDS.has("SEE LICENSE IN README.md")).toBe(false);
+    expect(checkNpmDependencyLicenses(records({
+      "SEE LICENSE IN README.md": ["unrelated-package", "@anthropic-ai/claude-agent-sdk-unapproved"],
+    }))).toHaveLength(2);
+    expect(checkNpmDependencyLicenses(records({
+      "GPL-3.0-only": ["@anthropic-ai/claude-agent-sdk"],
+    }))).toHaveLength(1);
+  });
+});
 
 /**
  * The license headings of the committed notice's Dependency Summary.
@@ -326,6 +345,14 @@ describe("notice coverage", () => {
     const disclosed = readCommittedNoticeLicenses();
     expect(disclosed.length).toBeGreaterThan(0);
     for (const declaredLicense of disclosed) {
+      if (declaredLicense === "SEE LICENSE IN README.md") {
+        const notice = readFileSync(join(repoRoot, "THIRD_PARTY_LICENSES"), "utf8");
+        const group = notice.split(`\n${declaredLicense}\n`)[1]?.split(/\n\n/)[0] ?? "";
+        const packages = [...group.matchAll(/^- (\S+)@[^@\s]+(?: \|.*)?$/gm)].map((match) => match[1]);
+        expect(packages.length).toBeGreaterThan(0);
+        for (const name of packages) expect(ANTHROPIC_COMMERCIAL_TERMS_PACKAGES.has(name)).toBe(true);
+        continue;
+      }
       expect(
         evaluateSpdxExpression(declaredLicense, isPermissive),
         `THIRD_PARTY_LICENSES discloses ${declaredLicense}, which the gate does not allow`,

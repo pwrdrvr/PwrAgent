@@ -535,6 +535,38 @@ describe("isAcpSessionMissingForProjectError", () => {
 });
 
 describe("AcpBackendAdapter", () => {
+  it("excludes retired Claude ACP records from discovery and backend selection", async () => {
+    const legacyAgent: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId: "acp:claude-acp", registryId: "claude-acp", name: "Claude Agent",
+    };
+    const supportedAgent = buildInstalledAgent();
+    const upsertInstalledAgent = vi.fn();
+    const createAcpTransport = vi.fn();
+    const adapter = createTestAcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: (backend) => backend === legacyAgent.backendId ? legacyAgent : supportedAgent,
+        listInstalledAgents: () => [legacyAgent, supportedAgent],
+        upsertInstalledAgent,
+      },
+      captureStores: [],
+      discoverLocalAcpAgents: async () => [legacyAgent, supportedAgent],
+      createAcpTransport,
+      emit: vi.fn(async () => undefined),
+      handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
+    });
+    try {
+      await expect(adapter.listAvailableAgents()).resolves.toEqual([supportedAgent]);
+      await adapter.discoverAvailableAgents(issueProviderDiscoveryPermit("settings-user-action"));
+      expect((await adapter.describeInstalledBackends()).map((backend) => backend.kind)).toEqual(["acp:gemini"]);
+      expect(upsertInstalledAgent).not.toHaveBeenCalledWith(legacyAgent);
+      await expect(adapter.getClient("acp:claude-acp")).rejects.toThrow("ACP backend is not installed");
+      expect(createAcpTransport).not.toHaveBeenCalled();
+    } finally {
+      await adapter.close();
+    }
+  });
+
   it.each([
     { version: "1.0.50", runtimeVersion: undefined, supported: false },
     { version: "1.0.50-pwragent.1", runtimeVersion: undefined, supported: true },

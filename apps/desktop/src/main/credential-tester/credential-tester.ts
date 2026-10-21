@@ -1,5 +1,6 @@
 import type { MessagingCredentialValidationResult } from "@pwragent/messaging-interface";
 import type {
+  BackendSummary,
   DecisionProviderCheck,
   DecisionProviderId,
   SettingsCredentialTestKind,
@@ -68,6 +69,8 @@ export interface CredentialTesterDependencies {
   validateMessagingCredentials: (
     request: CredentialValidationRequest,
   ) => Promise<MessagingCredentialValidationResult>;
+  /** Re-inspects Claude Code: the executable PwrAgent will run and its sign-in. */
+  checkClaude?: () => Promise<BackendSummary["claude"]>;
   /** Settings' check of a decision provider, against what is saved. */
   checkDecisionProvider?: (provider: DecisionProviderId) => Promise<DecisionProviderCheck>;
   /** Override the codex `--version` runner. Defaults to spawning the binary. */
@@ -106,9 +109,9 @@ export class CredentialTester {
   private readonly deps: Required<
     Omit<
       CredentialTesterDependencies,
-      "runCodexVersion" | "timeoutMs" | "checkDecisionProvider"
+      "runCodexVersion" | "timeoutMs" | "checkDecisionProvider" | "checkClaude"
     >
-  > & Pick<CredentialTesterDependencies, "checkDecisionProvider"> & {
+  > & Pick<CredentialTesterDependencies, "checkDecisionProvider" | "checkClaude"> & {
     runCodexVersion: NonNullable<
       CredentialTesterDependencies["runCodexVersion"]
     >;
@@ -134,6 +137,7 @@ export class CredentialTester {
       resolveCodexCommand: dependencies.resolveCodexCommand,
       validateMessagingCredentials: dependencies.validateMessagingCredentials,
       checkDecisionProvider: dependencies.checkDecisionProvider,
+      checkClaude: dependencies.checkClaude,
       runCodexVersion:
         dependencies.runCodexVersion ?? defaultRunCodexVersion,
       timeoutMs: dependencies.timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS,
@@ -196,6 +200,8 @@ export class CredentialTester {
         return await this.testDiscord(startedAt);
       case "codex":
         return await this.testCodex(startedAt);
+      case "claude":
+        return await this.testClaude(startedAt);
       case "mattermost":
         return await this.testMattermost(startedAt);
       case "slack":
@@ -213,6 +219,26 @@ export class CredentialTester {
         throw new Error(`unknown credential test kind: ${exhaustive as string}`);
       }
     }
+  }
+
+  private async testClaude(
+    startedAt: number,
+  ): Promise<SettingsCredentialTestResult> {
+    const claude = await this.deps.checkClaude?.();
+    const finished = { kind: "claude" as const, testedAt: Date.now(), durationMs: Date.now() - startedAt };
+    if (!claude?.executable) return { ...finished, status: "unset" };
+    const account = claude.executable;
+    if (claude.authStatus === "signed-in") {
+      return { ...finished, status: "ok", account, detail: describeClaudeSignIn(claude.authMethod) };
+    }
+    return {
+      ...finished,
+      status: "failed",
+      account,
+      errorMessage: claude.authStatus === "sign-in-required"
+        ? "Sign-in required"
+        : "Could not verify sign-in",
+    };
   }
 
   private async testDecisionProvider(
@@ -462,4 +488,19 @@ async function defaultRunCodexVersion(
     stdout: stdout?.toString?.() ?? "",
     stderr: stderr?.toString?.() ?? "",
   };
+}
+
+function describeClaudeSignIn(
+  method: NonNullable<BackendSummary["claude"]>["authMethod"],
+): string {
+  switch (method) {
+    case "api-key":
+      return "API key";
+    case "claude-account":
+      return "Claude account";
+    case "external":
+      return "External provider";
+    default:
+      return "Signed in";
+  }
 }

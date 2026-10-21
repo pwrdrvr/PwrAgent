@@ -56,6 +56,7 @@ describe("ASAR entry paths", () => {
         entry: "/node_modules/node-pty/build/Release/conpty_console_list.node",
         unpacked: true,
       },
+      { entry: "/node_modules/@anthropic-ai/claude-agent-sdk-win32-x64/claude.exe", unpacked: true },
     ]);
   });
 
@@ -73,6 +74,7 @@ describe("ASAR entry paths", () => {
         entry: "/node_modules/node-pty/build/Release/spawn-helper",
         unpacked: true,
       },
+      { entry: "/node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/claude", unpacked: true },
     ]);
     expect(requiredPackagedRuntimeFiles("linux", "arm64")).toEqual([
       {
@@ -83,6 +85,7 @@ describe("ASAR entry paths", () => {
         entry: "/node_modules/node-pty/build/Release/pty.node",
         unpacked: true,
       },
+      { entry: "/node_modules/@anthropic-ai/claude-agent-sdk-linux-arm64/claude", unpacked: true },
     ]);
   });
 
@@ -93,6 +96,7 @@ describe("ASAR entry paths", () => {
       "\\node_modules\\better-sqlite3\\build\\Release\\better_sqlite3.node",
       "\\node_modules\\node-pty\\build\\Release\\conpty.node",
       "\\node_modules\\node-pty\\build\\Release\\conpty_console_list.node",
+      "\\node_modules\\@anthropic-ai\\claude-agent-sdk-win32-x64\\claude.exe",
     ], "win32", "x64");
 
     expect(missing).toEqual([

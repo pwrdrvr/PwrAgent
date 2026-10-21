@@ -350,7 +350,7 @@ export type McpSelectionApplyTiming = "next_turn" | "next_session_load";
 export function mcpSelectionApplyTiming(
   backend: AppServerBackendKind,
 ): McpSelectionApplyTiming {
-  return backend === "codex" ? "next_turn" : "next_session_load";
+  return backend === "codex" || backend === "claude" ? "next_turn" : "next_session_load";
 }
 
 /**

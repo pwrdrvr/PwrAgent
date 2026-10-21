@@ -23,11 +23,11 @@ function connection(
 const READY = connection({ id: "datadog", displayName: "Datadog" });
 
 describe("McpAccessPanel", () => {
-  it("adds a connection to the thread's selection", async () => {
+  it.each(["codex", "claude"] as const)("adds a connection to a %s thread selection", async (backend) => {
     const onSelectionChange = vi.fn(async () => undefined);
     render(
       <McpAccessPanel
-        backend="codex"
+        backend={backend}
         desktopApi={{
           listMcpConnections: async () => ({ connections: [READY] }),
         }}

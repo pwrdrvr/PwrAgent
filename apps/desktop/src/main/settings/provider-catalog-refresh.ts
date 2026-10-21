@@ -37,6 +37,7 @@ export type ProviderCatalogRefreshCoordinatorOptions = {
     progress: ProviderCatalogRefreshCodexProgress,
   ) => Promise<{ modelCount?: number }>;
   refreshAcp: (progress: ProviderCatalogRefreshProgress) => Promise<void>;
+  refreshClaude?: () => Promise<ProviderCatalogRefreshProviderUpdate>;
 };
 
 export const CODEX_PROVIDER_CATALOG_ID = "codex";
@@ -103,6 +104,9 @@ export class ProviderCatalogRefreshCoordinator {
           detail: CODEX_STARTING_STAGE,
           startedAt,
         },
+        ...(this.options.refreshClaude
+          ? [{ id: "claude", label: "Claude", status: "running" as const, startedAt }]
+          : []),
         ...this.options.listAcpProviders().map(
           (provider): ProviderCatalogRefreshProviderState => ({
             ...provider,
@@ -134,8 +138,18 @@ export class ProviderCatalogRefreshCoordinator {
     await Promise.all([
       this.runCodex(runId, signal),
       this.runAcp(runId, signal),
+      this.runClaude(runId, signal),
     ]);
     this.finish(runId, "completed");
+  }
+
+  private async runClaude(runId: number, signal: AbortSignal): Promise<void> {
+    if (!this.options.refreshClaude) return;
+    try {
+      this.updateProvider(runId, "claude", await untilAborted(this.options.refreshClaude(), signal));
+    } catch (error) {
+      this.updateProvider(runId, "claude", { status: "failed", error: errorMessage(error) });
+    }
   }
 
   private async runCodex(runId: number, signal: AbortSignal): Promise<void> {
@@ -182,6 +196,7 @@ export class ProviderCatalogRefreshCoordinator {
       for (const provider of this.state?.providers ?? []) {
         if (
           provider.id !== CODEX_PROVIDER_CATALOG_ID
+          && provider.id !== "claude"
           && !TERMINAL_STATUSES.has(provider.status)
         ) {
           this.updateProvider(runId, provider.id, {

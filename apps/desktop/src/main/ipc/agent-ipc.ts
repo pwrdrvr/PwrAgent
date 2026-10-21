@@ -25,6 +25,8 @@ import {
   type ApplyThreadModelMigrationResponse,
   type CancelQueuedTurnRequest,
   type CancelQueuedTurnResponse,
+  type MoveQueuedTurnRequest,
+  type MoveQueuedTurnResponse,
   type ReleaseQueuedTurnRequest,
   type ReleaseQueuedTurnResponse,
   type CancelThreadExecutionModeQueueRequest,
@@ -108,6 +110,7 @@ import {
   federationEventClassForMethod,
   getDesktopFederationRuntime,
 } from "../federation/federation-runtime";
+import { QUEUED_TURN_REORDER_UNSUPPORTED_MESSAGE } from "../federation/federation-backend-bridge";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { buildLiveDiffActivityEntry } from "../app-server/live-diff-activity";
 import { timeStartupProfileOperation } from "../diagnostics/startup-profile-events";
@@ -115,6 +118,7 @@ import {
   AGENT_READ_QUEUED_TURN_CHANNEL,
   AGENT_CANCEL_QUEUED_TURN_CHANNEL,
   AGENT_RELEASE_QUEUED_TURN_CHANNEL,
+  AGENT_MOVE_QUEUED_TURN_CHANNEL,
   AGENT_CANCEL_THREAD_EXECUTION_MODE_QUEUE_CHANNEL,
   AGENT_APPLY_THREAD_MODEL_MIGRATION_CHANNEL,
   AGENT_EVENT_CHANNEL,
@@ -738,6 +742,32 @@ export function registerAgentIpcHandlers(): void {
         "Cancelled from the desktop composer.",
         request.expectedContentHash,
       );
+    },
+  );
+
+  ipcMain.removeHandler(AGENT_MOVE_QUEUED_TURN_CHANNEL);
+  ipcMain.handle(
+    AGENT_MOVE_QUEUED_TURN_CHANNEL,
+    async (
+      _event,
+      request: MoveQueuedTurnRequest,
+    ): Promise<MoveQueuedTurnResponse> => {
+      if (
+        request.federationTarget
+        && isRemoteFederationTarget(request.federationTarget)
+      ) {
+        const { federationTarget, ...remoteRequest } = request;
+        const runtime = getDesktopFederationRuntime();
+        // The renderer offers no drag without the capability; this answers a
+        // stale window without a round trip to an owner that cannot move.
+        if (!runtime.remoteTargetSupportsCapability(federationTarget, "turn_queue_reorder")) {
+          throw new Error(QUEUED_TURN_REORDER_UNSUPPORTED_MESSAGE);
+        }
+        return await runtime
+          .remoteBackend(federationTarget)
+          .moveQueuedTurn(remoteRequest);
+      }
+      return await registry.moveQueuedTurn(request);
     },
   );
 

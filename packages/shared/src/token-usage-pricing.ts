@@ -110,7 +110,7 @@ export type ThreadUsageLineRecord = {
   provider: string;
   pricingCatalogId?: string;
   pricingCatalogVersion?: string;
-  pricingBasis?: "aggregate" | "request-components";
+  pricingBasis?: "aggregate" | "request-components" | "provider-reported";
   pricingRateId?: string;
   reasoningEffort?: string;
   reasoningOutputTokens: number;

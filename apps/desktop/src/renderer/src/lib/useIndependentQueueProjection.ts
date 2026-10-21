@@ -198,7 +198,7 @@ export function useIndependentQueueProjection(params: {
         return;
       }
       if (method.startsWith("turn/") || method.startsWith("thread/queued")
-        || method === "thread/turnQueue/updated"
+        || method === "thread/turnQueue/updated" || method === "thread/turnQueue/reordered"
         || method.startsWith("thread/executionMode/") || method === "thread/status/changed") schedule();
     });
     void refresh();

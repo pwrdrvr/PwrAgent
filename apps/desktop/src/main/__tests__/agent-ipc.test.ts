@@ -5,6 +5,7 @@ import type {
   ApplyThreadModelMigrationRequest,
   CancelQueuedTurnRequest,
   ReleaseQueuedTurnRequest,
+  MoveQueuedTurnRequest,
   CancelThreadExecutionModeQueueRequest,
   CancelThreadPrAutoDispatchRequest,
   CheckThreadBranchDriftRequest,
@@ -143,6 +144,11 @@ const registry = {
     disposition: "started" as const,
     turnId: "turn-released-1",
   })),
+  moveQueuedTurn: vi.fn(async (request: MoveQueuedTurnRequest) => ({
+    queueEntryId: request.queueEntryId,
+    disposition: "moved" as const,
+    queueEntryIds: [request.queueEntryId],
+  })),
   interruptTurn: vi.fn(async (request: InterruptTurnRequest) => ({
     backend: request.backend,
     threadId: request.threadId,
@@ -236,6 +242,11 @@ const federationMock = vi.hoisted(() => {
       queueEntryId: request.queueEntryId,
       disposition: "started" as const,
       turnId: "remote-turn-released-1",
+    })),
+    moveQueuedTurn: vi.fn(async (request: MoveQueuedTurnRequest) => ({
+      queueEntryId: request.queueEntryId,
+      disposition: "moved" as const,
+      queueEntryIds: [request.queueEntryId],
     })),
     startReview: vi.fn(async (request: StartReviewRequest) => ({
       backend: request.backend,
@@ -400,6 +411,7 @@ const federationMock = vi.hoisted(() => {
     runtime: {
       hydrateLiveThreadMessageOrigin: vi.fn((event: AgentEvent) => event),
       remoteBackend: vi.fn(() => remoteBackend),
+      remoteTargetSupportsCapability: vi.fn((_target: unknown, _capability: unknown) => true),
       rendererWantsRemoteEvent: vi.fn(() => true),
       setAgentEventPublisher: vi.fn(),
       setEnvironmentSetupProgressPublisher: vi.fn(),
@@ -492,6 +504,7 @@ describe("agent ipc", () => {
     registry.cancelQueuedTurn.mockClear();
     registry.cancelQueuedTurnWithDisposition.mockClear();
     registry.releaseQueuedTurnWithDisposition.mockClear();
+    registry.moveQueuedTurn.mockClear();
     registry.interruptTurn.mockClear();
     registry.stopSubAgent.mockClear();
     registry.steerTurn.mockClear();
@@ -504,6 +517,8 @@ describe("agent ipc", () => {
     invalidateExactOwner.mockClear();
     registry.setCodexThreadEnvironment.mockClear();
     federationMock.runtime.remoteBackend.mockClear();
+    federationMock.runtime.remoteTargetSupportsCapability.mockReset();
+    federationMock.runtime.remoteTargetSupportsCapability.mockReturnValue(true);
     federationMock.runtime.hydrateLiveThreadMessageOrigin.mockReset();
     federationMock.runtime.hydrateLiveThreadMessageOrigin.mockImplementation(
       (event: AgentEvent) => event,
@@ -562,6 +577,52 @@ describe("agent ipc", () => {
         federationTarget, { backend: "codex", threadId: "thread-1" }, "detail",
       );
       expect(invalidateExactOwner).toHaveBeenCalledTimes(2);
+    } finally {
+      disposeAgentIpcHandlers();
+    }
+  });
+
+  it("moves a queued turn in the local queue or on the owning peer", async () => {
+    const { registerAgentIpcHandlers, disposeAgentIpcHandlers } = await import("../ipc/agent-ipc");
+    const { AGENT_MOVE_QUEUED_TURN_CHANNEL } = await import("../../shared/ipc");
+    const federationTarget = { scope: "remote" as const, instanceId: "client_one" };
+    registerAgentIpcHandlers();
+    try {
+      const move = handlers.get(AGENT_MOVE_QUEUED_TURN_CHANNEL)!;
+
+      await expect(move({}, { queueEntryId: "local-c", beforeQueueEntryId: "local-a" })).resolves
+        .toMatchObject({ disposition: "moved" });
+      expect(registry.moveQueuedTurn).toHaveBeenCalledWith({ queueEntryId: "local-c", beforeQueueEntryId: "local-a" });
+      expect(federationMock.runtime.remoteBackend).not.toHaveBeenCalled();
+
+      await expect(move({}, { federationTarget, queueEntryId: "c", beforeQueueEntryId: "a" })).resolves
+        .toMatchObject({ disposition: "moved" });
+      expect(federationMock.runtime.remoteTargetSupportsCapability)
+        .toHaveBeenCalledWith(federationTarget, "turn_queue_reorder");
+      expect(federationMock.runtime.remoteBackend).toHaveBeenCalledWith(federationTarget);
+      // The owner moves its own entry; the viewer's target stays home.
+      expect(federationMock.remoteBackend.moveQueuedTurn).toHaveBeenCalledWith({ queueEntryId: "c", beforeQueueEntryId: "a" });
+      expect(registry.moveQueuedTurn).toHaveBeenCalledTimes(1);
+    } finally {
+      disposeAgentIpcHandlers();
+    }
+  });
+
+  it("refuses a move for a peer that does not advertise reordering, without asking it", async () => {
+    const { registerAgentIpcHandlers, disposeAgentIpcHandlers } = await import("../ipc/agent-ipc");
+    const { AGENT_MOVE_QUEUED_TURN_CHANNEL } = await import("../../shared/ipc");
+    const { QUEUED_TURN_REORDER_UNSUPPORTED_MESSAGE } = await import("../federation/federation-backend-bridge");
+    federationMock.runtime.remoteTargetSupportsCapability.mockImplementation(
+      (_target: unknown, capability: unknown) => capability !== "turn_queue_reorder",
+    );
+    registerAgentIpcHandlers();
+    try {
+      await expect(handlers.get(AGENT_MOVE_QUEUED_TURN_CHANNEL)!({}, {
+        federationTarget: { scope: "remote" as const, instanceId: "client_one" },
+        queueEntryId: "c",
+      })).rejects.toThrow(QUEUED_TURN_REORDER_UNSUPPORTED_MESSAGE);
+      expect(federationMock.remoteBackend.moveQueuedTurn).not.toHaveBeenCalled();
+      expect(registry.moveQueuedTurn).not.toHaveBeenCalled();
     } finally {
       disposeAgentIpcHandlers();
     }
