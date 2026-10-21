@@ -2,7 +2,10 @@ import type { ClaudeUsageTotals } from "./claude-usage";
 import { randomUUID } from "node:crypto";
 import { appendFile, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { AppServerThreadEntry, AppServerThreadSummary } from "@pwragent/shared";
+import type { AppServerThreadEntry, AppServerThreadSummary, BackendRateLimitSummary } from "@pwragent/shared";
+
+/** Not a thread id, so list() never reads it as session metadata. */
+const RATE_LIMITS_FILE = "rate-limits.json";
 
 export type ClaudeSession = {
   thread: AppServerThreadSummary;
@@ -39,6 +42,33 @@ export class ClaudeSessionStore {
     const temporary = `${destination}.${randomUUID()}.tmp`;
     try {
       await writeFile(temporary, JSON.stringify(session), { mode: 0o600 });
+      await rename(temporary, destination);
+    } finally {
+      await rm(temporary, { force: true });
+    }
+  }
+
+  /** Account-wide limits last reported by Claude, so a restart does not start blank. */
+  async readRateLimits(): Promise<BackendRateLimitSummary[]> {
+    try {
+      const value: unknown = JSON.parse(await readFile(path.join(this.root, RATE_LIMITS_FILE), "utf8"));
+      return Array.isArray(value) ? value.filter((limit): limit is BackendRateLimitSummary =>
+        Boolean(limit) && typeof limit.name === "string" && typeof limit.limitId === "string") : [];
+    } catch {
+      return [];
+    }
+  }
+
+  async saveRateLimits(limits: BackendRateLimitSummary[]): Promise<void> {
+    const destination = path.join(this.root, RATE_LIMITS_FILE);
+    if (limits.length === 0) {
+      await rm(destination, { force: true });
+      return;
+    }
+    await mkdir(this.root, { recursive: true, mode: 0o700 });
+    const temporary = `${destination}.${randomUUID()}.tmp`;
+    try {
+      await writeFile(temporary, JSON.stringify(limits), { mode: 0o600 });
       await rename(temporary, destination);
     } finally {
       await rm(temporary, { force: true });
