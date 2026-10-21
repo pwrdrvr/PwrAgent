@@ -64,6 +64,12 @@ describe("summarizeThreadDependencies", () => {
       .toMatchObject({ count: 2, label: "2 waiting" });
   });
 
+  it("says in the tooltip when a registration reminds the operator instead of resuming", () => {
+    const tooltip = summarizeThreadDependencies([{ ...waiting, deliver: "operator" }]).get("codex:consumer")!.tooltip;
+    expect(tooltip).toBe("Continue after all of:\n✓ Split settings schema has a reviewable PR\n○ Split settings schema is merged\nThen reminds you.");
+    expect(summarizeThreadDependencies([waiting]).get("codex:consumer")!.tooltip).not.toContain("reminds you");
+  });
+
   it("raises an uncertain delivery over every other state and leaves finished ones out", () => {
     const indicators = summarizeThreadDependencies([
       waiting,

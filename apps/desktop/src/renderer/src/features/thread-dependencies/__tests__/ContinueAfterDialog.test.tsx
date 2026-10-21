@@ -251,6 +251,55 @@ describe("Continue After dialog", () => {
     expect(screen.getByText("Prerequisite failed")).toBeInTheDocument();
   });
 
+  it("reminds the operator instead of resuming the thread when chosen", async () => {
+    const manage = vi.fn(async () => ({ dependencies: [] }));
+    const api = { manageThreadDependencies: manage, getNavigationQueryPage: pageOf([target]), releaseNavigationQuery: vi.fn(async () => {}) } as unknown as DesktopApi;
+    renderDialog(api);
+    const results = await screen.findByRole("list", { name: "Threads" });
+    fireEvent.click(await within(results).findByRole("button", { name: "Foundation" }));
+    const whenMet = screen.getByRole("group", { name: "When met" });
+    expect(within(whenMet).getByRole("button", { name: "Resume this thread" })).toHaveAttribute("aria-pressed", "true");
+    // Start thread is offered only for a reminder.
+    expect(screen.queryByRole("checkbox", { name: "Offer to start a thread with this reminder" })).not.toBeInTheDocument();
+    fireEvent.click(within(whenMet).getByRole("button", { name: "Remind me" }));
+    expect(screen.queryByRole("textbox", { name: "Instructions" })).not.toBeInTheDocument();
+    const reminder = screen.getByRole("textbox", { name: "Reminder" });
+    expect(reminder).toBeRequired();
+    expect(reminder).toHaveAccessibleDescription("Required. It becomes a to-do card on this thread, after the met prerequisites. No turn starts.");
+    fireEvent.change(reminder, { target: { value: "Write the release notes" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Offer to start a thread with this reminder" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    await waitFor(() => expect(manage).toHaveBeenCalledWith({
+      action: "create", backend: "codex", threadId: "waiting",
+      conditions: [{ backend: "codex", threadId: "foundation", when: "ci_passed", title: "Foundation" }],
+      mode: "all", onFailure: "wait", continuation: "Write the release notes", deliver: "operator", handoff: true,
+    }));
+  });
+
+  it("names who acts on each card", async () => {
+    const reminder: ThreadDependency = { ...dependency, id: "reminder", deliver: "operator", continuation: "Call mom" };
+    const reminded: ThreadDependency = { ...reminder, id: "reminded", status: "delivered", outcome: "success", todoId: "todo-1" };
+    const continued: ThreadDependency = { ...dependency, id: "continued", status: "delivered", outcome: "success" };
+    const api = { manageThreadDependencies: vi.fn(async () => ({ dependencies: [dependency, reminder, reminded, continued] })) } as unknown as DesktopApi;
+    renderDialog(api);
+    expect(await screen.findByText("Reminds you")).toBeInTheDocument();
+    // A registration made before operator delivery resumes the thread.
+    expect(screen.getByText("Resumes this thread")).toBeInTheDocument();
+    expect(dialog()).toHaveAccessibleDescription("“Dependencies” starts a turn when its prerequisites are met.");
+    fireEvent.click(screen.getByRole("button", { name: "History (2)" }));
+    expect(screen.getByText("Reminded")).toBeInTheDocument();
+    expect(screen.getByText("Continued")).toBeInTheDocument();
+    expect(screen.getAllByText("Reminds you")).toHaveLength(2);
+  });
+
+  it("says the thread reminds you when every active registration does", async () => {
+    const reminder: ThreadDependency = { ...dependency, id: "reminder", deliver: "operator", continuation: "Call mom" };
+    const api = { manageThreadDependencies: vi.fn(async () => ({ dependencies: [reminder] })) } as unknown as DesktopApi;
+    renderDialog(api);
+    expect(await screen.findByText("Reminds you")).toBeInTheDocument();
+    expect(dialog()).toHaveAccessibleDescription("“Dependencies” reminds you when its prerequisites are met.");
+  });
+
   it("shows registration failures and uncertain delivery without offering to replay it", async () => {
     const manage = vi.fn(async () => ({ dependencies: [{ ...dependency, status: "dispatching", error: "Delivery was interrupted" }] }));
     const api = { manageThreadDependencies: manage } as unknown as DesktopApi;

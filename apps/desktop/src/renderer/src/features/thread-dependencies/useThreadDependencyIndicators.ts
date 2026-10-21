@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import type { NavigationThreadSummary, ThreadDependency } from "@pwragent/shared";
-import { buildThreadIdentityKey, THREAD_DEPENDENCY_CONDITION_PHRASES } from "@pwragent/shared";
+import { buildThreadIdentityKey, THREAD_DEPENDENCY_CONDITION_PHRASES, threadDependencyDeliveryTarget } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import {
@@ -151,6 +151,7 @@ function describeRegistration(dependency: ThreadDependency): string {
     const mark = state === "satisfied" ? "✓" : state === "failed" ? "✗" : "○";
     return `${mark} ${condition.title || condition.threadId} ${THREAD_DEPENDENCY_CONDITION_PHRASES[condition.when]}`;
   });
+  if (threadDependencyDeliveryTarget(dependency) === "operator") lines.push("Then reminds you.");
   if (needsDeliveryReview(dependency)) lines.push("Delivery needs review.");
   return [heading, ...lines].join("\n");
 }

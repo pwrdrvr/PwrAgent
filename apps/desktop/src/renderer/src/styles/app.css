@@ -32292,6 +32292,18 @@ div.composer-error-row__toggle {
   overflow-wrap: anywhere;
 }
 
+/* Who acts when the dependency fires, beside the status chip. */
+.thread-dependencies__target {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+/* The form's 12px type; the composer primitive, declared later, is sized
+   for the composer, so this needs both classes to win. */
+.composer__checkbox.thread-dependencies__handoff {
+  font-size: 12px;
+}
+
 /* The plan the resumed turn starts from, as the registering author wrote it. */
 .thread-dependencies__continuation {
   margin: 0;
