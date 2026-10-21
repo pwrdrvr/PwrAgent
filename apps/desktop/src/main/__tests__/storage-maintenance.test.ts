@@ -24,6 +24,7 @@ it("requires positive archived evidence and seven days, resetting on restore", (
   const identity = { backend: "codex", threadId: "fixture" };
   try {
     observeStorageArchive(state.raw, identity.backend, identity.threadId, true, 100);
+    state.raw.prepare("INSERT INTO token_miser_objects VALUES (?,?,?,?)").run("object", identity.threadId, 0, "history");
     expect(eligibleStorageThreads(state.raw, [identity], 100 + STORAGE_GRACE_MS - 1)).toEqual([]);
     expect(eligibleStorageThreads(state.raw, [identity], 100 + STORAGE_GRACE_MS)).toEqual([identity]);
     expect(eligibleStorageThreads(state.raw, [], 100 + STORAGE_GRACE_MS)).toEqual([]);
@@ -33,6 +34,45 @@ it("requires positive archived evidence and seven days, resetting on restore", (
     observeStorageArchive(state.raw, identity.backend, identity.threadId, true, 200 + STORAGE_GRACE_MS);
     expect(eligibleStorageThreads(state.raw, [identity], 201 + STORAGE_GRACE_MS)).toEqual([]);
   } finally { state.close(); }
+});
+
+it("skips old archives without inspection history, even when metadata is retained", () => {
+  const state = StateDb.open(":memory:");
+  const identity = { backend: "codex", threadId: "empty" };
+  try {
+    observeStorageArchive(state.raw, identity.backend, identity.threadId, true, 0);
+    fenceStorageRetention(state.raw, identity);
+    state.raw.prepare("INSERT INTO threads(thread_id,payload) VALUES (?,?)").run("codex:empty", "{}");
+    expect(eligibleStorageThreads(state.raw, [identity], STORAGE_GRACE_MS)).toEqual([]);
+  } finally { state.close(); }
+});
+
+it("resumes remaining history, then excludes cleaned archives across restarts without losing their archive age", () => {
+  const fixture = createTempStateDb("storage-eligibility-");
+  let state = StateDb.open(fixture.dbPath);
+  const identity = { backend: "codex", threadId: "fixture" };
+  const now = STORAGE_GRACE_MS;
+  try {
+    observeStorageArchive(state.raw, identity.backend, identity.threadId, true, 0);
+    const insert = state.raw.prepare("INSERT INTO token_miser_objects VALUES (?,?,?,?)");
+    state.raw.transaction(() => {
+      for (let i = 0; i < 129; i++) insert.run(String(i), identity.threadId, 0, "history");
+    })();
+    const slice = storageDetailStatements(state.raw, identity).find((op) => op.statement.source.includes("token_miser_objects"))!;
+    expect(slice.statement.run(...slice.parameters).changes).toBe(128);
+    state.close();
+    state = StateDb.open(fixture.dbPath);
+    expect(eligibleStorageThreads(state.raw, [identity], now)).toEqual([identity]);
+    for (const op of storageDetailStatements(state.raw, identity)) op.statement.run(...op.parameters);
+    state.close();
+    state = StateDb.open(fixture.dbPath);
+    observeStorageArchive(state.raw, identity.backend, identity.threadId, true, now);
+    expect(eligibleStorageThreads(state.raw, [identity], now + STORAGE_INTERVAL_MS)).toEqual([]);
+    // A late observation is cleanup work again, without another seven-day wait.
+    state.raw.prepare("INSERT INTO token_miser_observations VALUES (?,?,?,?)").run("late", identity.threadId, 0, "history");
+    expect(eligibleStorageThreads(state.raw, [identity], now + STORAGE_INTERVAL_MS)).toEqual([identity]);
+    expect(eligibleStorageThreads(state.raw, [{ backend: "acp:grok", threadId: identity.threadId }], now + STORAGE_INTERVAL_MS)).toEqual([]);
+  } finally { state.close(); removeTempStateDbDir(fixture.tempDir); }
 });
 
 it("preserves metadata, unknown threads and oversized objects across resumable slices", () => {
