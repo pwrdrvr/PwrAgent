@@ -71,7 +71,15 @@ for (const theme of ["dark", "light"] as const) {
         }, activityFixture()),
       );
       await app.window.emulateMedia({ reducedMotion: "reduce" });
-      const trigger = app.window.getByRole("button", { name: "Open Star Map", exact: true });
+      // Loading and final headers both expose Star Map. Wait for the selected
+      // thread's real header; opening the placeholder's popover loses it when
+      // lazy thread detail replaces that header during the audit.
+      await app.window.getByRole("button", { name: /Replay smoke thread/i }).first().click();
+      await expect(app.window.getByRole("heading", { level: 2, name: "Replay smoke thread" })).toBeVisible();
+      await expect(app.window.getByRole("textbox", { name: "Reply", exact: true })).toBeEnabled();
+      // Windows hosts this control in its persistent native-style titlebar.
+      const trigger = app.window.locator(".thread-header:not(.thread-header--placeholder), .app-titlebar")
+        .getByRole("button", { name: "Open Star Map", exact: true });
       await expect(trigger).toBeVisible();
       expect(await trigger.evaluate((button) => {
         const control = button.getBoundingClientRect();
