@@ -112,11 +112,21 @@ export function observeStorageArchive(db: Database.Database, backend: string, th
 export type StorageThreadIdentity = { backend: string; threadId: string; archivedAt?: number };
 
 export function eligibleStorageThreads(db: Database.Database, archived: StorageThreadIdentity[], now: number): StorageThreadIdentity[] {
-  const lookup = db.prepare("SELECT archived_at FROM thread_storage_retention WHERE backend=? AND thread_id=?");
-  return archived.filter((identity) => {
-    const row = lookup.get(identity.backend, identity.threadId) as { archived_at: number } | undefined;
-    return row !== undefined && row.archived_at <= now - STORAGE_GRACE_MS;
-  });
+  // Archive receipts preserve the grace period, not a permanent cleanup queue.
+  // Probe the detail indexes without loading payloads; completed archives drop
+  // out naturally, and interrupted cleanup or late writes remain discoverable.
+  const lookup = db.prepare(`SELECT 1 FROM thread_storage_retention
+    WHERE backend=@backend AND thread_id=@threadId AND archived_at<=@cutoff
+      AND (
+        EXISTS (SELECT 1 FROM thread_tool_invocation_alerts WHERE backend=@backend AND thread_id=@threadId)
+        OR EXISTS (SELECT 1 FROM thread_tool_invocations WHERE backend=@backend AND thread_id=@threadId)
+        OR EXISTS (SELECT 1 FROM thread_tool_analysis WHERE backend=@backend AND thread_id=@threadId)
+        OR (@backend='codex' AND (
+          EXISTS (SELECT 1 FROM token_miser_objects WHERE thread_id=@threadId)
+          OR EXISTS (SELECT 1 FROM token_miser_observations WHERE thread_id=@threadId)
+        ))
+      )`);
+  return archived.filter((identity) => lookup.get({ backend: identity.backend, threadId: identity.threadId, cutoff: now - STORAGE_GRACE_MS }) !== undefined);
 }
 
 // Slice indexed candidates by rows and bytes. Keep oversized records intact.

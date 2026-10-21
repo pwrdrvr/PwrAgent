@@ -47,6 +47,37 @@ it("skips old archives without inspection history, even when metadata is retaine
   } finally { state.close(); }
 });
 
+it.each([
+  ["invocations", `INSERT INTO thread_tool_invocations (
+    invocation_id,backend,thread_id,item_id,tool_name,category,status,observed_at,updated_at,
+    output_chars,output_lines,estimated_output_tokens,warning_lines,error_lines,info_lines,debug_lines,output_truncated,noisy
+  ) VALUES ('invocation',?,?,'item','tool','other','completed',0,0,0,0,0,0,0,0,0,0,0)`, false],
+  ["alerts", `INSERT INTO thread_tool_invocation_alerts (
+    alert_id,backend,thread_id,kind,severity,tool_name,first_observed_at,last_observed_at,invocation_count,
+    total_output_chars,estimated_output_tokens,message,suggested_prompt,created_at,updated_at
+  ) VALUES ('alert',?,?,'kind','warning','tool',0,0,1,0,0,'message','prompt',0,0)`, false],
+  ["analysis", `INSERT INTO thread_tool_analysis (
+    backend,thread_id,analyzer_version,analyzed_at,completeness,entry_count,invocation_count,missing_output_count,page_count
+  ) VALUES (?,?,'v1',0,'complete',0,0,0,0)`, false],
+  ["objects", "INSERT INTO token_miser_objects VALUES ('object',?,0,'history')", true],
+  ["observations", "INSERT INTO token_miser_observations VALUES ('observation',?,0,'history')", true],
+] as const)("counts remaining %s only for the matching archived backend and thread", (_kind, sql, codexOnly) => {
+  const state = StateDb.open(":memory:");
+  const codex = { backend: "codex", threadId: "shared-id" };
+  const acp = { backend: "acp:grok", threadId: "shared-id" };
+  const empty = { backend: "codex", threadId: "empty" };
+  const identities = [codex, acp, empty];
+  try {
+    for (const id of identities) observeStorageArchive(state.raw, id.backend, id.threadId, true, 0);
+    state.raw.prepare(sql).run(...(codexOnly ? [codex.threadId] : [acp.backend, acp.threadId]));
+    const owner = codexOnly ? codex : acp;
+    expect(eligibleStorageThreads(state.raw, identities, STORAGE_GRACE_MS)).toEqual([owner]);
+    expect(eligibleStorageThreads(state.raw, identities.filter((id) => id !== owner), STORAGE_GRACE_MS)).toEqual([]);
+    for (const op of storageDetailStatements(state.raw, owner)) op.statement.run(...op.parameters);
+    expect(eligibleStorageThreads(state.raw, identities, STORAGE_GRACE_MS)).toEqual([]);
+  } finally { state.close(); }
+});
+
 it("resumes remaining history, then excludes cleaned archives across restarts without losing their archive age", () => {
   const fixture = createTempStateDb("storage-eligibility-");
   let state = StateDb.open(fixture.dbPath);
@@ -72,6 +103,20 @@ it("resumes remaining history, then excludes cleaned archives across restarts wi
     state.raw.prepare("INSERT INTO token_miser_observations VALUES (?,?,?,?)").run("late", identity.threadId, 0, "history");
     expect(eligibleStorageThreads(state.raw, [identity], now + STORAGE_INTERVAL_MS)).toEqual([identity]);
     expect(eligibleStorageThreads(state.raw, [{ backend: "acp:grok", threadId: identity.threadId }], now + STORAGE_INTERVAL_MS)).toEqual([]);
+  } finally { state.close(); removeTempStateDbDir(fixture.tempDir); }
+});
+
+it("only reads when selecting pending cleanup across repeated startups", async () => {
+  vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+  const fixture = createTempStateDb("storage-eligibility-writes-");
+  const state = StateDb.open(fixture.dbPath);
+  const identity = { backend: "codex", threadId: "fixture" };
+  try {
+    observeStorageArchive(state.raw, identity.backend, identity.threadId, true, 0);
+    const { writes } = await measureSqliteWrites(() => {
+      for (let i = 0; i < 10; i++) expect(eligibleStorageThreads(state.raw, [identity], STORAGE_GRACE_MS + i * STORAGE_INTERVAL_MS)).toEqual([]);
+    });
+    expect(writes).toMatchObject({ commits: 0, statements: 0, rowsChanged: 0, walBytes: 0 });
   } finally { state.close(); removeTempStateDbDir(fixture.tempDir); }
 });
 
