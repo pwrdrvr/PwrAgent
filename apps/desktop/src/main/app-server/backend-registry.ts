@@ -34054,6 +34054,11 @@ export class DesktopBackendRegistry {
           after = page.nextCursor;
         } while (after);
       }
+      // Claude threads hold checkouts too. Without them, archiving another
+      // thread could remove a worktree a Claude thread still runs in. Their
+      // directory comes from the cwd, the same way ACP sessions resolve it.
+      await context?.checkpoint();
+      await appendPage("claude", await this.claudeBackend.listThreads({ archived }), archived, true);
     }
     context?.assertCurrent();
     backendRegistryLog.info("archive cleanup inventory read", {

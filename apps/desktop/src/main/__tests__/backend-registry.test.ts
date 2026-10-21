@@ -54845,6 +54845,60 @@ script = "printf setup"
     await registry.close();
   });
 
+  it("skips Codex worktree cleanup while an active Claude thread runs in it", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-worktree-"));
+    const worktreePath = "/repo/.worktrees/shared";
+    const worktree: LinkedDirectorySummary = {
+      id: "directory:/repo/app", label: "app", path: "/repo/app", kind: "worktree", worktreePath,
+    };
+    const codexThread: AppServerThreadSummary = {
+      id: "codex-parent", title: "Codex parent", titleSource: "explicit", linkedDirectories: [worktree],
+      source: "codex", gitBranch: "codex/parent", updatedAt: 1,
+    };
+    const claudeId = "6a1d2c3b-4e5f-4a7b-8c9d-0e1f2a3b4c5d";
+    const store = new ClaudeSessionStore(path.join(root, "sessions"));
+    // Saved the way a Claude thread started in a folder is: a local cwd.
+    await store.save({ cwd: worktreePath, thread: {
+      id: claudeId, title: "Claude user", titleSource: "explicit", source: "claude", updatedAt: 2,
+      linkedDirectories: [{ id: worktreePath, kind: "local", label: "shared", path: worktreePath }],
+    } });
+    const archiveWorktree = vi.fn();
+    const acpWorktreeRepositoryResolver = vi.fn(async (cwd: string) => cwd === worktreePath ? worktree : undefined);
+    const codexClient = Object.assign(new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "thread/archive"] },
+      threads: [codexThread],
+    }), {
+      // The shipped Codex client uses the paged inventory, not the aggregate listing.
+      listArchiveCleanupThreadsPage: vi.fn(async ({ archived }: { archived: boolean }) => ({
+        threads: archived ? [{ ...codexThread, archived: true }] : [],
+      })),
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      pdfToolMcpServer: null,
+      worktreeArchiveService: { archive: archiveWorktree } as unknown as WorktreeArchiveService,
+      acpWorktreeRepositoryResolver,
+      claudeBackendOptions: {
+        store,
+        inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+        discoverModels: async () => [],
+      },
+    });
+    try {
+      const response = await registry.archiveThread({ backend: "codex", threadId: "codex-parent" });
+      expect(codexClient.listArchiveCleanupThreadsPage).toHaveBeenCalled();
+      expect(archiveWorktree).not.toHaveBeenCalled();
+      expect(response.cleanup).toEqual([expect.objectContaining({
+        worktreePath, removedWorktree: false,
+        skippedReason: `Worktree is still used by another active thread: ${claudeId}.`,
+      })]);
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("ungroups active child threads when archiving only the parent", async () => {
     const parentThread: AppServerThreadSummary = {
       id: "thread-parent",
