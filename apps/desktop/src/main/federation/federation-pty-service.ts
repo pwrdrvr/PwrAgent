@@ -322,7 +322,7 @@ export class FederationPtyService {
    * disconnect reaping. They grant no control, ack, lease or process lifetime. */
   async listForOwnerThread(context: TerminalToolContext): Promise<IntegratedTerminalSessionSummary[]> {
     await this.ready;
-    await Promise.all([...this.checkpoints]);
+    await Promise.all([...this.checkpoints.values()].flatMap((pending) => [...pending]));
     if (this.options.allowOpen?.() === false) return [];
     const threadKey = `${context.backend}:${context.threadId}`;
     return [
@@ -341,7 +341,7 @@ export class FederationPtyService {
 
   async snapshotForOwnerThread(context: TerminalToolContext, sessionId: string) {
     await this.ready;
-    await Promise.all([...this.checkpoints]);
+    await Promise.all([...this.checkpoints.get(sessionId) ?? []]);
     if (this.options.allowOpen?.() === false) return undefined;
     const replay = this.outputForOwnerThread(context, sessionId);
     if (replay) return replay.snapshot();

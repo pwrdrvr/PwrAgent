@@ -1,4 +1,5 @@
 import { TerminalControlTail } from "./terminal-control-tail";
+import { randomUUID } from "node:crypto";
 import headless from "@xterm/headless";
 import serialize from "@xterm/addon-serialize";
 import type { Terminal } from "@xterm/headless";
@@ -32,6 +33,8 @@ const PLAIN_TERMINAL_MODES = "\x1b[0m\x1b[?25h\x1b[?1l\x1b[?66l\x1b[?2004l\x1b[4
 /** Authoritative screen and bounded raw output, independent of renderer lifetime.
  * Never wire headless onData to a PTY: parsing output can generate replies. */
 export class TerminalReplay {
+  /** A resumed shell can reuse its terminal id, but starts a new raw sequence. */
+  readonly generation = randomUUID();
   private readonly terminal: Terminal;
   private readonly serializer = new serialize.SerializeAddon();
   private queue: Promise<void> = Promise.resolve();

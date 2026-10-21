@@ -573,19 +573,20 @@ export class IntegratedTerminalService {
 
   async listForOwnerThread(threadKey: string): Promise<IntegratedTerminalSessionSummary[]> {
     await this.ready;
-    return this.listSessions().filter((session) => session.threadKey === threadKey);
+    return this.listSessions().filter((session) => session.threadKey === threadKey
+      && !this.sessionsById.get(session.sessionId)?.closing);
   }
 
   /** Thread-bound owner API for the read-only tool stack. */
   outputForThread(threadKey: string, sessionId: string): TerminalReplay | undefined {
     const session = this.sessionsById.get(sessionId);
-    return session?.threadKey === threadKey ? session.replay : undefined;
+    return session?.threadKey === threadKey && !session.closing ? session.replay : undefined;
   }
 
   async snapshotForThread(threadKey: string, sessionId: string) {
     await this.ready;
     const live = this.sessionsById.get(sessionId);
-    if (live?.threadKey === threadKey) return live.replay.snapshot();
+    if (live?.threadKey === threadKey) return live.closing ? undefined : live.replay.snapshot();
     const record = this.archived.get(sessionId);
     return record?.summary.threadKey === threadKey ? { ...record.snapshot } : undefined;
   }

@@ -1,4 +1,5 @@
 import { TerminalHistoryStore } from "../terminal/terminal-history-store";
+import { TerminalOutputReader } from "../terminal/terminal-output-reader";
 import {
   chmodSync,
   existsSync,
@@ -1743,6 +1744,88 @@ describe("terminal history lifecycle", () => {
     await expect(service.createOrAttach({ ...request, threadKey: "codex:two" }, fakeWebContents())).rejects.toThrow("different thread");
     expect(service.outputForThread("codex:two", "one")).toBeUndefined();
     service.close({ sessionId: "one" });
+  });
+});
+
+describe("local terminal owner read lifecycle", () => {
+  function readerFor(service: IntegratedTerminalService) {
+    return new TerminalOutputReader({
+      ownerInstanceId: () => "owner",
+      list: (ctx) => service.listForOwnerThread(`${ctx.backend}:${ctx.threadId}`),
+      replay: (ctx, id) => service.outputForThread(`${ctx.backend}:${ctx.threadId}`, id),
+      snapshot: (ctx, id) => service.snapshotForThread(`${ctx.backend}:${ctx.threadId}`, id),
+    });
+  }
+  const context = { backend: "codex" as const, threadId: "one" };
+  const address = { ownerInstanceId: "owner", terminalId: "one" };
+  const request = { sessionId: "one", threadKey: "codex:one", cwd: os.tmpdir(), cols: 80, rows: 24 };
+
+  it("rejects old raw cursors before and after a resumed shell reaches their sequence", async () => {
+    const first = fakePty();
+    const second = fakePty();
+    const spawn = vi.fn().mockReturnValueOnce(first).mockReturnValueOnce(second);
+    let exited!: () => void;
+    const exitPublished = new Promise<void>((resolve) => { exited = resolve; });
+    const service = new IntegratedTerminalService({
+      loadNodePty: async () => ({ spawn: spawn as unknown as typeof import("node-pty").spawn }),
+      onSessionsChanged: (sessions) => {
+        if (sessions.some((session) => session.status === "exited")) exited();
+      },
+    });
+    try {
+      await service.createOrAttach(request, fakeWebContents());
+      const reader = readerFor(service);
+      for (let i = 0; i < 3; i++) vi.mocked(first.onData).mock.calls[0]![0]("old output\r\n");
+      const before = (await reader.list(context)).terminals[0]!;
+      const oldCursors = [before.availableRange!.startCursor, before.availableRange!.endCursor,
+        (await reader.read(context, { ...address, format: "raw" })).nextCursor!];
+      vi.mocked(first.onExit).mock.calls[0]![0]({ exitCode: 0 });
+      await exitPublished;
+      await service.createOrAttach({ ...request, resume: true }, fakeWebContents());
+      expect((await reader.list(context)).terminals[0]).toMatchObject({ terminalId: before.terminalId, createdAt: before.createdAt });
+      for (const cursor of oldCursors) {
+        await expect(reader.read(context, { ...address, format: "raw", cursor })).rejects.toThrow("cursor");
+      }
+      for (let i = 0; i < 4; i++) vi.mocked(second.onData).mock.calls[0]![0](`new output ${i}\r\n`);
+      for (const cursor of oldCursors) {
+        await expect(reader.read(context, { ...address, format: "raw", cursor })).rejects.toThrow("cursor");
+      }
+      const fresh = (await reader.list(context)).terminals[0]!.availableRange!.startCursor;
+      const output = await reader.read(context, { ...address, format: "raw", cursor: fresh });
+      expect(output).toMatchObject({ gap: false, frames: expect.arrayContaining([{ seq: 2, timestamp: expect.any(Number), data: "new output 0\r\n" }]) });
+      expect(await reader.read(context, { ...address, format: "raw", cursor: output.nextCursor! })).toMatchObject({ frames: [], gap: false });
+    } finally {
+      service.close({ sessionId: "one" });
+      vi.mocked(second.onExit).mock.calls[0]?.[0]({ exitCode: 0 });
+      await service.dispose();
+    }
+  });
+
+  it("revokes fresh and cached reads while a closed local PTY delays exit", async () => {
+    const pty = fakePty();
+    const service = new IntegratedTerminalService({
+      loadNodePty: async () => ({ spawn: (() => pty) as unknown as typeof import("node-pty").spawn }),
+    });
+    try {
+      await service.createOrAttach(request, fakeWebContents());
+      vi.mocked(pty.onData).mock.calls[0]![0]("retained screen");
+      const reader = readerFor(service);
+      const page = await reader.read(context, { ...address, format: "plain", maxChars: 3 });
+      expect(page.hasMore).toBe(true);
+      service.close({ sessionId: "one" });
+      expect(pty.kill).toHaveBeenCalled();
+      expect((await reader.list(context)).terminals).toEqual([]);
+      expect(service.outputForThread("codex:one", "one")).toBeUndefined();
+      expect(await service.snapshotForThread("codex:one", "one")).toBeUndefined();
+      for (const format of ["raw", "plain"] as const) {
+        await expect(reader.read(context, { ...address, format })).rejects.toThrow("scope");
+      }
+      await expect(reader.read(context, { ...address, format: "plain", cursor: page.nextCursor! })).rejects.toThrow("scope");
+      expect(pty.write).not.toHaveBeenCalled();
+    } finally {
+      vi.mocked(pty.onExit).mock.calls[0]?.[0]({ exitCode: 0 });
+      await service.dispose();
+    }
   });
 });
 
