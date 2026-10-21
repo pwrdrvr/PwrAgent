@@ -4,12 +4,6 @@ import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
 
 export type SubthreadTrays = {
   /**
-   * Give `owner` a tray and fill it with its whole descendant subtree. Rows
-   * already claimed by an earlier owner are skipped, so a cycle in the stored
-   * parent links terminates and no row renders twice.
-   */
-  addTrayOwner: (owner: NavigationThreadSummary) => void;
-  /**
    * Ordered keys of the *direct* children this tray actually renders — the
    * only rows a tray reorder may move, because `subthreadOrder` is stored per
    * parent. Writing a whole flattened tray back would list grandchildren as
@@ -48,14 +42,19 @@ export type SubthreadTrays = {
  * collapse would hide its children behind a control that is nowhere on screen
  * — the invisible-row failure these trays exist to prevent. A tray owner's own
  * collapse is honored by the caller.
+ *
+ * Reserve every presentation root before walking any descendants. A promoted
+ * root can also appear in an ancestor's child page; its own tray must keep
+ * both that row and its descendants regardless of the owners' render order.
  */
 export function createSubthreadTrays(
   childrenByParentKey: ReadonlyMap<string, NavigationThreadSummary[]>,
+  owners: readonly NavigationThreadSummary[],
 ): SubthreadTrays {
   const subtreeByTrayKey = new Map<string, NavigationThreadSummary[]>();
   const directChildKeysByTrayKey = new Map<string, string[]>();
   const depthByThreadKey = new Map<string, number>();
-  const placedThreadKeys = new Set<string>();
+  const placedThreadKeys = new Set(owners.map(threadSummaryIdentityKey));
 
   const collectSubtree = (
     trayKey: string,
@@ -95,12 +94,12 @@ export function createSubthreadTrays(
     }
   };
 
+  for (const owner of owners) {
+    const ownerKey = threadSummaryIdentityKey(owner);
+    collectSubtree(ownerKey, owner, ownerKey, 1);
+  }
+
   return {
-    addTrayOwner: (owner) => {
-      const ownerKey = threadSummaryIdentityKey(owner);
-      placedThreadKeys.add(ownerKey);
-      collectSubtree(ownerKey, owner, ownerKey, 1);
-    },
     depth: (threadKey) => depthByThreadKey.get(threadKey) ?? 1,
     directChildKeys: (trayKey) => directChildKeysByTrayKey.get(trayKey) ?? [],
     subtree: (trayKey) => subtreeByTrayKey.get(trayKey) ?? [],

@@ -263,9 +263,7 @@ export function RecentsList(props: RecentsListProps) {
   // depth-first order. The owner keys each child under its *true* parent,
   // so a grandchild is filed under a row that is itself a child; rendering
   // only direct children would silently drop it from this lens.
-  const trays = createSubthreadTrays(childrenByParentKey);
-  for (const thread of pinnedRoots) trays.addTrayOwner(thread);
-  for (const thread of topLevelThreads) trays.addTrayOwner(thread);
+  const trays = createSubthreadTrays(childrenByParentKey, [...pinnedRoots, ...topLevelThreads]);
   const renderedThreadKeys = new Set(topLevelKeys);
   for (const key of topLevelKeys) {
     for (const child of trays.subtree(key)) renderedThreadKeys.add(threadSummaryIdentityKey(child));

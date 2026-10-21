@@ -940,10 +940,11 @@ export function DirectoriesList(props: DirectoriesListProps) {
     // depth-first order. The owner keys each child under its *true* parent, so
     // a grandchild is filed under a row that is itself a child; rendering only
     // direct children would silently drop it from the lens.
-    const trays = createSubthreadTrays(childThreadsByParentKey);
-    for (const thread of expandedThreadModel.directoryPinnedThreads) trays.addTrayOwner(thread);
-    for (const thread of expandedThreadModel.selectedUnpinnedThreads) trays.addTrayOwner(thread);
-    for (const thread of expandedThreadModel.unpinnedThreads) trays.addTrayOwner(thread);
+    const trays = createSubthreadTrays(childThreadsByParentKey, [
+      ...expandedThreadModel.directoryPinnedThreads,
+      ...expandedThreadModel.selectedUnpinnedThreads,
+      ...expandedThreadModel.unpinnedThreads,
+    ]);
     const renderStaticSubthreads = (parent: NavigationPresentedThread): ReactElement | null => {
       const parentKey = threadSummaryIdentityKey(parent);
       // Already depth-first ordered by the tray. Re-sorting here by this row's
