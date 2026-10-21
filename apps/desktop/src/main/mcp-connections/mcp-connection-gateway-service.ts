@@ -63,6 +63,7 @@ import {
 import { createMcpSafeFetch } from "./mcp-safe-fetch";
 import { probeMcpConnectionUrl } from "./mcp-connection-probe";
 import {
+  MCP_GATEWAY_TOOL_SEARCH_TIMEOUT_MS,
   MCP_CONNECTION_TOOL_LIST_TIMEOUT_MS,
   MCP_CONNECTION_TOOL_TIMEOUT_MS,
 } from "./mcp-connection-timeouts";
@@ -2245,7 +2246,7 @@ export class McpConnectionGatewayService {
   ): Promise<McpGatewayTool[]> {
     const connection = this.requireAvailableConnection(grant.connectionId);
     const generation = this.toolInventoryGenerations.get(connection.id) ?? 0;
-    const deadline = Date.now() + MCP_CONNECTION_TOOL_LIST_TIMEOUT_MS;
+    const deadline = Date.now() + MCP_GATEWAY_TOOL_SEARCH_TIMEOUT_MS;
     const tools: McpGatewayTool[] = [];
     const names = new Set<string>();
     const cursors = new Set<string>();

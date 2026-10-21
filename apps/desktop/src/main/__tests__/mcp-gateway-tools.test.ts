@@ -106,6 +106,38 @@ describe("fixed MCP gateway tools", () => {
     expect(f.requestGatewayToolOperation.mock.calls.some(([call]) => call.operation === "gateway/tools/call")).toBe(false);
   });
 
+  it("searches four connections in parallel within a 60-second budget", async () => {
+    const f = fixture();
+    const timeout = vi.spyOn(AbortSignal, "timeout");
+    f.selected.set("thread-a", ["one", "two", "three", "four", "five", "six", "one"]);
+    let releaseFirst!: () => void;
+    let releaseOthers!: () => void;
+    const first = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const others = new Promise<void>((resolve) => { releaseOthers = resolve; });
+    f.requestGatewayToolOperation.mockImplementation(async ({ connectionId }) => {
+      await (connectionId === "one" ? first : others);
+      if (connectionId === "two") throw new Error("Fixture server unavailable.");
+      return [tool(connectionId)];
+    });
+    const searching = f.service.search({ query: "lookup", limit: 5 }, context);
+    try {
+      await vi.waitFor(() => expect(f.requestGatewayToolOperation).toHaveBeenCalledTimes(4));
+      expect(timeout).toHaveBeenCalledWith(60_000);
+      expect(f.requestGatewayToolOperation.mock.calls.map(([call]) => call.connectionId))
+        .toEqual(["one", "two", "three", "four"]);
+      releaseFirst();
+      await vi.waitFor(() => expect(f.requestGatewayToolOperation).toHaveBeenCalledTimes(5));
+    } finally {
+      releaseFirst();
+      releaseOthers();
+      await searching;
+    }
+    const result = await searching;
+    expect(f.requestGatewayToolOperation).toHaveBeenCalledTimes(6);
+    expect(result.tools).toHaveLength(5);
+    expect(result.unavailable).toEqual([{ connectionId: "two", message: "Fixture server unavailable." }]);
+  });
+
   it("rejects stale schemas, invalid arguments and denied approvals before dispatch", async () => {
     const f = fixture();
     await expect(f.service.call({ ...f.args, schemaRevision: "stale" }, context)).rejects.toThrow("changed");

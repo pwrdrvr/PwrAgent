@@ -21,3 +21,7 @@ export const MCP_CONNECTION_PROBE_TIMEOUT_MS = 8_000;
  * looking at a row that says "reading tools".
  */
 export const MCP_CONNECTION_TOOL_LIST_TIMEOUT_MS = 20_000;
+
+// Live gateway searches can initialize and page catalogs across several
+// selected connections. Share this budget with the owner's catalog read.
+export const MCP_GATEWAY_TOOL_SEARCH_TIMEOUT_MS = 60_000;
