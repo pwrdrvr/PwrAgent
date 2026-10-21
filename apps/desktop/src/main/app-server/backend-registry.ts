@@ -12599,6 +12599,15 @@ export class DesktopBackendRegistry {
     return this.incompleteThreadLists.has(threads);
   }
 
+  /**
+   * A managed runtime answers without recording a provider observation, so
+   * the durable selection alone would call a failed managed Codex absent.
+   */
+  private async hasCodexExecutable(): Promise<boolean> {
+    if (this.readCodexProvider().lastKnownGood?.selectedCommand) return true;
+    return await this.resolveCodexRuntimeCommandFn?.().then(() => true, () => false) ?? false;
+  }
+
   private inheritIncompleteThreadList(
     threads: AppServerThreadSummary[],
     source: readonly AppServerThreadSummary[],
@@ -28728,7 +28737,7 @@ export class DesktopBackendRegistry {
       await Promise.all([
         this.codexClient
           .listThreads(params, diagnostics)
-          .catch((error) => {
+          .catch(async (error) => {
             if (
               diagnostics?.callerReason === "archive-cleanup"
               || diagnostics?.callerReason === "startup-provider-refresh"
@@ -28737,9 +28746,9 @@ export class DesktopBackendRegistry {
               throw error;
             }
 
-            // A selected Codex that fails to answer has rows this listing
+            // A Codex executable that fails to answer has rows this listing
             // lacks. With no executable there is no Codex inventory to lack.
-            incomplete ||= Boolean(this.readCodexProvider().lastKnownGood?.selectedCommand);
+            incomplete ||= await this.hasCodexExecutable();
             return [];
           }),
         observedFilterThreadIds.size > 0

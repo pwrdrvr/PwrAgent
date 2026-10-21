@@ -10202,13 +10202,27 @@ describe("DesktopBackendRegistry", () => {
     expect(registry.isIncompleteThreadList(listed)).toBe(true);
   });
 
-  it("does not mark a listing incomplete when no Codex executable is selected", async () => {
+  it("marks a navigation listing incomplete when a managed Codex runtime fails without a recorded selection", async () => {
     const registry = new DesktopBackendRegistry({
-      codexClient: new MockBackendClient({
-        listThreadsError: new Error("Codex discovery has not selected an executable. Refresh Codex in Settings."),
-      }),
+      codexClient: new MockBackendClient({ listThreadsError: new Error("codex app server client closed") }),
       overlayStore: createOverlayStoreMock(),
       discoverLocalAcpAgents: async () => [],
+      resolveCodexRuntimeCommand: async () => ({ command: "/managed/codex", version: "0.160.0" }),
+    });
+    onTestFinished(async () => { await registry.close(); });
+
+    const listed = await registry.listThreads({ callerReason: "navigation-snapshot" });
+    expect(listed).toEqual([]);
+    expect(registry.isIncompleteThreadList(listed)).toBe(true);
+  });
+
+  it("does not mark a listing incomplete when no Codex executable is selected", async () => {
+    const noExecutable = new Error("Codex discovery has not selected an executable. Refresh Codex in Settings.");
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ listThreadsError: noExecutable }),
+      overlayStore: createOverlayStoreMock(),
+      discoverLocalAcpAgents: async () => [],
+      resolveCodexRuntimeCommand: async () => { throw noExecutable; },
     });
     onTestFinished(async () => { await registry.close(); });
 
