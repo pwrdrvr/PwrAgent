@@ -174,6 +174,12 @@ import {
   type InterruptTurnRequest,
   type ListWorktreeUnpublishedCommitsRequest,
   type ListWorktreeUnpublishedCommitsResponse,
+  type ListMcpConnectionsResponse,
+  type ReadThreadMcpConnectionsRequest,
+  type SetThreadMcpConnectionsRequest,
+  type SetThreadMcpConnectionsResponse,
+  type DescribeThreadMcpConnectionsRequest,
+  type DescribeThreadMcpConnectionsResponse,
   type ListThreadMcpServersRequest,
   type MaterializeDirectoryLaunchpadRequest,
   type MaterializeDirectoryLaunchpadOptions,
@@ -574,6 +580,7 @@ export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "shutdown_notice",
   "navigation_directory_set_events",
   "turn_queue_reorder",
+  "thread_mcp_connections",
 ];
 
 const REMOTE_THREAD_SUMMARY_EVENT_CONSUMER_ID =
@@ -7029,6 +7036,24 @@ function localBackendOperations(): FederationBackendOperations {
       request: CompactThreadRequest,
     ): Promise<CompactThreadResponse> {
       return await getDesktopBackendRegistry().compactThread(request);
+    },
+    async listMcpConnections(): Promise<ListMcpConnectionsResponse> {
+      return { connections: await getMcpConnectionGatewayService().listConnections() };
+    },
+    async readThreadMcpConnections(
+      request: ReadThreadMcpConnectionsRequest,
+    ): Promise<SetThreadMcpConnectionsResponse> {
+      return await getDesktopBackendRegistry().readThreadMcpConnections(request);
+    },
+    async setThreadMcpConnections(
+      request: SetThreadMcpConnectionsRequest,
+    ): Promise<SetThreadMcpConnectionsResponse> {
+      return await getDesktopBackendRegistry().setThreadMcpConnections(request);
+    },
+    async describeThreadMcpConnections(
+      request: DescribeThreadMcpConnectionsRequest,
+    ): Promise<DescribeThreadMcpConnectionsResponse> {
+      return await getDesktopBackendRegistry().describeThreadMcpConnections(request);
     },
     async listThreadMcpServers(
       request: ListThreadMcpServersRequest,

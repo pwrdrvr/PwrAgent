@@ -159,6 +159,7 @@ import {
   McpAccessPanel,
   ThreadMcpAccessPanel,
   useThreadMcpConnectionCount,
+  supportsThreadMcpAccess,
 } from "./McpAccessPanel";
 import {
   PwrGitConnectionPrompt,
@@ -1759,11 +1760,14 @@ export function ThreadView(props: ThreadViewProps) {
   // Closing the panel is the cheap, reliable signal that the selection may
   // have changed; re-reading then keeps the composer badge honest without
   // subscribing to every write.
+  const threadMcpAccessSupported = supportsThreadMcpAccess(selectedThread?.federation);
+  const mcpOwnerTarget = selectedThread?.federation?.ref.target ?? props.activeFederationTarget;
+  const mcpFederationTarget = mcpOwnerTarget?.scope === "remote" ? mcpOwnerTarget : undefined;
   const threadMcpConnectionCount = useThreadMcpConnectionCount({
     backend: selectedThread?.source ?? "codex",
     desktopApi: props.desktopApi,
-    ...(selectedThread && !props.activeFederationTarget
-      ? { threadId: selectedThread.id }
+    ...(selectedThread && threadMcpAccessSupported
+      ? { threadId: selectedThread.id, federationTarget: mcpFederationTarget }
       : {}),
     token: threadMcpAccessOpen ? 1 : 0,
   });
@@ -3904,11 +3908,9 @@ export function ThreadView(props: ThreadViewProps) {
         desktopApi={props.desktopApi}
         onShowNotice={props.onShowNotice}
         onShowMcpAccess={
-          props.activeFederationTarget
-            ? undefined
-            : composerLaunchpad
-              ? showLaunchpadMcpAccess
-              : showThreadMcpAccess
+          composerLaunchpad
+            ? props.activeFederationTarget ? undefined : showLaunchpadMcpAccess
+            : threadMcpAccessSupported ? showThreadMcpAccess : undefined
         }
         composerImplementation={props.composerImplementation}
         draftStore={props.composerDraftStore}
@@ -4355,18 +4357,17 @@ export function ThreadView(props: ThreadViewProps) {
         />
       ) : null}
 
-      {/* Managed connections are local to the profile that runs the
-          thread, so a remote thread's selection belongs to its owner
-          and is not editable from here. */}
+      {/* The owner serves its gateway inventory and persists the selection. */}
       {threadMcpAccessOpen
         && selectedThread
-        && !props.activeFederationTarget ? (
+        && threadMcpAccessSupported ? (
         <ThreadMcpAccessPanel
           backend={selectedThread.source}
           desktopApi={props.desktopApi}
           threadId={selectedThread.id}
+          federationTarget={mcpFederationTarget}
           onDismiss={() => setThreadMcpAccessOpen(false)}
-          onOpenSettings={openMcpConnectionSettings}
+          onOpenSettings={mcpFederationTarget ? undefined : openMcpConnectionSettings}
         />
       ) : null}
     </Fragment>

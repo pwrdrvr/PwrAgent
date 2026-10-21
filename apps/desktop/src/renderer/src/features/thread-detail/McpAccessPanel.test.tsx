@@ -1,7 +1,7 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type { McpConnectionStatus } from "@pwragent/shared";
-import { McpAccessPanel, ThreadMcpAccessPanel } from "./McpAccessPanel";
+import type { AgentEvent, McpConnectionStatus } from "@pwragent/shared";
+import { McpAccessPanel, ThreadMcpAccessPanel, useThreadMcpConnectionCount } from "./McpAccessPanel";
 
 function connection(
   overrides: Partial<McpConnectionStatus> & Pick<McpConnectionStatus, "id">,
@@ -195,6 +195,48 @@ describe("McpAccessPanel", () => {
 });
 
 describe("ThreadMcpAccessPanel", () => {
+  it("reads, verifies, and toggles the remote owner's connections", async () => {
+    const federationTarget = { scope: "remote" as const, instanceId: "owner" };
+    const list = vi.fn(async () => ({ connections: [READY] }));
+    const read = vi.fn(async () => ({ connectionIds: [], providerServersEnabled: true }));
+    const write = vi.fn(async () => ({ connectionIds: ["datadog"], providerServersEnabled: true }));
+    const describe = vi.fn(async () => ({ backend: "codex" as const, threadId: "thread-1", connections: [], providerServersEnabled: true, appliesAt: "next_turn" as const, agentInventoryAvailable: false }));
+    render(<ThreadMcpAccessPanel
+      backend="codex"
+      threadId="thread-1"
+      federationTarget={federationTarget}
+      desktopApi={{ listMcpConnections: list, readThreadMcpConnections: read, setThreadMcpConnections: write, describeThreadMcpConnections: describe }}
+      onDismiss={vi.fn()}
+    />);
+    fireEvent.click(await screen.findByRole("switch", { name: "Use Datadog in this thread" }));
+    await waitFor(() => expect(write).toHaveBeenCalledWith({ backend: "codex", threadId: "thread-1", federationTarget, connectionIds: ["datadog"], providerServersEnabled: true }));
+    expect(list).toHaveBeenCalledWith({ federationTarget });
+    expect(read).toHaveBeenCalledWith({ backend: "codex", threadId: "thread-1", federationTarget });
+    expect(describe).toHaveBeenCalledWith({ backend: "codex", threadId: "thread-1", federationTarget });
+    expect(screen.queryByRole("button", { name: "Manage connections" })).toBeNull();
+    await waitFor(() => expect(screen.getByRole("switch", { name: "Use Datadog in this thread" }).getAttribute("aria-checked")).toBe("true"));
+  });
+
+  it("disables changes when the owner's selection cannot be read", async () => {
+    const write = vi.fn();
+    render(<ThreadMcpAccessPanel
+      backend="codex"
+      threadId="thread-1"
+      federationTarget={{ scope: "remote", instanceId: "owner" }}
+      desktopApi={{
+        listMcpConnections: async () => ({ connections: [READY] }),
+        readThreadMcpConnections: async () => { throw new Error("Owner disconnected"); },
+        setThreadMcpConnections: write,
+      }}
+      onDismiss={vi.fn()}
+    />);
+    expect(await screen.findByRole("alert")).toHaveProperty("textContent", "Owner disconnected");
+    const toggle = await screen.findByRole("switch", { name: "Use Datadog in this thread" });
+    expect(toggle).toHaveProperty("disabled", true);
+    fireEvent.click(toggle);
+    expect(write).not.toHaveBeenCalled();
+  });
+
   it("saves through the thread IPC and keeps the main process's answer", async () => {
     const setThreadMcpConnections = vi.fn(async () => ({
       connectionIds: ["datadog"],
@@ -494,5 +536,32 @@ describe("thread verification", () => {
 
     await screen.findByText("Datadog");
     expect(screen.queryByText("In this thread")).toBeNull();
+  });
+});
+
+
+describe("remote MCP connection count", () => {
+  it("refreshes only for the matching owner, backend, and thread", async () => {
+    const federationTarget = { scope: "remote" as const, instanceId: "owner" };
+    let receive: ((event: AgentEvent) => void) | undefined;
+    const read = vi.fn(async () => ({ connectionIds: ["rovo"], providerServersEnabled: true }));
+    const desktopApi = {
+      readThreadMcpConnections: read,
+      onAgentEvent: (listener: (event: AgentEvent) => void) => { receive = listener; return () => undefined; },
+    };
+    const { result } = renderHook(() => useThreadMcpConnectionCount({ backend: "codex", threadId: "thread-1", federationTarget, desktopApi }));
+    await waitFor(() => expect(result.current).toBe(1));
+    expect(read).toHaveBeenCalledWith({ backend: "codex", threadId: "thread-1", federationTarget });
+    const event = { backend: "codex", notification: { method: "thread/mcpConnections/updated", params: { threadId: "thread-1" } } } as AgentEvent;
+    act(() => {
+      receive?.(event);
+      receive?.({ ...event, federationTarget: { scope: "remote", instanceId: "other-owner" } });
+      receive?.({ ...event, backend: "claude", federationTarget });
+    });
+    expect(read).toHaveBeenCalledOnce();
+    read.mockResolvedValue({ connectionIds: ["rovo", "datadog"], providerServersEnabled: true });
+    act(() => receive?.({ ...event, federationTarget }));
+    await waitFor(() => expect(result.current).toBe(2));
+    expect(read).toHaveBeenCalledTimes(2);
   });
 });

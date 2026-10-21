@@ -4202,6 +4202,10 @@ describe("DesktopFederationRuntime", () => {
 
 
 describe("advertised capabilities", () => {
+  it("advertises owner-side thread MCP access to remote viewers", () => {
+    expect(DEFAULT_CAPABILITIES).toContain("thread_mcp_connections");
+  });
+
   it("advertises queue reordering, which viewers need before they offer a drag", () => {
     expect(DEFAULT_CAPABILITIES).toContain("turn_queue_reorder");
     expect(DEFAULT_CAPABILITIES).toContain("turn_control");
