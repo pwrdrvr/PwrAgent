@@ -323,6 +323,41 @@ describe("navigation query projection", () => {
       review: 1,
     });
   });
+
+  it.each(["checking", "degraded", "complete"] as const)("shows counted unread children in their own project during %s discovery", (state) => {
+    const parent = thread("parent", { subthreadsCollapsed: true });
+    const source = snapshot([
+      parent,
+      thread("local-unread", { inbox: { inInbox: true } }),
+      thread("research", { source: "acp:grok", parentThreadId: parent.id, parentThreadBackend: "codex",
+        inbox: { inInbox: true } }),
+      thread("pinned-research", { source: "acp:grok", parentThreadId: parent.id, parentThreadBackend: "codex",
+        pinnedRank: "1024", inbox: { inInbox: true } }),
+    ]);
+    source.directories[0]!.threadKeys = ["codex:local-unread", "acp:grok:research", "acp:grok:pinned-research"];
+    source.directories.push({ ...source.directories[0]!, key: "workspace:/scratch", kind: "workspace",
+      label: "Workspaces", path: "/scratch", threadKeys: ["codex:parent"] });
+    const index = { ...source, coverage: { state } };
+    const directoryIndex = projectNavigationQuery({ index, request: request({ kind: "directory-index" }) });
+    expect(directoryIndex.directories[0]).toMatchObject({ counts: { unread: 3, review: 3 },
+      pinnedRootCount: 1, unpinnedRootCount: 2 });
+
+    for (const roots of ["all", "pinned", "unpinned"] as const) {
+      const page = projectNavigationQuery({ index, request: request({ kind: "directory", directoryKey: "directory:/repo", roots }) });
+      const expected = roots === "pinned" ? ["pinned-research"]
+        : roots === "unpinned" ? ["local-unread", "research"] : ["local-unread", "pinned-research", "research"];
+      expect(page.entries.map(({ row }) => row.id).sort()).toEqual(expected);
+      expect(page.counts.review).toBe(3);
+      expect(page.entries.every(({ placement }) => placement.kind === "root")).toBe(true);
+      const child = page.entries.find(({ row }) => row.id === "research" || row.id === "pinned-research");
+      expect(child?.row).toMatchObject({ parentThreadId: "parent", parentThreadBackend: "codex", inbox: { inInbox: true } });
+    }
+
+    // Other lenses and explicit child reads retain the actual group.
+    const children = projectNavigationQuery({ index, request: request({ kind: "children", parent: { backend: "codex", threadId: "parent" } }) });
+    expect(children.entries).toHaveLength(2);
+    expect(children.entries.every(({ placement }) => placement.kind === "child")).toBe(true);
+  });
 });
 
 it("keeps ten-root demand separate from disclosed child pages and pin disclosure", () => {
@@ -424,12 +459,17 @@ it.each([undefined, "199680"])("keeps a local handoff reachable when its remote 
   source.threads.push(remoteRoot);
   expect(project({ kind: "exact", identities: [{ backend: "codex", threadId: child.id }], includeAncestry: true }).entries[0]?.placement)
     .toEqual({ kind: "root" });
-  // Restoring the actual mount restores nesting without rewriting the handoff.
+  // Restoring the mount restores exact ancestry. It must not hide local
+  // directory members until that directory also contains the mounted parent.
   remoteRoot.federation!.ref.target = { scope: "remote", instanceId: "peer" };
   const mounted = project({ kind: "exact", identities: [{ backend: "codex", threadId: child.id }], includeAncestry: true });
   expect(mounted.entries.map((entry) => entry.row.id)).toEqual(["remote-root", "handoff"]);
   expect(mounted.entries[1]?.placement).toEqual({ kind: "child", parent: { backend: "codex", threadId: "remote-root", ownerInstanceId: "peer" } });
-  expect(project({ kind: "directory", directoryKey: "directory:/repo" }).entries).toEqual([]);
+  const directoryRoots = project({ kind: "directory", directoryKey: "directory:/repo" });
+  expect(directoryRoots.entries.map(({ row }) => row.id).sort()).toEqual(["handoff", "launcher"]);
+  expect(directoryRoots.entries.every(({ placement }) => placement.kind === "root")).toBe(true);
+  source.directories[0]!.threadKeys.push("remote:peer:codex:remote-root");
+  expect(project({ kind: "directory", directoryKey: "directory:/repo" }).entries.map(({ row }) => row.id)).toEqual(["remote-root"]);
   expect(child.parentThreadInstanceId).toBeUndefined();
 });
 
