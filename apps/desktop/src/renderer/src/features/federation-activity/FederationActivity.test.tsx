@@ -223,7 +223,12 @@ describe("Federation activity surfaces", () => {
     await screen.findByText("Running · connected");
     const action = screen.getByRole("button", { name: "Open Federation Activity" });
     act(() => action.focus());
+    vi.useFakeTimers();
+    fireEvent.pointerLeave(trigger.parentElement!);
+    act(() => vi.advanceTimersByTime(200));
+    expect(action).toHaveFocus();
     expect(screen.getByRole("dialog")).toBeInTheDocument();
+    vi.useRealTimers();
     fireEvent.keyDown(action, { key: "Escape" });
     expect(trigger).toHaveFocus();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();

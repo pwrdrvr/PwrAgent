@@ -1,3 +1,7 @@
+import type { Options as ClaudeOptions, Query as ClaudeQuery, SDKMessage as ClaudeMessage } from "@anthropic-ai/claude-agent-sdk";
+import { Client as McpClient } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { ClaudeSessionStore } from "../claude/claude-session-store";
 import { DEFAULT_THREAD_ARCHIVE_POLICY } from "@pwragent/shared";
 import { threadLockRefusalMessage } from "@pwragent/shared";
 import { ThreadCorrespondenceStore } from "../app-server/thread-correspondence-store";
@@ -3164,6 +3168,153 @@ afterEach(() => {
 });
 
 describe("DesktopBackendRegistry", () => {
+  it("routes Claude creation, replay, approvals, resume and lifecycle without a Codex or ACP client", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-registry-"));
+    const store = new ClaudeSessionStore(path.join(root, "sessions"));
+    const codex = new MockBackendClient({});
+    const startCodex = vi.spyOn(codex, "startThread");
+    const events: AgentEvent[] = [];
+    const optionsSeen: ClaudeOptions[] = [];
+    const decisions: unknown[] = [];
+    const closeQuery = vi.fn();
+    const revokeBridge = vi.fn();
+    const registerBridge = vi.fn(async () => ({
+      server: { name: "fixture_gateway", command: "/fixture/bridge", args: ["--stdio"], env: {} },
+      bindThread: vi.fn(), revoke: revokeBridge,
+    }));
+    const overlayStore = createOverlayStoreMock();
+    const messagingStore = createMessagingArchiveCleanupStoreMock();
+    const deletePendingIntents = vi.spyOn(messagingStore, "deletePendingIntentsForThread").mockResolvedValue(["pending-claude"]);
+    const messagingArchiveCleaner = createMessagingArchiveCleanerMock();
+    const origins: AppServerThreadMessageOrigin[] = [
+      { kind: "messaging" },
+      { kind: "agent", sourceThread: { backend: "codex", threadId: "sender", title: "Sender" } },
+    ];
+    const imagePath = path.join(root, "attachment.png");
+    const filePath = path.join(root, "report.txt");
+    const imageBytes = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j3ioAAAAASUVORK5CYII=", "base64");
+    await writeFile(imagePath, imageBytes);
+    await writeFile(filePath, "Fixture report");
+    const registry = new DesktopBackendRegistry({
+      codexClient: codex,
+      overlayStore,
+      messagingStore,
+      messagingArchiveCleaner,
+      mcpConnectionService: { registerBridge },
+      pdfToolMcpServer: null,
+      claudeBackendOptions: {
+        store,
+        inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+        discoverModels: async () => [
+          { id: "fable", label: "Fable 5.1", current: true },
+          { id: "claude-opus-4-8", label: "Opus 4.8", other: true, supportsReasoning: true,
+            reasoningEfforts: ["default", "max"], defaultReasoningEffort: "default" },
+        ],
+        query: ({ options = {} }) => {
+          optionsSeen.push(options);
+          async function* messages(): AsyncGenerator<ClaudeMessage> {
+            yield { type: "system", subtype: "init", session_id: options.sessionId ?? options.resume } as ClaudeMessage;
+            decisions.push(await options.canUseTool!("Bash", { command: "git status" }, {
+              signal: options.abortController!.signal, toolUseID: "tool", requestId: "sdk-request",
+            }));
+            yield { type: "assistant", parent_tool_use_id: null, message: { id: `answer-${optionsSeen.length}`, content: [{ type: "text", text: "Done" }] } } as ClaudeMessage;
+            yield { type: "result", subtype: "success", is_error: false, result: "Done" } as ClaudeMessage;
+          }
+          return Object.assign(messages(), { close: closeQuery, setPermissionMode: vi.fn() }) as unknown as ClaudeQuery;
+        },
+      },
+    });
+    registry.onEvent((event) => { events.push(event); });
+    try {
+      await registry.listBackends({ refreshModels: "claude", includeUnavailable: true },
+        issueProviderDiscoveryPermit("settings-user-action"));
+      const { threadId } = await registry.startThread({ backend: "claude", cwd: root, executionMode: "default" });
+      await registry.setThreadMcpConnections({ backend: "claude", threadId, connectionIds: ["fixture-connection"] });
+      expect(startCodex).not.toHaveBeenCalled();
+      expect(await registry.listThreads({ backend: "claude", forceRefresh: true })).toEqual(expect.arrayContaining([expect.objectContaining({ id: threadId, source: "claude" })]));
+      for (let turn = 0; turn < 2; turn += 1) {
+        events.length = 0;
+        const started = await registry.startTurn({ backend: "claude", threadId, executionMode: "auto",
+          model: turn === 0 ? "claude-custom-fixture" : "claude-opus-4-8", reasoningEffort: "max",
+          input: [
+            { type: "text", text: "Hello" },
+            ...(turn === 0 ? [
+              { type: "localImage" as const, path: imagePath, name: "Screenshot.png" },
+              { type: "localFile" as const, path: filePath, name: "Report.txt" },
+            ] : []),
+          ], messageOrigin: origins[turn] });
+        await vi.waitFor(() => expect(events.map((event) => event.notification), JSON.stringify(events)).toEqual(expect.arrayContaining([expect.objectContaining({ method: "item/commandExecution/requestApproval" })])));
+        const replay = await registry.readThread({ backend: "claude", threadId });
+        expect(replay.pendingRequest?.method).toBe("item/commandExecution/requestApproval");
+        expect(registry.getInProgressThreadSnapshotForQuit()).toMatchObject({ count: 1, threadIds: [`claude:${threadId}`] });
+        expect(registry.getActiveTurnForThread({ backend: "claude", threadId })).toMatchObject({ turnId: started.turnId });
+        expect(optionsSeen[turn].permissionMode).toBe("auto");
+        expect(registerBridge).toHaveBeenCalledWith("fixture-connection", threadId);
+        expect(Object.values(optionsSeen[turn].mcpServers ?? {})).toContainEqual(expect.objectContaining({ type: "stdio", command: "/fixture/bridge" }));
+        const server = optionsSeen[turn].mcpServers!.pwragent;
+        if (!("url" in server)) throw new Error("Expected HTTP MCP server");
+        const mcp = new McpClient({ name: "claude-fixture", version: "1.0.0" });
+        try {
+          await mcp.connect(new StreamableHTTPClientTransport(new URL(server.url), { requestInit: { headers: server.headers } }));
+          const status = await mcp.callTool({ name: "get_thread_status", arguments: {} });
+          expect(status.isError).not.toBe(true);
+          expect(JSON.stringify(status)).toContain(threadId);
+        } finally {
+          await mcp.close();
+        }
+        await registry.submitServerRequest({ backend: "claude", threadId, requestId: replay.pendingRequest!.params.requestId, response: { decision: "accept" } });
+        await vi.waitFor(() => expect(events.some((event) => event.notification.method === "turn/completed")).toBe(true));
+      }
+      expect(revokeBridge).toHaveBeenCalledTimes(2);
+      expect(optionsSeen[1].resume).toBe(threadId);
+      expect(optionsSeen.map(({ model, effort }) => ({ model, effort }))).toEqual([
+        { model: "claude-custom-fixture", effort: "max" }, { model: "claude-opus-4-8", effort: "max" },
+      ]);
+      expect(decisions).toEqual([{ behavior: "allow", updatedInput: { command: "git status" } }, { behavior: "allow", updatedInput: { command: "git status" } }]);
+      expect((await registry.readThread({ backend: "claude", threadId })).replay.messages).toHaveLength(4);
+      // Reads hydrate origins from the overlay after the turn's live events are gone.
+      const history = (await registry.readThread({ backend: "claude", threadId })).replay;
+      expect(history.messages.filter((message) => message.role === "user").map((message) => message.origin)).toEqual(origins);
+      expect(history.entries.flatMap((entry) => entry.type === "message" && entry.role === "user" ? [entry.origin] : [])).toEqual(origins);
+      await rm(imagePath);
+      await rm(filePath);
+      const retained = (await new ClaudeSessionStore(path.join(root, "sessions")).entries(threadId))[0];
+      expect(retained).toMatchObject({ parts: [
+        { type: "text", text: "Hello" },
+        { type: "image", alt: "Screenshot.png", url: expect.stringMatching(/^pwragent-image:/) },
+        { type: "file", name: "Report.txt", mimeType: "text/plain", sizeBytes: 14 },
+      ] });
+      if (retained.type !== "message") throw new Error("Expected user message");
+      const image = retained.parts?.find((part) => part.type === "image");
+      expect(image).toBeDefined();
+      const retainedFileUrl = decodeURIComponent(new URL(image!.url).pathname.slice(1));
+      expect(await readFile(fileURLToPath(retainedFileUrl))).toEqual(imageBytes);
+      await registry.renameThread({ backend: "claude", threadId, name: "Claude fixture" });
+      await registry.setThreadExecutionMode({ backend: "claude", threadId, executionMode: "auto" });
+      expect((await store.read(threadId)).thread.executionMode).toBe("auto");
+      await registry.archiveThread({ backend: "claude", threadId });
+      expect(deletePendingIntents).toHaveBeenCalledWith({ backend: "claude", threadId });
+      expect(messagingArchiveCleaner.requests).toEqual([{ backend: "claude", threadId, origin: "thread-archive" }]);
+      expect(await registry.listThreads({ backend: "claude", archived: true, forceRefresh: true })).toEqual(expect.arrayContaining([expect.objectContaining({ title: "Claude fixture" })]));
+      await registry.restoreThread({ backend: "claude", threadId });
+      expect((await store.read(threadId)).thread.archivedAt).toBeUndefined();
+      await registry.archiveThread({ backend: "claude", threadId });
+      expect(messagingArchiveCleaner.requests).toHaveLength(2);
+      await registry.restoreThread({ backend: "claude", threadId });
+      events.length = 0;
+      await registry.startTurn({ backend: "claude", threadId, input: [{ type: "text", text: "Await approval" }] });
+      await vi.waitFor(() => expect(events.some((event) => event.notification.method === "item/commandExecution/requestApproval")).toBe(true));
+      closeQuery.mockClear();
+      await registry.stopRunningTurnsForShutdown({ timeoutMs: 1_000 });
+      expect(closeQuery).toHaveBeenCalled();
+      expect(events.some((event) => event.notification.method === "turn/cancelled")).toBe(true);
+      expect(registry.getInProgressThreadSnapshotForQuit().count).toBe(0);
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("exports the authoritative handoff workspace while provider cwd synchronization is pending", async () => {
     const thread: AppServerThreadSummary = {
       id: "handoff-source", title: "Source", titleSource: "explicit", source: "codex", updatedAt: 1000,
@@ -7585,7 +7736,8 @@ describe("DesktopBackendRegistry", () => {
           reasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max", "ultra"],
           supportsFastMode: true,
         },
-      },    ]);
+      },      { kind: "claude", label: "Claude", available: false, source: "builtin" },
+    ]);
 
     await registry.close();
   });
@@ -10788,6 +10940,10 @@ describe("DesktopBackendRegistry", () => {
       optionId: "mode",
       value: "yolo",
     });
+
+    // Selected detail reads remembered summaries before the next full listing.
+    expect(registry.getCachedThreadSummary({ backend: acpBackendId, threadId: "session-1" }))
+      .toMatchObject({ executionMode: "full-access", acpRuntime: { currentModeId: "yolo" } });
 
     await expect(
       registry.listThreads({ backend: acpBackendId }),
@@ -54689,6 +54845,60 @@ script = "printf setup"
     await registry.close();
   });
 
+  it("skips Codex worktree cleanup while an active Claude thread runs in it", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-worktree-"));
+    const worktreePath = "/repo/.worktrees/shared";
+    const worktree: LinkedDirectorySummary = {
+      id: "directory:/repo/app", label: "app", path: "/repo/app", kind: "worktree", worktreePath,
+    };
+    const codexThread: AppServerThreadSummary = {
+      id: "codex-parent", title: "Codex parent", titleSource: "explicit", linkedDirectories: [worktree],
+      source: "codex", gitBranch: "codex/parent", updatedAt: 1,
+    };
+    const claudeId = "6a1d2c3b-4e5f-4a7b-8c9d-0e1f2a3b4c5d";
+    const store = new ClaudeSessionStore(path.join(root, "sessions"));
+    // Saved the way a Claude thread started in a folder is: a local cwd.
+    await store.save({ cwd: worktreePath, thread: {
+      id: claudeId, title: "Claude user", titleSource: "explicit", source: "claude", updatedAt: 2,
+      linkedDirectories: [{ id: worktreePath, kind: "local", label: "shared", path: worktreePath }],
+    } });
+    const archiveWorktree = vi.fn();
+    const acpWorktreeRepositoryResolver = vi.fn(async (cwd: string) => cwd === worktreePath ? worktree : undefined);
+    const codexClient = Object.assign(new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "thread/archive"] },
+      threads: [codexThread],
+    }), {
+      // The shipped Codex client uses the paged inventory, not the aggregate listing.
+      listArchiveCleanupThreadsPage: vi.fn(async ({ archived }: { archived: boolean }) => ({
+        threads: archived ? [{ ...codexThread, archived: true }] : [],
+      })),
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      pdfToolMcpServer: null,
+      worktreeArchiveService: { archive: archiveWorktree } as unknown as WorktreeArchiveService,
+      acpWorktreeRepositoryResolver,
+      claudeBackendOptions: {
+        store,
+        inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+        discoverModels: async () => [],
+      },
+    });
+    try {
+      const response = await registry.archiveThread({ backend: "codex", threadId: "codex-parent" });
+      expect(codexClient.listArchiveCleanupThreadsPage).toHaveBeenCalled();
+      expect(archiveWorktree).not.toHaveBeenCalled();
+      expect(response.cleanup).toEqual([expect.objectContaining({
+        worktreePath, removedWorktree: false,
+        skippedReason: `Worktree is still used by another active thread: ${claudeId}.`,
+      })]);
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("ungroups active child threads when archiving only the parent", async () => {
     const parentThread: AppServerThreadSummary = {
       id: "thread-parent",
@@ -54854,6 +55064,52 @@ script = "printf setup"
     });
 
     await registry.close();
+  });
+
+  it("records the archive and ungroups active children when archiving a Claude parent", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-archive-"));
+    const parentId = "0f7b3c1e-2d4a-4e5f-9a6b-7c8d9e0f1a2b";
+    const store = new ClaudeSessionStore(path.join(root, "sessions"));
+    await store.save({ cwd: root, thread: {
+      id: parentId, title: "Claude parent", titleSource: "explicit", linkedDirectories: [], source: "claude", updatedAt: 1,
+    } });
+    const childThread: AppServerThreadSummary = {
+      id: "codex-child", title: "Codex child", titleSource: "explicit", linkedDirectories: [], source: "codex", updatedAt: 2,
+    };
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:codex-child": {
+          backend: "codex", threadId: "codex-child", executionMode: "default", extraLinkedDirectories: [],
+          parentThreadId: parentId, parentThreadBackend: "claude",
+        },
+      },
+    });
+    const observeArchivedThreads = vi.fn(async () => {});
+    Object.assign(overlayStore, { observeArchivedThreads });
+    const setThreadParent = vi.spyOn(overlayStore, "setThreadParent");
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ initializeResult: { methods: ["thread/list"] }, threads: [childThread] }),
+      overlayStore,
+      pdfToolMcpServer: null,
+      claudeBackendOptions: {
+        store,
+        inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+        discoverModels: async () => [],
+      },
+    });
+    try {
+      await registry.archiveThread({ backend: "claude", threadId: parentId });
+      expect(observeArchivedThreads).toHaveBeenCalledWith([{ backend: "claude", threadId: parentId }], expect.any(Number));
+      expect(setThreadParent).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "codex-child",
+        parentThreadId: undefined,
+        expectedParent: { threadId: parentId, backend: "claude", instanceId: undefined },
+      });
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it("removes a linked worktree when only archived threads still reference it", async () => {

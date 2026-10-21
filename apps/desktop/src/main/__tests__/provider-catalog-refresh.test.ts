@@ -69,6 +69,23 @@ function provider(state: ProviderCatalogRefreshState | undefined, id: string) {
 }
 
 describe("ProviderCatalogRefreshCoordinator", () => {
+  it("refreshes Claude independently when ACP discovery fails", async () => {
+    const claude = deferred<{ status: "succeeded"; modelCount: number }>();
+    const coordinator = new ProviderCatalogRefreshCoordinator({
+      publish: () => {},
+      listAcpProviders: () => [{ id: "grok", label: "Grok" }],
+      refreshCodex: async () => ({ modelCount: 2 }),
+      refreshAcp: async () => { throw new Error("ACP fixture failure"); },
+      refreshClaude: async () => await claude.promise,
+    });
+    coordinator.start();
+    await vi.waitFor(() => expect(provider(coordinator.read(), "grok")?.status).toBe("failed"));
+    expect(provider(coordinator.read(), "claude")?.status).toBe("running");
+    claude.resolve({ status: "succeeded", modelCount: 3 });
+    await vi.waitFor(() => expect(coordinator.read()?.status).toBe("completed"));
+    expect(provider(coordinator.read(), "claude")).toMatchObject({ status: "succeeded", modelCount: 3 });
+  });
+
   it("lists every provider as soon as the run starts", () => {
     const { coordinator } = createCoordinator();
 

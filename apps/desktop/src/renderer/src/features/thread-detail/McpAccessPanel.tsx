@@ -67,7 +67,7 @@ export function McpAccessPanel(props: McpAccessPanelProps) {
   const [busyId, setBusyId] = useState<string>();
   const bodyId = useId();
   const backendSupported =
-    props.backend === "codex" || isAcpBackendId(props.backend);
+    props.backend === "codex" || props.backend === "claude" || isAcpBackendId(props.backend);
   // Only Codex can suppress the servers the agent loads for itself, so the
   // control is offered only where it can be honored. The main-process writer
   // reads the same predicate, so it cannot store a value this hides.
@@ -148,8 +148,7 @@ export function McpAccessPanel(props: McpAccessPanelProps) {
       <div className="live-work-rail__body" id={bodyId}>
         {!backendSupported ? (
           <p className="mcp-access-panel__state">
-            This backend cannot use MCP connections. Choose Codex or an ACP
-            agent.
+            This backend cannot use MCP connections. Choose Codex, Claude, or an ACP agent.
           </p>
         ) : null}
         {error ?? props.readError ? (

@@ -31,7 +31,7 @@ import type {
 } from "../token-usage-pricing";
 import type { ThreadToolIncidentNoticeState } from "./tool-output-incidents";
 
-export type AppServerBuiltinBackendKind = "codex";
+export type AppServerBuiltinBackendKind = "codex" | "claude";
 export type AcpBackendId = `acp:${string}`;
 export type AppServerBackendKind = AppServerBuiltinBackendKind | AcpBackendId;
 export type AppServerBackendScope = AppServerBackendKind | "all";
@@ -927,6 +927,8 @@ export type AppServerThreadReplayPagination = {
 };
 
 export type AppServerThreadReplay = {
+  /** Latest context occupancy; separate from billed token totals. */
+  contextWindow?: { usedTokens: number; modelContextWindow: number };
   entries: AppServerThreadEntry[];
   messages: AppServerThreadMessage[];
   /** Native Codex nickname when a replay belongs to a delegated sub-agent. */

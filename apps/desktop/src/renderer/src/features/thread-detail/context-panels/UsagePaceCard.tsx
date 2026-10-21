@@ -169,3 +169,29 @@ function PaceSpark({ series, start, end, now, projection, short }: {
     </span>
   );
 }
+
+/** Claude limits come from its CLI, never from the local Codex account. */
+export function ClaudeUsageLimits({ backend }: { backend?: BackendSummary }) {
+  const limits = backend?.rateLimits;
+  return (
+    <section className="rail-summary-card" aria-label="Claude plan limits">
+      <span className="rail-summary-card__eyebrow">Claude plan limits</span>
+      {limits?.length ? limits.map((limit) => (
+        <p key={limit.limitId ?? limit.name}>
+          {limit.limitName ? (
+            <span className="tooltip-target" data-tooltip={`Claude reports this limit as “${limit.limitName}”.`}>
+              {limit.name}
+            </span>
+          ) : limit.name}
+          : <strong>{usagePercent(limit.usedPercent ?? 0)}% used</strong>
+          {limit.resetAt !== undefined
+            ? ` · ${limit.expires ? "Expires" : "Resets"} ${usageWhen(limit.resetAt, Date.now(), true)}`
+            : ""}
+        </p>
+      )) : <p>{backend?.claude?.authMethod === "api-key"
+        ? "API-key usage has no Claude subscription limit."
+        : "Claude has not reported plan limits. They refresh when a turn starts and ends."}</p>}
+      <p>Costs are provider estimates, not subscription charges.</p>
+    </section>
+  );
+}

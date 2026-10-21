@@ -101,6 +101,7 @@ export function ComposerDropdown(props: {
   onPointerEnter?: () => void;
   options: ComposerDropdownOption[];
   otherOptions?: ComposerDropdownOption[];
+  otherLabel?: string;
   tooltip?: string;
   value: string;
 }) {
@@ -369,7 +370,7 @@ export function ComposerDropdown(props: {
               onClick={toggleOtherMenu}
             >
               <span aria-hidden="true" className="composer-dropdown__check" />
-              <span className="composer-dropdown__option-label">Other</span>
+              <span className="composer-dropdown__option-label">{props.otherLabel ?? "Other"}</span>
               <span aria-hidden="true" className="composer-dropdown__option-chevron">›</span>
             </button>
           ) : null}
@@ -377,7 +378,7 @@ export function ComposerDropdown(props: {
       ) : null}
       {open && showingOther ? (
         <div
-          aria-label={`${props.ariaLabel}: Other`}
+          aria-label={`${props.ariaLabel}: ${props.otherLabel ?? "Other"}`}
           className="composer-dropdown__menu composer-dropdown__menu--other"
           id={otherListboxId}
           role="listbox"

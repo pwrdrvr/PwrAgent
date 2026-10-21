@@ -29,8 +29,8 @@ for (const scenario of ["local", "remote", "unreadable"]) {
       const archive = join(temp, "app.asar");
       await asar.createPackageWithOptions(input, archive, {
         unpack: scenario === "unreadable"
-          ? "**/{*.node,*.dat,*.html,spawn-helper}"
-          : "**/{*.node,*.dat,spawn-helper}",
+          ? "**/{*.node,*.dat,*.html,spawn-helper,claude,claude.exe}"
+          : "**/{*.node,*.dat,spawn-helper,claude,claude.exe}",
       });
       if (scenario === "unreadable") {
         rmSync(join(`${archive}.unpacked`, htmlPath));
@@ -69,7 +69,7 @@ for (const [label, leaked] of [
       }
       const archive = join(temp, "app.asar");
       await asar.createPackageWithOptions(input, archive, {
-        unpack: "**/{*.node,*.dat,*.dll,spawn-helper}",
+        unpack: "**/{*.node,*.dat,*.dll,spawn-helper,claude,claude.exe}",
       });
       const result = spawnSync(process.execPath, [verifier, archive], { encoding: "utf8" });
       expect(result.status, result.stderr).toBe(1);

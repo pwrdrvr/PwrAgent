@@ -16,7 +16,7 @@ export type AcpAgentAllowlistRule = {
   allowGplFamilyLicense?: boolean;
 };
 
-const BANNED_ACP_REGISTRY_IDS = new Set(["codex-acp"]);
+const BANNED_ACP_REGISTRY_IDS = new Set(["codex-acp", "claude-acp"]);
 
 /**
  * The `local-*` rules are **decorative for the local-discovery path**
@@ -111,8 +111,8 @@ export const defaultAcpAgentAllowlist = new AcpAgentAllowlist(
 );
 
 export function isBannedAcpRegistryId(registryId: string): boolean {
-  // PwrAgent talks to Codex through the first-class Codex App Server backend.
-  // The ACP adapter should not be presented as an installable duplicate.
+  // Codex and Claude have first-class backends. Their ACP adapters must not
+  // appear as duplicates, including records persisted by older builds.
   return BANNED_ACP_REGISTRY_IDS.has(registryId);
 }
 

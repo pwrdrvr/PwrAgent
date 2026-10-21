@@ -1,8 +1,8 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ReadUsageActivityResponse, UsageLimitObservation } from "@pwragent/shared";
-import { UsagePaceCard } from "../UsagePaceCard";
+import type { BackendSummary, ReadUsageActivityResponse, UsageLimitObservation } from "@pwragent/shared";
+import { ClaudeUsageLimits, UsagePaceCard } from "../UsagePaceCard";
 import { usageFixture } from "../../../federation-activity/usage-activity-fixture";
 
 afterEach(() => {
@@ -257,5 +257,23 @@ describe("UsagePaceCard", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("ClaudeUsageLimits", () => {
+  it("says credits expire and hides an unknown key behind a generic label", () => {
+    const backend = { kind: "claude", rateLimits: [
+      { name: "Weekly Fable limit", limitId: "model_scoped:Fable", usedPercent: 40, resetAt: NOW + 50 * HOUR },
+      { name: "Cloud session credits", limitId: "iguana_necktie", usedPercent: 30,
+        resetAt: NOW + 400 * HOUR, expires: true },
+      { name: "Other plan limit", limitId: "walrus_monocle", limitName: "walrus_monocle", usedPercent: 5 },
+    ] } as BackendSummary;
+    render(<ClaudeUsageLimits backend={backend} />);
+    expect(screen.getByText(/^Weekly Fable limit/).closest("p")).toHaveTextContent(/40% used · Resets /);
+    expect(screen.getByText(/^Cloud session credits/).closest("p")).toHaveTextContent(/30% used · Expires /);
+    const other = screen.getByText("Other plan limit");
+    expect(other).toHaveAttribute("data-tooltip", "Claude reports this limit as “walrus_monocle”.");
+    expect(other.closest("p")).toHaveTextContent("Other plan limit: 5% used");
+    expect(screen.queryByText(/walrus monocle/)).not.toBeInTheDocument();
   });
 });

@@ -57,7 +57,7 @@ import { RailCardTiming, useNowWhileActive } from "./RailCardTiming";
 import { TokenMiserSavingsBreakdown } from "./TokenMiserSavingsBreakdown";
 import { TokenMiserSummaryCard } from "./TokenMiserSummaryCard";
 import { ThreadFamilyPricingCard } from "./ThreadFamilyPricingCard";
-import { UsagePaceCard } from "./UsagePaceCard";
+import { ClaudeUsageLimits, UsagePaceCard } from "./UsagePaceCard";
 import {
   exactSummaryMoneyTitle,
   formatRoundedSummaryMoney,
@@ -321,7 +321,9 @@ export const PricingPanel = memo(function PricingPanel(props: PricingPanelProps)
 
       {/* This thread's bill; the account's limit and its pace are the card,
           and every thread's spend across instances is the window it opens. */}
-      <UsagePaceCard desktopApi={props.desktopApi} backends={props.backends} />
+      {source === "claude"
+        ? <ClaudeUsageLimits backend={props.backends?.find((backend) => backend.kind === "claude")} />
+        : <UsagePaceCard desktopApi={props.desktopApi} backends={props.backends} />}
 
       {/* Under the spend breakdown, above the turn rows: the gate's result is
           part of reading the bill, not a footnote to one turn of it. */}
@@ -1081,7 +1083,7 @@ function formatUsageLineRunningTotal(params: {
   const estimates: string[] = [];
   if (params.displayOptions.usd && params.lineTotals?.runningCostMicros !== undefined) {
     estimates.push(
-      `${formatMoney(params.lineTotals.runningCostMicros, params.line.currency)} list price`,
+      `${formatMoney(params.lineTotals.runningCostMicros, params.line.currency)} ${params.line.pricingBasis === "provider-reported" ? "provider estimate" : "list price"}`,
     );
   }
   if (
@@ -1359,6 +1361,7 @@ function formatPricingProviderLabel(provider: string): string {
 }
 
 function formatUsageLineCostSuffix(line: PricingUsageLine): string {
+  if (line.pricingBasis === "provider-reported") return "provider estimate this turn";
   if (line.pricingCatalogId === LOCAL_MODEL_PRICING_CATALOG) return "local inference";
   if (isEstimatedUsageGap(line)) {
     return "estimated list price";

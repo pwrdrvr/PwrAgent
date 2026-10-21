@@ -183,6 +183,8 @@ export type BackendModelOption = {
   id: string;
   label?: string;
   current?: boolean;
+  /** Older or secondary catalog models shown in the Other Models submenu. */
+  other?: boolean;
   defaultReasoningEffort?: string;
   reasoningEfforts?: string[];
   supportsReasoning?: boolean;
@@ -222,6 +224,8 @@ export type BackendRateLimitSummary = {
   limitId?: string;
   /** Provider label retained so a sparse update cannot erase it. */
   limitName?: string;
+  /** `resetAt` ends the allowance (a credit grant) instead of renewing it. */
+  expires?: boolean;
   /** Provider slot used to merge sparse rolling updates with a full snapshot. */
   windowKey?: "primary" | "secondary" | "individual" | "credits";
   remaining?: number;
@@ -281,6 +285,15 @@ export type BackendSummary = {
    * discovery. Never set alongside `available: true`.
    */
   discoveryPending?: boolean;
+  claude?: {
+    executable?: string;
+    source?: "system" | "bundled";
+    version?: string;
+    loginCommand?: string;
+    authStatus: "signed-in" | "sign-in-required" | "unknown";
+    authMethod?: "api-key" | "claude-account" | "external";
+    message?: string;
+  };
   acp?: BackendAcpSummary;
   /**
    * Provenance of the executable serving this backend. Absent until PwrAgent

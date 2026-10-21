@@ -30,6 +30,8 @@ electronVersion: 44.7.0
 # Bundle layout
 asar: true
 asarUnpack:
+  # Run Anthropic's original native CLI directly from the installed package.
+  - "node_modules/@anthropic-ai/claude-agent-sdk-*/claude{,.exe}"
   - "**/*.node"
   # @napi-rs/canvas loads its ICU data beside the Windows native binding.
   - "node_modules/@napi-rs/canvas-win32-x64-msvc/**/*"
@@ -125,11 +127,11 @@ electronFuses:
   grantFileProtocolExtraPrivileges: true
 
 mac:
-  # Both prebuilt canvas bindings are intentionally present in both temporary
+  # Both prebuilt canvas bindings and Claude binaries are intentionally present in both temporary
   # per-arch apps. They have distinct package paths and runtime selects the
   # matching one, so keep the identical single-arch files side-by-side when
   # electron-builder merges the universal app.
-  x64ArchFiles: "Contents/Resources/app.asar.unpacked/node_modules/@napi-rs/canvas-darwin-*/**"
+  x64ArchFiles: "Contents/Resources/app.asar.unpacked/node_modules/{@napi-rs/canvas-darwin-*,@anthropic-ai/claude-agent-sdk-darwin-*}/**"
   category: public.app-category.developer-tools
   # Icon Composer package, NOT a hand-built .icns: electron-builder compiles
   # it with Xcode 26's actool (Assets.car + CFBundleIconName for macOS 26) and

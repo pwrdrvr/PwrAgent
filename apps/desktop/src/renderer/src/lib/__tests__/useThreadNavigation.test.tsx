@@ -6,6 +6,7 @@ import { StrictMode } from "react";
 import { DirectoriesList } from "../../features/navigation/DirectoriesList";
 import {
   buildPullRequestStatusKey,
+  canonicalizeNavigationPath,
   shortenDerivedThreadTitle,
 } from "@pwragent/shared";
 import type {
@@ -1451,7 +1452,7 @@ describe("useThreadNavigation", () => {
     });
   });
 
-  it("marks the selected thread seen again when a refresh advances it", async () => {
+  it.each([false, true])("marks the selected thread seen again when a refresh advances it (stale detail: %s)", async (withStaleDetail) => {
     const listeners = new Set<(event: AgentEvent) => void>();
     const markThreadSeen = vi.fn(
       async (
@@ -1509,8 +1510,19 @@ describe("useThreadNavigation", () => {
       },
     }));
 
+    const initialThread = (await readPopulation()).threads[0]!;
+    const getNavigationSelectedDetail = vi.fn<NonNullable<DesktopApi["getNavigationSelectedDetail"]>>(async (request) => ({
+      protocol: 2,
+      ref: request.ref,
+      revision: "initial",
+      readiness: "ready",
+      identity: "present",
+      thread: initialThread,
+      workspaceDirectories: [],
+    }));
     const desktopApi: DesktopApi = {
       readPopulation,
+      ...(withStaleDetail ? { getNavigationSelectedDetail } : {}),
       markThreadSeen,
       onAgentEvent: (callback) => {
         listeners.add(callback);
@@ -1537,6 +1549,13 @@ describe("useThreadNavigation", () => {
         seenUpdatedAt: 1_000,
       });
     });
+
+    if (withStaleDetail) {
+      await waitFor(() => {
+        expect(result.current.selectedThreadConfigurationReady).toBe(true);
+        expect(getNavigationSelectedDetail).toHaveBeenCalled();
+      });
+    }
 
     refreshed = true;
     await act(async () => {
@@ -1567,6 +1586,10 @@ describe("useThreadNavigation", () => {
       });
       expect(result.current.threads[0]?.inbox.inInbox).toBe(false);
     });
+    if (withStaleDetail) {
+      // An unrelated event refreshes the sidebar without changing selected detail.
+      expect(result.current.selectedThread?.updatedAt).toBe(1_000);
+    }
   });
 
   it("contains a failed remote seen write and retries it on reselection", async () => {
@@ -14331,6 +14354,41 @@ describe("main selected detail authority", () => {
     vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
   });
   afterEach(() => vi.restoreAllMocks());
+  it.each(["/repo/FixtureRepo", "C:\\repo\\FixtureRepo", "C:/repo/FixtureRepo/"])(
+    "preserves selected workspace branch choices across path representations (%s)",
+    async (workspacePath) => {
+      const directoryPath = canonicalizeNavigationPath(workspacePath);
+      const thread: NavigationThreadSummary = {
+        id: "handoff", source: "codex", title: "Handoff", titleSource: "explicit",
+        linkedDirectories: [{ id: "fixture-repo", kind: "local", label: "FixtureRepo", path: workspacePath }],
+        inbox: { inInbox: false }, updatedAt: 1,
+      };
+      const gitStatus = {
+        currentBranch: "feature/handoff", branches: ["feature/handoff", "main", "release"],
+        handoffBranches: ["main", "release"], syncState: "untracked" as const,
+      };
+      const api: DesktopApi = {
+        readPopulation: async () => ({
+          backend: "all", fetchedAt: 1, unchanged: false, inboxThreadKeys: [], threads: [thread],
+          launchpadDefaults: { backend: "codex", executionMode: "default" },
+          directories: [{ key: `directory:${directoryPath}`, kind: "directory", path: directoryPath,
+            label: "FixtureRepo", threadKeys: ["codex:handoff"], needsAttentionCount: 0 }],
+        }),
+        getNavigationSelectedDetail: async (request) => ({
+          protocol: 2, ref: request.ref, revision: "workspace", readiness: "ready", identity: "present", thread,
+          workspaceDirectories: [
+            { key: "other", path: `${workspacePath}-other`, label: "Other", gitStatus: { currentBranch: "unrelated" } },
+            { key: "fixture-repo", path: workspacePath, label: "FixtureRepo", gitStatus },
+          ],
+        }),
+      };
+      const { result } = renderHook(() => useThreadNavigation(api));
+      await waitFor(() => expect(result.current.selectedThreadConfigurationReady).toBe(true));
+      expect(result.current.selectedDirectory?.path).toBe(directoryPath);
+      expect(result.current.selectedDirectory?.gitStatus).toEqual(gitStatus);
+    },
+  );
+
   it.each(["secondary-first", "primary-first", "primary-missing"])(
     "selects the primary project for a multi-directory thread (%s)",
     async (order) => {

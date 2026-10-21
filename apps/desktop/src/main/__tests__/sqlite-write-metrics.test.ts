@@ -1,3 +1,5 @@
+import type { Query as ClaudeQuery, SDKMessage as ClaudeMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import { ClaudeSessionStore } from "../claude/claude-session-store";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -10,7 +12,7 @@ import type {
   ThreadSubAgentSummary,
   ThreadUsageLineRecord,
 } from "@pwragent/shared";
-import { buildFederatedThreadRef, DEFAULT_THREAD_ARCHIVE_POLICY } from "@pwragent/shared";
+import { buildFederatedThreadRef, buildTurnUsageActivityEntryFromLine, DEFAULT_THREAD_ARCHIVE_POLICY } from "@pwragent/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { CodexEnvironmentHydrationStore } from "../app-server/codex-environment-hydration-store";
@@ -72,6 +74,134 @@ afterEach(() => {
 });
 
 describe("sqlite write metrics", () => {
+  it("steers Claude once per request and dispatches queued input only after completion", async () => {
+    const finish = Promise.withResolvers<void>();
+    const prompts: SDKUserMessage[] = [];
+    const queries: Array<{ resume?: string }> = [];
+    const events: AgentEvent[] = [];
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient(), overlayStore: store,
+      agentToolMcpServer: null, pdfToolMcpServer: null,
+      claudeBackendOptions: {
+        store: new ClaudeSessionStore(path.join(tempDir, "claude")),
+        inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+        query: ({ prompt, options = {} }) => {
+          const first = queries.length === 0;
+          queries.push(options);
+          if (typeof prompt === "string") throw new Error("Expected streaming input");
+          const input = prompt[Symbol.asyncIterator]();
+          async function* messages(): AsyncGenerator<ClaudeMessage> {
+            prompts.push((await input.next()).value);
+            yield { type: "system", subtype: "init", session_id: options.sessionId ?? options.resume } as ClaudeMessage;
+            if (first) {
+              await finish.promise;
+              prompts.push((await input.next()).value);
+            }
+            yield { type: "result", subtype: "success", is_error: false,
+              user_message_uuid: prompts.at(-1)?.uuid,
+            } as ClaudeMessage;
+          }
+          return Object.assign(messages(), { close: () => { finish.resolve(); } }) as unknown as ClaudeQuery;
+        },
+      },
+    });
+    registry.onEvent((event) => { events.push(event); });
+    try {
+      const { threadId } = await registry.startThread({ backend: "claude", cwd: tempDir, executionMode: "default" });
+      const identity = { backend: "claude" as const, threadId };
+      const started = await registry.startTurn({ ...identity, input: [{ type: "text", text: "Start" }] });
+      await vi.waitFor(() => expect(prompts).toHaveLength(1));
+      // Keep terminal accounting and setup outside the per-steer write budget.
+      await vi.waitFor(() => expect(events.some((event) => event.notification.method === "backend/providerStatus/updated")).toBe(true));
+      expect(await registry.submitTurn({ ...identity, input: [{ type: "text", text: "Next queued task" }] }))
+        .toMatchObject({ status: "queued" });
+      const request = { ...identity, expectedTurnId: started.turnId, requestId: "steer-fixture",
+        input: [{ type: "text" as const, text: "Focus on the PR" }] };
+      const origin = { kind: "agent" as const, sourceThread: { backend: "codex" as const, threadId: "sender", title: "Sender" } };
+      const { writes } = await measureSqliteWrites(async () => {
+        expect(await registry.steerTurn(request, origin)).toMatchObject({ disposition: "steered", turnId: started.turnId });
+        expect(await registry.steerTurn(request, origin)).toMatchObject({ disposition: "steered", turnId: started.turnId });
+      });
+      expectSqliteWriteBudget({ scenario: "claude-steer", note: "one steer with agent origin plus one idempotent retry; no timer writes", writes });
+      expect(queries).toHaveLength(1);
+      expect(prompts).toHaveLength(1);
+      finish.resolve();
+      await vi.waitFor(() => expect(events.filter((event) => event.notification.method === "turn/completed")).toHaveLength(2));
+      expect(queries).toHaveLength(2);
+      expect(queries[1].resume).toBe(threadId);
+      expect(prompts.map((prompt) => prompt.message.content)).toEqual([
+        [{ type: "text", text: "Start" }], [{ type: "text", text: "Focus on the PR" }], [{ type: "text", text: "Next queued task" }],
+      ]);
+      expect(prompts[1].priority).toBe("now");
+      const replay = await registry.readThread(identity);
+      expect(replay.replay.messages.find((message) => message.text === "Focus on the PR")?.origin).toEqual(origin);
+      expect(registry.getActiveTurnForThread(identity)).toBeUndefined();
+    } finally { finish.resolve(); await registry.close(); }
+  });
+
+  it("budgets Claude result accounting independently of context updates and preserves provider pricing", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient(), overlayStore: store,
+      agentToolMcpServer: null, pdfToolMcpServer: null,
+    });
+    const internal = registry as unknown as {
+      emit(event: AgentEvent): Promise<void>;
+      flushLiveThreadUsageLines(): Promise<void>;
+    };
+    const target = { backend: "claude" as const, threadId: "claude-usage-fixture" };
+    try {
+      const { writes } = await measureSqliteWrites(async () => {
+        for (let index = 0; index < 100; index += 1) {
+          await internal.emit({ backend: "claude", notification: {
+            method: "thread/contextWindow/updated", params: {
+              threadId: target.threadId, turnId: "turn", usedTokens: 1000 + index, modelContextWindow: 200_000,
+            },
+          } });
+        }
+        await internal.emit({ backend: "claude", notification: {
+          method: "thread/tokenUsage/updated", params: {
+            threadId: target.threadId, turnId: "turn", model: "claude-opus-5-5",
+            tokenUsage: { last: { inputTokens: 350, cachedInputTokens: 200, cacheWriteInputTokens: 50, outputTokens: 20, totalTokens: 370 }, claudeCostUSD: 0.123456 },
+          },
+        } });
+        await internal.flushLiveThreadUsageLines();
+      });
+      const pricing = await store.readThreadPricing(target);
+      expect(pricing.lines).toHaveLength(1);
+      expect(pricing.lines[0]).toMatchObject({
+        provider: "anthropic", pricingBasis: "provider-reported", priceStatus: "priced",
+        totalCostMicros: 123456, inputTokens: 350, cachedInputTokens: 200, cacheWriteInputTokens: 50,
+        outputTokens: 20, turnUsageAttributed: true,
+      });
+      const entry = buildTurnUsageActivityEntryFromLine({ line: pricing.lines[0], turn: { id: "turn", status: "completed" } });
+      expect(entry?.details.find((detail) => detail.id.endsWith("-cost"))?.label).toContain("provider estimate");
+      expect(entry?.details.some((detail) => detail.id.endsWith("-input-cost") || detail.id.endsWith("-output-cost"))).toBe(false);
+      expectSqliteWriteBudget({ scenario: "claude-result-usage", note: "100 context updates plus one result usage event and ledger flush; context does not write SQLite; 1 commit/turn, measured 65,920 bytes: ~6.6 MB/day at 100 turns/day, zero idle writes", writes });
+    } finally { await registry.close(); }
+  });
+
+  it("budgets Claude creation and operator mode changes without repeat-selection writes", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient(), overlayStore: store,
+      agentToolMcpServer: null, pdfToolMcpServer: null,
+      claudeBackendOptions: {
+        store: new ClaudeSessionStore(path.join(tempDir, "claude")),
+        inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+      },
+    });
+    try {
+      const { result, writes: creation } = await measureSqliteWrites(async () =>
+        await registry.startThread({ backend: "claude", cwd: tempDir, executionMode: "default" }));
+      expectSqliteWriteBudget({ scenario: "claude-thread-creation", note: "one thread creation through the registry; SDK transcripts and resume metadata use files", writes: creation });
+      const target = { backend: "claude" as const, threadId: result.threadId, executionMode: "auto" as const };
+      const { writes } = await measureSqliteWrites(async () => {
+        await registry.setThreadExecutionMode(target);
+        for (let i = 0; i < 100; i++) await registry.setThreadExecutionMode(target);
+      });
+      expectSqliteWriteBudget({ scenario: "claude-permission-selection", note: "one operator mode selection; 100 duplicate selections add no writes", writes });
+    } finally { await registry.close(); }
+  });
+
   it("keeps 24 hourly inactive-thread sweeps read-only", async () => {
     const thread: AppServerThreadSummary = {
       id: "recently-restored", title: "Restored thread", titleSource: "explicit", source: "codex", threadStatus: "notLoaded",

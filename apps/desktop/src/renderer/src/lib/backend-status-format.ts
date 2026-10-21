@@ -121,7 +121,7 @@ export function describeRateLimitRow(
   const resetText = formatRateLimitResetCompact(limit.resetAt, now);
   const base = {
     label: rateLimitDisplayLabel(limit),
-    ...(resetText ? { reset: `resets ${resetText}` } : {}),
+    ...(resetText ? { reset: `${limit.expires ? "expires" : "resets"} ${resetText}` } : {}),
   };
   if (typeof limit.used === "number" && typeof limit.limit === "number" && limit.limit > 0) {
     return {
@@ -168,7 +168,7 @@ export function formatRateLimitLine(limit: BackendRateLimitSummary): string {
   const { label } = splitRateLimitName(limit.name);
   const displayLabel = rateLimitDisplayLabel(limit);
   const resetText = formatRateLimitReset(limit.resetAt);
-  const suffix = resetText ? `, resets ${resetText}` : "";
+  const suffix = resetText ? `, ${limit.expires ? "expires" : "resets"} ${resetText}` : "";
   if (
     label === "Individual limit"
     && typeof limit.used === "number"

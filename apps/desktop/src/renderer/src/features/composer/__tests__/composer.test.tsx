@@ -5536,6 +5536,35 @@ describe("Composer", () => {
     });
   });
 
+  it("shows current Claude families and selects an older model from Other Models", async () => {
+    const onUpdateLaunchpad = vi.fn(async () => undefined);
+    render(<Composer
+      backends={[backendSummary("claude", { models: [
+        { id: "opus", label: "Opus 5.5" },
+        { id: "fable", label: "Fable 5.1", current: true, supportsReasoning: true,
+          defaultReasoningEffort: "default", reasoningEfforts: ["default", "low", "high", "max"] },
+        { id: "sonnet", label: "Sonnet 5.5" },
+        { id: "haiku", label: "Haiku 5.5" },
+        { id: "claude-opus-4-8", label: "Opus 4.8", other: true },
+      ] })]}
+      launchpad={{ directoryKey: "directory:/repo", directoryKind: "directory", directoryLabel: "Repo",
+        directoryPath: "/repo", backend: "claude", executionMode: "default", prompt: "", workMode: "local",
+        branchName: "main", createdAt: 1, updatedAt: 1 }}
+      onUpdateLaunchpad={onUpdateLaunchpad} skills={[]} />);
+    const modelButton = screen.getByRole("button", { name: "Model" });
+    expect(modelButton).toHaveValue("fable");
+    fireEvent.click(modelButton);
+    expect(screen.getAllByRole("option").map((option) => option.querySelector(".composer-dropdown__option-label")?.textContent))
+      .toEqual(["Opus 5.5", "Fable 5.1", "Sonnet 5.5", "Haiku 5.5", "Other Models"]);
+    expect(screen.queryByRole("option", { name: "Opus 4.8" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("option", { name: "Other Models" }));
+    const submenu = screen.getByRole("listbox", { name: "Model: Other Models" });
+    fireEvent.click(within(submenu).getByRole("option", { name: "Opus 4.8" }));
+    await waitFor(() => expect(onUpdateLaunchpad).toHaveBeenCalledWith(
+      "directory:/repo", expect.objectContaining({ model: "claude-opus-4-8" }), expect.anything(),
+    ));
+  });
+
   it("adopts the refreshed ACP default when the provider is selected", async () => {
     const staleKimi = {
       ...backendSummary("acp:kimi", {

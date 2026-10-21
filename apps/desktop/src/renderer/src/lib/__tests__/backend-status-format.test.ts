@@ -137,6 +137,20 @@ describe("backend status formatting", () => {
     ).toContain("resets 2:20 AM");
   });
 
+  it("says a credit grant expires rather than resets", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 9, 20, 22, 0, 0));
+    const grant = {
+      name: "Cloud session credits",
+      usedPercent: 30,
+      resetAt: new Date(2026, 10, 5, 2, 59, 0).getTime(),
+      expires: true,
+    };
+    expect(formatRateLimitLine(grant)).toContain("expires Nov 5");
+    expect(formatRateLimitLine(grant)).not.toContain("resets");
+    expect(describeRateLimitRow(grant, Date.now()).reset).toMatch(/^expires /);
+  });
+
   it("formats later resets as dates", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 4, 13, 22, 0, 0));

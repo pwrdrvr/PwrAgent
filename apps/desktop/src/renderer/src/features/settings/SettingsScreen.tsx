@@ -16,6 +16,7 @@ import type {
 import type { AppearanceController } from "../../lib/useAppearance";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { describeGitCommandState } from "./CommandToolsSettings";
+import { claudeProviderStatus } from "./claude-provider-status";
 import type { PwrAgentProfilesState } from "../../lib/usePwrAgentProfiles";
 import type { DesktopSettingsState } from "./useDesktopSettings";
 import { AboutSettings } from "./AboutSettings";
@@ -527,12 +528,22 @@ export function SettingsScreen(props: {
       const codexConfigured = Boolean(
         snapshot?.models.codex.discovery.selectedCommand,
       );
+      const claude = claudeProviderStatus(
+        props.cachedBackends?.find((backend) => backend.kind === "claude")?.claude,
+      );
       return [
         {
           key: "codex",
           label: "Codex",
           sub: "codex",
           dot: snapshot ? (codexConfigured ? "ok" : "off") : undefined,
+        },
+        {
+          key: "claude",
+          label: "Claude",
+          sub: "claude",
+          dot: claude.dot,
+          ...(claude.navChip ? { chip: claude.navChip } : {}),
         },
         ...displayOrderedAcpEntries(acpCatalog.entries).map((entry) => {
           const enabled = acpAgentEnabledInSnapshot(snapshot, entry.registryId);

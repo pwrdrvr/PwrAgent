@@ -26,6 +26,9 @@ export function formatBackendLabel(
   backend: AppServerBackendKind,
   summaries: BackendSummary[] = [],
 ): string {
+  if (backend === "claude") {
+    return "Claude";
+  }
   if (backend === "acp:gemini") {
     return "Gemini";
   }

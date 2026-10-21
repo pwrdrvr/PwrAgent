@@ -71,7 +71,15 @@ for (const theme of ["dark", "light"] as const) {
         }, activityFixture()),
       );
       await app.window.emulateMedia({ reducedMotion: "reduce" });
-      const trigger = app.window.getByRole("button", { name: "Open Star Map", exact: true });
+      // Loading and final headers both expose Star Map. Wait for the selected
+      // thread's real header; opening the placeholder's popover loses it when
+      // lazy thread detail replaces that header during the audit.
+      await app.window.getByRole("button", { name: /Replay smoke thread/i }).first().click();
+      await expect(app.window.getByRole("heading", { level: 2, name: "Replay smoke thread" })).toBeVisible();
+      await expect(app.window.getByRole("textbox", { name: "Reply", exact: true })).toBeEnabled();
+      // Windows hosts this control in its persistent native-style titlebar.
+      const trigger = app.window.locator(".thread-header:not(.thread-header--placeholder), .app-titlebar")
+        .getByRole("button", { name: "Open Star Map", exact: true });
       await expect(trigger).toBeVisible();
       expect(await trigger.evaluate((button) => {
         const control = button.getBoundingClientRect();
@@ -86,6 +94,11 @@ for (const theme of ["dark", "light"] as const) {
       await trigger.hover();
       const panel = app.window.getByRole("dialog", { name: "Federation activity", exact: true });
       await expect(panel.getByText("Running · connected")).toBeVisible();
+      // Hover is verified above. Give this interactive popover keyboard focus
+      // before the audit/capture so native pointer departure cannot dismiss it.
+      const openActivity = panel.getByRole("button", { name: "Open Federation Activity", exact: true });
+      await openActivity.focus();
+      await expect(openActivity).toBeFocused();
       const popoverAudit = await new AxeBuilder({ page: app.window })
         .setLegacyMode(true)
         .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"]).analyze();
@@ -94,7 +107,7 @@ for (const theme of ["dark", "light"] as const) {
       const opened = app.electronApp.waitForEvent("window", {
         predicate: (page) => page !== app.window,
       });
-      await panel.getByRole("button", { name: "Open Federation Activity", exact: true }).click();
+      await openActivity.click();
       const activity = await opened;
       await activity.emulateMedia({ reducedMotion: "reduce" });
       await expect(activity.getByText("Running · connected")).toBeVisible();
