@@ -38102,7 +38102,25 @@ export class DesktopBackendRegistry {
             && candidate.threadId === context.threadId,
           ),
       );
-    return matchingTurns.length === 1 ? matchingTurns[0] : undefined;
+    if (matchingTurns.length !== 1) {
+      backendRegistryLog.warn("MCP active turn resolution failed", {
+        backend: context.backend,
+        threadId: context.threadId,
+        matchingTurnCount: matchingTurns.length,
+        matchingTurnIds: matchingTurns.slice(0, 8).map((turn) => turn.turnId),
+        activeTurnCount: this.activeTurnKeys.size,
+        relatedActiveTurns: [...this.activeTurnKeys]
+          .map(parseActiveTurnKey)
+          .filter((turn) => turn
+            && (turn.backend === context.backend || turn.threadId === context.threadId))
+          .slice(0, 8),
+        startReserved: this.reservedAcpStartThreadKeys.has(
+          buildTurnStartReservationKey(context.backend, context.threadId),
+        ),
+      });
+      return undefined;
+    }
+    return matchingTurns[0];
   }
 
   /**
@@ -45606,6 +45624,13 @@ export class DesktopBackendRegistry {
       this.activeTurnKeys.add(
         buildActiveTurnKey(event.backend, notification.params.threadId, turnId),
       );
+      if (isAcpBackendId(event.backend)) {
+        backendRegistryLog.info("ACP active turn registered", {
+          backend: event.backend,
+          threadId: notification.params.threadId,
+          turnId,
+        });
+      }
       if (event.backend === "codex") {
         const key = buildActiveTurnModeKey(
           notification.params.threadId,
@@ -45768,6 +45793,13 @@ export class DesktopBackendRegistry {
             if (key.startsWith(genericActiveTurnKeyPrefix)) {
               this.activeTurnKeys.delete(key);
               const parsed = parseActiveTurnKey(key);
+              backendRegistryLog.info("ACP active turn removed", {
+                backend: event.backend,
+                threadId: notification.params.threadId,
+                turnId: parsed?.turnId ?? null,
+                method: event.notification.method,
+                completedTurnId: turnId,
+              });
               if (parsed) {
                 this.clearAcceptedToolCallsForEndedTurn(parsed.backend, parsed.threadId, parsed.turnId);
               }
@@ -45996,6 +46028,15 @@ export class DesktopBackendRegistry {
             endedTurnIds.add(parsed.turnId);
           }
           this.activeTurnKeys.delete(key);
+          if (isAcpBackendId(event.backend)) {
+            backendRegistryLog.info("ACP active turn removed", {
+              backend: event.backend,
+              threadId,
+              turnId: parsed?.turnId ?? null,
+              method: event.notification.method,
+              status: readStatusType(event.notification.params.status),
+            });
+          }
           if (parsed) {
             this.clearAcceptedToolCallsForEndedTurn(parsed.backend, parsed.threadId, parsed.turnId);
           }

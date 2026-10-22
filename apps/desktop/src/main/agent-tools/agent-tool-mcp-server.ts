@@ -116,6 +116,10 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     }
     await this.ensureStarted();
     const token = this.tokenForContext(context);
+    agentToolMcpLog.info("registered MCP client", {
+      backend: context.backend,
+      threadId: context.threadId ?? null,
+    });
     return {
       server: {
         name: PWRAGENT_TOOL_NAMESPACE,
@@ -139,6 +143,11 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
           threadId: normalizedThreadId,
         };
         this.contextsByToken.set(token, bound);
+        agentToolMcpLog.info("bound MCP client to thread", {
+          backend: bound.backend,
+          previousThreadId: current.threadId ?? null,
+          threadId: normalizedThreadId,
+        });
         const key = boundThreadKey(bound.backend, normalizedThreadId);
         if (!this.tokensByBoundThread.has(key)) {
           this.tokensByBoundThread.set(key, token);
@@ -283,6 +292,11 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
         }
         const callContext = await this.options.resolveCallContext(clientContext);
         if (!callContext) {
+          agentToolMcpLog.warn("MCP tool rejected: no unique active turn", {
+            backend: clientContext.backend,
+            threadId: clientContext.threadId,
+            tool: request.params.name,
+          });
           return forbiddenMcpResponse(
             "PwrAgent MCP tools are callable only during an active turn on the registered thread.",
           );

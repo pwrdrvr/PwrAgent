@@ -153,6 +153,7 @@ import { WorktreeArchiveService } from "../app-server/worktree-archive-service";
 import { GitWorkspaceHandoffService } from "../app-server/git-workspace-handoff-service";
 import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
 import { AcpRolloutStore } from "../acp/acp-rollout-store";
+import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
 import { AcpSessionStore, type AcpSessionMetadata } from "../acp/acp-session-store";
 import { TestTokenMiserStore as TokenMiserStore } from "./token-miser-test-store";
 import type { ThreadSearchService } from "../thread-search/thread-search-service";
@@ -61276,6 +61277,96 @@ script = "printf setup"
     });
 
     await registry.close();
+  });
+
+  it("keeps Grok MCP calls active when an idle metadata update finishes after turn start", async () => {
+    const backend = "acp:grok" as AcpBackendId;
+    const threadId = "grok-mcp-lifecycle";
+    const transport = new FakeAcpAgentTransport({
+      initialize: {
+        protocolVersion: 1,
+        agentCapabilities: { loadSession: true, mcp: { http: true } },
+      },
+      "session/new": { sessionId: threadId },
+    });
+    let finishPrompt!: (result: unknown) => void;
+    const prompt = new Promise<unknown>((resolve) => { finishPrompt = resolve; });
+    const request = transport.request.bind(transport);
+    vi.spyOn(transport, "request").mockImplementation(async (method, params) =>
+      method === "session/prompt" ? await prompt : await request(method, params),
+    );
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([{
+        ...createKimiAgentRecord(backend, {
+          schemaVersion: 1,
+          status: "discovered",
+          agentCapabilities: { loadSession: true, mcp: { http: true } },
+          checkedAt: 1000,
+        }),
+        registryId: "grok",
+        name: "Grok",
+      }]),
+      acpSessionStore: createAcpSessionStoreMock([]),
+      createAcpTransport: () => transport,
+      threadTitleGenerationService: null,
+    });
+    const client = new McpClient({ name: "grok-lifecycle-fixture", version: "1.0.0" });
+    let releaseMetadata!: () => void;
+    const metadataGate = new Promise<void>((resolve) => { releaseMetadata = resolve; });
+    let metadataStarted!: () => void;
+    const metadataPending = new Promise<void>((resolve) => { metadataStarted = resolve; });
+    const events: AgentEvent[] = [];
+    registry.onEvent(async (event) => {
+      events.push(event);
+      if (event.notification.method === "thread/availableCommands/updated") {
+        metadataStarted();
+        await metadataGate;
+      }
+    });
+    try {
+      await registry.startThread({ backend, cwd: "/repo", executionMode: "default" });
+      const sessionNew = transport.requests.find((call) => call.method === "session/new");
+      const servers = sessionNew?.params?.mcpServers as AgentToolMcpRegistration["server"][];
+      expect(servers).toEqual(expect.arrayContaining([expect.objectContaining({ name: "pwragent" })]));
+      const server = servers.find((candidate) => candidate.name === "pwragent")!;
+      await client.connect(new StreamableHTTPClientTransport(new URL(server.url), {
+        requestInit: {
+          headers: Object.fromEntries(server.headers.map(({ name, value }) => [name, value])),
+        },
+      }));
+      transport.emitSessionUpdate(threadId, {
+        sessionUpdate: "available_commands_update",
+        availableCommands: [],
+      });
+      await metadataPending;
+      const turn = await registry.startTurn({
+        backend, threadId, input: [{ type: "text", text: "Inspect this thread." }],
+      });
+      releaseMetadata();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      const search = await client.callTool({ name: "search_threads", arguments: { includeRemote: false } });
+      expect(search.isError, JSON.stringify(search)).not.toBe(true);
+      expect(search.structuredContent).toHaveProperty("threads");
+      expect(registry.getActiveTurnForThread({ backend, threadId })).toMatchObject({ turnId: turn.turnId });
+
+      transport.emitSessionUpdate(threadId, {
+        sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Done." },
+      });
+      finishPrompt({ stopReason: "end_turn" });
+      await vi.waitFor(() => expect(events.some((event) => event.notification.method === "turn/completed")).toBe(true));
+      expect(registry.getActiveTurnForThread({ backend, threadId })).toBeUndefined();
+      const afterTurn = await client.callTool({ name: "search_threads", arguments: { includeRemote: false } });
+      expect(afterTurn.isError).toBe(true);
+      expect(JSON.stringify(afterTurn)).toContain("only during an active turn");
+    } finally {
+      releaseMetadata();
+      finishPrompt({ stopReason: "cancelled" });
+      await client.close();
+      await registry.close();
+    }
   });
 
   it("creates same-backend handoff threads from an ACP MCP parent", async () => {
