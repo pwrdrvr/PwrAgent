@@ -35486,6 +35486,15 @@ export class DesktopBackendRegistry {
         return;
       }
 
+      // Claude's adapter requests its own native title. Keep a local prompt
+      // fallback eligible for session_info_update, without another model call.
+      if (params.backend === "acp:claude") {
+        if (currentThread?.titleSource !== "explicit") await this.applyPromptDerivedAcpThreadTitle({
+          backend: params.backend, threadId: params.threadId, prompt: params.prompt,
+        });
+        return;
+      }
+
       if (params.backend === "codex" || isAcpBackendId(params.backend)) {
         const titleHelperRuntime = await this.resolveTitleHelperRuntime(params);
         await this.safePersistTitleHelperSubAgent({

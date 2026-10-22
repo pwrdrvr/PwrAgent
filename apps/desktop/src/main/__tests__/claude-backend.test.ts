@@ -14,7 +14,9 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-async function fixture(messages?: (options: Options) => AsyncGenerator<SDKMessage>, controls: Partial<Query> = {}) {
+async function fixture(messages?: (options: Options) => AsyncGenerator<SDKMessage>, controls: Partial<Query> & {
+  generateSessionTitle?: (description: string, options?: { persist?: boolean }) => Promise<string | null>;
+} = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-"));
   roots.push(root);
   const store = new ClaudeSessionStore(root);
@@ -44,6 +46,7 @@ async function fixture(messages?: (options: Options) => AsyncGenerator<SDKMessag
   const backendOptions = {
     store,
     query: run,
+    getSessionInfo: vi.fn().mockResolvedValue(undefined),
     discoverModels: vi.fn().mockResolvedValue([]),
     inspectInstallation: vi.fn(async (_options?: Parameters<typeof import("../claude/claude-executable").inspectClaudeInstallation>[0]) => ({
       executable: "/fixture/claude", authStatus: "signed-in" as const,
@@ -51,7 +54,7 @@ async function fixture(messages?: (options: Options) => AsyncGenerator<SDKMessag
     emit: async (event: AgentEvent) => { events.push(event); },
     request: async () => ({ decision: "accept" }),
     cancelRequest: async () => {},
-    resolveEnv: async () => ({ PATH: "/fixture", ANTHROPIC_API_KEY: "must-not-reach-child", CLAUDE_CODE_OAUTH_TOKEN: "must-not-reach-child" }),
+    resolveEnv: async (): Promise<NodeJS.ProcessEnv> => ({ PATH: "/fixture", ANTHROPIC_API_KEY: "must-not-reach-child", CLAUDE_CODE_OAUTH_TOKEN: "must-not-reach-child" }),
   };
   const backend = new ClaudeBackend(backendOptions);
   async function waitForTurn() {
@@ -61,6 +64,139 @@ async function fixture(messages?: (options: Options) => AsyncGenerator<SDKMessag
 }
 
 describe("Claude SDK backend", () => {
+  it("consumes a stored provider title without another title request", async () => {
+    const generateSessionTitle = vi.fn().mockResolvedValue("Redundant title");
+    const f = await fixture(undefined, { generateSessionTitle });
+    f.backendOptions.getSessionInfo.mockResolvedValue({ customTitle: "Provider title", summary: "Raw prompt" });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Investigate title behavior" }] });
+    await f.waitForTurn();
+    expect((await f.store.read(threadId)).thread).toMatchObject({ title: "Provider title", titleSource: "derived" });
+    expect(f.backendOptions.getSessionInfo).toHaveBeenCalledWith("5a85c1ad-85c1-4930-ae19-50f721ad13dd", { dir: f.root });
+    expect(generateSessionTitle).not.toHaveBeenCalled();
+  });
+
+  it("requests one native title across resumed turns and includes its usage", async () => {
+    const generateSessionTitle = vi.fn().mockResolvedValue("  Fix\nClaude naming  ");
+    const totals = { haiku: { inputTokens: 25, outputTokens: 5, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+      costUSD: 0.002, contextWindow: 200_000, maxOutputTokens: 32_000, webSearchRequests: 0 } };
+    const f = await fixture(undefined, { generateSessionTitle,
+      usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: vi.fn().mockResolvedValue({ session: { model_usage: totals } }),
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Investigate title behavior" }] });
+    await f.waitForTurn();
+    expect((await f.store.read(threadId)).thread).toMatchObject({ title: "Fix Claude naming", titleSource: "derived" });
+    expect(generateSessionTitle).toHaveBeenCalledWith("Investigate title behavior", { persist: true });
+    expect(f.events.find((event) => event.notification.method === "thread/tokenUsage/updated")?.notification)
+      .toMatchObject({ params: { tokenUsage: { claudeCostUSD: 0.002 } } });
+    f.events.length = 0;
+    const resumed = new ClaudeBackend(f.backendOptions);
+    await resumed.startTurn({ threadId, input: [{ type: "text", text: "Follow up" }] });
+    await f.waitForTurn();
+    expect(generateSessionTitle).toHaveBeenCalledTimes(1);
+    expect(f.run).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves an operator name and supplies it to a new native session", async () => {
+    const generateSessionTitle = vi.fn().mockResolvedValue("Unwanted title");
+    const f = await fixture(undefined, { generateSessionTitle });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.renameThread(threadId, "Operator name");
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Investigate title behavior" }] });
+    await f.waitForTurn();
+    expect(f.queries[0].title).toBe("Operator name");
+    expect((await f.store.read(threadId)).thread.title).toBe("Operator name");
+    expect(generateSessionTitle).not.toHaveBeenCalled();
+    expect(f.backendOptions.getSessionInfo).not.toHaveBeenCalled();
+  });
+
+  it("preserves an operator rename while a native title request is pending", async () => {
+    const pending = Promise.withResolvers<string>();
+    const generateSessionTitle = vi.fn(() => pending.promise);
+    const f = await fixture(undefined, { generateSessionTitle });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Investigate title behavior" }] });
+    await vi.waitFor(() => expect(generateSessionTitle).toHaveBeenCalledOnce());
+    await f.backend.renameThread(threadId, "Operator wins");
+    pending.resolve("Generated title");
+    await f.waitForTurn();
+    expect((await f.store.read(threadId)).thread).toMatchObject({ title: "Operator wins", titleSource: "explicit" });
+  });
+
+  it("keeps a local fallback after a failed native title request without retrying", async () => {
+    const generateSessionTitle = vi.fn().mockRejectedValue(new Error("usage limit"));
+    const f = await fixture(undefined, { generateSessionTitle });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    for (let turn = 0; turn < 2; turn += 1) {
+      f.events.length = 0;
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Investigate title behavior" }] });
+      await f.waitForTurn();
+      expect(f.events.some((event) => event.notification.method === "turn/completed")).toBe(true);
+    }
+    expect((await f.store.read(threadId)).thread.title).toBe("Investigate title behavior");
+    expect(generateSessionTitle).toHaveBeenCalledOnce();
+  });
+
+  it.each(["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "CLAUDE_CODE_DISABLE_TERMINAL_TITLE"])(
+    "respects %s without making a native title request", async (key) => {
+      const generateSessionTitle = vi.fn().mockResolvedValue("Unwanted title");
+      const f = await fixture(undefined, { generateSessionTitle });
+      f.backendOptions.resolveEnv = async () => ({ PATH: "/fixture", [key]: "1" });
+      const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Investigate title behavior" }] });
+      await f.waitForTurn();
+      expect(generateSessionTitle).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps the prompt fallback when the SDK has no native title control", async () => {
+    const f = await fixture();
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Investigate title behavior" }] });
+    await f.waitForTurn();
+    expect((await f.store.read(threadId)).thread.title).toBe("Investigate title behavior");
+    expect(f.run).toHaveBeenCalledOnce();
+  });
+
+  it("does not request a speculative title when provider metadata cannot be read", async () => {
+    const generateSessionTitle = vi.fn().mockResolvedValue("Unwanted title");
+    const f = await fixture(undefined, { generateSessionTitle });
+    f.backendOptions.getSessionInfo.mockRejectedValue(new Error("unreadable session"));
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Investigate title behavior" }] });
+    await f.waitForTurn();
+    expect(generateSessionTitle).not.toHaveBeenCalled();
+    expect(f.events.some((event) => event.notification.method === "turn/completed")).toBe(true);
+  });
+
+  it("consumes a provider title arriving after a failed request without spending again", async () => {
+    const generateSessionTitle = vi.fn().mockRejectedValue(new Error("temporary failure"));
+    const f = await fixture(undefined, { generateSessionTitle });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Investigate title behavior" }] });
+    await f.waitForTurn();
+    f.backendOptions.getSessionInfo.mockResolvedValue({ customTitle: "Late provider title" });
+    f.events.length = 0;
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Follow up" }] });
+    await f.waitForTurn();
+    expect((await f.store.read(threadId)).thread.title).toBe("Late provider title");
+    expect(generateSessionTitle).toHaveBeenCalledOnce();
+  });
+
+  it("does not request a native title after a failed turn", async () => {
+    const generateSessionTitle = vi.fn().mockResolvedValue("Unwanted title");
+    const f = await fixture(async function* () {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      yield { type: "result", subtype: "error_during_execution", is_error: true, errors: ["usage limit"] } as SDKMessage;
+    }, { generateSessionTitle });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Investigate title behavior" }] });
+    await f.waitForTurn();
+    expect(generateSessionTitle).not.toHaveBeenCalled();
+    expect(f.events.some((event) => event.notification.method === "turn/failed")).toBe(true);
+  });
+
   it.each([false, true])("preserves all completed text blocks without duplicating deltas (streaming=%s)", async (streaming) => {
     const f = await fixture(async function* () {
       yield { type: "stream_event", parent_tool_use_id: null, event: {

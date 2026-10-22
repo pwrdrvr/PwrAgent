@@ -3169,6 +3169,34 @@ afterEach(() => {
 });
 
 describe("DesktopBackendRegistry", () => {
+  it("leaves ACP Claude naming to the provider without launching a redundant title helper", async () => {
+    const backend = "acp:claude" as const;
+    const titleService = { generateTitle: vi.fn(async () => ({ status: "generated" as const, title: "Redundant helper title" })) };
+    const sessions: AcpSessionMetadata[] = [{ backendId: backend, sessionId: "claude-title-session", title: "ACP session", titleSource: "fallback",
+      cwd: "/tmp/claude-title-workspace", createdAt: 1000, updatedAt: 1000, executionMode: "default", status: "idle" }];
+    const { registry } = createKimiAcpRegistry({
+      acpBackendId: backend,
+      sessionId: "claude-title-session",
+      sessions,
+      threadTitleGenerationService: titleService,
+    });
+    try {
+      await registry.startTurn({ backend, threadId: "claude-title-session", input: [{ type: "text", text: "Investigate Claude titles" }] });
+      await registry.whenThreadTitleGenerationSettledForTests();
+      expect(titleService.generateTitle).not.toHaveBeenCalled();
+      expect(sessions[0]).toMatchObject({ title: "Investigate Claude titles", titleSource: "fallback" });
+      // The real ACP client stores accepted session_info_update titles before
+      // publishing the corresponding notification.
+      Object.assign(sessions[0], { title: "Provider generated Claude title", titleSource: "derived" });
+      await registry.publishLocalEvent({ backend, notification: { method: "thread/name/updated", params: {
+        threadId: "claude-title-session", threadName: "Provider generated Claude title", titleSource: "derived",
+      } } });
+      expect(await registry.listThreads({ backend, forceRefresh: true })).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: "claude-title-session", title: "Provider generated Claude title", titleSource: "derived" }),
+      ]));
+    } finally { await registry.close(); }
+  });
+
   it("routes Claude creation, replay, approvals, resume and lifecycle without a Codex or ACP client", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-registry-"));
     const store = new ClaudeSessionStore(path.join(root, "sessions"));

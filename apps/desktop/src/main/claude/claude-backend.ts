@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { query, type AccountInfo, type Options, type Query, type SDKMessage, type SDKUserMessage, type SlashCommand } from "@anthropic-ai/claude-agent-sdk";
+import { getSessionInfo, query, type AccountInfo, type Options, type Query, type SDKMessage, type SDKUserMessage, type SlashCommand } from "@anthropic-ai/claude-agent-sdk";
 import type {
   AgentEvent, AppServerAvailableCommandSummary, AppServerPendingRequestNotification, AppServerThreadEntry,
   AppServerThreadMessageEntry, AppServerThreadMessagePart, AppServerThreadReplay, AppServerThreadSummary,
@@ -21,10 +21,12 @@ import {
 } from "./claude-usage";
 import { claudeCommandActivity, groupClaudeActivities } from "./claude-activity";
 import { ClaudeSessionStore, type ClaudeSession } from "./claude-session-store";
+import { normalizeClaudeTitle, requestClaudeTitle, type ClaudeTitleQuery } from "./claude-titles";
 
 export type ClaudeBackendOptions = {
   store?: ClaudeSessionStore;
   query?: typeof query;
+  getSessionInfo?: typeof getSessionInfo;
   inspectInstallation?: typeof inspectClaudeInstallation;
   discoverModels?: typeof discoverClaudeModels;
   readCommands?: (params: { executable: string; env: NodeJS.ProcessEnv; cwd: string }) => Promise<SlashCommand[]>;
@@ -67,6 +69,8 @@ type RunningTurn = {
   ending?: boolean;
   /** One background context probe at a time; a request while it runs reruns it once. */
   contextRefresh?: { promise: Promise<void>; again: boolean };
+  titlePrompt?: string;
+  titleEnv?: NodeJS.ProcessEnv;
 };
 
 /** One input pump owns the SDK's stdin until the logical turn finishes. */
@@ -289,6 +293,7 @@ export class ClaudeBackend {
         createdAt: Date.now(), turn: { id: running.turnId, status: "in_progress" },
       };
       const firstPrompt = params.input.find((item) => item.type === "text" && item.text.trim());
+      running.titlePrompt = firstPrompt?.type === "text" ? firstPrompt.text : undefined;
       if (session.thread.titleSource === "fallback" && firstPrompt?.type === "text") {
         session.thread.title = firstPrompt.text.replace(/\s+/g, " ").trim().slice(0, 80);
         session.thread.titleSource = "derived";
@@ -306,6 +311,7 @@ export class ClaudeBackend {
         item: { id: user.id, type: "userMessage", text: user.text, content: parts },
       } });
       const env = claudeEnvironment(await this.options.resolveEnv?.() ?? process.env);
+      running.titleEnv = env;
       const permissionMode = claudePermissionMode(params.executionMode ?? session.thread.executionMode ?? "default");
       const sdkOptions: Options = {
         ...claudeHarnessOptions(executable, env),
@@ -313,6 +319,7 @@ export class ClaudeBackend {
         ...(session.sdkSessionId ? { resume: session.sdkSessionId } : { sessionId: params.threadId }),
         systemPrompt: { type: "preset", preset: "claude_code", ...(params.instructions ? { append: params.instructions } : {}) },
         persistSession: true,
+        ...(session.thread.titleSource === "explicit" ? { title: session.thread.title } : {}),
         includePartialMessages: true,
         permissionMode,
         // Enables an explicit Full Access selection through setPermissionMode;
@@ -471,12 +478,19 @@ export class ClaudeBackend {
           const finished = message.is_error || running.pendingSteers.size === 0;
           if (finished) running.ending = true;
           receivedResult = true;
-          const hasUsage = message.modelUsage && Object.values(message.modelUsage).some((value) =>
+          const requestedTitle = finished && !message.is_error && !running.controller.signal.aborted
+            ? await this.updateTitle(session, running) : false;
+          await running.contextRefresh?.promise;
+          const [, usage] = await Promise.all([this.refreshContext(session, running), this.refreshUsage(running)]);
+          // Native title generation shares this session's account and model
+          // totals. Its request can land after the result's usage snapshot.
+          const modelUsage = requestedTitle ? usage?.session?.model_usage ?? message.modelUsage : message.modelUsage;
+          const hasUsage = modelUsage && Object.values(modelUsage).some((value) =>
             value.inputTokens + value.outputTokens + value.cacheReadInputTokens + value.cacheCreationInputTokens > 0);
           if (hasUsage) {
             const canAttribute = !needsUsageBaseline;
-            const tokenUsage = claudeTurnUsage(message.modelUsage, usageBaseline);
-            session.modelUsage = message.modelUsage;
+            const tokenUsage = claudeTurnUsage(modelUsage, usageBaseline);
+            session.modelUsage = modelUsage;
             // Without an old session's baseline, cumulative spend cannot be
             // attributed to this turn. Save it for the next turn, do not bill
             // the pre-existing transcript as new work.
@@ -484,8 +498,6 @@ export class ClaudeBackend {
               await this.emit({ method: "thread/tokenUsage/updated", params: { threadId, turnId, model: tokenUsage.model, tokenUsage } });
             }
           }
-          await running.contextRefresh?.promise;
-          await Promise.all([this.refreshContext(session, running), this.refreshUsage(running)]);
           if (message.is_error) failure = message.subtype === "success" ? message.result : message.errors.join("\n");
           if (finished) break;
         }
@@ -528,6 +540,52 @@ export class ClaudeBackend {
           output: [...running.entries.values()].flatMap((entry) => entry.type === "message" && entry.role === "assistant" ? [{ type: "text" as const, text: entry.text }] : []),
         } } });
       }
+    }
+  }
+
+  /** Prefer a durable provider title; SDK headless sessions otherwise need an explicit control request. */
+  private async updateTitle(session: ClaudeSession, running: RunningTurn): Promise<boolean> {
+    const threadId = session.thread.id;
+    try {
+      let current = await this.store.read(threadId);
+      if (current.thread.titleSource === "explicit" || !session.sdkSessionId) return false;
+      // getSessionInfo uses the SDK host's config directory, not Options.env.
+      // Do not inspect a different account's session store.
+      if (running.titleEnv?.CLAUDE_CONFIG_DIR !== process.env.CLAUDE_CONFIG_DIR) return false;
+      const snapshot = await claudeTelemetry(async () => ({
+        info: await (this.options.getSessionInfo ?? getSessionInfo)(session.sdkSessionId!, { dir: session.cwd }),
+      }));
+      if (!snapshot) return false;
+      let title = normalizeClaudeTitle(snapshot.info?.customTitle);
+      current = await this.store.read(threadId);
+      if (current.thread.titleSource === "explicit") return false;
+      const query = running.query as ClaudeTitleQuery;
+      const disabled = ["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "CLAUDE_CODE_DISABLE_TERMINAL_TITLE"]
+        .some((key) => ["1", "true", "yes"].includes(running.titleEnv?.[key]?.toLowerCase() ?? ""));
+      const canRequest = !title && !current.titleGenerationAttempted && !disabled && typeof query.generateSessionTitle === "function"
+        && Boolean(running.titlePrompt?.trim()) && !running.controller.signal.aborted;
+      if (!title && !canRequest) return false;
+      // Persist the attempt before spending quota so failure/restart cannot
+      // create a title request on every turn.
+      if (!current.titleGenerationAttempted) {
+        current.titleGenerationAttempted = true;
+        await this.store.save(current);
+      }
+      if (canRequest) title = await requestClaudeTitle(query, running.titlePrompt!, running.controller.signal);
+      if (title && !running.controller.signal.aborted) {
+        current = await this.store.read(threadId);
+        if (current.thread.titleSource !== "explicit" && current.thread.title !== title) {
+          current.thread.title = title;
+          current.thread.titleSource = "derived";
+          await this.store.save(current);
+          await this.emit({ method: "thread/name/updated", params: { threadId, threadName: title, titleSource: "derived" } });
+        }
+      }
+      return canRequest;
+    } catch {
+      // An unreadable provider session must not trigger a speculative title
+      // request or fail the actual turn. The local prompt name remains usable.
+      return false;
     }
   }
 

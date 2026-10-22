@@ -3485,11 +3485,11 @@ describe("AcpAgentClient", () => {
     expect(titleUpdates).toEqual(["Exploring PwrSnap Project"]);
   });
 
-  it("does not overwrite an explicit ACP session title with topic updates", async () => {
+  it.each(["acp:gemini", "acp:claude"] as const)("does not overwrite an explicit %s session title with topic updates", async (backendId) => {
     const transport = new FakeAcpAgentTransport();
     const titleUpdates: string[] = [];
     const client = new AcpAgentClient({
-      backendId: "acp:gemini",
+      backendId,
       store,
       transport,
       now: () => 1000,
@@ -3514,7 +3514,12 @@ describe("AcpAgentClient", () => {
       status: "completed",
     });
 
-    expect(store.getSession("acp:gemini", session.sessionId)).toMatchObject({
+    transport.emitSessionUpdate(session.sessionId, {
+      sessionUpdate: "session_info_update",
+      title: "Provider generated name",
+    });
+
+    expect(store.getSession(backendId, session.sessionId)).toMatchObject({
       title: "Manual thread name",
       titleSource: "explicit",
     });
