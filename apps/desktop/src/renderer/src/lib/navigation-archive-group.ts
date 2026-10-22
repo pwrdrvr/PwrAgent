@@ -48,6 +48,9 @@ export async function readNavigationArchiveGroup(params: {
       const page = await params.api.getNavigationQueryPage!({ protocol: 2, consumer: "main-sidebar",
         inventory: viewer ? "viewer" : "owner", query: { kind: "group-members", roots }, pageSize: 10,
         federationTarget: owner ? { scope: "remote", instanceId: owner } : undefined, cursor, deadlineAt }, token);
+      if (page.coverage.state === "degraded") {
+        throw new Error("Thread group membership is incomplete: a provider did not list its threads. No threads were archived. Try again once it reconnects.");
+      }
       if (page.protocol !== 2 || page.unchanged || page.coverage.state !== "complete" || page.entries.length > 10
         || (generation && (generation !== page.generation || epoch !== page.ownerEpoch))) {
         throw new Error("Thread group membership is incomplete or changed during discovery. Refresh and try again.");

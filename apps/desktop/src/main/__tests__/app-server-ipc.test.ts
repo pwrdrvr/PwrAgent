@@ -239,6 +239,7 @@ const resolveGitHubReposForDirectory = vi.hoisted(() =>
 
 const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
 const getStartupProviderRefreshStatus = vi.fn();
+const isIncompleteThreadList = vi.fn((_threads: unknown) => false);
 const listThreads = vi.fn(async (request?: {
   archived?: boolean;
   backend?: "codex" | "acp:grok";
@@ -1174,6 +1175,7 @@ vi.mock("../app-server/backend-registry", () => {
     getQueuedTurnsForThread: () => [],
     getQueuedExecutionModeForThread: () => undefined,
     getStartupProviderRefreshStatus,
+    isIncompleteThreadList,
     rememberCompleteNavigationSnapshot,
     rememberNavigationVisibilityIndex: rememberCompleteNavigationSnapshot,
     getCodexAppServerRestartStatus: () => ({ stopped: false }),
@@ -1278,6 +1280,7 @@ describe("app server ipc", () => {
 
   beforeEach(() => {
     getCachedThreadSummary.mockReset();
+    isIncompleteThreadList.mockReset().mockReturnValue(false);
     federationMock.runtime.stampRemoteNavigationQueryPage.mockReset().mockImplementation((_target, page) => page);
     isProviderEnabled.mockReturnValue(true);
     backendRegistryLifecycle.existing = true;
@@ -2219,9 +2222,14 @@ describe("app server ipc", () => {
     }));
   });
 
-  it.each(["checking", "degraded"])("does not apply bulk Auto-fix changes to a %s owner inventory", async (state) => {
+  it.each([
+    ["checking", "checking", false],
+    // Degraded means this listing lacked Codex rows, whatever startup reported.
+    ["degraded", "ready", true],
+  ] as const)("does not apply bulk Auto-fix changes to a %s owner inventory", async (_coverage, state, incomplete) => {
     const { NAVIGATION_SET_ELIGIBLE_THREADS_PR_AUTO_DISPATCH_CHANNEL } = await import("../../shared/ipc");
     getStartupProviderRefreshStatus.mockReturnValueOnce({ state });
+    isIncompleteThreadList.mockReturnValueOnce(incomplete);
     registerAppServerIpcHandlers();
     await expect(handlers.get(NAVIGATION_SET_ELIGIBLE_THREADS_PR_AUTO_DISPATCH_CHANNEL)?.({}, { enabled: true }))
       .rejects.toThrow("Thread discovery is incomplete");

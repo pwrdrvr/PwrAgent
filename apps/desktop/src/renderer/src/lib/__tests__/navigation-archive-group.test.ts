@@ -47,7 +47,7 @@ describe("owner-revalidated archive group planning", () => {
       ...navigationQueryFixture(request, { threads: [root] }), coverage: { state: "degraded" as const },
     }));
     await expect(readNavigationArchiveGroup({ api: { getNavigationQueryPage, releaseNavigationQuery }, thread: root }))
-      .rejects.toThrow("membership is incomplete");
+      .rejects.toThrow("a provider did not list its threads. No threads were archived.");
     expect(releaseNavigationQuery).toHaveBeenCalledTimes(1);
   });
 

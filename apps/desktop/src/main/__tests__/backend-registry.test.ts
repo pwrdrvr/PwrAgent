@@ -10131,6 +10131,106 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  async function createSelectedCodexRegistry(codexClient: MockBackendClient) {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "pwragent-incomplete-listing-"));
+    const configStore = new DesktopConfigStore({ configPath: path.join(tempRoot, "config.toml") });
+    const command = path.join(tempRoot, "codex");
+    configStore.recordProviderDiscovery("codex", {
+      candidates: [{ command, source: "path", version: "0.160.0" }],
+      selectedCommand: command,
+      selectedVersion: "0.160.0",
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      configStore,
+      overlayStore: createOverlayStoreMock(),
+      discoverLocalAcpAgents: async () => [],
+    });
+    onTestFinished(async () => {
+      await registry.close();
+      configStore.dispose();
+      await rm(tempRoot, { recursive: true, force: true });
+    });
+    return registry;
+  }
+
+  it("marks a navigation listing incomplete when a selected Codex fails, then completes once Codex answers", async () => {
+    const codexClient = new MockBackendClient({ threads: [] });
+    const registry = await createSelectedCodexRegistry(codexClient);
+    const listing = vi.spyOn(codexClient, "listThreads")
+      .mockRejectedValueOnce(new Error("codex app server client closed"));
+
+    const failed = await registry.listThreads({ callerReason: "navigation-snapshot" });
+    expect(failed).toEqual([]);
+    expect(registry.isIncompleteThreadList(failed)).toBe(true);
+    // The Codex-only listing the aggregate reused carries the same mark.
+    const codexOnly = await registry.listThreads({ backend: "codex", callerReason: "navigation-snapshot" });
+    expect(registry.isIncompleteThreadList(codexOnly)).toBe(true);
+    expect(listing).toHaveBeenCalledTimes(1);
+
+    codexClient.setThreads([{
+      id: "recovered-thread",
+      source: "codex",
+      title: "Recovered",
+      titleSource: "explicit",
+      linkedDirectories: [],
+      updatedAt: 200,
+    }]);
+    // An incomplete listing is not reused for the whole five-minute window.
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 16_000);
+    onTestFinished(() => { clock.mockRestore(); });
+    const recovered = await registry.listThreads({ callerReason: "navigation-snapshot" });
+    expect(recovered).toEqual([expect.objectContaining({ id: "recovered-thread" })]);
+    expect(registry.isIncompleteThreadList(recovered)).toBe(false);
+  });
+
+  it("marks a navigation listing incomplete when native Codex sub-agent discovery fails", async () => {
+    const codexClient = new MockBackendClient({ threads: [{
+      id: "parent-thread",
+      source: "codex",
+      title: "Parent",
+      titleSource: "explicit",
+      linkedDirectories: [],
+      updatedAt: 100,
+    }] });
+    vi.spyOn(codexClient, "listNativeSubAgentThreads")
+      .mockRejectedValueOnce(new Error("native discovery failed"));
+    const registry = await createSelectedCodexRegistry(codexClient);
+
+    const listed = await registry.listThreads({ callerReason: "navigation-snapshot" });
+    expect(listed).toEqual([expect.objectContaining({ id: "parent-thread" })]);
+    expect(registry.isIncompleteThreadList(listed)).toBe(true);
+  });
+
+  it("marks a navigation listing incomplete when a managed Codex runtime fails without a recorded selection", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ listThreadsError: new Error("codex app server client closed") }),
+      overlayStore: createOverlayStoreMock(),
+      discoverLocalAcpAgents: async () => [],
+      resolveCodexRuntimeCommand: async () => ({ command: "/managed/codex", version: "0.160.0" }),
+    });
+    onTestFinished(async () => { await registry.close(); });
+
+    const listed = await registry.listThreads({ callerReason: "navigation-snapshot" });
+    expect(listed).toEqual([]);
+    expect(registry.isIncompleteThreadList(listed)).toBe(true);
+  });
+
+  it("does not mark a listing incomplete when no Codex executable is selected", async () => {
+    const noExecutable = new Error("Codex discovery has not selected an executable. Refresh Codex in Settings.");
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ listThreadsError: noExecutable }),
+      overlayStore: createOverlayStoreMock(),
+      discoverLocalAcpAgents: async () => [],
+      resolveCodexRuntimeCommand: async () => { throw noExecutable; },
+    });
+    onTestFinished(async () => { await registry.close(); });
+
+    const listed = await registry.listThreads({ callerReason: "navigation-snapshot" });
+    expect(listed).toEqual([]);
+    expect(registry.isIncompleteThreadList(listed)).toBe(false);
+  });
+
   it("marks Gemini ACP thread workspace handoff unavailable after conversation history", async () => {
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),

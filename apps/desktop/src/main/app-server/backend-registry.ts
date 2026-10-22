@@ -794,6 +794,9 @@ const REPLAY_THREAD_TITLE_ENV = "PWRAGENT_REPLAY_THREAD_TITLE";
 // changes, so this window can cover ordinary foreground idle time while
 // background polling catches external Codex changes on a slower cadence.
 const THREAD_LIST_REUSE_WINDOW_MS = 5 * 60_000;
+// A listing that stood in an empty Codex inventory for a failed read must not
+// hide a recovered Codex for the whole window, nor retry on every focus.
+const INCOMPLETE_THREAD_LIST_REUSE_WINDOW_MS = 15_000;
 const CODEX_RATE_LIMIT_BROADCAST_WINDOW_MS = 20_000;
 const THREAD_SEARCH_REUSE_WINDOW_MS = 2_000;
 const ACTIVE_TURN_HANDOFF_ERROR =
@@ -9155,6 +9158,14 @@ export class DesktopBackendRegistry {
     failedProviders?: number;
   }>;
   /**
+   * Listings that stand in an empty Codex inventory for a failed provider read.
+   * Navigation reads this per listing: the startup refresh status records one
+   * attempt, so a recovered Codex would stay incomplete and a later failure
+   * would pass as complete. Claude and ACP rows come from PwrAgent's own
+   * stores, and their read errors reject the listing instead.
+   */
+  private readonly incompleteThreadLists = new WeakSet<readonly AppServerThreadSummary[]>();
+  /**
    * In-flight terminal-notification label reconciliations, keyed by thread. A
    * burst of turn completions on threads this process never observed must cost
    * one provider walk per thread, not one per notification.
@@ -12073,7 +12084,9 @@ export class DesktopBackendRegistry {
         if (this.threadListCache.get(cacheKey) === pendingState) {
           listingDiagnostics.remember(threads, execution);
           this.threadListCache.set(cacheKey, {
-            expiresAt: Date.now() + THREAD_LIST_REUSE_WINDOW_MS,
+            expiresAt: Date.now() + (this.incompleteThreadLists.has(threads)
+              ? INCOMPLETE_THREAD_LIST_REUSE_WINDOW_MS
+              : THREAD_LIST_REUSE_WINDOW_MS),
             threads,
           });
           logDebug("threadListCache:store", {
@@ -12482,20 +12495,24 @@ export class DesktopBackendRegistry {
     }
     if (params.backend === "codex") {
       const archiveGeneration = this.archiveCleanupReads.generation("codex");
-      const threads = await this.filterArchivedThreadsPresentInActiveList({
+      const listed = await this.listCodexThreads({
         archived: params.archived,
-        backend: "codex",
-        diagnostics,
+        enrichDirectories: params.enrichDirectories,
         filter: params.filter,
-        threads: await this.listCodexThreads({
+        limit: params.limit,
+        maxPages: params.maxPages,
+        skipArchivedMetadataRefresh: params.skipArchivedMetadataRefresh,
+      }, diagnostics);
+      const threads = this.inheritIncompleteThreadList(
+        await this.filterArchivedThreadsPresentInActiveList({
           archived: params.archived,
-          enrichDirectories: params.enrichDirectories,
+          backend: "codex",
+          diagnostics,
           filter: params.filter,
-          limit: params.limit,
-          maxPages: params.maxPages,
-          skipArchivedMetadataRefresh: params.skipArchivedMetadataRefresh,
-        }, diagnostics),
-      });
+          threads: listed,
+        }),
+        listed,
+      );
       // Listings that began before a restore cannot authorize destructive
       // cleanup, including archived reads made outside the cleanup pool.
       if (!params.skipArchivedMetadataRefresh
@@ -12565,9 +12582,38 @@ export class DesktopBackendRegistry {
       ACP_LISTINGS_ARE_ENRICHED,
       params.archived,
     );
-    return [...codexThreads, ...acpThreads, ...claudeThreads].sort(
-      (left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0),
+    return this.inheritIncompleteThreadList(
+      [...codexThreads, ...acpThreads, ...claudeThreads].sort(
+        (left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0),
+      ),
+      codexThreads,
     );
+  }
+
+  /**
+   * Whether this listing stands in an empty Codex inventory for a failed
+   * provider read. Navigation coverage asks this of the listing an index was
+   * built from, so each index reports its own completeness.
+   */
+  isIncompleteThreadList(threads: readonly AppServerThreadSummary[]): boolean {
+    return this.incompleteThreadLists.has(threads);
+  }
+
+  /**
+   * A managed runtime answers without recording a provider observation, so
+   * the durable selection alone would call a failed managed Codex absent.
+   */
+  private async hasCodexExecutable(): Promise<boolean> {
+    if (this.readCodexProvider().lastKnownGood?.selectedCommand) return true;
+    return await this.resolveCodexRuntimeCommandFn?.().then(() => true, () => false) ?? false;
+  }
+
+  private inheritIncompleteThreadList(
+    threads: AppServerThreadSummary[],
+    source: readonly AppServerThreadSummary[],
+  ): AppServerThreadSummary[] {
+    if (this.incompleteThreadLists.has(source)) this.incompleteThreadLists.add(threads);
+    return threads;
   }
 
   private readDurableStartupThreads(
@@ -28683,6 +28729,7 @@ export class DesktopBackendRegistry {
   }): Promise<AppServerThreadSummary[]> {
     const observedFilterThreadIds =
       this.observedCodexThreadIdsMatchingFilter(params.filter);
+    let incomplete = false;
     // Codex applies searchTerm before returning rows. During its naming lag,
     // fetch unfiltered candidates only when a live observed title matches the
     // query, then retain just those thread ids alongside provider matches.
@@ -28690,7 +28737,7 @@ export class DesktopBackendRegistry {
       await Promise.all([
         this.codexClient
           .listThreads(params, diagnostics)
-          .catch((error) => {
+          .catch(async (error) => {
             if (
               diagnostics?.callerReason === "archive-cleanup"
               || diagnostics?.callerReason === "startup-provider-refresh"
@@ -28699,6 +28746,9 @@ export class DesktopBackendRegistry {
               throw error;
             }
 
+            // A Codex executable that fails to answer has rows this listing
+            // lacks. With no executable there is no Codex inventory to lack.
+            incomplete ||= await this.hasCodexExecutable();
             return [];
           }),
         observedFilterThreadIds.size > 0
@@ -28754,6 +28804,7 @@ export class DesktopBackendRegistry {
             backendRegistryLog.debug("native Codex sub-agent discovery failed", {
               error: error instanceof Error ? error.message : String(error),
             });
+            incomplete = true;
             return [];
           })
         : [];
@@ -28892,9 +28943,11 @@ export class DesktopBackendRegistry {
         )
       : statusReconciledThreads;
 
-    return filteredThreads.sort(
+    const threads = filteredThreads.sort(
       (left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0),
     );
+    if (incomplete) this.incompleteThreadLists.add(threads);
+    return threads;
   }
 
   private async reconcilePersistedCodexNativeSubAgents(
