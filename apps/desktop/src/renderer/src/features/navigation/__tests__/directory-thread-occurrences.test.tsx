@@ -2,12 +2,13 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, expect, it, vi } from "vitest";
-import type { NavigationDirectoryRow, NavigationQueryEntry, NavigationQueryRequest, NavigationRow } from "@pwragent/shared";
+import type { NavigationDirectoryRow, NavigationQueryEntry, NavigationQueryRequest, NavigationRow, NavigationThreadSummary } from "@pwragent/shared";
 import { createNavigationPageState } from "../../../lib/navigation-query-state";
 import type { NavigationWindowResource } from "../../../lib/navigation-window-queries";
 import { Sidebar } from "../Sidebar";
 import { ThreadRow } from "../ThreadRow";
 import { threadRowInstanceKey } from "../thread-row-instance";
+import { threadSummaryIdentityKey } from "../../../lib/federated-thread-events";
 
 const originalScrollIntoView = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollIntoView");
 
@@ -151,4 +152,44 @@ it("keeps another project collapsed when selecting a child in its parent's tray"
   expect(screen.getByRole("button", { name: "PwrSnap" })).toHaveAttribute("aria-expanded", "false");
   fireEvent.click(screen.getByRole("button", { name: /research/ }));
   expect(screen.getByRole("button", { name: "PwrSnap" })).toHaveAttribute("aria-expanded", "false");
+});
+
+it.each([undefined, "peer-a", "peer-b"])("scopes occurrence reveals to their federation owner: %s", (ownerInstanceId) => {
+  const scrolled: Element[] = [];
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+    configurable: true, value: function (this: Element) { scrolled.push(this); },
+  });
+  const { child } = fixture();
+  const threads: NavigationThreadSummary[] = [undefined, "peer-a", "peer-b"].map((owner) => ({
+    ...child,
+    ...(owner ? { federation: {
+      instanceLabel: owner,
+      peerStatus: "connected" as const,
+      ref: { backend: "codex" as const, threadId: child.id, target: { scope: "remote" as const, instanceId: owner } },
+    } } : {}),
+  }));
+  const selectedThread = threads.find((thread) =>
+    (thread.federation?.ref.target.scope === "remote" ? thread.federation.ref.target.instanceId : undefined) === ownerInstanceId)!;
+  const selectedThreadKey = threadSummaryIdentityKey(selectedThread);
+  // All three owners use the same thread ID, project, and parent ID. Only
+  // their owner-scoped identities distinguish the displayed occurrences.
+  const rows = threads.flatMap((thread) => [undefined, "parent"].map((parentId) => ({
+    thread,
+    instance: {
+      threadKey: threadSummaryIdentityKey(thread),
+      directoryKey: "directory:/shared-project",
+      parentThreadKey: parentId ? threadSummaryIdentityKey({ ...thread, id: parentId,
+        ...(thread.federation ? { federation: { ...thread.federation, ref: { ...thread.federation.ref, threadId: parentId } } } : {}),
+      }) : undefined,
+    },
+  })));
+  const targetRow = rows.find(({ instance }) => instance.threadKey === selectedThreadKey && instance.parentThreadKey)!;
+  const target = threadRowInstanceKey(targetRow.instance);
+  expect(new Set(rows.map(({ instance }) => threadRowInstanceKey(instance))).size).toBe(6);
+  render(<>{rows.map(({ thread, instance }) => <ThreadRow key={threadRowInstanceKey(instance)}
+    thread={thread} directoryKey={instance.directoryKey} parentThreadKey={instance.parentThreadKey}
+    selectedThreadKey={selectedThreadKey} revealThreadRowKey={target}
+    onSelectThread={() => undefined} onOpenContextMenu={() => undefined} />)}</>);
+  expect(scrolled).toHaveLength(1);
+  expect(scrolled[0]!.closest("[data-thread-row-key]")).toHaveAttribute("data-thread-row-key", target);
 });
