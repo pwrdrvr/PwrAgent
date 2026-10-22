@@ -1,3 +1,4 @@
+import type { FederationRemoteTarget } from "./federation";
 import type {
   AppServerBackendKind,
   AppServerReviewContext,
@@ -12,7 +13,7 @@ export const PWRAGENT_THREAD_REVIEW_OPERATION_NAMES = [
 
 export type ThreadReviewStatus = "open" | "handled" | "dismissed";
 export type ThreadReviewItemStatus = "open" | "addressed" | "dismissed";
-export type ThreadReviewIdentity = { backend: AppServerBackendKind; threadId: string };
+export type ThreadReviewIdentity = { backend: AppServerBackendKind; threadId: string; federationTarget?: FederationRemoteTarget };
 
 export type ThreadReviewResolution = {
   note: string;
@@ -59,6 +60,7 @@ export type RecordThreadReviewInput = Pick<ThreadReview, "sourceKey" | "sourceUr
 };
 
 export type UpdateThreadReviewRequest = {
+  federationTarget?: FederationRemoteTarget;
   id: string;
   itemId?: string;
   status: ThreadReviewStatus | ThreadReviewItemStatus;

@@ -1,3 +1,7 @@
+import type { FederationRemoteTarget } from "./federation";
+import { federatedThreadIdentityKey } from "./federation";
+import { buildThreadIdentityKey } from "./navigation";
+
 import type {
   AppServerBackendKind,
   ThreadExecutionMode,
@@ -114,6 +118,9 @@ export type ThreadTodo = {
   id: string;
   /** A projected tracked review, whose status is owned by review tracking. */
   reviewId?: string;
+  /** Present only on a viewer projection; state remains on the owner. */
+  federationTarget?: FederationRemoteTarget;
+  mergeMethod?: ThreadTodoMergeMethod;
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   /** Current owner title projected when listing cards; never persisted with the card. */
@@ -241,6 +248,7 @@ export function threadTodoItemProgress(
 }
 
 export type ListThreadTodosRequest = {
+  federationTarget?: FederationRemoteTarget;
   status?: ThreadTodoStatus | "all";
   backend?: AppServerBackendKind;
   threadId?: ThreadIdentifier;
@@ -267,9 +275,10 @@ export function threadTodoActionProject(
 }
 
 export function resolveThreadTodoMergeMethod(
-  todo: Pick<ThreadTodo, "sourceProject" | "targetProject">,
+  todo: Pick<ThreadTodo, "sourceProject" | "targetProject" | "mergeMethod">,
   preferences: ThreadTodoMergeMethodPreferences | undefined,
 ): ThreadTodoMergeMethod {
+  if (isThreadTodoMergeMethod(todo.mergeMethod)) return todo.mergeMethod;
   const projectKey = threadTodoActionProject(todo)?.key;
   return (projectKey ? preferences?.byProject[projectKey] : undefined)
     ?? preferences?.defaultMethod
@@ -277,6 +286,7 @@ export function resolveThreadTodoMergeMethod(
 }
 
 export type ResolveThreadTodoRequest = {
+  federationTarget?: FederationRemoteTarget;
   id: string;
   /** `open` reopens a done or dismissed card (Undo). */
   status: ThreadTodoStatus;
@@ -296,6 +306,7 @@ export type ResolveThreadTodoRequest = {
 
 /** The operator ticks or unticks one step. One commit. */
 export type SetThreadTodoItemCheckedRequest = {
+  federationTarget?: FederationRemoteTarget;
   id: string;
   itemId: string;
   checked: boolean;
@@ -313,6 +324,7 @@ export function isThreadTodoResolution(value: unknown): value is ThreadTodoResol
 }
 
 export type RunThreadTodoActionRequest = {
+  federationTarget?: FederationRemoteTarget;
   id: string;
   /**
    * Merge cards only. Absent: the project's remembered pick, else the
@@ -338,6 +350,8 @@ export type ThreadTodoMutationResponse = {
  * The projects a card can be for: the local Directories lens, directories
  * only, as the agent's `project` argument is matched against them.
  */
+export type ListThreadTodoProjectsRequest = { federationTarget?: FederationRemoteTarget };
+
 export type ListThreadTodoProjectsResponse = {
   projects: ThreadTodoProject[];
 };
@@ -347,12 +361,13 @@ export type ListThreadTodoProjectsResponse = {
  * card's own project, returns the card to the thread's project.
  */
 export type SetThreadTodoProjectRequest = {
+  federationTarget?: FederationRemoteTarget;
   id: string;
   projectKey: string | null;
 };
 
 /** An identity-less notification refreshes the whole list after owner discovery. */
-export type ThreadTodosChangedEvent = { at: number } & ({
+export type ThreadTodosChangedEvent = { at: number; federationTarget?: FederationRemoteTarget } & ({
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
 } | { backend?: undefined; threadId?: undefined });
@@ -377,4 +392,11 @@ export function isThreadTodoStatus(value: unknown): value is ThreadTodoStatus {
     typeof value === "string"
     && (THREAD_TODO_STATUSES as readonly string[]).includes(value)
   );
+}
+
+/** The same owner-qualified key navigation uses for mounted threads. */
+export function threadTodoThreadKey(todo: Pick<ThreadTodo, "backend" | "threadId" | "federationTarget">): string {
+  return todo.federationTarget
+    ? federatedThreadIdentityKey({ backend: todo.backend, threadId: todo.threadId, target: todo.federationTarget })
+    : buildThreadIdentityKey(todo.backend, todo.threadId);
 }

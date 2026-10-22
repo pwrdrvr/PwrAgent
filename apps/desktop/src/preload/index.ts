@@ -27,6 +27,7 @@ import { THREAD_FAMILY_PRICING_READ_CHANNEL } from "../shared/ipc";
 import { USAGE_ACTIVITY_OPEN_THREAD_CHANNEL, USAGE_ACTIVITY_OPEN_WINDOW_CHANNEL } from "../shared/ipc";
 import type {
   ListThreadTodoProjectsResponse,
+  ListThreadTodoProjectsRequest,
   ListThreadTodosRequest,
   ListThreadTodosResponse,
   ResolveThreadTodoRequest,
@@ -2196,8 +2197,8 @@ const desktopApi = Object.freeze({
     request: RunThreadTodoActionRequest,
   ): Promise<ThreadTodoMutationResponse> =>
     await ipcRenderer.invoke(THREAD_TODOS_RUN_ACTION_CHANNEL, request),
-  listThreadTodoProjects: async (): Promise<ListThreadTodoProjectsResponse> =>
-    await ipcRenderer.invoke(THREAD_TODOS_LIST_PROJECTS_CHANNEL),
+  listThreadTodoProjects: async (request?: ListThreadTodoProjectsRequest): Promise<ListThreadTodoProjectsResponse> =>
+    await ipcRenderer.invoke(THREAD_TODOS_LIST_PROJECTS_CHANNEL, request ?? {}),
   setThreadTodoProject: async (
     request: SetThreadTodoProjectRequest,
   ): Promise<ThreadTodoMutationResponse> =>

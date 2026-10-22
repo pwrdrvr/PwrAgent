@@ -1388,15 +1388,17 @@ export function ThreadView(props: ThreadViewProps) {
   }, [props.activeTurnId]);
 
   const selectedThread = props.selectedThread;
-  // Cards live in this instance's state, so a peer's thread has none.
-  const threadTodoKey = selectedThread && !selectedThread.federation
+  const threadTodoKey = selectedThread
     ? threadSummaryIdentityKey(selectedThread)
     : undefined;
   const threadTodoDirectory = selectedThread?.linkedDirectories[0];
+  const transcriptThreadLinkTarget =
+    selectedThread?.federation?.ref.target ?? readRendererFederationTarget();
   const threadTodos = props.threadTodos && threadTodoKey
     ? {
         view: props.threadTodos,
         threadKey: threadTodoKey,
+        projectOwner: transcriptThreadLinkTarget?.scope === "remote" ? transcriptThreadLinkTarget : undefined,
         projectKey: threadTodoDirectory
           ? classifyDirectory(threadTodoDirectory).key
           : undefined,
@@ -1404,8 +1406,6 @@ export function ThreadView(props: ThreadViewProps) {
           ?? NO_THREAD_TODOS,
       }
     : undefined;
-  const transcriptThreadLinkTarget =
-    selectedThread?.federation?.ref.target ?? readRendererFederationTarget();
   const transcriptThreadLinkInstanceId =
     transcriptThreadLinkTarget && isRemoteFederationTarget(transcriptThreadLinkTarget)
       ? transcriptThreadLinkTarget.instanceId
@@ -4418,6 +4418,7 @@ export function ThreadView(props: ThreadViewProps) {
             view: threadTodos.view,
             threadKey: threadTodos.threadKey,
             projectKey: threadTodos.projectKey,
+            projectOwner: threadTodos.projectOwner,
             onStartReview: startTodoReview,
             onDoHere: doTodoHere,
             // The card's own answer path: start, steer or queue.

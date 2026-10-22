@@ -7,6 +7,7 @@ import type {
 } from "@pwragent/shared";
 import type {
   ListThreadTodoProjectsResponse,
+  ListThreadTodoProjectsRequest,
   ListThreadTodosRequest,
   ListThreadTodosResponse,
   ResolveThreadTodoRequest,
@@ -1027,7 +1028,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
     request: RunThreadTodoActionRequest,
   ) => Promise<ThreadTodoMutationResponse>;
   /** The projects a card's project menu offers. */
-  listThreadTodoProjects?: () => Promise<ListThreadTodoProjectsResponse>;
+  listThreadTodoProjects?: (request?: ListThreadTodoProjectsRequest) => Promise<ListThreadTodoProjectsResponse>;
   /** The operator's pick from a card's project menu. */
   setThreadTodoProject?: (
     request: SetThreadTodoProjectRequest,
@@ -1036,7 +1037,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   setThreadTodoItemChecked?: (
     request: SetThreadTodoItemCheckedRequest,
   ) => Promise<ThreadTodoMutationResponse>;
-  /** Marker event; refetch with `listThreadTodos`. Local windows only. */
+  /** Marker event; refetch owner-routed cards with `listThreadTodos`. */
   onThreadTodosChanged?: (
     callback: (event: ThreadTodosChangedEvent) => void,
   ) => () => void;

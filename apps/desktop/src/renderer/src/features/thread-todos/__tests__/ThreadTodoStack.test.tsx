@@ -4,6 +4,7 @@ import type { NavigationThreadSummary, ThreadTodo, ThreadTodoProject } from "@pw
 import type { AppServerPendingRequestNotification } from "@pwragent/shared";
 import {
   codexAsyncQuestionItemId,
+  threadTodoThreadKey,
   operatorTodoItemKey,
   parseCodexAsyncQuestionReply,
 } from "@pwragent/shared";
@@ -46,7 +47,7 @@ function todo(overrides: Partial<ThreadTodo> & { id: string }): ThreadTodo {
 function createView(open: ThreadTodo[], overrides: Partial<ThreadTodosView> = {}): ThreadTodosView {
   const openByThreadKey = new Map<string, ThreadTodo[]>();
   for (const entry of open) {
-    const key = `${entry.backend}:${entry.threadId}`;
+    const key = threadTodoThreadKey(entry);
     openByThreadKey.set(key, [...(openByThreadKey.get(key) ?? []), entry]);
   }
   return {
@@ -968,5 +969,50 @@ describe("thread row to-do chip", () => {
   it("falls back to the session's flags without a wait list", () => {
     render(<ThreadMetaChips thread={thread} hasApprovalRequest />);
     expect(screen.getByText("Waiting for approval")).toBeTruthy();
+  });
+});
+
+describe("federated To-do project scope", () => {
+  const peer = { scope: "remote" as const, instanceId: "peer" };
+  const other = { scope: "remote" as const, instanceId: "other" };
+
+  it.each([undefined, peer])("counts only the selected project's owner for source and target cards (%j)", (projectOwner) => {
+    const cards = [
+      todo({ id: "local-source", title: "Local source", sourceProject: AGENT }),
+      todo({ id: "local-target", title: "Local target", sourceProject: SNAP, targetProject: AGENT }),
+      todo({ id: "peer-source", title: "Peer source", sourceProject: AGENT, federationTarget: peer }),
+      todo({ id: "peer-target", title: "Peer target", sourceProject: SNAP, targetProject: AGENT, federationTarget: peer }),
+      todo({ id: "other-source", title: "Other source", sourceProject: AGENT, federationTarget: other }),
+    ];
+    const wait: OperatorWait = { key: "local-wait", kind: "question", backend: "codex", threadId: "wait-thread",
+      threadKey: "codex:wait-thread", title: "Local question", createdAt: 1 };
+    const view = createView(cards, { waits: [wait], threadProjectForKey: () => AGENT });
+    render(<ThreadTodosPanel view={view} threadKey={projectOwner ? "remote:peer:codex:thread-a" : "codex:thread-a"}
+      projectKey={AGENT.key} projectOwner={projectOwner} onStartReview={vi.fn()} />);
+    fireEvent.click(screen.getByRole("tab", { name: /^Project,/ }));
+    expect(screen.getByRole("tab", { name: projectOwner ? /^Project, 2 open/ : /^Project, 3 open/ })).toBeTruthy();
+    expect(screen.queryByText("Other source")).toBeNull();
+    for (const title of projectOwner ? ["Peer source", "Peer target"] : ["Local source", "Local target", "Local question"]) {
+      expect(screen.getByText(title)).toBeTruthy();
+    }
+    for (const title of projectOwner ? ["Local source", "Local target", "Local question"] : ["Peer source", "Peer target"]) {
+      expect(screen.queryByText(title)).toBeNull();
+    }
+    expect(cards.every((card) => card.sourceProject?.key === AGENT.key || card.targetProject?.key === AGENT.key)).toBe(true);
+  });
+
+  it("keeps identical project paths in separate All groups and puts the selected owner first", () => {
+    const cards = [
+      todo({ id: "local", title: "Local card", sourceProject: AGENT }),
+      todo({ id: "peer", title: "Peer card", sourceProject: AGENT, federationTarget: peer }),
+      todo({ id: "other", title: "Other card", sourceProject: AGENT, federationTarget: other }),
+    ];
+    render(<ThreadTodosPanel view={createView(cards)} threadKey="remote:peer:codex:thread-a"
+      projectKey={AGENT.key} projectOwner={peer} onStartReview={vi.fn()} />);
+    fireEvent.click(screen.getByRole("tab", { name: /^All,/ }));
+    const groups = screen.getAllByRole("region", { name: "PwrAgent" });
+    expect(groups).toHaveLength(3);
+    expect(within(groups[0]!).getByText("Peer card")).toBeTruthy();
+    expect(groups.map((group) => group.querySelector(".thread-todos-panel__group-count")?.textContent)).toEqual(["1", "1", "1"]);
   });
 });

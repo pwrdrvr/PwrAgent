@@ -1,3 +1,7 @@
+import type { ThreadTodosChangedEvent } from "@pwragent/shared";
+import { localThreadTodoOperations } from "../thread-todos/thread-todo-operations";
+import { FEDERATION_THREAD_TODO_CAPABILITIES, FEDERATION_THREAD_TODO_METHODS, registerFederationThreadTodoHandlers,
+  type ThreadTodoOperation, type ThreadTodoOperationRequest, type ThreadTodoOperationResponse } from "./federation-thread-todos";
 import { createTerminalHistoryStore } from "../terminal/terminal-history";
 import type {
   ListBackgroundTerminalsRequest,
@@ -581,6 +585,7 @@ export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "navigation_directory_set_events",
   "turn_queue_reorder",
   "thread_mcp_connections",
+  "thread_todos",
 ];
 
 const REMOTE_THREAD_SUMMARY_EVENT_CONSUMER_ID =
@@ -727,7 +732,7 @@ export function federationEventClassForMethod(
   ) {
     return "star_map";
   }
-  if (method === "navigation/invalidated") {
+  if (method === "navigation/invalidated" || method === "thread/todos/changed") {
     return "navigation";
   }
   if (method === NAVIGATION_DIRECTORY_SET_CHANGED_METHOD) {
@@ -2282,6 +2287,22 @@ export class DesktopFederationRuntime {
     };
   }
 
+  async requestThreadTodoOperation<K extends ThreadTodoOperation>(
+    target: FederationRemoteTarget, operation: K, request: ThreadTodoOperationRequest<K>,
+  ): Promise<ThreadTodoOperationResponse<K>> {
+    if (!this.remotePeerAdvertisesCapability(target.instanceId, "thread_todos")) {
+      throw new Error("This Federation owner does not support To-dos. Update that PwrAgent instance.");
+    }
+    return await this.rpcFor(target).request({ method: FEDERATION_THREAD_TODO_METHODS[operation], params: request,
+      ...(operation === "runAction" ? { timeoutMs: null } : {}),
+    });
+  }
+
+  publishThreadTodosChanged(event: ThreadTodosChangedEvent): void {
+    this.forwardLocalBackendEvent({ backend: event.backend ?? "codex",
+      notification: { method: "thread/todos/changed", params: event } });
+  }
+
   remoteBackend(target: FederationRemoteTarget): FederationRemoteBackendClient {
     return new FederationRemoteBackendClient(
       this.rpcFor(target),
@@ -3267,6 +3288,7 @@ export class DesktopFederationRuntime {
           : undefined),
       methodCapabilities: {
         ...FEDERATION_BACKEND_METHOD_CAPABILITIES,
+        ...FEDERATION_THREAD_TODO_CAPABILITIES,
         ...FEDERATION_PTY_METHOD_CAPABILITIES,
         ...FILE_PUSH_METHOD_CAPABILITIES,
         [THREAD_HANDOFF_METHODS.send]: "thread_handoff",
@@ -3275,13 +3297,15 @@ export class DesktopFederationRuntime {
         [FILE_PULL_MARKDOWN_METHOD]: "file_pull",
         [FILE_RESOLVE_TRANSCRIPT_METHOD]: "file_pull",
       },
-      additionalRequiredCapabilities: (envelope) => envelope.method === THREAD_HANDOFF_METHODS.import
-        ? ["file_push", "turn_control", "environment_actions"]
-        : envelope.method === THREAD_HANDOFF_METHODS.send
-          ? ["turn_control", "environment_actions"]
-          : envelope.method === THREAD_HANDOFF_METHODS.prepare
-            ? ["environment_actions"]
-            : additionalFederationBackendCapabilities(envelope),
+      additionalRequiredCapabilities: (envelope) => envelope.method === FEDERATION_THREAD_TODO_METHODS.runAction
+        ? ["environment_actions"]
+        : envelope.method === THREAD_HANDOFF_METHODS.import
+          ? ["file_push", "turn_control", "environment_actions"]
+          : envelope.method === THREAD_HANDOFF_METHODS.send
+            ? ["turn_control", "environment_actions"]
+            : envelope.method === THREAD_HANDOFF_METHODS.prepare
+              ? ["environment_actions"]
+              : additionalFederationBackendCapabilities(envelope),
     });
     router.registerBlobChunkHandler(async (envelope) => {
       await this.turnInputAttachmentReceiver.receive(
@@ -3289,6 +3313,7 @@ export class DesktopFederationRuntime {
         envelope.sourceInstanceId,
       );
     });
+    registerFederationThreadTodoHandlers(router, localThreadTodoOperations);
     registerFederationBackendHandlers({
       router,
       backend: localBackendOperations(),

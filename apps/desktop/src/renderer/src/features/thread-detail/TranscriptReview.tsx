@@ -172,8 +172,11 @@ function ReviewVerdictBadge(props: {
 
 export function TranscriptReview(props: TranscriptReviewProps) {
   const tracking = useTrackedReview(
-    props.parentThreadId && props.fileViewerContext?.federationTarget?.scope !== "remote"
-      ? { backend: props.parentThreadBackend ?? "codex", threadId: props.parentThreadId }
+    props.parentThreadId
+      ? { backend: props.parentThreadBackend ?? "codex", threadId: props.parentThreadId,
+          ...(props.fileViewerContext?.federationTarget?.scope === "remote"
+            ? { federationTarget: props.fileViewerContext.federationTarget } : {}),
+        }
       : undefined,
     { sourceKey: props.entry.id },
   );

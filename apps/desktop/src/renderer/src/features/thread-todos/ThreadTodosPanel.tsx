@@ -1,3 +1,4 @@
+import { threadTodoThreadKey } from "@pwragent/shared";
 import {
   useEffect,
   useId,
@@ -5,10 +6,9 @@ import {
   type ComponentType,
   type KeyboardEvent,
 } from "react";
-import type { ThreadTodo, ThreadTodoKind } from "@pwragent/shared";
+import type { FederationRemoteTarget, ThreadTodo, ThreadTodoKind } from "@pwragent/shared";
 import {
   THREAD_TODO_RESOLUTION_RESULTS,
-  buildThreadIdentityKey,
   codexAsyncQuestionItemId,
   operatorTodoItemKey,
   threadTodoItemProgress,
@@ -40,7 +40,10 @@ const KIND_ICONS: Record<ThreadTodoKind, ComponentType<IconProps> | undefined> =
   handoff: HandoffIcon,
 };
 
-const NO_PROJECT_KEY = "";
+/** Presentation identity only: card project keys stay owner-local for mutations. */
+function projectGroupKey(key: string | undefined, owner?: FederationRemoteTarget): string {
+  return JSON.stringify([owner?.instanceId ?? null, key ?? null]);
+}
 
 /** Results an operator's own resolve wrote; those can be taken back. */
 const RESOLUTION_RESULTS: ReadonlySet<string> = new Set(
@@ -75,6 +78,8 @@ export type ThreadTodosPanelProps = {
   threadRunning?: boolean;
   /** Directory key of that thread's project, when it has one. */
   projectKey?: string;
+  /** Owner of the selected project; absent for this instance. */
+  projectOwner?: FederationRemoteTarget;
   onStartReview: (todo: ThreadTodo, options?: ThreadTodoResolveOptions) => void;
   onDoHere?: (
     todo: ThreadTodo,
@@ -130,9 +135,10 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
   const todoInScope = (todo: ThreadTodo, lens: ThreadTodoScope): boolean => {
     switch (lens) {
       case "thread":
-        return buildThreadIdentityKey(todo.backend, todo.threadId) === threadKey;
+        return threadTodoThreadKey(todo) === threadKey;
       case "project":
         return projectKey !== undefined
+          && todo.federationTarget?.instanceId === props.projectOwner?.instanceId
           && (todo.sourceProject?.key === projectKey
             || todo.targetProject?.key === projectKey);
       case "all":
@@ -145,6 +151,7 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
         return wait.threadKey === threadKey;
       case "project":
         return projectKey !== undefined
+          && props.projectOwner === undefined
           && threadProjectForKey(wait.threadKey)?.key === projectKey;
       case "all":
         return true;
@@ -332,7 +339,7 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
                     );
                   }
                   const { todo } = item;
-                  const mine = buildThreadIdentityKey(todo.backend, todo.threadId) === threadKey;
+                  const mine = threadTodoThreadKey(todo) === threadKey;
                   return (
                     <li key={todo.id}>
                       {mine && todo.status === "open" ? (
@@ -514,14 +521,14 @@ function groupItems(
     let title: string;
     if (item.type === "wait") {
       const project = view.threadProjectForKey(item.wait.threadKey);
-      key = scope === "all" ? project?.key ?? NO_PROJECT_KEY : item.wait.threadKey;
+      key = scope === "all" ? projectGroupKey(project?.key) : item.wait.threadKey;
       title = scope === "all"
         ? project?.label ?? "No project"
         : view.threadTitleForKey(item.wait.threadKey);
     } else {
       key = scope === "all"
-        ? item.todo.sourceProject?.key ?? NO_PROJECT_KEY
-        : buildThreadIdentityKey(item.todo.backend, item.todo.threadId);
+        ? projectGroupKey(item.todo.sourceProject?.key, item.todo.federationTarget)
+        : threadTodoThreadKey(item.todo);
       title = scope === "all"
         ? item.todo.sourceProject?.label ?? "No project"
         : view.threadTitle(item.todo);
@@ -536,7 +543,9 @@ function groupItems(
       groups.set(key, { key, title, items: [item], paused });
     }
   }
-  const first = scope === "all" ? props.projectKey : props.threadKey;
+  const first = scope === "all"
+    ? props.projectKey === undefined ? undefined : projectGroupKey(props.projectKey, props.projectOwner)
+    : props.threadKey;
   const ordered = [...groups.values()];
   const current = ordered.findIndex((group) => group.key === first);
   if (current > 0) {

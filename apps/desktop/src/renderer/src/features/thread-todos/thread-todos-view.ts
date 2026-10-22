@@ -31,7 +31,7 @@ export type ThreadTodoDoHereOptions = ThreadTodoResolveOptions & { prompt?: stri
 /** What a card's project menu reads and writes. */
 export type ThreadTodoProjectMenu = {
   /** The projects a card can be for, fetched as the menu opens. */
-  list: () => Promise<ThreadTodoProject[]>;
+  list: (todo: ThreadTodo) => Promise<ThreadTodoProject[]>;
   /** `null` returns the card to its thread's project. */
   set: (todo: ThreadTodo, projectKey: string | null) => Promise<ThreadTodo | undefined>;
 };

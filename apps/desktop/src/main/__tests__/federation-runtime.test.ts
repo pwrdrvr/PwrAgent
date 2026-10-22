@@ -1709,6 +1709,54 @@ describe("DesktopFederationRuntime", () => {
     expect(params.at(3)).toEqual(params.at(1));
   });
 
+  it.each([false, true])("delivers To-do invalidations to mounted and remote viewers through the owner route (gateway=%s)", (viaGateway) => {
+    const capabilities: FederationCapability[] = ["gateway_relay", "thread_navigation", "thread_detail", "event_subscriptions", "thread_todos"];
+    const ownerRuntime = new DesktopFederationRuntime();
+    const owner = ownerRuntime as unknown as RuntimeHarness;
+    const viewer = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    const gateway = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    for (const [runtime, id] of [[viewer, "viewer_one"], [owner, "owner_one"], [gateway, "gateway_one"]] as const) {
+      runtime.localInstanceId = id;
+      runtime.router = new FederationRouter({ localInstanceId: id });
+    }
+    viewer.gatewayInstanceId = viaGateway ? "gateway_one" : undefined;
+    owner.gatewayInstanceId = viaGateway ? "gateway_one" : undefined;
+    const received = vi.fn();
+    viewer.onRemoteBackendEvent(received);
+    viewer.router!.registerConnection(createConnection({
+      peerId: viaGateway ? "gateway_one" : "owner_one", capabilities,
+      sendEnvelope: (envelope) => {
+        if (viaGateway) gateway.applyEventSubscription(envelope, "viewer_one");
+        else owner.applyEventSubscription(envelope, "viewer_one");
+      },
+    }));
+    owner.router!.registerConnection(createConnection({
+      peerId: viaGateway ? "gateway_one" : "viewer_one", capabilities,
+      sendEnvelope: (envelope) => {
+        if (viaGateway) gateway.publishRemoteBackendEvent(envelope, "owner_one");
+        else viewer.publishRemoteBackendEvent(envelope, "owner_one");
+      },
+    }));
+    gateway.router!.registerConnection(createConnection({ peerId: "owner_one", capabilities,
+      sendEnvelope: (envelope) => owner.applyEventSubscription(envelope, "gateway_one") }));
+    gateway.router!.registerConnection(createConnection({ peerId: "viewer_one", capabilities,
+      sendEnvelope: (envelope) => viewer.publishRemoteBackendEvent(envelope, "gateway_one") }));
+    viewer.setEventSubscriptions("mounted", [{ sourceInstanceId: "owner_one", eventClasses: ["navigation"],
+      threadSelection: { kind: "threads", threads: [{ backend: "codex", threadId: "mounted" }] } }]);
+    ownerRuntime.publishThreadTodosChanged({ backend: "codex", threadId: "unmounted", at: 1 });
+    expect(received).not.toHaveBeenCalled();
+    ownerRuntime.publishThreadTodosChanged({ backend: "codex", threadId: "mounted", at: 2 });
+    expect(received).toHaveBeenLastCalledWith(expect.objectContaining({
+      federationTarget: { scope: "remote", instanceId: "owner_one" },
+      notification: { method: "thread/todos/changed", params: { backend: "codex", threadId: "mounted", at: 2 } },
+    }));
+    viewer.setEventSubscriptions("remote-window", [{ sourceInstanceId: "owner_one", eventClasses: ["navigation"], threadSelection: { kind: "all" } }]);
+    ownerRuntime.publishThreadTodosChanged({ backend: "codex", threadId: "unmounted", at: 3 });
+    expect(received).toHaveBeenCalledTimes(2);
+    ownerRuntime.publishThreadTodosChanged({ at: 4 });
+    expect(received).toHaveBeenCalledTimes(3);
+  });
+
   it.each([false, true])("broad navigation does not widen transcript selection (gateway=%s)", (viaGateway) => {
     const capabilities: FederationCapability[] = [
       "gateway_relay", "thread_navigation", "navigation_snapshot_deltas",
@@ -4204,6 +4252,7 @@ describe("DesktopFederationRuntime", () => {
 describe("advertised capabilities", () => {
   it("advertises owner-side thread MCP access to remote viewers", () => {
     expect(DEFAULT_CAPABILITIES).toContain("thread_mcp_connections");
+    expect(DEFAULT_CAPABILITIES).toContain("thread_todos");
   });
 
   it("advertises queue reordering, which viewers need before they offer a drag", () => {

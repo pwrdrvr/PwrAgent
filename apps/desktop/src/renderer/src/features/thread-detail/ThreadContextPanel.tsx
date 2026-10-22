@@ -15,6 +15,7 @@ import {
 } from "react";
 import type {
   BackendSummary,
+  FederationRemoteTarget,
   AppServerThreadEntry,
   DesktopApplicationDiscoveryCandidate,
   EditGroupCommitState,
@@ -105,11 +106,12 @@ const CONTEXT_TABS: ContextTab[] = [
 ];
 
 type ThreadContextPanelProps = {
-  /** The To-dos tab. Absent in a window that fronts a peer. */
+  /** To-dos for the thread on screen. */
   todos?: {
     view: ThreadTodosView;
     threadKey: string;
     projectKey?: string;
+    projectOwner?: FederationRemoteTarget;
     onStartReview: (todo: ThreadTodo, options?: ThreadTodoResolveOptions) => void;
     onDoHere?: (todo: ThreadTodo, options?: ThreadTodoDoHereOptions) => void;
     /** Answers a question in this thread through its composer. */
@@ -793,6 +795,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             view={props.todos.view}
             threadKey={props.todos.threadKey}
             projectKey={props.todos.projectKey}
+            projectOwner={props.todos.projectOwner}
             onStartReview={props.todos.onStartReview}
             onDoHere={props.todos.onDoHere}
             onAnswerQuestion={props.todos.onAnswerQuestion}
