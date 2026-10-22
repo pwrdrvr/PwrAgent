@@ -18754,6 +18754,11 @@ export class DesktopBackendRegistry {
   }
 
   private requestQueuedMessageTitle(entry: ThreadTurnQueueEntry): void {
+    // This helper currently supports Codex only. A Claude or ACP message
+    // must not start a turn on a different provider just to label its queue.
+    if (entry.backend !== "codex") {
+      return;
+    }
     const source = queuedMessageTitleSource(entry.input);
     if (!source) {
       this.queuedMessageTitler.forget(entry.id);
@@ -26506,7 +26511,7 @@ export class DesktopBackendRegistry {
   /**
    * One-shot structured generation as an ephemeral Codex helper turn. The
    * Helper model setting picks the model, and that model is a Codex
-   * model, so this runs on Codex whenever Codex is available regardless of
+   * model, so this runs on Codex whenever Codex is usable regardless of
    * the launchpad default; otherwise it returns "unavailable".
    */
   async generateStructuredObject(params: {
@@ -26521,13 +26526,18 @@ export class DesktopBackendRegistry {
     /** Model answering budget, separate from the protocol round-trips. */
     turnTimeoutMs?: number;
   }): Promise<ThreadTitleAdapterResult> {
-    const backend = (await this.listBackends({ includeUnavailable: true }))
-      .backends.find((summary) => summary.kind === "codex");
+    // Helper work must not discover unrelated providers or probe Codex auth.
+    // An installed executable can still have a known signed-out account.
+    const backend = this.readCodexBackendSummary();
+    const requiresLogin = backend.account?.requiresOpenaiAuth === true
+      && !backend.account.type;
     const requiredKeys = schemaRequiredKeys(params.schema);
 
     if (
-      backend?.kind === "codex"
+      !this.closed
       && backend.available
+      && !requiresLogin
+      && !this.codexClient.isAuthenticationRequired?.()
       && this.codexClient.generateStructuredObject
     ) {
       return await this.codexClient.generateStructuredObject({

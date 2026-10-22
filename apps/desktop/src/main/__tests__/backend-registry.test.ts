@@ -5229,6 +5229,49 @@ describe("DesktopBackendRegistry", () => {
     expect(generateStructuredObject).not.toHaveBeenCalled();
   });
 
+  it.each(["signed-out", "rejected"] as const)("skips auxiliary Codex turns while authentication is %s", async (auth) => {
+    const codexClient = Object.assign(new MockBackendClient({
+      account: auth === "signed-out"
+        ? { requiresOpenaiAuth: true }
+        : { type: "chatgpt", requiresOpenaiAuth: true },
+    }), {
+      isAuthenticationRequired: vi.fn(() => false),
+      generateStructuredObject: vi.fn(async () => ({ status: "ok" as const, object: { title: "Queue title" } })),
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    onTestFinished(() => registry.close());
+    await discoverCodexBackendForTest(registry);
+    codexClient.isAuthenticationRequired.mockReturnValue(auth === "rejected");
+
+    await expect(registry.generateStructuredObject({
+      helper: "queued_message_titles",
+      system: "Label the message.",
+      prompt: "A long message to label.",
+      schema: { type: "object", required: ["title"], properties: { title: { type: "string" } } },
+    })).resolves.toEqual({ status: "unavailable", reason: "codex_structured_generation_unavailable" });
+    expect(codexClient.generateStructuredObject).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { type: "apiKey", requiresOpenaiAuth: true },
+    { requiresOpenaiAuth: false },
+  ] satisfies BackendAccountSummary[])("allows auxiliary Codex turns for an account that needs no login: %j", async (account) => {
+    const codexClient = Object.assign(new MockBackendClient({ account }), {
+      generateStructuredObject: vi.fn(async () => ({ status: "ok" as const, object: { title: "Queue title" } })),
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    onTestFinished(() => registry.close());
+    await discoverCodexBackendForTest(registry);
+
+    await expect(registry.generateStructuredObject({
+      helper: "queued_message_titles",
+      system: "Label the message.",
+      prompt: "A long message to label.",
+      schema: { type: "object", required: ["title"], properties: { title: { type: "string" } } },
+    })).resolves.toMatchObject({ status: "ok", object: { title: "Queue title" } });
+    expect(codexClient.generateStructuredObject).toHaveBeenCalledOnce();
+  });
+
   it("publishes owner Token Miser settings and persists overrides through the registry", async () => {
     const overlayStore = createOverlayStoreMock();
     let enabled = true;
@@ -28466,7 +28509,7 @@ command = "pnpm dev"
     await registry.close();
   });
 
-  it("applies generated title helper names to ACP prompt-derived fallback sessions", async () => {
+  it.each(["missing", "signed-out"] as const)("names ACP sessions on their own provider when Codex is %s", async (codexState) => {
     const acpBackendId = "acp:kimi" as AcpBackendId;
     const prompt =
       "We're testing something here... just tell me your favorite cereal.";
@@ -28545,8 +28588,13 @@ command = "pnpm dev"
     const overlayStore = createOverlayStoreMock();
     const upsertSubAgentSpy = vi.spyOn(overlayStore, "upsertThreadSubAgent");
     const upsertUsageLineSpy = vi.spyOn(overlayStore, "upsertThreadUsageLine");
+    const codexClient = new MockBackendClient({
+      threads: [],
+      initializeError: new Error(codexState === "missing" ? "spawn codex ENOENT" : "Codex is not logged in"),
+      account: { requiresOpenaiAuth: true },
+    });
     const registry = new DesktopBackendRegistry({
-      codexClient: new MockBackendClient({ threads: [] }),
+      codexClient,
       overlayStore,
       acpAgentStore: createAcpAgentStoreMock([createKimiAgentRecord(acpBackendId)]),
       acpSessionStore: createAcpSessionStoreMock(sessions),
@@ -28632,6 +28680,9 @@ command = "pnpm dev"
         threadId: "kimi-title-helper",
       }),
     });
+    expect(codexClient.initializeCallCount).toBe(0);
+    expect(codexClient.listModelsCallCount).toBe(0);
+    expect(codexClient.listThreadsCallCount).toBe(0);
 
     await registry.close();
   });
@@ -42858,6 +42909,35 @@ script = "printf setup"
       method: "turn/completed", params: { threadId: "recipient", turnId: "active-recipient", turn: { id: "active-recipient", status: "completed", output: [] } },
     });
     await waitForCondition(() => codexClient.startTurnCallCount === 1);
+  });
+
+  it.each(["claude", "acp:kimi"] as const)("keeps queued %s messages independent of Codex even when it is available", async (backend) => {
+    const codexClient = Object.assign(new MockBackendClient({}), {
+      generateStructuredObject: vi.fn(async () => ({ status: "ok" as const, object: { title: "Unexpected Codex title" } })),
+    });
+    const overlayStore = createOverlayStoreMock();
+    const recordHelper = vi.spyOn(overlayStore, "upsertThreadSubAgent");
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore, threadTitleGenerationService: null });
+    onTestFinished(() => registry.close());
+    await discoverCodexBackendForTest(registry);
+    await registry.publishLocalEvent({ backend, notification: {
+      method: "turn/started", params: { threadId: "recipient", turnId: "active", turn: { id: "active" } },
+    } });
+    const input = [{ type: "text" as const, text: "Docs child: the migration guide now covers the renamed config keys and the new default port." }];
+    try {
+      await registry.submitTurn({ backend, threadId: "recipient", queueEntryId: "long", delivery: "new_turn", input });
+      await registry.queuedMessageTitlesIdle();
+
+      const snapshot = registry.getQueuedTurnsSnapshot()[buildThreadIdentityKey(backend, "recipient")];
+      expect(snapshot).toHaveLength(1);
+      expect(snapshot?.[0]?.title).toBeUndefined();
+      expect((await registry.readQueuedTurn({ backend, threadId: "recipient", queueEntryId: "long" })).input).toEqual(input);
+      expect(codexClient.generateStructuredObject).not.toHaveBeenCalled();
+      expect(recordHelper).not.toHaveBeenCalled();
+    } finally {
+      registry.cancelQueuedTurn("long");
+      await emitCompletedTurn(registry, backend, "recipient");
+    }
   });
 
   it("titles a long queued message once and drops a title the input outgrew", async () => {
