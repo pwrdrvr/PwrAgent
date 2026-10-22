@@ -107,6 +107,13 @@ export function claudeStreamRateLimits(info: SDKRateLimitInfo): BackendRateLimit
 }
 
 /**
+ * A stream reset is rounded up to the hour, so one window's resets can differ
+ * by up to an hour. The next window starts at the first use after the reset,
+ * at least five hours later, so a larger move is a new window.
+ */
+const SAME_WINDOW_RESET_TOLERANCE_MS = 2 * 60 * 60 * 1000;
+
+/**
  * Stream windows arrive one or two at a time and are coarser than the usage
  * snapshot (whole percent, reset rounded to the hour). Fill gaps and raise
  * utilization, but never let one replace a finer reading of a live window.
@@ -117,12 +124,23 @@ export function mergeClaudeStreamRateLimits(
   const limits = new Map(current.map((limit) => [limit.limitId, limit]));
   for (const limit of update) {
     const known = limits.get(limit.limitId);
-    const live = known?.resetAt !== undefined && known.resetAt > now;
-    limits.set(limit.limitId, live
-      ? { ...known, usedPercent: Math.max(known.usedPercent ?? 0, limit.usedPercent ?? 0) }
-      : limit);
+    const live = known?.resetAt !== undefined && known.resetAt > now
+      && !(limit.resetAt !== undefined && limit.resetAt > known.resetAt + SAME_WINDOW_RESET_TOLERANCE_MS);
+    const usedPercent = known?.usedPercent === undefined || limit.usedPercent === undefined
+      ? known?.usedPercent ?? limit.usedPercent
+      : Math.max(known.usedPercent, limit.usedPercent);
+    limits.set(limit.limitId, live ? { ...known, usedPercent } : limit);
   }
   return [...limits.values()];
+}
+
+/** The earliest reset still ahead, when a shown window will stop describing the account. */
+export function nextClaudeRateLimitReset(limits: BackendRateLimitSummary[], now: number): number | undefined {
+  let next: number | undefined;
+  for (const { resetAt } of limits) {
+    if (resetAt !== undefined && resetAt > now && (next === undefined || resetAt < next)) next = resetAt;
+  }
+  return next;
 }
 
 /** A window past its reset no longer describes the account; hide it until Claude reports again. */
