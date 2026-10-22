@@ -121,11 +121,14 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
   useEffect(() => {
     if (!showResolved || !listResolved) return;
     let cancelled = false;
+    setActionError(undefined);
     void listResolved().then((todos) => {
       if (!cancelled) setResolved(todos);
     }).catch((error: unknown) => {
-      console.warn("Loading resolved to-dos failed.", error);
-      if (!cancelled) setResolved([]);
+      if (!cancelled) {
+        setActionError(String(error));
+        setResolved([]);
+      }
     });
     return () => {
       cancelled = true;
@@ -353,6 +356,7 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
                           instances={view.instances}
                           projectMenu={view.projectMenu}
                           onResolve={(target, status, resolution, options) => {
+                            setActionError(undefined);
                             void view.resolve(target, status, resolution, options).catch(
                               (error: unknown) => {
                                 setActionError(String(error));
@@ -360,6 +364,7 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
                             );
                           }}
                           onRun={(target, options) => {
+                            setActionError(undefined);
                             void view.run(target, options).catch((error: unknown) => {
                               setActionError(String(error));
                             });
@@ -367,6 +372,7 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
                           onStartReview={props.onStartReview}
                           onDoHere={props.onDoHere}
                           onSetItemChecked={(target, item, checked) => {
+                            setActionError(undefined);
                             void view.setItemChecked(target, item.id, checked).catch(
                               (error: unknown) => {
                                 setActionError(String(error));

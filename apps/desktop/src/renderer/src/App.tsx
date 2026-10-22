@@ -2600,6 +2600,7 @@ function DesktopAppShell(props: {
       },
       listResolved: async () => {
         const response = await listThreadTodos({ status: "all" });
+        if (response.errors?.length) throw new Error(response.errors.join("\n"));
         return response.todos
           .filter((todo) => todo.status !== "open")
           .sort((left, right) =>
