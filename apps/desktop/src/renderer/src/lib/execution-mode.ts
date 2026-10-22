@@ -1,4 +1,5 @@
 import type {
+  AppServerBackendKind,
   BackendSummary,
   NavigationLaunchpadDraft,
   NavigationThreadSummary,
@@ -18,6 +19,26 @@ export function describeCodexExecutionMode(mode: ThreadExecutionMode): string {
     default:
       return "Workspace sandbox; asks you to approve additional access.";
   }
+}
+
+export function describeClaudeExecutionMode(mode: ThreadExecutionMode): string {
+  switch (mode) {
+    case "auto":
+      return "Claude Code's auto mode decides routine permission requests.";
+    case "full-access":
+      return "Runs without permission prompts.";
+    default:
+      return "Asks you to approve edits and commands.";
+  }
+}
+
+export function describeExecutionModeForBackend(
+  backend: AppServerBackendKind,
+  mode: ThreadExecutionMode,
+): string {
+  return backend === "claude"
+    ? describeClaudeExecutionMode(mode)
+    : describeCodexExecutionMode(mode);
 }
 
 export function acpRuntimeModeRequiresFullAccess(value: string): boolean {

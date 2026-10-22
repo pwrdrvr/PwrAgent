@@ -50,7 +50,9 @@ import type {
 import {
   AGENT_PERSONA_INSTRUCTIONS_LINE_GUIDANCE,
   applyNavigationLaunchpadProviderSettingsPatch,
+  applyNavigationLaunchpadProviderExecutionModeDefaults,
   applyNavigationLaunchpadProviderModelDefaults,
+  changedProviderExecutionModeDefaultBackends,
   changedProviderModelDefaultBackends,
   buildPullRequestStatusKey,
   buildThreadIdentityKey,
@@ -3441,11 +3443,23 @@ export function useThreadNavigation(
     // a draft's deliberate model selection merely because this window opened.
     if (!previous || !next || rendererFederationTarget) return;
     const changedBackends = changedProviderModelDefaultBackends(previous, next);
-    if (changedBackends.length === 0) return;
+    const changedAccessBackends = changedProviderExecutionModeDefaultBackends(
+      previous,
+      next,
+    );
+    if (changedBackends.length === 0 && changedAccessBackends.length === 0) {
+      return;
+    }
+    // Mirrors the owner's store update: access reaches every draft.
     const reconcile = (draft: NavigationLaunchpadDraft): NavigationLaunchpadDraft =>
       draft.federationTarget?.scope === "remote"
         ? draft
-        : applyNavigationLaunchpadProviderModelDefaults(draft, next, changedBackends);
+        : applyNavigationLaunchpadProviderExecutionModeDefaults(
+            applyNavigationLaunchpadProviderModelDefaults(draft, next, changedBackends),
+            next,
+            changedAccessBackends,
+            true,
+          );
     setLocalLaunchpads((current) => Object.fromEntries(
       Object.entries(current).map(([key, draft]) => [key, reconcile(draft)]),
     ));

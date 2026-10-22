@@ -273,6 +273,7 @@ import {
   type ReloadCodexMcpConfigResponse,
   applyNavigationLaunchpadProviderSettingsPatch,
   projectNavigationLaunchpadProviderSettings,
+  resolveDefaultLaunchpadExecutionMode,
   type RestoreWorktreeRequest,
   type RestoreWorktreeResponse,
   type ResolveMissingCodexThreadsRequest,
@@ -27145,21 +27146,34 @@ export class DesktopBackendRegistry {
     const backend = await this.resolveLaunchpadBackend(
       preferredBackend ?? projectedDefaults.backend,
     );
+    const providerModelDefaults = this.resolveProviderModelDefaultsFn();
+    // Access saved for this provider wins; otherwise the provider's default
+    // from Settings (Auto for Codex and Claude unless changed).
+    const storedExecutionMode =
+      projectedDefaults.providerSettings?.[backend.kind]?.executionMode
+      ?? (backend.kind === storedDefaults.backend
+        ? storedDefaults.executionMode
+        : undefined);
     const backendDefaults =
       backend.kind === projectedDefaults.backend
         ? projectedDefaults
         : projectNavigationLaunchpadProviderSettings({
             ...projectedDefaults,
             backend: backend.kind,
-            executionMode: "default",
+            executionMode: undefined as unknown as ThreadExecutionMode,
             model: undefined,
             reasoningEffort: undefined,
             serviceTier: undefined,
             fastMode: undefined,
             acpRuntime: undefined,
           });
-    const configuredDefaults =
-      this.resolveProviderModelDefaultsFn()[backend.kind];
+    if (storedExecutionMode === undefined) {
+      backendDefaults.executionMode = resolveDefaultLaunchpadExecutionMode(
+        backend.kind,
+        providerModelDefaults,
+      );
+    }
+    const configuredDefaults = providerModelDefaults[backend.kind];
     const configuredModel = configuredDefaults?.model;
     const configuredReasoningEffort = configuredModel
       ? configuredDefaults.reasoningEffortsByModel[configuredModel]

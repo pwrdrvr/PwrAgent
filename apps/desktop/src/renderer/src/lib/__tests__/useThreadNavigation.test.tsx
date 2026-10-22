@@ -7826,6 +7826,35 @@ describe("useThreadNavigation", () => {
     expect(result.current.selectedLaunchpad).toMatchObject({ model: "custom-model", reasoningEffort: "high", prompt: "draft" });
   });
 
+  it("applies a changed provider access default to open drafts and keeps their models", async () => {
+    const defaults: NavigationLaunchpadDefaults = { backend: "claude", executionMode: "auto" };
+    const launchpad: NavigationLaunchpadDraft = {
+      ...defaults, directoryKey: "directory:/fixture", directoryKind: "directory", directoryLabel: "Fixture",
+      model: "opus", workMode: "local", prompt: "draft", createdAt: 1, updatedAt: 1,
+    };
+    const api: DesktopApi = {
+      readPopulation: vi.fn(async (): Promise<NavigationSnapshot> => ({
+        backend: "all", fetchedAt: 1, unchanged: false, threads: [], inboxThreadKeys: [],
+        directories: [{ key: launchpad.directoryKey, kind: "directory", label: "Fixture",
+          threadKeys: [], needsAttentionCount: 0, launchpad }], launchpadDefaults: defaults,
+      })),
+      ensureDirectoryLaunchpad: vi.fn(async () => ({ launchpad, defaults })),
+      onAgentEvent: () => () => undefined,
+    };
+    const { result, rerender } = renderHook((props) => useThreadNavigation(api, props), {
+      initialProps: { providerModelDefaults: {} as Record<string, DesktopProviderModelDefaults> },
+    });
+    await waitFor(() => expect(result.current.directories).toHaveLength(1));
+    await act(async () => { await result.current.openDirectoryLaunchpad(result.current.directories[0]!); });
+    expect(result.current.selectedLaunchpad).toMatchObject({ executionMode: "auto" });
+    rerender({ providerModelDefaults: {
+      claude: { reasoningEffortsByModel: {}, executionMode: "full-access" },
+    } });
+    await waitFor(() => expect(result.current.selectedLaunchpad).toMatchObject({
+      executionMode: "full-access", model: "opus", prompt: "draft",
+    }));
+  });
+
   it("keeps launchpad environment controls stable after prompt-only update responses", async () => {
     const defaults = {
       backend: "codex" as const,

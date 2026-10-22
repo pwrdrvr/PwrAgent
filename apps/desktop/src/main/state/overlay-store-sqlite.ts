@@ -91,8 +91,11 @@ import {
   materializeNavigationThreads,
   serializeNavigationSnapshotForHash,
   applyNavigationLaunchpadProviderSettingsPatch,
+  applyNavigationLaunchpadProviderExecutionModeDefaults,
   applyNavigationLaunchpadProviderModelDefaults,
+  changedProviderExecutionModeDefaultBackends,
   changedProviderModelDefaultBackends,
+  forgetLegacyDefaultLaunchpadExecutionModes,
   estimateTokenUsageCost,
   isAcpBackendId,
   isRemoteFederationTarget,
@@ -100,6 +103,7 @@ import {
   normalizeThreadIdentityKey,
   parseThreadIdentityKey,
   projectNavigationLaunchpadProviderSettings,
+  resolveDefaultLaunchpadExecutionMode,
   resolveTokenUsagePriceUnavailableReason,
 } from "@pwragent/shared";
 import type { StateDb } from "./state-db.js";
@@ -593,6 +597,8 @@ function normalizeLaunchpadDefaults(
 }
 
 const NAVIGATION_BROWSE_MODE_META_KEY = "navigation_browse_mode";
+/** Set once the saved "default" launchpad access for Codex and Claude is forgotten. */
+const LAUNCHPAD_AUTO_ACCESS_MIGRATION_META_KEY = "launchpad_auto_access_migrated";
 /**
  * Whether the Pinned group, which Updated and Created share, is collapsed.
  * Beside the lens for the same reason: the first paint reads it, and
@@ -7464,30 +7470,85 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     next: Record<string, DesktopProviderModelDefaults>,
   ): number {
     const changedBackends = changedProviderModelDefaultBackends(previous, next);
-    if (changedBackends.length === 0) return 0;
+    const changedAccessBackends = changedProviderExecutionModeDefaultBackends(
+      previous,
+      next,
+    );
+    if (changedBackends.length === 0 && changedAccessBackends.length === 0) {
+      return 0;
+    }
+    // Access reaches every launchpad, including ones that have not used the
+    // provider yet, so switching a launchpad to it later finds the choice.
+    const apply = <T extends NavigationLaunchpadDefaults>(
+      launchpad: T,
+      includeAllModels: boolean,
+    ): T => applyNavigationLaunchpadProviderExecutionModeDefaults(
+      applyNavigationLaunchpadProviderModelDefaults(
+        launchpad, next, changedBackends, includeAllModels,
+      ),
+      next,
+      changedAccessBackends,
+      true,
+    );
 
     // One commit regardless of the number of directories or changed providers.
     return this.stateDb.raw.transaction(() => {
-      this.writeLaunchpadDefaults(applyNavigationLaunchpadProviderModelDefaults(
-        this.readLaunchpadDefaults(), next, changedBackends, true,
-      ));
+      this.writeLaunchpadDefaults(apply(this.readLaunchpadDefaults(), true));
       const update = this.stateDb.raw.prepare(
         "UPDATE directory_launchpads SET payload = ?, updated_at = ?, settings_touched_at = ? WHERE directory_path = ?",
       );
       const now = Date.now();
       let count = 0;
       for (const launchpad of Object.values(this.readAllDirectoryLaunchpads())) {
-        if (!changedBackends.some((backend) =>
-          launchpad.backend === backend
-          || launchpad.providerSettings?.[backend] !== undefined
-        )) continue;
-        const updated = applyNavigationLaunchpadProviderModelDefaults(launchpad, next, changedBackends);
+        if (
+          changedAccessBackends.length === 0
+          && !changedBackends.some((backend) =>
+            launchpad.backend === backend
+            || launchpad.providerSettings?.[backend] !== undefined
+          )
+        ) continue;
+        const updated = apply(launchpad, false);
         updated.updatedAt = now;
         updated.settingsTouchedAt = now;
         update.run(JSON.stringify(updated), now, now, updated.directoryKey);
         count += 1;
       }
       return count;
+    })();
+  }
+
+  /**
+   * One-time: forget the "Default Access" that launchpads saved for Codex and
+   * Claude back when an unset access projected to it, so they start on the
+   * Auto default. One commit, at most once per profile.
+   */
+  migrateLegacyLaunchpadExecutionModes(): void {
+    if (this.stateDb.getMeta(LAUNCHPAD_AUTO_ACCESS_MIGRATION_META_KEY)) return;
+    this.stateDb.raw.transaction(() => {
+      const defaultsRows = this.stateDb.raw
+        .prepare("SELECT key, value FROM launchpad_defaults")
+        .all() as { key: string; value: string }[];
+      if (defaultsRows.length > 0) {
+        const stored = Object.fromEntries(
+          defaultsRows.map((row) => [row.key, JSON.parse(row.value) as unknown]),
+        ) as NavigationLaunchpadDefaults;
+        const migrated = forgetLegacyDefaultLaunchpadExecutionModes(stored);
+        if (migrated !== stored) this.writeLaunchpadDefaults(migrated);
+      }
+      const rows = this.stateDb.raw
+        .prepare("SELECT directory_path, payload FROM directory_launchpads")
+        .all() as { directory_path: string; payload: string }[];
+      const update = this.stateDb.raw.prepare(
+        "UPDATE directory_launchpads SET payload = ? WHERE directory_path = ?",
+      );
+      for (const row of rows) {
+        const stored = JSON.parse(row.payload) as DirectoryLaunchpadOverlayState;
+        const migrated = forgetLegacyDefaultLaunchpadExecutionModes(stored);
+        if (migrated !== stored) {
+          update.run(JSON.stringify(migrated), row.directory_path);
+        }
+      }
+      this.stateDb.setMeta(LAUNCHPAD_AUTO_ACCESS_MIGRATION_META_KEY, "1");
     })();
   }
 
@@ -8159,7 +8220,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     const parsed = (
       Object.keys(defaults).length > 0
         ? defaults
-        : { backend: "codex", executionMode: "default" }
+        // Already in projected form, so reading an empty table never writes.
+        : {
+            backend: "codex",
+            executionMode: resolveDefaultLaunchpadExecutionMode("codex"),
+          }
     ) as NavigationLaunchpadDefaults;
     const normalized = normalizeLaunchpadDefaults(parsed);
     if (JSON.stringify(parsed) !== JSON.stringify(normalized)) {
