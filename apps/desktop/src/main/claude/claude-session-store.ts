@@ -16,6 +16,12 @@ export type ClaudeSession = {
   contextWindow?: { usedTokens: number; modelContextWindow: number };
 };
 
+export type ClaudeRateLimitsRecord = {
+  limits: BackendRateLimitSummary[];
+  /** Hash of the account the limits describe; never the account's own identifiers. */
+  account?: string;
+};
+
 /**
  * PwrAgent-owned metadata and append-only history. No transcript is stored in
  * SQLite, and no Claude authentication or provider-owned files are inspected.
@@ -49,17 +55,36 @@ export class ClaudeSessionStore {
   }
 
   /** Account-wide limits last reported by Claude, so a restart does not start blank. */
-  async readRateLimits(): Promise<BackendRateLimitSummary[]> {
+  async readRateLimits(): Promise<ClaudeRateLimitsRecord> {
+    let value: unknown;
     try {
-      const value: unknown = JSON.parse(await readFile(path.join(this.root, RATE_LIMITS_FILE), "utf8"));
-      return Array.isArray(value) ? value.filter((limit): limit is BackendRateLimitSummary =>
-        Boolean(limit) && typeof limit.name === "string" && typeof limit.limitId === "string") : [];
+      value = JSON.parse(await readFile(path.join(this.root, RATE_LIMITS_FILE), "utf8"));
     } catch {
-      return [];
+      return { limits: [] };
     }
+    // The first release wrote a bare array, with no account.
+    const record = Array.isArray(value) ? { limits: value } : value;
+    if (!record || typeof record !== "object" || !("limits" in record) || !Array.isArray(record.limits)) {
+      return { limits: [] };
+    }
+    const finite = (number: unknown): number is number => typeof number === "number" && Number.isFinite(number);
+    const limits = record.limits.flatMap((limit: unknown): BackendRateLimitSummary[] => {
+      if (!limit || typeof limit !== "object" || !("name" in limit) || !("limitId" in limit)
+        || typeof limit.name !== "string" || typeof limit.limitId !== "string") return [];
+      const { usedPercent, resetAt, ...row } = limit as BackendRateLimitSummary;
+      // A meter without a reading draws nothing; a reset without a time is no reset.
+      if (usedPercent !== undefined && !finite(usedPercent)) return [];
+      return [{
+        ...row,
+        ...(usedPercent !== undefined ? { usedPercent } : {}),
+        ...(finite(resetAt) ? { resetAt } : {}),
+      }];
+    });
+    const account = "account" in record && typeof record.account === "string" ? record.account : undefined;
+    return { limits, ...(account ? { account } : {}) };
   }
 
-  async saveRateLimits(limits: BackendRateLimitSummary[]): Promise<void> {
+  async saveRateLimits(limits: BackendRateLimitSummary[], account?: string): Promise<void> {
     const destination = path.join(this.root, RATE_LIMITS_FILE);
     if (limits.length === 0) {
       await rm(destination, { force: true });
@@ -67,8 +92,9 @@ export class ClaudeSessionStore {
     }
     await mkdir(this.root, { recursive: true, mode: 0o700 });
     const temporary = `${destination}.${randomUUID()}.tmp`;
+    const record: ClaudeRateLimitsRecord = { limits, ...(account ? { account } : {}) };
     try {
-      await writeFile(temporary, JSON.stringify(limits), { mode: 0o600 });
+      await writeFile(temporary, JSON.stringify(record), { mode: 0o600 });
       await rename(temporary, destination);
     } finally {
       await rm(temporary, { force: true });

@@ -1,13 +1,14 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { query, type Options, type Query, type SDKMessage, type SDKUserMessage, type SlashCommand } from "@anthropic-ai/claude-agent-sdk";
+import { query, type AccountInfo, type Options, type Query, type SDKMessage, type SDKUserMessage, type SlashCommand } from "@anthropic-ai/claude-agent-sdk";
 import type {
   AgentEvent, AppServerAvailableCommandSummary, AppServerPendingRequestNotification, AppServerThreadEntry,
   AppServerThreadMessageEntry, AppServerThreadMessagePart, AppServerThreadReplay, AppServerThreadSummary,
   AppServerTurnInputItem, BackendModelOption, BackendRateLimitSummary, BackendSummary, ThreadExecutionMode, CodexMcpServerSummary,
 } from "@pwragent/shared";
+import { getMainLogger } from "../log";
 import { resolveActiveProfilePath } from "../profile";
 import { toTranscriptImageProtocolUrl } from "../transcript-image-protocol";
 import { CLAUDE_SETUP_INSTRUCTIONS, claudeEnvironment, inspectClaudeInstallation, type ClaudeInstallation } from "./claude-executable";
@@ -16,7 +17,7 @@ import { claudeHarnessOptions, discoverClaudeModels, readClaudeMetadata } from "
 import { CLAUDE_TERMINAL_COMMANDS_SEED, claudeCommandSummaries } from "./claude-commands";
 import {
   claudeRateLimits, claudeStreamRateLimits, claudeTelemetry, claudeTurnUsage, liveClaudeRateLimits,
-  mergeClaudeStreamRateLimits,
+  mergeClaudeStreamRateLimits, nextClaudeRateLimitReset,
 } from "./claude-usage";
 import { claudeCommandActivity, groupClaudeActivities } from "./claude-activity";
 import { ClaudeSessionStore, type ClaudeSession } from "./claude-session-store";
@@ -32,6 +33,23 @@ export type ClaudeBackendOptions = {
   request: (request: AppServerPendingRequestNotification, signal: AbortSignal) => Promise<unknown>;
   cancelRequest: (threadId: string, turnId: string, requestId: string) => Promise<void>;
 };
+
+const claudeBackendLog = getMainLogger("pwragent:claude-backend");
+
+/** setTimeout's longest delay; a later reset re-arms on wake. */
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
+/** Signed out, or billed outside a Claude subscription: no plan limit applies. */
+function claudeHasNoPlanLimits({ authStatus, authMethod }: ClaudeInstallation): boolean {
+  return authStatus === "sign-in-required" || authMethod === "api-key" || authMethod === "external";
+}
+
+/** Tells accounts apart without keeping their identifiers. */
+function claudeAccountKey(info: AccountInfo): string {
+  return createHash("sha256")
+    .update(JSON.stringify([info.apiProvider ?? "", info.organization ?? "", info.email ?? ""]))
+    .digest("hex").slice(0, 16);
+}
 
 type RunningTurn = {
   turnId: string;
@@ -87,6 +105,9 @@ export class ClaudeBackend {
   private rateLimits: BackendSummary["rateLimits"];
   private rateLimitsLoad?: Promise<void>;
   private rateLimitWrites = Promise.resolve();
+  /** The account the limits describe, as `claudeAccountKey`. */
+  private rateLimitAccount?: string;
+  private rateLimitExpiry?: ReturnType<typeof setTimeout>;
   // Last command list Claude reported per working directory. Project
   // commands and skills differ by folder, so the folder is the key.
   private readonly commandsByCwd = new Map<string, AppServerAvailableCommandSummary[]>();
@@ -114,8 +135,7 @@ export class ClaudeBackend {
             executable: this.installation.executable, env,
           });
         }
-        const { authStatus, authMethod } = this.installation;
-        if (authStatus === "sign-in-required" || authMethod === "api-key" || authMethod === "external") {
+        if (claudeHasNoPlanLimits(this.installation)) {
           this.setRateLimits([]);
         } else {
           await this.loadRateLimits();
@@ -131,7 +151,8 @@ export class ClaudeBackend {
     return {
       kind: "claude", source: "builtin", label: "Claude", available,
       claude: { ...this.installation },
-      rateLimits: this.rateLimits && liveClaudeRateLimits(this.rateLimits, Date.now()),
+      // Remembered limits describe a usable install; hide them while Claude is unavailable.
+      rateLimits: this.rateLimits && (available ? liveClaudeRateLimits(this.rateLimits, Date.now()) : []),
       unavailableReason: available ? undefined : this.installation.message,
       methods: [],
       capabilities: {
@@ -370,7 +391,10 @@ export class ClaudeBackend {
           await this.store.save(current);
           if (message.terminal_slash_commands) this.terminalCommands = new Set(message.terminal_slash_commands);
           await Promise.all([
-            this.refreshUsage(running), this.refreshContext(session, running),
+            // A probe that finds no windows keeps the last reading, so the
+            // account must be confirmed first.
+            this.checkAccount(running).then(() => this.refreshUsage(running)),
+            this.refreshContext(session, running),
             claudeTelemetry(() => running.query!.supportedCommands())
               .then((commands) => commands && this.publishCommands(session, commands)),
           ]);
@@ -481,7 +505,7 @@ export class ClaudeBackend {
     // account Claude does not meter by subscription clears it.
     const limits = usage?.rate_limits_available && usage.rate_limits ? claudeRateLimits(usage) : [];
     if (limits.length > 0) this.setRateLimits(limits);
-    else if (usage && !usage.rate_limits_available && this.installation.authMethod !== "claude-account") {
+    else if (usage && !usage.rate_limits_available && claudeHasNoPlanLimits(this.installation)) {
       this.setRateLimits([]);
     }
     // Emitted after every probe, changed or not: it marks the turn's provider
@@ -490,10 +514,30 @@ export class ClaudeBackend {
     return usage;
   }
 
+  /**
+   * Installation checks are cached for the session, so a sign-in to another
+   * account shows up here first. Limits from a different account are cleared.
+   */
+  private async checkAccount(running: RunningTurn): Promise<void> {
+    const info = await claudeTelemetry(() => running.query!.accountInfo());
+    if (!info) return;
+    const account = claudeAccountKey(info);
+    await this.loadRateLimits();
+    if (account === this.rateLimitAccount) return;
+    const previous = this.rateLimitAccount;
+    this.rateLimitAccount = account;
+    // A file from before accounts were recorded is adopted, not discarded.
+    if (previous !== undefined) this.setRateLimits([]);
+    else this.saveRateLimits();
+  }
+
   private async loadRateLimits(): Promise<void> {
-    this.rateLimitsLoad ??= this.store.readRateLimits().then((limits) => {
+    this.rateLimitsLoad ??= this.store.readRateLimits().then(({ limits, account }) => {
       // A reading taken since launch is newer than the file.
-      if (this.rateLimits === undefined) this.rateLimits = liveClaudeRateLimits(limits, Date.now());
+      if (this.rateLimits !== undefined) return;
+      this.rateLimits = liveClaudeRateLimits(limits, Date.now());
+      this.rateLimitAccount ??= account;
+      this.scheduleRateLimitExpiry();
     });
     await this.rateLimitsLoad;
   }
@@ -502,10 +546,39 @@ export class ClaudeBackend {
   private setRateLimits(limits: BackendRateLimitSummary[]): boolean {
     if (this.rateLimits && JSON.stringify(limits) === JSON.stringify(this.rateLimits)) return false;
     this.rateLimits = limits;
-    this.rateLimitWrites = this.rateLimitWrites
-      .then(() => this.store.saveRateLimits(limits))
-      .catch(() => {});
+    this.saveRateLimits();
+    this.scheduleRateLimitExpiry();
     return true;
+  }
+
+  private saveRateLimits(): void {
+    const limits = this.rateLimits ?? [];
+    const account = this.rateLimitAccount;
+    this.rateLimitWrites = this.rateLimitWrites
+      .then(() => this.store.saveRateLimits(limits, account))
+      .catch((error: unknown) => {
+        claudeBackendLog.warn("Could not save Claude usage limits", error);
+      });
+  }
+
+  /**
+   * summary() hides a window once it resets. Tell listeners when that
+   * happens, so a surface that refreshes only on events drops the row.
+   */
+  private scheduleRateLimitExpiry(): void {
+    if (this.rateLimitExpiry) clearTimeout(this.rateLimitExpiry);
+    this.rateLimitExpiry = undefined;
+    const next = nextClaudeRateLimitReset(this.rateLimits ?? [], Date.now());
+    if (next === undefined) return;
+    this.rateLimitExpiry = setTimeout(() => {
+      this.rateLimitExpiry = undefined;
+      this.scheduleRateLimitExpiry();
+      if (next > Date.now()) return;
+      this.emit({ method: "backend/providerStatus/updated", params: { backend: "claude" } }).catch((error: unknown) => {
+        claudeBackendLog.warn("Could not report an expired Claude usage limit", error);
+      });
+    }, Math.min(next - Date.now() + 1, MAX_TIMER_DELAY_MS));
+    this.rateLimitExpiry.unref?.();
   }
 
   private scheduleContextRefresh(session: ClaudeSession, running: RunningTurn): void {
@@ -745,6 +818,8 @@ export class ClaudeBackend {
   }
 
   async close(): Promise<void> {
+    if (this.rateLimitExpiry) clearTimeout(this.rateLimitExpiry);
+    this.rateLimitExpiry = undefined;
     await Promise.all([...this.running.entries()].map(([threadId, running]) => this.interruptTurn({ threadId, turnId: running.turnId })));
   }
 }

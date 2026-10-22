@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { ModelUsage, SDKControlGetUsageResponse } from "@anthropic-ai/claude-agent-sdk";
-import { claudeRateLimits, claudeStreamRateLimits, claudeTurnUsage } from "../claude/claude-usage";
+import {
+  claudeRateLimits, claudeStreamRateLimits, claudeTurnUsage, mergeClaudeStreamRateLimits, nextClaudeRateLimitReset,
+} from "../claude/claude-usage";
 
 const model: ModelUsage = {
   inputTokens: 100, outputTokens: 40, thinkingTokens: 10,
@@ -70,5 +72,32 @@ describe("Claude usage normalization", () => {
     expect(names).toEqual(["Weekly limit with extra usage"]);
     expect(claudeStreamRateLimits({ status: "allowed", rateLimitType: "overage", utilization: 0.2 })[0].name)
       .toBe("Extra usage");
+  });
+  it("raises a live window from the stream but takes a reading from the next window", () => {
+    const hour = 3_600_000;
+    const now = Date.parse("2026-10-21T14:30:00Z");
+    // Known from an earlier stream event, its reset rounded up to the hour.
+    const known = { name: "5-hour limit", limitId: "five_hour", usedPercent: 98, resetAt: now + hour / 2 };
+    expect(mergeClaudeStreamRateLimits([known], [{ ...known, usedPercent: 99 }], now))
+      .toEqual([{ ...known, usedPercent: 99 }]);
+    expect(mergeClaudeStreamRateLimits([known], [{ ...known, usedPercent: 40, resetAt: known.resetAt + hour }], now))
+      .toEqual([known]);
+    // The window reset early and a new one began: a far later reset replaces it.
+    const next = { ...known, usedPercent: 2, resetAt: now + 5 * hour };
+    expect(mergeClaudeStreamRateLimits([known], [next], now)).toEqual([next]);
+  });
+  it("keeps an unknown reading unknown when merging", () => {
+    const known = { name: "Weekly limit", limitId: "seven_day", resetAt: 2_000 };
+    expect(mergeClaudeStreamRateLimits([known], [{ name: "Weekly limit", limitId: "seven_day" }], 1_000))
+      .toEqual([known]);
+    expect(mergeClaudeStreamRateLimits([known], [{ ...known, usedPercent: 5 }], 1_000))
+      .toEqual([{ ...known, usedPercent: 5 }]);
+  });
+  it("finds the next reset still ahead", () => {
+    expect(nextClaudeRateLimitReset([
+      { name: "a", limitId: "a", resetAt: 500 }, { name: "b", limitId: "b", resetAt: 3_000 },
+      { name: "c", limitId: "c", resetAt: 2_000 }, { name: "d", limitId: "d" },
+    ], 1_000)).toBe(2_000);
+    expect(nextClaudeRateLimitReset([{ name: "a", limitId: "a", resetAt: 500 }], 1_000)).toBeUndefined();
   });
 });

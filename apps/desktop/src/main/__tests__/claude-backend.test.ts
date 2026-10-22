@@ -318,7 +318,7 @@ describe("Claude SDK backend", () => {
 
     const restarted = new ClaudeBackend(f.backendOptions);
     expect(restarted.summary().rateLimits).toBeUndefined();
-    await vi.waitFor(async () => expect(await f.store.readRateLimits()).toHaveLength(3));
+    await vi.waitFor(async () => expect((await f.store.readRateLimits()).limits).toHaveLength(3));
     await restarted.discover({ models: false });
     expect(restarted.summary().rateLimits).toEqual(expected);
   });
@@ -329,7 +329,98 @@ describe("Claude SDK backend", () => {
     f.backendOptions.inspectInstallation.mockResolvedValueOnce({ executable: "/fixture/claude", authStatus: "sign-in-required" } as never);
     await f.backend.discover({ models: false });
     expect(f.backend.summary().rateLimits).toEqual([]);
-    await vi.waitFor(async () => expect(await f.store.readRateLimits()).toEqual([]));
+    await vi.waitFor(async () => expect(await f.store.readRateLimits()).toEqual({ limits: [] }));
+  });
+
+  it("hides remembered limits while Claude is unavailable, without forgetting them", async () => {
+    const f = await fixture();
+    const saved = [{ name: "Weekly limit", limitId: "seven_day", usedPercent: 40 }];
+    await f.store.saveRateLimits(saved);
+    f.backendOptions.inspectInstallation.mockResolvedValueOnce({ authStatus: "unknown" } as never);
+    await f.backend.discover({ models: false });
+    expect(f.backend.summary()).toMatchObject({ available: false, rateLimits: [] });
+    await f.backend.discover({ models: false });
+    expect(f.backend.summary()).toMatchObject({ available: true, rateLimits: saved });
+    expect((await f.store.readRateLimits()).limits).toEqual(saved);
+  });
+
+  it("clears limits when Claude signs in to another account mid-session", async () => {
+    const resetsAt = Date.now() + 86_400_000;
+    const snapshot = { rate_limits_available: true, rate_limits: {
+      seven_day: { utilization: 56, resets_at: new Date(resetsAt).toISOString() },
+    }, session: { model_usage: {} } };
+    // The new account's probe answers with no windows, which alone keeps a reading.
+    const usage = vi.fn().mockResolvedValueOnce(snapshot).mockResolvedValueOnce(snapshot)
+      .mockResolvedValue({ rate_limits_available: true, rate_limits: null, session: { model_usage: {} } });
+    const accountInfo = vi.fn().mockResolvedValueOnce({ apiProvider: "firstParty", email: "first@example.com" })
+      .mockResolvedValue({ apiProvider: "firstParty", email: "second@example.com" });
+    const f = await fixture(async function* () {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: false } as SDKMessage;
+    }, { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: usage, accountInfo });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Hi" }] });
+    await f.waitForTurn();
+    expect(f.backend.summary().rateLimits).toEqual([expect.objectContaining({ limitId: "seven_day", usedPercent: 56 })]);
+    await vi.waitFor(async () => expect((await f.store.readRateLimits()).account).toMatch(/^[0-9a-f]{16}$/));
+    // The file keeps a hash of the account, never its identifiers.
+    expect(JSON.stringify(await f.store.readRateLimits())).not.toContain("example.com");
+
+    f.events.length = 0;
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Hi" }] });
+    await f.waitForTurn();
+    expect(f.backend.summary().rateLimits).toEqual([]);
+    await vi.waitFor(async () => expect(await f.store.readRateLimits()).toEqual({ limits: [] }));
+  });
+
+  it("keeps limits when an account of unknown method reports none, and clears them for an API key", async () => {
+    const saved = [{ name: "Weekly limit", limitId: "seven_day", usedPercent: 40, resetAt: Date.now() + 86_400_000 }];
+    const f = await fixture(undefined, { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: vi.fn()
+      .mockResolvedValue({ rate_limits_available: false, rate_limits: null, session: { model_usage: {} } }) });
+    await f.store.saveRateLimits(saved);
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Hi" }] });
+    await f.waitForTurn();
+    expect(f.backend.summary().rateLimits).toEqual(saved);
+
+    f.backendOptions.inspectInstallation.mockResolvedValueOnce(
+      { executable: "/fixture/claude", authStatus: "signed-in", authMethod: "api-key" } as never);
+    await f.backend.discover({ models: false });
+    expect(f.backend.summary().rateLimits).toEqual([]);
+  });
+
+  it("reports a window passing its reset so event-driven surfaces drop it", async () => {
+    const f = await fixture(undefined, { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: vi.fn()
+      .mockImplementation(async () => ({ rate_limits_available: true, rate_limits: {
+        five_hour: { utilization: 98, resets_at: new Date(Date.now() + 400).toISOString() },
+        seven_day: { utilization: 20, resets_at: new Date(Date.now() + 86_400_000).toISOString() },
+      }, session: { model_usage: {} } })) });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Hi" }] });
+    await f.waitForTurn();
+    f.events.length = 0;
+    await vi.waitFor(() => expect(f.events.map((event) => event.notification.method))
+      .toContain("backend/providerStatus/updated"), { timeout: 3_000 });
+    expect(f.backend.summary().rateLimits).toEqual([expect.objectContaining({ limitId: "seven_day" })]);
+    await f.backend.close();
+  });
+
+  it("reads saved limits from the first file shape and drops malformed readings", async () => {
+    const f = await fixture();
+    await writeFile(path.join(f.root, "rate-limits.json"), JSON.stringify([
+      { name: "Weekly limit", limitId: "seven_day", usedPercent: 40, resetAt: 1_000 },
+      { name: "5-hour limit", limitId: "five_hour", usedPercent: "high" },
+      { name: "Weekly Opus limit", limitId: "seven_day_opus", usedPercent: 10, resetAt: "soon" },
+      { name: "Unnamed" },
+    ]));
+    expect(await f.store.readRateLimits()).toEqual({ limits: [
+      { name: "Weekly limit", limitId: "seven_day", usedPercent: 40, resetAt: 1_000 },
+      { name: "Weekly Opus limit", limitId: "seven_day_opus", usedPercent: 10 },
+    ] });
+    await writeFile(path.join(f.root, "rate-limits.json"), JSON.stringify({ account: "abc", limits: [
+      { name: "Weekly limit", limitId: "seven_day", usedPercent: null },
+    ] }));
+    expect(await f.store.readRateLimits()).toEqual({ account: "abc", limits: [] });
   });
 
   it("records only new resumed usage, exposes Claude limits, and restores the context moon", async () => {
