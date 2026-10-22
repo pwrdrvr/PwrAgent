@@ -1455,6 +1455,11 @@ export function AutomationEditor(props: AutomationEditorProps) {
       return response.servers;
     };
   }, [props.desktopApi, agentAssignment]);
+  const loadGatewayConnections = useMemo(() => {
+    const list = props.desktopApi?.listMcpConnections;
+    if (!list) return undefined;
+    return async () => (await list()).connections;
+  }, [props.desktopApi]);
   const agentPickerLabel =
     threadKey === DEFER_AGENT_KEY
       ? DEFER_AGENT_LABEL
@@ -2726,15 +2731,16 @@ export function AutomationEditor(props: AutomationEditorProps) {
               <div className="automation-field">
                 <span>Allowed MCP servers</span>
                 <AutomationMcpPicker
+                  loadGatewayConnections={loadGatewayConnections}
                   loadServers={loadAgentMcpServers}
                   selected={profileMcpAllowlist}
                   onChange={setProfileMcpAllowlist}
                 />
               </div>
               <p className="automation-field__hint">
-                MCP servers this run may use to fetch data, picked from the
-                Agent&rsquo;s configured servers. Leave empty to inherit all of
-                the Agent&rsquo;s MCP servers.
+                MCP servers this run may use: PwrAgent gateway connections
+                such as Datadog, or the Agent&rsquo;s own servers. Leave empty
+                to inherit the Agent&rsquo;s MCP servers.
               </p>
             </div>
             <div className="automation-field-group">
