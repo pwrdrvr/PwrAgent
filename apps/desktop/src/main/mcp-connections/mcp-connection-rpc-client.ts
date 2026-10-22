@@ -19,6 +19,7 @@ export class ConnectionRpcClient {
     signal?: AbortSignal,
     deadlineAt?: number,
     discoveryId?: string,
+    rpcTimeoutMs?: number,
   ): Promise<unknown> {
     return new Promise((resolve, reject) => {
       const socket: Socket = connect(this.socketPath);
@@ -35,7 +36,9 @@ export class ConnectionRpcClient {
       };
       const timeout = setTimeout(
         () => finish(new Error("PwrAgent MCP bridge timed out.")),
-        deadlineAt === undefined ? MCP_CONNECTION_TOOL_TIMEOUT_MS : Math.max(1, deadlineAt - Date.now() + MCP_DISCOVERY_RESPONSE_GRACE_MS),
+        rpcTimeoutMs ?? (deadlineAt === undefined
+          ? MCP_CONNECTION_TOOL_TIMEOUT_MS
+          : Math.max(1, deadlineAt - Date.now() + MCP_DISCOVERY_RESPONSE_GRACE_MS)),
       );
       const onAbort = (): void => {
         finish(new DOMException("The MCP request was cancelled.", "AbortError"));

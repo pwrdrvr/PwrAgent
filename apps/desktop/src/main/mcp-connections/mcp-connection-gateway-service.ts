@@ -1125,7 +1125,12 @@ export class McpConnectionGatewayService {
         registration.server.env.PWRAGENT_MCP_CONNECTION_SOCKET,
         registration.server.env.PWRAGENT_MCP_CONNECTION_TOKEN,
       );
-      return await rpc.request(params.operation, params.invocation, params.signal, discovery.deadlineAt, discovery.id) as McpGatewayTool[] | CallToolResult;
+      // The owner still needs the discovery deadline for catalog validation.
+      // A call's socket must also cover execution after that validation ends.
+      return await rpc.request(
+        params.operation, params.invocation, params.signal, discovery.deadlineAt, discovery.id,
+        params.operation === "gateway/tools/call" ? MCP_CONNECTION_TOOL_TIMEOUT_MS : undefined,
+      ) as McpGatewayTool[] | CallToolResult;
     } finally {
       discovery.close();
     }
@@ -2386,6 +2391,7 @@ export class McpConnectionGatewayService {
             }
             validateGatewayArguments(tool.definition, values.arguments as Record<string, unknown>);
             signal?.throwIfAborted();
+            discovery.close();
             return await client.callTool({ name: tool.toolName, arguments: values.arguments as Record<string, unknown> },
               undefined, { signal, timeout: MCP_CONNECTION_TOOL_TIMEOUT_MS });
           }

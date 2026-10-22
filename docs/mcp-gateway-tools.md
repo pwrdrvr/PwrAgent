@@ -110,6 +110,11 @@ error; that second does not extend upstream work. Native Codex bridges set
 `startup_timeout_sec` to 75 for process overhead and preserve the discovery
 deadline from initialization through the initial catalog and its cursors.
 Tool execution keeps its separate 12-minute allowance.
+Gateway call RPCs carry the short discovery deadline for catalog validation
+while their sockets retain the 12-minute call allowance. Completing discovery
+stops its timer before tool execution. Native catalog continuations use opaque
+bridge tokens that retain each read's upstream cursor and original deadline;
+overlapping reads remain independent even when upstream cursors are identical.
 
 Initialization and token refresh are shared only while they have waiters.
 Cancelling one waiter leaves siblings running; losing the last waiter aborts

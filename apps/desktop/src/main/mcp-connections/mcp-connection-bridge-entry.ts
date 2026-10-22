@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -49,20 +50,29 @@ async function main(): Promise<void> {
 
   if (description.tools) {
     let firstCatalogDeadlineAt: number | undefined = startupDeadlineAt;
-    const pageDeadlines = new Map<string, number>();
+    // Upstream cursors can be deterministic across concurrent catalog reads.
+    // Give each continuation its own opaque token and original read deadline.
+    const continuations = new Map<string, { upstreamCursor: string; deadlineAt: number }>();
     server.setRequestHandler(ListToolsRequestSchema, async (request, extra) => {
       const cursor = request.params?.cursor;
-      if (cursor && !pageDeadlines.has(cursor)) throw new Error("MCP catalog cursor expired. Restart discovery.");
-      const deadlineAt = (cursor ? pageDeadlines.get(cursor) : firstCatalogDeadlineAt)
+      const continuation = cursor ? continuations.get(cursor) : undefined;
+      if (cursor && (!continuation || continuation.deadlineAt <= Date.now())) {
+        continuations.delete(cursor);
+        throw new Error("MCP catalog cursor expired. Restart discovery.");
+      }
+      const deadlineAt = (cursor ? continuation?.deadlineAt : firstCatalogDeadlineAt)
         ?? Date.now() + MCP_CONNECTION_TOOL_LIST_TIMEOUT_MS;
       firstCatalogDeadlineAt = undefined;
-      if (cursor) pageDeadlines.delete(cursor);
-      const result = await rpc.request("tools/list", request.params, extra.signal, deadlineAt) as { nextCursor?: string };
+      if (cursor) continuations.delete(cursor);
+      const params = continuation ? { ...request.params, cursor: continuation.upstreamCursor } : request.params;
+      const result = await rpc.request("tools/list", params, extra.signal, deadlineAt) as { nextCursor?: string };
       // Bound abandoned cursor chains without storing catalog contents.
-      for (const [key, deadline] of pageDeadlines) if (deadline <= Date.now()) pageDeadlines.delete(key);
+      for (const [key, read] of continuations) if (read.deadlineAt <= Date.now()) continuations.delete(key);
       if (result.nextCursor) {
-        if (pageDeadlines.size >= 20) throw new Error("Too many incomplete MCP catalog reads. Restart discovery.");
-        pageDeadlines.set(result.nextCursor, deadlineAt);
+        if (continuations.size >= 20) throw new Error("Too many incomplete MCP catalog reads. Restart discovery.");
+        const nextCursor = randomUUID();
+        continuations.set(nextCursor, { upstreamCursor: result.nextCursor, deadlineAt });
+        return { ...result, nextCursor } as never;
       }
       return result as never;
     });

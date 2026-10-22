@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { McpGatewayTool } from "../mcp-connections/mcp-gateway-catalog";
 import { McpError } from "@modelcontextprotocol/sdk/types.js";
 import { McpConnectionGatewayService } from "../mcp-connections/mcp-connection-gateway-service";
 import { McpDiscovery, mcpDiscoveryContext } from "../mcp-connections/mcp-discovery";
@@ -27,6 +28,7 @@ function fixture() {
   const registry = new McpConnectionRegistry({ configPath: path.join(directory, "config.toml") });
   let initializeMs = 0;
   let listMs = 0;
+  let callMs: number | undefined;
   let failure: "http503" | "http504" | "reset" | "sdk" | undefined;
   let pageCount = 1;
   const posts: Array<{ method: string; signal?: AbortSignal | null; at: number }> = [];
@@ -35,7 +37,7 @@ function fixture() {
     const request = JSON.parse(String(init?.body)) as { id?: number; method: string; params?: { cursor?: string } };
     posts.push({ method: request.method, signal: init?.signal, at: Date.now() });
     if (request.method.startsWith("notifications/")) return new Response(null, { status: 202 });
-    const delayMs = request.method === "initialize" ? initializeMs : listMs;
+    const delayMs = request.method === "initialize" ? initializeMs : request.method === "tools/call" ? callMs ?? listMs : listMs;
     if (delayMs) await new Promise<void>((resolve, reject) => {
       const abort = (): void => { clearTimeout(timer); reject(init?.signal?.reason); };
       const timer = setTimeout(() => { init?.signal?.removeEventListener("abort", abort); resolve(); }, delayMs);
@@ -74,9 +76,10 @@ function fixture() {
   internals.grants.set("fixture", grant);
   return {
     service, internals, posts,
-    configure(options: { initializeMs?: number; listMs?: number; failure?: typeof failure; pageCount?: number }) {
+    configure(options: { initializeMs?: number; listMs?: number; callMs?: number; failure?: typeof failure; pageCount?: number }) {
       initializeMs = options.initializeMs ?? 0;
       listMs = options.listMs ?? 0;
+      callMs = options.callMs;
       failure = options.failure;
       pageCount = options.pageCount ?? 1;
     },
@@ -183,6 +186,55 @@ describe("MCP discovery lifecycle with the real SDK and a fake HTTP endpoint", (
     expect(post?.signal?.aborted).toBe(true);
     expect(f.internals.upstreamSessions.size).toBe(1);
     await expect(f.run("tools/call", undefined, undefined, params)).resolves.toMatchObject({ content: [{ text: "fixture result" }] });
+  });
+
+  it("keeps a gateway execution RPC alive beyond the discovery budget", async () => {
+    const f = fixture();
+    const base = { connectionId: "pwrsnap", scopeKey: grant.threadId, signal: new AbortController().signal };
+    let tools: McpGatewayTool[] | undefined;
+    const discovery = f.service.requestGatewayToolOperation({ ...base, operation: "gateway/tools/list" }).then((result) => { tools = result as McpGatewayTool[]; });
+    await vi.waitFor(() => expect(tools).toBeDefined());
+    await discovery;
+    f.configure({ listMs: 10_000, callMs: 90_000 });
+    const listCount = f.posts.filter((post) => post.method === "tools/list").length;
+    let result: unknown;
+    let error: unknown;
+    const call = f.service.requestGatewayToolOperation({
+      ...base, operation: "gateway/tools/call", invocation: { ...tools![0], arguments: {} },
+    }).then((value) => { result = value; }, (cause: unknown) => { error = cause; });
+    await vi.waitFor(() => expect(f.posts.filter((post) => post.method === "tools/list")).toHaveLength(listCount + 1));
+    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.waitFor(() => expect(f.posts.some((post) => post.method === "tools/call")).toBe(true));
+    await vi.advanceTimersByTimeAsync(61_000);
+    // Includes 10 seconds validating the catalog and 61 seconds executing.
+    // The short discovery deadline must not close this execution socket.
+    expect(error).toBeUndefined();
+    expect(result).toBeUndefined();
+    expect(f.posts.find((post) => post.method === "tools/call")?.signal?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(29_000);
+    await vi.waitFor(() => expect(result).toMatchObject({ content: [{ text: "fixture result" }] }));
+    await call;
+    expect(error).toBeUndefined();
+  });
+
+  it("still bounds gateway call catalog validation before executing a tool", async () => {
+    const f = fixture();
+    const base = { connectionId: "pwrsnap", scopeKey: grant.threadId, signal: new AbortController().signal };
+    let tools: McpGatewayTool[] | undefined;
+    const discovery = f.service.requestGatewayToolOperation({ ...base, operation: "gateway/tools/list" }).then((result) => { tools = result as McpGatewayTool[]; });
+    await vi.waitFor(() => expect(tools).toBeDefined());
+    await discovery;
+    f.configure({ listMs: 65_000, callMs: 0 });
+    const listCount = f.posts.filter((post) => post.method === "tools/list").length;
+    let error: unknown;
+    const call = f.service.requestGatewayToolOperation({
+      ...base, operation: "gateway/tools/call", invocation: { ...tools![0], arguments: {} },
+    }).catch((cause: unknown) => { error = cause; });
+    await vi.waitFor(() => expect(f.posts.filter((post) => post.method === "tools/list")).toHaveLength(listCount + 1));
+    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.waitFor(() => expect(error).toMatchObject({ data: { kind: "deadline", phase: "tools/list" } }));
+    await call;
+    expect(f.posts.some((post) => post.method === "tools/call")).toBe(false);
   });
 
   it("keeps one deadline across initialization and paginated listing", async () => {
