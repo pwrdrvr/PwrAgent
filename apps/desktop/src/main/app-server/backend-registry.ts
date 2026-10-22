@@ -9367,6 +9367,8 @@ export class DesktopBackendRegistry {
       startedAt: number;
       suppressBindingBroadcast?: boolean;
       mcpConnectionIds?: string[];
+      /** Connections the automation's own allowlist granted, not the Agent's selection. */
+      mcpGrantedConnectionIds?: string[];
       mcpServerAliases?: Record<string, string[]>;
       mcpAllowedServerNames?: string[];
       toolAllowlist?: string[];
@@ -10153,7 +10155,7 @@ export class DesktopBackendRegistry {
           const automation = this.findHeadlessAutomationForThread(context.backend, context.threadId);
           if (automation?.mcpConnectionIds) {
             const selected = await this.readThreadMcpConnections({ backend: context.backend, threadId: automation.agentThreadId });
-            return automation.mcpConnectionIds.filter((id) => selected.connectionIds.includes(id));
+            return automation.mcpConnectionIds.filter((id) => selected.connectionIds.includes(id) || automation.mcpGrantedConnectionIds?.includes(id));
           }
           return (await this.readThreadMcpConnections(context)).connectionIds;
         },
@@ -11475,6 +11477,7 @@ export class DesktopBackendRegistry {
       startedAt: Date.now(),
       suppressBindingBroadcast: params.suppressBindingBroadcast,
       mcpConnectionIds: mcp?.connectionIds,
+      mcpGrantedConnectionIds: mcp?.grantedConnectionIds,
       mcpServerAliases: mcp?.serverAliases,
       mcpAllowedServerNames: mcp?.allowedServerNames,
       toolAllowlist: params.toolAllowlist,
@@ -19257,13 +19260,27 @@ export class DesktopBackendRegistry {
   }): Promise<{
     config?: CodexThreadStartParams["config"];
     connectionIds: string[];
+    grantedConnectionIds: string[];
     serverAliases: Record<string, string[]>;
     allowedServerNames: string[];
     registrations: McpConnectionBridgeRegistration[];
   }> {
     const registrations: Array<{ connectionId: string; registration: McpConnectionBridgeRegistration }> = [];
     try {
-      for (const connectionId of params.overlay?.mcpConnectionIds ?? []) {
+      const connectionStatuses = params.mcpAllowlist?.length || params.overlay?.mcpConnectionIds?.length
+        ? await this.mcpConnectionService?.listConnections?.()
+        : undefined;
+      // A gateway connection the automation names (Datadog, say) is granted to
+      // its runs by that choice, whether or not the Agent thread selected it.
+      // Only connections offered to threads qualify.
+      const grantedConnectionIds = (connectionStatuses ?? [])
+        .filter((connection) => connection.enabled && params.mcpAllowlist?.some((entry) => {
+          const name = entry.trim();
+          return name === connection.id || name === connection.displayName || name === connection.displayName.toLowerCase();
+        }))
+        .map((connection) => connection.id);
+      const connectionIds = [...new Set([...(params.overlay?.mcpConnectionIds ?? []), ...grantedConnectionIds])];
+      for (const connectionId of connectionIds) {
         for (const registration of await this.registerMcpConnections([connectionId])) {
           registrations.push({ connectionId, registration });
         }
@@ -19283,7 +19300,6 @@ export class DesktopBackendRegistry {
       const servers: AutomationMcpServer[] = (inheritedNames ?? [])
         .filter((name) => providerEnabled && readRecord(baseServers[name])?.enabled !== false)
         .map((name) => ({ name, tools: inventory.find((server) => server.name === name)?.tools }));
-      const connectionStatuses = registrations.length ? await this.mcpConnectionService?.listConnections?.() : undefined;
       for (const { connectionId, registration } of registrations) {
         const parentBridge = this.mcpConnectionService?.peekThreadBridge?.(connectionId, params.agentThreadId);
         const parentName = parentBridge ? buildCodexConnectionMcpServerName(parentBridge) : undefined;
@@ -19306,6 +19322,7 @@ export class DesktopBackendRegistry {
       return {
         config: servers.length || baseConfig ? mergeCodexThreadConfigs(baseConfig, policy.config) : undefined,
         connectionIds: policy.connectionIds,
+        grantedConnectionIds: grantedConnectionIds.filter((id) => policy.connectionIds.includes(id)),
         allowedServerNames: servers
           .filter((server) => readRecord(readRecord(policy.config?.mcp_servers)?.[server.name])?.enabled !== false)
           .flatMap((server) => [server.name, ...(server.aliases ?? [])]),
@@ -28045,6 +28062,7 @@ export class DesktopBackendRegistry {
         executionMode: ThreadExecutionMode;
         queueEntryId: string;
         mcpConnectionIds?: string[];
+        mcpGrantedConnectionIds?: string[];
         mcpServerAliases?: Record<string, string[]>;
         mcpAllowedServerNames?: string[];
         toolAllowlist?: string[];
@@ -37711,7 +37729,8 @@ export class DesktopBackendRegistry {
       const connectionIds = Object.entries(headlessAutomation.mcpServerAliases ?? {})
         .filter(([, names]) => names.includes(serverName)).map(([id]) => id);
       const stillSelected = connectionIds.length > 0
-        ? connectionIds.some((id) => headlessAutomation.mcpConnectionIds?.includes(id) && selected.connectionIds.includes(id))
+        ? connectionIds.some((id) => headlessAutomation.mcpConnectionIds?.includes(id)
+          && (selected.connectionIds.includes(id) || headlessAutomation.mcpGrantedConnectionIds?.includes(id)))
         : selected.providerServersEnabled;
       const consent = headlessAutomation.mcpAllowedServerNames?.includes(serverName)
         && stillSelected

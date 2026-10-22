@@ -1,14 +1,20 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
-import type { CodexMcpServerSummary } from "@pwragent/shared";
+import type {
+  CodexMcpServerSummary,
+  McpConnectionStatus,
+} from "@pwragent/shared";
+import { formatMcpConnectionState } from "../thread-detail/McpAccessPanel";
 
 /**
  * Chip + suggestion control for the run's MCP-server allowlist.
  *
- * Suggestions come from the selected Agent thread's live MCP inventory, so the
- * operator picks from servers that actually exist instead of guessing names
- * into a comma-separated box. Free-text entry stays available (Enter or comma)
- * because a server can be configured but currently disconnected — an allowlist
- * naming it should still be expressible.
+ * Suggestions come from two places: the MCP Gateway's connections (Datadog,
+ * say), which PwrAgent hands to a run itself, and the selected Agent thread's
+ * live Codex inventory. Either way the operator picks from servers that
+ * actually exist instead of guessing names into a comma-separated box.
+ * Free-text entry stays available (Enter or comma) because a server can be
+ * configured but currently disconnected — an allowlist naming it should
+ * still be expressible.
  */
 export function AutomationMcpPicker(props: {
   selected: string[];
@@ -19,15 +25,39 @@ export function AutomationMcpPicker(props: {
    * an empty suggestion list that looks like "no servers exist".
    */
   loadServers?: () => Promise<CodexMcpServerSummary[]>;
+  /**
+   * Load the MCP Gateway's connections. They belong to the profile, not the
+   * Agent, so they are listed even before an Agent is chosen. A picked
+   * connection is stored by id, so renaming it keeps the automation working.
+   */
+  loadGatewayConnections?: () => Promise<McpConnectionStatus[]>;
 }) {
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
   const [servers, setServers] = useState<CodexMcpServerSummary[]>();
   const [loadFailed, setLoadFailed] = useState(false);
+  const [gateway, setGateway] = useState<McpConnectionStatus[]>([]);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const listId = useId();
 
-  const { loadServers, onChange, selected } = props;
+  const { loadGatewayConnections, loadServers, onChange, selected } = props;
+
+  // Loaded at mount, unlike the Agent inventory: a saved chip stores the
+  // connection id and needs the list to show the display name.
+  useEffect(() => {
+    if (!loadGatewayConnections) return;
+    let cancelled = false;
+    loadGatewayConnections()
+      .then((result) => {
+        if (!cancelled) setGateway(result.filter((connection) => connection.enabled));
+      })
+      .catch(() => {
+        if (!cancelled) setGateway([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [loadGatewayConnections]);
 
   // The inventory is fetched once per Agent selection, on first open — not per
   // keystroke, and not at mount for a disclosure the operator may never expand.
@@ -82,12 +112,21 @@ export function AutomationMcpPicker(props: {
   );
 
   const normalized = query.trim().toLowerCase();
+  const gatewaySuggestions = gateway.filter(
+    (connection) =>
+      !selected.includes(connection.id)
+      && (normalized.length === 0
+        || connection.displayName.toLowerCase().includes(normalized)
+        || connection.id.toLowerCase().includes(normalized)),
+  );
   const suggestions = (servers ?? []).filter(
     (server) =>
       !selected.includes(server.name)
       && (normalized.length === 0
         || server.name.toLowerCase().includes(normalized)),
   );
+  const chipLabel = (name: string): string =>
+    gateway.find((connection) => connection.id === name)?.displayName ?? name;
 
   return (
     <div className="automation-sender-picker" ref={containerRef}>
@@ -95,11 +134,13 @@ export function AutomationMcpPicker(props: {
         <ul className="automation-sender-picker__chips">
           {selected.map((name) => (
             <li className="chip automation-sender-chip" key={name}>
-              <span className="automation-sender-chip__label">{name}</span>
+              <span className="automation-sender-chip__label">
+                {chipLabel(name)}
+              </span>
               <button
                 type="button"
                 className="automation-sender-chip__remove"
-                aria-label={`Remove ${name}`}
+                aria-label={`Remove ${chipLabel(name)}`}
                 onClick={() => remove(name)}
               >
                 ×
@@ -135,6 +176,28 @@ export function AutomationMcpPicker(props: {
 
       {open ? (
         <div className="automation-sender-picker__menu" id={listId}>
+          {gatewaySuggestions.length > 0 ? (
+            <div>
+              <p className="automation-sender-picker__section">
+                PwrAgent gateway
+              </p>
+              {gatewaySuggestions.map((connection) => (
+                <button
+                  type="button"
+                  className="automation-sender-picker__option"
+                  key={connection.id}
+                  onClick={() => add(connection.id)}
+                >
+                  <span className="automation-sender-picker__name">
+                    {connection.displayName}
+                  </span>
+                  <span className="automation-sender-picker__id">
+                    <GatewayState connection={connection} />
+                  </span>
+                </button>
+              ))}
+            </div>
+          ) : undefined}
           {!loadServers ? (
             <p className="automation-sender-picker__empty">
               Choose an Agent in Deliver below to list its MCP servers. You can
@@ -143,17 +206,19 @@ export function AutomationMcpPicker(props: {
           ) : servers === undefined ? (
             <p className="automation-sender-picker__empty">Loading servers…</p>
           ) : suggestions.length === 0 ? (
-            <p className="automation-sender-picker__empty">
-              {loadFailed
-                ? "Couldn't read the Agent's MCP servers. Type a server name and press Enter."
-                : servers.length === 0
-                  ? "The Agent has no MCP servers configured. Type a name to allow one anyway."
-                  : "No matching servers. Press Enter to add what you typed."}
-            </p>
+            gatewaySuggestions.length > 0 && !loadFailed ? undefined : (
+              <p className="automation-sender-picker__empty">
+                {loadFailed
+                  ? "Couldn't read the Agent's MCP servers. Type a server name and press Enter."
+                  : servers.length === 0
+                    ? "The Agent has no MCP servers configured. Type a name to allow one anyway."
+                    : "No matching servers. Press Enter to add what you typed."}
+              </p>
+            )
           ) : (
             <div>
               <p className="automation-sender-picker__section">
-                Agent&rsquo;s MCP servers
+                Agent&rsquo;s Codex servers
               </p>
               {suggestions.map((server) => (
                 <button
@@ -176,5 +241,15 @@ export function AutomationMcpPicker(props: {
         </div>
       ) : undefined}
     </div>
+  );
+}
+
+/** The thread MCP access panel's words, so the state reads the same in both. */
+function GatewayState(props: { connection: McpConnectionStatus }) {
+  const label = formatMcpConnectionState(props.connection);
+  return label === "Ready" ? (
+    <>{label}</>
+  ) : (
+    <span className="automation-sender-picker__badge">{label}</span>
   );
 }
