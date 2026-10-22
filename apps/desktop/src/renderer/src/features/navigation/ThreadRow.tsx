@@ -39,6 +39,7 @@ import {
 import { setThreadRowNativeDragPreview } from "./thread-row-drag-preview";
 import { InlineRenameInput } from "./InlineRenameInput";
 import { matchMoveHotkey } from "./thread-action-hotkeys";
+import { threadRowInstanceKey, type ThreadRowInstance } from "./thread-row-instance";
 
 const HOVER_PREFETCH_DELAY_MS = 750;
 const absoluteDateFormatter = new Intl.DateTimeFormat(undefined, {
@@ -56,16 +57,7 @@ const absoluteDateFormatter = new Intl.DateTimeFormat(undefined, {
  * no matter how stable the row's data was. Handing the identity back instead
  * lets a list hold ONE handler for all of its rows.
  */
-export type ThreadRowRef = {
-  /**
-   * The directory section this row renders under. The Directories lens shows
-   * a thread once per directory it is linked to, so the thread alone does not
-   * say which row was acted on. Absent in the lenses with no directory
-   * sections.
-   */
-  directoryKey?: string;
-  /** `threadSummaryIdentityKey(thread)`, so the list need not recompute it. */
-  threadKey: string;
+export type ThreadRowRef = ThreadRowInstance & {
   /** Whether this row renders in its directory's pinned group. */
   pinned: boolean;
 };
@@ -90,6 +82,9 @@ type ThreadRowProps = {
   compact?: boolean;
   /** Reported back through the row's callbacks as `ThreadRowRef`. */
   directoryKey?: string;
+  parentThreadKey?: string;
+  /** undefined uses thread selection; null preserves the current scroll position. */
+  revealThreadRowKey?: string | null;
   dropIndicator?: DropIndicatorPosition;
   draggable?: boolean;
   pointerDraggable?: boolean;
@@ -281,9 +276,13 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
   // one handler for every row instead of a closure per row. See `ThreadRowRef`.
   const rowIdentity: ThreadRowRef = {
     directoryKey: props.directoryKey,
+    parentThreadKey: props.parentThreadKey,
     threadKey,
     pinned: props.threadPinState === "pinned",
   };
+  const rowInstanceKey = threadRowInstanceKey(rowIdentity);
+  const revealActive = active && (props.revealThreadRowKey === undefined
+    || props.revealThreadRowKey === rowInstanceKey);
   const onPointerDownThreadProp = props.onPointerDownThread;
 
   // Stable identities for everything handed to a memoized chip below. These
@@ -317,7 +316,7 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
     }
   }, []);
   useEffect(() => {
-    if (!active) {
+    if (!revealActive) {
       return;
     }
 
@@ -344,7 +343,7 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
       });
       return () => window.cancelAnimationFrame(frame);
     }
-  }, [active, threadKey, revealSelectedThreadRequest, onRevealSelectedThreadComplete]);
+  }, [revealActive, rowInstanceKey, revealSelectedThreadRequest, onRevealSelectedThreadComplete]);
   const armHoverPrefetch = (): void => {
     if (isNativeDragInteractionActive()) return;
     if (
@@ -398,6 +397,7 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
       }
       data-hover-stable-row="thread"
       data-thread-key={threadKey}
+      data-thread-row-key={rowInstanceKey}
       data-thread-directory-key={props.directoryKey}
       data-thread-pin-key={props.threadPinState ? threadKey : undefined}
       data-thread-pin-state={props.threadPinState}
