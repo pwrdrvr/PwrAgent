@@ -43,6 +43,13 @@ import { ComposerDraftRecoveryStore } from "../state/composer-draft-recovery-sto
 import { StateDb } from "../state/state-db";
 import { partitionFederationCollection } from "../federation/federation-collection-reads";
 
+// Record a missing fixture seam without launching the SDK's real Git probes.
+const sdkGetSessionInfo = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock("@anthropic-ai/claude-agent-sdk", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@anthropic-ai/claude-agent-sdk")>(),
+  getSessionInfo: sdkGetSessionInfo,
+}));
+
 let stateDb: StateDb;
 let store: SqliteOverlayStore;
 let tempDir: string;
@@ -71,6 +78,8 @@ afterEach(() => {
   delete process.env[SQLITE_WRITE_METRICS_ENV];
   stateDb.close();
   rmSync(tempDir, { recursive: true, force: true });
+  try { expect(sdkGetSessionInfo).not.toHaveBeenCalled(); }
+  finally { sdkGetSessionInfo.mockClear(); }
 });
 
 describe("sqlite write metrics", () => {
@@ -84,6 +93,7 @@ describe("sqlite write metrics", () => {
       agentToolMcpServer: null, pdfToolMcpServer: null,
       claudeBackendOptions: {
         store: new ClaudeSessionStore(path.join(tempDir, "claude")),
+        getSessionInfo: async () => undefined,
         inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
         discoverModels: async () => [],
         query: ({ prompt, options = {} }) => {
