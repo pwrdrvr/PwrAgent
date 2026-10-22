@@ -49,7 +49,7 @@ export function AutomationMcpPicker(props: {
     let cancelled = false;
     loadGatewayConnections()
       .then((result) => {
-        if (!cancelled) setGateway(result.filter((connection) => connection.enabled));
+        if (!cancelled) setGateway(result);
       })
       .catch(() => {
         if (!cancelled) setGateway([]);
@@ -112,9 +112,12 @@ export function AutomationMcpPicker(props: {
   );
 
   const normalized = query.trim().toLowerCase();
+  // Only offered connections are suggested, but every one names its chip:
+  // a connection switched off since it was picked still reads as itself.
   const gatewaySuggestions = gateway.filter(
     (connection) =>
-      !selected.includes(connection.id)
+      connection.enabled
+      && !selected.includes(connection.id)
       && (normalized.length === 0
         || connection.displayName.toLowerCase().includes(normalized)
         || connection.id.toLowerCase().includes(normalized)),
@@ -125,6 +128,18 @@ export function AutomationMcpPicker(props: {
       && (normalized.length === 0
         || server.name.toLowerCase().includes(normalized)),
   );
+  // A typed gateway display name is stored by id, as a picked one is, unless
+  // an Agent server answers to the same name.
+  const typedEntry = (text: string): string => {
+    const name = text.trim().toLowerCase();
+    if ((servers ?? []).some((server) => server.name.toLowerCase() === name)) {
+      return text;
+    }
+    return gateway.find(
+      (connection) =>
+        connection.enabled && connection.displayName.toLowerCase() === name,
+    )?.id ?? text;
+  };
   const chipLabel = (name: string): string =>
     gateway.find((connection) => connection.id === name)?.displayName ?? name;
 
@@ -167,7 +182,7 @@ export function AutomationMcpPicker(props: {
         onKeyDown={(event) => {
           if (event.key === "Enter" || event.key === ",") {
             event.preventDefault();
-            add(query);
+            add(typedEntry(query));
           } else if (event.key === "Escape") {
             setOpen(false);
           }

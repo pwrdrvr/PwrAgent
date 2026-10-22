@@ -377,6 +377,20 @@ describe("backend MCP gateway dispatch", () => {
     expect(operation.mock.calls.filter(([entry]) => entry.operation === "gateway/tools/call")).toHaveLength(1);
   });
 
+  it("does not grant a gateway connection by a name the Agent's own Codex server answers to", async () => {
+    await store.setThreadMcpConnectionIds({ backend: "codex", threadId: "thread-1", connectionIds: [] });
+    createRegistry({
+      registerBridge, requestGatewayToolOperation: operation, listConnections: async () => [gatewayConnection(true)],
+    } as unknown as McpConnectionGatewayService);
+    const nativeRegistry = registry as unknown as { readConfiguredCodexMcpServerNames(cwd?: string): Promise<string[]> };
+    vi.spyOn(nativeRegistry, "readConfiguredCodexMcpServerNames").mockResolvedValue(["datadog"]);
+    await registry.startAutomationHeadlessTurn({
+      backend: "codex", agentThreadId: "thread-1", automationRunId: "run-1", cwd: directory,
+      mcpAllowlist: ["datadog"], input: [{ type: "text", text: "Look up the fixture." }],
+    });
+    expect(registerBridge).not.toHaveBeenCalled();
+  });
+
   it("does not grant a gateway connection that is not offered to threads", async () => {
     await store.setThreadMcpConnectionIds({ backend: "codex", threadId: "thread-1", connectionIds: [] });
     createRegistry({

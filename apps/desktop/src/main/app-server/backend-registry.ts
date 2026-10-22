@@ -19267,26 +19267,36 @@ export class DesktopBackendRegistry {
   }> {
     const registrations: Array<{ connectionId: string; registration: McpConnectionBridgeRegistration }> = [];
     try {
-      const connectionStatuses = params.mcpAllowlist?.length || params.overlay?.mcpConnectionIds?.length
+      const inheritedNames = await this.readConfiguredCodexMcpServerNames(params.cwd);
+      const providerEnabled = params.overlay?.mcpProviderServersEnabled !== false;
+      const selectedConnectionIds = params.overlay?.mcpConnectionIds ?? [];
+      const connectionStatuses = params.mcpAllowlist?.length || selectedConnectionIds.length
         ? await this.mcpConnectionService?.listConnections?.()
         : undefined;
+      const namesConnection = (connection: { id: string; displayName: string }, name: string) =>
+        name === connection.id || name === connection.displayName || name === connection.displayName.toLowerCase();
       // A gateway connection the automation names (Datadog, say) is granted to
       // its runs by that choice, whether or not the Agent thread selected it.
-      // Only connections offered to threads qualify.
+      // Only connections offered to threads qualify. A display name the Agent
+      // already resolves -- its own Codex server, or another connection it
+      // selected -- grants nothing, or that allowlist entry would turn
+      // ambiguous and fail a run that worked before the grant existed.
       const grantedConnectionIds = (connectionStatuses ?? [])
         .filter((connection) => connection.enabled && params.mcpAllowlist?.some((entry) => {
           const name = entry.trim();
-          return name === connection.id || name === connection.displayName || name === connection.displayName.toLowerCase();
+          if (name === connection.id) return true;
+          return namesConnection(connection, name)
+            && !(providerEnabled && inheritedNames?.includes(name))
+            && !(connectionStatuses ?? []).some((other) =>
+              other.id !== connection.id && selectedConnectionIds.includes(other.id) && namesConnection(other, name));
         }))
         .map((connection) => connection.id);
-      const connectionIds = [...new Set([...(params.overlay?.mcpConnectionIds ?? []), ...grantedConnectionIds])];
+      const connectionIds = [...new Set([...selectedConnectionIds, ...grantedConnectionIds])];
       for (const connectionId of connectionIds) {
         for (const registration of await this.registerMcpConnections([connectionId])) {
           registrations.push({ connectionId, registration });
         }
       }
-      const inheritedNames = await this.readConfiguredCodexMcpServerNames(params.cwd);
-      const providerEnabled = params.overlay?.mcpProviderServersEnabled !== false;
       if (inheritedNames === undefined && (params.mcpAllowlist?.length || params.toolAllowlist?.length || !providerEnabled)) {
         throw new Error("The Codex runtime cannot report configured MCP servers, so the automation's MCP allowlist cannot be applied.");
       }
