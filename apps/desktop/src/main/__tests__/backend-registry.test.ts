@@ -16434,6 +16434,7 @@ script = "echo setup"
         PWRAGENT_MCP_CONNECTION_SOCKET: "/tmp/pwragent.sock",
         PWRAGENT_MCP_CONNECTION_TOKEN: "local-grant",
       },
+      startup_timeout_sec: 75,
       tool_timeout_sec: 720,
     });
     await expect(overlayStore.getThreadOverlayState({

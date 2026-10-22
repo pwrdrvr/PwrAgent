@@ -88,6 +88,12 @@ export type McpConnectionStatus = McpConnectionRecord & {
   state: McpConnectionRuntimeState;
   configured: boolean;
   detail?: string;
+  /** In-memory live catalog health, independent of stored authorization. */
+  discovery?: {
+    state: "untested" | "ready" | "failed";
+    lastSuccessAt?: number;
+    lastFailure?: { at: number; message: string };
+  };
 };
 
 export type ListMcpConnectionsRequest = {

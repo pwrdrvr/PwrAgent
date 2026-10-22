@@ -4,7 +4,31 @@ import {
   countMcpServerHealth,
   describeMcpServerTools,
   readMcpServerHealth,
+  readManagedMcpConnectionHealth,
+  reconcileManagedMcpInventory,
 } from "../mcp-server-health";
+
+describe("managed catalog health", () => {
+  it("does not treat stored authorization as a successful catalog check", () => {
+    const setup = {
+      state: "ready" as const, headline: "Ready", detail: "Offered to threads.",
+      tone: "ok" as const, offersAvailabilitySwitch: true, threadSelectable: true,
+    };
+    expect(readManagedMcpConnectionHealth(setup, undefined)).toBe("unknown");
+    const inventory = reconcileManagedMcpInventory({ status: "loaded", tools: ["search"], fetchedAt: 100 }, {
+      state: "failed", lastSuccessAt: 100, lastFailure: { at: 200, message: "atlassian-rovo: initialize deadline expired" },
+    });
+    expect(readManagedMcpConnectionHealth(setup, inventory)).toBe("failed");
+    expect(inventory).toMatchObject({ status: "failed", error: expect.stringContaining("initialize") });
+  });
+
+  it("accepts a fresh Settings catalog after an earlier gateway failure", () => {
+    const inventory = { status: "loaded" as const, tools: ["search"], fetchedAt: 300 };
+    expect(reconcileManagedMcpInventory(inventory, {
+      state: "failed", lastFailure: { at: 200, message: "earlier failure" },
+    })).toBe(inventory);
+  });
+});
 
 function server(
   overrides: Partial<CodexMcpServerSummary> & { name: string },

@@ -1,6 +1,6 @@
 import { connect, type Socket } from "node:net";
 import { McpError } from "@modelcontextprotocol/sdk/types.js";
-import { MCP_CONNECTION_TOOL_TIMEOUT_MS } from "./mcp-connection-timeouts.js";
+import { MCP_CONNECTION_TOOL_TIMEOUT_MS, MCP_DISCOVERY_RESPONSE_GRACE_MS } from "./mcp-connection-timeouts.js";
 
 const MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
 type RpcResponse =
@@ -17,6 +17,9 @@ export class ConnectionRpcClient {
     operation: string,
     params?: unknown,
     signal?: AbortSignal,
+    deadlineAt?: number,
+    discoveryId?: string,
+    rpcTimeoutMs?: number,
   ): Promise<unknown> {
     return new Promise((resolve, reject) => {
       const socket: Socket = connect(this.socketPath);
@@ -33,7 +36,9 @@ export class ConnectionRpcClient {
       };
       const timeout = setTimeout(
         () => finish(new Error("PwrAgent MCP bridge timed out.")),
-        MCP_CONNECTION_TOOL_TIMEOUT_MS,
+        rpcTimeoutMs ?? (deadlineAt === undefined
+          ? MCP_CONNECTION_TOOL_TIMEOUT_MS
+          : Math.max(1, deadlineAt - Date.now() + MCP_DISCOVERY_RESPONSE_GRACE_MS)),
       );
       const onAbort = (): void => {
         finish(new DOMException("The MCP request was cancelled.", "AbortError"));
@@ -48,6 +53,8 @@ export class ConnectionRpcClient {
         socket.write(`${JSON.stringify({
           token: this.token,
           op: operation,
+          ...(deadlineAt === undefined ? {} : { deadlineAt }),
+          ...(discoveryId === undefined ? {} : { discoveryId }),
           ...(params === undefined ? {} : { params }),
         })}\n`);
       });

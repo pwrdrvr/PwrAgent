@@ -13,15 +13,12 @@ export const MCP_CONNECTION_TOOL_TIMEOUT_SECONDS =
  */
 export const MCP_CONNECTION_PROBE_TIMEOUT_MS = 8_000;
 
-/**
- * How long Settings waits for a managed connection to list its tools.
- *
- * Longer than the probe, because this one has to finish an initialize and
- * possibly page through a large inventory, but still bounded by someone
- * looking at a row that says "reading tools".
- */
-export const MCP_CONNECTION_TOOL_LIST_TIMEOUT_MS = 20_000;
-
-// Live gateway searches can initialize and page catalogs across several
-// selected connections. Share this budget with the owner's catalog read.
+// One end-to-end discovery budget: registration, initialize, and every page.
 export const MCP_GATEWAY_TOOL_SEARCH_TIMEOUT_MS = 60_000;
+export const MCP_CONNECTION_TOOL_LIST_TIMEOUT_MS = MCP_GATEWAY_TOOL_SEARCH_TIMEOUT_MS;
+// The owner enforces the deadline. Leave time to return its phase diagnostic
+// before the local RPC/search safety timer replaces it with a generic timeout.
+export const MCP_DISCOVERY_RESPONSE_GRACE_MS = 1_000;
+// Remote capabilities are needed before the stdio server can initialize.
+// Allow discovery plus local process/RPC overhead; tool execution is separate.
+export const MCP_CONNECTION_STARTUP_TIMEOUT_SECONDS = 75;
