@@ -5,7 +5,7 @@ history.replaceState(null, "", location.pathname);
 const status = document.querySelector("#status"), canvas = document.querySelector("canvas"), context = canvas?.getContext("2d");
 const socket = new WebSocket(`${location.origin.replace("http", "ws")}/socket/${role}`);
 let ready = false, nativeReady = false, pc, media, feedback, sender, receiver, pendingOffer;
-let connection = 0, epoch = 0, budgetSequence = 0, lastRepair = 0, lastManifestAt = 0, manifest, manifestSent = 0;
+let connection = 0, epoch = 0, budgetSequence = 0, lastRepair = 0, lastManifestAt = null, manifestEpoch = 0, manifest, manifestSent = 0;
 const nativeCache = new Map(), decodeQueue = new Map(), delayed = new Map();
 const fixtureAcks = [];
 let decoding = 0, delayedBytes = 0, delayId = 0, seed = 1;
@@ -21,7 +21,7 @@ function close() {
   connection++; pc?.close(); pc = media = feedback = sender = receiver = undefined;
   pendingOffer?.reject(new Error("connection_closed")); pendingOffer = undefined;
   decodeQueue.clear(); for (const timer of delayed.values()) clearTimeout(timer); delayed.clear(); delayedBytes = 0;
-  manifestSent = 0; budgetSequence = 0; note("Stopped");
+  manifestSent = 0; budgetSequence = 0; manifestEpoch = 0; lastManifestAt = null; note("Stopped");
 }
 async function gathered(peer) {
   if (peer.iceGatheringState === "complete") return;
@@ -88,7 +88,9 @@ async function begin() {
       if (typeof event.data !== "string" || event.data.length > 4096) throw new Error("manifest_size");
       metrics.feedbackReceivedBytes += event.data.length;
       const m = JSON.parse(event.data);
-      if (m.epoch === epoch && m.kind === "manifest") { receiver.manifest(m.versions); lastManifestAt = performance.now(); receiveBudget(); }
+      if (m.epoch === epoch && m.kind === "manifest") {
+        receiver.manifest(m.versions); manifestEpoch = m.epoch; lastManifestAt = performance.now(); receiveBudget();
+      }
       else throw new Error("manifest_method");
     } catch (e) { error(e); close(); }
   };
@@ -199,20 +201,23 @@ setInterval(() => {
   if (role !== "viewer" || !receiver || feedback?.readyState !== "open" || feedback.bufferedAmount > 4096) return;
   receiveBudget();
   receiver.expire();
-  if (performance.now() - lastRepair >= 100 && performance.now() - lastManifestAt >= 150) {
+  if (lastManifestAt !== null && performance.now() - lastRepair >= 100 && performance.now() - lastManifestAt >= 150) {
     const missing = receiver.missing(); lastRepair = performance.now();
     if (missing.length) sendFeedback({ kind: "repair", epoch, tiles: missing });
   }
 }, 50);
 function snapshot() {
+  const manifestReceived = receiver !== undefined && manifestEpoch === receiver.epoch;
+  const missing = receiver?.missing(TILES).length;
   let visibleRevision = 0;
   if (context) for (let bit = 0; bit < 12; bit++) {
     const p = context.getImageData(28 + bit * 16, 538, 1, 1).data;
     if (p[0] + p[1] + p[2] > 384) visibleRevision |= 1 << bit;
   }
   return { ...metrics, at: performance.now(), ready, nativeReady, connected: pc?.connectionState === "connected", epoch,
-    visibleRevision, quietMs: performance.now() - lastManifestAt,
-    missing: receiver?.missing(TILES).length, receive: receiver?.stats, send: sender?.stats,
+    visibleRevision, quietMs: lastManifestAt === null ? null : performance.now() - lastManifestAt,
+    manifestReceived, refinementComplete: manifestReceived && missing === 0,
+    missing, receive: receiver?.stats, send: sender?.stats,
     queuedBytes: queueBytes(), delayedBytes, faults, unordered: media ? !media.ordered : undefined, maxRetransmits: media?.maxRetransmits };
 }
 window.pwrwin = {
