@@ -51,6 +51,8 @@ export const FEDERATION_CAPABILITIES = [
   "thread_mcp_connections",
   /** Owner-local To-do and tracked review reads, mutations, and invalidations. */
   "thread_todos",
+  /** Owner-persisted async question dismissals and change notifications. */
+  "operator_questions",
 ] as const;
 
 export const FEDERATION_SHUTDOWN_METHOD = "federation/shutdown";

@@ -213,6 +213,25 @@ describe("OperatorRequestService", () => {
     expect(row).toEqual({ status: "dismissed", questions_json: "[]" });
   });
 
+  it("restores owner dismissals after service restart, scoped by backend and thread", () => {
+    const { db, broadcasts, registry, service } = createService();
+    service.start();
+    registry.emit(askedEvent("thread-a", "msg-1"));
+    registry.emit(askedEvent("thread-b", "msg-1"));
+    service.dismissQuestion({ backend: "codex", threadId: "thread-a", messageId: "msg-1" });
+    expect(broadcasts.at(-1)).toEqual({ reason: "questions", backend: "codex", threadId: "thread-a" });
+    service.stop();
+    const restartedFixture = createService(db);
+    const restarted = restartedFixture.service;
+    restarted.start();
+    expect(restarted.listDismissedQuestions({ backend: "codex", threadId: "thread-a" })).toEqual(["msg-1"]);
+    expect(restarted.listDismissedQuestions({ backend: "codex", threadId: "thread-b" })).toEqual([]);
+    expect(restarted.listDismissedQuestions({ backend: "claude", threadId: "thread-a" })).toEqual([]);
+    // Provider replay during a later turn cannot reopen the dismissed record.
+    restartedFixture.registry.emit(askedEvent("thread-a", "msg-1"));
+    expect(restarted.list().questions.map((question) => question.threadId)).toEqual(["thread-b"]);
+  });
+
   it("closes a thread's questions when the thread is archived", () => {
     const { registry, service } = createService();
     service.start();
@@ -276,6 +295,34 @@ describe("OperatorRequestService", () => {
 });
 
 describe("OperatorRequestService write cost", () => {
+  it("writes once per dismissal and nothing for dismissal snapshots", async () => {
+    process.env[SQLITE_WRITE_METRICS_ENV] = "1";
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-dismissal-budget-"));
+    const db = StateDb.open(path.join(root, "state.db"));
+    const { registry, service } = createService(db);
+    try {
+      service.start();
+      registry.emit(askedEvent("thread-a", "msg-1"));
+      resetSqliteWriteMetrics();
+      const { writes } = await measureSqliteWrites(async () => {
+        service.dismissQuestion({ backend: "codex", threadId: "thread-a", messageId: "msg-1" });
+        for (let index = 0; index < 50; index += 1) {
+          expect(service.listDismissedQuestions({ backend: "codex", threadId: "thread-a" })).toEqual(["msg-1"]);
+        }
+        // A retried RPC has already resolved the row and must cost no commit.
+        service.dismissQuestion({ backend: "codex", threadId: "thread-a", messageId: "msg-1" });
+      });
+      expectSqliteWriteBudget({ scenario: "operator-question-dismissal", writes,
+        note: "one dismissal, one retry and 50 snapshot reads: one commit per operator action, no streaming or timer writes; 0.0082 MB/action, 0.41 MB/day at 50 dismissals/day, 0 MB/day idle",
+      });
+    } finally {
+      service.stop();
+      db.close();
+      delete process.env[SQLITE_WRITE_METRICS_ENV];
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("commits once per question, per close, and per seen batch; never per event", async () => {
     process.env[SQLITE_WRITE_METRICS_ENV] = "1";
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-operator-budget-"));

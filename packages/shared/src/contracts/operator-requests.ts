@@ -1,4 +1,5 @@
 import type { CodexAsyncQuestion } from "../codex-async-questions";
+import type { FederationRemoteTarget } from "./federation";
 import type {
   AppServerBackendKind,
   AppServerPendingRequestNotification,
@@ -48,15 +49,22 @@ export type MarkOperatorItemsSeenRequest = {
   keys: string[];
 };
 
-export type DismissOperatorQuestionRequest = {
+export type OperatorQuestionThreadRequest = {
   backend: AppServerBackendKind;
   threadId: string;
+  federationTarget?: FederationRemoteTarget;
+};
+
+export type DismissOperatorQuestionRequest = OperatorQuestionThreadRequest & {
   messageId: string;
 };
 
 /** Marker event; listeners refetch with the list call. */
 export type OperatorRequestsChangedEvent = {
   reason: "requests" | "questions" | "seen";
+  backend?: AppServerBackendKind;
+  threadId?: string;
+  federationTarget?: FederationRemoteTarget;
 };
 
 export function operatorServerRequestItemKey(

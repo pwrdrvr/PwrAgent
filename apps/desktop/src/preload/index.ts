@@ -40,6 +40,7 @@ import type {
   ListThreadReviewsRequest,
   UpdateThreadReviewRequest,
   DismissOperatorQuestionRequest,
+  OperatorQuestionThreadRequest,
   ListOperatorRequestsResponse,
   MarkOperatorItemsSeenRequest,
   OperatorRequestsChangedEvent,
@@ -648,6 +649,7 @@ import {
   OPERATOR_REQUESTS_CHANGED_EVENT_CHANNEL,
   OPERATOR_REQUESTS_DISMISS_QUESTION_CHANNEL,
   OPERATOR_REQUESTS_LIST_CHANNEL,
+  OPERATOR_QUESTIONS_LIST_DISMISSED_CHANNEL,
   OPERATOR_REQUESTS_MARK_SEEN_CHANNEL,
   AGENT_CANCEL_THREAD_EXECUTION_MODE_QUEUE_CHANNEL,
   AGENT_APPLY_THREAD_MODEL_MIGRATION_CHANNEL,
@@ -2221,6 +2223,8 @@ const desktopApi = Object.freeze({
   },
   listOperatorRequests: async (): Promise<ListOperatorRequestsResponse> =>
     await ipcRenderer.invoke(OPERATOR_REQUESTS_LIST_CHANNEL),
+  listDismissedOperatorQuestions: async (request: OperatorQuestionThreadRequest): Promise<string[]> =>
+    await ipcRenderer.invoke(OPERATOR_QUESTIONS_LIST_DISMISSED_CHANNEL, request),
   markOperatorItemsSeen: async (
     request: MarkOperatorItemsSeenRequest,
   ): Promise<void> =>

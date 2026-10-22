@@ -92,6 +92,16 @@ export class OperatorRequestStore {
     return result.changes > 0;
   }
 
+  dismissQuestion(params: { backend: AppServerBackendKind; threadId: string; messageId: string; now: number }): boolean {
+    const open = this.stateDb.raw.prepare(
+      `SELECT 1 FROM operator_async_questions
+        WHERE backend = ? AND thread_id = ? AND message_id = ? AND status = 'open'`,
+    ).get(params.backend, params.threadId, params.messageId);
+    // Duplicate RPCs and clicks avoid even a zero-row write transaction.
+    if (!open) return false;
+    return this.resolveQuestions({ ...params, messageIds: [params.messageId], status: "dismissed" });
+  }
+
   listOpenQuestions(): OperatorAsyncQuestion[] {
     const rows = this.stateDb.raw
       .prepare(
@@ -113,6 +123,14 @@ export class OperatorRequestStore {
           }]
         : [];
     });
+  }
+
+  listDismissedQuestionMessageIds(params: { backend: AppServerBackendKind; threadId: string }): string[] {
+    return (this.stateDb.raw.prepare(
+      `SELECT message_id FROM operator_async_questions
+        WHERE backend = ? AND thread_id = ? AND status = 'dismissed'`,
+    ).all(params.backend, params.threadId) as Array<{ message_id: string }>)
+      .map((row) => row.message_id);
   }
 
   listSeenKeys(): string[] {

@@ -5,6 +5,7 @@ import type {
   ListOperatorRequestsResponse,
   OperatorRequestsChangedEvent,
   OperatorServerRequest,
+  OperatorQuestionThreadRequest,
 } from "@pwragent/shared";
 import {
   MAX_OPERATOR_ITEM_KEY_LENGTH,
@@ -96,19 +97,20 @@ export class OperatorRequestService {
     }
   }
 
+  listDismissedQuestions(params: OperatorQuestionThreadRequest): string[] {
+    return this.store.listDismissedQuestionMessageIds(params);
+  }
+
   dismissQuestion(params: {
     backend: AppServerBackendKind;
     threadId: string;
     messageId: string;
   }): void {
-    const changed = this.store.resolveQuestions({
-      backend: params.backend,
-      threadId: params.threadId,
-      messageIds: [params.messageId],
-      status: "dismissed",
+    const changed = this.store.dismissQuestion({
+      ...params,
       now: this.now(),
     });
-    if (changed) this.broadcast({ reason: "questions" });
+    if (changed) this.broadcast({ reason: "questions", backend: params.backend, threadId: params.threadId });
   }
 
   private handleEvent(event: AgentEvent): void {

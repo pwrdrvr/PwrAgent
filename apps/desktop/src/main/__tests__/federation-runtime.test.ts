@@ -1757,6 +1757,68 @@ describe("DesktopFederationRuntime", () => {
     expect(received).toHaveBeenCalledTimes(3);
   });
 
+  it.each([[false, false], [false, true], [true, false], [true, true]])("delivers question dismissals to thread-detail viewers (gateway=%s, pending-request control=%s)", (viaGateway, pendingRequestControl) => {
+    const capabilities: FederationCapability[] = ["gateway_relay", "thread_detail", "event_subscriptions", "operator_questions",
+      ...(pendingRequestControl ? ["pending_request_control" as const] : []),
+    ];
+    const ownerRuntime = new DesktopFederationRuntime();
+    const owner = ownerRuntime as unknown as RuntimeHarness;
+    const viewer = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    const gateway = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    for (const [runtime, id] of [[viewer, "viewer_one"], [owner, "owner_one"], [gateway, "gateway_one"]] as const) {
+      runtime.localInstanceId = id;
+      runtime.router = new FederationRouter({ localInstanceId: id });
+    }
+    viewer.gatewayInstanceId = viaGateway ? "gateway_one" : undefined;
+    owner.gatewayInstanceId = viaGateway ? "gateway_one" : undefined;
+    const received = vi.fn();
+    viewer.onRemoteBackendEvent(received);
+    viewer.router!.registerConnection(createConnection({ peerId: viaGateway ? "gateway_one" : "owner_one", capabilities,
+      sendEnvelope: (envelope) => {
+        if (viaGateway) gateway.applyEventSubscription(envelope, "viewer_one");
+        else owner.applyEventSubscription(envelope, "viewer_one");
+      },
+    }));
+    owner.router!.registerConnection(createConnection({ peerId: viaGateway ? "gateway_one" : "viewer_one", capabilities,
+      sendEnvelope: (envelope) => {
+        if (viaGateway) gateway.publishRemoteBackendEvent(envelope, "owner_one");
+        else viewer.publishRemoteBackendEvent(envelope, "owner_one");
+      },
+    }));
+    gateway.router!.registerConnection(createConnection({ peerId: "owner_one", capabilities,
+      sendEnvelope: (envelope) => owner.applyEventSubscription(envelope, "gateway_one") }));
+    gateway.router!.registerConnection(createConnection({ peerId: "viewer_one", capabilities,
+      sendEnvelope: (envelope) => viewer.publishRemoteBackendEvent(envelope, "gateway_one") }));
+    viewer.setEventSubscriptions("question", [{ sourceInstanceId: "owner_one", eventClasses: ["transcript"],
+      threadSelection: { kind: "threads", threads: [{ backend: "codex", threadId: "mounted" }] } }]);
+    // Transcript subscription setup announces its initial stream baseline.
+    received.mockClear();
+    ownerRuntime.publishOperatorQuestionsChanged({ backend: "codex", threadId: "unmounted" });
+    expect(received).not.toHaveBeenCalled();
+    ownerRuntime.publishOperatorQuestionsChanged({ backend: "codex", threadId: "mounted" });
+    expect(received).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      federationTarget: { scope: "remote", instanceId: "owner_one" },
+      notification: { method: "thread/operatorQuestions/changed", params: { backend: "codex", threadId: "mounted" } },
+    }));
+    owner.forwardLocalBackendEvent({ backend: "codex", notification: {
+      method: "item/tool/requestUserInput", params: { threadId: "mounted", requestId: "prompt-1", questions: [] },
+    } });
+    expect(received).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects question dismissals for an older owner before sending an RPC", async () => {
+    const runtime = new DesktopFederationRuntime();
+    const harness = runtime as unknown as RuntimeHarness;
+    harness.localInstanceId = "viewer";
+    harness.router = new FederationRouter({ localInstanceId: "viewer" });
+    const send = vi.fn();
+    harness.router.registerConnection(createConnection({ peerId: "owner", capabilities: ["thread_detail", "turn_control"], sendEnvelope: send }));
+    await expect(runtime.requestOperatorQuestionOperation({ scope: "remote", instanceId: "owner" }, "dismiss", {
+      backend: "codex", threadId: "thread", messageId: "question",
+    })).rejects.toThrow("Update that PwrAgent instance.");
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it.each([false, true])("broad navigation does not widen transcript selection (gateway=%s)", (viaGateway) => {
     const capabilities: FederationCapability[] = [
       "gateway_relay", "thread_navigation", "navigation_snapshot_deltas",

@@ -1,6 +1,7 @@
 import type { BackgroundTerminalsViewProps } from "./BackgroundTerminalsView";
 import type { AgentCommandsStatus } from "../../lib/useThreadSessionState";
 import { useEventCallback } from "../../lib/useEventCallback";
+import { useDismissedOperatorQuestions } from "../operator-requests/useDismissedOperatorQuestions";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import { applyLaunchpadEnvironmentSetupProgress, type LaunchpadEnvironmentSetupProgress } from "../../lib/launchpad-setup-progress";
 import {
@@ -2487,14 +2488,30 @@ export function ThreadView(props: ThreadViewProps) {
   const asyncQuestionThreadKey = selectedThread
     ? `${selectedThread.source}:${selectedThread.id}`
     : undefined;
+  const questionOwner = selectedThread?.federation?.ref.target ?? readRendererFederationTarget();
+  const questionFederationTarget = questionOwner?.scope === "remote" ? questionOwner : undefined;
+  const dismissalThreadKey = `${questionFederationTarget?.instanceId ?? "local"}:${asyncQuestionThreadKey}`;
+  const ownerDismissedQuestionIds = useDismissedOperatorQuestions(props.desktopApi, selectedThread ? {
+    backend: selectedThread.source, threadId: selectedThread.id, federationTarget: questionFederationTarget,
+  } : undefined);
+  // Apply each owner dismissal once, so Show questions can still reopen a card
+  // for inspection without changing the owner's resolved state.
+  const appliedOwnerDismissals = useRef(new Set<string>());
+  useEffect(() => {
+    const fresh = ownerDismissedQuestionIds.map((id) => `${dismissalThreadKey}\0${id}`)
+      .filter((key) => !appliedOwnerDismissals.current.has(key));
+    if (fresh.length === 0) return;
+    for (const key of fresh) appliedOwnerDismissals.current.add(key);
+    setDismissedAsyncQuestions((current) => new Set([...current, ...fresh]));
+  }, [ownerDismissedQuestionIds, dismissalThreadKey]);
   const dismissedAsyncQuestionMessageIds = useMemo(() => {
-    const prefix = `${asyncQuestionThreadKey}\0`;
+    const prefix = `${dismissalThreadKey}\0`;
     return new Set(
       [...dismissedAsyncQuestions]
         .filter((key) => key.startsWith(prefix))
         .map((key) => key.slice(prefix.length)),
     );
-  }, [asyncQuestionThreadKey, dismissedAsyncQuestions]);
+  }, [dismissalThreadKey, dismissedAsyncQuestions]);
   // The To-dos panel's answers count too: one sent while this thread was off
   // screen may still be waiting to reach the transcript.
   const panelSentAsyncQuestionAnswers = props.threadTodos?.sentQuestionAnswers;
@@ -2640,24 +2657,30 @@ export function ThreadView(props: ThreadViewProps) {
     setDismissedAsyncQuestions((current) => {
       const next = new Set(current);
       for (const key of fresh) {
-        next.add(`${selectedThread.source}:${selectedThread.id}\0${key.slice(prefix.length)}`);
+        next.add(`${dismissalThreadKey}\0${key.slice(prefix.length)}`);
       }
       return next;
     });
-  }, [panelDismissedQuestionKeys, selectedThread]);
+  }, [panelDismissedQuestionKeys, selectedThread, dismissalThreadKey]);
   const handleAsyncQuestionsDismissedChange = useEventCallback(
     (messageId: string, dismissed: boolean) => {
       if (!asyncQuestionThreadKey) return;
-      const key = `${asyncQuestionThreadKey}\0${messageId}`;
-      // Closes the question in the To-dos panel as well. A peer's thread is
-      // listed on the peer, which this window cannot reach.
-      if (dismissed && selectedThread && !selectedThread.federation) {
-        void props.threadTodos?.dismissQuestion({
+      const key = `${dismissalThreadKey}\0${messageId}`;
+      if (dismissed && selectedThread) {
+        void props.desktopApi?.dismissOperatorQuestion?.({
           backend: selectedThread.source,
           threadId: selectedThread.id,
           messageId,
+          ...(questionFederationTarget ? { federationTarget: questionFederationTarget } : {}),
         }).catch((error: unknown) => {
-          console.warn("Closing the question in the To-dos panel failed.", error);
+          setDismissedAsyncQuestions((current) => {
+            const next = new Set(current);
+            next.delete(key);
+            return next;
+          });
+          props.onShowNotice?.({ id: `question-dismissal:${key}`, tone: "error", title: "Question dismissal failed",
+            message: error instanceof Error ? error.message : String(error) });
+          console.warn("Dismissing the question failed.", error);
         });
       }
       setDismissedAsyncQuestions((current) => {

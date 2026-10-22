@@ -765,6 +765,7 @@
     "rowsChanged": 1,
     "statements": 1
   },
+  "operator-question-dismissal": {"commits": 1, "note": "one dismissal, one retry and 50 snapshot reads: one commit per operator action, no streaming or timer writes; 0.0082 MB/action, 0.41 MB/day at 50 dismissals/day, 0 MB/day idle", "observedWalBytes": 8240, "rowsChanged": 1, "statements": 1},
   "operator-requests": {
     "commits": 3,
     "note": "one approval and one async question across 200 streamed events: the question's insert, one seen batch, and the reply's close; server requests and streamed events write nothing. ~0.03 MB WAL per question; ~1.5 MB/day at 50 questions",
