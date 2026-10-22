@@ -356,6 +356,39 @@ describe("backend MCP gateway dispatch", () => {
     expect(operation).not.toHaveBeenCalled();
   });
 
+  const gatewayConnection = (enabled: boolean) => ({
+    id: "one", displayName: "Datadog", serverUrl: "https://mcp.example.com/one", authMode: "oauth" as const,
+    kind: "remote" as const, enabled, createdAt: 1, updatedAt: 1, state: "ready" as const, configured: true,
+  });
+
+  it.each(["one", "Datadog"])("grants an allowlisted gateway connection the Agent has not selected (%s)", async (allowed) => {
+    await store.setThreadMcpConnectionIds({ backend: "codex", threadId: "thread-1", connectionIds: [] });
+    createRegistry({
+      registerBridge, requestGatewayToolOperation: operation, listConnections: async () => [gatewayConnection(true)],
+    } as unknown as McpConnectionGatewayService);
+    await registry.startAutomationHeadlessTurn({
+      backend: "codex", agentThreadId: "thread-1", automationRunId: "run-1", cwd: directory,
+      mcpAllowlist: [allowed], input: [{ type: "text", text: "Look up the fixture." }],
+    });
+    expect(registerBridge).toHaveBeenCalledWith("one", undefined);
+    internals.activeTurnKeys.add("codex:headless-1:turn-1");
+    const call = request("call_mcp_tool", args);
+    expect((await internals.handleServerRequest("codex", { ...call, params: { ...call.params, threadId: "headless-1" } })).success).toBe(true);
+    expect(operation.mock.calls.filter(([entry]) => entry.operation === "gateway/tools/call")).toHaveLength(1);
+  });
+
+  it("does not grant a gateway connection that is not offered to threads", async () => {
+    await store.setThreadMcpConnectionIds({ backend: "codex", threadId: "thread-1", connectionIds: [] });
+    createRegistry({
+      registerBridge, requestGatewayToolOperation: operation, listConnections: async () => [gatewayConnection(false)],
+    } as unknown as McpConnectionGatewayService);
+    await expect(registry.startAutomationHeadlessTurn({
+      backend: "codex", agentThreadId: "thread-1", automationRunId: "run-1", cwd: directory,
+      mcpAllowlist: ["one"], input: [{ type: "text", text: "Look up the fixture." }],
+    })).rejects.toThrow("not configured for the Agent: one");
+    expect(registerBridge).not.toHaveBeenCalled();
+  });
+
   it("revokes automation bridge grants if turn startup fails", async () => {
     startTurn.mockRejectedValue(new Error("fixture start failure"));
     await expect(registry.startAutomationHeadlessTurn({

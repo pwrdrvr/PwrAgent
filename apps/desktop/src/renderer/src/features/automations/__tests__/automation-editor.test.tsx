@@ -13,6 +13,7 @@ import type {
   AppServerBackendKind,
   AutomationDetail,
   InboundPreviewMessage,
+  McpConnectionStatus,
   MessagingChannelKind,
   MessagingPairingEntry,
   NavigationThreadSummary,
@@ -912,6 +913,77 @@ describe("AutomationEditor", () => {
       kind: "create",
       request: expect.objectContaining({
         executionProfile: { mcpAllowlist: ["datadog", "aws-readonly"] },
+      }),
+    });
+  });
+
+  it("offers MCP Gateway connections and saves the pick by id", async () => {
+    const onSubmit = vi.fn(async () => undefined);
+    const connection = (
+      id: string,
+      displayName: string,
+      enabled: boolean,
+    ): McpConnectionStatus => ({
+      id,
+      displayName,
+      serverUrl: `https://mcp.example.com/${id}`,
+      authMode: "oauth",
+      kind: "remote",
+      enabled,
+      createdAt: 1,
+      updatedAt: 1,
+      state: "ready",
+      configured: true,
+    });
+    const desktopApi = {
+      ...fakeDesktopApi(fakeSettings({ enabled: { telegram: true } })),
+      listMcpConnections: vi.fn(async () => ({
+        connections: [
+          connection("datadog", "Datadog", true),
+          connection("parked", "Parked Service", false),
+        ],
+      })),
+    } as DesktopApi;
+
+    render(
+      <AutomationEditor
+        desktopApi={desktopApi}
+        mode={{
+          assignment: { backend: "codex", threadId: "thread-1" },
+          kind: "create",
+        }}
+        onCancel={() => undefined}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "Datadog incident bot" },
+    });
+    fireEvent.change(screen.getByLabelText("Task prompt"), {
+      target: { value: "Investigate using Datadog." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
+    fireEvent.change(screen.getByLabelText("Group ID"), {
+      target: { value: "-1001234567890" },
+    });
+    fireEvent.change(screen.getByLabelText("Value"), {
+      target: { value: "ERROR" },
+    });
+    fireEvent.focus(screen.getByLabelText("Allowed MCP servers"));
+    expect(await screen.findByText("PwrAgent gateway")).toBeInTheDocument();
+    expect(screen.queryByText("Parked Service")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Datadog/ }));
+    expect(
+      screen.getByRole("button", { name: "Remove Datadog" }),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit).toHaveBeenCalledWith({
+      kind: "create",
+      request: expect.objectContaining({
+        executionProfile: { mcpAllowlist: ["datadog"] },
       }),
     });
   });
