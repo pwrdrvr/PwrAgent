@@ -287,6 +287,51 @@ describe("Claude SDK backend", () => {
     ]));
   });
 
+  it("keeps the full limit snapshot across turns, coarse stream events, and a restart", async () => {
+    const resetsAt = Date.now() + 86_400_000;
+    const snapshot = { rate_limits_available: true, rate_limits: {
+      seven_day: { utilization: 56, resets_at: new Date(resetsAt).toISOString() },
+      iguana_necktie: { utilization: 30, resets_at: new Date(resetsAt).toISOString() },
+      model_scoped: [{ display_name: "Fable", utilization: 96, resets_at: new Date(resetsAt).toISOString() }],
+    }, session: { model_usage: {} } };
+    // The first turn reads the snapshot; every later probe times out or fails.
+    const usage = vi.fn().mockResolvedValueOnce(snapshot).mockResolvedValueOnce(snapshot)
+      .mockRejectedValue(new Error("Probe unavailable"));
+    const f = await fixture(async function* () {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      yield { type: "rate_limit_event", rate_limit_info: { status: "allowed", rateLimitType: "seven_day",
+        utilization: 0.55, resetsAt: Math.round(resetsAt / 1000) + 3600 } } as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: false } as SDKMessage;
+    }, { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: usage });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    for (let turn = 0; turn < 3; turn += 1) {
+      f.events.length = 0;
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Hi" }] });
+      await f.waitForTurn();
+    }
+    const expected = [
+      expect.objectContaining({ limitId: "seven_day", usedPercent: 56, resetAt: resetsAt }),
+      expect.objectContaining({ limitId: "iguana_necktie", usedPercent: 30 }),
+      expect.objectContaining({ limitId: "model_scoped:Fable", usedPercent: 96 }),
+    ];
+    expect(f.backend.summary().rateLimits).toEqual(expected);
+
+    const restarted = new ClaudeBackend(f.backendOptions);
+    expect(restarted.summary().rateLimits).toBeUndefined();
+    await vi.waitFor(async () => expect(await f.store.readRateLimits()).toHaveLength(3));
+    await restarted.discover({ models: false });
+    expect(restarted.summary().rateLimits).toEqual(expected);
+  });
+
+  it("clears remembered limits when Claude is signed out", async () => {
+    const f = await fixture();
+    await f.store.saveRateLimits([{ name: "Weekly limit", limitId: "seven_day", usedPercent: 40 }]);
+    f.backendOptions.inspectInstallation.mockResolvedValueOnce({ executable: "/fixture/claude", authStatus: "sign-in-required" } as never);
+    await f.backend.discover({ models: false });
+    expect(f.backend.summary().rateLimits).toEqual([]);
+    await vi.waitFor(async () => expect(await f.store.readRateLimits()).toEqual([]));
+  });
+
   it("records only new resumed usage, exposes Claude limits, and restores the context moon", async () => {
     let count = 0;
     const context = vi.fn().mockResolvedValue({ totalTokens: 1200, maxTokens: 200_000 });

@@ -6,7 +6,7 @@ import { query, type Options, type Query, type SDKMessage, type SDKUserMessage, 
 import type {
   AgentEvent, AppServerAvailableCommandSummary, AppServerPendingRequestNotification, AppServerThreadEntry,
   AppServerThreadMessageEntry, AppServerThreadMessagePart, AppServerThreadReplay, AppServerThreadSummary,
-  AppServerTurnInputItem, BackendModelOption, BackendSummary, ThreadExecutionMode, CodexMcpServerSummary,
+  AppServerTurnInputItem, BackendModelOption, BackendRateLimitSummary, BackendSummary, ThreadExecutionMode, CodexMcpServerSummary,
 } from "@pwragent/shared";
 import { resolveActiveProfilePath } from "../profile";
 import { toTranscriptImageProtocolUrl } from "../transcript-image-protocol";
@@ -14,7 +14,10 @@ import { CLAUDE_SETUP_INSTRUCTIONS, claudeEnvironment, inspectClaudeInstallation
 import { createClaudePermissionHandler, claudePermissionMode } from "./claude-permissions";
 import { claudeHarnessOptions, discoverClaudeModels, readClaudeMetadata } from "./claude-models";
 import { CLAUDE_TERMINAL_COMMANDS_SEED, claudeCommandSummaries } from "./claude-commands";
-import { claudeRateLimits, claudeStreamRateLimits, claudeTelemetry, claudeTurnUsage } from "./claude-usage";
+import {
+  claudeRateLimits, claudeStreamRateLimits, claudeTelemetry, claudeTurnUsage, liveClaudeRateLimits,
+  mergeClaudeStreamRateLimits,
+} from "./claude-usage";
 import { claudeCommandActivity, groupClaudeActivities } from "./claude-activity";
 import { ClaudeSessionStore, type ClaudeSession } from "./claude-session-store";
 
@@ -80,7 +83,10 @@ export class ClaudeBackend {
   private installation: ClaudeInstallation = { authStatus: "unknown", message: CLAUDE_SETUP_INSTRUCTIONS };
   private discovery?: { models: boolean; promise: Promise<void> };
   private models?: BackendModelOption[];
+  // Account-wide, so one thread's turn must never clear another's view.
   private rateLimits: BackendSummary["rateLimits"];
+  private rateLimitsLoad?: Promise<void>;
+  private rateLimitWrites = Promise.resolve();
   // Last command list Claude reported per working directory. Project
   // commands and skills differ by folder, so the folder is the key.
   private readonly commandsByCwd = new Map<string, AppServerAvailableCommandSummary[]>();
@@ -108,6 +114,12 @@ export class ClaudeBackend {
             executable: this.installation.executable, env,
           });
         }
+        const { authStatus, authMethod } = this.installation;
+        if (authStatus === "sign-in-required" || authMethod === "api-key" || authMethod === "external") {
+          this.setRateLimits([]);
+        } else {
+          await this.loadRateLimits();
+        }
       })(),
     };
     this.discovery = discovery;
@@ -119,7 +131,7 @@ export class ClaudeBackend {
     return {
       kind: "claude", source: "builtin", label: "Claude", available,
       claude: { ...this.installation },
-      rateLimits: this.rateLimits,
+      rateLimits: this.rateLimits && liveClaudeRateLimits(this.rateLimits, Date.now()),
       unavailableReason: available ? undefined : this.installation.message,
       methods: [],
       capabilities: {
@@ -273,7 +285,6 @@ export class ClaudeBackend {
         item: { id: user.id, type: "userMessage", text: user.text, content: parts },
       } });
       const env = claudeEnvironment(await this.options.resolveEnv?.() ?? process.env);
-      this.rateLimits = undefined;
       const permissionMode = claudePermissionMode(params.executionMode ?? session.thread.executionMode ?? "default");
       const sdkOptions: Options = {
         ...claudeHarnessOptions(executable, env),
@@ -382,10 +393,10 @@ export class ClaudeBackend {
           }
         }
         if (message.type === "rate_limit_event") {
-          const limits = new Map(this.rateLimits?.map((limit) => [limit.limitId, limit]));
-          for (const limit of claudeStreamRateLimits(message.rate_limit_info)) limits.set(limit.limitId, limit);
-          this.rateLimits = [...limits.values()];
-          await this.emit({ method: "backend/providerStatus/updated", params: { backend: "claude" } });
+          const update = claudeStreamRateLimits(message.rate_limit_info);
+          if (this.setRateLimits(mergeClaudeStreamRateLimits(this.rateLimits ?? [], update, Date.now()))) {
+            await this.emit({ method: "backend/providerStatus/updated", params: { backend: "claude" } });
+          }
         }
         await this.consumeCompleteMessage(message, threadId, running);
         // The probe is a control round-trip that can wait 1.5s; never hold
@@ -465,11 +476,36 @@ export class ClaudeBackend {
 
   private async refreshUsage(running: RunningTurn) {
     const usage = await claudeTelemetry(() => running.query!.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true }));
-    // An unavailable optional probe must not erase windows observed on the
-    // stream during this turn. A known non-subscription account does clear them.
-    if (usage && (!usage.rate_limits_available || usage.rate_limits)) this.rateLimits = claudeRateLimits(usage);
+    // The snapshot is complete, so it replaces every window. A probe that
+    // timed out or returned nothing keeps the last good reading. Only an
+    // account Claude does not meter by subscription clears it.
+    const limits = usage?.rate_limits_available && usage.rate_limits ? claudeRateLimits(usage) : [];
+    if (limits.length > 0) this.setRateLimits(limits);
+    else if (usage && !usage.rate_limits_available && this.installation.authMethod !== "claude-account") {
+      this.setRateLimits([]);
+    }
+    // Emitted after every probe, changed or not: it marks the turn's provider
+    // refresh as settled for listeners.
     await this.emit({ method: "backend/providerStatus/updated", params: { backend: "claude" } });
     return usage;
+  }
+
+  private async loadRateLimits(): Promise<void> {
+    this.rateLimitsLoad ??= this.store.readRateLimits().then((limits) => {
+      // A reading taken since launch is newer than the file.
+      if (this.rateLimits === undefined) this.rateLimits = liveClaudeRateLimits(limits, Date.now());
+    });
+    await this.rateLimitsLoad;
+  }
+
+  /** Returns whether the reading changed; a change is also written for the next launch. */
+  private setRateLimits(limits: BackendRateLimitSummary[]): boolean {
+    if (this.rateLimits && JSON.stringify(limits) === JSON.stringify(this.rateLimits)) return false;
+    this.rateLimits = limits;
+    this.rateLimitWrites = this.rateLimitWrites
+      .then(() => this.store.saveRateLimits(limits))
+      .catch(() => {});
+    return true;
   }
 
   private scheduleContextRefresh(session: ClaudeSession, running: RunningTurn): void {
