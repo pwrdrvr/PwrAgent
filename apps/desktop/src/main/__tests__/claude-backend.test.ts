@@ -21,6 +21,8 @@ async function fixture(messages?: (options: Options) => AsyncGenerator<SDKMessag
   roots.push(root);
   const store = new ClaudeSessionStore(root);
   const events: AgentEvent[] = [];
+  const turnCompletions = new Map<string, ReturnType<typeof Promise.withResolvers<void>>>();
+  let latestTurnId: string | undefined;
   const queries: Options[] = [];
   const close = vi.fn();
   const run = vi.fn((args: Parameters<typeof query>[0]) => {
@@ -51,14 +53,30 @@ async function fixture(messages?: (options: Options) => AsyncGenerator<SDKMessag
     inspectInstallation: vi.fn(async (_options?: Parameters<typeof import("../claude/claude-executable").inspectClaudeInstallation>[0]) => ({
       executable: "/fixture/claude", authStatus: "signed-in" as const,
     })),
-    emit: async (event: AgentEvent) => { events.push(event); },
+    emit: async (event: AgentEvent) => {
+      events.push(event);
+      const method = event.notification.method;
+      if (method === "turn/started") {
+        const { turn } = event.notification.params as { turn: { id: string } };
+        latestTurnId = turn.id;
+        turnCompletions.set(turn.id, Promise.withResolvers<void>());
+      } else if (["turn/completed", "turn/failed", "turn/cancelled"].includes(method)) {
+        const { turn } = event.notification.params as { turn: { id: string } };
+        turnCompletions.get(turn.id)?.resolve();
+      }
+    },
     request: async () => ({ decision: "accept" }),
     cancelRequest: async () => {},
     resolveEnv: async (): Promise<NodeJS.ProcessEnv> => ({ PATH: "/fixture", ANTHROPIC_API_KEY: "must-not-reach-child", CLAUDE_CODE_OAUTH_TOKEN: "must-not-reach-child" }),
   };
   const backend = new ClaudeBackend(backendOptions);
   async function waitForTurn() {
-    await vi.waitFor(() => expect(events.some((event) => ["turn/completed", "turn/failed", "turn/cancelled"].includes(event.notification.method))).toBe(true));
+    // Join the current turn's persisted terminal event. The test timeout
+    // bounds a stuck turn; a separate polling deadline races filesystem I/O
+    // on Windows and an older terminal event can release a later turn early.
+    const completion = latestTurnId && turnCompletions.get(latestTurnId);
+    if (!completion) throw new Error("No Claude turn has started in this fixture.");
+    await completion.promise;
   }
   return { backend, backendOptions, store, events, queries, run, close, waitForTurn, root };
 }
@@ -228,6 +246,37 @@ describe("Claude SDK backend", () => {
     expect(f.events.some((event) => event.notification.method === "turn/failed")).toBe(true);
   });
 
+  it("waits for the current turn when an earlier turn already completed", async () => {
+    const enteredSecondTurn = Promise.withResolvers<void>();
+    const finishSecondTurn = Promise.withResolvers<void>();
+    let turns = 0;
+    const f = await fixture(async function* () {
+      if (++turns === 2) {
+        enteredSecondTurn.resolve();
+        await finishSecondTurn.promise;
+      }
+      yield { type: "result", subtype: "success", is_error: false, result: "Done" } as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "First" }] });
+    await f.waitForTurn();
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Second" }] });
+    await enteredSecondTurn.promise;
+    let completed = false;
+    const waiting = f.waitForTurn().then(() => { completed = true; });
+    try {
+      // Flush promise callbacks while the second SDK result is held. A
+      // terminal event from the first turn cannot satisfy this wait.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(completed).toBe(false);
+    } finally {
+      finishSecondTurn.resolve();
+      await waiting;
+      await f.backend.close();
+    }
+    expect(completed).toBe(true);
+  });
+
   it.each([false, true])("preserves all completed text blocks without duplicating deltas (streaming=%s)", async (streaming) => {
     const f = await fixture(async function* () {
       yield { type: "stream_event", parent_tool_use_id: null, event: {
@@ -356,7 +405,7 @@ describe("Claude SDK backend", () => {
     let holdEnv = false;
     const backend = new ClaudeBackend({ ...f.backendOptions,
       emit: async (event: AgentEvent) => {
-        f.events.push(event);
+        await f.backendOptions.emit(event);
         if (event.notification.method === "turn/started") holdEnv = true;
       },
       resolveEnv: async () => {

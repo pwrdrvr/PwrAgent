@@ -1,3 +1,4 @@
+import { threadRowInstanceKey } from "./thread-row-instance";
 import type { NavigationPresentationOrder } from "./navigation-presentation-order";
 import { isNavigationPeerUnavailable, navigationIdentityKey, navigationThreadSelectionKey } from "../../lib/navigation-query-state";
 import type { NavigationPresentedThread } from "../../lib/navigation-loaded-rows";
@@ -544,6 +545,23 @@ export function DirectoriesList(props: DirectoriesListProps) {
   );
   const revealSelectedThreadRequest = props.revealSelectedThreadRequest;
   const selectedItemKeyForReveal = props.selectedItemKey;
+  const [clickedRow, setClickedRow] = useState<{
+    threadKey: string;
+    revealRequest: number;
+  }>();
+  // A row click already has a visible landing. Opening its transcript must
+  // not scroll another occurrence, even when selection was already on it.
+  // A later thread-only reveal (search, Back/Forward, header) chooses one
+  // directory, then one root or descendant occurrence in that directory.
+  const preserveClickedPosition = clickedRow?.threadKey === props.selectedItemKey
+    && clickedRow?.revealRequest === (revealSelectedThreadRequest ?? 0);
+  useEffect(() => {
+    if (clickedRow && clickedRow.threadKey !== props.selectedItemKey) {
+      setClickedRow(undefined);
+    }
+  }, [clickedRow, props.selectedItemKey]);
+  const revealDirectoryKey = visibleDirectories.find((directory) =>
+    props.selectedThreadDirectoryKeys?.includes(directory.key))?.key;
   const setDirectoryThreadsCollapsed = props.onSetDirectoryThreadsCollapsed;
   // Rows this lens is still waiting on. A reveal opens the selected row's
   // directory and re-anchors its root range, which puts reads in flight for
@@ -697,6 +715,10 @@ export function DirectoriesList(props: DirectoriesListProps) {
       previousSelectedItemKeyRef.current = undefined;
       return;
     }
+    if (preserveClickedPosition) {
+      previousSelectedItemKeyRef.current = selectedItemKey;
+      return;
+    }
     const selectedStartingThread = props.startingThreads?.find(
       (creation) => creation.selectionKey === selectedItemKey,
     );
@@ -751,7 +773,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
     setExpandedByKey((current) => revealsDirectory(current)
       ? { ...current, [matchingDirectory.key]: true }
       : current);
-  }, [expandedByKey, previousSelectedItemKeyRef, setExpandedByKey, visibleDirectories, props.selectedItemKey, props.startingThreads, startingThreadDirectoryKeys]);
+  }, [expandedByKey, preserveClickedPosition, previousSelectedItemKeyRef, setExpandedByKey, visibleDirectories, props.selectedItemKey, props.selectedThreadDirectoryKeys, props.startingThreads, startingThreadDirectoryKeys]);
 
   useEffect(() => {
     const request = revealSelectedThreadRequest ?? 0;
@@ -832,6 +854,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
         .flatMap((context) => context.selectionOrder.map((threadKey) => ({
           directoryKey: context.directory.key, threadKey,
         })));
+      if (!event.metaKey && !event.shiftKey) {
+        setClickedRow({ threadKey: row.threadKey, revealRequest: revealSelectedThreadRequest ?? 0 });
+      }
       props.onSelectThread(thread, event, selectionOrder, row);
     },
   );
@@ -940,11 +965,24 @@ export function DirectoriesList(props: DirectoriesListProps) {
     // depth-first order. The owner keys each child under its *true* parent, so
     // a grandchild is filed under a row that is itself a child; rendering only
     // direct children would silently drop it from the lens.
-    const trays = createSubthreadTrays(childThreadsByParentKey, [
+    const roots = [
       ...expandedThreadModel.directoryPinnedThreads,
       ...expandedThreadModel.selectedUnpinnedThreads,
       ...expandedThreadModel.unpinnedThreads,
-    ]);
+    ];
+    const trays = createSubthreadTrays(childThreadsByParentKey, roots);
+    const selectedRoot = roots.find((thread) => threadSummaryIdentityKey(thread) === props.selectedItemKey);
+    const selectedTrayRoot = selectedRoot ? undefined : roots.find((thread) =>
+      trays.subtree(threadSummaryIdentityKey(thread)).some((child) =>
+        threadSummaryIdentityKey(child) === props.selectedItemKey));
+    const revealThreadRowKey = !preserveClickedPosition && directory.key === revealDirectoryKey
+      && props.selectedItemKey && (selectedRoot || selectedTrayRoot)
+      ? threadRowInstanceKey({
+          directoryKey: directory.key,
+          threadKey: props.selectedItemKey,
+          parentThreadKey: selectedTrayRoot ? threadSummaryIdentityKey(selectedTrayRoot) : undefined,
+        })
+      : null;
     const renderStaticSubthreads = (parent: NavigationPresentedThread): ReactElement | null => {
       const parentKey = threadSummaryIdentityKey(parent);
       // Already depth-first ordered by the tray. Re-sorting here by this row's
@@ -1036,6 +1074,8 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 onCommitRename={props.onCommitRenameThread}
                 compact
                 directoryKey={directory.key}
+                parentThreadKey={parentKey}
+                revealThreadRowKey={revealThreadRowKey}
                 draggable={reorderable && directChildKeySet.has(childKey)}
                 includeLinkedDirectories
                 linkedDirectoryMode={getDirectoryRowLinkedDirectoryMode(child)}
@@ -1255,6 +1295,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
             onCommitRename={props.onCommitRenameThread}
             compact
             directoryKey={directory.key}
+            revealThreadRowKey={revealThreadRowKey}
             pointerDraggable={Boolean(props.onReorderThreadPins)}
             includeLinkedDirectories
             linkedDirectoryMode={getDirectoryRowLinkedDirectoryMode(thread)}
@@ -1701,6 +1742,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                           onCommitRename={props.onCommitRenameThread}
                           compact
                           directoryKey={directory.key}
+                          revealThreadRowKey={revealThreadRowKey}
                           pointerDraggable={Boolean(props.onReorderThreadPins)}
                           includeLinkedDirectories
                           linkedDirectoryMode={getDirectoryRowLinkedDirectoryMode(thread)}

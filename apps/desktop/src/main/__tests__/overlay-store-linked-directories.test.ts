@@ -18,19 +18,22 @@ afterEach(() => {
 });
 
 describe("SqliteOverlayStore — linked directories", () => {
-  it.each([undefined, "remote-instance"])("detaches a moved project thread from its parent in the workspace commit: %s", async (parentThreadInstanceId) => {
+  it.each([
+    ["codex", undefined], ["codex", "remote-instance"],
+    ["acp:grok", undefined], ["acp:grok", "remote-instance"],
+  ] as const)("detaches a moved project thread from its parent in the workspace commit: %s / %s", async (backend, parentThreadInstanceId) => {
     await store.setThreadParent({
-      backend: "codex", threadId: "child", parentThreadId: "parent",
-      parentThreadBackend: "acp:grok", parentThreadInstanceId,
+      backend, threadId: "child", parentThreadId: "parent",
+      parentThreadBackend: backend === "codex" ? "acp:grok" : "codex", parentThreadInstanceId,
     });
     const overlay = await store.replaceWorkspaceLinkedDirectory({
-      backend: "codex", threadId: "child", resetProjectState: true, gitBranch: "HEAD",
-      directory: { id: "pwragent-handoff:codex:child", label: "target", path: "/repo/target", kind: "worktree", worktreePath: "/worktrees/target" },
+      backend, threadId: "child", resetProjectState: true, gitBranch: "HEAD",
+      directory: { id: `pwragent-handoff:${backend}:child`, label: "target", path: "/repo/target", kind: "worktree", worktreePath: "/worktrees/target" },
     });
     expect(overlay.parentThreadId).toBeUndefined();
     expect(overlay.parentThreadBackend).toBeUndefined();
     expect(overlay.parentThreadInstanceId).toBeUndefined();
-    expect((await store.getThreadOverlayState({ backend: "codex", threadId: "child" }))?.parentThreadId).toBeUndefined();
+    expect((await store.getThreadOverlayState({ backend, threadId: "child" }))?.parentThreadId).toBeUndefined();
   });
 
   it("keeps project movement and parent detachment in one SQLite commit", async () => {
