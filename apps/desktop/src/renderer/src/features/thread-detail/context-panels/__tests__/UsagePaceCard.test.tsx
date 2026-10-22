@@ -268,12 +268,16 @@ describe("ClaudeUsageLimits", () => {
         resetAt: NOW + 400 * HOUR, expires: true },
       { name: "Other plan limit", limitId: "walrus_monocle", limitName: "walrus_monocle", usedPercent: 5 },
     ] } as BackendSummary;
-    render(<ClaudeUsageLimits backend={backend} />);
-    expect(screen.getByText(/^Weekly Fable limit/).closest("p")).toHaveTextContent(/40% used · Resets /);
-    expect(screen.getByText(/^Cloud session credits/).closest("p")).toHaveTextContent(/30% used · Expires /);
+    const view = render(<ClaudeUsageLimits backend={backend} />);
+    const row = (label: string) => screen.getByText(label).closest("div")!;
+    expect(row("Weekly Fable limit")).toHaveTextContent(/40% used · resets /);
+    expect(row("Cloud session credits")).toHaveTextContent(/30% used · expires /);
     const other = screen.getByText("Other plan limit");
     expect(other).toHaveAttribute("data-tooltip", "Claude reports this limit as “walrus_monocle”.");
-    expect(other.closest("p")).toHaveTextContent("Other plan limit: 5% used");
+    expect(row("Other plan limit")).toHaveTextContent("Other plan limit5% used");
+    // Each limit draws the same meter as AI providers, filled to its share.
+    const fills = [...view.container.querySelectorAll<HTMLElement>(".backend-status-list__meter i")];
+    expect(fills.map((fill) => fill.style.width)).toEqual(["40%", "30%", "5%"]);
     expect(screen.queryByText(/walrus monocle/)).not.toBeInTheDocument();
   });
 });

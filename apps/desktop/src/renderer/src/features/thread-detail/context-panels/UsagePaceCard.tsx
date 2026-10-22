@@ -13,6 +13,7 @@ import {
   usageWhen,
 } from "../../federation-activity/usage-activity-presentation";
 import { useLocalUsagePace, usagePaceAccountKey, usagePaceRefreshKey } from "../../federation-activity/useLocalUsagePace";
+import { RateLimitRow } from "./RateLimitRow";
 
 type UsagePaceCardProps = {
   desktopApi?: Pick<DesktopApi, "openUsageActivity" | "readUsageActivity">;
@@ -170,28 +171,36 @@ function PaceSpark({ series, start, end, now, projection, short }: {
   );
 }
 
-/** Claude limits come from its CLI, never from the local Codex account. */
+/**
+ * Claude limits come from its CLI, never from the local Codex account. Only
+ * Codex records a limit history, so Claude gets AI providers' meters rather
+ * than the pace chart.
+ */
 export function ClaudeUsageLimits({ backend }: { backend?: BackendSummary }) {
   const limits = backend?.rateLimits;
+  const now = Date.now();
   return (
     <section className="rail-summary-card" aria-label="Claude plan limits">
       <span className="rail-summary-card__eyebrow">Claude plan limits</span>
-      {limits?.length ? limits.map((limit) => (
-        <p key={limit.limitId ?? limit.name}>
-          {limit.limitName ? (
-            <span className="tooltip-target" data-tooltip={`Claude reports this limit as “${limit.limitName}”.`}>
-              {limit.name}
-            </span>
-          ) : limit.name}
-          : <strong>{usagePercent(limit.usedPercent ?? 0)}% used</strong>
-          {limit.resetAt !== undefined
-            ? ` · ${limit.expires ? "Expires" : "Resets"} ${usageWhen(limit.resetAt, Date.now(), true)}`
-            : ""}
-        </p>
-      )) : <p>{backend?.claude?.authMethod === "api-key"
-        ? "API-key usage has no Claude subscription limit."
-        : "Claude has not reported plan limits. They refresh when a turn starts and ends."}</p>}
-      <p>Costs are provider estimates, not subscription charges.</p>
+      {limits?.length ? (
+        <dl className="backend-status-list__metadata-grid rail-limit-grid">
+          {limits.map((limit) => (
+            <RateLimitRow
+              key={limit.limitId ?? limit.name}
+              limit={limit}
+              now={now}
+              labelTooltip={limit.limitName ? `Claude reports this limit as “${limit.limitName}”.` : undefined}
+            />
+          ))}
+        </dl>
+      ) : (
+        <div className="rail-summary-card__caption">
+          {backend?.claude?.authMethod === "api-key"
+            ? "API-key usage has no Claude subscription limit."
+            : "Claude has not reported plan limits. They refresh when a turn starts and ends."}
+        </div>
+      )}
+      <div className="rail-summary-card__caption">Costs are provider estimates, not subscription charges.</div>
     </section>
   );
 }
