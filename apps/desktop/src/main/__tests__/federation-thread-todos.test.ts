@@ -68,6 +68,15 @@ describe("federated To-do ownership", () => {
     expect(local.updateReview).not.toHaveBeenCalled();
   });
 
+  it.each(["addressed", "dismissed", "open", "handled"] as const)("routes review status %s and its evidence to the original owner", async (status) => {
+    const { service, local, remoteOperations } = setup();
+    const request = { id: review.id, ...(status !== "handled" ? { itemId: "finding" } : {}), status,
+      note: "Verified the owner-side fix", url: "https://example.com/commit/123" };
+    await service.request("updateReview", { ...request, federationTarget: target });
+    expect(remoteOperations.updateReview).toHaveBeenCalledExactlyOnceWith(request);
+    expect(local.updateReview).not.toHaveBeenCalled();
+  });
+
   it("never falls back to a colliding local record when the owner is unavailable", async () => {
     const local = operations();
     const unavailable = vi.fn(async () => { throw new Error("Peer offline"); });
@@ -84,7 +93,9 @@ describe("federated To-do ownership", () => {
     const service = new FederatedThreadTodoService({ local, onUnavailable,
       remote: async () => { throw new Error("Peer offline"); },
       mountedThreads: async () => [{ target, backend: card.backend, threadId: card.threadId }] });
-    expect((await service.request("listTodos", {})).todos).toEqual([card]);
+    const response = await service.request("listTodos", {});
+    expect(response.todos).toEqual([card]);
+    expect(response.errors).toEqual(["peer: Peer offline"]);
     expect(onUnavailable).toHaveBeenCalledOnce();
   });
 });

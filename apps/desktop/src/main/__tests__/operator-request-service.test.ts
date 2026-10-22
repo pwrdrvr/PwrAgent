@@ -1,4 +1,6 @@
 import fs from "node:fs";
+import { FederatedOperatorRequestService } from "../federation/federation-operator-requests";
+import { projectOperatorItemKey } from "@pwragent/shared";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -183,7 +185,7 @@ describe("OperatorRequestService", () => {
     broadcasts.length = 0;
 
     registry.emit(askedEvent("thread-a", "msg-1"));
-    expect(broadcasts).toEqual([{ reason: "questions" }]);
+    expect(broadcasts).toEqual([{ reason: "questions", backend: "codex", threadId: "thread-a" }]);
     expect(service.list().questions).toEqual([{
       backend: "codex",
       threadId: "thread-a",
@@ -211,6 +213,17 @@ describe("OperatorRequestService", () => {
       .prepare("SELECT status, questions_json FROM operator_async_questions")
       .get() as { status: string; questions_json: string };
     expect(row).toEqual({ status: "dismissed", questions_json: "[]" });
+  });
+
+  it("does not enumerate unrelated question or seen identities in a mounted-thread read", () => {
+    const { registry, service } = createService();
+    service.start();
+    registry.emit(askedEvent("thread-a", "msg-1"));
+    registry.emit(askedEvent("thread-b", "msg-2"));
+    service.markSeen([operatorQuestionItemKey("codex", "thread-a", "msg-1"), operatorQuestionItemKey("codex", "thread-b", "msg-2")]);
+    expect(service.list({ backend: "codex", threadId: "thread-a" })).toMatchObject({
+      questions: [{ threadId: "thread-a" }], seenKeys: [operatorQuestionItemKey("codex", "thread-a", "msg-1")],
+    });
   });
 
   it("restores owner dismissals after service restart, scoped by backend and thread", () => {
@@ -317,6 +330,38 @@ describe("OperatorRequestService write cost", () => {
       });
     } finally {
       service.stop();
+      db.close();
+      delete process.env[SQLITE_WRITE_METRICS_ENV];
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("federates seen marks with one owner commit and no writes for reads or repeated marks", async () => {
+    process.env[SQLITE_WRITE_METRICS_ENV] = "1";
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-federated-seen-budget-"));
+    const db = StateDb.open(path.join(root, "state.db"));
+    const { service } = createService(db);
+    const target = { scope: "remote" as const, instanceId: "owner" };
+    const queue = new FederatedOperatorRequestService({
+      localList: () => { throw new Error("Remote reads must not touch the viewer store"); },
+      localMarkSeen: () => { throw new Error("Remote marks must not touch the viewer store"); },
+      mountedThreads: async () => [],
+      remote: (async (_target, operation, request) => {
+        if (operation === "markSeen") { service.markSeen((request as { keys: string[] }).keys); return; }
+        if (operation === "listPending") return [];
+        return service.list();
+      }) as ConstructorParameters<typeof FederatedOperatorRequestService>[0]["remote"],
+    });
+    try {
+      const keys = ["todo:review:1", "question:codex:thread:message"].map((key) => projectOperatorItemKey(key, target));
+      const { writes } = await measureSqliteWrites(async () => {
+        await queue.markSeen({ keys });
+        await queue.markSeen({ keys });
+        for (let i = 0; i < 50; i += 1) await queue.list({}, target);
+      });
+      expectSqliteWriteBudget({ scenario: "federated-operator-seen", writes,
+        note: "one owner commit for two seen items; a repeated batch and 50 remote reads write nothing; ~0.41 MB/day at 50 batches" });
+    } finally {
       db.close();
       delete process.env[SQLITE_WRITE_METRICS_ENV];
       fs.rmSync(root, { recursive: true, force: true });

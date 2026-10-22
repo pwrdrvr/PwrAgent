@@ -1,10 +1,11 @@
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { NavigationThreadSummary, ThreadTodo, ThreadTodoProject } from "@pwragent/shared";
+import type { NavigationThreadSummary, ThreadReview, ThreadTodo, ThreadTodoProject } from "@pwragent/shared";
 import type { AppServerPendingRequestNotification } from "@pwragent/shared";
 import {
   codexAsyncQuestionItemId,
   threadTodoThreadKey,
+  threadReviewTodo,
   operatorTodoItemKey,
   parseCodexAsyncQuestionReply,
 } from "@pwragent/shared";
@@ -23,6 +24,7 @@ vi.mock("../../../lib/copy-text", () => ({
 
 afterEach(() => {
   cleanup();
+  delete (window as unknown as { pwragent?: unknown }).pwragent;
   vi.useRealTimers();
   vi.mocked(copyText).mockClear();
 });
@@ -78,6 +80,33 @@ function createView(open: ThreadTodo[], overrides: Partial<ThreadTodosView> = {}
 }
 
 describe("ThreadTodoStack", () => {
+  it("keeps remote review fixes pending until the owner accepts them and retains selection on refusal", async () => {
+    const federationTarget = { scope: "remote" as const, instanceId: "owner" };
+    const review: ThreadReview = {
+      id: "review", backend: "codex", threadId: "thread-a", sourceKey: "artifact",
+      title: "Review", status: "open", createdAt: 1, updatedAt: 1, federationTarget,
+      items: [{ id: "finding", title: "Repair cancellation", status: "open", createdAt: 1, updatedAt: 1 }],
+    };
+    Object.assign(window, { pwragent: {
+      listThreadReviews: vi.fn(async () => ({ reviews: [review] })),
+      onThreadTodosChanged: () => () => {},
+    } });
+    let settle!: (accepted: boolean) => void;
+    const onDoHere = vi.fn(() => new Promise<boolean>((resolve) => { settle = resolve; }));
+    const card = threadReviewTodo(review);
+    render(<ThreadTodoStack threadKey={threadTodoThreadKey(card)} todos={[card]}
+      view={createView([card])} onStartReview={vi.fn()} onDoHere={onDoHere} />);
+    const select = await screen.findByRole("button", { name: "Select finding: Repair cancellation" });
+    fireEvent.click(select);
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /Fix 1 selected/ })); });
+    expect(onDoHere).toHaveBeenCalledTimes(1);
+    expect(select.getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: /Sending/ }).hasAttribute("disabled")).toBe(true);
+    await act(async () => settle(false));
+    expect(select.getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: /Fix 1 selected/ }).hasAttribute("disabled")).toBe(false);
+  });
+
   it("pages through this thread's cards", () => {
     const todos = [todo({ id: "1" }), todo({ id: "2" }), todo({ id: "3" })];
     render(
@@ -535,6 +564,23 @@ describe("thread to-do checklists", () => {
     expect(view.resolve).toHaveBeenCalledWith(card, "done", undefined, undefined);
   });
 
+  it("reports a failed resolved-queue read", async () => {
+    const view = createView([], { listResolved: vi.fn(async () => { throw new Error("Owner disconnected"); }) });
+    render(<ThreadTodosPanel view={view} threadKey="remote:owner:codex:thread-a" onStartReview={vi.fn()} />);
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Resolved" })); });
+    expect(screen.getByRole("alert").textContent).toContain("Owner disconnected");
+  });
+
+  it("shows a rejected owner action without hiding the card", async () => {
+    const card = todo({ id: "remote-todo:owner:card", title: "Ship it", federationTarget: { scope: "remote", instanceId: "owner" } });
+    const view = createView([card], { resolve: vi.fn(async () => { throw new Error("Owner disconnected"); }) });
+    render(<ThreadTodoStack threadKey={threadTodoThreadKey(card)} todos={[card]} view={view} onStartReview={vi.fn()} />);
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Dismiss to-do: Ship it" })); });
+    expect(screen.getByRole("status").textContent).toContain("Owner disconnected");
+    expect(screen.getByRole("heading", { name: "Ship it" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
+  });
+
   it("dismisses a card with open steps without asking", async () => {
     const card = todo({ id: "k4", title: "Ship it", items: steps([false]) });
     const view = createView([card]);
@@ -986,16 +1032,17 @@ describe("federated To-do project scope", () => {
     ];
     const wait: OperatorWait = { key: "local-wait", kind: "question", backend: "codex", threadId: "wait-thread",
       threadKey: "codex:wait-thread", title: "Local question", createdAt: 1 };
-    const view = createView(cards, { waits: [wait], threadProjectForKey: () => AGENT });
+    const peerWait = { ...wait, key: "peer-wait", threadKey: "remote:peer:codex:wait-thread", title: "Peer question", federationTarget: peer };
+    const view = createView(cards, { waits: [wait, peerWait], threadProjectForKey: () => AGENT });
     render(<ThreadTodosPanel view={view} threadKey={projectOwner ? "remote:peer:codex:thread-a" : "codex:thread-a"}
       projectKey={AGENT.key} projectOwner={projectOwner} onStartReview={vi.fn()} />);
     fireEvent.click(screen.getByRole("tab", { name: /^Project,/ }));
-    expect(screen.getByRole("tab", { name: projectOwner ? /^Project, 2 open/ : /^Project, 3 open/ })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: /^Project, 3 open/ })).toBeTruthy();
     expect(screen.queryByText("Other source")).toBeNull();
-    for (const title of projectOwner ? ["Peer source", "Peer target"] : ["Local source", "Local target", "Local question"]) {
+    for (const title of projectOwner ? ["Peer source", "Peer target", "Peer question"] : ["Local source", "Local target", "Local question"]) {
       expect(screen.getByText(title)).toBeTruthy();
     }
-    for (const title of projectOwner ? ["Local source", "Local target", "Local question"] : ["Peer source", "Peer target"]) {
+    for (const title of projectOwner ? ["Local source", "Local target", "Local question"] : ["Peer source", "Peer target", "Peer question"]) {
       expect(screen.queryByText(title)).toBeNull();
     }
     expect(cards.every((card) => card.sourceProject?.key === AGENT.key || card.targetProject?.key === AGENT.key)).toBe(true);

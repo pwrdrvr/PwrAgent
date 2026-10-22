@@ -1,11 +1,15 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildFederatedThreadRef, type NavigationThreadSummary, type OperatorQuestionThreadRequest,
+import type { ComposerProps } from "../../composer/Composer";
+import type { ThreadTodosView } from "../../thread-todos/thread-todos-view";
+import { buildFederatedThreadRef, threadTodoThreadKey, type ThreadTodo, type NavigationThreadSummary, type OperatorQuestionThreadRequest,
   type OperatorRequestsChangedEvent } from "@pwragent/shared";
 import { useIntegratedTerminals } from "../../../lib/useIntegratedTerminals";
 import { ThreadView, type ThreadViewProps } from "../ThreadView";
 
+const composer = vi.hoisted(() => ({ current: undefined as ComposerProps | undefined }));
+vi.mock("../../composer/Composer", () => ({ Composer: (props: ComposerProps) => { composer.current = props; return null; } }));
 afterEach(cleanup);
 
 const target = { scope: "remote" as const, instanceId: "owner" };
@@ -43,6 +47,27 @@ function View(props: Partial<Omit<ThreadViewProps, "terminals">>) {
 }
 
 describe("question dismissal ownership", () => {
+  it("resolves the original remote review task when acceptance arrives after switching owners", async () => {
+    const todo: ThreadTodo = { id: "remote-todo:owner:review-task", backend: "codex", threadId: thread.id,
+      federationTarget: target, title: "Review changes", kind: "review", status: "open", createdAt: 1, updatedAt: 1,
+      action: { type: "start_review" } };
+    const resolve = vi.fn(async () => undefined);
+    const view: ThreadTodosView = {
+      open: [todo], openByThreadKey: new Map([[threadTodoThreadKey(todo), [todo]]]), revision: 0, runningIds: new Set(),
+      instances: [], threadTitle: () => "Example", resolve, run: vi.fn(), setItemChecked: vi.fn(), openThread: vi.fn(), openStartedThread: vi.fn(),
+      waits: [], waitsByThreadKey: new Map(), seenKeys: new Set(), markSeen: vi.fn(), respond: vi.fn(), dismissQuestion: vi.fn(),
+      dismissedQuestionKeys: new Set(), openWait: vi.fn(), threadTitleForKey: () => "Example", threadProjectForKey: () => undefined,
+    };
+    const mounted = render(<View threadTodos={view} />);
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+    const request = composer.current!.reviewRequest!;
+    expect(request.federationTarget).toEqual(target);
+    expect(resolve).not.toHaveBeenCalled();
+    mounted.rerender(<View threadTodos={view} selectedThread={{ ...thread, federation: undefined }} />);
+    await act(async () => composer.current!.onReviewStarted!(threadTodoThreadKey(todo), request.id));
+    expect(resolve).toHaveBeenCalledExactlyOnceWith(todo, "done", undefined, undefined);
+  });
+
   it.each([undefined, "active-turn"])("sends a remote dismissal to its owner during turn %s", async (activeTurnId) => {
     const dismissOperatorQuestion = vi.fn(async () => {});
     render(<View activeTurnId={activeTurnId} desktopApi={{ dismissOperatorQuestion }} />);

@@ -656,13 +656,12 @@ export function registerAgentIpcHandlers(): void {
     },
   );
 
-  // Local only: the To-dos panel lists this instance's threads, so a reply
-  // through here never has a peer to forward to.
+  // The owner FIFO decides whether an offscreen reply starts, steers or queues.
   ipcMain.removeHandler(AGENT_SUBMIT_THREAD_REPLY_CHANNEL);
   ipcMain.handle(
     AGENT_SUBMIT_THREAD_REPLY_CHANNEL,
     async (
-      _event,
+      event,
       request: SubmitThreadReplyRequest,
     ): Promise<SubmitThreadReplyResponse> => {
       logDebug("submitThreadReply", {
@@ -671,6 +670,9 @@ export function registerAgentIpcHandlers(): void {
         ...summarizeTurnInput(request.input),
       });
       try {
+        const { federationTarget, ...local } = request;
+        const target = federationTarget ?? federationTargetForChannelSubscriber(event.sender);
+        if (target) return await getDesktopFederationRuntime().requestOperatorQuestionOperation(target, "reply", local);
         const submitted = await registry.submitThreadReply({
           backend: request.backend,
           threadId: request.threadId,

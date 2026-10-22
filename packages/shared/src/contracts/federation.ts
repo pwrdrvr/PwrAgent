@@ -53,6 +53,7 @@ export const FEDERATION_CAPABILITIES = [
   "thread_todos",
   /** Owner-persisted async question dismissals and change notifications. */
   "operator_questions",
+  "operator_requests",
 ] as const;
 
 export const FEDERATION_SHUTDOWN_METHOD = "federation/shutdown";

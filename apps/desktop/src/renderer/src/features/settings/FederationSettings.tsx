@@ -1886,6 +1886,7 @@ const FEDERATION_CAPABILITY_LABELS: Record<FederationCapability, string> = {
   shutdown_notice: "receive shutdown notices",
   navigation_directory_set_events: "announce directory changes",
   thread_todos: "To-dos and tracked reviews",
+  operator_requests: "operator request queue",
   operator_questions: "dismiss async questions",
   thread_mcp_connections: "Thread MCP connections",
   turn_queue_reorder: "reorder queued messages",

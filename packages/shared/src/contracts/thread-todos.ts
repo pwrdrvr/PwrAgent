@@ -255,6 +255,7 @@ export type ListThreadTodosRequest = {
 };
 
 export type ListThreadTodosResponse = {
+  errors?: string[];
   todos: ThreadTodo[];
   /** What a merge card's primary button does, so its label can say so. */
   mergeMethods?: ThreadTodoMergeMethodPreferences;

@@ -109,15 +109,13 @@ export function ThreadMetaChips({
   // the Star Map layer would paint over one anyway.
   const draftTooltip = useViewportTooltip({ className: "viewport-tooltip" });
   const todoTooltip = useViewportTooltip({ className: "viewport-tooltip" });
-  const itemThreadKey = thread.federation ? "" : threadSummaryIdentityKey(thread);
+  const itemThreadKey = threadSummaryIdentityKey(thread);
   const openTodos = useThreadTodosForKey(itemThreadKey);
   const waitTooltip = useViewportTooltip({ className: "viewport-tooltip" });
-  // This window's list of what threads wait on. A peer's window has none, and
-  // a peer's thread is answered on the peer. Whenever the list names nothing
-  // for a thread (a peer's, or before the first list arrives), the session's
-  // own approval and input flags still show.
+  // Queue entries carry the same owner identity as navigation. The session's
+  // own approval and input flags still show when the queue has no matching wait.
   const waitsContext = useOperatorWaitsContext();
-  const waitsKnown = Boolean(waitsContext) && !thread.federation;
+  const waitsKnown = Boolean(waitsContext);
   const waits = waitsKnown
     ? waitsContext?.waitsByThreadKey.get(itemThreadKey) ?? NO_WAITS
     : NO_WAITS;

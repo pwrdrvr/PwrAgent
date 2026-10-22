@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentEvent, OperatorRequestsChangedEvent } from "@pwragent/shared";
 import {
   OPERATOR_QUESTIONS_LIST_DISMISSED_CHANNEL, OPERATOR_REQUESTS_CHANGED_EVENT_CHANNEL,
-  OPERATOR_REQUESTS_DISMISS_QUESTION_CHANNEL,
+  OPERATOR_REQUESTS_DISMISS_QUESTION_CHANNEL, OPERATOR_REQUESTS_LIST_CHANNEL, OPERATOR_REQUESTS_MARK_SEEN_CHANNEL,
 } from "../../shared/ipc";
 
 const fixture = vi.hoisted(() => {
@@ -13,7 +13,7 @@ const fixture = vi.hoisted(() => {
       target, isDestroyed: () => false, send: vi.fn(),
     })),
     handlers: new Map<string, (event: unknown, request: unknown) => Promise<unknown>>(),
-    remote: vi.fn(async () => ["question-1"]), publish: vi.fn(), localDismiss: vi.fn(), localList: vi.fn(() => []),
+    remote: vi.fn(async (..._args: unknown[]): Promise<unknown> => ["question-1"]), publish: vi.fn(), localDismiss: vi.fn(), localList: vi.fn(() => []),
     broadcast: undefined as ((event: OperatorRequestsChangedEvent) => void) | undefined,
     remoteListener: undefined as ((event: AgentEvent) => void) | undefined,
     peerListener: undefined as (() => void) | undefined,
@@ -25,6 +25,7 @@ vi.mock("electron", () => ({ ipcMain: {
   handle: (channel: string, handler: (event: unknown, request: unknown) => Promise<unknown>) => fixture.handlers.set(channel, handler),
 } }));
 vi.mock("../app-server/backend-registry", () => ({ getDesktopBackendRegistry: () => ({}) }));
+vi.mock("../app-server/desktop-overlay-store", () => ({ getDesktopOverlayStore: () => ({ listRemoteThreadPins: async () => [] }) }));
 vi.mock("../state/app-state", () => ({ getAppStateDb: () => ({}) }));
 vi.mock("../operator-requests/operator-request-store", () => ({ OperatorRequestStore: class {} }));
 vi.mock("../operator-requests/operator-request-service", () => ({ OperatorRequestService: class {
@@ -37,7 +38,7 @@ vi.mock("../operator-requests/operator-request-runtime", () => ({
   localOperatorQuestionOperations: { dismiss: fixture.localDismiss, listDismissed: fixture.localList },
 }));
 vi.mock("../federation/federation-runtime", () => ({ getDesktopFederationRuntime: () => ({
-  requestOperatorQuestionOperation: fixture.remote, publishOperatorQuestionsChanged: fixture.publish,
+  requestOperatorQuestionOperation: fixture.remote, publishOperatorQuestionsChanged: fixture.publish, publishOperatorRequestsChanged: vi.fn(),
   onRemoteBackendEvent: (listener: (event: AgentEvent) => void) => { fixture.remoteListener = listener; return () => {}; },
   onPeerStatusChanged: (listener: () => void) => { fixture.peerListener = listener; return () => {}; },
 }) }));
@@ -64,6 +65,20 @@ describe("operator question IPC ownership", () => {
     expect(response).toEqual(["question-1"]);
     expect(fixture.remote).toHaveBeenLastCalledWith(fixture.target, "listDismissed", question);
     expect(fixture.localList).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])("routes queue reads and seen marks through IPC to the owner (remote window=%s)", async (remoteWindow) => {
+    const sender = fixture.windows[remoteWindow ? 1 : 0];
+    fixture.remote.mockImplementationOnce(async () => ({ serverRequests: [], questions: [], seenKeys: ["todo:card"] }))
+      .mockImplementationOnce(async () => []);
+    const request = remoteWindow ? {} : { federationTarget: fixture.target };
+    await expect(fixture.handlers.get(OPERATOR_REQUESTS_LIST_CHANNEL)!({ sender }, request)).resolves.toEqual({
+      serverRequests: [], questions: [], seenKeys: ["remote-operator:owner:todo%3Acard"],
+    });
+    expect(fixture.remote).toHaveBeenCalledWith(fixture.target, "list", {});
+    expect(fixture.remote).toHaveBeenCalledWith(fixture.target, "listPending", {});
+    await fixture.handlers.get(OPERATOR_REQUESTS_MARK_SEEN_CHANNEL)!({ sender }, { keys: ["remote-operator:owner:todo%3Acard"] });
+    expect(fixture.remote).toHaveBeenLastCalledWith(fixture.target, "markSeen", { keys: ["todo:card"] });
   });
 
   it("never falls back to a colliding local question after an owner rejects the request", async () => {
