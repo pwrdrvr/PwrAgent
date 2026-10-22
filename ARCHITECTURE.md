@@ -54,6 +54,15 @@ No overlay is written to the selected Codex home. Existing per-thread protocol
 settings still override process defaults; overlays do not migrate saved thread
 model selections or add model capability metadata.
 
+Ephemeral Codex helpers share that App Server with interactive threads. Title
+and structured-object generation (including data-only Token Miser helpers) and
+Star Map intake compose their existing `thread/start.config` with
+`features.hooks = false` and `notify = []` on both primary and legacy attempts.
+The composer preserves the rest of each feature table and the helper's MCP and
+execution restrictions. Ordinary start, resume, and fork requests retain their
+configured hooks and notifications, including user-facing Agent/manager threads
+and automation coding threads. Helper policy is scoped to the helper request.
+
 Overlay changes enter the existing provider fingerprint/invalidation path and
 reconnect Codex at an idle boundary, then resolve the current overlay again.
 Invalid edits retain the config store's last-known-good snapshot; a cold start
