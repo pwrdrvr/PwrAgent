@@ -101,7 +101,7 @@ import { requestShowThread } from "../window-show-thread";
 import { toTranscriptImageProtocolUrl } from "../transcript-image-protocol";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import type { AcpMcpServerRegistration } from "../acp/acp-client";
-import { MCP_CONNECTION_TOOL_TIMEOUT_SECONDS } from "../mcp-connections/mcp-connection-timeouts";
+import { MCP_CONNECTION_STARTUP_TIMEOUT_SECONDS, MCP_CONNECTION_TOOL_TIMEOUT_SECONDS } from "../mcp-connections/mcp-connection-timeouts";
 import {
   getMcpConnectionGatewayService,
   type McpConnectionBridgeRegistration,
@@ -7850,6 +7850,7 @@ export function buildCodexConnectionMcpConfig(
               command: server.command,
               args: server.args,
               env: server.env,
+              startup_timeout_sec: MCP_CONNECTION_STARTUP_TIMEOUT_SECONDS,
               tool_timeout_sec: MCP_CONNECTION_TOOL_TIMEOUT_SECONDS,
             },
           ] as const,

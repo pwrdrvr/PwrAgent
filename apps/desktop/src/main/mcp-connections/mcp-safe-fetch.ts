@@ -1,9 +1,14 @@
+import { randomUUID } from "node:crypto";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { getMainLogger } from "../log";
+import { discoveryFailure, mcpDiscoveryContext, mcpDiscoveryPhaseContext } from "./mcp-discovery";
 
 const MAX_REDIRECTS = 5;
+const log = getMainLogger("pwragent:mcp-connections");
 
 export type McpSafeFetchOptions = {
   fetchFn?: FetchLike;
+  connectionId?: string;
 };
 
 export function createMcpSafeFetch(options: McpSafeFetchOptions = {}): FetchLike {
@@ -13,7 +18,29 @@ export function createMcpSafeFetch(options: McpSafeFetchOptions = {}): FetchLike
     let requestInit = { ...init, redirect: "manual" as const };
     for (let redirectCount = 0; redirectCount <= MAX_REDIRECTS; redirectCount += 1) {
       validateOutboundUrl(url);
-      const response = await fetchFn(url, requestInit);
+      const startedAt = Date.now();
+      const fields = {
+        connectionId: options.connectionId,
+        requestId: randomUUID(),
+        discoveryId: mcpDiscoveryContext.getStore()?.id,
+        ...mcpDiscoveryPhaseContext.getStore(),
+        method: (requestInit.method ?? "GET").toUpperCase(),
+        endpoint: diagnosticEndpoint(url),
+        redirectCount,
+      };
+      if (options.connectionId) log.info("MCP HTTP request started", fields);
+      let response: Response;
+      try {
+        response = await fetchFn(url, requestInit);
+      } catch (error) {
+        if (options.connectionId) log.warn("MCP HTTP request failed before response headers", {
+          ...fields, elapsedMs: Date.now() - startedAt, ...discoveryFailure(error, requestInit.signal ?? undefined),
+        });
+        throw error;
+      }
+      if (options.connectionId) log.info("MCP HTTP response headers received", {
+        ...fields, status: response.status, elapsedMs: Date.now() - startedAt,
+      });
       if (!isRedirect(response.status)) {
         return await sanitizeHtmlResponse(response, url);
       }
@@ -53,6 +80,14 @@ export function createMcpSafeFetch(options: McpSafeFetchOptions = {}): FetchLike
     }
     throw new Error("The MCP server redirect could not be completed.");
   };
+}
+
+/** Identify the route without credentials, query values or fragments. */
+function diagnosticEndpoint(url: URL): string {
+  const pathname = url.pathname
+    .replace(/(\/(?:tokens?|secrets?|api[_-]?keys?|passwords?|bearer)\/)[^/]+/gi, "$1[redacted]")
+    .replace(/[^/]{32,}/g, "[redacted]");
+  return `${url.origin}${pathname}`;
 }
 
 async function sanitizeHtmlResponse(response: Response, url: URL): Promise<Response> {

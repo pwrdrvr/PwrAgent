@@ -103,6 +103,36 @@ changes, disabling and disconnecting. Duplicate names within one server and
 repeated or incomplete pagination are rejected. Identical tool names on
 different connections remain distinct.
 
+Discovery has one 60-second allowance for registration, remote initialization
+and all catalog pages. Settings uses the same allowance. The local RPC and
+search safety timers allow one additional second to deliver the owner's phase
+error; that second does not extend upstream work. Native Codex bridges set
+`startup_timeout_sec` to 75 for process overhead and preserve the discovery
+deadline from initialization through the initial catalog and its cursors.
+Tool execution keeps its separate 12-minute allowance.
+
+Initialization and token refresh are shared only while they have waiters.
+Cancelling one waiter leaves siblings running; losing the last waiter aborts
+the unfinished start and removes it before a retry. Discovery POSTs receive the
+request's abort signal even with SDK v1's session-wide transport signal.
+Successful sessions remain available to sibling requests after a list timeout.
+
+Phase logs include a discovery ID, elapsed time and catalog page number.
+HTTP logs identify each physical request's method and origin/path before
+sending it, then record status and elapsed time when response headers arrive.
+Query strings, fragments, credential-like path segments and long opaque path
+segments are omitted or redacted. Redirect hops are logged at their actual
+destinations. A failure before headers has a separate event; these logs do not
+record header contents or request/response bodies.
+Initialization join events connect caller IDs to shared start IDs. RPCs carry
+the caller discovery ID, and owner logs include the thread scope. Failures
+distinguish local deadlines, cancellation, SDK timeouts, authorization, HTTP
+status, already-sent-header errors and network error codes. Upstream response bodies, messages, headers and
+payloads are excluded. Connection status reports in-memory catalog health and
+last successful/failed discovery separately from stored authorization. A newer
+gateway failure overrides an older catalog retained in Settings. Healthy search
+results survive another connection's discovery failure.
+
 Selection changes, turn termination and shutdown cancel outstanding gateway
 work. MCP request cancellation propagates through the local socket to the
 upstream SDK signal without closing healthy sibling calls. Disabling or

@@ -1,5 +1,6 @@
 import type {
   CodexMcpServerSummary,
+  McpConnectionStatus,
   McpConnectionSetupSummary,
 } from "@pwragent/shared";
 
@@ -106,6 +107,16 @@ export type ManagedMcpToolInventory =
   | { status: "failed"; error: string }
   /** This build cannot ask. Saying "reading tools" would never end. */
   | { status: "unavailable" };
+
+/** A newer gateway failure outranks a catalog retained by an open Settings pane. */
+export function reconcileManagedMcpInventory(
+  inventory: ManagedMcpToolInventory | undefined,
+  discovery: McpConnectionStatus["discovery"],
+): ManagedMcpToolInventory | undefined {
+  if (discovery?.state !== "failed" || !discovery.lastFailure || inventory?.status === "loading") return inventory;
+  if (inventory?.status === "loaded" && inventory.fetchedAt >= discovery.lastFailure.at) return inventory;
+  return { status: "failed", error: discovery.lastFailure.message };
+}
 
 /**
  * A managed connection's health, in the Codex list's vocabulary.

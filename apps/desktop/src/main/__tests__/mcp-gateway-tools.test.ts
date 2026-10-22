@@ -122,7 +122,7 @@ describe("fixed MCP gateway tools", () => {
     const searching = f.service.search({ query: "lookup", limit: 5 }, context);
     try {
       await vi.waitFor(() => expect(f.requestGatewayToolOperation).toHaveBeenCalledTimes(4));
-      expect(timeout).toHaveBeenCalledWith(60_000);
+      expect(timeout).toHaveBeenCalledWith(61_000);
       expect(f.requestGatewayToolOperation.mock.calls.map(([call]) => call.connectionId))
         .toEqual(["one", "two", "three", "four"]);
       releaseFirst();
@@ -136,6 +136,22 @@ describe("fixed MCP gateway tools", () => {
     expect(f.requestGatewayToolOperation).toHaveBeenCalledTimes(6);
     expect(result.tools).toHaveLength(5);
     expect(result.unavailable).toEqual([{ connectionId: "two", message: "Fixture server unavailable." }]);
+  });
+
+  it("preserves healthy results when another connection exhausts discovery", async () => {
+    const f = fixture();
+    f.selected.set("thread-a", ["one", "stalled"]);
+    const startedAt = Date.now();
+    f.requestGatewayToolOperation.mockImplementation(async ({ connectionId, deadlineAt, signal }) => {
+      expect(deadlineAt).toBeGreaterThanOrEqual(startedAt + 60_000);
+      expect(deadlineAt).toBeLessThanOrEqual(Date.now() + 60_000);
+      expect(signal.aborted).toBe(false);
+      if (connectionId === "one") return [tool()];
+      throw new McpError(-32000, "stalled: initialize — discovery deadline expired (discovery fixture).");
+    });
+    const result = await f.service.search({ query: "lookup" }, context);
+    expect(result.tools).toMatchObject([{ connectionId: "one" }]);
+    expect(result.unavailable).toEqual([{ connectionId: "stalled", message: expect.stringContaining("initialize — discovery deadline expired") }]);
   });
 
   it("rejects stale schemas, invalid arguments and denied approvals before dispatch", async () => {

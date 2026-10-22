@@ -1,10 +1,82 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { McpDiscovery } from "../mcp-connections/mcp-discovery";
 import { createMcpSafeFetch } from "../mcp-connections/mcp-safe-fetch";
 import { parseErrorResponse } from "@modelcontextprotocol/sdk/client/auth.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 
+const logs = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn() }));
+vi.mock("../log", () => ({ getMainLogger: () => logs }));
+afterEach(() => { vi.clearAllMocks(); vi.restoreAllMocks(); });
+
 describe("createMcpSafeFetch", () => {
+  it("logs the endpoint before dispatch and measures the wait for response headers", async () => {
+    let respond!: (response: Response) => void;
+    const response = new Promise<Response>((resolve) => { respond = resolve; });
+    let now = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const safeFetch = createMcpSafeFetch({ connectionId: "atlassian-fixture", fetchFn: async () => await response });
+    const request = safeFetch("https://mcp.example.com/v1/mcp?access_token=private-query#private-fragment", {
+      method: "POST", headers: { authorization: "Bearer private-header" }, body: "private-payload",
+    });
+    expect(logs.info).toHaveBeenCalledExactlyOnceWith("MCP HTTP request started", expect.objectContaining({
+      connectionId: "atlassian-fixture", method: "POST", endpoint: "https://mcp.example.com/v1/mcp", requestId: expect.any(String),
+    }));
+    now += 35_000;
+    respond(new Response("private-upstream-body", { status: 503 }));
+    expect((await request).status).toBe(503);
+    expect(logs.info).toHaveBeenLastCalledWith("MCP HTTP response headers received", expect.objectContaining({
+      endpoint: "https://mcp.example.com/v1/mcp", status: 503, elapsedMs: 35_000,
+      requestId: logs.info.mock.calls[0][1].requestId,
+    }));
+    expect(JSON.stringify(logs.info.mock.calls)).not.toContain("private-");
+  });
+
+  it("correlates physical requests with their discovery phase and page", async () => {
+    const discovery = new McpDiscovery("fixture", Date.now() + 60_000);
+    try {
+      await discovery.phase("tools/list", async () => await createMcpSafeFetch({
+        connectionId: "fixture", fetchFn: async () => new Response("ok"),
+      })("https://mcp.example.com/mcp"), 2);
+      expect(logs.info).toHaveBeenCalledWith("MCP HTTP request started", expect.objectContaining({
+        discoveryId: discovery.id, phase: "tools/list", page: 2,
+      }));
+    } finally {
+      discovery.close();
+    }
+  });
+
+  it("records actual redirect destinations and sanitizes credential path segments", async () => {
+    const fetchFn = vi.fn()
+      .mockResolvedValueOnce(new Response(null, { status: 302, headers: { location: "https://auth.example.com/token/private-path?code=private-code" } }))
+      .mockResolvedValueOnce(new Response("ok"));
+    await createMcpSafeFetch({ connectionId: "fixture", fetchFn })("https://mcp.example.com/metadata");
+    expect(logs.info).toHaveBeenCalledWith("MCP HTTP request started", expect.objectContaining({
+      endpoint: "https://auth.example.com/token/[redacted]", redirectCount: 1,
+    }));
+    expect(JSON.stringify(logs.info.mock.calls)).not.toContain("private-");
+  });
+
+  it("distinguishes a failure before response headers without logging its message", async () => {
+    const fetchFn = vi.fn(async () => { throw new TypeError("private-upstream-message", { cause: { code: "ECONNRESET" } }); });
+    await expect(createMcpSafeFetch({ connectionId: "fixture", fetchFn })("https://mcp.example.com/mcp"))
+      .rejects.toThrow("private-upstream-message");
+    expect(logs.warn).toHaveBeenCalledWith("MCP HTTP request failed before response headers", expect.objectContaining({
+      endpoint: "https://mcp.example.com/mcp", kind: "upstream_network", networkCode: "ECONNRESET",
+    }));
+    expect(JSON.stringify(logs.warn.mock.calls)).not.toContain("private-");
+  });
+
+  it("preserves an already-sent-headers code separately from connection failures", async () => {
+    const fetchFn = vi.fn(async () => { throw Object.assign(new Error("private-header-error"), { code: "ERR_HTTP_HEADERS_SENT" }); });
+    await expect(createMcpSafeFetch({ connectionId: "fixture", fetchFn })("https://mcp.example.com/mcp"))
+      .rejects.toThrow("private-header-error");
+    expect(logs.warn).toHaveBeenCalledWith("MCP HTTP request failed before response headers", expect.objectContaining({
+      kind: "headers_sent", transportCode: "ERR_HTTP_HEADERS_SENT",
+    }));
+    expect(JSON.stringify(logs.warn.mock.calls)).not.toContain("private-header-error");
+  });
+
   it("keeps Cloudflare challenge HTML out of SDK OAuth errors", async () => {
     const response = new Response("<!DOCTYPE html><script>private-challenge</script>", {
       status: 403,

@@ -167,7 +167,7 @@ describe("MCP connection owner broker", () => {
         backend: "codex", threadId: "thread", turnId: "turn", callId: "call", transport: "codex_dynamic_tool",
       }).catch((error: unknown) => { failure = error; });
       await vi.waitFor(() => expect(receivedRegistration).toBe(true));
-      expect(timeout).toHaveBeenCalledWith(MCP_GATEWAY_TOOL_SEARCH_TIMEOUT_MS);
+      expect(timeout).toHaveBeenCalledWith(MCP_GATEWAY_TOOL_SEARCH_TIMEOUT_MS + 1_000);
       if (reason === "deadline") deadline.abort(new DOMException("Discovery timed out.", "TimeoutError"));
       else gateway.cancel("codex", "thread", "turn");
       await vi.waitFor(() => {

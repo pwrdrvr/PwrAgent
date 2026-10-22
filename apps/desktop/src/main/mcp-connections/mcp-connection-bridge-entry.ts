@@ -10,6 +10,7 @@ import {
   ReadResourceRequestSchema,
   type ServerCapabilities,
 } from "@modelcontextprotocol/sdk/types.js";
+import { MCP_CONNECTION_TOOL_LIST_TIMEOUT_MS } from "./mcp-connection-timeouts.js";
 import { ConnectionRpcClient } from "./mcp-connection-rpc-client.js";
 
 type BridgeDescription = {
@@ -34,7 +35,8 @@ async function main(): Promise<void> {
     process.exit(1);
   }
   const rpc = new ConnectionRpcClient(socketPath, token);
-  const description = await rpc.request("describe") as BridgeDescription;
+  const startupDeadlineAt = Date.now() + MCP_CONNECTION_TOOL_LIST_TIMEOUT_MS;
+  const description = await rpc.request("describe", undefined, undefined, startupDeadlineAt) as BridgeDescription;
   const capabilities: ServerCapabilities = {
     ...(description.tools ? { tools: {} } : {}),
     ...(description.resources ? { resources: {} } : {}),
@@ -46,32 +48,47 @@ async function main(): Promise<void> {
   );
 
   if (description.tools) {
-    server.setRequestHandler(ListToolsRequestSchema, async (request) =>
-      await rpc.request("tools/list", request.params) as never,
-    );
+    let firstCatalogDeadlineAt: number | undefined = startupDeadlineAt;
+    const pageDeadlines = new Map<string, number>();
+    server.setRequestHandler(ListToolsRequestSchema, async (request, extra) => {
+      const cursor = request.params?.cursor;
+      if (cursor && !pageDeadlines.has(cursor)) throw new Error("MCP catalog cursor expired. Restart discovery.");
+      const deadlineAt = (cursor ? pageDeadlines.get(cursor) : firstCatalogDeadlineAt)
+        ?? Date.now() + MCP_CONNECTION_TOOL_LIST_TIMEOUT_MS;
+      firstCatalogDeadlineAt = undefined;
+      if (cursor) pageDeadlines.delete(cursor);
+      const result = await rpc.request("tools/list", request.params, extra.signal, deadlineAt) as { nextCursor?: string };
+      // Bound abandoned cursor chains without storing catalog contents.
+      for (const [key, deadline] of pageDeadlines) if (deadline <= Date.now()) pageDeadlines.delete(key);
+      if (result.nextCursor) {
+        if (pageDeadlines.size >= 20) throw new Error("Too many incomplete MCP catalog reads. Restart discovery.");
+        pageDeadlines.set(result.nextCursor, deadlineAt);
+      }
+      return result as never;
+    });
     server.setRequestHandler(CallToolRequestSchema, async (request, extra) =>
       await rpc.request("tools/call", request.params, extra.signal) as never,
     );
   }
   if (description.resources) {
-    server.setRequestHandler(ListResourcesRequestSchema, async (request) =>
-      await rpc.request("resources/list", request.params) as never,
+    server.setRequestHandler(ListResourcesRequestSchema, async (request, extra) =>
+      await rpc.request("resources/list", request.params, extra.signal) as never,
     );
     server.setRequestHandler(
       ListResourceTemplatesRequestSchema,
-      async (request) =>
-        await rpc.request("resources/templates/list", request.params) as never,
+      async (request, extra) =>
+        await rpc.request("resources/templates/list", request.params, extra.signal) as never,
     );
-    server.setRequestHandler(ReadResourceRequestSchema, async (request) =>
-      await rpc.request("resources/read", request.params) as never,
+    server.setRequestHandler(ReadResourceRequestSchema, async (request, extra) =>
+      await rpc.request("resources/read", request.params, extra.signal) as never,
     );
   }
   if (description.prompts) {
-    server.setRequestHandler(ListPromptsRequestSchema, async (request) =>
-      await rpc.request("prompts/list", request.params) as never,
+    server.setRequestHandler(ListPromptsRequestSchema, async (request, extra) =>
+      await rpc.request("prompts/list", request.params, extra.signal) as never,
     );
-    server.setRequestHandler(GetPromptRequestSchema, async (request) =>
-      await rpc.request("prompts/get", request.params) as never,
+    server.setRequestHandler(GetPromptRequestSchema, async (request, extra) =>
+      await rpc.request("prompts/get", request.params, extra.signal) as never,
     );
   }
 

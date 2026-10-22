@@ -366,6 +366,51 @@ describe("McpOAuthSessionCoordinator", () => {
     expect(coordinator.state).toBe("ready");
   });
 
+  it.each([false, true])("isolates refresh cancellation and retries after abandonment (cancelAll=%s)", async (cancelAll) => {
+    const { vault, writes } = createVault({
+      resourceUrl: "https://mcp.example.com/mcp",
+      clientInformation: { client_id: "fixture" },
+      tokens: { access_token: "old-access", refresh_token: "old-refresh", token_type: "bearer" },
+    });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const authFn = refreshAuth(async (provider) => {
+      await gate;
+      await provider.saveTokens?.({ access_token: "new-access", token_type: "bearer" });
+      return "AUTHORIZED";
+    });
+    const coordinator = new McpOAuthSessionCoordinator({
+      connectionId: "example", serverUrl: new URL("https://mcp.example.com/mcp"), vault, authFn,
+      fetchFn: async (_url, init) => new Response(null, { status: new Headers(init?.headers).get("authorization") === "Bearer new-access" ? 200 : 401 }),
+    });
+    const first = new AbortController();
+    const second = new AbortController();
+    const fetch = coordinator.authorizedFetch();
+    const one = fetch("https://mcp.example.com/mcp", { signal: first.signal }).catch((error: unknown) => error);
+    const two = fetch("https://mcp.example.com/mcp", { signal: second.signal }).catch((error: unknown) => error);
+    await vi.waitFor(() => expect(authFn).toHaveBeenCalledOnce());
+    first.abort();
+    expect(await one).toMatchObject({ name: "AbortError" });
+    if (cancelAll) {
+      second.abort();
+      expect(await two).toMatchObject({ name: "AbortError" });
+      expect(coordinator.state).toBe("ready");
+    }
+    release();
+    if (cancelAll) {
+      // The abandoned auth implementation resumes late and tries to save a
+      // token. The cancellation guard must reject that commit before retry.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(writes).toHaveLength(0);
+      expect((await fetch("https://mcp.example.com/mcp")).status).toBe(200);
+      expect(authFn).toHaveBeenCalledTimes(2);
+    } else {
+      expect(await two).toMatchObject({ status: 200 });
+      expect(authFn).toHaveBeenCalledOnce();
+    }
+    expect(writes).toHaveLength(1);
+  });
+
   it("retains the prior refresh token when rotation omits a replacement", async () => {
     const { vault, writes } = createVault({
       resourceUrl: "https://mcp.example.com/mcp",

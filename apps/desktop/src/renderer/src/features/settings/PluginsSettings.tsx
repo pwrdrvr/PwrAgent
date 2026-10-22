@@ -44,6 +44,7 @@ import {
   describeMcpServerTools,
   readManagedMcpConnectionHealth,
   readMcpServerHealth,
+  reconcileManagedMcpInventory,
   type ManagedMcpToolInventory,
 } from "./mcp-server-health";
 import { SettingsCopyValue } from "./SettingsCopyValue";
@@ -1877,13 +1878,14 @@ function ManagedMcpConnectionRow(props: {
     ...(localStatus ? { localAvailability: localStatus.availability } : {}),
   });
   const listable = setup.state === "ready" || setup.state === "parked";
-  const { inventory, refresh: refreshTools } = useManagedConnectionTools({
+  const { inventory: fetchedInventory, refresh: refreshTools } = useManagedConnectionTools({
     connectionId: connection.id,
     desktopApi: props.desktopApi,
     identity: `${connection.serverUrl}\n${connection.configured}`,
     listable,
     signIns: props.signIns,
   });
+  const inventory = reconcileManagedMcpInventory(fetchedInventory, connection.discovery);
   const health = readManagedMcpConnectionHealth(setup, inventory);
   const auth = describeMcpConnectionAuth(connection);
   // An app that is missing or not running has nothing to sign in to yet: its
@@ -2531,4 +2533,3 @@ function McpServerRow(props: {
     </article>
   );
 }
-
