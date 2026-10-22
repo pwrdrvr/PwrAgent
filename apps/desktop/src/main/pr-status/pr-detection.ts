@@ -1,8 +1,9 @@
 import type { LinkedDirectorySummary, PrSummary } from "@pwragent/shared";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
-import { resolveForgeReposForDirectory } from "./git-remote";
+import { resolveForgeReposForDirectory, type GitHubRepoRef } from "./git-remote";
 import type { GithubPrFetcher } from "./github-pr-fetcher";
 import { runGitCommand } from "../app-server/git-executable";
+import { prMatchesSourceRepository } from "./pr-source-repository";
 
 const GIT_BRANCH_LOOKUP_TIMEOUT_MS = 2_000;
 const FALLBACK_DEFAULT_BRANCHES = [
@@ -22,6 +23,13 @@ type TrackedRemoteBranch = {
   name: string;
   remote: string;
 };
+
+type StoredDiscoveryContext = { repos: GitHubRepoRef[]; defaults: DefaultBranchInfo };
+// Navigation/federation can canonicalize many threads sharing one checkout.
+// Coalesce their probes and bound both cache age and directory count.
+const storedDiscoveryContexts = new Map<string, { expiresAt: number; pending: Promise<StoredDiscoveryContext> }>();
+const STORED_DISCOVERY_CONTEXT_TTL_MS = 60_000;
+const MAX_STORED_DISCOVERY_CONTEXTS = 256;
 
 /**
  * Detect PRs for a single thread by walking the resolved directory paths that
@@ -53,7 +61,8 @@ export async function detectPullRequestsForThread(params: {
 
   const results = await Promise.all(
     dirs.map(async (cwd) => {
-      if ((await resolveForgeReposForDirectory(cwd)).length === 0) {
+      const repos = await resolveForgeReposForDirectory(cwd);
+      if (repos.length === 0) {
         return [];
       }
       const branches = await resolvePrLookupBranches({ branch, cwd });
@@ -70,7 +79,7 @@ export async function detectPullRequestsForThread(params: {
             }),
         ),
       );
-      return prsByBranch.flat().map((pr) => ({
+      return prsByBranch.flat().filter((pr) => prMatchesSourceRepository(pr, repos)).map((pr) => ({
         ...pr,
         linkedDirectoryPaths: uniqueNonEmpty([
           ...(pr.linkedDirectoryPaths ?? []),
@@ -98,11 +107,16 @@ export async function detectPullRequestsForThread(params: {
   return [...seenByUrl.values()];
 }
 
-async function resolvePrLookupBranches(params: {
+export async function resolvePrLookupBranches(params: {
   branch: string;
   cwd: string;
 }): Promise<string[]> {
   const defaultBranchInfo = await readDefaultBranchInfo(params.cwd);
+  // A timed-out/failed git probe must not turn a default branch into an
+  // eligible head-name lookup against every contributor's fork.
+  if (defaultBranchInfo.remotes.size === 0) return [];
+  if (defaultBranchInfo.names.size === 0
+    && FALLBACK_DEFAULT_BRANCHES.some((branch) => branch === params.branch)) return [];
 
   if (params.branch !== "HEAD") {
     const trackedRemoteBranch = await readTrackedRemoteBranch({
@@ -128,6 +142,54 @@ async function resolvePrLookupBranches(params: {
   }
 
   return [];
+}
+
+/**
+ * Repair legacy automatic attachments before cache hits or history merging can
+ * attach them to another thread. Explicit references remain valid independently
+ * of the checkout's branch or remotes; legacy references without discovery
+ * paths also have no automatic association to invalidate.
+ * Missing checkouts are inconclusive: preserve their history.
+ */
+export async function filterStoredDiscoveredPullRequests(prs: PrSummary[]): Promise<PrSummary[]> {
+  const directories = uniqueNonEmpty(prs.flatMap((pr) => pr.explicitlyAttached ? [] : pr.linkedDirectoryPaths ?? []));
+  if (directories.length === 0) return prs;
+  const contexts = new Map(await Promise.all(directories.map(async (cwd) =>
+    [cwd, await readStoredDiscoveryContext(cwd)] as const,
+  )));
+  return prs.filter((pr) => {
+    if (pr.explicitlyAttached) return true;
+    const paths = uniqueNonEmpty(pr.linkedDirectoryPaths ?? []);
+    return paths.length === 0 || paths.some((cwd) => {
+      const context = contexts.get(cwd)!;
+      if (context.repos.length === 0 || context.defaults.remotes.size === 0) return true;
+      return !context.defaults.names.has(pr.headRefName ?? "")
+        && prMatchesSourceRepository(pr, context.repos);
+    });
+  });
+}
+
+function readStoredDiscoveryContext(cwd: string): Promise<StoredDiscoveryContext> {
+  const cached = storedDiscoveryContexts.get(cwd);
+  if (cached && cached.expiresAt > Date.now()) return cached.pending;
+  const pending = Promise.all([
+    resolveForgeReposForDirectory(cwd),
+    readDefaultBranchInfo(cwd),
+  ]).then(([repos, defaults]) => {
+    // Failed metadata probes are inconclusive, and must be retried rather
+    // than extend the lifetime of a known-invalid attachment.
+    if ((repos.length === 0 || defaults.remotes.size === 0)
+      && storedDiscoveryContexts.get(cwd)?.pending === pending) {
+      storedDiscoveryContexts.delete(cwd);
+    }
+    return { repos, defaults };
+  });
+  storedDiscoveryContexts.delete(cwd);
+  if (storedDiscoveryContexts.size >= MAX_STORED_DISCOVERY_CONTEXTS) {
+    storedDiscoveryContexts.delete(storedDiscoveryContexts.keys().next().value!);
+  }
+  storedDiscoveryContexts.set(cwd, { expiresAt: Date.now() + STORED_DISCOVERY_CONTEXT_TTL_MS, pending });
+  return pending;
 }
 
 async function readTrackedRemoteBranch(params: {

@@ -403,7 +403,11 @@ import { buildMessagingBindingsByThreadKey } from "../messaging/messaging-bindin
 import { getDesktopAutomationService } from "../automations/desktop-automation-service";
 import { GitLabPrFetcher } from "../pr-status/gitlab-pr-fetcher";
 import { ForgePrFetcher, parseForgePrRefFromUrl as parsePrRefFromUrl, type ForgePrRef } from "../pr-status/forge-pr-fetcher";
-import { detectPullRequestsForThread } from "../pr-status/pr-detection";
+import {
+  detectPullRequestsForThread,
+  filterStoredDiscoveredPullRequests,
+  resolvePrLookupBranches,
+} from "../pr-status/pr-detection";
 import {
   GithubGraphqlPrClient,
   branchRefKey,
@@ -1060,6 +1064,7 @@ function associatePrsWithLinkedDirectories(
 function stripPrLinkedDirectoryPaths(pr: PrSummary): PrSummary {
   const normalized = normalizePrSummary(pr);
   delete normalized.linkedDirectoryPaths;
+  delete normalized.explicitlyAttached;
   return normalized;
 }
 
@@ -1188,6 +1193,7 @@ export function prSummariesEqual(left: PrSummary[], right: PrSummary[]): boolean
       candidate.headSha === pr.headSha &&
       JSON.stringify(candidate.linkedDirectoryPaths ?? [])
         === JSON.stringify(pr.linkedDirectoryPaths ?? []) &&
+      candidate.explicitlyAttached === pr.explicitlyAttached &&
       JSON.stringify(candidate.commitShas ?? []) === JSON.stringify(pr.commitShas ?? []) &&
       // Hover-card fields. They belong here for the same reason as every field
       // above: this comparison decides whether a snapshot is republished, so a
@@ -4415,9 +4421,11 @@ class DesktopAppServerService {
     });
     await this.loadPrStatusRegistry();
     await this.loadPrLookupRegistry();
+    const storedPrs = existing?.prs ?? [];
+    const retainedStoredPrs = await filterStoredDiscoveredPullRequests(storedPrs);
     const persistedPrs = this.mergePrHistory(
-      existing?.prs ?? [],
-      existing?.detachedPrs ?? [],
+      retainedStoredPrs,
+      await filterStoredDiscoveredPullRequests(existing?.detachedPrs ?? []),
     );
     this.rememberPrStatuses(
       persistedPrs,
@@ -4437,16 +4445,47 @@ class DesktopAppServerService {
         provider,
         branch,
         directoryPaths: lookupDirectoryPaths,
-        prs: existingPrs,
+        prs: existingPrs.filter((pr) => !pr.explicitlyAttached),
         fetchedAt: existing?.prsFetchedAt ?? 0,
       });
     }
     const lookupEntry = this.prLookupRegistry.get(lookupKey);
-    const currentLookupPrs = lookupEntry
+    const lookupPrs = lookupEntry
       ? this.canonicalizePrs(lookupEntry.prs)
       : existingLookupMatches
         ? existingPrs
         : [];
+    const currentLookupPrs = await filterStoredDiscoveredPullRequests(
+      associatePrsWithLinkedDirectories(lookupPrs, lookupDirectoryPaths),
+    );
+    // Legacy automatic matches may already be in an overlay even though the
+    // current default-branch lookup correctly answers []. Repair before a
+    // cache hit or terminal short-circuit can keep serving those attachments.
+    if (!prSummariesEqual(storedPrs, retainedStoredPrs)) {
+      await this.enqueuePullRequestOverlayWrite({
+        backend,
+        threadId: request.threadId,
+        write: async () => {
+          const latest = await overlay.getThreadOverlayState({ backend, threadId: request.threadId });
+          if (!latest) return;
+          const prs = await filterStoredDiscoveredPullRequests(latest.prs ?? []);
+          if (prSummariesEqual(latest.prs ?? [], prs)) return;
+          const updated = await overlay.setThreadPullRequests({
+            backend,
+            threadId: request.threadId,
+            prs,
+            fetchedAt: latest.prsFetchedAt ?? 0,
+            refreshKey: latest.prsRefreshKey,
+          });
+          await this.publishThreadPullRequestsUpdated({
+            backend,
+            threadId: request.threadId,
+            prs: this.canonicalizePrs(updated.prs ?? []),
+            detachedPrs: this.canonicalizePrs(updated.detachedPrs ?? []),
+          });
+        },
+      });
+    }
     let knownPrs = this.mergePrHistory(existingPrs, currentLookupPrs);
     const visibleKnownPrs = (): PrSummary[] =>
       filterDetachedPullRequests(knownPrs, existing?.detachedPrKeys);
@@ -5013,10 +5052,10 @@ class DesktopAppServerService {
               latest?.prs ?? [],
               latest?.detachedPrs ?? [],
             );
-            const previousPrs = this.mergePrHistory(
+            const previousPrs = await filterStoredDiscoveredPullRequests(this.mergePrHistory(
               subscriber.previousPrs,
               latestPrs,
-            );
+            ));
             const associatedPrs = associatePrsWithLinkedDirectories(
               params.prs,
               subscriber.linkedDirectoryPaths,
@@ -5397,6 +5436,7 @@ class DesktopAppServerService {
       return normalizePrSummary({
         ...canonical,
         linkedDirectoryPaths: normalized.linkedDirectoryPaths,
+        ...(normalized.explicitlyAttached ? { explicitlyAttached: true } : {}),
       });
     });
   }
@@ -5412,7 +5452,7 @@ class DesktopAppServerService {
     prs: PrSummary[],
   ): Promise<PrSummary[]> {
     await this.loadPrStatusRegistry();
-    return this.canonicalizePrs(prs);
+    return await filterStoredDiscoveredPullRequests(this.canonicalizePrs(prs));
   }
 
   private mergePrHistory(
@@ -5439,6 +5479,7 @@ class DesktopAppServerService {
             existing?.linkedDirectoryPaths,
             pr.linkedDirectoryPaths,
           ),
+          ...((existing?.explicitlyAttached || pr.explicitlyAttached) ? { explicitlyAttached: true } : {}),
         });
       }
     }
@@ -6062,6 +6103,8 @@ class DesktopAppServerService {
         if (repos.length === 0) {
           continue;
         }
+        const lookupBranches = await resolvePrLookupBranches({ cwd, branch });
+        if (!lookupBranches.includes(branch)) continue;
         wanted.set(dedupeKey, {
           cwd,
           branch,

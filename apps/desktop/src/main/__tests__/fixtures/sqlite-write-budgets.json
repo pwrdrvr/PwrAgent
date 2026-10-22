@@ -513,6 +513,13 @@
     "rowsChanged": 1,
     "statements": 1
   },
+  "legacy-pr-discovery-repair": {
+    "commits": 1,
+    "note": "One legacy attachment repair followed by 9 unchanged offline refreshes: one boundary repair, zero steady-state writes (0 MB/day after repair).",
+    "observedWalBytes": 16480,
+    "rowsChanged": 1,
+    "statements": 1
+  },
   "messaging-agent-conversation-rename": {
     "commits": 5,
     "note": "one agent-driven conversation rename persists the binding title and re-renders the status card inline (no bus event exists for binding-local mutations); bounded by explicit tool calls, not per turn or per item",

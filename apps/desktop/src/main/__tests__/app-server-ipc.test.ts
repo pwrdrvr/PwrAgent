@@ -1218,7 +1218,8 @@ vi.mock("../pr-status/forge-pr-fetcher", async () => ({
   }),
 }));
 
-vi.mock("../pr-status/pr-detection", () => ({
+vi.mock("../pr-status/pr-detection", async () => ({
+  ...await vi.importActual<typeof import("../pr-status/pr-detection")>("../pr-status/pr-detection"),
   detectPullRequestsForThread,
 }));
 
@@ -2546,6 +2547,95 @@ describe("app server ipc", () => {
       overlay.mockRestore();
       service.prAutoDispatchBudgetPaused = previousPaused;
       service.prAutoDispatchBudgetConfig = previousConfig;
+      db.close();
+      removeTempStateDbDir(temp.tempDir);
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("repairs legacy default-branch attachments once, even offline, without losing explicit PRs or feature history", async () => {
+    const { SqliteOverlayStore } = await import("../state/overlay-store-sqlite");
+    const { StateDb } = await import("../state/state-db");
+    const { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } = await import("../state/sqlite-write-metrics");
+    const { expectSqliteWriteBudget } = await import("./fixtures/sqlite-write-budget");
+    const { createTempStateDb, removeTempStateDbDir } = await import("./sqlite-test-utils");
+    const { runGitCommand } = await import("../app-server/git-executable");
+    const { appServerService } = await import("../ipc/app-server");
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const temp = createTempStateDb("legacy-pr-discovery-");
+    const db = StateDb.open(temp.dbPath);
+    const store = new SqliteOverlayStore(db);
+    const service = appServerService as unknown as {
+      getOverlayStore: () => typeof store;
+      getPrGraphqlClient: () => unknown;
+      primeDiscoveryBranchLookups: (contexts: { branch: string; directoryPaths: string[] }[]) => Promise<void>;
+    };
+    const overlay = vi.spyOn(service, "getOverlayStore").mockReturnValue(store);
+    try {
+      await runGitCommand(temp.tempDir, ["init", "-b", "main"]);
+      await runGitCommand(temp.tempDir, ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "--allow-empty", "-m", "fixture"]);
+      await runGitCommand(temp.tempDir, ["remote", "add", "origin", "https://github.com/openai/codex.git"]);
+      await runGitCommand(temp.tempDir, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+      await runGitCommand(temp.tempDir, ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]);
+      const fetchPullRequestsForBranches = vi.fn(async () => {
+        throw new Error("Default branches must not be prefetched");
+      });
+      const graphql = vi.spyOn(service, "getPrGraphqlClient").mockReturnValue({ fetchPullRequestsForBranches });
+      try {
+        await service.primeDiscoveryBranchLookups([{ branch: "main", directoryPaths: [temp.tempDir] }]);
+        expect(fetchPullRequestsForBranches).not.toHaveBeenCalled();
+      } finally {
+        graphql.mockRestore();
+      }
+      const request = { backend: "codex", threadId: "legacy-main", branch: "main", directoryPaths: [temp.tempDir] } satisfies RefreshThreadPullRequestsRequest;
+      const requestKey = buildThreadPrRequestKey(request);
+      const lookupKey = buildPrLookupKey(request);
+      const badPr = githubPr({ number: 14495, org: "openai", repo: "codex", state: "merged", url: "https://github.com/openai/codex/pull/14495" });
+      Object.assign(badPr, { headRefName: "main", headSha: "a".repeat(40), linkedDirectoryPaths: [temp.tempDir],
+        sourceRepository: { provider: "github.com", org: "unrelated", repo: "codex" } });
+      const featurePr = { ...badPr, number: 10, headRefName: "fix/old-feature", sourceRepository: undefined,
+        state: "pending" as const, checkState: "pending" as const, lifecycleState: "open" as const,
+        url: "https://github.com/openai/codex/pull/10" };
+      const canonicalFeaturePr = { ...featurePr, state: "passing" as const, checkState: "passing" as const,
+        lifecycleState: "merged" as const };
+      const explicitPr = { ...badPr, number: 11, explicitlyAttached: true as const,
+        url: "https://github.com/openai/codex/pull/11" };
+      await store.setThreadPullRequests({ backend: "codex", threadId: request.threadId,
+        prs: [badPr, featurePr], fetchedAt: Date.now() - 120_000, refreshKey: requestKey });
+      await store.addThreadPullRequestReference({ backend: "codex", threadId: request.threadId, pr: explicitPr });
+      await store.writePrLookupCacheEntry({ lookupKey, provider: "github.com", branch: "main",
+        directoryPaths: [temp.tempDir], fetchedAt: Date.now(), prs: [badPr] });
+      await store.writePrStatusCacheEntries([{
+        provider: "github.com", prKey: "github.com/openai/codex#10", fetchedAt: Date.now() - 30_000,
+        pr: canonicalFeaturePr,
+      }]);
+      // The federation canonicalizer must hide old automatic matches before
+      // the owner has selected/refreshed this thread. It must not write.
+      const { writes: viewerWrites } = await measureSqliteWrites(async () => {
+        expect(await appServerService.canonicalizeStoredPullRequests([badPr, featurePr, explicitPr]))
+          .toEqual([canonicalFeaturePr, explicitPr]);
+      });
+      expect(viewerWrites.commits).toBe(0);
+      isGhAvailable.mockResolvedValue(false);
+      const { writes } = await measureSqliteWrites(async () => {
+        for (let i = 0; i < 10; i++) {
+          expect((await appServerService.refreshThreadPullRequests(request)).prs).toEqual([canonicalFeaturePr, explicitPr]);
+        }
+      });
+      expect((await store.getThreadOverlayState(request))?.prs).toEqual([featurePr, explicitPr]);
+      expectSqliteWriteBudget({ scenario: "legacy-pr-discovery-repair", writes,
+        note: "One legacy attachment repair followed by 9 unchanged offline refreshes: one boundary repair, zero steady-state writes (0 MB/day after repair).",
+      });
+      expect(publishLocalEvent).toHaveBeenCalledWith(expect.objectContaining({ notification: expect.objectContaining({
+        method: "thread/pullRequests/updated", params: expect.objectContaining({ prs: [canonicalFeaturePr, explicitPr] }),
+      }) }));
+      // The persisted branch cache must not copy the same bad match onto a
+      // second thread, even before a fresh provider lookup gets to run.
+      isGhAvailable.mockResolvedValue(true);
+      expect((await appServerService.refreshThreadPullRequests({ ...request, threadId: "another-main" })).prs).toEqual([]);
+      expect((await store.getThreadOverlayState({ backend: "codex", threadId: "another-main" }))?.prs).toEqual([]);
+    } finally {
+      overlay.mockRestore();
       db.close();
       removeTempStateDbDir(temp.tempDir);
       vi.unstubAllEnvs();

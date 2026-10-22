@@ -2034,15 +2034,41 @@ describe("MessagingController", () => {
         ...navigation.directories[0]!, key: "remote:project", path: "/remote/project",
       }],
     };
-    const harness = await createHarness(boundedPeerBrowseFixture(navigation, complete, peer.promise));
+    const firstDelivery = createDeferred<void>();
+    const delivered: MessagingSurfaceIntent[] = [];
+    const harness = await createHarness({
+      ...boundedPeerBrowseFixture(navigation, complete, peer.promise),
+      deliver: async (intent) => {
+        delivered.push(intent);
+        firstDelivery.resolve();
+        return {
+          channel: "telegram",
+          deliveredAt: 1000,
+          outcome: "presented",
+          surface: { channel: "telegram", id: `surface:${intent.id}` },
+        };
+      },
+    });
     const pending = harness.controller.handleInboundEvent(buildCommandEvent(`/resume${args}`));
-    await vi.waitFor(() => expect(harness.delivered).toHaveLength(1));
-    await harness.controller.handleInboundEvent(buildCommandEvent("/help"));
-    const afterAction = harness.delivered.length;
-    peer.resolve();
-    await pending;
-    expect(harness.delivered).toHaveLength(afterAction);
-    harness.controller.dispose();
+    try {
+      // The initial delivery owns readiness; a polling deadline races the
+      // browse store's disk IO on Windows before this test can act.
+      await Promise.race([
+        firstDelivery.promise,
+        pending.then(() => { throw new Error("Browse completed before publishing its initial picker"); }),
+      ]);
+      expect(delivered).toHaveLength(1);
+      await harness.controller.handleInboundEvent(buildCommandEvent("/help"));
+      const afterAction = delivered.length;
+      peer.resolve();
+      await pending;
+      expect(delivered).toHaveLength(afterAction);
+    } finally {
+      // Release and drain this test's command even when an assertion fails,
+      // before afterEach removes the store it still owns.
+      peer.resolve();
+      await pending.finally(() => harness.controller.dispose());
+    }
   });
 
   it("budgets SQLite writes for initial and completed progressive browse publications", async () => {

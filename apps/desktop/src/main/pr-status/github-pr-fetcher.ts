@@ -11,6 +11,7 @@ import { getMainLogger } from "../log";
 import { discoverGhCommands } from "../settings/gh-discovery";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { resolveGitHubReposForDirectory } from "./git-remote";
+import { prMatchesSourceRepository } from "./pr-source-repository";
 import {
   branchRefKey,
   GithubGraphqlPrClient,
@@ -256,7 +257,7 @@ export class GithubPrFetcher {
       const byUrl = new Map<string, PrSummary>();
       for (const ref of refs) {
         for (const pr of byBranch.get(branchRefKey(ref)) ?? []) {
-          if (pr.lifecycleState === "open") {
+          if (pr.lifecycleState === "open" && prMatchesSourceRepository(pr, repos)) {
             byUrl.set(pr.url, pr);
           }
         }
@@ -294,11 +295,11 @@ export class GithubPrFetcher {
     // sweep avoid one `gh` subprocess per branch without changing any of the
     // PR→thread attachment logic below this call.
     const primed = this.takePrimedBranchLookup(params.cwd, params.branch);
-    if (params.allowPrimed !== false && primed) {
-      return primed;
-    }
     const repos = await this.resolveGitHubRepos(params.cwd);
     if (repos.length === 0) return [];
+    if (params.allowPrimed !== false && primed) {
+      return primed.filter((pr) => prMatchesSourceRepository(pr, repos));
+    }
     if (!(await this.isGhAvailable())) {
       params.onProviderFailure?.();
       return [];
@@ -320,7 +321,7 @@ export class GithubPrFetcher {
           continue;
         }
         for (const pr of prs) {
-          byUrl.set(pr.url, pr);
+          if (prMatchesSourceRepository(pr, repos)) byUrl.set(pr.url, pr);
         }
       }
       return [...byUrl.values()];

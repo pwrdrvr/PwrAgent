@@ -456,6 +456,7 @@ function mergePrSummariesByStatusKey(
         existing?.linkedDirectoryPaths,
         normalized.linkedDirectoryPaths,
       ),
+      ...((existing?.explicitlyAttached || normalized.explicitlyAttached) ? { explicitlyAttached: true } : {}),
     }));
   }
   // Map replacement retains the existing key's position, while a genuinely
@@ -5200,11 +5201,17 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       current.detachedPrs,
       collectDetachedPrs(params.prs, detachedPrKeys),
     );
+    const explicitKeys = new Set((current.prs ?? [])
+      .filter((pr) => pr.explicitlyAttached)
+      .map(buildPullRequestStatusKey));
     const nextState: ThreadOverlayState = {
       ...current,
       detachedPrKeys,
       detachedPrs,
-      prs: filterDetachedPrs(params.prs, detachedPrKeys).map(normalizePrSummary),
+      prs: filterDetachedPrs(params.prs, detachedPrKeys).map((pr) => normalizePrSummary({
+        ...pr,
+        ...(explicitKeys.has(buildPullRequestStatusKey(pr)) ? { explicitlyAttached: true } : {}),
+      })),
       prsFetchedAt: fetchedAt,
       prsRefreshKey: params.refreshKey,
     };
@@ -5257,7 +5264,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       executionMode: "default" as const,
       extraLinkedDirectories: [],
     };
-    const normalizedPr = normalizePrSummary(params.pr);
+    const normalizedPr = normalizePrSummary({ ...params.pr, explicitlyAttached: true });
     const prKey = buildPullRequestStatusKey(normalizedPr);
     const detachedPrKeys = normalizeDetachedPrKeys(current.detachedPrKeys).filter(
       (key) => key !== prKey,
