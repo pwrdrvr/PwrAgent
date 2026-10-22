@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { UsageLimitObservation } from "@pwragent/shared";
-import { buildLimitAccounts, projectLimit, seriesStart, sinceResetSeries } from "./usage-limits";
+import { buildLimitAccounts, fiveHourSeries, limitLabel, projectLimit, seriesStart, sinceResetSeries } from "./usage-limits";
 
 const HOUR = 3_600_000;
 const t0 = new Date(2026, 8, 28, 9).getTime();
@@ -57,6 +57,27 @@ describe("usage limit history", () => {
     expect(accounts[1].credits).toEqual({ hasCredits: true, unlimited: undefined });
     // No stated window length: the credit limit's window is the month before its reset.
     expect(seriesStart(individual)).toBe(new Date(2026, 7, 30).getTime());
+  });
+
+  it("finds the 5-hour limit by its length, not its position", () => {
+    // Codex reports an account whose only limit is weekly as its primary window.
+    const [weeklyOnly] = buildLimitAccounts([{ owner: "Studio", current: { observedAt: t0, accountKey: "pro", limits: [
+      { name: "Weekly limit", windowKey: "primary", usedPercent: 3, resetAt: t0 + 7 * 24 * HOUR, windowMinutes: 10_080 },
+    ] } }]);
+    expect(fiveHourSeries(weeklyOnly)).toBeUndefined();
+    expect(sinceResetSeries(weeklyOnly)!.windowKey).toBe("primary");
+    expect(limitLabel(sinceResetSeries(weeklyOnly)!)).toBe("Weekly limit");
+    const [both] = buildLimitAccounts([{ owner: "Studio", current: { observedAt: t0, accountKey: "plus", limits: [
+      { name: "5h limit", windowKey: "primary", usedPercent: 20, resetAt: t0 + 2 * HOUR, windowMinutes: 300 },
+      { name: "Weekly limit", windowKey: "secondary", usedPercent: 9, resetAt: t0 + 4 * 24 * HOUR, windowMinutes: 10_080 },
+    ] } }]);
+    expect(fiveHourSeries(both)!.windowMinutes).toBe(300);
+    expect(limitLabel(fiveHourSeries(both)!)).toBe("5-hour window");
+    // An owner that never stated the length keeps the old reading of primary.
+    const [unstated] = buildLimitAccounts([{ owner: "Studio", current: { observedAt: t0, accountKey: "old", limits: [
+      { name: "Primary limit", windowKey: "primary", usedPercent: 20 },
+    ] } }]);
+    expect(fiveHourSeries(unstated)!.name).toBe("Primary limit");
   });
 
   it("projects the level at the reset when the pace cannot fill the window first", () => {

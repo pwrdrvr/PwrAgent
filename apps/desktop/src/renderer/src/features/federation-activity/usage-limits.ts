@@ -145,8 +145,14 @@ export function sinceResetSeries(account: LimitAccount | undefined): LimitSeries
     ?? account.series.at(-1);
 }
 
+/**
+ * The account's 5-hour limit. Codex names its windows by position, not
+ * length: an account with only a weekly limit reports it as `primary`, so a
+ * primary window of another stated length is not the 5-hour limit.
+ */
 export function fiveHourSeries(account: LimitAccount | undefined): LimitSeries | undefined {
-  return account?.series.find((series) => series.windowKey === "primary");
+  return account?.series.find((series) => series.windowMinutes === 300)
+    ?? account?.series.find((series) => series.windowKey === "primary" && series.windowMinutes === undefined);
 }
 
 /**
@@ -181,8 +187,8 @@ export function projectLimit(series: LimitSeries): LimitProjection | undefined {
 }
 
 export function limitLabel(series: LimitSeries): string {
-  if (series.windowKey === "primary" && series.windowMinutes === 300) return "5-hour window";
-  if (series.windowKey === "secondary" && series.windowMinutes === 10_080) return "Weekly limit";
+  if (series.windowMinutes === 300) return "5-hour window";
+  if (series.windowMinutes === 10_080) return "Weekly limit";
   if (series.windowKey === "individual") return "Individual limit";
   return series.name;
 }
