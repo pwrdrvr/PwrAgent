@@ -131,6 +131,14 @@ export class FederationServices {
     return { leaseId };
   }
 
+  /** Distinct peers that currently hold a lease on the service. */
+  leaseHolders(serviceId: string): string[] {
+    const now = this.now();
+    return [...new Set([...this.leases.values()]
+      .filter((lease) => lease.service.serviceId === serviceId && lease.expiresAt > now)
+      .map((lease) => lease.peerId))];
+  }
+
   renew(peerId: string, leaseId: string): void {
     this.getLease(peerId, leaseId).expiresAt = this.now() + SERVICE_LEASE_MS;
   }

@@ -2648,7 +2648,31 @@ export class DesktopFederationRuntime {
       try { assertViewing(); }
       catch (error) { this.serviceForwarder.disconnect(windowId, forward.forwardId); throw error; }
     }
-    return { services, forwards: this.serviceForwarder.list(windowId, instanceId, thread) };
+    const forwards = this.serviceForwarder.list(windowId, instanceId, thread);
+    // Most threads advertise nothing; their viewers poll without reading
+    // permissions or peers.
+    if (!services.length) return { services, forwards };
+    if (remote) {
+      const allowed = this.visiblePeers().find((peer) => peer.id === instanceId)?.receiverPermissions?.portForwarding;
+      return { services, forwards, forwarding: allowed === undefined ? "unknown" : allowed ? "allowed" : "blocked" };
+    }
+    // The owner shows which peers hold a lease, so its operator can see that
+    // a port is in use. Lease state is in memory; this reads no storage.
+    const peers = this.visiblePeers();
+    const peerLabel = (peerId: string): string => {
+      const peer = peers.find((candidate) => candidate.id === peerId);
+      return peer?.shortLabel ?? peer?.label ?? "Federation peer";
+    };
+    const inbound = services.flatMap((service) => {
+      const holders = this.threadServices().leaseHolders(service.serviceId);
+      return holders.length ? [{ serviceId: service.serviceId, peerLabels: holders.map(peerLabel) }] : [];
+    });
+    return {
+      services,
+      forwards,
+      forwarding: this.receiverPermissions().portForwarding ? "allowed" : "blocked",
+      inbound,
+    };
   }
 
   receiverPermissions() {

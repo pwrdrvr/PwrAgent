@@ -54,7 +54,7 @@ export function FederationCapabilities(props: {
         />
         <ToggleField
           label="Allow port forwarding"
-          sub="Let enrolled peers forward advertised ports on this machine to their own loopback address. Off by default. Each port requires a separate Forward Port action. Disabling closes active forwards."
+          sub="Let enrolled peers forward ports that agents advertise on this machine. A peer opens each forward with its own click, on its own loopback address. Turning this off closes live forwards."
           checked={federation.allowPortForwarding.value}
           disabled={props.saving || pending}
           onChange={(allowPortForwarding) => save({ allowPortForwarding })}

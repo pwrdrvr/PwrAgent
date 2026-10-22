@@ -4504,6 +4504,7 @@ export function ThreadView(props: ThreadViewProps) {
               threadId={selectedThread.id}
               instanceId={serviceInstanceId}
               ownerLabel={props.activeFederationOwnerLabel}
+              onOpenFederationSettings={props.starMap?.onOpenFederationSettings}
             /> : null}
             {primaryContent}
             {composerSlotElement}

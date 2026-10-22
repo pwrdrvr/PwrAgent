@@ -170,10 +170,23 @@ That is `advertise_service` input. `list_services` takes `{}`;
 `remove_service` takes `{"serviceId":"<returned-id>"}`. From a compatible
 remote desktop, first enable **Allow port forwarding** on the owner. Select the
 thread, expand **Ports**, click **Forward Port**, then **Open in Browser**.
-**Stop Forwarding** closes only this viewer’s forward. **Remove Advertisement**
-withdraws the declaration for every viewer. A local owner shows declarations and Remove Advertisement; it does not create a
-redundant local tunnel. Open is available only for HTTP(S). Leaving the thread or
-closing the window disconnects its forwards. Removal revokes all viewers.
+**Stop Forwarding** closes only this viewer’s forward. **Remove** (accessible
+name Remove Advertisement) withdraws the declaration for every viewer. A local
+owner shows declarations and Remove; it does not create a redundant local tunnel.
+Open is available only for HTTP(S). Leaving the thread or closing the window
+disconnects its forwards. Removal revokes all viewers.
+
+The **Ports** bar appears only when the thread has an advertisement or a live
+forward. Its collapsed status shows the state without expanding:
+**Not forwarded**, **Forwarding** with the local address and an **Open** link,
+or **Forwarding is off on** the owner. A live forward tints the bar and shows an
+accent dot. The inventory response carries the owner permission (`forwarding`),
+so a blocked owner disables Forward Port with its reason before a click. On the
+owner, the response also names peers that hold a lease (`inbound`, from in-memory
+lease state), so the bar reads **Forwarded to** the peer and the row reads
+**In use by** it. Otherwise it reads **Peers can forward** or **Forwarding is off
+on this machine**, with a link to Federation settings. A thread without services
+returns before permissions or peers are read.
 
 Use these repository-root verification commands with disposable fixture state:
 

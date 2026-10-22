@@ -40,7 +40,7 @@ test("remote thread services explicitly connect real HTTP and WS and release on 
     await expect(rail).toBeVisible();
     const railBefore = await rail.boundingBox();
     expect(railBefore).not.toBeNull();
-    await services.getByRole("button", { name: "Ports · 1" }).click();
+    await services.getByRole("button", { name: "Ports (1)", exact: true }).click();
     await expect(services.getByText("Development preview", { exact: true })).toBeVisible();
     const railAfter = await rail.boundingBox();
     const servicesBox = await services.boundingBox();
@@ -71,7 +71,7 @@ test("remote thread services explicitly connect real HTTP and WS and release on 
     await expect(services.getByRole("button", { name: "Forward Port", exact: true })).toBeVisible();
     await expect(fetch(url)).rejects.toThrow();
     await services.getByRole("button", { name: "Remove Advertisement", exact: true }).click();
-    await expect(services.getByText("No ports advertised for this thread.")).toBeVisible();
+    await expect(services).toHaveCount(0);
   } finally {
     browserSocket?.terminate();
     await app?.close();

@@ -222,6 +222,21 @@ describe("service boundaries and lifecycle", () => {
     await expect(service.lease("viewer", thread, declaration.serviceId)).rejects.toThrow("no longer");
   });
 
+  it("reports each peer holding a live lease once, for the owner's in-use indicator", async () => {
+    let now = 1000;
+    const service = owner({ now: () => now });
+    const declaration = await service.advertise(thread, { port: 3000, name: "Fixture", protocol: "http" });
+    expect(service.leaseHolders(declaration.serviceId)).toEqual([]);
+    const first = await service.lease("laptop", thread, declaration.serviceId);
+    await service.lease("laptop", thread, declaration.serviceId);
+    await service.lease("desk", thread, declaration.serviceId);
+    expect(service.leaseHolders(declaration.serviceId)).toEqual(["laptop", "desk"]);
+    service.release("laptop", first.leaseId);
+    expect(service.leaseHolders(declaration.serviceId)).toEqual(["laptop", "desk"]);
+    now += 31_000;
+    expect(service.leaseHolders(declaration.serviceId)).toEqual([]);
+  });
+
   it("preserves TCP half-close and returns the reply after request FIN", async () => {
     const server = createServer({ allowHalfOpen: true }, (socket) => {
       socket.on("data", () => undefined);

@@ -325,6 +325,34 @@ describe("DesktopFederationRuntime", () => {
     }
   });
 
+  it("tells the owner whether forwarding is allowed and which peers are forwarding each port", async () => {
+    const runtime = new DesktopFederationRuntime();
+    (runtime as unknown as RuntimeHarness).localInstanceId = "service-owner";
+    const advertised = {
+      backend: "codex" as const, threadId: "service-thread", serviceId: "service", ownerInstanceId: "service-owner",
+      ownerSessionId: "session", address: "127.0.0.1" as const, port: 3000, name: "Preview", description: "",
+      protocol: "http" as const, createdAt: 1, expiresAt: 2,
+    };
+    vi.spyOn(runtime, "threadServices").mockReturnValue({
+      list: async () => [advertised],
+      leaseHolders: () => ["peer-laptop", "peer-unlisted"],
+    } as never);
+    vi.spyOn(runtime as unknown as { visiblePeers: () => unknown[] }, "visiblePeers")
+      .mockReturnValue([{ id: "peer-laptop", label: "Fixture Laptop", shortLabel: "Laptop" }]);
+    vi.spyOn(runtime, "receiverPermissions").mockReturnValue({
+      remoteShells: false, portForwarding: true, filePush: false, filePull: false, filePullOutsideThreadDirectories: false,
+    });
+    const watch = { action: "watch" as const, viewId: "owner-view", backend: "codex" as const, threadId: "service-thread" };
+    try {
+      await expect(runtime.threadServiceAction(1, watch)).resolves.toEqual({
+        services: [advertised],
+        forwards: [],
+        forwarding: "allowed",
+        inbound: [{ serviceId: "service", peerLabels: ["Laptop", "Federation peer"] }],
+      });
+    } finally { await runtime.stop(); }
+  });
+
   it("keeps repeated service watches intact and registers them again after stop", async () => {
     const runtime = new DesktopFederationRuntime();
     (runtime as unknown as RuntimeHarness).localInstanceId = "service-owner";

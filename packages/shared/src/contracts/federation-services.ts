@@ -37,9 +37,16 @@ export type ServiceUiRequest = ServiceThread & {
   serviceId?: string;
   forwardId?: string;
 };
+/** Peers holding a forwarding lease on one of this machine's services. */
+export type ServiceInboundForward = { serviceId: string; peerLabels: string[] };
 export type ServiceUiResponse = {
   services: ThreadService[];
   forwards: ServiceForward[];
+  /** Whether the owning machine allows peers to forward its ports. "unknown"
+   * covers owners that predate the permission summary. */
+  forwarding?: "allowed" | "blocked" | "unknown";
+  /** Owner view only: which peers are forwarding each local service. */
+  inbound?: ServiceInboundForward[];
 };
 export const FEDERATION_SERVICE_CAPABILITY = "service_forward_v1" as const;
 export const FEDERATION_SERVICE_METHODS = {
