@@ -9421,7 +9421,7 @@ describe("app server ipc", () => {
     });
   });
 
-  it("refreshes post-turn pull requests for an adopted branch instead of stale snapshot context", async () => {
+  it.each(["codex", "claude", "acp:gemini", "acp:grok", "acp:kimi", "acp:qwen", "acp:registry-fixture"] as const)("refreshes post-turn pull requests for an adopted branch instead of stale snapshot context (%s)", async (backend) => {
     const discoveredPr = githubPr({
       number: 814,
       org: "pwrdrvr",
@@ -9436,7 +9436,7 @@ describe("app server ipc", () => {
         id: "thread-1",
         title: "Thread one",
         titleSource: "explicit",
-        source: "codex",
+        source: backend,
         projectKey: "/repo/wt",
         linkedDirectories: [
           {
@@ -9462,7 +9462,7 @@ describe("app server ipc", () => {
     detectPullRequestsForThread.mockClear();
 
     emitRegistryEvent({
-      backend: "codex",
+      backend,
       notification: {
         method: "thread/branch/updated",
         params: {
@@ -9472,7 +9472,7 @@ describe("app server ipc", () => {
       },
     });
     emitRegistryEvent({
-      backend: "codex",
+      backend,
       notification: {
         method: "turn/completed",
         params: {
@@ -9500,7 +9500,7 @@ describe("app server ipc", () => {
     });
   });
 
-  it("refreshes pull requests when branch adoption finishes after turn completion", async () => {
+  it.each(["codex", "claude", "acp:gemini", "acp:grok", "acp:kimi", "acp:qwen", "acp:registry-fixture"] as const)("refreshes pull requests when branch adoption finishes after turn completion (%s)", async (backend) => {
     const discoveredPr = githubPr({
       number: 815,
       org: "pwrdrvr",
@@ -9515,7 +9515,7 @@ describe("app server ipc", () => {
         id: "thread-1",
         title: "Thread one",
         titleSource: "explicit",
-        source: "codex",
+        source: backend,
         projectKey: "/repo/wt",
         linkedDirectories: [
           {
@@ -9543,7 +9543,7 @@ describe("app server ipc", () => {
     detectPullRequestsForThread.mockClear();
 
     emitRegistryEvent({
-      backend: "codex",
+      backend,
       notification: {
         method: "turn/completed",
         params: {
@@ -9564,7 +9564,7 @@ describe("app server ipc", () => {
     });
 
     emitRegistryEvent({
-      backend: "codex",
+      backend,
       notification: {
         method: "thread/branch/updated",
         params: {
@@ -9576,12 +9576,12 @@ describe("app server ipc", () => {
 
     await vi.waitFor(() => {
       expect(setThreadPullRequests).toHaveBeenCalledWith({
-        backend: "codex",
+        backend,
         threadId: "thread-1",
         prs: [discoveredPr],
         fetchedAt: expect.any(Number),
         refreshKey: buildThreadPrRequestKey({
-          backend: "codex",
+          backend,
           threadId: "thread-1",
           branch: "fix/adopted-after-completion",
           directoryPaths: ["/repo/wt"],

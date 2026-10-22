@@ -58937,6 +58937,143 @@ script = "printf setup"
     await closePromise;
   });
 
+  describe.each([
+    "claude", "acp:gemini", "acp:grok", "acp:kimi", "acp:qwen", "acp:registry-fixture",
+  ] as const)("%s Git branch monitoring", (backend) => {
+    async function fixture(initialBranch: string, observedOnly = false) {
+      const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-provider-branch-"));
+      const repo = path.join(root, "repo");
+      const cwd = path.join(root, ".pwragent", "worktrees", "fixture", "repo");
+      await mkdir(repo, { recursive: true });
+      await git(repo, ["init", "-b", "main"]);
+      await git(repo, ["commit", "--allow-empty", "-m", "init"]);
+      await git(repo, ["worktree", "add", "--detach", cwd]);
+      if (initialBranch !== "HEAD") await git(cwd, ["switch", "-c", initialBranch]);
+      const threadId = "a1111111-1111-4111-8111-111111111111";
+      const directory: LinkedDirectorySummary = {
+        id: repo, path: repo, worktreePath: cwd, label: "repo", kind: "worktree",
+      };
+      const identity = { backend, threadId };
+      const overlayStore = createOverlayStoreMock({ overlays: {
+        [`${backend}:${threadId}`]: {
+          ...identity, executionMode: "default", gitBranch: observedOnly ? undefined : initialBranch,
+          observedGitBranch: initialBranch, extraLinkedDirectories: [directory],
+        },
+      } });
+      let registry: DesktopBackendRegistry;
+      if (backend === "claude") {
+        const store = new ClaudeSessionStore(path.join(root, "sessions"));
+        await store.save({ cwd, thread: {
+          id: threadId, source: backend, title: "Branch fixture", titleSource: "explicit",
+          projectKey: cwd, linkedDirectories: [directory],
+        } });
+        registry = new DesktopBackendRegistry({
+          codexClient: new MockBackendClient({ threads: [] }), overlayStore,
+          claudeBackendOptions: { store },
+        });
+      } else {
+        ({ registry } = createKimiAcpRegistry({
+          acpBackendId: backend, sessionId: threadId, overlayStore,
+          sessions: [{ backendId: backend, sessionId: threadId, cwd, title: "Branch fixture",
+            createdAt: 1_000, updatedAt: 2_000, executionMode: "default", status: "idle" }],
+        }));
+      }
+      onTestFinished(async () => {
+        await registry.close();
+        await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      });
+      return { registry, overlayStore, identity, cwd };
+    }
+
+    it.each(["turn/completed", "turn/failed", "turn/cancelled", "thread/status/changed"] as const)(
+      "adopts a branch created from detached HEAD before publishing %s",
+      async (method) => {
+        const { registry, overlayStore, identity, cwd } = await fixture("HEAD");
+        const events: string[] = [];
+        let overlayAtBoundary: ThreadOverlayState | undefined;
+        registry.onEvent(async (event) => {
+          events.push(event.notification.method);
+          if (event.notification.method === method) {
+            overlayAtBoundary = await overlayStore.getThreadOverlayState(identity);
+          }
+        });
+        await registry.publishLocalEvent({ backend, notification: {
+          method: "turn/started", params: { threadId: identity.threadId, turnId: "turn-branch",
+            turn: { id: "turn-branch", status: "in_progress" } },
+        } });
+        await git(cwd, ["switch", "-c", "fix/provider-branch"]);
+        await registry.publishLocalEvent({ backend, notification: method === "thread/status/changed"
+          ? { method, params: { threadId: identity.threadId, status: { type: "idle" } } }
+          : { method, params: { threadId: identity.threadId, turnId: "turn-branch",
+              turn: { id: "turn-branch", status: "completed", output: [], error: { message: "Fixture failure" } } } },
+        } as AgentEvent);
+        expect(overlayAtBoundary).toMatchObject({
+          gitBranch: "fix/provider-branch", observedGitBranch: "fix/provider-branch",
+        });
+        expect(events).toContain("thread/branch/updated");
+      },
+    );
+
+    it.each(["HEAD", "feature/original", "observed-only HEAD"])("refreshes an external branch change from %s on hover", async (storedBranch) => {
+      const initialBranch = storedBranch === "observed-only HEAD" ? "HEAD" : storedBranch;
+      const { registry, overlayStore, identity, cwd } = await fixture(initialBranch, storedBranch === "observed-only HEAD");
+      const events: AgentEvent[] = [];
+      registry.onEvent((event) => { events.push(event); });
+      await registry.listThreads({ backend });
+      await git(cwd, ["switch", "-c", "fix/external-branch"]);
+      await registry.refreshThreadDirectoryRelationship(identity);
+      expect(await overlayStore.getThreadOverlayState(identity)).toMatchObject({
+        gitBranch: initialBranch === "HEAD" ? "fix/external-branch" : initialBranch,
+        observedGitBranch: "fix/external-branch",
+      });
+      expect(events).toEqual(expect.arrayContaining([expect.objectContaining({
+        backend, notification: expect.objectContaining({ method: "navigation/threadDirectories/updated" }),
+      })]));
+      events.length = 0;
+      await registry.refreshThreadDirectoryRelationship(identity);
+      expect(events).toEqual([]);
+    });
+
+    it("does not publish an unchanged observation with no expected branch", async () => {
+      const { registry, identity } = await fixture("feature/original", true);
+      const events: AgentEvent[] = [];
+      registry.onEvent((event) => { events.push(event); });
+      await registry.refreshThreadDirectoryRelationship(identity);
+      expect(events).toEqual([]);
+    });
+
+    it("does not adopt an unowned terminal event", async () => {
+      const { registry, overlayStore, identity, cwd } = await fixture("HEAD");
+      await git(cwd, ["switch", "-c", "fix/stale-terminal"]);
+      await registry.publishLocalEvent({ backend, notification: {
+        method: "turn/completed", params: { threadId: identity.threadId, turnId: "stale",
+          turn: { id: "stale", status: "completed", output: [] } },
+      } });
+      expect(await overlayStore.getThreadOverlayState(identity)).toMatchObject({
+        gitBranch: "HEAD", observedGitBranch: "HEAD",
+      });
+    });
+
+    if (backend === "claude") {
+      it("ignores a stale terminal while another Claude turn owns the workspace", async () => {
+        const { registry, overlayStore, identity, cwd } = await fixture("HEAD");
+        await registry.publishLocalEvent({ backend, notification: {
+          method: "turn/started", params: { threadId: identity.threadId, turnId: "current",
+            turn: { id: "current", status: "in_progress" } },
+        } });
+        await git(cwd, ["switch", "-c", "fix/current-turn"]);
+        for (const turnId of ["stale", "current"]) {
+          await registry.publishLocalEvent({ backend, notification: {
+            method: "turn/completed", params: { threadId: identity.threadId, turnId,
+              turn: { id: turnId, status: "completed", output: [] } },
+          } });
+          expect((await overlayStore.getThreadOverlayState(identity))?.gitBranch)
+            .toBe(turnId === "stale" ? "HEAD" : "fix/current-turn");
+        }
+      });
+    }
+  });
+
   it("adopts a named branch change from an active turn before notifying listeners", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-active-turn-branch-"));
     const repo = path.join(root, "app");

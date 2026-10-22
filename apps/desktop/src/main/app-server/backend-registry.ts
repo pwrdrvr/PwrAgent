@@ -1690,6 +1690,7 @@ function resolveExpectedThreadBranch(params: {
 }
 
 function shouldUseObservedBranchForDetachedHandoff(params: {
+  providerOwnsBranchMetadata?: boolean;
   branch?: string;
   observedBranch?: string;
   overlay?: ThreadOverlayState;
@@ -1700,11 +1701,13 @@ function shouldUseObservedBranchForDetachedHandoff(params: {
     branch === "HEAD" &&
       observedBranch &&
       observedBranch !== "HEAD" &&
-      hasHandoffWorkspace(params.overlay?.extraLinkedDirectories),
+      (params.providerOwnsBranchMetadata === false
+        || hasHandoffWorkspace(params.overlay?.extraLinkedDirectories)),
   );
 }
 
 function resolveBranchDriftExpectedBranch(params: {
+  providerOwnsBranchMetadata?: boolean;
   observedBranch?: string;
   overlay?: ThreadOverlayState;
   requestedExpectedBranch?: string;
@@ -1713,6 +1716,7 @@ function resolveBranchDriftExpectedBranch(params: {
   const overlayBranch = params.overlay?.gitBranch?.trim();
   if (
     shouldUseObservedBranchForDetachedHandoff({
+      providerOwnsBranchMetadata: params.providerOwnsBranchMetadata,
       branch: overlayBranch,
       observedBranch: params.observedBranch,
       overlay: params.overlay,
@@ -1733,6 +1737,7 @@ function resolveBranchDriftExpectedBranch(params: {
   const requestedBranch = params.requestedExpectedBranch?.trim();
   if (
     shouldUseObservedBranchForDetachedHandoff({
+      providerOwnsBranchMetadata: params.providerOwnsBranchMetadata,
       branch: requestedBranch,
       observedBranch: params.observedBranch,
       overlay: params.overlay,
@@ -1753,9 +1758,12 @@ function resolveBranchDriftExpectedBranch(params: {
   const fallbackBranch = resolveExpectedThreadBranch({
     overlay: params.overlay,
     thread: params.thread,
-  });
+  }) ?? (params.providerOwnsBranchMetadata === false
+    ? params.overlay?.observedGitBranch?.trim()
+    : undefined);
   if (
     shouldUseObservedBranchForDetachedHandoff({
+      providerOwnsBranchMetadata: params.providerOwnsBranchMetadata,
       branch: fallbackBranch,
       observedBranch: params.observedBranch,
       overlay: params.overlay,
@@ -24307,6 +24315,9 @@ export class DesktopBackendRegistry {
       : thread?.observedGitBranch;
     const normalizedObservedBranch = observedBranch?.trim() || undefined;
     const expectedBranchResolution = resolveBranchDriftExpectedBranch({
+      // Claude and ACP have no provider-owned Git branch to preserve. Repair
+      // a detached placeholder even when no workspace handoff was recorded.
+      providerOwnsBranchMetadata: params.backend === "codex",
       observedBranch: normalizedObservedBranch,
       overlay,
       requestedExpectedBranch: params.expectedBranch,
@@ -24327,15 +24338,21 @@ export class DesktopBackendRegistry {
       };
     }
 
-    const persistedOverlay = await this.overlayStore.setThreadObservedBranch({
+    const expectedBranchToPersist =
+      drifted || expectedBranchResolution.repairedDetachedHandoffBranch
+        ? expectedBranch
+        : undefined;
+    const observationChanged = !overlay
+      || overlay.observedGitBranch !== normalizedObservedBranch
+      || (expectedBranchToPersist !== undefined
+        && (!overlay.gitBranch?.trim() || expectedBranchToPersist === normalizedObservedBranch)
+        && overlay.gitBranch !== expectedBranchToPersist);
+    const persistedOverlay = observationChanged ? await this.overlayStore.setThreadObservedBranch({
       backend: params.backend,
       threadId: params.threadId,
       branch: normalizedObservedBranch,
-      expectedBranch:
-        drifted || expectedBranchResolution.repairedDetachedHandoffBranch
-          ? expectedBranch
-          : undefined,
-    });
+      expectedBranch: expectedBranchToPersist,
+    }) : overlay;
     const persistedExpectedBranch = persistedOverlay.gitBranch?.trim() || undefined;
     const effectiveExpectedBranch = persistedExpectedBranch ?? expectedBranch;
     const effectiveDrifted = isBranchDrifted(
@@ -24414,11 +24431,13 @@ export class DesktopBackendRegistry {
     }
 
     if (normalizedObservedBranch === "HEAD") {
-      await this.overlayStore.setThreadObservedBranch({
-        backend: params.backend,
-        threadId: params.threadId,
-        branch: normalizedObservedBranch,
-      });
+      if (overlay?.observedGitBranch !== normalizedObservedBranch) {
+        await this.overlayStore.setThreadObservedBranch({
+          backend: params.backend,
+          threadId: params.threadId,
+          branch: normalizedObservedBranch,
+        });
+      }
       return;
     }
 
@@ -24426,6 +24445,10 @@ export class DesktopBackendRegistry {
       overlay,
       thread,
     });
+    if (overlay?.gitBranch === normalizedObservedBranch
+      && overlay.observedGitBranch === normalizedObservedBranch) {
+      return;
+    }
     await this.overlayStore.setThreadExpectedBranch({
       backend: params.backend,
       threadId: params.threadId,
@@ -28297,7 +28320,27 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind;
     threadId: string;
   }): Promise<void> {
-    if (this.closed || params.backend !== "codex") return;
+    if (this.closed) return;
+    if (params.backend !== "codex") {
+      // Claude and ACP providers report a cwd, not live Git metadata. The
+      // selected-thread timer and hover must observe it on their behalf too.
+      const overlay = await this.overlayStore.getThreadOverlayState(params);
+      await this.checkThreadBranchDrift(params);
+      const refreshed = await this.overlayStore.getThreadOverlayState(params);
+      if (this.closed
+        || (refreshed?.observedGitBranch === overlay?.observedGitBranch
+          && refreshed?.gitBranch === overlay?.gitBranch)) {
+        return;
+      }
+      await this.emit({
+        backend: params.backend,
+        notification: {
+          method: "navigation/threadDirectories/updated",
+          params: { reason: "selected-thread", threadIds: [params.threadId] },
+        },
+      });
+      return;
+    }
     await this.repairCodexThreadDirectoryRelationship({
       reason: "selected-thread", threadId: params.threadId,
     });
@@ -28402,6 +28445,8 @@ export class DesktopBackendRegistry {
 
   private shouldInvalidateThreadListCacheForNotification(method: string): boolean {
     return (
+      method === "navigation/threadDirectories/updated" ||
+      method === "thread/branch/updated" ||
       method === "thread/archived" ||
       method === "thread/acpRuntime/updated" ||
       method === "thread/executionMode/queueCleared" ||
@@ -45798,6 +45843,8 @@ export class DesktopBackendRegistry {
       const hadGenericActiveTurn = Array.from(this.activeTurnKeys).some((key) =>
         key.startsWith(genericActiveTurnKeyPrefix),
       );
+      const hadMatchingGenericActiveTurn = turnId !== undefined
+        && this.activeTurnKeys.has(buildActiveTurnKey(event.backend, notification.params.threadId, turnId));
       if (turnId) {
         if (isAcpBackendId(event.backend)) {
           for (const key of Array.from(this.activeTurnKeys)) {
@@ -45833,7 +45880,8 @@ export class DesktopBackendRegistry {
           }
         }
       }
-      if (isAcpBackendId(event.backend) && hadGenericActiveTurn) {
+      if ((event.backend === "claude" && hadMatchingGenericActiveTurn)
+        || (isAcpBackendId(event.backend) && hadGenericActiveTurn)) {
         await this.adoptThreadBranchChangeFromActiveTurn({
           backend: event.backend,
           threadId: notification.params.threadId,
@@ -46054,13 +46102,13 @@ export class DesktopBackendRegistry {
         }
       }
       if (event.backend !== "codex") {
+        if (hadGenericActiveTurn) {
+          await this.adoptThreadBranchChangeFromActiveTurn({
+            backend: event.backend,
+            threadId: event.notification.params.threadId,
+          });
+        }
         if (isAcpBackendId(event.backend)) {
-          if (hadGenericActiveTurn) {
-            await this.adoptThreadBranchChangeFromActiveTurn({
-              backend: event.backend,
-              threadId: event.notification.params.threadId,
-            });
-          }
           if (this.usesSlashControlledAcpExecutionModes(event.backend)) {
             await this.flushQueuedExecutionModeIfPresent(
               event.notification.params.threadId,
