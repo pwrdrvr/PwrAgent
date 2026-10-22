@@ -1,5 +1,7 @@
 import {
+  useEffect,
   useId,
+  useRef,
   useMemo,
   useState,
   type FormEvent,
@@ -232,18 +234,26 @@ function ThreadSearchResultRow(props: {
 
 /**
  * Discloses remote-search scope: which connected instances contributed
- * and that remote matching is title-only (content search never crosses
- * the federation link).
+ * and whether an owner is still searching.
  */
 function describeRemoteInstances(
   instances: ThreadSearchRemoteInstance[],
 ): string {
-  const parts = instances.map((instance) =>
-    instance.failed
-      ? `${instance.instanceLabel} unavailable`
-      : `${instance.instanceLabel} (${instance.resultCount})`,
-  );
-  return `Remote: ${parts.join(", ")} — title matches only`;
+  const parts = instances.map((instance) => {
+    if (instance.failed) return `${instance.instanceLabel} unavailable`;
+    if (instance.cancelled) return `${instance.instanceLabel} stopped`;
+    if (instance.searching) return `${instance.instanceLabel} searching`;
+    return `${instance.instanceLabel} (${instance.resultCount})`;
+  });
+  return `Remote: ${parts.join(", ")}`;
+}
+
+function stoppedResponse(response: ThreadSearchResponse): ThreadSearchResponse {
+  return {
+    ...response,
+    remoteInstances: response.remoteInstances?.map((instance) =>
+      instance.searching ? { ...instance, searching: false, cancelled: true } : instance),
+  };
 }
 
 function ThreadSearchEmptyState(props: {
@@ -268,6 +278,19 @@ export function ThreadSearchPanel(props: ThreadSearchPanelProps) {
   const helpId = useId();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
+  const [cancelled, setCancelled] = useState(false);
+  const searchGeneration = useRef(0);
+  const searching = useRef(false);
+  const lastResponse = useRef(response);
+  lastResponse.current = response;
+  const api = props.desktopApi;
+  useEffect(() => () => {
+    searchGeneration.current += 1;
+    if (searching.current) {
+      if (lastResponse.current) setResponse(stoppedResponse(lastResponse.current));
+      void api?.cancelThreadSearch?.().catch(() => undefined);
+    }
+  }, [api, setResponse]);
 
   const searchUnavailable = !props.desktopApi?.searchThreads;
   const agentThreadKeys = useMemo(
@@ -286,31 +309,44 @@ export function ThreadSearchPanel(props: ThreadSearchPanelProps) {
     if (!trimmed || !props.desktopApi?.searchThreads) {
       return;
     }
+    const generation = ++searchGeneration.current;
+    searching.current = true;
     setLoading(true);
+    setCancelled(false);
+    setResponse(undefined);
     setError(undefined);
+    const parsed = parseThreadSearchQuery(trimmed);
+    const scopedThreads = props.threads?.filter((thread) => matchesThreadSearchProjects(thread, parsed.projects));
+    const accept = (result: ThreadSearchResponse): void => {
+      if (searchGeneration.current !== generation) return;
+      setResponse(mergeAgentMatches(mergePrNumberMatches(result, parsed.query, scopedThreads), parsed.query, scopedThreads));
+    };
     try {
-      const result = await props.desktopApi.searchThreads({
+      accept(await props.desktopApi.searchThreads({
         contentMode: "available",
         filters: { includeArchived: false },
         limit: 25,
         query: trimmed,
-      });
-      const parsed = parseThreadSearchQuery(trimmed);
-      const scopedThreads = props.threads?.filter((thread) =>
-        matchesThreadSearchProjects(thread, parsed.projects),
-      );
-      setResponse(
-        mergeAgentMatches(
-          mergePrNumberMatches(result, parsed.query, scopedThreads),
-          parsed.query,
-          scopedThreads,
-        ),
-      );
+      }, accept));
     } catch (searchError) {
-      setError(searchError instanceof Error ? searchError.message : String(searchError));
+      if (searchGeneration.current === generation) {
+        setError(searchError instanceof Error ? searchError.message : String(searchError));
+      }
     } finally {
-      setLoading(false);
+      if (searchGeneration.current === generation) {
+        searching.current = false;
+        setLoading(false);
+      }
     }
+  };
+
+  const cancel = (): void => {
+    searchGeneration.current += 1;
+    searching.current = false;
+    setLoading(false);
+    setCancelled(true);
+    if (response) setResponse(stoppedResponse(response));
+    void api?.cancelThreadSearch?.().catch(() => undefined);
   };
 
   const resultCount = response?.results.length ?? 0;
@@ -351,12 +387,13 @@ export function ThreadSearchPanel(props: ThreadSearchPanelProps) {
           <ProjectSearchInput value={query} onChange={setQuery} desktopApi={props.desktopApi} />
           <button
             className="button button--primary thread-search__submit"
-            disabled={loading || !query.trim() || searchUnavailable}
+            disabled={!query.trim() || searchUnavailable}
             type="submit"
           >
             <SearchIcon size={15} aria-hidden />
             <span>{loading ? "Searching" : "Search"}</span>
           </button>
+          {loading ? <button className="button button--secondary" type="button" onClick={cancel}>Stop</button> : null}
           <button
             className="button"
             type="button"
@@ -387,13 +424,13 @@ export function ThreadSearchPanel(props: ThreadSearchPanelProps) {
             {response.unavailableScopes.map((scope, index) => (
               <span key={`${scope.scope}:${scope.backend ?? "all"}:${index}`}>
                 {scope.backend ? `${scope.backend} ` : ""}
-                {scope.scope.replace("_", " ")}: {scope.reason}
+                {scope.scope.replace("_", " ")}: {scope.message}
               </span>
             ))}
           </div>
         ) : null}
 
-        {response && resultCount > 0 ? (
+        {response ? (
           <p className="thread-search-results-meta">
             <span>
               <strong>{resultCount}</strong> {resultCount === 1 ? "thread" : "threads"}
@@ -405,7 +442,8 @@ export function ThreadSearchPanel(props: ThreadSearchPanelProps) {
           </p>
         ) : null}
 
-        {loading && !response ? (
+        {cancelled ? <p role="status">Search stopped. Results received so far are shown.</p> : null}
+        {loading && resultCount === 0 ? (
           <ThreadSearchEmptyState
             title="Searching threads…"
             hint="Looking across titles, summaries, branches, and message content."
@@ -435,8 +473,9 @@ export function ThreadSearchPanel(props: ThreadSearchPanelProps) {
             </div>
           ) : (
             <ThreadSearchEmptyState
-              title="No threads match that search"
-              hint={`Nothing came back for “${response.query}”. Try a broader term or different wording.`}
+              title={cancelled ? "Search stopped" : "No threads match that search"}
+              hint={cancelled ? "Run the search again to check all connected instances."
+                : `Nothing came back for “${response.query}”. Try a broader term or different wording.`}
             />
           )
         ) : (

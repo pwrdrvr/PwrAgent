@@ -483,6 +483,7 @@ import {
 import { codexVersionFromUserAgent, resolveCodexProtocolCompatibility } from "../codex-app-server/protocol-compatibility";
 import { subAgentActivityToolCall } from "../codex-app-server/subagent-activity";
 import { ProviderTranscriptThreadSearchAdapter } from "../thread-search/thread-search-provider-adapters";
+import { OwnerContentSearch } from "../thread-search/owner-content-search";
 import { ThreadSearchService } from "../thread-search/thread-search-service";
 import { ThreadSearchStore } from "../thread-search/thread-search-store";
 import {
@@ -44269,6 +44270,12 @@ export class DesktopBackendRegistry {
       };
     }
   }
+
+  readonly ownerContentSearch = new OwnerContentSearch(async (request, signal) => {
+    const service = this.getThreadInspectionSearchService();
+    if (!service) throw new Error("Thread content search is unavailable.");
+    return await service.search(request, signal);
+  });
 
   private getThreadInspectionSearchService(): ThreadSearchService | null {
     if (this.threadInspectionSearchService !== undefined) {

@@ -97,6 +97,17 @@ describe("ThreadSearchStore", () => {
     ).toEqual(["7f2f4bd1-8e7b-4d3b-92e5-0e9ef15c9c84"]);
   });
 
+  it("refreshes changed metadata after skipping an unchanged projection", () => {
+    const original = threadSummary({ id: "audit", title: "Original mail setup", model: "old-model" });
+    store.upsertThread(original);
+    store.upsertThread(original);
+    store.upsertThread({ ...original, title: "Updated mail audit", model: "new-model", summary: "DKIM settings" });
+    expect(store.search({ query: "Original", limit: 10 })).toEqual([]);
+    expect(store.search({ query: "DKIM", limit: 10 })).toEqual([
+      expect.objectContaining({ title: "Updated mail audit", model: "new-model", summary: "DKIM settings" }),
+    ]);
+  });
+
   it("searches by prefixed ACP thread ids and their embedded UUIDs", () => {
     store.upsertThread(
       threadSummary({

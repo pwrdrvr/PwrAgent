@@ -61,6 +61,8 @@ import type {
   FederationCapability,
   FederationJumpSearchRequest,
   FederationJumpSearchResponse,
+  FederationContentSearchRequest,
+  ThreadSearchResponse,
   FederationThreadSearchRequest,
   FederationThreadSearchResponse,
   FederationInstanceId,
@@ -467,6 +469,8 @@ export const FEDERATION_BACKEND_METHODS = {
   getNavigationSnapshot: "backend.getNavigationSnapshot",
   searchNavigationThreads: "backend.searchNavigationThreads",
   searchFederatedThreads: "backend.searchFederatedThreads",
+  searchThreadContent: "backend.searchThreadContent",
+  cancelThreadContentSearch: "backend.cancelThreadContentSearch",
   /** @deprecated Collection enumeration; use bounded queries or exact-ID archive lookup. */
   listThreads: "backend.listThreads",
   resolveThread: "backend.resolveThread",
@@ -603,6 +607,8 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.getNavigationSnapshot]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.searchNavigationThreads]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.searchFederatedThreads]: "federated_search",
+  [FEDERATION_BACKEND_METHODS.searchThreadContent]: "thread_detail",
+  [FEDERATION_BACKEND_METHODS.cancelThreadContentSearch]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.listThreads]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.resolveThread]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.resolveThreadAdmissionState]: "messaging_route",
@@ -789,6 +795,14 @@ export type FederationBackendOperations = {
     request: FederationThreadSearchRequest,
     rpcOptions?: FederationRpcRequestOptions,
   ): Promise<FederationThreadSearchResponse>;
+  searchThreadContent?(
+    request: FederationContentSearchRequest,
+    rpcOptions?: FederationRpcRequestOptions,
+  ): Promise<ThreadSearchResponse>;
+  cancelThreadContentSearch?(
+    request: { searchId: string },
+    rpcOptions?: FederationRpcRequestOptions,
+  ): Promise<void>;
   listThreads(
     request?: AppServerListThreadsRequest,
     rpcOptions?: FederationRpcRequestOptions,
@@ -1205,6 +1219,18 @@ export function registerFederationBackendHandlers(params: {
         );
       },
     );
+  }
+  if (params.backend.searchThreadContent) {
+    params.router.registerHandler(FEDERATION_BACKEND_METHODS.searchThreadContent, async (envelope) =>
+      await params.backend.searchThreadContent!(envelope.params as FederationContentSearchRequest, {
+        deadlineAt: envelope.deadlineAt, requesterInstanceId: envelope.sourceInstanceId,
+      }));
+  }
+  if (params.backend.cancelThreadContentSearch) {
+    params.router.registerHandler(FEDERATION_BACKEND_METHODS.cancelThreadContentSearch, async (envelope) =>
+      await params.backend.cancelThreadContentSearch!(envelope.params as { searchId: string }, {
+        requesterInstanceId: envelope.sourceInstanceId,
+      }));
   }
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.listThreads,
@@ -2182,6 +2208,19 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
       params: request,
       ...rpcOptions,
     });
+  }
+
+  async searchThreadContent(
+    request: FederationContentSearchRequest,
+    rpcOptions?: FederationRpcRequestOptions,
+  ): Promise<ThreadSearchResponse> {
+    return await this.rpc.request<ThreadSearchResponse>({
+      method: FEDERATION_BACKEND_METHODS.searchThreadContent, params: request, ...rpcOptions,
+    });
+  }
+
+  async cancelThreadContentSearch(request: { searchId: string }): Promise<void> {
+    await this.rpc.request({ method: FEDERATION_BACKEND_METHODS.cancelThreadContentSearch, params: request });
   }
 
   async listThreads(

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type {
   NavigationThreadSummary,
@@ -10,6 +10,99 @@ import { basename, highlightSnippet, ThreadSearchPanel } from "../ThreadSearchPa
 import type { DesktopApi } from "../../../lib/desktop-api";
 
 describe("ThreadSearchPanel", () => {
+  it("renders remote content results while another owner is still searching", async () => {
+    const pending = Promise.withResolvers<ThreadSearchResponse>();
+    let progress: ((response: ThreadSearchResponse) => void) | undefined;
+    const searchThreads = vi.fn(async (_request, onProgress) => {
+      progress = onProgress;
+      return await pending.promise;
+    });
+    const onOpenResult = vi.fn();
+    render(<ThreadSearchPanel desktopApi={{ searchThreads } as DesktopApi} onOpenResult={onOpenResult} />);
+    fireEvent.change(screen.getByLabelText("Search threads"), { target: { value: "DKIM" } });
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+    const response: ThreadSearchResponse = {
+      backend: "all", fetchedAt: 1, query: "DKIM", filters: {}, contentMode: "available",
+      semanticMode: "disabled", searchedScopes: ["provider_content"], unavailableScopes: [],
+      remoteInstances: [{ instanceId: "owner", instanceLabel: "Owner Mac", resultCount: 1 },
+        { instanceId: "slow", instanceLabel: "Slow Mac", resultCount: 0, searching: true }],
+      results: [{ backend: "acp:grok", source: "acp:grok", threadId: "audit", identityKey: "remote-audit",
+        title: "Audit example.com against a tweet", score: 25, confidence: "medium", linkedDirectories: [],
+        matchReasons: [{ kind: "provider_content_match" }],
+        snippets: [{ scope: "provider_content", text: "Check DKIM and DMARC", turnId: "match-turn" }],
+        federation: { instanceLabel: "Owner Mac", ref: { backend: "acp:grok", threadId: "audit",
+          target: { scope: "remote", instanceId: "owner" } } } }],
+    };
+    act(() => progress?.(response));
+    expect(screen.getByText("Message content")).toBeInTheDocument();
+    expect(screen.getByText(/Slow Mac searching/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Audit example.com/ }));
+    expect(onOpenResult).toHaveBeenCalledWith(expect.objectContaining({ backend: "acp:grok", turnId: "match-turn",
+      federation: response.results[0].federation }));
+    await act(async () => pending.resolve(response));
+  });
+
+  it("ignores replaced search results and cancels the current search on unmount", async () => {
+    const first = Promise.withResolvers<ThreadSearchResponse>();
+    const second = Promise.withResolvers<ThreadSearchResponse>();
+    const callbacks: Array<(response: ThreadSearchResponse) => void> = [];
+    const searchThreads = vi.fn(async (_request, onProgress) => {
+      callbacks.push(onProgress);
+      return await (callbacks.length === 1 ? first.promise : second.promise);
+    });
+    const cancelThreadSearch = vi.fn(async () => {});
+    const view = render(<ThreadSearchPanel desktopApi={{ searchThreads, cancelThreadSearch } as DesktopApi} onOpenResult={vi.fn()} />);
+    const input = screen.getByLabelText("Search threads");
+    fireEvent.change(input, { target: { value: "DKIM" } });
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+    fireEvent.change(input, { target: { value: "DMARC" } });
+    fireEvent.click(screen.getByRole("button", { name: "Searching" }));
+    const stale: ThreadSearchResponse = { backend: "all", fetchedAt: 1, query: "STALE", filters: {},
+      contentMode: "available", semanticMode: "disabled", results: [], searchedScopes: [], unavailableScopes: [] };
+    act(() => callbacks[0](stale));
+    await act(async () => first.resolve(stale));
+    expect(screen.queryByText(/STALE/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
+    view.unmount();
+    expect(cancelThreadSearch).toHaveBeenCalledOnce();
+    await act(async () => second.resolve(stale));
+  });
+
+  it("marks unfinished owners stopped and ignores late progress after Stop", async () => {
+    const pending = Promise.withResolvers<ThreadSearchResponse>();
+    let progress: ((response: ThreadSearchResponse) => void) | undefined;
+    const cancelThreadSearch = vi.fn(async () => {});
+    const searchThreads = vi.fn(async (_request, onProgress) => { progress = onProgress; return await pending.promise; });
+    render(<ThreadSearchPanel desktopApi={{ searchThreads, cancelThreadSearch } as DesktopApi} onOpenResult={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText("Search threads"), { target: { value: "DKIM" } });
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+    const partial: ThreadSearchResponse = { backend: "all", fetchedAt: 1, query: "DKIM", filters: {},
+      contentMode: "available", semanticMode: "disabled", results: [], searchedScopes: [], unavailableScopes: [],
+      remoteInstances: [{ instanceId: "slow", instanceLabel: "Slow Mac", searching: true, resultCount: 0 }] };
+    act(() => progress?.(partial));
+    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+    expect(cancelThreadSearch).toHaveBeenCalledOnce();
+    expect(screen.getByText(/Slow Mac stopped/)).toBeInTheDocument();
+    act(() => progress?.({ ...partial, query: "STALE" }));
+    await act(async () => pending.resolve({ ...partial, query: "STALE" }));
+    expect(screen.queryByText(/STALE/)).not.toBeInTheDocument();
+  });
+
+  it("shows peer failures even when no results match", async () => {
+    const searchThreads = vi.fn(async (): Promise<ThreadSearchResponse> => ({
+      backend: "all", fetchedAt: 1, query: "DKIM", filters: {}, contentMode: "available",
+      semanticMode: "disabled", results: [], searchedScopes: [],
+      unavailableScopes: [{ scope: "provider_content", reason: "error", message: "Old Mac: Update PwrAgent" }],
+      remoteInstances: [{ instanceId: "old", instanceLabel: "Old Mac", resultCount: 0, failed: true }],
+    }));
+    render(<ThreadSearchPanel desktopApi={{ searchThreads } as DesktopApi} onOpenResult={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText("Search threads"), { target: { value: "DKIM" } });
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+    expect(await screen.findByText(/Old Mac unavailable/)).toBeInTheDocument();
+    expect(screen.getByText(/Old Mac: Update PwrAgent/)).toBeInTheDocument();
+  });
+
   it("toggles accessible search syntax help", () => {
     render(<ThreadSearchPanel onOpenResult={vi.fn()} />);
     const help = screen.getByRole("button", { name: "Search help" });
@@ -39,7 +132,7 @@ describe("ThreadSearchPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Search" }));
     expect(await screen.findByText("DiskHound thread")).toBeInTheDocument();
     expect(screen.queryByText("Other thread")).not.toBeInTheDocument();
-    expect(searchThreads).toHaveBeenCalledWith(expect.objectContaining({ query: "#779 @disk" }));
+    expect(searchThreads).toHaveBeenCalledWith(expect.objectContaining({ query: "#779 @disk" }), expect.any(Function));
   });
 
   it("defaults global search to active threads and opens a result", async () => {

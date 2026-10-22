@@ -751,6 +751,8 @@ import {
   MANAGED_RUNTIME_PROGRESS_READ_CHANNEL,
   APP_SERVER_LIST_THREADS_CHANNEL,
   THREAD_SEARCH_CHANNEL,
+  THREAD_SEARCH_PROGRESS_CHANNEL,
+  THREAD_SEARCH_CANCEL_CHANNEL,
   APP_SERVER_ARCHIVE_THREAD_CHANNEL,
   APP_SERVER_ARCHIVE_WORKTREE_CHANNEL,
   APP_SERVER_HANDOFF_THREAD_WORKSPACE_CHANNEL,
@@ -1150,6 +1152,7 @@ const subscribeToAgentEvent = createEventSubscriptionMultiplexer<AgentEvent>(
 );
 
 let federationJumpSearchRequestSequence = 0;
+let threadSearchRequestSequence = 0;
 
 const desktopApi = Object.freeze({
   manageThreadDependencies: async (request: import("@pwragent/shared").ManageThreadDependenciesRequest): Promise<import("@pwragent/shared").ManageThreadDependenciesResponse> =>
@@ -1626,8 +1629,22 @@ const desktopApi = Object.freeze({
     ),
   searchThreads: async (
     request?: ThreadSearchRequest,
-  ): Promise<ThreadSearchResponse> =>
-    await ipcRenderer.invoke(THREAD_SEARCH_CHANNEL, request),
+    onProgress?: (response: ThreadSearchResponse) => void,
+  ): Promise<ThreadSearchResponse> => {
+    const searchId = ++threadSearchRequestSequence;
+    const listener = (_event: Electron.IpcRendererEvent, update: { searchId: number; response: ThreadSearchResponse }): void => {
+      if (update.searchId === searchId) onProgress?.(update.response);
+    };
+    ipcRenderer.on(THREAD_SEARCH_PROGRESS_CHANNEL, listener);
+    try {
+      return await ipcRenderer.invoke(THREAD_SEARCH_CHANNEL, request, searchId);
+    } finally {
+      ipcRenderer.removeListener(THREAD_SEARCH_PROGRESS_CHANNEL, listener);
+    }
+  },
+  cancelThreadSearch: async (): Promise<void> => {
+    await ipcRenderer.invoke(THREAD_SEARCH_CANCEL_CHANNEL);
+  },
   listSkills: async (
     request?: AppServerListSkillsRequest
   ): Promise<AppServerListSkillsResponse> =>

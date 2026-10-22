@@ -774,6 +774,8 @@
     "rowsChanged": 5,
     "statements": 5
   },
+  "owner-content-search": {"commits": 1, "note": "First owner query with one known thread: one metadata projection commit (~37 KB); 1000 newly discovered threads once/day project ~37 MB/day, zero idle writes. No transcript index.", "observedWalBytes": 37080, "rowsChanged": 2, "statements": 3},
+  "owner-content-search-unchanged": {"commits": 0, "note": "20 repeated owner searches with unchanged metadata: zero commits and 0 MB/day at 20 searches/day; transcript reads add no search persistence.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "owner-pr-candidate-bootstrap": {
     "commits": 1,
     "note": "120 owner PR candidates reconciled at startup/provider completion: one commit when membership changes, never per-thread commits; no idle timer writes",
