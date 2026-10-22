@@ -49,6 +49,8 @@ export const FEDERATION_CAPABILITIES = [
   "turn_queue_reorder",
   /** Owner-side gateway inventory and per-thread MCP selection. */
   "thread_mcp_connections",
+  /** Owner-local To-do and tracked review reads, mutations, and invalidations. */
+  "thread_todos",
 ] as const;
 
 export const FEDERATION_SHUTDOWN_METHOD = "federation/shutdown";

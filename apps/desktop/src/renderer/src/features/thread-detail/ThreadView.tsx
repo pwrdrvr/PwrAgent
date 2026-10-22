@@ -1388,8 +1388,7 @@ export function ThreadView(props: ThreadViewProps) {
   }, [props.activeTurnId]);
 
   const selectedThread = props.selectedThread;
-  // Cards live in this instance's state, so a peer's thread has none.
-  const threadTodoKey = selectedThread && !selectedThread.federation
+  const threadTodoKey = selectedThread
     ? threadSummaryIdentityKey(selectedThread)
     : undefined;
   const threadTodoDirectory = selectedThread?.linkedDirectories[0];

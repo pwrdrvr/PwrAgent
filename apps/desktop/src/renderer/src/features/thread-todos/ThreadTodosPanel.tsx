@@ -1,3 +1,4 @@
+import { threadTodoThreadKey } from "@pwragent/shared";
 import {
   useEffect,
   useId,
@@ -8,7 +9,6 @@ import {
 import type { ThreadTodo, ThreadTodoKind } from "@pwragent/shared";
 import {
   THREAD_TODO_RESOLUTION_RESULTS,
-  buildThreadIdentityKey,
   codexAsyncQuestionItemId,
   operatorTodoItemKey,
   threadTodoItemProgress,
@@ -130,7 +130,7 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
   const todoInScope = (todo: ThreadTodo, lens: ThreadTodoScope): boolean => {
     switch (lens) {
       case "thread":
-        return buildThreadIdentityKey(todo.backend, todo.threadId) === threadKey;
+        return threadTodoThreadKey(todo) === threadKey;
       case "project":
         return projectKey !== undefined
           && (todo.sourceProject?.key === projectKey
@@ -332,7 +332,7 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
                     );
                   }
                   const { todo } = item;
-                  const mine = buildThreadIdentityKey(todo.backend, todo.threadId) === threadKey;
+                  const mine = threadTodoThreadKey(todo) === threadKey;
                   return (
                     <li key={todo.id}>
                       {mine && todo.status === "open" ? (
@@ -521,7 +521,7 @@ function groupItems(
     } else {
       key = scope === "all"
         ? item.todo.sourceProject?.key ?? NO_PROJECT_KEY
-        : buildThreadIdentityKey(item.todo.backend, item.todo.threadId);
+        : threadTodoThreadKey(item.todo);
       title = scope === "all"
         ? item.todo.sourceProject?.label ?? "No project"
         : view.threadTitle(item.todo);

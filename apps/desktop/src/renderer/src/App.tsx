@@ -1,3 +1,4 @@
+import { threadTodoThreadKey, type ThreadTodo } from "@pwragent/shared";
 import { FederationShutdownNotices } from "./features/notifications/FederationShutdownNotices";
 import { AgentThreadRenameNotice } from "./features/notifications/AgentThreadRenameNotice";
 import { CloudflareSignInNotice, CLOUDFLARE_SIGN_IN_NOTICE_ID } from "./features/notifications/CloudflareSignInNotice";
@@ -2419,7 +2420,9 @@ function DesktopAppShell(props: {
     threads: navigation.threads,
   });
   const unassignedThreadDraftCount = useUnassignedThreadDraftCount(composerDraftStore);
-  const threadTodoController = useThreadTodos(desktopApi);
+  const mountedTodoThreadKeys = useMemo(() => navigation.threads.filter((thread) => thread.federation)
+    .map(threadSummaryIdentityKey).sort().join("\n"), [navigation.threads]);
+  const threadTodoController = useThreadTodos(desktopApi, mountedTodoThreadKeys);
   const operatorRequests = useOperatorRequests(desktopApi);
   const operatorWaitsContext = useMemo(
     () => readRendererFederationTarget()
@@ -2433,9 +2436,7 @@ function DesktopAppShell(props: {
   const localThreadTitles = useMemo(() => {
     const titles = new Map<string, string>();
     for (const thread of navigation.threads) {
-      if (!thread.federation) {
-        titles.set(buildThreadIdentityKey(thread.source, thread.id), thread.title);
-      }
+      titles.set(threadSummaryIdentityKey(thread), thread.title);
     }
     return titles;
   }, [navigation.threads]);
@@ -2486,7 +2487,7 @@ function DesktopAppShell(props: {
   const todoProjectMenu = useMemo<ThreadTodoProjectMenu | undefined>(
     () => listThreadTodoProjects && setThreadTodoProject
       ? {
-          list: async () => (await listThreadTodoProjects()).projects,
+          list: async (todo) => (await listThreadTodoProjects({ federationTarget: todo.federationTarget })).projects,
           set: async (todo, projectKey) =>
             (await setThreadTodoProject({ id: todo.id, projectKey })).todo,
         }
@@ -2536,9 +2537,13 @@ function DesktopAppShell(props: {
     onUserRepliedToThread: reportUserRepliedToThread,
   });
   const threadTodosView = useMemo<ThreadTodosView | undefined>(() => {
-    if (!listThreadTodos || readRendererFederationTarget()) return undefined;
-    const showTodoThread = (backend: AppServerBackendKind, threadId: string): void => {
-      showThreadFromLink({ backend, threadId });
+    if (!listThreadTodos) return undefined;
+    const showTodoThread = (todo: ThreadTodo): void => {
+      showThreadFromLink({
+        backend: todo.backend,
+        threadId: todo.threadId,
+        ...(todo.federationTarget ? { instanceId: todo.federationTarget.instanceId } : {}),
+      });
     };
     // Settings is the live source for the default, so the button relabels
     // as soon as it changes there rather than on the next card change.
@@ -2559,7 +2564,7 @@ function DesktopAppShell(props: {
       instances: todoHandoffInstances,
       ...(todoProjectMenu ? { projectMenu: todoProjectMenu } : {}),
       threadTitle: (todo) =>
-        localThreadTitles.get(buildThreadIdentityKey(todo.backend, todo.threadId))
+        localThreadTitles.get(threadTodoThreadKey(todo))
           ?? todo.threadTitle
           ?? "Untitled thread",
       resolve: (todo, status, resolution, options) =>
@@ -2580,16 +2585,17 @@ function DesktopAppShell(props: {
           requestTodoExecutionMode("full-access");
         });
       },
-      openThread: (todo) => showTodoThread(todo.backend, todo.threadId),
+      openThread: (todo) => showTodoThread(todo),
       openStartedThread: (todo) => {
         const started = todo.startedThread;
         if (!started) return;
+        const instanceId = started.instanceId ?? todo.federationTarget?.instanceId;
         showThreadFromLink({
           backend: started.backend,
           threadId: started.threadId,
-          ...(started.instanceId
+          ...(instanceId
             ? {
-                instanceId: started.instanceId,
+                instanceId,
                 ...(started.instanceLabel ? { instanceLabel: started.instanceLabel } : {}),
               }
             : {}),

@@ -1684,6 +1684,7 @@ export type AppServerMcpElicitationRequestNotification = {
 };
 
 export type AppServerNotification =
+  | { method: "thread/todos/changed"; params: import("./thread-todos").ThreadTodosChangedEvent }
   | {
       method: "thread/dependencies/updated";
       params: { threadId: string; dependencyId: string };

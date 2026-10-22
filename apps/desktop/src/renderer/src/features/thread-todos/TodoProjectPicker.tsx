@@ -61,7 +61,7 @@ export function TodoProjectPicker(props: TodoProjectPickerProps) {
   useEffect(() => {
     if (!open || !menu) return;
     let cancelled = false;
-    menu.list().then((listed) => {
+    menu.list(todo).then((listed) => {
       if (!cancelled) setProjects(listed);
     }).catch((listError: unknown) => {
       if (!cancelled) setError(errorText(listError, "Projects could not be listed."));
@@ -69,7 +69,7 @@ export function TodoProjectPicker(props: TodoProjectPickerProps) {
     return () => {
       cancelled = true;
     };
-  }, [open, menu]);
+  }, [open, menu, todo]);
 
   const currentKey = target?.key ?? source?.key;
   const rows = useMemo(() => {
