@@ -100,6 +100,8 @@ export class ClaudeBackend {
   private readonly running = new Map<string, RunningTurn>();
   private installation: ClaudeInstallation = { authStatus: "unknown", message: CLAUDE_SETUP_INSTRUCTIONS };
   private discovery?: { models: boolean; promise: Promise<void> };
+  private modelDiscovery?: Promise<void>;
+  private nextModelRefreshAt = 0;
   private models?: BackendModelOption[];
   // Account-wide, so one thread's turn must never clear another's view.
   private rateLimits: BackendSummary["rateLimits"];
@@ -131,9 +133,7 @@ export class ClaudeBackend {
         const env = claudeEnvironment(await this.options.resolveEnv?.() ?? process.env);
         this.installation = await (this.options.inspectInstallation ?? inspectClaudeInstallation)({ env });
         if (models && this.installation.executable && this.installation.authStatus !== "sign-in-required") {
-          this.models = await (this.options.discoverModels ?? discoverClaudeModels)({
-            executable: this.installation.executable, env,
-          });
+          await this.refreshModelCatalog(env);
         }
         if (claudeHasNoPlanLimits(this.installation)) {
           this.setRateLimits([]);
@@ -167,7 +167,7 @@ export class ClaudeBackend {
         { mode: "auto", label: "Auto", available: true },
         { mode: "full-access", label: "Full Access", available: true },
       ],
-      // Stable aliases remain usable before explicit Settings/setup discovery.
+      // Stable aliases remain usable until global discovery reports models.
       launchpadOptions: { models: this.models ?? [
         { id: "sonnet", label: "Sonnet", supportsImage: true },
         { id: "opus", label: "Opus", supportsImage: true },
@@ -374,6 +374,36 @@ export class ClaudeBackend {
     await this.options.emit({ backend: "claude", notification });
   }
 
+  private async publishModels(models: BackendModelOption[]): Promise<void> {
+    if (models.length === 0) return;
+    const changed = JSON.stringify(this.models) !== JSON.stringify(models);
+    this.models = models;
+    if (changed) await this.emit({ method: "backend/providerStatus/updated", params: { backend: "claude" } });
+  }
+
+  private refreshModelCatalog(env: NodeJS.ProcessEnv): Promise<void> {
+    if (this.modelDiscovery) return this.modelDiscovery;
+    const { executable, version } = this.installation;
+    if (!executable) return Promise.resolve();
+    this.modelDiscovery = (async () => {
+      const models = await (this.options.discoverModels ?? discoverClaudeModels)({
+        executable, env, ...(version ? { cliVersion: version } : {}),
+      });
+      this.nextModelRefreshAt = Date.now() + 60_000;
+      await this.publishModels(models);
+    })().finally(() => { this.modelDiscovery = undefined; });
+    return this.modelDiscovery;
+  }
+
+  private async refreshGlobalModels(): Promise<void> {
+    if (Date.now() < this.nextModelRefreshAt) return;
+    // A new turn can recover missing/stale metadata, but never spawns more
+    // than one global probe per minute or waits for it to consume the stream.
+    this.nextModelRefreshAt = Date.now() + 60_000;
+    const env = claudeEnvironment(await this.options.resolveEnv?.() ?? process.env);
+    await this.refreshModelCatalog(env);
+  }
+
   private async consume(session: ClaudeSession, running: RunningTurn): Promise<void> {
     const threadId = session.thread.id;
     const turnId = running.turnId;
@@ -385,6 +415,9 @@ export class ClaudeBackend {
     try {
       for await (const message of running.query!) {
         if (message.type === "system" && message.subtype === "init") {
+          // Never publish this query's project-scoped supportedModels() to
+          // the backend-wide picker. Recover through separate global discovery.
+          void this.refreshGlobalModels().catch(() => {});
           session.sdkSessionId = message.session_id;
           const current = await this.store.read(threadId);
           current.sdkSessionId = message.session_id;

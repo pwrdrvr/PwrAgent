@@ -31,6 +31,7 @@ async function fixture(params: {
   const backend = new ClaudeBackend({
     store: new ClaudeSessionStore(root),
     query: run,
+    discoverModels: async () => [],
     inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" as const }),
     readCommands: params.readCommands,
     resolveEnv: async () => ({ PATH: "/fixture" }),

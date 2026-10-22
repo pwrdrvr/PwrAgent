@@ -1,6 +1,9 @@
 import { spawn } from "node:child_process";
 import { query, type ModelInfo, type Options, type Query, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { BackendModelOption } from "@pwragent/shared";
+import { getMainLogger } from "../log";
+
+const claudeModelLog = getMainLogger("pwragent:claude-models");
 
 /** Keep discovery and turns on the same unmodified Claude Code harness. */
 export function claudeHarnessOptions(executable: string, env: NodeJS.ProcessEnv): Options {
@@ -24,15 +27,19 @@ export function claudeHarnessOptions(executable: string, env: NodeJS.ProcessEnv)
 export async function discoverClaudeModels(params: {
   executable: string;
   env: NodeJS.ProcessEnv;
+  cliVersion?: string;
   query?: typeof query;
 }): Promise<BackendModelOption[]> {
   const models = await readClaudeMetadata({
     ...params,
+    // This catalog feeds every project. Project/local availableModels settings
+    // belong to actual turns and must not restrict the global model picker.
+    settingSources: ["user"],
     read: (session) => session.supportedModels(),
     timeoutMessage: "Claude model discovery timed out. Check the CLI and try again.",
   });
   if (models.length === 0) throw new Error("Claude returned no available models.");
-  return claudeModelOptions(models);
+  return claudeModelOptions(models, { source: "discovery", cliVersion: params.cliVersion });
 }
 
 /**
@@ -44,6 +51,7 @@ export async function readClaudeMetadata<T>(params: {
   executable: string;
   env: NodeJS.ProcessEnv;
   cwd?: string;
+  settingSources?: Options["settingSources"];
   query?: typeof query;
   read: (session: Query) => Promise<T>;
   timeoutMessage: string;
@@ -64,6 +72,7 @@ export async function readClaudeMetadata<T>(params: {
       options: {
         ...claudeHarnessOptions(params.executable, params.env),
         ...(params.cwd ? { cwd: params.cwd } : {}),
+        ...(params.settingSources ? { settingSources: params.settingSources } : {}),
         abortController: controller,
         persistSession: false,
         // Metadata reads need no tools or MCP connections.
@@ -89,12 +98,38 @@ function familyVersion(model: ModelInfo): { family: string; version: number[] } 
   return match ? { family: match[1].toLowerCase(), version: match[2].split(".").map(Number) } : undefined;
 }
 
+function withResolvedVersion(model: ModelInfo): ModelInfo {
+  // Some initialize handshakes return only generic display names even though
+  // they resolve each alias to a versioned model. Keep the selectable alias and
+  // any explicit/custom label; enrich only a bare family name we can identify.
+  const match = /^claude-([a-z]+)-(\d{1,3})(?:-(\d{1,3}))?(?:-\d{8})?(?:\[\d+[mk]\])?$/i
+    .exec(model.resolvedModel ?? model.value);
+  if (!match || model.displayName.replace(/^Claude\s+/i, "").toLowerCase() !== match[1].toLowerCase()) return model;
+  const version = match[3] ? `${match[2]}.${match[3]}` : match[2];
+  const context = /\[(\d+[mk])\]$/i.exec(model.value) ?? /\[(\d+[mk])\]$/i.exec(model.resolvedModel ?? "");
+  return { ...model, displayName: `${model.displayName} ${version}${context ? ` (${context[1].toUpperCase()} context)` : ""}` };
+}
+
 /** Preserve the CLI's order and aliases; only older versions move to the submenu. */
-export function claudeModelOptions(catalog: ModelInfo[]): BackendModelOption[] {
+export function claudeModelOptions(catalog: ModelInfo[], diagnostics?: {
+  source: "discovery" | "session";
+  cliVersion?: string;
+}): BackendModelOption[] {
+  if (diagnostics) {
+    // Aggregate metadata only: no model IDs, custom labels, paths, or account data.
+    claudeModelLog.info("Claude model catalog received", {
+      source: diagnostics.source,
+      cliVersion: diagnostics.cliVersion,
+      modelCount: catalog.length,
+      versionedNameCount: catalog.filter((model) => familyVersion(model)).length,
+      resolvedGenericNameCount: catalog.filter((model) => withResolvedVersion(model) !== model).length,
+    });
+  }
   const defaultModel = catalog.find((model) => model.value === "default");
   const models = catalog.filter((model) => model !== defaultModel
     || !defaultModel.resolvedModel
-    || !catalog.some((other) => other !== defaultModel && other.resolvedModel === defaultModel.resolvedModel));
+    || !catalog.some((other) => other !== defaultModel && other.resolvedModel === defaultModel.resolvedModel))
+    .map(withResolvedVersion);
   const newest = new Map<string, { model: ModelInfo; version: number[] }>();
   for (const model of models) {
     const parsed = familyVersion(model);

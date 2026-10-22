@@ -85,6 +85,7 @@ describe("sqlite write metrics", () => {
       claudeBackendOptions: {
         store: new ClaudeSessionStore(path.join(tempDir, "claude")),
         inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+        discoverModels: async () => [],
         query: ({ prompt, options = {} }) => {
           const first = queries.length === 0;
           queries.push(options);

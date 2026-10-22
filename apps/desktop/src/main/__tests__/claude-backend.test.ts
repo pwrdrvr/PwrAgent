@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Options, Query, SDKMessage, query } from "@anthropic-ai/claude-agent-sdk";
-import type { AgentEvent } from "@pwragent/shared";
+import type { AgentEvent, BackendModelOption } from "@pwragent/shared";
 import { ClaudeBackend } from "../claude/claude-backend";
 import { ClaudeSessionStore } from "../claude/claude-session-store";
 import { createClaudePermissionHandler, claudePermissionMode } from "../claude/claude-permissions";
@@ -44,6 +44,7 @@ async function fixture(messages?: (options: Options) => AsyncGenerator<SDKMessag
   const backendOptions = {
     store,
     query: run,
+    discoverModels: vi.fn().mockResolvedValue([]),
     inspectInstallation: vi.fn(async (_options?: Parameters<typeof import("../claude/claude-executable").inspectClaudeInstallation>[0]) => ({
       executable: "/fixture/claude", authStatus: "signed-in" as const,
     })),
@@ -476,7 +477,7 @@ describe("Claude SDK backend", () => {
     await expect(f.backend.listMcpServers(threadId)).rejects.toThrow("while a turn is running");
   });
 
-  it("discovers the model catalog only on an explicit refresh and retains it when a later refresh fails", async () => {
+  it("publishes discovery immediately and retains the catalog when a later refresh fails", async () => {
     const f = await fixture();
     const models = [{ id: "fable", label: "Fable 5.1", current: true }];
     const discoverModels = vi.fn().mockResolvedValue(models);
@@ -486,9 +487,110 @@ describe("Claude SDK backend", () => {
     await backend.discover();
     expect(discoverModels).toHaveBeenCalledWith({ executable: "/fixture/claude", env: { PATH: "/fixture" } });
     expect(backend.summary().launchpadOptions?.models).toEqual(models);
+    expect(f.events).toEqual([{ backend: "claude", notification: {
+      method: "backend/providerStatus/updated", params: { backend: "claude" },
+    } }]);
     discoverModels.mockRejectedValueOnce(new Error("Discovery failed"));
     await expect(backend.discover()).rejects.toThrow("Discovery failed");
     expect(backend.summary().launchpadOptions?.models).toEqual(models);
+  });
+
+  it("shares pending global discovery across differently configured projects without publishing either session catalog", async () => {
+    const supportedModels = vi.fn()
+      .mockResolvedValueOnce([{ value: "haiku", displayName: "Haiku 5.5", description: "Project A only" }])
+      .mockResolvedValue([{ value: "sonnet", displayName: "Sonnet 5.5", description: "Project B only" }]);
+    const f = await fixture(undefined, { supportedModels });
+    let resolveDiscovery!: (models: BackendModelOption[]) => void;
+    const discoverModels = vi.fn(() => new Promise<BackendModelOption[]>((resolve) => { resolveDiscovery = resolve; }));
+    const backend = new ClaudeBackend({ ...f.backendOptions, discoverModels });
+    const discovery = backend.discover();
+    await vi.waitFor(() => expect(discoverModels).toHaveBeenCalledTimes(1));
+    const directories = [path.join(f.root, "project-a"), path.join(f.root, "project-b")];
+    for (const cwd of directories) {
+      f.events.length = 0;
+      const { threadId } = await backend.startThread({ cwd, executionMode: "default" });
+      await backend.startTurn({ threadId, input: [{ type: "text", text: "Hi" }] });
+      await f.waitForTurn();
+      expect(backend.summary().launchpadOptions?.models?.map((model) => model.label)).toEqual(["Sonnet", "Opus", "Haiku"]);
+    }
+    expect(discoverModels).toHaveBeenCalledTimes(1);
+    expect(supportedModels).not.toHaveBeenCalled();
+    expect(f.queries.map((options) => options.cwd)).toEqual(directories);
+    for (const options of f.queries) expect(options.settingSources).toEqual(["user", "project", "local"]);
+    const globalModels = [{ id: "opus", label: "Opus 5.5" }, { id: "fable", label: "Fable 5.1" }];
+    resolveDiscovery(globalModels);
+    await discovery;
+    expect(backend.summary().launchpadOptions?.models).toEqual(globalModels);
+    // Subsequent turns in the restricted project keep the shared global catalog.
+    f.events.length = 0;
+    const { threadId } = await backend.startThread({ cwd: directories[0], executionMode: "default" });
+    await backend.startTurn({ threadId, input: [{ type: "text", text: "Hi again" }] });
+    await f.waitForTurn();
+    expect(backend.summary().launchpadOptions?.models).toEqual(globalModels);
+    expect(discoverModels).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["failed", "signed-out"])("recovers the global catalog in the background after %s startup discovery", async (startup) => {
+    const supportedModels = vi.fn().mockResolvedValue([
+      { value: "haiku", displayName: "Haiku 5.5", description: "Restricted project" },
+    ]);
+    const f = await fixture(undefined, { supportedModels });
+    const globalModels = [
+      { id: "opus", label: "Opus 5.5" },
+      { id: "fable", label: "Fable 5.1", reasoningEfforts: ["default", "high"] },
+    ];
+    const discoverModels = vi.fn().mockResolvedValue(globalModels);
+    if (startup === "failed") discoverModels.mockRejectedValueOnce(new Error("Startup discovery unavailable"));
+    const inspectInstallation = vi.fn()
+      .mockResolvedValueOnce({ executable: "/fixture/claude", authStatus: startup === "signed-out" ? "sign-in-required" : "signed-in" })
+      .mockResolvedValue({ executable: "/fixture/claude", authStatus: "signed-in" });
+    const backend = new ClaudeBackend({ ...f.backendOptions, inspectInstallation, discoverModels });
+    if (startup === "failed") await expect(backend.discover()).rejects.toThrow("Startup discovery unavailable");
+    else await backend.discover();
+    expect(backend.summary().launchpadOptions?.models?.map((model) => model.label)).toEqual(["Sonnet", "Opus", "Haiku"]);
+    const { threadId } = await backend.startThread({ cwd: f.root, executionMode: "default" });
+    await backend.startTurn({ threadId, input: [{ type: "text", text: "Hi" }] });
+    await f.waitForTurn();
+    expect(backend.summary().launchpadOptions?.models).toEqual(globalModels);
+    expect(f.events).toContainEqual({ backend: "claude", notification: {
+      method: "backend/providerStatus/updated", params: { backend: "claude" },
+    } });
+    expect(supportedModels).not.toHaveBeenCalled();
+    expect(f.run).toHaveBeenCalledTimes(1);
+    expect(discoverModels).toHaveBeenCalledTimes(startup === "failed" ? 2 : 1);
+  });
+
+  it("streams during global recovery and throttles later failed or empty probes while retaining the catalog", async () => {
+    const f = await fixture();
+    let resolveModels!: (models: BackendModelOption[]) => void;
+    const discoverModels = vi.fn().mockImplementationOnce(() => new Promise<BackendModelOption[]>((resolve) => { resolveModels = resolve; }))
+      .mockRejectedValueOnce(new Error("Metadata unavailable")).mockResolvedValue([]);
+    const backend = new ClaudeBackend({ ...f.backendOptions, discoverModels });
+    let now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      const { threadId } = await backend.startThread({ cwd: f.root, executionMode: "default" });
+      const turn = async () => {
+        f.events.length = 0;
+        await backend.startTurn({ threadId, input: [{ type: "text", text: "Hi" }] });
+        await f.waitForTurn();
+      };
+      await turn();
+      expect((await backend.readThread(threadId)).lastAssistantMessage).toBe("Hello world");
+      expect(discoverModels).toHaveBeenCalledTimes(1);
+      resolveModels([{ id: "opus", label: "Opus 5.5" }]);
+      await vi.waitFor(() => expect(backend.summary().launchpadOptions?.models?.[0].label).toBe("Opus 5.5"));
+      await turn();
+      expect(discoverModels).toHaveBeenCalledTimes(1);
+      for (const attempt of [2, 3]) {
+        now += 60_001;
+        await turn();
+        expect(discoverModels).toHaveBeenCalledTimes(attempt);
+        expect(backend.summary().launchpadOptions?.models?.[0].label).toBe("Opus 5.5");
+        await turn();
+        expect(discoverModels).toHaveBeenCalledTimes(attempt);
+      }
+    } finally { clock.mockRestore(); }
   });
 
   it.each(["max", "default"])("passes an explicit effort and preserves the CLI default (%s)", async (reasoningEffort) => {
