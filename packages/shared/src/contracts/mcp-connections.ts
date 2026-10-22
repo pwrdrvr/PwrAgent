@@ -90,6 +90,10 @@ export type McpConnectionStatus = McpConnectionRecord & {
   detail?: string;
 };
 
+export type ListMcpConnectionsRequest = {
+  federationTarget?: FederationRemoteTarget;
+};
+
 export type ListMcpConnectionsResponse = {
   connections: McpConnectionStatus[];
 };
@@ -320,6 +324,7 @@ export type OpenPwrGitResponse = OpenPwrSnapResponse;
  * that cannot enforce it.
  */
 export type SetThreadMcpConnectionsRequest = {
+  federationTarget?: FederationRemoteTarget;
   backend: AppServerBackendKind;
   threadId: string;
   connectionIds: McpConnectionId[];
@@ -327,6 +332,7 @@ export type SetThreadMcpConnectionsRequest = {
 };
 
 export type ReadThreadMcpConnectionsRequest = {
+  federationTarget?: FederationRemoteTarget;
   backend: AppServerBackendKind;
   threadId: string;
 };
@@ -639,6 +645,7 @@ export type ThreadMcpConnectionReport = {
 };
 
 export type DescribeThreadMcpConnectionsRequest = {
+  federationTarget?: FederationRemoteTarget;
   backend: AppServerBackendKind;
   threadId: string;
 };

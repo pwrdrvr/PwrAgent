@@ -137,6 +137,7 @@ import type {
   ListAutomationsResponse,
   ListBackendsRequest,
   ListBackendsResponse,
+  ListMcpConnectionsRequest,
   ListMcpConnectionsResponse,
   ListCodexMcpServersRequest,
   ListCodexMcpServersResponse,
@@ -1174,8 +1175,8 @@ const desktopApi = Object.freeze({
   },
   readTranscriptImage: async (url: string): Promise<{ dataBase64: string; mimeType: string }> =>
     await ipcRenderer.invoke(TRANSCRIPT_IMAGE_READ_CHANNEL, url),
-  listMcpConnections: async (): Promise<ListMcpConnectionsResponse> =>
-    await ipcRenderer.invoke(MCP_CONNECTION_LIST_CHANNEL),
+  listMcpConnections: async (request?: ListMcpConnectionsRequest): Promise<ListMcpConnectionsResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_LIST_CHANNEL, request),
   createMcpConnection: async (
     request: CreateMcpConnectionRequest,
   ): Promise<CreateMcpConnectionResponse> =>

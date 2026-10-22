@@ -189,6 +189,7 @@ import type {
   ListAutomationsResponse,
   ListBackendsRequest,
   ListBackendsResponse,
+  ListMcpConnectionsRequest,
   ListMcpConnectionsResponse,
   ListCodexMcpServersRequest,
   ListCodexMcpServersResponse,
@@ -598,7 +599,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   copyText?: (text: string) => Promise<void>;
   copyRichText?: (payload: { text: string; html: string }) => Promise<void>;
   readTranscriptImage?: (url: string) => Promise<{ dataBase64: string; mimeType: string }>;
-  listMcpConnections?: () => Promise<ListMcpConnectionsResponse>;
+  listMcpConnections?: (request?: ListMcpConnectionsRequest) => Promise<ListMcpConnectionsResponse>;
   createMcpConnection?: (
     request: CreateMcpConnectionRequest,
   ) => Promise<CreateMcpConnectionResponse>;

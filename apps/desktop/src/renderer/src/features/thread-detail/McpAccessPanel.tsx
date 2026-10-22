@@ -6,10 +6,19 @@ import {
   type AppServerBackendKind,
   type DescribeThreadMcpConnectionsResponse,
   type McpConnectionStatus,
+  type FederationRemoteTarget,
+  type NavigationThreadSummary,
 } from "@pwragent/shared";
 import { CloseIcon } from "../../icons";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { SettingsSwitch } from "../settings/SettingsSwitch";
+
+export function supportsThreadMcpAccess(
+  federation: NavigationThreadSummary["federation"],
+): boolean {
+  return !federation
+    || federation.capabilities?.includes("thread_mcp_connections") === true;
+}
 
 export type McpAccessSelection = {
   connectionIds: string[];
@@ -19,6 +28,7 @@ export type McpAccessSelection = {
 type McpAccessPanelProps = {
   backend: AppServerBackendKind;
   desktopApi?: DesktopApi;
+  federationTarget?: FederationRemoteTarget;
   /** Current selection; the caller owns it so launchpad and thread differ. */
   selection: McpAccessSelection;
   /** A failure the caller hit while loading the selection, shown inline. */
@@ -79,14 +89,16 @@ export function McpAccessPanel(props: McpAccessPanelProps) {
       return;
     }
     try {
-      const response = await props.desktopApi.listMcpConnections();
+      const response = await props.desktopApi.listMcpConnections(
+        props.federationTarget ? { federationTarget: props.federationTarget } : undefined,
+      );
       setConnections(response.connections);
       setError(undefined);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
       setConnections([]);
     }
-  }, [props.desktopApi]);
+  }, [props.desktopApi, props.federationTarget]);
 
   useEffect(() => {
     void refresh();
@@ -96,7 +108,7 @@ export function McpAccessPanel(props: McpAccessPanelProps) {
   // resolves, so every control has to be inert while one is in flight. A
   // second toggle would otherwise compose against the pre-write value and
   // silently revert the first one.
-  const busy = busyId !== undefined;
+  const busy = busyId !== undefined || props.readError !== undefined;
 
   const apply = async (
     update: (current: McpAccessSelection) => McpAccessSelection,
@@ -146,6 +158,11 @@ export function McpAccessPanel(props: McpAccessPanelProps) {
         </div>
       </header>
       <div className="live-work-rail__body" id={bodyId}>
+        {props.federationTarget ? (
+          <p className="mcp-access-panel__detail">
+            Connections on the remote machine running this thread. Manage sign-in and setup on that machine.
+          </p>
+        ) : null}
         {!backendSupported ? (
           <p className="mcp-access-panel__state">
             This backend cannot use MCP connections. Choose Codex, Claude, or an ACP agent.
@@ -321,6 +338,7 @@ export function McpAccessPanel(props: McpAccessPanelProps) {
             backend={props.backend}
             desktopApi={props.desktopApi}
             threadId={props.threadId}
+            federationTarget={props.federationTarget}
             token={props.verifyToken ?? 0}
           />
         ) : null}
@@ -357,11 +375,12 @@ export function McpAccessPanel(props: McpAccessPanelProps) {
 export function useThreadMcpConnectionCount(params: {
   backend: AppServerBackendKind;
   desktopApi?: DesktopApi;
+  federationTarget?: FederationRemoteTarget;
   threadId?: string;
   /** Bumped by the caller after a write, so the chip re-reads. */
   token?: number;
 }): number | undefined {
-  const { backend, desktopApi, threadId, token } = params;
+  const { backend, desktopApi, federationTarget, threadId, token } = params;
   const [count, setCount] = useState<number>();
   // A selection can also change from outside this window -- a peer, a
   // messaging surface, a second window -- and `thread/mcpConnections/updated`
@@ -375,32 +394,37 @@ export function useThreadMcpConnectionCount(params: {
     if (!subscribe || !threadId) return;
     return subscribe((event) => {
       if (event.notification.method !== "thread/mcpConnections/updated") return;
-      if (event.notification.params.threadId !== threadId) return;
+      if (event.backend !== backend || event.notification.params.threadId !== threadId) return;
+      const eventOwner = event.federationTarget?.scope === "remote"
+        ? event.federationTarget.instanceId
+        : undefined;
+      if (eventOwner !== federationTarget?.instanceId) return;
       setBusToken((current) => current + 1);
     });
-  }, [desktopApi, threadId]);
+  }, [backend, desktopApi, federationTarget, threadId]);
 
   useEffect(() => {
     let cancelled = false;
     const read = desktopApi?.readThreadMcpConnections;
-    if (!read || !threadId) {
-      setCount(undefined);
-      return;
-    }
+    setCount(undefined);
+    if (!read || !threadId) return;
     void (async () => {
       try {
-        const response = await read({ backend, threadId });
+        const response = await read({
+          backend,
+          threadId,
+          ...(federationTarget ? { federationTarget } : {}),
+        });
         if (!cancelled) setCount(response.connectionIds.length);
       } catch {
-        // A federated window refuses this read. A missing chip is the right
-        // answer there; an error badge would be noise.
+        // A disconnected owner cannot supply a current selection.
         if (!cancelled) setCount(undefined);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [backend, busToken, desktopApi, threadId, token]);
+  }, [backend, busToken, desktopApi, federationTarget, threadId, token]);
 
   return count;
 }
@@ -420,20 +444,27 @@ export function useThreadMcpConnectionCount(params: {
 function ThreadMcpVerification(props: {
   backend: AppServerBackendKind;
   desktopApi?: DesktopApi;
+  federationTarget?: FederationRemoteTarget;
   threadId: string;
   token: number;
 }) {
   const [report, setReport] = useState<DescribeThreadMcpConnectionsResponse>();
   const [failed, setFailed] = useState(false);
-  const { backend, desktopApi, threadId, token } = props;
+  const { backend, desktopApi, federationTarget, threadId, token } = props;
 
   useEffect(() => {
     let cancelled = false;
     const describe = desktopApi?.describeThreadMcpConnections;
+    setReport(undefined);
+    setFailed(false);
     if (!describe) return;
     void (async () => {
       try {
-        const response = await describe({ backend, threadId });
+        const response = await describe({
+          backend,
+          threadId,
+          ...(federationTarget ? { federationTarget } : {}),
+        });
         if (!cancelled) {
           setReport(response);
           setFailed(false);
@@ -445,7 +476,7 @@ function ThreadMcpVerification(props: {
     return () => {
       cancelled = true;
     };
-  }, [backend, desktopApi, threadId, token]);
+  }, [backend, desktopApi, federationTarget, threadId, token]);
 
   if (failed || !report || report.connections.length === 0) return null;
 
@@ -503,6 +534,7 @@ function ThreadMcpVerification(props: {
 type ThreadMcpAccessPanelProps = {
   backend: AppServerBackendKind;
   desktopApi?: DesktopApi;
+  federationTarget?: FederationRemoteTarget;
   threadId: string;
   onDismiss: () => void;
   onOpenSettings?: () => void;
@@ -518,10 +550,12 @@ export function ThreadMcpAccessPanel(props: ThreadMcpAccessPanelProps) {
   const [selection, setSelection] = useState<McpAccessSelection>();
   const [error, setError] = useState<string>();
   const [verifyToken, setVerifyToken] = useState(0);
-  const { backend, desktopApi, threadId } = props;
+  const { backend, desktopApi, federationTarget, threadId } = props;
 
   useEffect(() => {
     let cancelled = false;
+    setSelection(undefined);
+    setError(undefined);
     const read = desktopApi?.readThreadMcpConnections;
     if (!read) {
       setSelection({ connectionIds: [], providerServersEnabled: true });
@@ -529,7 +563,11 @@ export function ThreadMcpAccessPanel(props: ThreadMcpAccessPanelProps) {
     }
     void (async () => {
       try {
-        const response = await read({ backend, threadId });
+        const response = await read({
+          backend,
+          threadId,
+          ...(federationTarget ? { federationTarget } : {}),
+        });
         if (cancelled) return;
         setSelection({
           connectionIds: response.connectionIds,
@@ -544,7 +582,7 @@ export function ThreadMcpAccessPanel(props: ThreadMcpAccessPanelProps) {
     return () => {
       cancelled = true;
     };
-  }, [backend, desktopApi, threadId]);
+  }, [backend, desktopApi, federationTarget, threadId]);
 
   if (!selection) {
     return (
@@ -565,6 +603,7 @@ export function ThreadMcpAccessPanel(props: ThreadMcpAccessPanelProps) {
     <McpAccessPanel
       backend={backend}
       desktopApi={desktopApi}
+      federationTarget={federationTarget}
       readError={error}
       selection={selection}
       threadId={threadId}
@@ -575,6 +614,7 @@ export function ThreadMcpAccessPanel(props: ThreadMcpAccessPanelProps) {
         const write = desktopApi?.setThreadMcpConnections;
         if (!write) throw new Error("This window cannot change MCP access.");
         const response = await write({
+          ...(federationTarget ? { federationTarget } : {}),
           backend,
           threadId,
           connectionIds: next.connectionIds,

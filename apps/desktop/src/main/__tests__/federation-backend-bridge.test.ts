@@ -29,6 +29,53 @@ import { FEDERATION_MAX_FRAME_BYTES } from "../federation/federation-transport";
 import { pageNormalizedReplay } from "../app-server/thread-replay-pagination";
 
 describe("federation backend bridge", () => {
+  it("round-trips gateway connections and thread MCP selection through the owner", async () => {
+    const request = { backend: "codex" as const, threadId: "thread-1" };
+    const selection = { connectionIds: ["rovo"], providerServersEnabled: false };
+    const backend = {
+      listMcpConnections: vi.fn(async () => ({ connections: [{ id: "rovo" }] })),
+      readThreadMcpConnections: vi.fn(async () => selection),
+      setThreadMcpConnections: vi.fn(async () => selection),
+      describeThreadMcpConnections: vi.fn(async () => ({ connections: [{ connectionId: "rovo", toolCount: 12 }] })),
+    };
+    const router = new FederationRouter({
+      localInstanceId: "owner_one",
+      methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+    });
+    let rpc: FederationRpcEndpoint;
+    router.registerConnection({
+      peerId: "viewer_one",
+      capabilities: ["thread_detail", "turn_control"],
+      sendEnvelope: (envelope) => { rpc.receiveEnvelope(envelope); },
+    });
+    registerFederationBackendHandlers({ router, backend: backend as unknown as FederationBackendOperations });
+    rpc = new FederationRpcEndpoint({
+      localInstanceId: "viewer_one",
+      remoteInstanceId: "owner_one",
+      sendEnvelope: (envelope) => { void router.routeEnvelope({ envelope, sourcePeerId: "viewer_one" }); },
+    });
+    const client = new FederationRemoteBackendClient(rpc);
+
+    expect(await client.listMcpConnections()).toEqual({ connections: [{ id: "rovo" }] });
+    expect(await client.readThreadMcpConnections(request)).toEqual(selection);
+    expect(await client.setThreadMcpConnections({ ...request, ...selection })).toEqual(selection);
+    expect(await client.describeThreadMcpConnections(request)).toEqual({ connections: [{ connectionId: "rovo", toolCount: 12 }] });
+    expect(backend.listMcpConnections).toHaveBeenCalledOnce();
+    expect(backend.readThreadMcpConnections).toHaveBeenCalledWith(request);
+    expect(backend.setThreadMcpConnections).toHaveBeenCalledWith({ ...request, ...selection });
+    expect(backend.describeThreadMcpConnections).toHaveBeenCalledWith(request);
+
+    // A viewer with read permission can inspect connections without changing access.
+    router.registerConnection({
+      peerId: "viewer_one",
+      capabilities: ["thread_detail"],
+      sendEnvelope: (envelope) => { rpc.receiveEnvelope(envelope); },
+    });
+    await expect(client.setThreadMcpConnections({ ...request, ...selection })).rejects.toThrow();
+    expect(backend.setThreadMcpConnections).toHaveBeenCalledOnce();
+    expect(await client.readThreadMcpConnections(request)).toEqual(selection);
+  });
+
   it("keeps remote environment selection unbounded and forwards setup progress", async () => {
     const sent: FederationProtocolEnvelope[] = [];
     const onEnvironmentSetupProgress = vi.fn();
@@ -3726,6 +3773,10 @@ describe("federation backend bridge", () => {
         threadId: "thread-1",
         turnId: "compact-1",
       })),
+      listMcpConnections: vi.fn(),
+      readThreadMcpConnections: vi.fn(),
+      setThreadMcpConnections: vi.fn(),
+      describeThreadMcpConnections: vi.fn(),
       listThreadMcpServers: vi.fn(async () => ({
         backend: "codex" as const,
         threadId: "thread-1",
@@ -4147,7 +4198,11 @@ describe("federation backend bridge", () => {
         cancelScheduledThreadAction: vi.fn(),
         sendScheduledThreadActionNow: vi.fn(),
         compactThread: vi.fn(),
-        listThreadMcpServers: vi.fn(),
+        listMcpConnections: vi.fn(),
+      readThreadMcpConnections: vi.fn(),
+      setThreadMcpConnections: vi.fn(),
+      describeThreadMcpConnections: vi.fn(),
+      listThreadMcpServers: vi.fn(),
         reloadCodexMcpConfig: vi.fn(),
         resolveActiveTurn: vi.fn(),
         interruptTurn: vi.fn(),
