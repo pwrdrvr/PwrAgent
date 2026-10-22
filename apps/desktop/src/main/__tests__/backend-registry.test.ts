@@ -29734,6 +29734,142 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("rejects a Claude thread's own review before checking its model against Codex", async () => {
+    // A Claude thread's composer once sent its own provider and model as the
+    // reviewer. The model check then read the Codex catalog and reported
+    // "opus" missing from a list of GPT models.
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start", "review/start"] },
+      models: [{ id: "gpt-5.5", label: "GPT-5.5", current: true, supportsReasoning: true }],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      pdfToolMcpServer: null,
+      claudeBackendOptions: {
+        inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+        discoverModels: async () => [],
+      },
+    });
+    try {
+      const review = registry.startReview({
+        backend: "claude",
+        threadId: "claude-thread",
+        target: { type: "baseBranch", branch: "main" },
+        delivery: "inline",
+        model: "opus",
+        reasoningEffort: "high",
+      });
+      await expect(review).rejects.toThrow(
+        "Selected review provider cannot run reviews: claude",
+      );
+      expect(codexClient.lastStartReviewParams).toBeUndefined();
+      expect(codexClient.lastStartThreadParams).toBeUndefined();
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("runs a Codex review child in its Claude parent's workspace", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-review-"));
+    const worktreePath = "/repo/.worktrees/claude-review";
+    const claudeId = "7b2e3d4c-5f60-4b8c-9dae-1f2a3b4c5d6e";
+    const store = new ClaudeSessionStore(path.join(root, "sessions"));
+    await store.save({ cwd: worktreePath, thread: {
+      id: claudeId, title: "Claude parent", titleSource: "explicit", source: "claude", updatedAt: 1,
+      linkedDirectories: [{ id: worktreePath, kind: "local", label: "claude-review", path: worktreePath }],
+    } });
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start"] },
+      models: [{ id: "gpt-5.5", label: "GPT-5.5", current: true, supportsReasoning: true }],
+      startThreadResult: { threadId: "codex-review-child" },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      pdfToolMcpServer: null,
+      claudeBackendOptions: {
+        store,
+        inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+        discoverModels: async () => [],
+      },
+    });
+    try {
+      const response = await registry.startReview({
+        backend: "claude",
+        reviewBackend: "codex",
+        runMode: "pwragent-sub-agent",
+        threadId: claudeId,
+        target: { type: "baseBranch", branch: "main" },
+        delivery: "inline",
+        model: "gpt-5.5",
+        reasoningEffort: "high",
+      });
+      expect(response).toMatchObject({
+        backend: "claude",
+        threadId: claudeId,
+        reviewThreadId: "codex-review-child",
+      });
+      // Without the parent's directory Codex reviews whatever directory its
+      // own process started in.
+      expect(codexClient.lastStartThreadParams).toMatchObject({
+        cwd: worktreePath,
+        ephemeral: true,
+        model: "gpt-5.5",
+      });
+      expect(codexClient.lastStartTurnParams).toMatchObject({
+        cwd: worktreePath,
+        model: "gpt-5.5",
+        reasoningEffort: "high",
+      });
+      await codexClient.emit({
+        method: "turn/completed",
+        params: {
+          threadId: response.reviewThreadId,
+          turnId: response.turnId,
+          turn: {
+            id: response.turnId,
+            status: "completed",
+            output: [{ type: "text", text: JSON.stringify({
+              findings: [],
+              overall_correctness: "patch is correct",
+              overall_explanation: "No blocking findings.",
+              overall_confidence_score: 0.98,
+            }) }],
+          },
+        },
+      });
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("advertises Claude review modes without claiming Claude runs reviews", async () => {
+    // The owner accepts a run mode for a Claude thread, because the review
+    // itself runs on another provider. Claude is never a reviewer.
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({}),
+      overlayStore: createOverlayStoreMock(),
+      pdfToolMcpServer: null,
+      claudeBackendOptions: {
+        inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+        discoverModels: async () => [],
+      },
+    });
+    try {
+      const claudeBackend = (
+        await registry.listBackends({ includeUnavailable: true })
+      ).backends.find((backend) => backend.kind === "claude");
+      expect(claudeBackend?.capabilities).toMatchObject({ reviewRunMode: true });
+      expect(claudeBackend?.capabilities.reviewRunner).not.toBe(true);
+      expect(claudeBackend?.capabilities.reviewCodexSubAgent).not.toBe(true);
+      expect(claudeBackend?.capabilities.startReview).not.toBe(true);
+    } finally {
+      await registry.close();
+    }
+  });
+
   it("advertises codex as a reviewer override target", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "turn/start"] },

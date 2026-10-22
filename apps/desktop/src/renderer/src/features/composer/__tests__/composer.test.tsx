@@ -8168,6 +8168,108 @@ describe("Composer", () => {
     );
   });
 
+  it("defaults a Claude thread's reviewer to a provider that can run reviews", async () => {
+    const startReview = vi.fn(async () => ({
+      backend: "claude" as const,
+      threadId: "claude-thread",
+      reviewThreadId: "review-1",
+      turnId: "turn-1",
+    }));
+    const recordModelSettingsRecent = vi.fn(async () => undefined);
+    const codex = backendSummary("codex", {
+      models: [{
+        id: "gpt-5.6-sol",
+        label: "GPT-5.6 Sol",
+        current: true,
+        supportsReasoning: true,
+        reasoningEfforts: ["low", "high"],
+        defaultReasoningEffort: "high",
+      }],
+    });
+    codex.label = "OpenAI";
+    codex.capabilities = {
+      ...codex.capabilities,
+      startReview: true,
+      reviewRunner: true,
+      reviewRunMode: true,
+      reviewCodexSubAgent: true,
+    };
+    // Claude advertises a run mode but runs no reviews itself.
+    const claude = backendSummary("claude", {
+      models: [{ id: "opus", label: "Opus 5.5", current: true, supportsImage: true }],
+    });
+    claude.label = "Claude";
+    claude.capabilities = { ...claude.capabilities, reviewRunMode: true };
+
+    render(
+      <Composer
+        backends={[codex, claude]}
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          listModelSettingsRecents: async () => ({ recents: [] }),
+          recordModelSettingsRecent,
+          startReview,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "claude-thread",
+          title: "Claude thread",
+          titleSource: "explicit",
+          source: "claude",
+          model: "opus",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review" },
+    });
+    fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter" });
+
+    const reviewTarget = screen.getByRole("group", { name: "Review target" });
+    // The chip must name the provider that will run. It used to read
+    // "OpenAI" while the panel held Claude, which is not a reviewer option.
+    const provider = within(reviewTarget).getByRole("button", {
+      name: "Review provider",
+    });
+    expect(provider).toHaveAttribute("data-value", "codex");
+    expect(provider).toHaveTextContent("OpenAI");
+    expect(
+      within(reviewTarget).getByRole("button", { name: "Review model" })
+    ).toHaveAttribute("data-value", "gpt-5.6-sol");
+    expect(
+      within(reviewTarget).getByRole("button", { name: "Review run mode" })
+    ).toHaveTextContent("PwrAgent Sub Agent");
+    // Nothing was picked, so there is nothing to reset.
+    expect(
+      within(reviewTarget).queryByRole("button", {
+        name: "Reset reviewer to thread settings",
+      })
+    ).not.toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(
+        within(reviewTarget).getByRole("button", { name: "Start review" })
+      );
+    });
+
+    expect(startReview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "claude",
+        reviewBackend: "codex",
+        runMode: "pwragent-sub-agent",
+        model: "gpt-5.6-sol",
+        reasoningEffort: "high",
+      })
+    );
+    // A default is not a pick, so it must not push real picks off the list.
+    expect(recordModelSettingsRecent).not.toHaveBeenCalled();
+  });
+
   it("does not reuse one instance's reviewer recents on another's thread", async () => {
     const reviewerBackend = (kind: BackendSummary["kind"]): BackendSummary => {
       const summary = backendSummary(kind, {
