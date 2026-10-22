@@ -501,6 +501,8 @@ export type PrSummary = {
    * worktree that shares the same Git object database.
    */
   linkedDirectoryPaths?: string[];
+  /** Thread-local operator/agent attachment intent; never provider status. */
+  explicitlyAttached?: true;
   /**
    * Deprecated compatibility alias for `checkState`. New writers keep this
    * check-only so review/lifecycle/mergeability never collide with checks.

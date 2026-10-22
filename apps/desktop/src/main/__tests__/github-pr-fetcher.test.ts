@@ -523,6 +523,27 @@ describe("GithubPrFetcher", () => {
   }
 
   describe("primeBranchLookup (batched in-process discovery)", () => {
+    it("rejects unrelated fork results from both fresh and primed branch lookups", async () => {
+      const unrelatedPr = {
+        ...primedPr,
+        number: 99,
+        sourceRepository: { provider: "github.com", org: "unrelated", repo: "PwrAgent" },
+        url: "https://github.com/pwrdrvr/PwrAgent/pull/99",
+      };
+      const { fetcher } = buildFetcher({ branchResults: () => [unrelatedPr, primedPr] });
+      const onProviderFailure = vi.fn();
+      await expect(fetcher.fetchAllPullRequestsForBranch({
+        cwd: "/repo", branch: "feat/x", onProviderFailure,
+      })).resolves.toEqual([primedPr]);
+      fetcher.primeBranchLookup([{ cwd: "/repo", branch: "feat/x", prs: [unrelatedPr, primedPr] }]);
+      await expect(fetcher.fetchAllPullRequestsForBranch({
+        cwd: "/repo", branch: "feat/x", onProviderFailure,
+      })).resolves.toEqual([primedPr]);
+      await expect(fetcher.fetchOpenPullRequests({ cwd: "/repo", branches: ["feat/x"] }))
+        .resolves.toEqual([primedPr]);
+      expect(onProviderFailure).not.toHaveBeenCalled();
+    });
+
     it("answers from the primed value without another GraphQL request", async () => {
       const { fetcher, fetchPullRequestsForBranches } = buildFetcher();
       fetcher.primeBranchLookup([
