@@ -54,6 +54,7 @@ describe("AgentToolMcpServer", () => {
         "get_automation_run", "get_automation_run_artifact", "list_automation_runs",
         "list_automations", "summarize_automation_status",
         "search_threads", "read_thread", "get_thread_status",
+        "list_thread_terminals", "read_terminal_output",
         "get_forge_status", "list_ci_runs", "get_ci_run", "get_ci_job",
         "read_ci_job_log", "get_commit_checks", "list_ci_artifacts",
         "get_current_messaging_surface",
