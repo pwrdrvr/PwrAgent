@@ -192,6 +192,7 @@ describe("pwragent thread orchestration agent tools", () => {
 
     expect(dynamicTool).toBeDefined();
     expect(mcpTool).toEqual({
+      annotations: { readOnlyHint: false },
       name: dynamicTool?.name,
       description: dynamicTool?.description,
       inputSchema: dynamicTool?.inputSchema,

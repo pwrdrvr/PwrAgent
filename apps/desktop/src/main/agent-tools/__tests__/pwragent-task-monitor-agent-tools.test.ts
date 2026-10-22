@@ -42,12 +42,14 @@ describe("PwrAgent task monitor agent tools", () => {
     // 45 with read_operator_focus, 46 with list_attention_threads,
     // 47 with mark_project_read, 50 with the three thread to-do tools,
     // 52 with rename_current_thread, 59 with the seven forge read tools,
-    // 63 with the four review-tracking tools, 64 with manage_thread_dependencies.
-    expect(dynamicTools).toHaveLength(64);
+    // 63 with the four review-tracking tools, 64 with manage_thread_dependencies,
+    // 65 with read_tool_guide.
+    expect(dynamicTools).toHaveLength(65);
     expect(dynamicTools.map((tool) => tool.name))
       .toContain("manage_thread_dependencies");
     expect(mcpTools).toEqual(expect.arrayContaining(
-      dynamicTools.filter((tool) => !dynamicOnlyToolNames.has(tool.name)),
+      dynamicTools.filter((tool) => !dynamicOnlyToolNames.has(tool.name))
+        .map((tool) => expect.objectContaining(tool)),
     ));
     expect(mcpTools.map((tool) => tool.name))
       .toContain("create_monitor_delegation");

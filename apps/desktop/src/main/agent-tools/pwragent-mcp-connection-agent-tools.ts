@@ -52,6 +52,7 @@ export function buildPwrAgentMcpConnectionToolDefinitions(
   return PWRAGENT_MCP_CONNECTION_OPERATION_NAMES.map((operation) => ({
     namespace: options.namespace ?? PWRAGENT_TOOL_NAMESPACE,
     name: operation,
+    annotations: { readOnlyHint: false },
     description: TOOL_DESCRIPTION,
     inputSchema: INPUT_SCHEMA,
     deferLoading: false,

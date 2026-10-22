@@ -31,6 +31,7 @@ export type AgentMcpTool = {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
+  annotations?: AgentToolDefinition["annotations"];
 };
 
 export type AgentMcpToolCallResponse = {
@@ -90,6 +91,7 @@ export class AgentToolRouter {
         name: definition.name,
         description: definition.description,
         inputSchema: definition.inputSchema,
+        ...(definition.annotations ? { annotations: definition.annotations } : {}),
       }));
   }
 

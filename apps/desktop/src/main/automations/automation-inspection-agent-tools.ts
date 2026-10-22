@@ -42,6 +42,7 @@ export function buildAutomationInspectionToolDefinitions(
   return buildAutomationInspectionToolCatalog().map((spec) => ({
     namespace: options.namespace ?? PWRAGENT_TOOL_NAMESPACE,
     name: spec.name,
+    annotations: { readOnlyHint: true },
     description: spec.description,
     inputSchema: spec.inputSchema,
     deferLoading: false,

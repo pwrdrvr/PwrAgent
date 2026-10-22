@@ -13,13 +13,93 @@ import {
   type AgentToolMcpRegistration,
 } from "../agent-tool-mcp-server";
 import { agentToolSuccess } from "../agent-tool-definition";
-import type { ResolvedAgentToolCatalog } from "../agent-tool-catalog-registry";
+import { resolveAgentToolCatalogs, type ResolvedAgentToolCatalog } from "../agent-tool-catalog-registry";
+import { buildPwrAgentMessagingPdfToolRouter } from "../pwragent-messaging-agent-tools";
+import { PWRAGENT_TOOL_GUIDE } from "../pwragent-tool-guide";
+import { searchPwrAgentTools } from "../pwragent-tool-search";
+import { TestTokenMiserStore } from "../../__tests__/token-miser-test-store";
+import { TokenMiserFocusedSummaries } from "../../token-miser/token-miser-focused";
 
 describe("AgentToolMcpServer", () => {
   const openServers: AgentToolMcpServer[] = [];
 
   afterEach(async () => {
     await Promise.all(openServers.splice(0).map(async (server) => server.close()));
+  });
+
+  it("advertises production read-only classifications and a callable guide over HTTP", async () => {
+    const store = new TestTokenMiserStore("catalog-annotation-test");
+    const focused = new TokenMiserFocusedSummaries({
+      store,
+      isEnabled: () => true,
+      isFocusedEnabled: () => true,
+      generateSummary: vi.fn(),
+    });
+    const catalogs = resolveAgentToolCatalogs({ tokenMiserStore: store, tokenMiserFocused: focused }, { taskMonitorRole: "all" });
+    const server = new AgentToolMcpServer({
+      resolveCatalogs: () => catalogs,
+      resolveCallContext: (context) => context.threadId
+        ? { backend: context.backend, threadId: context.threadId, turnId: "turn-1" }
+        : undefined,
+    });
+    openServers.push(server);
+    const registration = await server.registerClient({ backend: "acp:grok", threadId: "thread-1" });
+    const client = await connectClient(registration);
+    try {
+      const { tools } = await client.listTools();
+      const readOnlyNames = [
+        "get_automation_run", "get_automation_run_artifact", "list_automation_runs",
+        "list_automations", "summarize_automation_status",
+        "search_threads", "read_thread", "get_thread_status",
+        "get_forge_status", "list_ci_runs", "get_ci_run", "get_ci_job",
+        "read_ci_job_log", "get_commit_checks", "list_ci_artifacts",
+        "get_current_messaging_surface",
+        "list_federation_instances", "list_instance_projects", "list_attention_threads", "search_federation_threads",
+        "read_star_map_view", "read_operator_focus", "list_todos", "list_reviews",
+        "search_mcp_tools", "search_token_miser_output", "read_token_miser_output",
+        "read_token_miser_output_batch", "read_all_token_miser_output", "read_token_miser_segment",
+        "read_tool_guide",
+      ].sort();
+      expect(tools.filter((tool) => tool.annotations?.readOnlyHint).map((tool) => tool.name).sort()).toEqual(readOnlyNames);
+      // Every advertised tool has an explicit classification, including mixed tools
+      // with read actions (manage_pwragent, manage_mcp_connections, dependencies).
+      for (const tool of tools) {
+        expect(tool.annotations?.readOnlyHint, tool.name).toBe(readOnlyNames.includes(tool.name));
+      }
+      expect(tools.map((tool) => tool.name)).not.toContain("tool_search");
+      expect(tools.map((tool) => tool.name)).not.toContain("get_current_location");
+      expect(tools.map((tool) => tool.name)).not.toContain("render_messaging_pdf_pages");
+
+      expect(client.getInstructions()).toContain("Read read_tool_guide for the short tool guide.");
+      // Native dynamic-tool discovery reaches the same definition as MCP tools/list.
+      expect(searchPwrAgentTools(catalogs.flatMap((catalog) => catalog.dynamicTools), "PwrAgent tool guide")[0]?.name).toBe("read_tool_guide");
+      await expect(client.callTool({ name: "read_tool_guide", arguments: {} })).resolves.toMatchObject({
+        content: [{ type: "text", text: PWRAGENT_TOOL_GUIDE }],
+        structuredContent: { guide: PWRAGENT_TOOL_GUIDE },
+      });
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("keeps PDF rendering conservative on the separate advertised PDF MCP surface", async () => {
+    const server = new AgentToolMcpServer({
+      resolveCatalogs: () => [{ id: "messaging_context", router: buildPwrAgentMessagingPdfToolRouter(undefined) }],
+      resolveCallContext: () => undefined,
+    });
+    openServers.push(server);
+    const client = await connectClient(await server.registerClient({ backend: "codex" }));
+    try {
+      const { tools } = await client.listTools();
+      expect(Object.fromEntries(tools.map((tool) => [tool.name, tool.annotations?.readOnlyHint]))).toEqual({
+        inspect_messaging_pdfs: true,
+        search_messaging_pdf_text: true,
+        render_messaging_pdf_pages: false,
+      });
+      expect(client.getInstructions()).not.toContain("read_tool_guide");
+    } finally {
+      await client.close();
+    }
   });
 
   it("serves and dispatches the dynamic-tool catalog over loopback MCP", async () => {
@@ -29,6 +109,7 @@ describe("AgentToolMcpServer", () => {
         {
           namespace: "pwragent",
           name: "inspect",
+          annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
           description: "Inspect test state.",
           inputSchema: {
             type: "object",
@@ -71,6 +152,7 @@ describe("AgentToolMcpServer", () => {
           {
             name: "inspect",
             description: "Inspect test state.",
+            annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
           },
         ],
       });
@@ -185,6 +267,7 @@ describe("AgentToolMcpServer", () => {
         {
           namespace: "pwragent",
           name: "inspect",
+          annotations: { readOnlyHint: true },
           description: "Inspect test state.",
           inputSchema: {
             type: "object",
