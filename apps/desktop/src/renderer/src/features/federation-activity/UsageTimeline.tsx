@@ -182,7 +182,8 @@ export function UsageTimeline({ buckets, series, member, limit, forecast, select
   }, []);
   // Before paint, so the card never shows where it would be clipped. Its
   // width does not depend on where it sits, so placing it settles at once.
-  // The bars and the card's contents move it; so does a resize.
+  // The bars and the card's contents move it; so does a resize, and so does
+  // a forecast, which narrows the bars to its `share` of the plot.
   useLayoutEffect(() => {
     const plot = plotRef.current?.getBoundingClientRect();
     const bar = shown === undefined ? undefined : bars.current[shown]?.getBoundingClientRect();
@@ -193,7 +194,7 @@ export function UsageTimeline({ buckets, series, member, limit, forecast, select
     }
     const left = Math.round(sliceCardLeft(plot, bar, card));
     setPlaced((current) => current?.index === shown && current.left === left ? current : { index: shown, left });
-  }, [shown, selected, buckets, member, dimension, plotWidth]);
+  }, [shown, selected, buckets, member, dimension, plotWidth, share]);
   return <figure className="usage-timeline" onKeyDown={onChartKey}>
     <figcaption className="usage-timeline__head">
       <span className="usage-eyebrow">Spend by</span>
