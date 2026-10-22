@@ -134,6 +134,7 @@ export class ClaudeBackend {
         if (models && this.installation.executable && this.installation.authStatus !== "sign-in-required") {
           const catalog = await (this.options.discoverModels ?? discoverClaudeModels)({
             executable: this.installation.executable, env,
+            ...(this.installation.version ? { cliVersion: this.installation.version } : {}),
           });
           // A working session can recover discovery while this probe is still
           // running. Its authenticated catalog takes precedence.
@@ -387,7 +388,9 @@ export class ClaudeBackend {
 
   private async refreshSessionModels(session: Query): Promise<void> {
     const models = await claudeTelemetry(() => session.supportedModels());
-    if (models?.length) await this.publishModels(claudeModelOptions(models));
+    if (models?.length) await this.publishModels(claudeModelOptions(models, {
+      source: "session", cliVersion: this.installation.version,
+    }));
   }
 
   private async consume(session: ClaudeSession, running: RunningTurn): Promise<void> {

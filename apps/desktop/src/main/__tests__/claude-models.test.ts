@@ -2,11 +2,64 @@ import { describe, expect, it, vi } from "vitest";
 import type { ModelInfo, Query, query } from "@anthropic-ai/claude-agent-sdk";
 import { claudeModelOptions, discoverClaudeModels } from "../claude/claude-models";
 
+const catalogLog = vi.hoisted(() => ({ info: vi.fn() }));
+vi.mock("../log", () => ({ getMainLogger: () => catalogLog }));
+
 const model = (value: string, displayName: string, extra: Partial<ModelInfo> = {}): ModelInfo => ({
   value, displayName, description: "Fixture model", ...extra,
 });
 
 describe("Claude model catalog", () => {
+  it("labels the SDK's generic catalog using resolved versions without changing selectable IDs", () => {
+    const options = claudeModelOptions([
+      model("default", "Default (recommended)", { resolvedModel: "claude-opus-5-5" }),
+      model("opus", "Opus", { resolvedModel: "claude-opus-5-5" }),
+      model("claude-fable-5-1[1m]", "Fable", { resolvedModel: "claude-fable-5-1" }),
+      model("sonnet", "Sonnet", { resolvedModel: "claude-sonnet-5-5" }),
+      model("haiku", "Haiku", { resolvedModel: "claude-haiku-5-5" }),
+    ]);
+    expect(options.map(({ id, label }) => ({ id, label }))).toEqual([
+      { id: "opus", label: "Opus 5.5" },
+      { id: "claude-fable-5-1[1m]", label: "Fable 5.1 (1M context)" },
+      { id: "sonnet", label: "Sonnet 5.5" },
+      { id: "haiku", label: "Haiku 5.5" },
+    ]);
+    expect(options.filter((option) => option.current).map((option) => option.id)).toEqual(["opus"]);
+  });
+
+  it("groups resolved older versions and preserves explicit, custom, and unresolved labels", () => {
+    const options = claudeModelOptions([
+      model("opus", "Opus", { resolvedModel: "claude-opus-5-5" }),
+      model("claude-opus-5", "Claude Opus"),
+      model("claude-opus-4-8-20260101", "Opus"),
+      model("explicit", "Opus 5.5 (extended context)", { resolvedModel: "claude-opus-5-5[1m]" }),
+      model("custom", "My organization model", { resolvedModel: "claude-opus-5-5" }),
+      model("unresolved", "Haiku"),
+      model("opaque", "Sonnet", { resolvedModel: "provider-specific-id" }),
+    ]);
+    expect(options.slice(0, 3).map(({ label, other }) => ({ label, other }))).toEqual([
+      { label: "Opus 5.5", other: undefined },
+      { label: "Claude Opus 5", other: true },
+      { label: "Opus 4.8", other: true },
+    ]);
+    expect(options.slice(3).map((option) => option.label)).toEqual([
+      "Opus 5.5 (extended context)", "My organization model", "Haiku", "Sonnet",
+    ]);
+  });
+
+  it("logs aggregate catalog provenance without custom names or model IDs", () => {
+    catalogLog.info.mockClear();
+    claudeModelOptions([
+      model("opus", "Opus", { resolvedModel: "claude-opus-5-5" }),
+      model("sonnet", "Sonnet 5.5"),
+      model("private-deployment-id", "Private organization model"),
+    ], { source: "session", cliVersion: "2.1.296" });
+    expect(catalogLog.info.mock.calls).toEqual([["Claude model catalog received", {
+      source: "session", cliVersion: "2.1.296", modelCount: 3,
+      versionedNameCount: 1, resolvedGenericNameCount: 1,
+    }]]);
+  });
+
   it("uses versioned CLI names, keeps the latest family versions primary, and removes the duplicate default row", () => {
     const options = claudeModelOptions([
       model("default", "Default (recommended)", { resolvedModel: "claude-fable-5-1" }),
