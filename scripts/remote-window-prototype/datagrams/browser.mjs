@@ -1,10 +1,13 @@
 import { TileSender, TileReceiver, geometry, TILES, MAX_BUFFERED } from "./protocol.mjs";
+import { RelayPipe } from "./relay.mjs";
 
 const role = document.body.dataset.role, token = location.hash.slice(1);
 history.replaceState(null, "", location.pathname);
 const status = document.querySelector("#status"), canvas = document.querySelector("canvas"), context = canvas?.getContext("2d");
 const socket = new WebSocket(`${location.origin.replace("http", "ws")}/socket/${role}`);
 let ready = false, nativeReady = false, pc, media, feedback, sender, receiver, pendingOffer;
+let transport = "federation", relay;
+let lastSourceManifestAt = null;
 let connection = 0, epoch = 0, budgetSequence = 0, lastRepair = 0, lastManifestAt = null, manifestEpoch = 0, manifest, manifestSent = 0;
 const nativeCache = new Map(), decodeQueue = new Map(), delayed = new Map();
 const fixtureAcks = [];
@@ -18,6 +21,7 @@ const error = value => { const message = String(value); if (metrics.errors.lengt
 const sendLocal = value => { if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(value)); };
 const sendFeedback = value => { const text = JSON.stringify(value); feedback.send(text); metrics.feedbackSentBytes += text.length; };
 function close() {
+  relay?.close(); relay = undefined;
   connection++; pc?.close(); pc = media = feedback = sender = receiver = undefined;
   pendingOffer?.reject(new Error("connection_closed")); pendingOffer = undefined;
   decodeQueue.clear(); for (const timer of delayed.values()) clearTimeout(timer); delayed.clear(); delayedBytes = 0;
@@ -66,10 +70,22 @@ function sourceChannel(channel) {
   } else { channel.close(); error("unexpected_channel"); }
 }
 async function answer(message) {
-  close(); const generation = connection, local = pc = peer();
+  if (message.params?.kind === "reference") {
+    // Benchmark-only checksums, taken without activating a second browser/app.
+    sendLocal({ kind: "answer", id: message.id, result: { epoch, generation: manifest?.generation, hashes: window.pwrwin.hashes() } });
+    return;
+  }
+  close(); const generation = connection;
   epoch = crypto.getRandomValues(new Uint32Array(1))[0] || 1;
   sender = new TileSender(epoch); lastRepair = 0;
   if (manifest) { sender.manifest(manifest); for (const image of nativeCache.values()) sender.image(image); }
+  if (transport === "federation") {
+    relay = makeRelay(); media = relay.media;
+    sourceChannel(Object.assign(relay.feedback, { label: "feedback", ordered: true, maxRetransmits: null }));
+    sendLocal({ kind: "answer", id: message.id, result: { protocol: "pwrwin-datagram-fixture-v1", epoch, transport } });
+    return;
+  }
+  const local = pc = peer();
   local.ondatachannel = event => { if (pc === local) sourceChannel(event.channel); else event.channel.close(); };
   await local.setRemoteDescription(message.params);
   await local.setLocalDescription(await local.createAnswer()); await gathered(local);
@@ -78,10 +94,46 @@ async function answer(message) {
 }
 async function begin() {
   if (role !== "viewer" || !ready) throw new Error("viewer_not_ready");
+  if (transport === "federation") {
+    close(); const generation = connection;
+    const result = await requestOffer({ transport });
+    if (generation !== connection) return;
+    validateAnswer(result);
+    if (result.transport !== transport) throw new Error("transport_mismatch");
+    epoch = result.epoch; receiver = new TileReceiver(epoch);
+    relay = makeRelay(); media = relay.media; feedback = relay.feedback;
+    media.onmessage = event => { if (generation === connection && receiver) deliver(event.data, generation); };
+    viewerFeedback(generation); relay.start(); note("Viewer: Federation push connected");
+    return;
+  }
   close(); const generation = connection, local = pc = peer();
   media = local.createDataChannel("media", { ordered: false, maxRetransmits: 0 }); media.binaryType = "arraybuffer";
   feedback = local.createDataChannel("feedback", { ordered: true });
   media.onmessage = event => { if (generation === connection && receiver) deliver(event.data, generation); };
+  viewerFeedback(generation);
+  await local.setLocalDescription(await local.createOffer()); await gathered(local);
+  if (generation !== connection) return;
+  const result = await requestOffer(local.localDescription.toJSON());
+  if (generation !== connection) return;
+  validateAnswer(result);
+  epoch = result.epoch; receiver = new TileReceiver(epoch);
+  await local.setRemoteDescription(result.description);
+}
+function makeRelay() {
+  const pipe = new RelayPipe(epoch, role, sendLocal, e => { error(e); close(); }, () => socket.bufferedAmount);
+  pipe.onclose = close; return pipe;
+}
+function requestOffer(params) {
+  if (pendingOffer) return Promise.reject(new Error("fixture_request_in_flight"));
+  return new Promise((resolve, reject) => {
+    const id = crypto.randomUUID(); pendingOffer = { id, resolve, reject };
+    sendLocal({ kind: "offer", id, params });
+  });
+}
+function validateAnswer(result) {
+  if (result.protocol !== "pwrwin-datagram-fixture-v1" || !Number.isInteger(result.epoch) || result.epoch <= 0 || result.epoch > 0xffffffff) throw new Error("invalid_answer");
+}
+function viewerFeedback(generation) {
   feedback.onmessage = event => {
     if (generation !== connection || !receiver) return;
     try {
@@ -94,22 +146,12 @@ async function begin() {
       else throw new Error("manifest_method");
     } catch (e) { error(e); close(); }
   };
-  await local.setLocalDescription(await local.createOffer()); await gathered(local);
-  if (generation !== connection) return;
-  const result = await new Promise((resolve, reject) => {
-    const id = crypto.randomUUID(); pendingOffer = { id, resolve, reject };
-    sendLocal({ kind: "offer", id, params: local.localDescription.toJSON() });
-  });
-  if (generation !== connection) return;
-  if (result.protocol !== "pwrwin-datagram-fixture-v1" || !Number.isInteger(result.epoch) || result.epoch <= 0 || result.epoch > 0xffffffff) throw new Error("invalid_answer");
-  epoch = result.epoch; receiver = new TileReceiver(epoch);
-  await local.setRemoteDescription(result.description);
 }
 function random() { seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5; return (seed >>> 0) / 4294967296; }
 function deliver(raw, generation) {
   if (!(raw instanceof ArrayBuffer) || raw.byteLength > 1028) { error("media_size"); return; }
   metrics.packets++; metrics.mediaBytes += raw.byteLength;
-  // Deliberately application-message faults AFTER real WebRTC delivery, not network packet loss.
+  // Application-message faults AFTER transport delivery, not network packet loss.
   if (random() < faults.loss || delayedBytes + raw.byteLength > 512 * 1024) { metrics.dropped++; return; }
   const delay = faults.delayMs + random() * faults.jitterMs;
   if (delay === 0) { receive(raw, generation); return; }
@@ -164,14 +206,19 @@ socket.onclose = () => { close(); ready = false; };
 socket.onmessage = event => {
   try {
     const value = JSON.parse(event.data);
-    if (value.kind === "authenticated") { ready = true; note(`${role}: authenticated`); }
+    if (value.kind === "authenticated") { transport = value.transport; ready = true; note(`${role}: authenticated (${transport})`); }
     else if (value.kind === "ready") { nativeReady = true; note("Source ready; waiting for viewer"); }
     else if (value.kind === "offer" && role === "source") answer(value).catch(error);
     else if (value.kind === "answer" && value.id === pendingOffer?.id) { pendingOffer.resolve(value.result); pendingOffer = undefined; }
+    else if (value.kind === "relay-ack") relay?.ack(value);
+    else if (value.kind === "relay-delivery") {
+      relay?.receive(value.batch);
+      sendLocal({ kind: "relay-receipt", id: value.id });
+    }
     else if (value.kind === "input") { metrics.fixtureRevision = value.revision; fixtureAcks.shift()?.(value.revision); }
     else if (value.kind === "error") { pendingOffer?.reject(new Error(value.message)); pendingOffer = undefined; error(value.message); }
     else if (value.kind === "manifest") {
-      manifest = value;
+      manifest = value; lastSourceManifestAt = performance.now();
       for (const [id, image] of nativeCache) if (id === 65535 || image.version < value.versions[id]) nativeCache.delete(id);
       sender?.manifest(value);
     } else if (value.kind === "image") {
@@ -187,7 +234,7 @@ setInterval(() => {
       if (feedback?.readyState === "open" && feedback.bufferedAmount < 4096 && manifest && manifestSent < manifest.generation) {
         sendFeedback({ kind: "manifest", epoch, versions: manifest.versions }); manifestSent = manifest.generation;
       }
-      if (sender && media) sender.pump(media);
+      if (sender && media) { sender.pump(media); relay?.flush(); }
     }
   } catch (e) { error(e); close(); }
 }, 4);
@@ -214,14 +261,32 @@ function snapshot() {
     const p = context.getImageData(28 + bit * 16, 538, 1, 1).data;
     if (p[0] + p[1] + p[2] > 384) visibleRevision |= 1 << bit;
   }
-  return { ...metrics, at: performance.now(), ready, nativeReady, connected: pc?.connectionState === "connected", epoch,
+  return { ...metrics, at: performance.now(), ready, nativeReady, transport,
+    sourceGeneration: manifest?.generation, sourceTiles: [...nativeCache.values()].filter(i => i.imageKind === 2).length,
+    sourceQuietMs: lastSourceManifestAt === null ? null : performance.now() - lastSourceManifestAt,
+    connected: transport === "federation" ? !!relay?.active && !relay.closed : pc?.connectionState === "connected", epoch,
     visibleRevision, quietMs: lastManifestAt === null ? null : performance.now() - lastManifestAt,
     manifestReceived, refinementComplete: manifestReceived && missing === 0,
     missing, receive: receiver?.stats, send: sender?.stats,
-    queuedBytes: queueBytes(), delayedBytes, faults, unordered: media ? !media.ordered : undefined, maxRetransmits: media?.maxRetransmits };
+    queuedBytes: queueBytes(), delayedBytes, faults, relay: relay?.stats,
+    unordered: media ? !media.ordered : undefined, maxRetransmits: media?.maxRetransmits };
 }
 window.pwrwin = {
   begin, stop: close, snapshot,
+  checkPixels: async () => {
+    if (role !== "viewer" || !snapshot().refinementComplete) throw new Error("viewer_not_refined");
+    const generation = connection, reference = await requestOffer({ kind: "reference" });
+    if (generation !== connection || reference.epoch !== epoch || !snapshot().refinementComplete) throw new Error("reference_session_changed");
+    if (!Array.isArray(reference.hashes) || reference.hashes.length !== TILES
+      || new Set(reference.hashes.map(t => t.id)).size !== TILES
+      || reference.hashes.some(t => !Number.isInteger(t.id) || t.id < 0 || t.id >= TILES
+        || !Number.isSafeInteger(t.version) || t.version < 1 || !Number.isInteger(t.hash) || t.hash < 0 || t.hash > 0xffffffff)) throw new Error("invalid_pixel_reference");
+    const actual = window.pwrwin.hashes(), mismatches = reference.hashes.filter(t =>
+      t.version !== actual[t.id]?.version || t.hash !== actual[t.id]?.hash);
+    return { expectedCount: reference.hashes.length, sourceGeneration: reference.generation,
+      matches: reference.hashes.length - mismatches.length,
+      mismatches: mismatches.map(t => ({ expected: t, actual: actual[t.id] })) };
+  },
   fixture: command => new Promise((resolve, reject) => {
     if (fixtureAcks.length || socket.readyState !== WebSocket.OPEN) { reject(new Error("fixture_command_in_flight")); return; }
     const timer = setTimeout(() => { fixtureAcks.length = 0; reject(new Error("fixture_ack_timeout")); }, 2000);

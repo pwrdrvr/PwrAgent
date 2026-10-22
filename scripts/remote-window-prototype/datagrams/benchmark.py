@@ -51,9 +51,12 @@ try:
     for loss, delay, jitter in [(0, 0, 0), (0.03, 50, 20), (0.1, 100, 30)]:
         faults = {"loss": loss, "delayMs": delay, "jitterMs": jitter}
         row = evaluate("viewer", f"({code})({json.dumps(faults)})")
-        expected = evaluate("source", "window.pwrwin.hashes()")
-        actual = {tile["id"]: tile for tile in evaluate("viewer", "window.pwrwin.hashes()")}
-        matches = sum(tile == actual.get(tile["id"]) for tile in expected)
+        browser("viewer", "wait", "--fn", VIEWER_READY)
+        # Fetch versioned native checksums over Federation, then compare in the
+        # same viewer operation. Switching automation to the source can activate
+        # native windows and change the captured scene between reference/readback.
+        row["pixelCheck"] = evaluate("viewer", "window.pwrwin.checkPixels()")
+        matches = row["pixelCheck"]["matches"]
         row["opaqueRgbHashMatches"] = matches
         row["source"] = evaluate("source", "window.pwrwin.snapshot()")
         results.append(row)
@@ -71,10 +74,9 @@ try:
     before = evaluate("viewer", "window.pwrwin.snapshot().epoch")
     evaluate("viewer", "(window.pwrwin.faults({loss:0,delayMs:0,jitterMs:0}),window.pwrwin.begin().then(()=>true))")
     browser("viewer", "wait", "--fn", VIEWER_READY)
-    expected = evaluate("source", "window.pwrwin.hashes()")
-    actual = {t["id"]: t for t in evaluate("viewer", "window.pwrwin.hashes()")}
+    pixel_check = evaluate("viewer", "window.pwrwin.checkPixels()")
     reconnect = {"oldEpoch": before, "newEpoch": evaluate("viewer", "window.pwrwin.snapshot().epoch"),
-                 "opaqueRgbHashMatches": sum(t == actual.get(t["id"]) for t in expected)}
+                 "opaqueRgbHashMatches": pixel_check["matches"]}
     (args.output / "logical-reconnect.json").write_text(json.dumps(reconnect))
     if reconnect["newEpoch"] == before or reconnect["opaqueRgbHashMatches"] != 117:
         raise RuntimeError("Logical reconnect failed")

@@ -2,8 +2,9 @@ import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import { expect, test } from "vitest";
 import { TileSender, TileReceiver, geometry, TILES, MAX_BUFFERED } from "./protocol.mjs";
+import { RelayPipe } from "./relay.mjs";
 
-const source = readFileSync(new URL("./browser.mjs", import.meta.url), "utf8").replace(/^import[^\n]*\n/, "");
+const source = readFileSync(new URL("./browser.mjs", import.meta.url), "utf8").replace(/^import[^\n]*\n/gm, "");
 const benchmark = readFileSync(new URL("./benchmark.py", import.meta.url), "utf8");
 const readiness = benchmark.match(/^VIEWER_READY = "([^"]+)"$/m)[1];
 function fixture() {
@@ -31,7 +32,7 @@ function fixture() {
     close() { this.connectionState = "closed"; }
   }
   const element = { textContent: "", addEventListener: () => {}, getContext: () => ({ getImageData: () => ({ data: [0, 0, 0, 255] }) }) };
-  const context = vm.createContext({ TileSender, TileReceiver, geometry, TILES, MAX_BUFFERED,
+  const context = vm.createContext({ TileSender, TileReceiver, geometry, TILES, MAX_BUFFERED, RelayPipe,
     document: { body: { dataset: { role: "viewer" } }, querySelector: () => element },
     location: { origin: "http://fixture", pathname: "/", hash: "#fixture" }, history: { replaceState: () => {} },
     window: { addEventListener: () => {} }, performance: { now: () => time }, crypto: { randomUUID: () => "offer" },
@@ -39,10 +40,19 @@ function fixture() {
   });
   vm.runInContext(source, context);
   const socket = sockets[0], api = context.window.pwrwin;
-  socket.onmessage({ data: JSON.stringify({ kind: "authenticated" }) });
+  socket.onmessage({ data: JSON.stringify({ kind: "authenticated", transport: "webrtc" }) });
   return {
     snapshot: api.snapshot, ready: () => vm.runInContext(readiness, context), advance: ms => { time += ms; },
     read: expression => vm.runInContext(expression, context),
+    checkPixels(referenceEpoch = api.snapshot().epoch) {
+      const peerCount = peers.length;
+      offered = request => {
+        expect(request.params).toEqual({ kind: "reference" });
+        socket.onmessage({ data: JSON.stringify({ kind: "answer", id: request.id,
+          result: { epoch: referenceEpoch, generation: 1, hashes: api.hashes() } }) });
+      };
+      return api.checkPixels().then(value => { expect(peers).toHaveLength(peerCount); return value; });
+    },
     async connect(epoch) {
       const offer = new Promise(resolve => { offered = resolve; });
       const opening = api.begin(), request = await offer;
@@ -86,4 +96,12 @@ test("reconnect cannot reuse previous manifest timing, pixels, or a delayed old 
   expect(v.snapshot().missing).toBe(TILES); expect(v.ready()).toBe(false);
   v.read(`for (let id = 0; id < TILES; id++) receiver.presentedImage({ kind: 2, version: 3 }, id);`);
   expect(v.ready()).toBe(true);
+});
+
+test("pixel validation obtains a same-session reference without restarting the stream", async () => {
+  const v = fixture(), channel = await v.connect(7);
+  manifest(channel, 7);
+  v.read(`for (let id = 0; id < TILES; id++) receiver.presentedImage({ kind: 2, version: 1 }, id);`);
+  expect(await v.checkPixels()).toMatchObject({ expectedCount: TILES, matches: TILES, mismatches: [] });
+  await expect(v.checkPixels(6)).rejects.toThrow("reference_session_changed");
 });

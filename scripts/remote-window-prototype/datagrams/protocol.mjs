@@ -1,5 +1,5 @@
-// Experimental fixed-geometry fixture protocol. Media messages use unordered,
-// zero-retransmit RTCDataChannel delivery; no media is tunneled through TCP.
+// Experimental fixed-geometry fixture protocol. Fragments can use either the
+// Federation RPC push pipeline or unordered, zero-retransmit RTCDataChannels.
 export const WIDTH = 800, HEIGHT = 548, EDGE = 64, COLS = 13, TILES = 117;
 export const HEADER = 28, PAYLOAD = 1000, MAX_IMAGE = 132000, MAX_TILE = 32768;
 export const MAX_ASSEMBLY = 512 * 1024, MAX_BUFFERED = 64 * 1024;
