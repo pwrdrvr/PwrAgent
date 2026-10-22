@@ -719,13 +719,16 @@ export function federationEventClassForMethod(
   if (method === "thread/scheduledAction/updated") {
     return "scheduled_actions";
   }
+  if (method === "thread/operatorQuestions/changed") {
+    // Dismissed-question state is readable with thread_detail access.
+    return "transcript";
+  }
   if (
     method === "item/tool/requestUserInput"
     || method === "mcpServer/elicitation/request"
     || method === "applyPatchApproval"
     || method === "execCommandApproval"
     || method === "serverRequest/resolved"
-    || method === "thread/operatorQuestions/changed"
     || method.toLowerCase().includes("requestapproval")
   ) {
     return "pending_requests";

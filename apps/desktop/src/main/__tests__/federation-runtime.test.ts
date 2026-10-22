@@ -1757,8 +1757,10 @@ describe("DesktopFederationRuntime", () => {
     expect(received).toHaveBeenCalledTimes(3);
   });
 
-  it.each([false, true])("delivers question dismissals to subscribed threads through the owner route (gateway=%s)", (viaGateway) => {
-    const capabilities: FederationCapability[] = ["gateway_relay", "thread_detail", "pending_request_control", "event_subscriptions", "operator_questions"];
+  it.each([[false, false], [false, true], [true, false], [true, true]])("delivers question dismissals to thread-detail viewers (gateway=%s, pending-request control=%s)", (viaGateway, pendingRequestControl) => {
+    const capabilities: FederationCapability[] = ["gateway_relay", "thread_detail", "event_subscriptions", "operator_questions",
+      ...(pendingRequestControl ? ["pending_request_control" as const] : []),
+    ];
     const ownerRuntime = new DesktopFederationRuntime();
     const owner = ownerRuntime as unknown as RuntimeHarness;
     const viewer = new DesktopFederationRuntime() as unknown as RuntimeHarness;
@@ -1787,8 +1789,10 @@ describe("DesktopFederationRuntime", () => {
       sendEnvelope: (envelope) => owner.applyEventSubscription(envelope, "gateway_one") }));
     gateway.router!.registerConnection(createConnection({ peerId: "viewer_one", capabilities,
       sendEnvelope: (envelope) => viewer.publishRemoteBackendEvent(envelope, "gateway_one") }));
-    viewer.setEventSubscriptions("question", [{ sourceInstanceId: "owner_one", eventClasses: ["pending_requests"],
+    viewer.setEventSubscriptions("question", [{ sourceInstanceId: "owner_one", eventClasses: ["transcript"],
       threadSelection: { kind: "threads", threads: [{ backend: "codex", threadId: "mounted" }] } }]);
+    // Transcript subscription setup announces its initial stream baseline.
+    received.mockClear();
     ownerRuntime.publishOperatorQuestionsChanged({ backend: "codex", threadId: "unmounted" });
     expect(received).not.toHaveBeenCalled();
     ownerRuntime.publishOperatorQuestionsChanged({ backend: "codex", threadId: "mounted" });
@@ -1796,6 +1800,10 @@ describe("DesktopFederationRuntime", () => {
       federationTarget: { scope: "remote", instanceId: "owner_one" },
       notification: { method: "thread/operatorQuestions/changed", params: { backend: "codex", threadId: "mounted" } },
     }));
+    owner.forwardLocalBackendEvent({ backend: "codex", notification: {
+      method: "item/tool/requestUserInput", params: { threadId: "mounted", requestId: "prompt-1", questions: [] },
+    } });
+    expect(received).toHaveBeenCalledTimes(1);
   });
 
   it("rejects question dismissals for an older owner before sending an RPC", async () => {
