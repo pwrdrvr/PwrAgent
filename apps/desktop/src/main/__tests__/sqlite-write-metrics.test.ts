@@ -44,6 +44,18 @@ import { ComposerDraftRecoveryStore } from "../state/composer-draft-recovery-sto
 import { StateDb } from "../state/state-db";
 import { partitionFederationCollection } from "../federation/federation-collection-reads";
 
+// Keep real subprocesses by default. Only the repeated idle observations below
+// replay an already verified Git result; callback callers still use real execFile.
+const execFileAsync = vi.hoisted(() => vi.fn<typeof import("node:child_process").execFile.__promisify__>());
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  const { promisify } = await import("node:util");
+  execFileAsync.mockImplementation(promisify(actual.execFile));
+  return { ...actual, execFile: Object.assign(actual.execFile.bind(null), {
+    [promisify.custom]: execFileAsync,
+  }) };
+});
+
 // Record a missing fixture seam without launching the SDK's real Git probes.
 const sdkGetSessionInfo = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock("@anthropic-ai/claude-agent-sdk", async (importOriginal) => ({
@@ -76,6 +88,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  execFileAsync.mockClear();
   delete process.env[SQLITE_WRITE_METRICS_ENV];
   stateDb.close();
   rmSync(tempDir, { recursive: true, force: true });
@@ -120,23 +133,56 @@ describe("sqlite write metrics", () => {
       await start("changed");
       await git(["switch", "-c", "fix/agent-branch"]);
       const adopted = await measureSqliteWrites(() => complete("changed"));
-      expect((await store.getThreadOverlayState(identity))?.gitBranch).toBe("fix/agent-branch");
+      expect(await store.getThreadOverlayState(identity)).toMatchObject({
+        gitBranch: "fix/agent-branch", observedGitBranch: "fix/agent-branch",
+      });
       expectSqliteWriteBudget({ scenario: "provider-branch-adoption",
         note: "One turn-end branch change: 1 commit, ~16.5 KB WAL; ~1.65 MB/day at 100 changes/day; unchanged turns write zero.", writes: adopted.writes });
 
       await git(["switch", "-c", "fix/external-branch"]);
       const observed = await measureSqliteWrites(() => registry.refreshThreadDirectoryRelationship(identity));
-      expect((await store.getThreadOverlayState(identity))?.observedGitBranch).toBe("fix/external-branch");
+      expect(await store.getThreadOverlayState(identity)).toMatchObject({
+        gitBranch: "fix/agent-branch", observedGitBranch: "fix/external-branch",
+      });
       expectSqliteWriteBudget({ scenario: "provider-branch-observation",
         note: "One hover/timer branch change preserves the expected named branch: 1 commit, ~16.5 KB WAL; ~1.65 MB/day at 100 changes/day; idle writes zero.", writes: observed.writes });
 
+      const idleEvents: AgentEvent[] = [];
+      registry.onEvent((event) => { idleEvents.push(event); });
+      const probeStart = execFileAsync.mock.calls.length;
       const idle = await measureSqliteWrites(async () => {
-        for (let index = 0; index < 100; index++) await registry.refreshThreadDirectoryRelationship(identity);
+        // One real unchanged observation covers the Git integration. Repeating
+        // the same subprocess 100 times tests process startup cost, while this
+        // budget needs 100 passes through the registry and the real SQLite store.
+        await registry.refreshThreadDirectoryRelationship(identity);
+        expect(execFileAsync.mock.calls.slice(probeStart)).toEqual([
+          ["git", ["-C", cwd, "rev-parse", "--abbrev-ref", "HEAD"], { env: expect.any(Object) }],
+        ]);
+        const observation = await execFileAsync.mock.results.at(-1)!.value;
+        expect(observation.stdout.trim()).toBe("fix/external-branch");
+        const run = execFileAsync.getMockImplementation()!;
+        try {
+          execFileAsync.mockResolvedValue(observation);
+          for (let index = 1; index < 100; index++) await registry.refreshThreadDirectoryRelationship(identity);
+        } finally {
+          execFileAsync.mockImplementation(run);
+        }
       });
+      expect(execFileAsync.mock.calls.slice(probeStart)).toEqual(Array.from({ length: 100 }, () => [
+        "git", ["-C", cwd, "rev-parse", "--abbrev-ref", "HEAD"], { env: expect.any(Object) },
+      ]));
+      expect(await store.getThreadOverlayState(identity)).toMatchObject({
+        gitBranch: "fix/agent-branch", observedGitBranch: "fix/external-branch",
+      });
+      expect(idleEvents).toEqual([]);
       expectSqliteWriteBudget({ scenario: "provider-branch-unchanged-refreshes",
         note: "100 unchanged hover/timer observations; zero commits, 0 MB/day while idle", writes: idle.writes });
       await git(["switch", "fix/agent-branch"]);
       await registry.refreshThreadDirectoryRelationship(identity);
+      // This probe is real again: the fixture must observe the switch back.
+      expect(await store.getThreadOverlayState(identity)).toMatchObject({
+        gitBranch: "fix/agent-branch", observedGitBranch: "fix/agent-branch",
+      });
       await start("unchanged");
       const unchangedTurn = await measureSqliteWrites(() => complete("unchanged"));
       expectSqliteWriteBudget({ scenario: "provider-branch-unchanged-turn",
