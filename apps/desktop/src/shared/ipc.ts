@@ -183,13 +183,14 @@ export const THREAD_TODOS_SET_ITEM_CHECKED_CHANNEL = "thread-todos:set-item-chec
  */
 export const THREAD_TODOS_CHANGED_EVENT_CHANNEL = "thread-todos:changed";
 export const OPERATOR_REQUESTS_LIST_CHANNEL = "operator-requests:list";
+export const OPERATOR_QUESTIONS_LIST_DISMISSED_CHANNEL = "operator-requests:list-dismissed-questions";
 export const OPERATOR_REQUESTS_MARK_SEEN_CHANNEL = "operator-requests:mark-seen";
 export const OPERATOR_REQUESTS_DISMISS_QUESTION_CHANNEL =
   "operator-requests:dismiss-question";
 /**
  * Marker event: what local threads are waiting on the operator for, or what
  * the operator has seen, changed. Listeners refetch with
- * `operator-requests:list`. Local windows only.
+ * `operator-requests:list`. Scoped question changes also reach owner viewers.
  */
 export const OPERATOR_REQUESTS_CHANGED_EVENT_CHANNEL = "operator-requests:changed";
 export const AGENT_START_REVIEW_CHANNEL = "agent:start-review";

@@ -20,6 +20,7 @@ import type {
   ListThreadReviewsRequest,
   UpdateThreadReviewRequest,
   DismissOperatorQuestionRequest,
+  OperatorQuestionThreadRequest,
   ListOperatorRequestsResponse,
   MarkOperatorItemsSeenRequest,
   OperatorRequestsChangedEvent,
@@ -1043,6 +1044,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   ) => () => void;
   /** Every local thread's pending requests and open async questions. */
   listOperatorRequests?: () => Promise<ListOperatorRequestsResponse>;
+  listDismissedOperatorQuestions?: (request: OperatorQuestionThreadRequest) => Promise<string[]>;
   markOperatorItemsSeen?: (request: MarkOperatorItemsSeenRequest) => Promise<void>;
   dismissOperatorQuestion?: (request: DismissOperatorQuestionRequest) => Promise<void>;
   /** Marker event; refetch with `listOperatorRequests`. Local windows only. */

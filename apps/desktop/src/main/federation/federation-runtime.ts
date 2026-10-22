@@ -1,4 +1,7 @@
 import type { ThreadTodosChangedEvent } from "@pwragent/shared";
+import { FEDERATION_OPERATOR_QUESTION_CAPABILITIES, FEDERATION_OPERATOR_QUESTION_METHODS,
+  registerFederationOperatorQuestionHandlers, type OperatorQuestionOperation,
+  type OperatorQuestionOperationRequest, type OperatorQuestionOperationResponse } from "./federation-operator-questions";
 import { localThreadTodoOperations } from "../thread-todos/thread-todo-operations";
 import { FEDERATION_THREAD_TODO_CAPABILITIES, FEDERATION_THREAD_TODO_METHODS, registerFederationThreadTodoHandlers,
   type ThreadTodoOperation, type ThreadTodoOperationRequest, type ThreadTodoOperationResponse } from "./federation-thread-todos";
@@ -586,6 +589,7 @@ export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "turn_queue_reorder",
   "thread_mcp_connections",
   "thread_todos",
+  "operator_questions",
 ];
 
 const REMOTE_THREAD_SUMMARY_EVENT_CONSUMER_ID =
@@ -721,6 +725,7 @@ export function federationEventClassForMethod(
     || method === "applyPatchApproval"
     || method === "execCommandApproval"
     || method === "serverRequest/resolved"
+    || method === "thread/operatorQuestions/changed"
     || method.toLowerCase().includes("requestapproval")
   ) {
     return "pending_requests";
@@ -2298,6 +2303,22 @@ export class DesktopFederationRuntime {
     });
   }
 
+  async requestOperatorQuestionOperation<K extends OperatorQuestionOperation>(
+    target: FederationRemoteTarget, operation: K, request: OperatorQuestionOperationRequest<K>,
+  ): Promise<OperatorQuestionOperationResponse<K>> {
+    if (!this.remotePeerAdvertisesCapability(target.instanceId, "operator_questions")) {
+      throw new Error("This Federation owner does not support question dismissals. Update that PwrAgent instance.");
+    }
+    return await this.rpcFor(target).request({
+      method: FEDERATION_OPERATOR_QUESTION_METHODS[operation], params: request,
+    });
+  }
+
+  publishOperatorQuestionsChanged(params: { backend: AppServerBackendKind; threadId: string }): void {
+    this.forwardLocalBackendEvent({ backend: params.backend,
+      notification: { method: "thread/operatorQuestions/changed", params } });
+  }
+
   publishThreadTodosChanged(event: ThreadTodosChangedEvent): void {
     this.forwardLocalBackendEvent({ backend: event.backend ?? "codex",
       notification: { method: "thread/todos/changed", params: event } });
@@ -3289,6 +3310,7 @@ export class DesktopFederationRuntime {
       methodCapabilities: {
         ...FEDERATION_BACKEND_METHOD_CAPABILITIES,
         ...FEDERATION_THREAD_TODO_CAPABILITIES,
+        ...FEDERATION_OPERATOR_QUESTION_CAPABILITIES,
         ...FEDERATION_PTY_METHOD_CAPABILITIES,
         ...FILE_PUSH_METHOD_CAPABILITIES,
         [THREAD_HANDOFF_METHODS.send]: "thread_handoff",
@@ -3314,6 +3336,7 @@ export class DesktopFederationRuntime {
       );
     });
     registerFederationThreadTodoHandlers(router, localThreadTodoOperations);
+    registerFederationOperatorQuestionHandlers(router);
     registerFederationBackendHandlers({
       router,
       backend: localBackendOperations(),
