@@ -9740,6 +9740,52 @@ describe("SettingsScreen", () => {
     ).toBe("AI Providers");
   });
 
+  it("names the access default on a provider screen's defaults strip", async () => {
+    const snapshot = createSnapshot();
+    snapshot.models.providerDefaults = {
+      claude: { reasoningEffortsByModel: {}, executionMode: "full-access" },
+    };
+    const desktopApi = {
+      listAcpAgents: vi.fn(async () => ({ fetchedAt: 1000, entries: [] })),
+      listBackends: vi.fn(async () => ({
+        fetchedAt: 1000,
+        backends: [{
+          kind: "claude" as const,
+          label: "Claude",
+          available: true,
+          methods: [],
+          capabilities: {},
+          executionModes: [],
+          launchpadOptions: { models: [{ id: "opus", label: "Opus" }] },
+        }],
+      })),
+    } as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"];
+
+    const { rerender } = render(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        initialSection="models"
+        initialSubsection="claude"
+        settings={createSettingsState(snapshot)}
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(await screen.findByText("Full Access")).toBeInTheDocument();
+    expect(screen.queryByText(/Access access/)).not.toBeInTheDocument();
+
+    rerender(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        initialSection="models"
+        initialSubsection="claude"
+        settings={createSettingsState(createSnapshot())}
+        onClose={() => undefined}
+      />,
+    );
+    expect(await screen.findByText("Auto access")).toBeInTheDocument();
+  });
+
   it("sorts Gemini CLI last and marks disabled providers off in the nav", async () => {
     const baseSnapshot = createSnapshot();
     const snapshot = createSnapshot({

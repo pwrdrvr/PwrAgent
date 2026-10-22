@@ -922,9 +922,9 @@ function ProviderDefaultsStrip(props: {
     items.push(`${effort} effort`);
   }
   if (backend && supportsProviderExecutionModeDefault(backend.kind)) {
-    items.push(`${formatExecutionModeLabel(
-      resolveDefaultLaunchpadExecutionMode(backend.kind, props.defaults),
-    )} access`);
+    const access = resolveDefaultLaunchpadExecutionMode(backend.kind, props.defaults);
+    // "Default Access" and "Full Access" already name themselves.
+    items.push(access === "auto" ? "Auto access" : formatExecutionModeLabel(access));
   }
   if (props.codexFastAllowed !== undefined) {
     items.push(props.codexFastAllowed ? "Faster speeds allowed" : "Standard speed only");
