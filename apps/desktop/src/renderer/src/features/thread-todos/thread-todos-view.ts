@@ -80,6 +80,7 @@ export type ThreadTodosView = {
   /** Resolved cards, newest first. */
   listResolved?: () => Promise<ThreadTodo[]>;
   /** What threads are waiting on the operator for, most urgent first. */
+  queueError?: string;
   waits: OperatorWait[];
   waitsByThreadKey: ReadonlyMap<string, OperatorWait[]>;
   /** Item keys the operator has had on screen: waits and cards. */

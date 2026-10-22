@@ -1,3 +1,4 @@
+import { threadTodoThreadKey, parseRemoteOperatorItemKey } from "@pwragent/shared";
 import type { BackgroundTerminalsViewProps } from "./BackgroundTerminalsView";
 import type { AgentCommandsStatus } from "../../lib/useThreadSessionState";
 import { useEventCallback } from "../../lib/useEventCallback";
@@ -1238,6 +1239,7 @@ export function ThreadView(props: ThreadViewProps) {
     id: number;
     threadId: string;
     backend: NavigationThreadSummary["source"];
+    federationTarget?: FederationRemoteTarget;
     text: string;
   }>();
   // Dismissing Codex's async questions only hides their controls, so it is
@@ -2486,7 +2488,7 @@ export function ThreadView(props: ThreadViewProps) {
   };
 
   const asyncQuestionThreadKey = selectedThread
-    ? `${selectedThread.source}:${selectedThread.id}`
+    ? threadSummaryIdentityKey(selectedThread)
     : undefined;
   const questionOwner = selectedThread?.federation?.ref.target ?? readRendererFederationTarget();
   const questionFederationTarget = questionOwner?.scope === "remote" ? questionOwner : undefined;
@@ -2545,7 +2547,7 @@ export function ThreadView(props: ThreadViewProps) {
     const id = asyncQuestionReplyId.current;
     const thread = selectedThread;
     asyncQuestionSubmissions.current.set(id, {
-      threadKey: `${thread.source}:${thread.id}`,
+      threadKey: threadSummaryIdentityKey(thread),
       text,
     });
     return new Promise<boolean>((resolve) => {
@@ -2554,6 +2556,7 @@ export function ThreadView(props: ThreadViewProps) {
         id,
         threadId: thread.id,
         backend: thread.source,
+        federationTarget: questionFederationTarget,
         text,
       });
     });
@@ -2564,38 +2567,37 @@ export function ThreadView(props: ThreadViewProps) {
     id: number;
     threadId: string;
     backend: AppServerBackendKind;
+    federationTarget?: FederationRemoteTarget;
   }>();
   // The card's answer about open steps rides along, so the resolve once the
   // review starts sends the override only if the operator confirmed it.
-  const pendingReviewTodoRef = useRef<
-    { todo: ThreadTodo; options?: ThreadTodoResolveOptions } | undefined
-  >(undefined);
+  const pendingReviewTodos = useRef(new Map<number, { todo: ThreadTodo; options?: ThreadTodoResolveOptions }>());
+  const todoReviewRequestId = useRef(0);
   const startTodoReview = useEventCallback((
     todo: ThreadTodo,
     options?: ThreadTodoResolveOptions,
   ) => {
-    pendingReviewTodoRef.current = { todo, options };
-    setTodoReviewRequest((current) => ({
-      id: (current?.id ?? 0) + 1,
+    const id = ++todoReviewRequestId.current;
+    for (const [previousId, pending] of pendingReviewTodos.current) {
+      if (threadTodoThreadKey(pending.todo) === threadTodoThreadKey(todo)) pendingReviewTodos.current.delete(previousId);
+    }
+    pendingReviewTodos.current.set(id, { todo, options });
+    setTodoReviewRequest({
+      id,
       threadId: todo.threadId,
       backend: todo.backend,
-    }));
+      federationTarget: todo.federationTarget,
+    });
   });
-  const handleReviewStarted = useEventCallback(() => {
-    const pending = pendingReviewTodoRef.current;
-    pendingReviewTodoRef.current = undefined;
-    const todo = pending?.todo;
-    if (
-      todo
-      && todo.threadId === selectedThread?.id
-      && todo.backend === selectedThread?.source
-    ) {
-      void props.threadTodos?.resolve(todo, "done", undefined, pending?.options).catch(
-        (error: unknown) => {
-          console.warn("Resolving the review to-do failed.", error);
-        },
-      );
-    }
+  const handleReviewStarted = useEventCallback((threadKey: string, requestId?: number) => {
+    if (requestId === undefined) return;
+    const pending = pendingReviewTodos.current.get(requestId);
+    if (!pending || threadTodoThreadKey(pending.todo) !== threadKey) return;
+    pendingReviewTodos.current.delete(requestId);
+    // The original owner's acceptance can arrive after navigation changes.
+    void props.threadTodos?.resolve(pending.todo, "done", undefined, pending.options).catch(
+      (error: unknown) => setPendingRequestError(String(error)),
+    );
   });
   // "Do it here" sends a handoff's prompt through the same reply path an
   // answered question takes: start, steer or queue, as a typed reply would.
@@ -2611,7 +2613,7 @@ export function ThreadView(props: ThreadViewProps) {
     const { prompt, ...resolveOptions } = options ?? {};
     const handoff = todo.action?.type === "start_thread" ? todo.action.prompt : undefined;
     const text = prompt ?? handoff;
-    if (!text) return false;
+    if (!text || !selectedThread || threadTodoThreadKey(todo) !== threadSummaryIdentityKey(selectedThread)) return false;
     try {
       const accepted = await handleAnswerAsyncQuestions(text);
       if (accepted && prompt === undefined) {
@@ -2619,7 +2621,8 @@ export function ThreadView(props: ThreadViewProps) {
       }
       return accepted;
     } catch (error) {
-      console.warn("Sending the handoff here failed.", error);
+      props.onShowNotice?.({ id: `todo-dispatch:${todo.id}`, tone: "error", title: "To-do dispatch failed",
+        message: error instanceof Error ? error.message : String(error) });
       return false;
     }
   });
@@ -2648,20 +2651,21 @@ export function ThreadView(props: ThreadViewProps) {
   const panelDismissedQuestionKeys = props.threadTodos?.dismissedQuestionKeys;
   const foldedPanelQuestionKeysRef = useRef(new Set<string>());
   useEffect(() => {
-    if (!panelDismissedQuestionKeys || !selectedThread || selectedThread.federation) return;
+    if (!panelDismissedQuestionKeys || !selectedThread) return;
     const prefix = `question:${selectedThread.source}:${selectedThread.id}:`;
-    const fresh = [...panelDismissedQuestionKeys].filter((key) =>
-      key.startsWith(prefix) && !foldedPanelQuestionKeysRef.current.has(key));
-    if (fresh.length === 0) return;
-    for (const key of fresh) foldedPanelQuestionKeysRef.current.add(key);
-    setDismissedAsyncQuestions((current) => {
-      const next = new Set(current);
-      for (const key of fresh) {
-        next.add(`${dismissalThreadKey}\0${key.slice(prefix.length)}`);
-      }
-      return next;
+    const fresh = [...panelDismissedQuestionKeys].flatMap((key) => {
+      const projected = parseRemoteOperatorItemKey(key);
+      const localKey = projected?.key ?? key;
+      return projected?.target.instanceId === questionFederationTarget?.instanceId
+        && localKey.startsWith(prefix) && !foldedPanelQuestionKeysRef.current.has(key)
+        ? [{ key, messageId: localKey.slice(prefix.length) }] : [];
     });
-  }, [panelDismissedQuestionKeys, selectedThread, dismissalThreadKey]);
+    if (fresh.length === 0) return;
+    for (const { key } of fresh) foldedPanelQuestionKeysRef.current.add(key);
+    setDismissedAsyncQuestions((current) => new Set([...current,
+      ...fresh.map(({ messageId }) => `${dismissalThreadKey}\0${messageId}`),
+    ]));
+  }, [panelDismissedQuestionKeys, selectedThread, dismissalThreadKey, questionFederationTarget?.instanceId]);
   const handleAsyncQuestionsDismissedChange = useEventCallback(
     (messageId: string, dismissed: boolean) => {
       if (!asyncQuestionThreadKey) return;

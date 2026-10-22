@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { FEDERATION_OPERATOR_QUESTION_CAPABILITIES, FEDERATION_OPERATOR_QUESTION_METHODS,
   registerFederationOperatorQuestionHandlers } from "../federation/federation-operator-questions";
 import { FederationRouter } from "../federation/federation-router";
@@ -6,6 +6,9 @@ import { installOperatorRequestService } from "../operator-requests/operator-req
 import { OperatorRequestService } from "../operator-requests/operator-request-service";
 import { OperatorRequestStore } from "../operator-requests/operator-request-store";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
+
+const submitThreadReply = vi.hoisted(() => vi.fn(async () => ({ status: "queued", entry: { backend: "codex", threadId: "thread", id: "queue-1" } })));
+vi.mock("../app-server/backend-registry", () => ({ getDesktopBackendRegistry: () => ({ submitThreadReply }) }));
 
 const cleanups: Array<() => void> = [];
 afterEach(() => { while (cleanups.length) cleanups.pop()?.(); });
@@ -20,7 +23,9 @@ describe("owner question protocol", () => {
     });
     const changes: unknown[] = [];
     installOperatorRequestService(new OperatorRequestService({ store,
-      registry: { listPendingServerRequests: () => [], onEvent: () => () => {} },
+      registry: { listPendingServerRequests: () => [{ backend: "codex", notification: {
+        method: "item/commandExecution/requestApproval", params: { threadId: "thread", requestId: "approval" },
+      } }], onEvent: () => () => {} },
       broadcast: (event) => changes.push(event),
     }));
     const router = new FederationRouter({ localInstanceId: "owner", methodCapabilities: FEDERATION_OPERATOR_QUESTION_CAPABILITIES });
@@ -32,7 +37,19 @@ describe("owner question protocol", () => {
     } });
     expect((await send(FEDERATION_OPERATOR_QUESTION_METHODS.dismiss, question)).status).toBe("rejected");
     expect(store.listOpenQuestions()).toHaveLength(1);
-    router.registerConnection({ peerId: "viewer", capabilities: ["thread_detail", "turn_control"], sendEnvelope: () => {} });
+    const read = await send(FEDERATION_OPERATOR_QUESTION_METHODS.list, { backend: "codex", threadId: "thread" });
+    expect(read.status === "handled" && read.response?.result).toMatchObject({ questions: [{ messageId: "question" }], serverRequests: [] });
+    expect((await send(FEDERATION_OPERATOR_QUESTION_METHODS.listPending, {})).status).toBe("rejected");
+    expect((await send(FEDERATION_OPERATOR_QUESTION_METHODS.reply, { backend: "codex", threadId: "thread", input: [] })).status).toBe("rejected");
+    expect(submitThreadReply).not.toHaveBeenCalled();
+    router.registerConnection({ peerId: "viewer", capabilities: ["thread_detail", "turn_control", "pending_request_control"], sendEnvelope: () => {} });
+    const pending = await send(FEDERATION_OPERATOR_QUESTION_METHODS.listPending, { backend: "codex", threadId: "thread" });
+    expect(pending.status === "handled" && pending.response?.result).toMatchObject([{ notification: { params: { requestId: "approval" } } }]);
+    const reply = { backend: "codex", threadId: "thread", input: [{ type: "text", text: "staging" }] };
+    expect((await send(FEDERATION_OPERATOR_QUESTION_METHODS.reply, { ...reply, federationTarget: { scope: "remote", instanceId: "other" } })).status).toBe("rejected");
+    const accepted = await send(FEDERATION_OPERATOR_QUESTION_METHODS.reply, reply);
+    expect(accepted.status === "handled" && accepted.response?.result).toMatchObject({ queueStatus: "queued", queueEntryId: "queue-1" });
+    expect(submitThreadReply).toHaveBeenCalledExactlyOnceWith(reply);
     expect((await send(FEDERATION_OPERATOR_QUESTION_METHODS.dismiss, { ...question,
       federationTarget: { scope: "remote", instanceId: "other" },
     })).status).toBe("rejected");

@@ -1,5 +1,6 @@
 import type {
   AppServerBackendKind,
+  FederationRemoteTarget,
   AppServerMcpElicitationRequestNotification,
   AppServerPendingRequestNotification,
   AppServerToolRequestUserInputNotification,
@@ -7,7 +8,7 @@ import type {
   OperatorAsyncQuestion,
 } from "@pwragent/shared";
 import {
-  buildThreadIdentityKey,
+  threadTodoThreadKey,
   operatorQuestionItemKey,
   operatorServerRequestItemKey,
 } from "@pwragent/shared";
@@ -33,6 +34,7 @@ export type OperatorWait = {
   key: string;
   kind: OperatorWaitKind;
   backend: AppServerBackendKind;
+  federationTarget?: FederationRemoteTarget;
   threadId: string;
   /** `backend:threadId`. */
   threadKey: string;
@@ -89,7 +91,7 @@ export function leadingOperatorWait(waits: readonly OperatorWait[]): OperatorWai
 export function buildOperatorWaits(response: ListOperatorRequestsResponse): OperatorWait[] {
   const waits: OperatorWait[] = [];
   for (const entry of response.serverRequests) {
-    const wait = waitForServerRequest(entry.backend, entry.notification, entry.createdAt);
+    const wait = waitForServerRequest(entry.backend, entry.notification, entry.createdAt, entry.federationTarget);
     if (wait) waits.push(wait);
   }
   for (const question of response.questions) {
@@ -103,14 +105,16 @@ function waitForServerRequest(
   backend: AppServerBackendKind,
   request: AppServerPendingRequestNotification,
   createdAt: number,
+  federationTarget?: FederationRemoteTarget,
 ): OperatorWait | undefined {
   const { threadId, requestId } = request.params;
   if (typeof threadId !== "string" || typeof requestId !== "string") return undefined;
   const base = {
-    key: operatorServerRequestItemKey(backend, threadId, requestId),
+    key: operatorServerRequestItemKey(backend, threadId, requestId, federationTarget),
     backend,
     threadId,
-    threadKey: buildThreadIdentityKey(backend, threadId),
+    threadKey: threadTodoThreadKey({ backend, threadId, federationTarget }),
+    federationTarget,
     createdAt,
     request,
   };
@@ -189,11 +193,12 @@ function waitForQuestion(question: OperatorAsyncQuestion): OperatorWait | undefi
   const count = question.questions.length;
   const options = first.options?.length ?? 0;
   return {
-    key: operatorQuestionItemKey(question.backend, question.threadId, question.messageId),
+    key: operatorQuestionItemKey(question.backend, question.threadId, question.messageId, question.federationTarget),
     kind: "question",
     backend: question.backend,
     threadId: question.threadId,
-    threadKey: buildThreadIdentityKey(question.backend, question.threadId),
+    threadKey: threadTodoThreadKey(question),
+    federationTarget: question.federationTarget,
     title: firstLine(first.title),
     detail: count > 1
       ? `${count} questions`

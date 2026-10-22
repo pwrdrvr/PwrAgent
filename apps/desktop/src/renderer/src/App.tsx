@@ -2425,15 +2425,13 @@ function DesktopAppShell(props: {
   const mountedTodoThreadKeys = useMemo(() => navigation.threads.filter((thread) => thread.federation)
     .map(threadSummaryIdentityKey).sort().join("\n"), [navigation.threads]);
   const threadTodoController = useThreadTodos(desktopApi, mountedTodoThreadKeys);
-  const operatorRequests = useOperatorRequests(desktopApi);
+  const operatorRequests = useOperatorRequests(desktopApi, mountedTodoThreadKeys);
   const operatorWaitsContext = useMemo(
-    () => readRendererFederationTarget()
-      ? undefined
-      : {
-          waitsByThreadKey: operatorRequests.waitsByThreadKey,
-          seenKeys: operatorRequests.seenKeys,
-        },
-    [operatorRequests.waitsByThreadKey, operatorRequests.seenKeys],
+    () => operatorRequests.ready ? {
+      waitsByThreadKey: operatorRequests.waitsByThreadKey,
+      seenKeys: operatorRequests.seenKeys,
+    } : undefined,
+    [operatorRequests.ready, operatorRequests.waitsByThreadKey, operatorRequests.seenKeys],
   );
   const localThreadTitles = useMemo(() => {
     const titles = new Map<string, string>();
@@ -2442,15 +2440,15 @@ function DesktopAppShell(props: {
     }
     return titles;
   }, [navigation.threads]);
-  // The project each local thread files under, by its primary workspace, as
+  // The project each thread files under, by its primary workspace, as
   // the sidebar groups it.
   const localThreadProjects = useMemo(() => {
     const projects = new Map<string, { key: string; label: string }>();
     for (const thread of navigation.threads) {
       const linked = thread.linkedDirectories[0];
-      if (thread.federation || !linked) continue;
+      if (!linked) continue;
       const descriptor = classifyDirectory(linked);
-      projects.set(buildThreadIdentityKey(thread.source, thread.id), {
+      projects.set(threadSummaryIdentityKey(thread), {
         key: descriptor.key,
         label: descriptor.label,
       });
@@ -2534,8 +2532,7 @@ function DesktopAppShell(props: {
   const offscreenQuestionAnswers = useOffscreenQuestionAnswers({
     submitThreadReply: desktopApi?.submitThreadReply,
     findThread: (threadKey) => navigation.threads.find((candidate) =>
-      !candidate.federation
-      && buildThreadIdentityKey(candidate.source, candidate.id) === threadKey),
+      threadSummaryIdentityKey(candidate) === threadKey),
     onUserRepliedToThread: reportUserRepliedToThread,
   });
   const threadTodosView = useMemo<ThreadTodosView | undefined>(() => {
@@ -2605,11 +2602,13 @@ function DesktopAppShell(props: {
       },
       listResolved: async () => {
         const response = await listThreadTodos({ status: "all" });
+        if (response.errors?.length) throw new Error(response.errors.join("\n"));
         return response.todos
           .filter((todo) => todo.status !== "open")
           .sort((left, right) =>
             (right.resolvedAt ?? right.updatedAt) - (left.resolvedAt ?? left.updatedAt));
       },
+      queueError: [threadTodoController.error, operatorRequests.error].filter(Boolean).join("\n") || undefined,
       waits: operatorRequests.waits,
       waitsByThreadKey: operatorRequests.waitsByThreadKey,
       seenKeys: operatorRequests.seenKeys,
@@ -2622,6 +2621,7 @@ function DesktopAppShell(props: {
         await submitServerRequest({
           backend: wait.backend,
           threadId: wait.threadId,
+          federationTarget: wait.federationTarget,
           turnId: typeof request.params.turnId === "string" ? request.params.turnId : undefined,
           requestId: request.params.requestId,
           response,
@@ -2635,13 +2635,14 @@ function DesktopAppShell(props: {
         if (messageId && wait.threadKey === selectedThreadKeyRef.current) {
           // Already on screen: scroll only. Selecting it again would refresh
           // its git status and clear its errors for nothing.
-          queueMessageLinkRequest({ backend: wait.backend, threadId: wait.threadId, messageId });
+          queueMessageLinkRequest({ backend: wait.backend, threadId: wait.threadId, messageId, instanceId: wait.federationTarget?.instanceId });
           return;
         }
         showThreadFromLink({
           backend: wait.backend,
           threadId: wait.threadId,
           ...(messageId ? { messageId } : {}),
+          ...(wait.federationTarget ? { instanceId: wait.federationTarget.instanceId } : {}),
         });
       },
       ...offscreenQuestionAnswers,

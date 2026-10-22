@@ -1804,6 +1804,34 @@ describe("DesktopFederationRuntime", () => {
       method: "item/tool/requestUserInput", params: { threadId: "mounted", requestId: "prompt-1", questions: [] },
     } });
     expect(received).toHaveBeenCalledTimes(1);
+    received.mockClear();
+    ownerRuntime.publishThreadTodosChanged({ backend: "codex", threadId: "unmounted", at: 1 });
+    ownerRuntime.publishOperatorRequestsChanged({ reason: "questions", backend: "codex", threadId: "unmounted" });
+    expect(received).not.toHaveBeenCalled();
+    ownerRuntime.publishThreadTodosChanged({ backend: "codex", threadId: "mounted", at: 2 });
+    ownerRuntime.publishOperatorRequestsChanged({ reason: "questions", backend: "codex", threadId: "mounted" });
+    ownerRuntime.publishThreadTodosChanged({ at: 3 });
+    ownerRuntime.publishOperatorRequestsChanged({ reason: "seen" });
+    expect(received.mock.calls.map(([event]) => event.notification.method)).toEqual([
+      "thread/todoDetails/changed", "thread/operatorRequestDetails/changed", "thread/todoDetails/changed", "thread/operatorRequestDetails/changed",
+    ]);
+  });
+
+  it("does not read pending approvals without pending-request control and requires the queue feature", async () => {
+    const runtime = new DesktopFederationRuntime();
+    const harness = runtime as unknown as RuntimeHarness;
+    harness.localInstanceId = "viewer";
+    harness.router = new FederationRouter({ localInstanceId: "viewer" });
+    const send = vi.fn();
+    const target = { scope: "remote" as const, instanceId: "owner" };
+    harness.router.registerConnection(createConnection({ peerId: "owner", capabilities: ["thread_detail", "operator_requests"], sendEnvelope: send }));
+    await expect(runtime.requestOperatorQuestionOperation(target, "listPending", {})).resolves.toEqual([]);
+    expect(send).not.toHaveBeenCalled();
+    harness.router.registerConnection(createConnection({ peerId: "owner", capabilities: ["thread_detail", "turn_control", "operator_questions"], sendEnvelope: send }));
+    await expect(runtime.requestOperatorQuestionOperation(target, "list", {})).rejects.toThrow("Update that PwrAgent instance.");
+    await expect(runtime.requestOperatorQuestionOperation(target, "reply", { backend: "codex", threadId: "thread", input: [] }))
+      .rejects.toThrow("Update that PwrAgent instance.");
+    expect(send).not.toHaveBeenCalled();
   });
 
   it("rejects question dismissals for an older owner before sending an RPC", async () => {

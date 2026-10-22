@@ -409,6 +409,7 @@ const federationMock = vi.hoisted(() => {
   return {
     remoteBackend,
     runtime: {
+      requestOperatorQuestionOperation: vi.fn(async () => ({ backend: "codex", threadId: "thread-1", queueStatus: "queued", queueEntryId: "owner-reply" })),
       hydrateLiveThreadMessageOrigin: vi.fn((event: AgentEvent) => event),
       remoteBackend: vi.fn(() => remoteBackend),
       remoteTargetSupportsCapability: vi.fn((_target: unknown, _capability: unknown) => true),
@@ -1346,7 +1347,7 @@ describe("agent ipc", () => {
     const { AGENT_SUBMIT_THREAD_REPLY_CHANNEL } = await import("../../shared/ipc");
     registerAgentIpcHandlers();
     const input = [{ type: "text" as const, text: "Use the staging bucket" }];
-    await expect(handlers.get(AGENT_SUBMIT_THREAD_REPLY_CHANNEL)?.({}, {
+    await expect(handlers.get(AGENT_SUBMIT_THREAD_REPLY_CHANNEL)?.({ sender: { id: 1 } }, {
       backend: "codex", threadId: "thread-1", input,
     })).resolves.toEqual({
       backend: "codex", threadId: "thread-1", queueStatus: "queued", queueEntryId: "reply-1",
@@ -1355,9 +1356,29 @@ describe("agent ipc", () => {
       backend: "codex", threadId: "thread-1", input,
     });
     vi.mocked(registry.submitThreadReply).mockRejectedValueOnce(new Error("This thread is locked: Parked."));
-    await expect(handlers.get(AGENT_SUBMIT_THREAD_REPLY_CHANNEL)?.({}, {
+    await expect(handlers.get(AGENT_SUBMIT_THREAD_REPLY_CHANNEL)?.({ sender: { id: 1 } }, {
       backend: "codex", threadId: "thread-1", input,
     })).rejects.toThrow("This thread is locked: Parked.");
+  });
+
+  it.each([false, true])("routes offscreen replies to the owner with no local fallback (remote window=%s)", async (remoteWindow) => {
+    const { registerAgentIpcHandlers } = await import("../ipc/agent-ipc");
+    const { AGENT_SUBMIT_THREAD_REPLY_CHANNEL } = await import("../../shared/ipc");
+    registerAgentIpcHandlers();
+    const target = { scope: "remote" as const, instanceId: "owner" };
+    if (remoteWindow) channelSubscriberTargets.set(1, target);
+    const local = { backend: "codex", threadId: "thread-1", input: [{ type: "text", text: "staging" }] };
+    const request = { ...local, ...(!remoteWindow ? { federationTarget: target } : {}) };
+    registry.submitThreadReply.mockClear();
+    const send = federationMock.runtime.requestOperatorQuestionOperation;
+    send.mockClear();
+    await expect(handlers.get(AGENT_SUBMIT_THREAD_REPLY_CHANNEL)?.({ sender: { id: 1 } }, request))
+      .resolves.toMatchObject({ queueEntryId: "owner-reply" });
+    expect(send).toHaveBeenCalledExactlyOnceWith(target, "reply", local);
+    send.mockRejectedValueOnce(new Error("Owner disconnected"));
+    await expect(handlers.get(AGENT_SUBMIT_THREAD_REPLY_CHANNEL)?.({ sender: { id: 1 } }, request))
+      .rejects.toThrow("Owner disconnected");
+    expect(registry.submitThreadReply).not.toHaveBeenCalled();
   });
 
   it("routes remote events only to subscribed windows for the owning instance", async () => {

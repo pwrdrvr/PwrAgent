@@ -275,11 +275,12 @@ export type StartTurnResponse = {
 };
 
 /**
- * An operator's reply to a local thread no composer shows. The owner's FIFO
+ * An operator's reply to a thread no composer shows. The owner's FIFO
  * starts it, steers it into the running turn, or queues it, as a composer
  * reply would; it carries no turn settings.
  */
 export type SubmitThreadReplyRequest = {
+  federationTarget?: import("./federation").FederationRemoteTarget;
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   input: AppServerTurnInputItem[];

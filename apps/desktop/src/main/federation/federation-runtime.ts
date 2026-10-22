@@ -590,6 +590,7 @@ export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "thread_mcp_connections",
   "thread_todos",
   "operator_questions",
+  "operator_requests",
 ];
 
 const REMOTE_THREAD_SUMMARY_EVENT_CONSUMER_ID =
@@ -740,7 +741,7 @@ export function federationEventClassForMethod(
   ) {
     return "star_map";
   }
-  if (method === "navigation/invalidated" || method === "thread/todos/changed") {
+  if (method === "navigation/invalidated" || method === "thread/todos/changed" || method === "thread/operatorRequests/changed") {
     return "navigation";
   }
   if (method === NAVIGATION_DIRECTORY_SET_CHANGED_METHOD) {
@@ -956,7 +957,9 @@ export function eventMatchesThreadSelection(
   // a shared resource rather than one thread. Sparse consumers still need the
   // tiny invalidation so they can refresh their selected rows; the expensive
   // snapshot response remains filtered.
-  if (!threadId) return eventClass === "navigation" || event.notification.method === "federation/eventStream/changed";
+  if (!threadId) return eventClass === "navigation" || event.notification.method === "federation/eventStream/changed"
+    || ((event.notification.method === "thread/todoDetails/changed" || event.notification.method === "thread/operatorRequestDetails/changed")
+      && selection.threads.length > 0);
   const actionBackend =
     typeof scheduledAction?.backend === "string"
     && isAppServerBackendKind(scheduledAction.backend)
@@ -2309,8 +2312,12 @@ export class DesktopFederationRuntime {
   async requestOperatorQuestionOperation<K extends OperatorQuestionOperation>(
     target: FederationRemoteTarget, operation: K, request: OperatorQuestionOperationRequest<K>,
   ): Promise<OperatorQuestionOperationResponse<K>> {
-    if (!this.remotePeerAdvertisesCapability(target.instanceId, "operator_questions")) {
-      throw new Error("This Federation owner does not support question dismissals. Update that PwrAgent instance.");
+    const queueOperation = operation === "list" || operation === "listPending" || operation === "markSeen" || operation === "reply";
+    if (!this.remotePeerAdvertisesCapability(target.instanceId, queueOperation ? "operator_requests" : "operator_questions")) {
+      throw new Error(`This Federation owner does not support ${queueOperation ? "the operator request queue" : "question dismissals"}. Update that PwrAgent instance.`);
+    }
+    if (operation === "listPending" && !this.remotePeerAdvertisesCapability(target.instanceId, "pending_request_control")) {
+      return [] as OperatorQuestionOperationResponse<K>;
     }
     return await this.rpcFor(target).request({
       method: FEDERATION_OPERATOR_QUESTION_METHODS[operation], params: request,
@@ -2322,9 +2329,20 @@ export class DesktopFederationRuntime {
       notification: { method: "thread/operatorQuestions/changed", params } });
   }
 
+  publishOperatorRequestsChanged(params: { reason: "requests" | "questions" | "seen"; backend?: AppServerBackendKind; threadId?: string }): void {
+    this.forwardLocalBackendEvent({ backend: params.backend ?? "codex",
+      notification: { method: "thread/operatorRequests/changed", params } });
+    this.forwardLocalBackendEvent({ backend: params.backend ?? "codex",
+      notification: { method: "thread/operatorRequestDetails/changed", params } });
+  }
+
   publishThreadTodosChanged(event: ThreadTodosChangedEvent): void {
     this.forwardLocalBackendEvent({ backend: event.backend ?? "codex",
       notification: { method: "thread/todos/changed", params: event } });
+    // Detail-only viewers have no navigation subscription. Keep the sparse
+    // navigation marker for background queues and also refresh selected details.
+    this.forwardLocalBackendEvent({ backend: event.backend ?? "codex",
+      notification: { method: "thread/todoDetails/changed", params: event } });
   }
 
   remoteBackend(target: FederationRemoteTarget): FederationRemoteBackendClient {

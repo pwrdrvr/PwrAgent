@@ -58083,9 +58083,14 @@ script = "printf setup"
       warnings: [],
       completedAt: 1000,
     }));
+    const overlayStore = createOverlayStoreMock();
+    await overlayStore.setThreadParent({
+      backend: acpBackendId, threadId: "session-1", parentThreadId: "parent", parentThreadBackend: "codex",
+    });
+    const replaceWorkspace = vi.spyOn(overlayStore, "replaceWorkspaceLinkedDirectory");
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
-      overlayStore: createOverlayStoreMock(),
+      overlayStore,
       acpAgentStore: createAcpAgentStoreMock([
         {
           backendId: acpBackendId,
@@ -58130,6 +58135,9 @@ script = "printf setup"
       direction: "to-project",
       targetPath: "/projects/demo",
     });
+    expect(replaceWorkspace).toHaveBeenCalledWith(expect.objectContaining({
+      backend: acpBackendId, threadId: "session-1", resetProjectState: true,
+    }));
     await registry.startTurn({
       backend: acpBackendId,
       threadId: "session-1",
