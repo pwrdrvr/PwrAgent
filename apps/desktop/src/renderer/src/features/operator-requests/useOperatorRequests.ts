@@ -10,13 +10,14 @@ import {
 import type { DismissOperatorQuestionRequest } from "@pwragent/shared";
 import { operatorQuestionItemKey } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
-import { readRendererFederationTarget } from "../../lib/federation-window";
 import { buildOperatorWaits, type OperatorWait } from "./operator-waits";
 
 export type OperatorRequestsController = {
-  /** Every local thread's waits, most urgent first. */
+  ready: boolean;
+  error?: string;
+  /** Local and mounted threads' waits, most urgent first. */
   waits: OperatorWait[];
-  /** Waits per `backend:threadId`, most urgent first. */
+  /** Waits per owner-qualified thread key, most urgent first. */
   waitsByThreadKey: ReadonlyMap<string, OperatorWait[]>;
   /** Item keys the operator has had on screen, to-dos included. */
   seenKeys: ReadonlySet<string>;
@@ -29,7 +30,7 @@ export type OperatorRequestsController = {
 
 export type OperatorQuestionTarget = Pick<
   DismissOperatorQuestionRequest,
-  "backend" | "threadId" | "messageId"
+  "backend" | "threadId" | "messageId" | "federationTarget"
 >;
 
 type OperatorRequestsApi = Pick<
@@ -45,18 +46,18 @@ const EMPTY_MAP: ReadonlyMap<string, OperatorWait[]> = new Map();
 const EMPTY_SET: ReadonlySet<string> = new Set();
 
 /**
- * What every local thread is waiting on the operator for, and what the
- * operator has seen. Requests are answered on the instance that owns the
- * thread, so a window fronting a peer has none.
+ * The owner-backed queue for local and mounted threads, or a remote window.
  *
  * The change event is a marker: each one triggers one list call, and events
  * that arrive while a list is in flight collapse into one follow-up.
  */
 export function useOperatorRequests(
   desktopApi: OperatorRequestsApi | undefined,
+  mountedThreadKeys?: string,
 ): OperatorRequestsController {
-  const remoteWindow = readRendererFederationTarget() !== undefined;
-  const api = remoteWindow ? undefined : desktopApi;
+  const api = desktopApi;
+  const [ready, setReady] = useState(false);
+  const [error, setError] = useState<string>();
   const [waits, setWaits] = useState<OperatorWait[]>(EMPTY_WAITS);
   const [seenKeys, setSeenKeys] = useState<ReadonlySet<string>>(EMPTY_SET);
   const loadingRef = useRef(false);
@@ -80,6 +81,8 @@ export function useOperatorRequests(
         try {
           const response = await list();
           const next = buildOperatorWaits(response);
+          setReady(true);
+          setError(response.errors?.join("\n"));
           // A reload that changed no wait keeps the same array, so the
           // sidebar's rows, which read it through context, do not re-render.
           setWaits((current) => sameWaits(current, next)
@@ -93,7 +96,7 @@ export function useOperatorRequests(
               ? current
               : seen);
         } catch (error) {
-          console.warn("Loading operator requests failed.", error);
+          setError(error instanceof Error ? error.message : String(error));
         }
       } while (reloadQueuedRef.current);
     } finally {
@@ -107,7 +110,7 @@ export function useOperatorRequests(
       void reload();
     });
     return () => unsubscribe?.();
-  }, [api, reload]);
+  }, [api, reload, mountedThreadKeys]);
 
   const markSeen = useCallback((keys: readonly string[]): void => {
     const send = api?.markOperatorItemsSeen;
@@ -131,7 +134,8 @@ export function useOperatorRequests(
       void send({ keys: batch }).then(() => {
         storedSeenRef.current = new Set([...storedSeenRef.current, ...batch]);
       }, (error: unknown) => {
-        console.warn("Recording seen operator items failed.", error);
+        setError(error instanceof Error ? error.message : String(error));
+        setSeenKeys((current) => new Set([...current].filter((key) => !batch.includes(key) || storedSeenRef.current.has(key))));
       }).finally(() => {
         for (const key of batch) pendingSeenRef.current.delete(key);
       });
@@ -142,25 +146,14 @@ export function useOperatorRequests(
     useState<ReadonlySet<string>>(EMPTY_SET);
   const dismissQuestion = useCallback(async (target: OperatorQuestionTarget): Promise<void> => {
     if (!api?.dismissOperatorQuestion) return;
-    const key = operatorQuestionItemKey(target.backend, target.threadId, target.messageId);
-    setDismissedQuestionKeys((current) =>
-      current.has(key) ? current : new Set([...current, key]));
-    try {
-      await api.dismissOperatorQuestion({
-        backend: target.backend,
-        threadId: target.threadId,
-        messageId: target.messageId,
-      });
-    } catch (error) {
-      // The question is still open, so its transcript card must not fold.
-      setDismissedQuestionKeys((current) => {
-        if (!current.has(key)) return current;
-        const next = new Set(current);
-        next.delete(key);
-        return next;
-      });
-      throw error;
-    }
+    const key = operatorQuestionItemKey(target.backend, target.threadId, target.messageId, target.federationTarget);
+    await api.dismissOperatorQuestion({
+      backend: target.backend,
+      threadId: target.threadId,
+      messageId: target.messageId,
+      federationTarget: target.federationTarget,
+    });
+    setDismissedQuestionKeys((current) => current.has(key) ? current : new Set([...current, key]));
   }, [api]);
 
   const waitsByThreadKey = useMemo(() => {
@@ -176,6 +169,7 @@ export function useOperatorRequests(
 
   return useMemo(
     () => ({
+      ready, error,
       waits,
       waitsByThreadKey,
       seenKeys,
@@ -183,7 +177,7 @@ export function useOperatorRequests(
       dismissQuestion,
       dismissedQuestionKeys,
     }),
-    [waits, waitsByThreadKey, seenKeys, markSeen, dismissQuestion, dismissedQuestionKeys],
+    [ready, error, waits, waitsByThreadKey, seenKeys, markSeen, dismissQuestion, dismissedQuestionKeys],
   );
 }
 
@@ -201,8 +195,8 @@ export type OperatorWaitsContextValue = {
 /**
  * Waits per thread for the sidebar's chips, through context for the same
  * reason as the to-do counts: the chip sits several list components below
- * App. `undefined` means this window has no list (a peer's window), and the
- * row falls back to the session's own approval and input flags.
+ * App. `undefined` means the initial queue read is unavailable, so rows
+ * fall back to the session's own approval and input flags.
  */
 export const OperatorWaitsContext = createContext<OperatorWaitsContextValue | undefined>(
   undefined,

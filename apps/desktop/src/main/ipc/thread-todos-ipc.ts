@@ -87,7 +87,7 @@ export function registerThreadTodoIpcHandlers(options: {
   });
   unsubscribeRemoteTodos?.();
   unsubscribeRemoteTodos = runtime.onRemoteBackendEvent((event) => {
-    if (event.notification.method === "thread/todos/changed") {
+    if (event.notification.method === "thread/todos/changed" || event.notification.method === "thread/todoDetails/changed") {
       broadcastThreadTodosChanged({ ...(event.notification.params as ThreadTodosChangedEvent), federationTarget: event.federationTarget?.scope === "remote"
         ? event.federationTarget : undefined });
     } else if (event.notification.method === "federation/eventStream/changed") {

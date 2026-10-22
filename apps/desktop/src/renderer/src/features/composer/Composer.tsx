@@ -329,6 +329,7 @@ export type ComposerProps = {
     id: number;
     threadId: string;
     backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
     text: string;
   };
   onReplySubmissionSettled?: (id: number, accepted: boolean) => void;
@@ -341,9 +342,10 @@ export type ComposerProps = {
     id: number;
     threadId: string;
     backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
   };
   /** A review this composer submitted was accepted by the backend. */
-  onReviewStarted?: () => void;
+  onReviewStarted?: (threadKey: string, requestId?: number) => void;
   /**
    * Focus the input once this composer shows the named thread and can take
    * input. Sent for a mouse click on the thread's sidebar row only; each id
@@ -4030,6 +4032,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
 
     draftStore.set(scopeKey, state);
   };
+  const requestOwner = (target: FederationTarget | undefined): string | undefined =>
+    target?.scope === "remote" ? target.instanceId : undefined;
+  const composerRequestOwner = requestOwner(props.thread?.federation?.ref.target ?? readRendererFederationTarget());
   useEffect(() => {
     const submission = props.replySubmission;
     if (!submission || appliedReplySubmissionId.current === submission.id) {
@@ -4038,6 +4043,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     if (
       submission.threadId !== props.thread?.id
       || submission.backend !== props.thread?.source
+      || requestOwner(submission.federationTarget ?? readRendererFederationTarget()) !== composerRequestOwner
     ) {
       appliedReplySubmissionId.current = submission.id;
       props.onReplySubmissionSettled?.(submission.id, false);
@@ -4053,7 +4059,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       .then((accepted) => props.onReplySubmissionSettled?.(submission.id, accepted));
     // submitReplyText is recreated each render; the id guard sends once.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.replySubmission, props.disabled, props.thread?.id, props.thread?.source]);
+  }, [props.replySubmission, props.disabled, props.thread?.id, props.thread?.source, composerRequestOwner]);
   // A mouse click on a sidebar row. The request can arrive before this
   // composer shows the clicked thread, or while it is still disabled, so it
   // waits for readiness and the editor's scope transition to commit. It yields
@@ -4088,6 +4094,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     if (
       request.threadId !== props.thread?.id
       || request.backend !== props.thread?.source
+      || requestOwner(request.federationTarget ?? readRendererFederationTarget()) !== composerRequestOwner
     ) {
       appliedReviewRequestId.current = request.id;
       return;
@@ -4111,7 +4118,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     requestAnimationFrame(() => inputRef.current?.focus());
     // The helpers are recreated each render; the id guard opens once.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.reviewRequest, props.disabled, props.thread?.id, props.thread?.source]);
+  }, [props.reviewRequest, props.disabled, props.thread?.id, props.thread?.source, composerRequestOwner]);
   const clearComposerDraftSnapshot = (scopeKey: string): void => {
     if (isDraftStoreScope(scopeKey)) {
       draftStore.delete(scopeKey);
@@ -6477,7 +6484,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         })?.catch(() => undefined);
       }
       inFlightReviewSubmissionKeyRef.current = undefined;
-      props.onReviewStarted?.();
+      props.onReviewStarted?.(threadSummaryIdentityKey(props.thread), props.reviewRequest?.id);
       if (updateActiveTurnId(response.turnId, { review: true })) {
         props.onActiveTurnIdChange?.(response.turnId);
       }

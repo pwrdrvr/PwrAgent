@@ -22,6 +22,7 @@ import type {
   DismissOperatorQuestionRequest,
   OperatorQuestionThreadRequest,
   ListOperatorRequestsResponse,
+  ListOperatorRequestsRequest,
   MarkOperatorItemsSeenRequest,
   OperatorRequestsChangedEvent,
 } from "@pwragent/shared";
@@ -1043,11 +1044,11 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
     callback: (event: ThreadTodosChangedEvent) => void,
   ) => () => void;
   /** Every local thread's pending requests and open async questions. */
-  listOperatorRequests?: () => Promise<ListOperatorRequestsResponse>;
+  listOperatorRequests?: (request?: ListOperatorRequestsRequest) => Promise<ListOperatorRequestsResponse>;
   listDismissedOperatorQuestions?: (request: OperatorQuestionThreadRequest) => Promise<string[]>;
   markOperatorItemsSeen?: (request: MarkOperatorItemsSeenRequest) => Promise<void>;
   dismissOperatorQuestion?: (request: DismissOperatorQuestionRequest) => Promise<void>;
-  /** Marker event; refetch with `listOperatorRequests`. Local windows only. */
+  /** Marker event; refetch with `listOperatorRequests`. */
   onOperatorRequestsChanged?: (
     callback: (event: OperatorRequestsChangedEvent) => void,
   ) => () => void;

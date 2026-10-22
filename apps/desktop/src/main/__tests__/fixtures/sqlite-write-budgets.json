@@ -1211,5 +1211,6 @@
     "rowsChanged": 2,
     "statements": 2
   },
-  "thread-dependencies-unchanged-service-polls": {"commits": 0, "note": "100 accepted unchanged passing service polls with a busy consumer: zero commits and 0 MB/day idle.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0}
+  "thread-dependencies-unchanged-service-polls": {"commits": 0, "note": "100 accepted unchanged passing service polls with a busy consumer: zero commits and 0 MB/day idle.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "federated-operator-seen": {"commits": 1, "note": "one owner commit for two seen items; a repeated batch and 50 remote reads write nothing; ~0.41 MB/day at 50 batches", "observedWalBytes": 8240, "rowsChanged": 2, "statements": 2}
 }

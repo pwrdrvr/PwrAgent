@@ -19,6 +19,7 @@ import type { DesktopApi } from "../../lib/desktop-api";
 import type { ThreadTodoResolveOptions } from "./thread-todos-view";
 
 export type ThreadTodosController = {
+  error?: string;
   /** Open cards, newest first. */
   openTodos: ThreadTodo[];
   /** Open cards per `backend:threadId`, newest first. */
@@ -73,6 +74,7 @@ export function useThreadTodos(
   mountedThreadKeys = "",
 ): ThreadTodosController {
   const api = desktopApi;
+  const [error, setError] = useState<string>();
   const [openTodos, setOpenTodos] = useState<ThreadTodo[]>(EMPTY_TODOS);
   const [revision, setRevision] = useState(0);
   const [mergeMethods, setMergeMethods] = useState<ThreadTodoMergeMethodPreferences>();
@@ -93,10 +95,11 @@ export function useThreadTodos(
         reloadQueuedRef.current = false;
         try {
           const response = await list({ status: "open" });
+          setError(response.errors?.join("\n"));
           setOpenTodos(response.todos.length > 0 ? response.todos : EMPTY_TODOS);
           if (response.mergeMethods) setMergeMethods(response.mergeMethods);
         } catch (error) {
-          console.warn("Loading thread to-dos failed.", error);
+          setError(error instanceof Error ? error.message : String(error));
         }
       } while (reloadQueuedRef.current);
     } finally {
@@ -171,6 +174,7 @@ export function useThreadTodos(
 
   return useMemo(
     () => ({
+      error,
       openTodos,
       openByThreadKey,
       revision,
@@ -181,6 +185,7 @@ export function useThreadTodos(
       setItemChecked,
     }),
     [
+      error,
       openTodos,
       openByThreadKey,
       revision,

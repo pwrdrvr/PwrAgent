@@ -107,6 +107,7 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
   const { view, threadKey, projectKey } = props;
   const [scope, setScopeState] = useState<ThreadTodoScope>(rememberedScope);
   const [showResolved, setShowResolved] = useState(false);
+  const [actionError, setActionError] = useState<string>();
   const [resolved, setResolved] = useState<ThreadTodo[]>();
   const controlId = useId();
   const listResolved = view.listResolved;
@@ -151,7 +152,7 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
         return wait.threadKey === threadKey;
       case "project":
         return projectKey !== undefined
-          && props.projectOwner === undefined
+          && wait.federationTarget?.instanceId === props.projectOwner?.instanceId
           && threadProjectForKey(wait.threadKey)?.key === projectKey;
       case "all":
         return true;
@@ -224,6 +225,7 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
   return (
     <section className="context-panel__section thread-todos-panel">
       <h3>To-dos</h3>
+      {actionError || view.queueError ? <p className="thread-todo-card__error" role="alert">{actionError ?? view.queueError}</p> : null}
       <div className="thread-todos-panel__controls">
         <div
           aria-label="To-do scope"
@@ -353,13 +355,13 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
                           onResolve={(target, status, resolution, options) => {
                             void view.resolve(target, status, resolution, options).catch(
                               (error: unknown) => {
-                                console.warn("Resolving a to-do failed.", error);
+                                setActionError(String(error));
                               },
                             );
                           }}
                           onRun={(target, options) => {
                             void view.run(target, options).catch((error: unknown) => {
-                              console.warn("Running a to-do failed.", error);
+                              setActionError(String(error));
                             });
                           }}
                           onStartReview={props.onStartReview}
@@ -367,7 +369,7 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
                           onSetItemChecked={(target, item, checked) => {
                             void view.setItemChecked(target, item.id, checked).catch(
                               (error: unknown) => {
-                                console.warn("Checking a to-do step failed.", error);
+                                setActionError(String(error));
                               },
                             );
                           }}
@@ -521,7 +523,7 @@ function groupItems(
     let title: string;
     if (item.type === "wait") {
       const project = view.threadProjectForKey(item.wait.threadKey);
-      key = scope === "all" ? projectGroupKey(project?.key) : item.wait.threadKey;
+      key = scope === "all" ? projectGroupKey(project?.key, item.wait.federationTarget) : item.wait.threadKey;
       title = scope === "all"
         ? project?.label ?? "No project"
         : view.threadTitleForKey(item.wait.threadKey);

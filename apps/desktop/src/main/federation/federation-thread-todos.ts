@@ -92,15 +92,17 @@ export class FederatedThreadTodoService {
     const unique = new Map(mounts.filter((mount) => (!filter.backend || mount.backend === filter.backend)
       && (!filter.threadId || mount.threadId === filter.threadId))
       .map((mount) => [JSON.stringify([mount.target.instanceId, mount.backend, mount.threadId]), mount]));
+    const errors: string[] = [];
     const remote = await Promise.all([...unique.values()].map(async (mount) => {
       try {
         return (await this.request("listTodos", { ...filter, backend: mount.backend, threadId: mount.threadId,
           federationTarget: mount.target })).todos;
       } catch (error) {
         this.options.onUnavailable?.(error);
+        errors.push(`${mount.target.instanceId}: ${error instanceof Error ? error.message : String(error)}`);
         return [];
       }
     }));
-    return { ...listed, todos: [...listed.todos, ...remote.flat()].sort((a, b) => b.createdAt - a.createdAt) } as ThreadTodoOperationResponse<K>;
+    return { ...listed, ...(errors.length ? { errors } : {}), todos: [...listed.todos, ...remote.flat()].sort((a, b) => b.createdAt - a.createdAt) } as ThreadTodoOperationResponse<K>;
   }
 }

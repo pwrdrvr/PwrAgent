@@ -13,7 +13,7 @@ export type OffscreenQuestionAnswers = {
 };
 
 /**
- * Answers questions in local threads no composer shows, from the To-dos
+ * Answers questions in threads no composer shows, from the To-dos
  * panel. The thread's owner decides start, steer or queue in its turn FIFO.
  *
  * The thread counts as replied to only once the owner took the reply, as the
@@ -22,7 +22,7 @@ export type OffscreenQuestionAnswers = {
  */
 export function useOffscreenQuestionAnswers(params: {
   submitThreadReply: DesktopApi["submitThreadReply"];
-  /** The local thread a wait belongs to, for the replied-to report. */
+  /** The owner-qualified thread a wait belongs to, for the replied-to report. */
   findThread: (threadKey: string) => NavigationThreadSummary | undefined;
   onUserRepliedToThread?: (thread: NavigationThreadSummary) => void;
 }): OffscreenQuestionAnswers {
@@ -39,6 +39,7 @@ export function useOffscreenQuestionAnswers(params: {
     // A refusal (a lock, a handoff) throws, and the form shows its reason.
     await submitThreadReply({
       backend: wait.backend,
+      federationTarget: wait.federationTarget,
       threadId: wait.threadId,
       input: [{ type: "text", text }],
     });

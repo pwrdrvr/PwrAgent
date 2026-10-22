@@ -7911,6 +7911,27 @@ describe("Composer", () => {
       expect(startTurn).toHaveBeenCalledTimes(1);
     });
 
+    it("does not dispatch a pending fix or review after switching to the same thread id on another owner", async () => {
+      const target = { scope: "remote" as const, instanceId: "owner" };
+      const remoteThread = { ...thread, federation: { instanceLabel: "Owner", ref: { backend: "codex" as const, threadId: thread.id, target } } };
+      const startTurn = vi.fn();
+      const onReplySubmissionSettled = vi.fn();
+      const props = {
+        backends: [backendSummary("codex")], skills: [],
+        desktopApi: { onAgentEvent: () => () => undefined, startTurn }, onReplySubmissionSettled,
+        replySubmission: { id: 1, threadId: thread.id, backend: "codex" as const, text: reply, federationTarget: target },
+        reviewRequest: { id: 1, threadId: thread.id, backend: "codex" as const, federationTarget: target },
+      };
+      const view = render(<Composer {...props} thread={remoteThread} disabled />);
+      view.rerender(<Composer {...props} thread={thread} disabled={false} />);
+      await waitFor(() => expect(onReplySubmissionSettled).toHaveBeenCalledWith(1, false));
+      expect(startTurn).not.toHaveBeenCalled();
+      expect(screen.getByLabelText("Reply")).toHaveValue("");
+      view.rerender(<Composer {...props} thread={remoteThread} disabled={false} />);
+      expect(startTurn).not.toHaveBeenCalled();
+      expect(screen.getByLabelText("Reply")).toHaveValue("");
+    });
+
     it("drops a pending async answer when navigation leaves its thread", async () => {
       const startTurn = vi.fn();
       const onReplySubmissionSettled = vi.fn();

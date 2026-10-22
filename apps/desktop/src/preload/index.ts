@@ -42,6 +42,7 @@ import type {
   DismissOperatorQuestionRequest,
   OperatorQuestionThreadRequest,
   ListOperatorRequestsResponse,
+  ListOperatorRequestsRequest,
   MarkOperatorItemsSeenRequest,
   OperatorRequestsChangedEvent,
 } from "@pwragent/shared";
@@ -2221,8 +2222,8 @@ const desktopApi = Object.freeze({
       ipcRenderer.off(THREAD_TODOS_CHANGED_EVENT_CHANNEL, listener);
     };
   },
-  listOperatorRequests: async (): Promise<ListOperatorRequestsResponse> =>
-    await ipcRenderer.invoke(OPERATOR_REQUESTS_LIST_CHANNEL),
+  listOperatorRequests: async (request?: ListOperatorRequestsRequest): Promise<ListOperatorRequestsResponse> =>
+    await ipcRenderer.invoke(OPERATOR_REQUESTS_LIST_CHANNEL, request),
   listDismissedOperatorQuestions: async (request: OperatorQuestionThreadRequest): Promise<string[]> =>
     await ipcRenderer.invoke(OPERATOR_QUESTIONS_LIST_DISMISSED_CHANNEL, request),
   markOperatorItemsSeen: async (
