@@ -138,11 +138,12 @@ describe("Claude SDK backend", () => {
     expect(generateSessionTitle).toHaveBeenCalledOnce();
   });
 
-  it.each(["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "CLAUDE_CODE_DISABLE_TERMINAL_TITLE"])(
-    "respects %s without making a native title request", async (key) => {
+  it.each(["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "CLAUDE_CODE_DISABLE_TERMINAL_TITLE"].flatMap((key) =>
+    ["1", "true", "yes", "on", " true ", " ON "].map((value) => ({ key, value }))))(
+    "respects $key=$value without making a native title request", async ({ key, value }) => {
       const generateSessionTitle = vi.fn().mockResolvedValue("Unwanted title");
       const f = await fixture(undefined, { generateSessionTitle });
-      f.backendOptions.resolveEnv = async () => ({ PATH: "/fixture", [key]: "1" });
+      f.backendOptions.resolveEnv = async () => ({ PATH: "/fixture", [key]: value });
       const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
       await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Investigate title behavior" }] });
       await f.waitForTurn();

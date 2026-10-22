@@ -561,7 +561,7 @@ export class ClaudeBackend {
       if (current.thread.titleSource === "explicit") return false;
       const query = running.query as ClaudeTitleQuery;
       const disabled = ["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "CLAUDE_CODE_DISABLE_TERMINAL_TITLE"]
-        .some((key) => ["1", "true", "yes"].includes(running.titleEnv?.[key]?.toLowerCase() ?? ""));
+        .some((key) => ["1", "true", "yes", "on"].includes(running.titleEnv?.[key]?.trim().toLowerCase() ?? ""));
       const canRequest = !title && !current.titleGenerationAttempted && !disabled && typeof query.generateSessionTitle === "function"
         && Boolean(running.titlePrompt?.trim()) && !running.controller.signal.aborted;
       if (!title && !canRequest) return false;
