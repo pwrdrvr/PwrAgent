@@ -393,9 +393,12 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
   ].filter(Boolean);
   const limitAccounts = scopedLimits(snapshot?.accounts ?? []);
   const focus = snapshot ? focusAccount(limitAccounts, focusKey, localLabel) : undefined;
-  const lineSeries = snapshot?.preset === "five" ? fiveHourSeries(focus) : sinceResetSeries(focus);
+  // An account without a 5-hour limit reads the last 5 hours, and the line is
+  // its longest limit, resets and all: the window is not that limit's.
+  const fiveHour = fiveHourSeries(focus);
+  const lineSeries = snapshot?.preset === "five" ? fiveHour ?? sinceResetSeries(focus) : sinceResetSeries(focus);
   // Only a window anchored on the limit ends now and belongs beside its reset.
-  const forecast = snapshot?.preset === "reset" || snapshot?.preset === "five" ? limitForecast(lineSeries) : undefined;
+  const forecast = snapshot?.preset === "reset" || (snapshot?.preset === "five" && fiveHour) ? limitForecast(lineSeries) : undefined;
   const coverageKey = coverage.join("|");
   const openThread = (row: OwnedUsageRow) => desktopApi?.openUsageThreadInMainWindow
     ? () => void desktopApi.openUsageThreadInMainWindow!({
@@ -525,7 +528,8 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
           description: [account.detail, money(accountCosts.get(account.key) ?? 0)].filter(Boolean).join(" · ") })),
       ]} /></label>
       <div className="usage-segmented" role="group" aria-label="Period">
-        {PRESETS.map((item) => <button type="button" key={item.value} aria-pressed={preset === item.value} title={item.title}
+        {PRESETS.map((item) => <button type="button" key={item.value} aria-pressed={preset === item.value}
+          title={item.value === "five" && focus && !fiveHour ? "The last 5 hours. This account has no 5-hour limit." : item.title}
           onClick={() => setPreset(item.value)}>{item.label}</button>)}
       </div>
       {preset === "custom" ? <><label className="usage-date">From <input type="datetime-local" value={from} onChange={(event) => setFrom(event.target.value)} /></label>

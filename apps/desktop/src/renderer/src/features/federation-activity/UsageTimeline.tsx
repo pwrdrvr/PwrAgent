@@ -1,7 +1,8 @@
-import { useId, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { usageBucketLabel, usageMoney, type UsageBucket, type UsageDimension } from "./usage-activity-presentation";
 import type { LimitPoint, LimitReset } from "./usage-limits";
 import { UsageSliceCard, type UsageChartMember, type UsageSliceSegment } from "./UsageSliceCard";
+import { sliceCardLeft } from "./usage-activity-layout";
 
 export type { UsageChartMember } from "./UsageSliceCard";
 
@@ -88,6 +89,12 @@ export function UsageTimeline({ buckets, series, member, limit, forecast, select
   // The bars are one Tab stop; the arrows move between them.
   const [cursor, setCursor] = useState<number>();
   const bars = useRef<Array<HTMLButtonElement | null>>([]);
+  const plotRef = useRef<HTMLDivElement>(null);
+  const cardRef = useRef<HTMLDivElement>(null);
+  // The card's measured place; until it is measured the calc below stands.
+  const [placed, setPlaced] = useState<{ index: number; left: number }>();
+  // A resize moves the bars under a card that stays pinned, so the card is placed again.
+  const [plotWidth, setPlotWidth] = useState(0);
   const cardId = useId();
   const from = buckets[0].from;
   const to = buckets.at(-1)!.to;
@@ -162,9 +169,31 @@ export function UsageTimeline({ buckets, series, member, limit, forecast, select
     return `${(share * before * 100).toFixed(3)}% + ${(index - (buckets.length - 1) * before).toFixed(3)} * var(--usage-bar-gap)`;
   };
   const cardStyle = shown === undefined || !shownBucket ? {}
+    : placed?.index === shown ? { left: `${placed.left}px` }
     : share * ((shownBucket.from + shownBucket.to) / 2 - from) / (to - from) <= 0.5
       ? { left: `calc(${edge(shown, shownBucket.to)} + 8px)` }
       : { right: `calc(100% - (${edge(shown, shownBucket.from)}) + 8px)` };
+  useEffect(() => {
+    const plot = plotRef.current;
+    if (!plot || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => setPlotWidth(plot.clientWidth));
+    observer.observe(plot);
+    return () => observer.disconnect();
+  }, []);
+  // Before paint, so the card never shows where it would be clipped. Its
+  // width does not depend on where it sits, so placing it settles at once.
+  // The bars and the card's contents move it; so does a resize.
+  useLayoutEffect(() => {
+    const plot = plotRef.current?.getBoundingClientRect();
+    const bar = shown === undefined ? undefined : bars.current[shown]?.getBoundingClientRect();
+    const card = cardRef.current?.offsetWidth;
+    if (shown === undefined || !plot?.width || !bar || !card) {
+      setPlaced(undefined);
+      return;
+    }
+    const left = Math.round(sliceCardLeft(plot, bar, card));
+    setPlaced((current) => current?.index === shown && current.left === left ? current : { index: shown, left });
+  }, [shown, selected, buckets, member, dimension, plotWidth]);
   return <figure className="usage-timeline" onKeyDown={onChartKey}>
     <figcaption className="usage-timeline__head">
       <span className="usage-eyebrow">Spend by</span>
@@ -180,7 +209,7 @@ export function UsageTimeline({ buckets, series, member, limit, forecast, select
     </figcaption>
     <div className="usage-timeline__frame">
       <div className="usage-timeline__axis-y" aria-hidden="true"><span>{usageMoney(max)}</span><span>{usageMoney(0)}</span></div>
-      <div className="usage-timeline__plot">
+      <div className="usage-timeline__plot" ref={plotRef}>
         <div className={`usage-timeline__bars${selected === undefined && shown !== undefined ? " is-dimmed" : ""}`}
           role="group" aria-label="Filter threads by completion time"
           style={ahead ? { width: `${x(to)}%` } : undefined}>
@@ -203,7 +232,7 @@ export function UsageTimeline({ buckets, series, member, limit, forecast, select
             </span>
           </button>)}
         </div>
-        {shownBucket ? <UsageSliceCard id={cardId} bucket={shownBucket} label={usageBucketLabel(shownBucket, to)}
+        {shownBucket ? <UsageSliceCard ref={cardRef} id={cardId} bucket={shownBucket} label={usageBucketLabel(shownBucket, to)}
           noun={DIMENSION_NAMES[dimension].toLocaleLowerCase()} pinned={selected !== undefined} hot={hotSegment}
           onHot={(segment) => setHot(segment === undefined ? undefined : { index: shown!, segment })}
           member={member} onUnpin={() => unpin(true)} style={cardStyle} /> : null}
@@ -218,7 +247,8 @@ export function UsageTimeline({ buckets, series, member, limit, forecast, select
           <span>100% {moment(ahead.fullAt)}</span></span> : null}
         {ahead && clipped ? <span className={`usage-timeline__outcome${ahead.fullAt ? " is-short" : ""}`}>
           {ahead.fullAt ? `100% ${moment(ahead.fullAt)} →` : `${Math.round(ahead.end.percent)}% at the ${moment(ahead.resetAt)} reset →`}</span> : null}
-        {resets.map((reset) => <span key={reset.at} className={`usage-timeline__reset${reset.kind === "unscheduled" ? " is-unscheduled" : ""}`}
+        {/* A reset near the right edge labels itself on its left, clear of the percent axis. */}
+        {resets.map((reset) => <span key={reset.at} className={`usage-timeline__reset${reset.kind === "unscheduled" ? " is-unscheduled" : ""}${x(reset.at) > 90 ? " is-late" : ""}`}
           style={{ left: `${x(reset.at)}%` }} title={`${reset.kind === "unscheduled" ? "Unexpected reset, first seen" : "Scheduled reset"} ${new Date(reset.at).toLocaleString()}`}>
           <span>Reset</span></span>)}
       </div>
