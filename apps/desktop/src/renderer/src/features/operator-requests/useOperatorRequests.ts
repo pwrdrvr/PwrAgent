@@ -63,6 +63,10 @@ export function useOperatorRequests(
   const loadingRef = useRef(false);
   const reloadQueuedRef = useRef(false);
   const pendingSeenRef = useRef(new Set<string>());
+  // Viewing an item is a local fact even if saving it on the owner fails.
+  // Keep it separate from confirmed storage so panel effects and refetches
+  // cannot retry a rejected write. A new controller mount may try again.
+  const viewedSeenRef = useRef(new Set<string>());
   // What is stored, read by markSeen so a mark already stored costs no write.
   const storedSeenRef = useRef<ReadonlySet<string>>(EMPTY_SET);
   const flushScheduledRef = useRef(false);
@@ -89,8 +93,9 @@ export function useOperatorRequests(
             ? current
             : next.length > 0 ? next : EMPTY_WAITS);
           storedSeenRef.current = new Set(response.seenKeys);
-          // A mark sent but not yet stored stays seen here.
-          const seen = new Set([...response.seenKeys, ...pendingSeenRef.current]);
+          // Preserve this window's observations across owner snapshots, including
+          // failed saves, without treating them as confirmed owner state.
+          const seen = new Set([...response.seenKeys, ...viewedSeenRef.current]);
           setSeenKeys((current) =>
             current.size === seen.size && [...seen].every((key) => current.has(key))
               ? current
@@ -116,9 +121,12 @@ export function useOperatorRequests(
     const send = api?.markOperatorItemsSeen;
     if (!send) return;
     const fresh = keys.filter((key) =>
-      !pendingSeenRef.current.has(key) && !storedSeenRef.current.has(key));
+      !viewedSeenRef.current.has(key) && !storedSeenRef.current.has(key));
     if (fresh.length === 0) return;
-    for (const key of fresh) pendingSeenRef.current.add(key);
+    for (const key of fresh) {
+      viewedSeenRef.current.add(key);
+      pendingSeenRef.current.add(key);
+    }
     setSeenKeys((current) => {
       if (fresh.every((key) => current.has(key))) return current;
       const next = new Set(current);
@@ -135,7 +143,6 @@ export function useOperatorRequests(
         storedSeenRef.current = new Set([...storedSeenRef.current, ...batch]);
       }, (error: unknown) => {
         setError(error instanceof Error ? error.message : String(error));
-        setSeenKeys((current) => new Set([...current].filter((key) => !batch.includes(key) || storedSeenRef.current.has(key))));
       }).finally(() => {
         for (const key of batch) pendingSeenRef.current.delete(key);
       });
