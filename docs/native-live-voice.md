@@ -104,6 +104,12 @@ window), mounts a peer thread through the existing remote-thread pin API when
 needed, and selects the thread view. It never sends a focus command to the
 peer machine's graphical interface.
 
+Existing Codex manager threads receive added tools through the negotiated
+`dynamicToolsResumeField: "dynamicTools"` catalog-refresh capability. Older
+runtimes keep the tools registered when a thread was created. On those
+runtimes, update Codex or end director voice, archive the old Voice manager,
+and start director voice again to create a manager with the current catalog.
+
 The tool reports success only when the targeted main window's published focus
 matches the requested backend, thread and owner in the thread view. Dispatch
 alone is not success. A missing or closing window returns `ui_not_available`;
