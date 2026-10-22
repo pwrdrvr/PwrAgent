@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { createFabric } from "./fabric.mts";
+import { RELAY_SLOTS } from "./relay.mjs";
 import type { WebSocket, RawData } from "../../../apps/desktop/node_modules/@types/ws/index.d.ts";
 const require = createRequire(new URL("../../../apps/desktop/package.json", import.meta.url));
 const { WebSocketServer } = require("ws");
@@ -14,8 +15,11 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const out = resolve(process.env.PWRWIN_OUTPUT ?? `${root}/.local/remote-window/datagrams/run`);
 await mkdir(out, { recursive: true });
 const tokens = { source: randomBytes(32).toString("hex"), viewer: randomBytes(32).toString("hex") };
+const transport = process.env.PWRWIN_TRANSPORT ?? "federation";
+if (!["federation", "webrtc"].includes(transport)) throw new Error("invalid_fixture_transport");
 const sockets = new Map();
 const signals = new Map();
+const deliveries = new Map<string, { role: string; socket: WebSocket; resolve: () => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
 const sourceQueue = new Map();
 const nativeMetrics = { manifests: 0, previews: 0, tiles: 0, previewEncodeMs: [] as number[], tileEncodeMs: [] as number[],
   resources: undefined as unknown, errors: [] as string[], stderr: [] as string[] };
@@ -25,12 +29,21 @@ let lastFixtureCommand = 0;
 const fabric = await createFabric(params => new Promise((resolve, reject) => {
   const source = sockets.get("source");
   if (!source || !nativeReady || signals.size >= 1 || !params || typeof params !== "object"
-    || (params as { type?: string }).type !== "offer" || typeof (params as { sdp?: string }).sdp !== "string"
+    || ((params as { kind?: string }).kind !== "reference" && (transport === "webrtc"
+      ? (params as { type?: string }).type !== "offer" || typeof (params as { sdp?: string }).sdp !== "string"
+      : (params as { transport?: string }).transport !== "federation"))
     || JSON.stringify(params).length > 24000) { reject(new Error("fixture_not_ready_or_invalid_offer")); return; }
   const id = randomUUID(), timer = setTimeout(() => { signals.delete(id); reject(new Error("signal_timeout")); }, 4500);
   signals.set(id, { resolve, reject, timer }); source.send(JSON.stringify({ kind: "offer", id, params }));
+}), (role, batch) => new Promise<void>((resolve, reject) => {
+  const ws = sockets.get(role);
+  if (!ws || ws.readyState !== 1 || ws.bufferedAmount > 65536
+    || [...deliveries.values()].filter(d => d.role === role).length >= RELAY_SLOTS) { reject(new Error("viewer_backpressure_or_disconnected")); return; }
+  const id = randomUUID(), timer = setTimeout(() => { deliveries.delete(id); reject(new Error("browser_dispatch_timeout")); }, 4000);
+  deliveries.set(id, { role, socket: ws, resolve, reject, timer });
+  ws.send(JSON.stringify({ kind: "relay-delivery", id, batch }));
 }));
-const assets = new Map([['/', 'viewer.html'], ['/source', 'source.html'], ['/protocol.mjs', 'protocol.mjs'], ['/browser.mjs', 'browser.mjs']]);
+const assets = new Map([['/', 'viewer.html'], ['/source', 'source.html'], ['/protocol.mjs', 'protocol.mjs'], ['/browser.mjs', 'browser.mjs'], ['/relay.mjs', 'relay.mjs']]);
 const server = createServer(async (req, res) => {
   const file = assets.get(req.url ?? "");
   if (req.method !== "GET" || !file) { res.writeHead(404).end(); return; }
@@ -55,11 +68,23 @@ server.on("upgrade", (req, socket, head) => {
         if (!authenticated) {
           if (value.token !== tokens[role] || sockets.has(role)) { ws.close(); return; }
           authenticated = true; clearTimeout(authTimer); sockets.set(role, ws);
-          ws.send(JSON.stringify({ kind: "authenticated", role }));
+          ws.send(JSON.stringify({ kind: "authenticated", role, transport }));
           if (role === "source") startNative();
           return;
         }
-        if (role === "source" && value.kind === "answer") {
+        if (value.kind === "relay" && transport === "federation") {
+          try {
+            const result = await fabric.push(role, value.batch);
+            if (ws.readyState === 1) ws.send(JSON.stringify({ kind: "relay-ack", ...result as object }));
+          } catch (error) {
+            if (ws.readyState === 1) ws.send(JSON.stringify({ kind: "relay-ack", epoch: value.batch?.epoch,
+              sequence: value.batch?.sequence, error: String(error).slice(0, 180) }));
+          }
+        } else if (value.kind === "relay-receipt") {
+          const delivery = deliveries.get(value.id);
+          if (!delivery || delivery.socket !== ws || delivery.role !== role) throw new Error("relay_receipt_denied");
+          deliveries.delete(value.id); clearTimeout(delivery.timer); delivery.resolve();
+        } else if (role === "source" && value.kind === "answer") {
           const entry = signals.get(value.id);
           if (!entry || JSON.stringify(value.result).length > 24000) throw new Error("invalid_answer");
           signals.delete(value.id); clearTimeout(entry.timer); entry.resolve(value.result);
@@ -87,6 +112,9 @@ server.on("upgrade", (req, socket, head) => {
       clearTimeout(authTimer);
       if (sockets.get(role) !== ws) return;
       sockets.delete(role);
+      for (const [id, d] of deliveries) if (d.socket === ws) {
+        deliveries.delete(id); clearTimeout(d.timer); d.reject(new Error("browser_disconnected"));
+      }
       if (role === "source") { sourceQueue.clear(); void stop(); }
     });
     ws.on("error", () => ws.close());
@@ -131,12 +159,13 @@ const lifetime = setTimeout(() => { void stop(); }, 10 * 60 * 1000);
 async function stop() {
   if (stopped) return; stopped = true; clearInterval(drain); clearTimeout(lifetime);
   for (const s of signals.values()) { clearTimeout(s.timer); s.reject(new Error("closed")); } signals.clear();
+  for (const d of deliveries.values()) { clearTimeout(d.timer); d.reject(new Error("closed")); } deliveries.clear();
   if (native?.pid && native.exitCode === null && native.signalCode === null) {
     native.stdin?.end('{"kind":"stop"}\n');
     await new Promise<void>(resolve => { const timer = setTimeout(() => native?.kill("SIGTERM"), 2000); native!.once("exit", () => { clearTimeout(timer); resolve(); }); });
   }
   await writeFile(`${out}/result.json`, JSON.stringify({ measuredAt: new Date().toISOString(), crossMachine: false,
-    native: nativeMetrics, signalingWire: fabric.wire, browser: savedMetrics,
+    transport, native: nativeMetrics, federationWire: fabric.wire, browser: savedMetrics,
     helper: { wallMs: performance.now() - began, cpuMicroseconds: process.cpuUsage(cpu), maxRssKiB: process.resourceUsage().maxRSS } }));
   for (const ws of sockets.values()) ws.close(); wss.close(); server.closeAllConnections(); server.close(); await fabric.close();
 }

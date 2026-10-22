@@ -53,7 +53,7 @@ test("only the authenticated source owner can stop the harness", async () => {
 
     const owner = await connect(), authenticated = once(owner, "message");
     owner.send(JSON.stringify({ token }));
-    expect(JSON.parse(String((await authenticated)[0]))).toEqual({ kind: "authenticated", role: "source" });
+    expect(JSON.parse(String((await authenticated)[0]))).toEqual({ kind: "authenticated", role: "source", transport: "federation" });
     expect(mocks.spawn).toHaveBeenCalledTimes(1);
     await rejected(token); // A second source tab with the correct token is not the owner.
     await rejected("invalid-token");
