@@ -12,6 +12,8 @@ export type ClaudeSession = {
   cwd: string;
   /** Set only after the SDK confirms initialization; used by query({ resume }). */
   sdkSessionId?: string;
+  /** At most one native title request, including failed requests, across restarts. */
+  titleGenerationAttempted?: boolean;
   modelUsage?: ClaudeUsageTotals;
   contextWindow?: { usedTokens: number; modelContextWindow: number };
 };

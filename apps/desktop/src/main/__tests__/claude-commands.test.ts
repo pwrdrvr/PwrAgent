@@ -8,9 +8,23 @@ import { ClaudeBackend, type ClaudeBackendOptions } from "../claude/claude-backe
 import { claudeCommandSummaries } from "../claude/claude-commands";
 import { ClaudeSessionStore } from "../claude/claude-session-store";
 
+// Record a missing fixture seam without launching the SDK's real Git probes.
+const sdkGetSessionInfo = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock("@anthropic-ai/claude-agent-sdk", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@anthropic-ai/claude-agent-sdk")>(),
+  getSessionInfo: sdkGetSessionInfo,
+}));
+
 const roots: string[] = [];
+const backends: ClaudeBackend[] = [];
 afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  try {
+    await Promise.all(backends.splice(0).map((backend) => backend.close()));
+    expect(sdkGetSessionInfo).not.toHaveBeenCalled();
+  } finally {
+    sdkGetSessionInfo.mockClear();
+    await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  }
 });
 
 const command = (name: string, extra: Partial<SlashCommand> = {}): SlashCommand => ({
@@ -31,6 +45,7 @@ async function fixture(params: {
   const backend = new ClaudeBackend({
     store: new ClaudeSessionStore(root),
     query: run,
+    getSessionInfo: async () => undefined,
     discoverModels: async () => [],
     inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" as const }),
     readCommands: params.readCommands,
@@ -39,6 +54,7 @@ async function fixture(params: {
     request: async () => ({ decision: "accept" }),
     cancelRequest: async () => {},
   });
+  backends.push(backend);
   return { backend, events, root };
 }
 
