@@ -171,6 +171,36 @@ describe("Claude SDK backend", () => {
     expect(f.events.some((event) => event.notification.method === "turn/completed")).toBe(true);
   });
 
+  it("drains a pending SDK metadata read before shutdown releases the workspace", async () => {
+    const pending = Promise.withResolvers<undefined>();
+    const f = await fixture();
+    f.backendOptions.getSessionInfo.mockReturnValue(pending.promise);
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    // Keep real filesystem scheduling out of this control-operation race.
+    let session = await f.store.read(threadId);
+    vi.spyOn(f.store, "read").mockImplementation(async () => structuredClone(session));
+    vi.spyOn(f.store, "save").mockImplementation(async (value) => { session = structuredClone(value); });
+    vi.spyOn(f.store, "append").mockResolvedValue(undefined);
+    vi.useFakeTimers();
+    let closing: Promise<void> | undefined;
+    try {
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Investigate title behavior" }] });
+      await vi.waitFor(() => expect(f.backendOptions.getSessionInfo).toHaveBeenCalledOnce());
+      let closed = false;
+      closing = f.backend.close().then(() => { closed = true; });
+      await vi.advanceTimersByTimeAsync(1600);
+      expect(closed).toBe(false);
+      expect(f.events.some((event) => ["turn/completed", "turn/cancelled"].includes(event.notification.method))).toBe(false);
+      pending.resolve(undefined);
+      await closing;
+      expect(closed).toBe(true);
+    } finally {
+      pending.resolve(undefined);
+      await closing;
+      vi.useRealTimers();
+    }
+  });
+
   it("consumes a provider title arriving after a failed request without spending again", async () => {
     const generateSessionTitle = vi.fn().mockRejectedValue(new Error("temporary failure"));
     const f = await fixture(undefined, { generateSessionTitle });

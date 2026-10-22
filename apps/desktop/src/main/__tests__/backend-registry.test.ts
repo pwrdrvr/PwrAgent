@@ -3206,6 +3206,7 @@ describe("DesktopBackendRegistry", () => {
     const optionsSeen: ClaudeOptions[] = [];
     const decisions: unknown[] = [];
     const closeQuery = vi.fn();
+    const getSessionInfo = vi.fn().mockResolvedValue(undefined);
     const revokeBridge = vi.fn();
     const registerBridge = vi.fn(async () => ({
       server: { name: "fixture_gateway", command: "/fixture/bridge", args: ["--stdio"], env: {} },
@@ -3233,6 +3234,8 @@ describe("DesktopBackendRegistry", () => {
       pdfToolMcpServer: null,
       claudeBackendOptions: {
         store,
+        // This fixture owns a mocked Claude session, not SDK transcript/Git probes.
+        getSessionInfo,
         inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
         discoverModels: async () => [
           { id: "fable", label: "Fable 5.1", current: true },
@@ -3295,6 +3298,7 @@ describe("DesktopBackendRegistry", () => {
         await vi.waitFor(() => expect(events.some((event) => event.notification.method === "turn/completed")).toBe(true));
       }
       expect(revokeBridge).toHaveBeenCalledTimes(2);
+      expect(getSessionInfo).toHaveBeenCalledTimes(2);
       expect(optionsSeen[1].resume).toBe(threadId);
       expect(optionsSeen.map(({ model, effort }) => ({ model, effort }))).toEqual([
         { model: "claude-custom-fixture", effort: "max" }, { model: "claude-opus-4-8", effort: "max" },

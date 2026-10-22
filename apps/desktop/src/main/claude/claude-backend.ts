@@ -552,11 +552,12 @@ export class ClaudeBackend {
       // getSessionInfo uses the SDK host's config directory, not Options.env.
       // Do not inspect a different account's session store.
       if (running.titleEnv?.CLAUDE_CONFIG_DIR !== process.env.CLAUDE_CONFIG_DIR) return false;
-      const snapshot = await claudeTelemetry(async () => ({
-        info: await (this.options.getSessionInfo ?? getSessionInfo)(session.sdkSessionId!, { dir: session.cwd }),
-      }));
-      if (!snapshot) return false;
-      let title = normalizeClaudeTitle(snapshot.info?.customTitle);
+      // The SDK may spawn Git in this workspace (with its own timeout).
+      // Unlike query telemetry, this read cannot be cancelled by closing the
+      // query. Keep it owned by the turn so shutdown cannot release the
+      // workspace while an abandoned read still holds its directory open.
+      const info = await (this.options.getSessionInfo ?? getSessionInfo)(session.sdkSessionId, { dir: session.cwd });
+      let title = normalizeClaudeTitle(info?.customTitle);
       current = await this.store.read(threadId);
       if (current.thread.titleSource === "explicit") return false;
       const query = running.query as ClaudeTitleQuery;
