@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ModelInfo, Query, query } from "@anthropic-ai/claude-agent-sdk";
-import { claudeModelOptions, discoverClaudeModels } from "../claude/claude-models";
+import { claudeModelOptions, discoverClaudeModels, readClaudeMetadata } from "../claude/claude-models";
 
 const catalogLog = vi.hoisted(() => ({ info: vi.fn() }));
 vi.mock("../log", () => ({ getMainLogger: () => catalogLog }));
@@ -104,12 +104,29 @@ describe("Claude model catalog", () => {
       .resolves.toMatchObject([{ id: "fable", label: "Fable 5.1" }]);
     const args = (run.mock.calls as unknown as [Parameters<typeof query>[0]][])[0][0];
     expect(args.options).toMatchObject({ pathToClaudeCodeExecutable: "/fixture/claude", persistSession: false,
-      systemPrompt: { type: "preset", preset: "claude_code" }, settingSources: ["user", "project", "local"],
+      systemPrompt: { type: "preset", preset: "claude_code" }, settingSources: ["user"],
       tools: [], strictMcpConfig: true,
     });
     expect(typeof args.prompt).not.toBe("string");
     if (typeof args.prompt !== "string") expect(await args.prompt[Symbol.asyncIterator]().next()).toEqual({ done: true, value: undefined });
     expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("keeps project/local availableModels out of global discovery while retaining them for project metadata", async () => {
+    const globalModels = [model("opus", "Opus 5.5"), model("haiku", "Haiku 5.5")];
+    const projectModels = [globalModels[1]];
+    const run = vi.fn((args: Parameters<typeof query>[0]) => ({
+      supportedModels: async () => args.options?.settingSources?.some((source) => source !== "user") ? projectModels : globalModels,
+      close: vi.fn(),
+    }) as unknown as Query);
+    await expect(discoverClaudeModels({ executable: "/fixture/claude", env: {}, query: run }))
+      .resolves.toMatchObject([{ id: "opus" }, { id: "haiku" }]);
+    await expect(readClaudeMetadata({ executable: "/fixture/claude", env: {}, query: run,
+      cwd: "/fixture/restricted-project", read: (session) => session.supportedModels(), timeoutMessage: "Fixture timeout",
+    })).resolves.toEqual(projectModels);
+    expect(run.mock.calls[1][0].options).toMatchObject({
+      cwd: "/fixture/restricted-project", settingSources: ["user", "project", "local"],
+    });
   });
 
   it.each(["empty", "failure", "timeout"])("closes discovery on %s", async (failure) => {

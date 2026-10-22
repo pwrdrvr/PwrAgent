@@ -32,6 +32,9 @@ export async function discoverClaudeModels(params: {
 }): Promise<BackendModelOption[]> {
   const models = await readClaudeMetadata({
     ...params,
+    // This catalog feeds every project. Project/local availableModels settings
+    // belong to actual turns and must not restrict the global model picker.
+    settingSources: ["user"],
     read: (session) => session.supportedModels(),
     timeoutMessage: "Claude model discovery timed out. Check the CLI and try again.",
   });
@@ -48,6 +51,7 @@ export async function readClaudeMetadata<T>(params: {
   executable: string;
   env: NodeJS.ProcessEnv;
   cwd?: string;
+  settingSources?: Options["settingSources"];
   query?: typeof query;
   read: (session: Query) => Promise<T>;
   timeoutMessage: string;
@@ -68,6 +72,7 @@ export async function readClaudeMetadata<T>(params: {
       options: {
         ...claudeHarnessOptions(params.executable, params.env),
         ...(params.cwd ? { cwd: params.cwd } : {}),
+        ...(params.settingSources ? { settingSources: params.settingSources } : {}),
         abortController: controller,
         persistSession: false,
         // Metadata reads need no tools or MCP connections.
