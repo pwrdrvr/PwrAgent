@@ -9,6 +9,8 @@ from pathlib import Path
 import subprocess
 from urllib.parse import urlparse
 
+VIEWER_READY = "(() => { const s = window.pwrwin.snapshot(); return s.connected && s.refinementComplete && s.quietMs > 500; })()"
+
 parser = argparse.ArgumentParser()
 parser.add_argument("--ready", type=Path, required=True)
 parser.add_argument("--output", type=Path, required=True)
@@ -38,10 +40,10 @@ try:
     browser("source", "batch", "open " + urls["source"], 'wait --fn "window.pwrwin?.snapshot().nativeReady"')
     browser("viewer", "open", urls["viewer"])
     evaluate("viewer", "window.pwrwin.begin().then(()=>true)")
-    browser("viewer", "wait", "--fn", "window.pwrwin.snapshot().tiles >= 117 && window.pwrwin.snapshot().missing === 0")
+    browser("viewer", "wait", "--fn", "window.pwrwin.snapshot().connected && window.pwrwin.snapshot().refinementComplete")
     # Exclude initial capture-indicator/window activation damage from the idle phase.
     evaluate("viewer", "new Promise(r=>setTimeout(()=>r(true),2000))")
-    browser("viewer", "wait", "--fn", "window.pwrwin.snapshot().quietMs >= 500 && window.pwrwin.snapshot().missing === 0")
+    browser("viewer", "wait", "--fn", VIEWER_READY)
     metadata = evaluate("viewer", "({userAgent:navigator.userAgent,devicePixelRatio,viewport:[innerWidth,innerHeight]})")
     (args.output / "browser-environment.json").write_text(json.dumps(metadata))
     code = Path(__file__).with_name("benchmark-browser.mjs").read_text()
@@ -68,7 +70,7 @@ try:
     evaluate("viewer", "(window.pwrwin.save(), true)")
     before = evaluate("viewer", "window.pwrwin.snapshot().epoch")
     evaluate("viewer", "(window.pwrwin.faults({loss:0,delayMs:0,jitterMs:0}),window.pwrwin.begin().then(()=>true))")
-    browser("viewer", "wait", "--fn", "window.pwrwin.snapshot().connected && window.pwrwin.snapshot().missing === 0 && window.pwrwin.snapshot().quietMs > 500")
+    browser("viewer", "wait", "--fn", VIEWER_READY)
     expected = evaluate("source", "window.pwrwin.hashes()")
     actual = {t["id"]: t for t in evaluate("viewer", "window.pwrwin.hashes()")}
     reconnect = {"oldEpoch": before, "newEpoch": evaluate("viewer", "window.pwrwin.snapshot().epoch"),

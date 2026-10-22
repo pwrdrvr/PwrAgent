@@ -15,7 +15,7 @@ async function benchmark(faults) {
     // Starts after the native fixture acknowledged the command. End requires its
     // revision in actual canvas pixels AND complete current lossless tile coverage.
     const deadline = performance.now() + 8000;
-    const complete = () => { const s = p.snapshot(); return s.missing === 0 && s.visibleRevision === s.fixtureRevision; };
+    const complete = () => { const s = p.snapshot(); return s.refinementComplete && s.visibleRevision === s.fixtureRevision; };
     while (!complete() && performance.now() < deadline) await sleep(10);
     if (!complete()) throw new Error("refinement_did_not_converge");
   }
@@ -23,8 +23,8 @@ async function benchmark(faults) {
   // UI screenshot tooling between scenarios can itself change native window
   // activation/capture-indicator pixels. Start idle only after observed quiescence.
   const quietDeadline = performance.now() + 8000;
-  while ((p.snapshot().quietMs < 500 || p.snapshot().missing) && performance.now() < quietDeadline) await sleep(25);
-  if (p.snapshot().quietMs < 500 || p.snapshot().missing) throw new Error("source_not_quiet_for_idle");
+  while ((p.snapshot().quietMs < 500 || !p.snapshot().refinementComplete) && performance.now() < quietDeadline) await sleep(25);
+  if (p.snapshot().quietMs < 500 || !p.snapshot().refinementComplete) throw new Error("source_not_quiet_for_idle");
   await phase("idle", () => sleep(2000));
   await phase("typing", async () => { for (const text of " PUSH WEBP") { await p.fixture({ action: "text", text }); await sleep(100); } });
   await phase("typing-settle", settle);

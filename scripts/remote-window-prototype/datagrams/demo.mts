@@ -84,7 +84,9 @@ server.on("upgrade", (req, socket, head) => {
       } catch (error) { if (ws.readyState === 1) ws.send(JSON.stringify({ kind: "error", message: String(error).slice(0, 180) })); }
     });
     ws.on("close", () => {
-      clearTimeout(authTimer); if (sockets.get(role) === ws) sockets.delete(role);
+      clearTimeout(authTimer);
+      if (sockets.get(role) !== ws) return;
+      sockets.delete(role);
       if (role === "source") { sourceQueue.clear(); void stop(); }
     });
     ws.on("error", () => ws.close());
