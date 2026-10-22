@@ -67,16 +67,6 @@ describe("createMcpSafeFetch", () => {
     expect(JSON.stringify(logs.warn.mock.calls)).not.toContain("private-");
   });
 
-  it("preserves an already-sent-headers code separately from connection failures", async () => {
-    const fetchFn = vi.fn(async () => { throw Object.assign(new Error("private-header-error"), { code: "ERR_HTTP_HEADERS_SENT" }); });
-    await expect(createMcpSafeFetch({ connectionId: "fixture", fetchFn })("https://mcp.example.com/mcp"))
-      .rejects.toThrow("private-header-error");
-    expect(logs.warn).toHaveBeenCalledWith("MCP HTTP request failed before response headers", expect.objectContaining({
-      kind: "headers_sent", transportCode: "ERR_HTTP_HEADERS_SENT",
-    }));
-    expect(JSON.stringify(logs.warn.mock.calls)).not.toContain("private-header-error");
-  });
-
   it("keeps Cloudflare challenge HTML out of SDK OAuth errors", async () => {
     const response = new Response("<!DOCTYPE html><script>private-challenge</script>", {
       status: 403,

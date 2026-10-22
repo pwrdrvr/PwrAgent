@@ -21,10 +21,8 @@ export function discoveryFailure(error: unknown, signal?: AbortSignal) {
     causes.push(cause as Record<string, unknown>);
   }
   const code = error instanceof McpError || error instanceof StreamableHTTPError ? error.code : undefined;
-  const transportCode = causes.map((entry) => entry.code).find((entry) =>
+  const networkCode = causes.map((entry) => entry.code).find((entry) =>
     typeof entry === "string" && /^(?:E[A-Z_]+|UND_ERR_[A-Z_]+)$/.test(entry));
-  const headersSent = transportCode === "ERR_HTTP_HEADERS_SENT";
-  const networkCode = headersSent ? undefined : transportCode;
   const status = typeof value.status === "number" ? value.status
     : error instanceof StreamableHTTPError && code && code >= 400 && code <= 599 ? code : undefined;
   const kind = signal?.aborted
@@ -32,14 +30,12 @@ export function discoveryFailure(error: unknown, signal?: AbortSignal) {
     : code === -32001 ? "sdk_timeout"
     : value.name === "McpReauthorizationRequiredError" ? "authorization"
     : status ? "upstream_http"
-    : headersSent ? "headers_sent"
     : networkCode ? "upstream_network" : "upstream_error";
   return {
     kind,
     ...(code === undefined ? {} : { code }),
     ...(status === undefined ? {} : { status }),
     ...(networkCode ? { networkCode } : {}),
-    ...(headersSent ? { transportCode } : {}),
     errorName: error instanceof StreamableHTTPError ? "StreamableHTTPError" : error instanceof McpError ? "McpError"
       : value.name === "McpReauthorizationRequiredError" ? "McpReauthorizationRequiredError"
       : error instanceof TypeError ? "TypeError" : error instanceof Error ? "Error" : "Unknown",
@@ -95,7 +91,6 @@ export class McpDiscovery {
         : diagnostic.kind === "cancelled" ? "request cancelled"
         : diagnostic.kind === "sdk_timeout" ? "upstream MCP request timed out"
         : diagnostic.kind === "authorization" ? "reauthorization required in Settings → Plugins"
-        : diagnostic.kind === "headers_sent" ? "HTTP headers already sent (ERR_HTTP_HEADERS_SENT)"
         : diagnostic.status ? `upstream HTTP ${diagnostic.status}`
         : diagnostic.networkCode ? `upstream connection failed (${diagnostic.networkCode})` : "upstream request failed";
       throw new McpDiscoveryError(error instanceof McpError ? error.code : -32000, localMessage ?? `${this.connectionId}: ${phase}${page === undefined ? "" : ` page ${page}`} — ${detail} (discovery ${this.id}).`, diagnostic);

@@ -127,11 +127,17 @@ record header contents or request/response bodies.
 Initialization join events connect caller IDs to shared start IDs. RPCs carry
 the caller discovery ID, and owner logs include the thread scope. Failures
 distinguish local deadlines, cancellation, SDK timeouts, authorization, HTTP
-status, already-sent-header errors and network error codes. Upstream response bodies, messages, headers and
+status and network error codes. Upstream response bodies, messages, headers and
 payloads are excluded. Connection status reports in-memory catalog health and
 last successful/failed discovery separately from stored authorization. A newer
 gateway failure overrides an older catalog retained in Settings. Healthy search
 results survive another connection's discovery failure.
+
+Each managed Settings row exposes **Test connection** without opening its tool
+drawer. It bypasses the catalog cache and performs initialization and every
+tool-list page under the discovery deadline. The row shows progress, tool count
+and elapsed time on success, or the phase diagnostic on failure. The test reads
+the catalog without invoking a tool or changing the connection's configuration.
 
 Selection changes, turn termination and shutdown cancel outstanding gateway
 work. MCP request cancellation propagates through the local socket to the

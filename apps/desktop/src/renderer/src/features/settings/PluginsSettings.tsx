@@ -1749,6 +1749,11 @@ function chipToneClass(tone: "ok" | "warn" | "err" | "idle" | "neutral"): string
     : ` settings-pathrow__chip--${tone}`;
 }
 
+type ManagedConnectionTestResult =
+  | { status: "testing" }
+  | { status: "passed"; elapsedMs: number; toolCount: number }
+  | { status: "failed"; elapsedMs: number };
+
 /**
  * Read a managed connection's tools while its row is on screen.
  *
@@ -1767,11 +1772,13 @@ function useManagedConnectionTools(params: {
   signIns: number;
 }): {
   inventory: ManagedMcpToolInventory | undefined;
-  refresh: () => void;
+  test: () => void;
+  testResult?: ManagedConnectionTestResult;
 } {
   const { connectionId, identity, listable, signIns } = params;
   const list = params.desktopApi?.listMcpConnectionTools;
   const [inventory, setInventory] = useState<ManagedMcpToolInventory>();
+  const [testResult, setTestResult] = useState<ManagedConnectionTestResult>();
   // A refresh can overtake the read the row started on mount, and the two can
   // resolve in either order. The later request is the one the operator asked
   // for, so an earlier answer arriving second is dropped.
@@ -1781,11 +1788,13 @@ function useManagedConnectionTools(params: {
   // read after a sign-in skips that cache; later re-reads use it again.
   const readSignIns = useRef(signIns);
 
-  const read = useCallback(async (refresh: boolean): Promise<void> => {
+  const read = useCallback(async (refresh: boolean, testing = false): Promise<void> => {
     if (!list) return;
     const sequence = latestRead.current + 1;
     latestRead.current = sequence;
     setInventory({ status: "loading" });
+    setTestResult(testing ? { status: "testing" } : undefined);
+    const startedAt = performance.now();
     try {
       const response = await list({
         connectionId,
@@ -1797,12 +1806,14 @@ function useManagedConnectionTools(params: {
         tools: response.tools,
         fetchedAt: response.fetchedAt,
       });
+      if (testing) setTestResult({ status: "passed", elapsedMs: performance.now() - startedAt, toolCount: response.tools.length });
     } catch (cause) {
       if (latestRead.current !== sequence) return;
       setInventory({
         status: "failed",
         error: cause instanceof Error ? cause.message : String(cause),
       });
+      if (testing) setTestResult({ status: "failed", elapsedMs: performance.now() - startedAt });
     }
   }, [connectionId, list]);
 
@@ -1810,6 +1821,7 @@ function useManagedConnectionTools(params: {
     if (!listable || !list) {
       latestRead.current += 1;
       setInventory(listable ? { status: "unavailable" } : undefined);
+      setTestResult(undefined);
       return;
     }
     const signedInAgain = readSignIns.current !== signIns;
@@ -1822,8 +1834,9 @@ function useManagedConnectionTools(params: {
 
   return {
     inventory,
-    refresh: () => {
-      void read(true);
+    testResult,
+    test: () => {
+      void read(true, true);
     },
   };
 }
@@ -1878,7 +1891,7 @@ function ManagedMcpConnectionRow(props: {
     ...(localStatus ? { localAvailability: localStatus.availability } : {}),
   });
   const listable = setup.state === "ready" || setup.state === "parked";
-  const { inventory: fetchedInventory, refresh: refreshTools } = useManagedConnectionTools({
+  const { inventory: fetchedInventory, test: testConnection, testResult } = useManagedConnectionTools({
     connectionId: connection.id,
     desktopApi: props.desktopApi,
     identity: `${connection.serverUrl}\n${connection.configured}`,
@@ -1942,6 +1955,17 @@ function ManagedMcpConnectionRow(props: {
           ) : null}
         </div>
         <div className="settings-mcp-row__actions">
+          <button
+            className="button button--secondary"
+            disabled={disabled || !listable || inventory?.status === "loading" || inventory?.status === "unavailable"}
+            title={listable
+              ? `Verify ${connection.displayName} by connecting and reading its available tools.`
+              : setup.detail}
+            type="button"
+            onClick={testConnection}
+          >
+            {testResult?.status === "testing" ? "Testing..." : "Test connection"}
+          </button>
           {/*
             * The wait stands where the Authorize the operator clicked was,
             * with its way out beside it. It used to be a disabled "Working..."
@@ -2068,6 +2092,15 @@ function ManagedMcpConnectionRow(props: {
             Sign-in failed: {props.authorizationError}
           </p>
         ) : null}
+        {testResult ? (
+          <p className="settings-mcp-row__state" role="status">
+            {testResult.status === "testing"
+              ? `Testing ${connection.displayName}...`
+              : testResult.status === "passed"
+                ? `Connection test passed · ${testResult.toolCount} ${testResult.toolCount === 1 ? "tool" : "tools"} · ${(testResult.elapsedMs / 1_000).toFixed(1)} s`
+                : `Connection test failed after ${(testResult.elapsedMs / 1_000).toFixed(1)} s.`}
+          </p>
+        ) : null}
         {listable && inventory?.status === "failed" ? (
           <p className="settings-mcp-row__error">{inventory.error}</p>
         ) : null}
@@ -2092,23 +2125,6 @@ function ManagedMcpConnectionRow(props: {
                     : "Reading tools..."}
             </p>
           )}
-          {/*
-            * Codex re-reads its servers when its configuration reloads. A
-            * managed connection has no such moment -- its list is read once
-            * and kept -- so a server that gained or lost a tool needs a way
-            * to be asked again.
-            */}
-          {listable && inventory?.status !== "unavailable" ? (
-            <button
-              className="button button--ghost settings-mcp-row__refresh"
-              disabled={inventory?.status === "loading"}
-              title={`Ask ${connection.displayName} for its tools again.`}
-              type="button"
-              onClick={refreshTools}
-            >
-              {inventory?.status === "loading" ? "Refreshing..." : "Refresh tools"}
-            </button>
-          ) : null}
         </div>
       ) : null}
       {/*
