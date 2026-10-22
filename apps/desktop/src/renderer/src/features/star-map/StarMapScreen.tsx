@@ -3028,7 +3028,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
             bounds: canvasBoundsRef.current,
           }
         : undefined;
-      chatCards.open(
+      return chatCards.open(
         ownerInstanceId,
         thread,
         placement,
@@ -3050,24 +3050,15 @@ export function StarMapScreen(props: StarMapScreenProps) {
 
   /**
    * The Manager button's open. An already-open card only rises in place,
-   * so a manager card left somewhere off-screen, including one restored
-   * from a previous session, would make the button look dead. Fly to it.
+   * and a new one opens beside the manager's own thread card when the lens
+   * draws it, so either can sit off-screen (an open card may also be
+   * restored from a previous session) and make the button look dead. Fly
+   * to wherever the card ended up.
    */
   const openManagerThread = useCallback(
     (thread: NavigationThreadSummary) => {
-      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
-      const existing = chatCards.cards.find(
-        (card) => card.threadKey === threadKey,
-      );
-      openThread(thread);
-      if (
-        !existing
-        || chatCardIsInView(
-          existing.rect,
-          viewRef.current,
-          viewportSizeRef.current,
-        )
-      ) {
+      const rect = openThread(thread);
+      if (chatCardIsInView(rect, viewRef.current, viewportSizeRef.current)) {
         return;
       }
       // As `flyForAgent` does: a ⌘K pick still waiting for its card would
@@ -3077,10 +3068,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
       flight.flyTo(
         starMapViewFocusedOn({
           rect: {
-            x: existing.rect.left,
-            y: existing.rect.top,
-            width: existing.rect.width,
-            height: existing.rect.height,
+            x: rect.left,
+            y: rect.top,
+            width: rect.width,
+            height: rect.height,
           },
           canvas: canvasBoundsRef.current,
           viewport: viewportSizeRef.current,
@@ -3089,7 +3080,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
         }),
       );
     },
-    [chatCards.cards, flight, openThread, topAnchoredView],
+    [flight, openThread, topAnchoredView],
   );
 
   /**

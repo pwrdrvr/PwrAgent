@@ -132,7 +132,7 @@ export type StarMapChatCardsController = {
       sourceRect: { x: number; y: number; width: number; height: number };
     },
     options?: StarMapChatCardOpenOptions,
-  ) => void;
+  ) => ChatCardRect;
   raise: (cardKey: string, persist?: boolean) => boolean;
   remapOwner: (placeholderInstanceId: string, durableInstanceId: string) => void;
   /** Pointer-frame update. Deliberately memory-only. */
@@ -553,7 +553,7 @@ export function useStarMapChatCards(params: {
         sourceRect: { x: number; y: number; width: number; height: number };
       },
       options?: StarMapChatCardOpenOptions,
-    ) => {
+    ): ChatCardRect => {
       const persist = options?.persist ?? true;
       const threadKey = buildThreadIdentityKey(thread.source, thread.id);
       const key = starMapWorkspaceCardKey({
@@ -578,7 +578,7 @@ export function useStarMapChatCards(params: {
           },
           persist,
         );
-        return;
+        return existing.rect;
       }
       const rect = placement
         ? placeChatCardBesideAnchor({
@@ -628,6 +628,7 @@ export function useStarMapChatCards(params: {
         },
         persist,
       );
+      return rect;
     },
     [applyState],
   );
