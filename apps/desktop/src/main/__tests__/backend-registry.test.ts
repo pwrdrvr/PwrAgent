@@ -58881,6 +58881,50 @@ script = "printf setup"
     await registry.close();
   });
 
+  it("uses concurrent branch adoption when an unchanged drift observation skips persistence", async () => {
+    const identity = { backend: "codex" as const, threadId: "thread-1" };
+    const previousBranch = "feature/previous";
+    const adoptedBranch = "fix/adopted";
+    const thread: AppServerThreadSummary = {
+      id: identity.threadId, source: identity.backend, title: "Concurrent branch adoption",
+      titleSource: "explicit", linkedDirectories: [],
+      gitBranch: previousBranch, observedGitBranch: adoptedBranch,
+    };
+    const overlayStore = createOverlayStoreMock({ overlays: {
+      "codex:thread-1": {
+        ...identity, executionMode: "default", extraLinkedDirectories: [],
+        gitBranch: previousBranch, observedGitBranch: adoptedBranch,
+      },
+    } });
+    const setThreadObservedBranch = vi.spyOn(overlayStore, "setThreadObservedBranch");
+    const lookupStarted = createDeferred<void>();
+    const releaseLookup = createDeferred<void>();
+    const client = new MockBackendClient({ threads: [thread], listThreadsDelay: releaseLookup.promise });
+    const listThreads = client.listThreads.bind(client);
+    vi.spyOn(client, "listThreads").mockImplementation(async (...args) => {
+      lookupStarted.resolve();
+      return await listThreads(...args);
+    });
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore });
+    try {
+      const response = registry.checkThreadBranchDrift({ ...identity, expectedBranch: previousBranch });
+      await lookupStarted.promise;
+      await overlayStore.setThreadExpectedBranch({ ...identity, branch: adoptedBranch });
+      releaseLookup.resolve();
+
+      await expect(response).resolves.toMatchObject({
+        expectedBranch: adoptedBranch, observedBranch: adoptedBranch, drifted: false,
+      });
+      expect(setThreadObservedBranch).not.toHaveBeenCalled();
+      expect(await overlayStore.getThreadOverlayState(identity)).toMatchObject({
+        gitBranch: adoptedBranch, observedGitBranch: adoptedBranch,
+      });
+    } finally {
+      releaseLookup.resolve();
+      await registry.close();
+    }
+  });
+
   it("does not persist branch drift after registry shutdown starts", async () => {
     let releaseListThreads!: () => void;
     const listThreadsDelay = new Promise<void>((resolve) => {

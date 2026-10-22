@@ -24352,8 +24352,8 @@ export class DesktopBackendRegistry {
       threadId: params.threadId,
       branch: normalizedObservedBranch,
       expectedBranch: expectedBranchToPersist,
-    }) : overlay;
-    const persistedExpectedBranch = persistedOverlay.gitBranch?.trim() || undefined;
+    }) : await this.overlayStore.getThreadOverlayState(params);
+    const persistedExpectedBranch = persistedOverlay?.gitBranch?.trim() || undefined;
     const effectiveExpectedBranch = persistedExpectedBranch ?? expectedBranch;
     const effectiveDrifted = isBranchDrifted(
       effectiveExpectedBranch,
