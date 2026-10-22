@@ -2594,7 +2594,10 @@ describe("app server ipc", () => {
       Object.assign(badPr, { headRefName: "main", headSha: "a".repeat(40), linkedDirectoryPaths: [temp.tempDir],
         sourceRepository: { provider: "github.com", org: "unrelated", repo: "codex" } });
       const featurePr = { ...badPr, number: 10, headRefName: "fix/old-feature", sourceRepository: undefined,
+        state: "pending" as const, checkState: "pending" as const, lifecycleState: "open" as const,
         url: "https://github.com/openai/codex/pull/10" };
+      const canonicalFeaturePr = { ...featurePr, state: "passing" as const, checkState: "passing" as const,
+        lifecycleState: "merged" as const };
       const explicitPr = { ...badPr, number: 11, explicitlyAttached: true as const,
         url: "https://github.com/openai/codex/pull/11" };
       await store.setThreadPullRequests({ backend: "codex", threadId: request.threadId,
@@ -2602,17 +2605,21 @@ describe("app server ipc", () => {
       await store.addThreadPullRequestReference({ backend: "codex", threadId: request.threadId, pr: explicitPr });
       await store.writePrLookupCacheEntry({ lookupKey, provider: "github.com", branch: "main",
         directoryPaths: [temp.tempDir], fetchedAt: Date.now(), prs: [badPr] });
+      await store.writePrStatusCacheEntries([{
+        provider: "github.com", prKey: "github.com/openai/codex#10", fetchedAt: Date.now() - 30_000,
+        pr: canonicalFeaturePr,
+      }]);
       // The federation canonicalizer must hide old automatic matches before
       // the owner has selected/refreshed this thread. It must not write.
       const { writes: viewerWrites } = await measureSqliteWrites(async () => {
         expect(await appServerService.canonicalizeStoredPullRequests([badPr, featurePr, explicitPr]))
-          .toEqual([featurePr, explicitPr]);
+          .toEqual([canonicalFeaturePr, explicitPr]);
       });
       expect(viewerWrites.commits).toBe(0);
       isGhAvailable.mockResolvedValue(false);
       const { writes } = await measureSqliteWrites(async () => {
         for (let i = 0; i < 10; i++) {
-          expect((await appServerService.refreshThreadPullRequests(request)).prs).toEqual([featurePr, explicitPr]);
+          expect((await appServerService.refreshThreadPullRequests(request)).prs).toEqual([canonicalFeaturePr, explicitPr]);
         }
       });
       expect((await store.getThreadOverlayState(request))?.prs).toEqual([featurePr, explicitPr]);
@@ -2620,7 +2627,7 @@ describe("app server ipc", () => {
         note: "One legacy attachment repair followed by 9 unchanged offline refreshes: one boundary repair, zero steady-state writes (0 MB/day after repair).",
       });
       expect(publishLocalEvent).toHaveBeenCalledWith(expect.objectContaining({ notification: expect.objectContaining({
-        method: "thread/pullRequests/updated", params: expect.objectContaining({ prs: [featurePr, explicitPr] }),
+        method: "thread/pullRequests/updated", params: expect.objectContaining({ prs: [canonicalFeaturePr, explicitPr] }),
       }) }));
       // The persisted branch cache must not copy the same bad match onto a
       // second thread, even before a fresh provider lookup gets to run.

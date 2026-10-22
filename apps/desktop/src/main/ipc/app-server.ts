@@ -4478,7 +4478,10 @@ class DesktopAppServerService {
             refreshKey: latest.prsRefreshKey,
           });
           await this.publishThreadPullRequestsUpdated({
-            backend, threadId: request.threadId, prs: updated.prs ?? [], detachedPrs: updated.detachedPrs ?? [],
+            backend,
+            threadId: request.threadId,
+            prs: this.canonicalizePrs(updated.prs ?? []),
+            detachedPrs: this.canonicalizePrs(updated.detachedPrs ?? []),
           });
         },
       });
