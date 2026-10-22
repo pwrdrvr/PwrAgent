@@ -32,9 +32,7 @@ describe("createSubthreadTrays", () => {
     const trays = createSubthreadTrays(childrenByParentKey([
       ["codex:root", [childB, childA]],
       ["codex:child-a", [grandchild]],
-    ]));
-
-    trays.addTrayOwner(root);
+    ]), [root]);
 
     expect(trays.subtree("codex:root").map((row) => row.id)).toEqual([
       "child-a",
@@ -52,9 +50,7 @@ describe("createSubthreadTrays", () => {
       ["codex:root", [child]],
       ["codex:child", [grandchild]],
       ["codex:grandchild", [greatGrandchild]],
-    ]));
-
-    trays.addTrayOwner(root);
+    ]), [root]);
 
     // The tray renders flat, so depth is the only thing separating a
     // grandchild from the sibling above it.
@@ -74,9 +70,7 @@ describe("createSubthreadTrays", () => {
     const trays = createSubthreadTrays(childrenByParentKey([
       ["codex:root", [child]],
       ["codex:child", [grandchild]],
-    ]));
-
-    trays.addTrayOwner(root);
+    ]), [root]);
 
     // `subthreadOrder` is stored per parent, so a reorder of this tray must
     // never come to name the grandchild as a child of `root`.
@@ -91,15 +85,30 @@ describe("createSubthreadTrays", () => {
     const trays = createSubthreadTrays(childrenByParentKey([
       ["codex:first", [shared]],
       ["codex:second", [shared]],
-    ]));
-
-    trays.addTrayOwner(first);
-    trays.addTrayOwner(second);
+    ]), [first, second]);
 
     expect(trays.subtree("codex:first").map((row) => row.id)).toEqual([
       "shared",
     ]);
     expect(trays.subtree("codex:second")).toEqual([]);
+  });
+
+  it.each([false, true])("reserves a promoted root and its descendants before walking trays (promoted first=%s)", (promotedFirst) => {
+    const root = thread("root");
+    const child = thread("child", { parentThreadId: root.id });
+    const promoted = thread("promoted", { parentThreadId: child.id });
+    const descendant = thread("descendant", { parentThreadId: promoted.id });
+    const trays = createSubthreadTrays(childrenByParentKey([
+      ["codex:root", [child]],
+      ["codex:child", [promoted]],
+      ["codex:promoted", [descendant]],
+    ]), promotedFirst ? [promoted, root] : [root, promoted]);
+
+    expect(trays.subtree("codex:root")).toEqual([child]);
+    expect(trays.subtree("codex:promoted")).toEqual([descendant]);
+    expect(trays.directChildKeys("codex:root")).toEqual(["codex:child"]);
+    expect(trays.directChildKeys("codex:promoted")).toEqual(["codex:descendant"]);
+    expect(trays.depth("codex:descendant")).toBe(1);
   });
 
   it("terminates on a parent-link cycle", () => {
@@ -108,9 +117,7 @@ describe("createSubthreadTrays", () => {
     const trays = createSubthreadTrays(childrenByParentKey([
       ["codex:left", [right]],
       ["codex:right", [left]],
-    ]));
-
-    trays.addTrayOwner(left);
+    ]), [left]);
 
     // Terminating at all is the assertion; the owner is already claimed, so
     // the child's link back to it places nothing and the walk stops.
@@ -119,7 +126,7 @@ describe("createSubthreadTrays", () => {
   });
 
   it("returns empty views for a row that owns no tray", () => {
-    const trays = createSubthreadTrays(childrenByParentKey([]));
+    const trays = createSubthreadTrays(childrenByParentKey([]), []);
 
     expect(trays.subtree("codex:absent")).toEqual([]);
     expect(trays.directChildKeys("codex:absent")).toEqual([]);
