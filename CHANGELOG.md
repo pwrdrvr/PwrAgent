@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.3.0-prerelease.2 - 2026-10-22
+
+- Claude - Add plan-limit meters and clearer reset countdowns, improve remembered usage limits and sign-in status, and refresh model catalogs with versioned labels.
+- Remote MCP Access - Select and verify a remote thread's MCP connections from mounted threads and remote viewers, subject to owner permissions.
+- Federated To-dos and Reviews - View and act on remote To-dos and tracked review findings, with actions routed to the owning machine. Requires updated builds on both ends.
+- Navigation Reliability - Show unread sub-threads in their own project, recover navigation coverage after provider failures, and surface failed sidebar actions as notices.
+- Pull Requests - Prevent unrelated fork PRs from being attached automatically and repair stale automatic attachments while preserving explicit selections.
+- Cleanup Safety and Performance - Protect replaced worktree directories during Windows cleanup and stop repeatedly processing archives whose cleanup is already complete.
+
 ## v1.3.0-prerelease.1 - 2026-10-21
 
 - Claude - Added built-in Claude support through the official Agent SDK, with model and effort selection, approvals, questionnaires, MCP connections, resumable conversations, and usage reporting.
