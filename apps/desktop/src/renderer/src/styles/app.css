@@ -34636,12 +34636,18 @@ div.composer-error-row__toggle {
   margin-top: 4px;
 }
 
-/* The same limit rows, standalone in a Pricing rail card. */
+/* The same limit rows, standalone in a Pricing rail card. Claude's labels
+   run longer than Codex's ("Weekly limit with extra usage"), so the label
+   column is capped and wraps rather than squeezing the figure and meter. */
 .rail-limit-grid {
   grid-column: auto;
-  grid-template-columns: max-content minmax(0, 1fr);
+  grid-template-columns: fit-content(50%) minmax(0, 1fr);
   row-gap: 8px;
   margin-top: 10px;
+}
+
+.rail-limit-grid dt {
+  white-space: normal;
 }
 
 /* Shared subheading inside a rail panel (e.g. "Linked pull requests"). */
