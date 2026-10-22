@@ -4,6 +4,7 @@ import { AgentThreadRenameNotice } from "./features/notifications/AgentThreadRen
 import { CloudflareSignInNotice, CLOUDFLARE_SIGN_IN_NOTICE_ID } from "./features/notifications/CloudflareSignInNotice";
 import { CodexAuthProfileLoginDialog } from "./features/settings/CodexAuthProfileSelect";
 import { navigationIdentityFromThreadKey } from "./lib/navigation-query-state";
+import { ensureWindowThreadMounted } from "./lib/ensure-window-thread-mounted";
 import { classifyDirectory, operatorTodoItemKey } from "@pwragent/shared";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "./lib/navigation-loaded-rows";
 import {
@@ -1931,6 +1932,7 @@ function DesktopAppShell(props: {
     showAppNotice,
     dismissAppNotice,
   );
+  const [operatorFocusPublishRevision, setOperatorFocusPublishRevision] = useState(0);
   const operatorFocus = useMemo(
     () => operatorFocusFor({
       view: mainView,
@@ -1940,7 +1942,7 @@ function DesktopAppShell(props: {
     }),
     [mainView, navigation.browseMode, navigation.selectedThread, navigation.selectedLaunchpad],
   );
-  useOperatorFocusPublisher(directorVoiceApi, operatorFocus);
+  useOperatorFocusPublisher(directorVoiceApi, operatorFocus, operatorFocusPublishRevision);
   const directorVoiceControl = useMemo(
     () => directorVoiceApi ? <DirectorVoiceButton api={directorVoiceApi} /> : undefined,
     [directorVoiceApi],
@@ -2782,8 +2784,16 @@ function DesktopAppShell(props: {
     }
     return desktopApi.onShowThreadRequested((request) => {
       setMainView("thread", () => {
-        queueMessageLinkRequest(request);
-        void navigation.showThread(request);
+        void (async () => {
+          // Commands from agents and auxiliary windows can name a peer's
+          // thread before this main window has mounted it.
+          await ensureWindowThreadMounted(desktopApi, request, navigation.threads, Boolean(readRendererFederationTarget()));
+          queueMessageLinkRequest(request);
+          await navigation.showThread(request);
+          // A command selecting the current thread still needs a fresh UI
+          // acknowledgement; main must not accept a stale focus snapshot.
+          setOperatorFocusPublishRevision((revision) => revision + 1);
+        })().catch((error) => console.warn("Opening the requested thread failed.", error));
       });
     });
   }, [desktopApi, navigation, queueMessageLinkRequest, setMainView]);

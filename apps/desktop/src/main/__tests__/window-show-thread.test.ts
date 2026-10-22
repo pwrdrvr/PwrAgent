@@ -87,4 +87,16 @@ describe("requestShowThread", () => {
     ).toBeUndefined();
     expect(fromWebContentsMock).not.toHaveBeenCalled();
   });
+
+  it("does not fall through to another window when the preferred target is required", () => {
+    const send = vi.fn();
+    const other = { send } as unknown as WebContents;
+    const preferred = { isDestroyed: () => false } as WebContents;
+    getFocusedWindowMock.mockReturnValue({ isDestroyed: () => false, webContents: other });
+    vi.mocked(subscribersForChannel).mockReturnValue([other]);
+    expect(requestShowThread({ backend: "codex", threadId: "thread-1" }, {
+      preferWebContents: preferred, requirePreferred: true,
+    })).toBeUndefined();
+    expect(send).not.toHaveBeenCalled();
+  });
 });

@@ -49,7 +49,35 @@ export class ThreadSearchStore {
     this.db = stateDb.raw;
   }
 
+  /** Archive-inclusive global search must not commit once per listed thread. */
+  upsertThreads(threads: readonly AppServerThreadSummary[]): void {
+    const changed = threads.filter((thread) => !this.hasCurrentThread(thread));
+    if (changed.length === 0) return;
+    this.db.transaction(() => {
+      for (const thread of changed) this.upsertThread(thread);
+    })();
+  }
+
+  private hasCurrentThread(thread: AppServerThreadSummary): boolean {
+    return Boolean(this.db.prepare(`
+      SELECT 1 FROM thread_search_documents
+      WHERE identity_key = ? AND backend IS ? AND thread_id IS ?
+        AND title IS ? AND title_source IS ? AND summary IS ? AND project_key IS ?
+        AND created_at IS ? AND updated_at IS ? AND archived_at IS ?
+        AND git_branch IS ? AND git_origin_url IS ? AND model IS ?
+        AND linked_directories_json IS ? AND display_json IS ?
+    `).get(
+      buildLegacyEncodedThreadIdentityKey(thread.source, thread.id), thread.source, thread.id,
+      thread.title, thread.titleSource ?? null, thread.summary ?? null, thread.projectKey ?? null,
+      thread.createdAt ?? null, thread.updatedAt ?? null, thread.archivedAt ?? null,
+      thread.gitBranch ?? null, thread.gitOriginUrl ?? null, thread.model ?? null,
+      JSON.stringify(thread.linkedDirectories),
+      JSON.stringify({ source: thread.source, serviceTier: thread.serviceTier, reasoningEffort: thread.reasoningEffort }),
+    ));
+  }
+
   upsertThread(thread: AppServerThreadSummary, indexedAt = Date.now()): void {
+    if (this.hasCurrentThread(thread)) return;
     const identityKey = buildLegacyEncodedThreadIdentityKey(
       thread.source,
       thread.id,

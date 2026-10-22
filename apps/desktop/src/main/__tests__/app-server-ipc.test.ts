@@ -28,7 +28,9 @@ import type {
   RestoreThreadRequest,
   SetThreadParentRequest,
   ThreadGitWorkingState,
+  ThreadSearchResponse,
 } from "@pwragent/shared";
+import type { ThreadSearchService } from "../thread-search/thread-search-service";
 import {
   BACKGROUND_WORKTREE_WORKING_STATE_BATCH_SIZE,
   selectStaleWorktreeWorkingStatePaths,
@@ -152,6 +154,7 @@ const federationMock = vi.hoisted(() => {
         capabilities: string[];
       }> => []),
       health: vi.fn(async () => ({ instanceId: "pwr_local" })),
+      searchConnectedPeers: vi.fn(async () => ({ results: [], failures: [], searchedInstances: [] })),
       hydrateThreadMessageOrigins: vi.fn(async (response) => response),
       remoteBackend: vi.fn(() => remoteBackend),
       remoteTargetSupportsCapability: vi.fn(() => true),
@@ -1236,6 +1239,29 @@ vi.mock("../pr-status/git-remote", async () => {
 });
 
 describe("app server ipc", () => {
+  it("forwards the global search archive scope to peers as well as the local search", async () => {
+    const { appServerService } = await import("../ipc/app-server");
+    const local: ThreadSearchResponse = {
+      backend: "all", contentMode: "available", fetchedAt: 1, filters: {}, query: "archived example",
+      results: [], searchedScopes: ["metadata"], semanticMode: "disabled", unavailableScopes: [],
+    };
+    const search = vi.fn(async () => local);
+    const service = appServerService as unknown as { getThreadSearchService: () => Pick<ThreadSearchService, "search"> };
+    const stub = vi.spyOn(service, "getThreadSearchService").mockReturnValue({ search });
+    try {
+      for (const includeArchived of [true, false]) {
+        const request = { query: "archived example", filters: { includeArchived }, limit: 25 };
+        await appServerService.searchThreads(request);
+        expect(search).toHaveBeenLastCalledWith(request);
+        expect(federationMock.runtime.searchConnectedPeers).toHaveBeenLastCalledWith({
+          query: "archived example", limit: 25, backend: undefined, includeArchived,
+        });
+      }
+    } finally {
+      stub.mockRestore();
+    }
+  });
+
   type AppServerIpcModule = typeof import("../ipc/app-server");
   let disposeAppServerIpcHandlers: AppServerIpcModule["disposeAppServerIpcHandlers"];
   let registerAppServerIpcHandlers: AppServerIpcModule["registerAppServerIpcHandlers"];

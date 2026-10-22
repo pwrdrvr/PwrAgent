@@ -42,16 +42,17 @@ describe("ThreadSearchPanel", () => {
     expect(searchThreads).toHaveBeenCalledWith(expect.objectContaining({ query: "#779 @disk" }));
   });
 
-  it("submits a search and opens a result", async () => {
+  it("includes archived threads in global search, labels them and opens a result without restoring it", async () => {
     const searchThreads = vi.fn(async (): Promise<ThreadSearchResponse> => ({
       backend: "all",
       contentMode: "available",
       fetchedAt: 1_000,
-      filters: { backend: "all", includeArchived: false },
+      filters: { backend: "all", includeArchived: true },
       query: "branch drift",
       results: [
         {
           backend: "codex",
+          archivedAt: 500,
           confidence: "medium",
           identityKey: "codex:thread-1",
           linkedDirectories: [],
@@ -87,6 +88,10 @@ describe("ThreadSearchPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Search" }));
 
     expect(await screen.findByText("Screenshots")).toBeInTheDocument();
+    expect(screen.getByText("Archived")).toBeInTheDocument();
+    expect(searchThreads).toHaveBeenCalledWith({
+      contentMode: "available", filters: { includeArchived: true }, limit: 25, query: "branch drift",
+    });
     fireEvent.click(screen.getByRole("button", { name: /Screenshots/ }));
 
     await waitFor(() => {

@@ -14612,6 +14612,24 @@ describe("main selected detail authority", () => {
     },
   );
 
+  it("opens an archived local thread absent from active rows without restoring it", async () => {
+    const snapshot = acpTitleSnapshot("Active row", "explicit", 1);
+    const archived = { ...snapshot.threads[0]!, id: "archived-search-result", archivedAt: 123, title: "Archived example" };
+    const restoreThread = vi.fn();
+    const api = {
+      readPopulation: vi.fn(async () => snapshot),
+      ...actionDetailApi(...snapshot.threads, archived),
+      restoreThread,
+    } as unknown as DesktopApi;
+    const hook = renderHook(() => useThreadNavigation(api));
+    await waitFor(() => expect(hook.result.current.loaded).toBe(true));
+    await act(() => hook.result.current.showThread({ backend: archived.source, threadId: archived.id }));
+    await waitFor(() => expect(hook.result.current.selectedThread?.id).toBe(archived.id));
+    expect(hook.result.current.selectedThread?.archivedAt).toBe(123);
+    expect(hook.result.current.threads.some((row) => row.id === archived.id)).toBe(false);
+    expect(restoreThread).not.toHaveBeenCalled();
+  });
+
   it("keeps an off-page peer selection and hydrates configuration independently of row refresh", async () => {
     const snapshot = acpTitleSnapshot("Loaded row", "explicit", 1);
     const thread = { ...snapshot.threads[0]!, id: "off-page", model: "owner-model" };

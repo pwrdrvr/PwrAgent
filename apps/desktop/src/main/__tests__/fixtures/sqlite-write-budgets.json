@@ -343,6 +343,7 @@
     "rowsChanged": 0,
     "statements": 0
   },
+  "global-search-active-and-archived": {"commits": 1, "note": "Two global searches with active and archived fixtures: one initial index transaction, unchanged repeat search writes nothing; no background writes.", "observedWalBytes": 37080, "rowsChanged": 4, "statements": 6},
   "held-scheduled-action-retry": {
     "commits": 3,
     "note": "one operator-triggered held retry: claim, queue admission, and successful turn start; no timer or automatic retry",
@@ -1211,5 +1212,6 @@
     "rowsChanged": 2,
     "statements": 2
   },
-  "thread-dependencies-unchanged-service-polls": {"commits": 0, "note": "100 accepted unchanged passing service polls with a busy consumer: zero commits and 0 MB/day idle.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0}
+  "thread-dependencies-unchanged-service-polls": {"commits": 0, "note": "100 accepted unchanged passing service polls with a busy consumer: zero commits and 0 MB/day idle.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
+  "voice-open-thread-first-peer-mount": {"commits": 2, "note": "One peer mount through the UI pin API, then 100 opens of the mounted thread; only initial pin/owner persistence writes, no focus or timer writes.", "observedWalBytes": 24720, "rowsChanged": 2, "statements": 2}
 }

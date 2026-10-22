@@ -58,9 +58,7 @@ export class ThreadSearchService {
           })),
         ])
       : activeThreads;
-    for (const thread of threads) {
-      this.store.upsertThread(thread);
-    }
+    this.store.upsertThreads(threads);
     this.store.pruneMissingThreads({
       backend: listBackend,
       includeArchived: filters.includeArchived === true,

@@ -1616,6 +1616,7 @@ class DesktopAppServerService {
       query: local.query,
       limit: request.limit,
       backend: request.filters?.backend,
+      includeArchived: request.filters?.includeArchived,
     });
     const remoteResults = federated.results
       .filter((result) => isRemoteFederationTarget(result.ref.target))

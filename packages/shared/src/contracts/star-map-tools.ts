@@ -25,6 +25,7 @@ export const PWRAGENT_STAR_MAP_OPERATION_NAMES = [
   "highlight_star_map_threads",
   "set_star_map_view",
   "read_operator_focus",
+  "open_thread",
 ] as const;
 
 export type PwrAgentStarMapOperationName =
@@ -34,6 +35,8 @@ export const PWRAGENT_STAR_MAP_ERROR_CODES = [
   "invalid_arguments",
   "star_map_not_open",
   "focus_not_published",
+  "ui_not_available",
+  "navigation_timeout",
   "not_found",
   "unsupported_operation",
   "internal_error",
@@ -397,6 +400,14 @@ export type OperatorFocusSnapshot = {
 
 export type ReadOperatorFocusToolArgs = Record<string, never>;
 
+/** Select a thread in this instance's graphical main window. */
+export type OpenThreadToolArgs = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  /** The owning instance from search_threads. Omit for a local thread. */
+  instanceId?: FederationInstanceId;
+};
+
 export type ReadOperatorFocusToolData = {
   /** How stale the focus is; the window republishes when it changes. */
   ageMs: number;
@@ -409,6 +420,7 @@ export type PwrAgentStarMapToolArgsByOperation = {
   highlight_star_map_threads: HighlightStarMapThreadsToolArgs;
   set_star_map_view: SetStarMapViewToolArgs;
   read_operator_focus: ReadOperatorFocusToolArgs;
+  open_thread: OpenThreadToolArgs;
 };
 
 export type PwrAgentStarMapToolArgs<
@@ -429,6 +441,7 @@ export type PwrAgentStarMapDataByOperation = {
   highlight_star_map_threads: HighlightStarMapThreadsToolData;
   set_star_map_view: SetStarMapViewToolData;
   read_operator_focus: ReadOperatorFocusToolData;
+  open_thread: { focus: OperatorFocusSnapshot };
 };
 
 export type PwrAgentStarMapContext = {
