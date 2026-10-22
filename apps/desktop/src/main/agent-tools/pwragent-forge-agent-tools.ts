@@ -25,6 +25,7 @@ export function buildForgeReadToolDefinitions(handler?: ForgeReadHandler): Agent
   };
   return FORGE_READ_OPERATIONS.map((operation) => ({
     namespace: PWRAGENT_TOOL_NAMESPACE, name: operation, description: descriptions[operation],
+    annotations: { readOnlyHint: true },
     inputSchema: {
       type: "object", additionalProperties: false,
       ...(["get_ci_run", "list_ci_artifacts"].includes(operation) ? { required: ["runId"] } : operation === "get_commit_checks" ? { required: ["headSha"] } : operation === "get_ci_job" || operation === "read_ci_job_log" ? { required: ["jobId"] } : {}),

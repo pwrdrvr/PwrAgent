@@ -64,6 +64,7 @@ export function buildPwrAgentStarMapToolDefinitions(
   return PWRAGENT_STAR_MAP_OPERATION_NAMES.map((operation) => ({
     namespace: options.namespace ?? PWRAGENT_TOOL_NAMESPACE,
     name: operation,
+    annotations: { readOnlyHint: ["read_star_map_view", "read_operator_focus"].includes(operation) },
     description: descriptionForOperation(operation),
     inputSchema: inputSchemaForOperation(operation),
     deferLoading: false,

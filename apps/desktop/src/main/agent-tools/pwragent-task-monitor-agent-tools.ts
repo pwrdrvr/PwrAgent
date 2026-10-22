@@ -133,6 +133,7 @@ export function buildPwrAgentTaskMonitorToolDefinitions(
     {
       namespace: PWRAGENT_TOOL_NAMESPACE,
       name: "create_monitor_delegation",
+      annotations: { readOnlyHint: false },
       description: TASK_MONITOR_CREATE_TOOL_DESCRIPTION,
       inputSchema: TASK_MONITOR_CREATE_TOOL_INPUT_SCHEMA,
       deferLoading: false,
@@ -165,6 +166,7 @@ export function buildPwrAgentTaskMonitorToolDefinitions(
     {
       namespace: PWRAGENT_TOOL_NAMESPACE,
       name: "cancel_monitor_delegation",
+      annotations: { readOnlyHint: false },
       description: TASK_MONITOR_CANCEL_TOOL_DESCRIPTION,
       inputSchema: TASK_MONITOR_CANCEL_TOOL_INPUT_SCHEMA,
       deferLoading: false,
@@ -199,6 +201,7 @@ export function buildPwrAgentTaskMonitorToolDefinitions(
     {
       namespace: PWRAGENT_TOOL_NAMESPACE,
       name: "inject_progress",
+      annotations: { readOnlyHint: false },
       description: TASK_MONITOR_PROGRESS_TOOL_DESCRIPTION,
       inputSchema: TASK_MONITOR_PROGRESS_TOOL_INPUT_SCHEMA,
       deferLoading: false,
@@ -230,6 +233,7 @@ export function buildPwrAgentTaskMonitorToolDefinitions(
     {
       namespace: PWRAGENT_TOOL_NAMESPACE,
       name: "complete_monitoring",
+      annotations: { readOnlyHint: false },
       description: TASK_MONITOR_COMPLETE_TOOL_DESCRIPTION,
       inputSchema: TASK_MONITOR_COMPLETE_TOOL_INPUT_SCHEMA,
       deferLoading: false,

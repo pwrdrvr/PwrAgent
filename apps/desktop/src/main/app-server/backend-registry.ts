@@ -577,6 +577,7 @@ import {
   toDynamicToolResponse,
 } from "../agent-tools/agent-tool-router";
 import { buildPwrAgentMcpConnectionToolRouter } from "../agent-tools/pwragent-mcp-connection-agent-tools";
+import { buildPwrAgentToolGuideDefinition } from "../agent-tools/pwragent-tool-guide";
 import { buildTokenMiserToolDefinitions } from "../agent-tools/token-miser-agent-tools";
 import {
   buildPwrAgentToolSearchDefinition,
@@ -37253,6 +37254,16 @@ export class DesktopBackendRegistry {
       method: request.method,
       params: request.params,
     });
+    const toolGuideRouter = new AgentToolRouter([buildPwrAgentToolGuideDefinition()]);
+    if (hostToolCall && toolGuideRouter.acceptsDynamicToolCall(hostToolCall)) {
+      if (!this.isLiveDynamicToolCall(backend, hostToolCall)) {
+        return toDynamicToolResponse({
+          ok: false, code: "forbidden",
+          message: "Tool guide calls require an active turn on the owning thread.",
+        });
+      }
+      return await toolGuideRouter.handleDynamicToolCall({ backend, call: hostToolCall });
+    }
     // Keep dispatch available after disabling the experiment: older runtimes
     // can retain the previously advertised schema until a new thread starts.
     const toolSearchRouter = new AgentToolRouter([buildPwrAgentToolSearchDefinition([])]);

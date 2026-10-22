@@ -61,6 +61,7 @@ export function buildPwrAgentFederationToolDefinitions(
   return PWRAGENT_FEDERATION_OPERATION_NAMES.map((operation) => ({
     namespace: options.namespace ?? PWRAGENT_TOOL_NAMESPACE,
     name: operation,
+    annotations: { readOnlyHint: ["list_federation_instances", "list_instance_projects", "list_attention_threads", "search_federation_threads"].includes(operation) },
     description: descriptionForOperation(operation),
     inputSchema: inputSchemaForOperation(operation),
     deferLoading: false,

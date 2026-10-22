@@ -1,6 +1,6 @@
 import type { AppServerBackendKind, ThreadIdentifier } from "@pwragent/shared";
 import type { DynamicToolCallResponse } from "@pwrdrvr/codex-app-server-protocol/v2";
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import type { CallToolResult, ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
 
 export type AgentToolTransport = "codex_dynamic_tool" | "mcp";
 
@@ -46,6 +46,8 @@ export type AgentToolDefinition<TName extends string = string> = {
   name: TName;
   description: string;
   inputSchema: Record<string, unknown>;
+  /** MCP hints describe behavior. They do not grant permission. */
+  annotations?: ToolAnnotations;
   /**
    * Hidden definitions are callable compatibility facades, but are not
    * advertised to new Agent turns or MCP clients.

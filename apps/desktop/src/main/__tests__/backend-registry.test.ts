@@ -5451,6 +5451,25 @@ describe("DesktopBackendRegistry", () => {
     });
   });
 
+  it("dispatches the advertised tool guide only from a live owning turn", async () => {
+    const codexClient = new MockBackendClient({ threads: [] });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    try {
+      await registry.startThread({ backend: "codex", cwd: process.cwd() });
+      expect(pwragentDynamicTools(codexClient.lastStartThreadParams?.dynamicTools).map((tool) => tool.name)).toContain("read_tool_guide");
+      const call = {
+        method: "item/tool/call",
+        params: { threadId: "thread-1", turnId: "guide-turn", callId: "guide-1", requestId: "guide-1", namespace: "pwragent", tool: "read_tool_guide", arguments: {} },
+      } as AppServerPendingRequestNotification;
+      expect(await codexClient.emitRequest(call)).toMatchObject({ success: false });
+      await registry.publishLocalEvent({ backend: "codex", notification: { method: "turn/started", params: { threadId: "thread-1", turnId: "guide-turn", turn: { id: "guide-turn" } } } });
+      expect(await codexClient.emitRequest({ ...call, params: { ...call.params, callId: "guide-2", requestId: "guide-2" } })).toMatchObject({
+        success: true,
+        contentItems: [{ type: "inputText", text: expect.stringContaining("Use get_thread_status for compact state.") }],
+      });
+    } finally { await registry.close(); }
+  });
+
   it("refreshes tool discovery in both directions and authorizes only live searches", async () => {
     let enabled = false;
     const codexClient = new MockBackendClient({

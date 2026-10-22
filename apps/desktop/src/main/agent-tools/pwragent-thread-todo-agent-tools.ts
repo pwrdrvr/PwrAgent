@@ -109,6 +109,7 @@ export function buildPwrAgentThreadTodoToolDefinitions(
   return PWRAGENT_THREAD_TODO_OPERATION_NAMES.map((operation) => ({
     namespace: PWRAGENT_TOOL_NAMESPACE,
     name: operation,
+    annotations: { readOnlyHint: operation === "list_todos" },
     description: descriptionForOperation(operation),
     inputSchema: inputSchemaForOperation(operation),
     deferLoading: false,

@@ -116,6 +116,8 @@ export function buildPwrAgentThreadToolDefinitions(
   return operations.map((operation) => ({
     namespace: options.namespace ?? PWRAGENT_TOOL_NAMESPACE,
     name: operation,
+    // PR status checks refresh stored PR associations. Dependency tools can write.
+    annotations: { readOnlyHint: ["search_threads", "read_thread", "get_thread_status"].includes(operation) },
     description: descriptionForOperation(operation),
     inputSchema: inputSchemaForOperation(operation),
     deferLoading: false,
