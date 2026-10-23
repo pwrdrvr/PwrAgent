@@ -1,5 +1,27 @@
 # Changelog
 
+## v1.3.0 - 2026-10-23
+
+### Claude Code Sessions
+
+PwrAgent now works with **Claude Code sessions**, alongside Codex and Grok. Built-in support includes model and effort selection, streaming tool activity, approvals, questionnaires, MCP connections, resumable conversations, native session titles, and usage reporting with plan-limit meters and reset countdowns.
+
+### More Highlights
+
+- Code Reviews - Claude's `/code-review` findings appear as tracked review cards, with reported fixes synchronized back to those findings. Standard review actions select a supported reviewer while preserving the thread's workspace.
+- Continue After - Automatically resume work when another turn finishes, a PR becomes reviewable, CI passes, or a PR merges. Dependencies survive restarts without model-driven polling. Choose an operator reminder instead of automatic continuation, optionally starting a new thread.
+- Federated Thread Controls - Act on remote To-dos, approvals, questionnaires, replies, and review findings through the owning machine. Manage remote MCP connections and linked repositories from mounted threads and remote viewers.
+- Federated Search - Search transcript content across connected machines, with results appearing progressively and including matching snippets and links to the conversation.
+- MCP and Automations - Test connections with visible discovery progress and clearer failure details. Automation allowlists can select offered MCP Gateway connections independently of the Agent's current selections.
+- Queues and Organization - Reorder queued messages in the composer and Star Map. Drag folders and sub-threads to organize the sidebar, including mixed-provider and remote sub-threads, with drag-to-pin and unpin.
+- Voice and Star Map - Voice Manager can open local or remote threads in the UI. Live voice tracks whether camera awareness is enabled, waiting for an observation, or disabled. Star Map keeps the manager card accessible when navigating the canvas.
+- Access Defaults - New Codex and Claude threads default to Auto, with separate provider defaults in Settings. Existing threads retain their access settings.
+- Usage Visibility - Clearer Claude usage limits and reset countdowns, accurate five-hour versus weekly limit labels, and usage-detail cards that remain on screen.
+- Performance and Reliability - Faster bulk archive cleanup, safer worktree removal, and more reliable context compaction that honors selected model settings and releases queued follow-ups afterward. Improved PR discovery and clearer Grok tool activity.
+- Security - Updated Electron networking protections and disabled lifecycle hooks and notification commands in background Codex helpers.
+
+Upgrade notes: Legacy Codex/Claude launchpad "Default Access" selections reset to the new default. Select your preferred access in Settings. Update both machines to use the new Federation controls.
+
 ## v1.3.0-prerelease.4 - 2026-10-22
 
 - Claude Reviews - Show `/code-review` findings as tracked review cards and synchronize reported fixes. Standard review actions now choose a supported reviewer and preserve the thread's workspace.
