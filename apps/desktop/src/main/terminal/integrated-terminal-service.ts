@@ -627,19 +627,20 @@ export class IntegratedTerminalService {
     }
   }
 
-  private isInWorktree(cwd: string, worktreePath: string): boolean {
+  private isInWorktree(cwd: string | undefined, worktreePath: string): boolean {
     const paths = this.platform === "win32" ? path.win32 : path.posix;
-    const relative = paths.relative(paths.resolve(worktreePath), paths.resolve(cwd));
+    const relative = paths.relative(paths.resolve(worktreePath), paths.resolve(cwd?.trim() || homedir()));
     return relative === "" || (relative !== ".." && !relative.startsWith(`..${paths.sep}`) && !paths.isAbsolute(relative));
   }
 
-  private assertWorktreeAvailable(cwd: string): void {
+  private assertWorktreeAvailable(cwd: string | undefined): void {
     if ([...this.removingWorktrees].some((worktree) => this.isInWorktree(cwd, worktree))) {
       throw new Error("This worktree is being removed; a terminal cannot be opened here.");
     }
   }
 
-  async withWorktreeClosed<T>(worktreePath: string, work: () => Promise<T>): Promise<T> {
+  async withWorktreeClosed<T>(worktreePath: string, work: () => Promise<T>, assertCurrent?: () => void): Promise<T> {
+    assertCurrent?.();
     this.assertWorktreeAvailable(worktreePath);
     this.removingWorktrees.add(worktreePath);
     try {
@@ -653,9 +654,11 @@ export class IntegratedTerminalService {
           worktreePath,
         ))
         .map(({ promise }) => promise));
+      assertCurrent?.();
       await Promise.all([...this.sessionsById.values()]
         .filter((session) => this.isInWorktree(session.cwd, worktreePath))
         .map(async (session) => {
+          assertCurrent?.();
           session.closing = true;
           await this.disposeSessionForShutdown(session);
         }));

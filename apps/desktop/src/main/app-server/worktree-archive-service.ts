@@ -219,6 +219,7 @@ export class WorktreeArchiveService {
     const snapshotRef = snapshotRefForBackend(params.backend, worktreePath);
     await this.runGit(repositoryPath, ["update-ref", snapshotRef, snapshotCommit]);
     const assertRemoval = await params.beforeRemove?.();
+    assertRemoval?.();
     await withWorktreeTerminalsClosed(worktreePath, async () => {
       assertRemoval?.();
       if (process.platform === "win32") {
@@ -233,7 +234,7 @@ export class WorktreeArchiveService {
         // archive complete until the Job's active-process count reaches zero.
         { ownProcessTree: true, beforeSpawn: assertRemoval },
       );
-    });
+    }, assertRemoval);
 
     const archivedAt = params.now ?? Date.now();
     return {

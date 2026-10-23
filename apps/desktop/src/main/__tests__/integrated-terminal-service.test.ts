@@ -1439,14 +1439,14 @@ describe("resolveTerminalShell", () => {
     await service.dispose();
   });
 
-  it("does not wait for a terminal being created outside the removed worktree", async () => {
+  it.each([false, true])("does not wait for a terminal being created outside the removed worktree (default cwd: %s)", async (defaultCwd) => {
     const worktree = createTemporaryRoot("pwragent-terminal-removing-");
     const sibling = createTemporaryRoot("pwragent-terminal-starting-");
     let finishLoading!: (value: Pick<typeof import("node-pty"), "spawn">) => void;
     const loading = new Promise<Pick<typeof import("node-pty"), "spawn">>((resolve) => { finishLoading = resolve; });
     const loadNodePty = vi.fn(() => loading);
     const service = new IntegratedTerminalService({ loadNodePty });
-    const creating = service.createOrAttach({ threadKey: "codex:sibling", cwd: sibling, cols: 80, rows: 24 }, fakeWebContents());
+    const creating = service.createOrAttach({ threadKey: "codex:sibling", cwd: defaultCwd ? undefined : sibling, cols: 80, rows: 24 }, fakeWebContents());
     await vi.waitFor(() => expect(loadNodePty).toHaveBeenCalledOnce());
     const remove = vi.fn(async () => 42);
     const removing = service.withWorktreeClosed(worktree, remove);
@@ -1458,6 +1458,34 @@ describe("resolveTerminalShell", () => {
       finishLoading({ spawn: vi.fn(() => { throw new Error("fixture closed"); }) });
       await expect(creating).rejects.toThrow("fixture closed");
       await removing;
+    }
+  });
+
+  it("keeps worktree shells when ownership changes during removal preparation", async () => {
+    const worktree = createTemporaryRoot("pwragent-terminal-admission-");
+    const exits: Array<(event: { exitCode: number }) => void> = [];
+    const pty = fakePty({ onExit: vi.fn((listener) => {
+      exits.push(listener);
+      return { dispose: vi.fn() };
+    }) });
+    pty.destroy.mockImplementation(() => {
+      for (const listener of exits) listener({ exitCode: 0 });
+    });
+    const service = new IntegratedTerminalService({ loadNodePty: async () => ({ spawn: vi.fn(() => pty) }) });
+    await service.createOrAttach({ threadKey: "codex:owner", cwd: worktree, cols: 80, rows: 24 }, fakeWebContents());
+    let current = true;
+    const remove = vi.fn(async () => 42);
+    const removing = service.withWorktreeClosed(worktree, remove, () => {
+      if (!current) throw new Error("ownership changed");
+    });
+    current = false;
+    try {
+      await expect(removing).rejects.toThrow("ownership changed");
+      expect(remove).not.toHaveBeenCalled();
+      expect(pty.destroy).not.toHaveBeenCalled();
+      expect(service.listSessions()).toHaveLength(1);
+    } finally {
+      await service.dispose();
     }
   });
 
