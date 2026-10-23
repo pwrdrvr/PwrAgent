@@ -1,4 +1,4 @@
-import type { DesktopThreadArchivePolicy, ThreadTodoMergeMethod } from "@pwragent/shared";
+import type { DesktopThreadArchivePolicy, ThreadExecutionMode, ThreadTodoMergeMethod } from "@pwragent/shared";
 import { isAcpBackendId, isThreadTodoMergeMethod, validateLocalModelIds } from "@pwragent/shared";
 import fs from "node:fs";
 import { validateCodexConfigOverrides } from "./codex-config-overrides";
@@ -1748,6 +1748,9 @@ export function desktopSettingsPatchToEdits(
         provider,
         ...(defaults.model ? { model: defaults.model } : {}),
         reasoning_efforts: JSON.stringify(defaults.reasoningEffortsByModel),
+        ...(defaults.executionMode
+          ? { execution_mode: defaults.executionMode }
+          : {}),
       }));
     if (entries.length > 0) {
       edits.push({
@@ -3333,7 +3336,12 @@ function normalizeProviderModelDefaults(
           },
         ),
       );
-      if (!model && Object.keys(reasoningEffortsByModel).length === 0) {
+      const executionMode = readThreadExecutionMode(defaults.executionMode);
+      if (
+        !model
+        && Object.keys(reasoningEffortsByModel).length === 0
+        && !executionMode
+      ) {
         return [];
       }
       return [[
@@ -3341,10 +3349,20 @@ function normalizeProviderModelDefaults(
         {
           ...(model ? { model } : {}),
           reasoningEffortsByModel,
+          ...(executionMode ? { executionMode } : {}),
         },
       ]];
     }),
   );
+}
+
+/** Unknown or misspelled values read as unset, so the built-in default applies. */
+function readThreadExecutionMode(
+  value: unknown,
+): ThreadExecutionMode | undefined {
+  return value === "default" || value === "auto" || value === "full-access"
+    ? value
+    : undefined;
 }
 
 function readProviderModelDefaults(
@@ -3377,10 +3395,16 @@ function readProviderModelDefaults(
         reasoningEffortsByModel = {};
       }
     }
-    if (model || Object.keys(reasoningEffortsByModel).length > 0) {
+    const executionMode = readThreadExecutionMode(item.execution_mode);
+    if (
+      model
+      || Object.keys(reasoningEffortsByModel).length > 0
+      || executionMode
+    ) {
       defaults[provider] = {
         ...(model ? { model } : {}),
         reasoningEffortsByModel,
+        ...(executionMode ? { executionMode } : {}),
       };
     }
   }

@@ -29,6 +29,33 @@ import { FEDERATION_MAX_FRAME_BYTES } from "../federation/federation-transport";
 import { pageNormalizedReplay } from "../app-server/thread-replay-pagination";
 
 describe("federation backend bridge", () => {
+  it("round-trips content search and authenticates cancellation with transcript-read permission", async () => {
+    const response = { backend: "all", fetchedAt: 1, query: "DKIM", filters: {}, contentMode: "available",
+      semanticMode: "disabled", results: [], searchedScopes: ["provider_content"], unavailableScopes: [] };
+    const backend = { searchThreadContent: vi.fn(async () => response), cancelThreadContentSearch: vi.fn(async () => {}) };
+    const router = new FederationRouter({ localInstanceId: "owner", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES });
+    let rpc: FederationRpcEndpoint;
+    const connect = (capabilities: FederationCapability[]): void => {
+      router.registerConnection({ peerId: "viewer", capabilities,
+        sendEnvelope: (envelope) => { rpc.receiveEnvelope(envelope); } });
+    };
+    registerFederationBackendHandlers({ router, backend: backend as unknown as FederationBackendOperations });
+    rpc = new FederationRpcEndpoint({ localInstanceId: "viewer", remoteInstanceId: "owner",
+      sendEnvelope: (envelope) => { void router.routeEnvelope({ envelope, sourcePeerId: "viewer" }); } });
+    const client = new FederationRemoteBackendClient(rpc);
+    const request = { searchId: "search", request: { query: "DKIM", contentMode: "available" as const,
+      filters: { backend: "acp:grok" as const, includeArchived: true } } };
+    connect(["thread_detail"]);
+    expect(await client.searchThreadContent(request)).toEqual(response);
+    expect(backend.searchThreadContent).toHaveBeenCalledWith(request,
+      { requesterInstanceId: "viewer", deadlineAt: expect.any(Number) });
+    await client.cancelThreadContentSearch({ searchId: "search" });
+    expect(backend.cancelThreadContentSearch).toHaveBeenCalledWith({ searchId: "search" }, { requesterInstanceId: "viewer" });
+    connect(["federated_search"]);
+    await expect(client.searchThreadContent(request)).rejects.toThrow();
+    expect(backend.searchThreadContent).toHaveBeenCalledOnce();
+  });
+
   it("round-trips gateway connections and thread MCP selection through the owner", async () => {
     const request = { backend: "codex" as const, threadId: "thread-1" };
     const selection = { connectionIds: ["rovo"], providerServersEnabled: false };

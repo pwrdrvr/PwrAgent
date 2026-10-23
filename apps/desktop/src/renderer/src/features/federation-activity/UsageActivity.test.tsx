@@ -385,6 +385,36 @@ it("uses the selected account's reset window rather than another instance's curr
   expect(screen.getByText(/Limits are the newest reading, from Remote/)).toBeInTheDocument();
 });
 
+it("reads the last 5 hours for the 5-hour window when the account's only limit is weekly, across its reset", async () => {
+  const now = new Date(2026, 9, 22, 17, 12).getTime();
+  vi.spyOn(Date, "now").mockReturnValue(now);
+  // Codex reports a weekly-only account's limit as its primary window. The
+  // operator reset it 11 minutes ago, so it began then.
+  const resetSeen = now - 11 * 60_000;
+  const weekly = (at: number, usedPercent: number, resetAt: number): UsageLimitObservation => ({ observedAt: at, accountKey: "pro",
+    planType: "pro", limits: [{ name: "Weekly limit", windowKey: "primary", usedPercent, resetAt, windowMinutes: 10_080 }] });
+  const readUsageActivity = vi.fn(async () => ({ readAt: now, rateLimits: [], truncated: false,
+    rows: [usageFixture({ createdAt: now - 3 * HOUR, startedAt: now - 3 * HOUR, completedAt: now - 2 * HOUR })],
+    limitHistory: [weekly(now - 3 * HOUR, 40, now + 3 * 24 * HOUR)],
+    limitObservation: weekly(resetSeen, 1, resetSeen + 7 * 24 * HOUR) }));
+  const { container } = render(<UsageActivity desktopApi={{ readUsageActivity }} />);
+  await waitFor(() => expect(readUsageActivity).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled());
+  // Since reset starts at the reset itself.
+  expect(readUsageActivity).toHaveBeenLastCalledWith(expect.objectContaining({ from: resetSeen }));
+  const five = within(screen.getByRole("group", { name: "Period" })).getByRole("button", { name: "5-hour window" });
+  expect(five).toHaveAttribute("title", "The last 5 hours. This account has no 5-hour limit.");
+  choosePeriod("5-hour window");
+  expect(await screen.findByRole("button", { name: "Inspect Fixture thread" })).toBeInTheDocument();
+  expect(readUsageActivity).toHaveBeenCalledTimes(3);
+  expect(readUsageActivity).toHaveBeenLastCalledWith(expect.objectContaining({ from: now - 5 * HOUR, to: now }));
+  // The weekly line runs through the window with its reset marked, and no
+  // forecast: the window is not that limit's.
+  expect(screen.getByText("Weekly limit used, observed")).toBeInTheDocument();
+  expect(container.querySelectorAll(".usage-timeline__reset")).toHaveLength(1);
+  expect(screen.queryByText("At this pace")).not.toBeInTheDocument();
+});
+
 it("names an account on this machine, from the scope line, without undoing another window's names", async () => {
   const now = new Date(2026, 8, 28, 12).getTime();
   vi.spyOn(Date, "now").mockReturnValue(now);
@@ -690,6 +720,25 @@ it("names what is in a slice on hover, in stack order, and follows the segment u
   const legend = document.querySelector(".usage-timeline__legend")!;
   expect(legend.querySelectorAll("[title]")).toHaveLength(0);
   expect(legend.querySelector(".usage-timeline__legend-item")).toHaveAttribute("data-tooltip", "a thread");
+});
+
+it("keeps the slice card inside the plot when its bar leaves no room beside it", async () => {
+  const { bar } = await renderSlices([sliceTurn("a", 5, 7)]);
+  const slice = bar(/^10\sAM–10:15\sAM:/);
+  // jsdom has no layout: the plot is 600px wide and this one bar fills it,
+  // as a single slice does in a window that began minutes ago.
+  const rect = (left: number, width: number) => ({ left, right: left + width, width, top: 0, bottom: 110, height: 110, x: left, y: 0 }) as DOMRect;
+  const original = HTMLElement.prototype.getBoundingClientRect;
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+    return this.classList.contains("usage-timeline__plot") || this === slice ? rect(100, 600) : original.call(this);
+  });
+  vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockImplementation(function (this: HTMLElement) {
+    return this.classList.contains("usage-slice-card") ? 280 : 0;
+  });
+  fireEvent.mouseEnter(slice);
+  // Flush against the plot's right edge, not 8px past it.
+  expect(cardOf(slice).style.left).toBe("320px");
+  expect(cardOf(slice).style.right).toBe("");
 });
 
 it("pins a slice on click, says so in the chart and the list, and walks slices by keyboard", async () => {

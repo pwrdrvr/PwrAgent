@@ -16,6 +16,13 @@ import {
 type Entry = { focus: OperatorFocusSnapshot; webContents: WebContents; receivedAt: number };
 
 const entries = new Map<number, Entry>();
+const observers = new Set<(entry: Entry) => void>();
+
+/** Observe selection acknowledgements without polling or persisting UI state. */
+export function observeOperatorFocus(observer: (entry: Entry) => void): () => void {
+  observers.add(observer);
+  return () => { observers.delete(observer); };
+}
 
 export function publishOperatorFocus(params: {
   focus: OperatorFocusSnapshot;
@@ -25,10 +32,22 @@ export function publishOperatorFocus(params: {
   if (params.webContents.isDestroyed()) return;
   const id = params.webContents.id;
   if (!entries.has(id)) params.webContents.once("destroyed", () => { entries.delete(id); });
-  entries.set(id, { focus: copyOperatorFocus(params.focus), webContents: params.webContents, receivedAt: params.now ?? Date.now() });
+  const entry = { focus: copyOperatorFocus(params.focus), webContents: params.webContents, receivedAt: params.now ?? Date.now() };
+  entries.set(id, entry);
+  for (const observer of observers) observer(entry);
 }
 
 export function readOperatorFocus(): { focus: OperatorFocusSnapshot; receivedAt: number } | undefined {
+  const latest = latestOperatorFocusEntry();
+  return latest ? { focus: latest.focus, receivedAt: latest.receivedAt } : undefined;
+}
+
+/** Use the same local window for a navigation command as for "this thread". */
+export function currentOperatorFocusWebContents(): WebContents | undefined {
+  return latestOperatorFocusEntry()?.webContents;
+}
+
+function latestOperatorFocusEntry(): Entry | undefined {
   let latest: Entry | undefined;
   for (const [id, entry] of entries) {
     if (entry.webContents.isDestroyed()) {
@@ -37,7 +56,7 @@ export function readOperatorFocus(): { focus: OperatorFocusSnapshot; receivedAt:
     }
     if (!latest || entry.receivedAt > latest.receivedAt) latest = entry;
   }
-  return latest ? { focus: latest.focus, receivedAt: latest.receivedAt } : undefined;
+  return latest;
 }
 
 /**

@@ -1,6 +1,6 @@
 import type { DesktopThreadArchivePolicy } from "../thread-archive-policy";
 import type { MessagingToolUpdateMode } from "./messaging";
-import type { AppServerBackendKind } from "./normalized-app-server";
+import type { AppServerBackendKind, ThreadExecutionMode } from "./normalized-app-server";
 import type { FederationTarget } from "./federation";
 import type { DesktopHelperModelSettings } from "../helper-models";
 import type { DesktopDecisionModelSettings } from "../decision-models";
@@ -575,6 +575,11 @@ export type PrAutoDispatchBudgetStatus = {
 export type DesktopProviderModelDefaults = {
   model?: string;
   reasoningEffortsByModel: Record<string, string>;
+  /**
+   * Access for new threads when a launchpad has none saved for this provider.
+   * Absent means the built-in default (`resolveDefaultLaunchpadExecutionMode`).
+   */
+  executionMode?: ThreadExecutionMode;
 };
 
 /**

@@ -1074,7 +1074,8 @@ test("directory launchpad keeps full access as the sticky default after user cha
 
     const settings = app.window.getByLabel("New thread settings");
     const accessMode = settings.getByLabel("Access mode");
-    await expect(accessMode).toHaveAttribute("data-value", "default");
+    // A Codex launchpad with no saved access starts on Auto.
+    await expect(accessMode).toHaveAttribute("data-value", "auto");
     await selectComposerOption({
       select: accessMode,
       window: app.window,

@@ -7826,6 +7826,35 @@ describe("useThreadNavigation", () => {
     expect(result.current.selectedLaunchpad).toMatchObject({ model: "custom-model", reasoningEffort: "high", prompt: "draft" });
   });
 
+  it("applies a changed provider access default to open drafts and keeps their models", async () => {
+    const defaults: NavigationLaunchpadDefaults = { backend: "claude", executionMode: "auto" };
+    const launchpad: NavigationLaunchpadDraft = {
+      ...defaults, directoryKey: "directory:/fixture", directoryKind: "directory", directoryLabel: "Fixture",
+      model: "opus", workMode: "local", prompt: "draft", createdAt: 1, updatedAt: 1,
+    };
+    const api: DesktopApi = {
+      readPopulation: vi.fn(async (): Promise<NavigationSnapshot> => ({
+        backend: "all", fetchedAt: 1, unchanged: false, threads: [], inboxThreadKeys: [],
+        directories: [{ key: launchpad.directoryKey, kind: "directory", label: "Fixture",
+          threadKeys: [], needsAttentionCount: 0, launchpad }], launchpadDefaults: defaults,
+      })),
+      ensureDirectoryLaunchpad: vi.fn(async () => ({ launchpad, defaults })),
+      onAgentEvent: () => () => undefined,
+    };
+    const { result, rerender } = renderHook((props) => useThreadNavigation(api, props), {
+      initialProps: { providerModelDefaults: {} as Record<string, DesktopProviderModelDefaults> },
+    });
+    await waitFor(() => expect(result.current.directories).toHaveLength(1));
+    await act(async () => { await result.current.openDirectoryLaunchpad(result.current.directories[0]!); });
+    expect(result.current.selectedLaunchpad).toMatchObject({ executionMode: "auto" });
+    rerender({ providerModelDefaults: {
+      claude: { reasoningEffortsByModel: {}, executionMode: "full-access" },
+    } });
+    await waitFor(() => expect(result.current.selectedLaunchpad).toMatchObject({
+      executionMode: "full-access", model: "opus", prompt: "draft",
+    }));
+  });
+
   it("keeps launchpad environment controls stable after prompt-only update responses", async () => {
     const defaults = {
       backend: "codex" as const,
@@ -14611,6 +14640,24 @@ describe("main selected detail authority", () => {
       );
     },
   );
+
+  it("opens an archived local thread absent from active rows without restoring it", async () => {
+    const snapshot = acpTitleSnapshot("Active row", "explicit", 1);
+    const archived = { ...snapshot.threads[0]!, id: "archived-search-result", archivedAt: 123, title: "Archived example" };
+    const restoreThread = vi.fn();
+    const api = {
+      readPopulation: vi.fn(async () => snapshot),
+      ...actionDetailApi(...snapshot.threads, archived),
+      restoreThread,
+    } as unknown as DesktopApi;
+    const hook = renderHook(() => useThreadNavigation(api));
+    await waitFor(() => expect(hook.result.current.loaded).toBe(true));
+    await act(() => hook.result.current.showThread({ backend: archived.source, threadId: archived.id }));
+    await waitFor(() => expect(hook.result.current.selectedThread?.id).toBe(archived.id));
+    expect(hook.result.current.selectedThread?.archivedAt).toBe(123);
+    expect(hook.result.current.threads.some((row) => row.id === archived.id)).toBe(false);
+    expect(restoreThread).not.toHaveBeenCalled();
+  });
 
   it("keeps an off-page peer selection and hydrates configuration independently of row refresh", async () => {
     const snapshot = acpTitleSnapshot("Loaded row", "explicit", 1);

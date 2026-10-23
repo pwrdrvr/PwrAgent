@@ -1,4 +1,4 @@
-import type { CSSProperties } from "react";
+import type { CSSProperties, Ref } from "react";
 import { usageMoney, type UsageBucket, type UsageBucketMember } from "./usage-activity-presentation";
 
 /** A thread, model, provider or instance as the chart names it, with what clicking its name does. */
@@ -17,7 +17,8 @@ const count = (value: number, noun: string) => `${value} ${noun}${value === 1 ? 
  * stack order, top to bottom. Hovered, Other is one counted row; pinned, it
  * lists its members and each name opens its thread or toggles its filter.
  */
-export function UsageSliceCard({ id, bucket, label, noun, pinned, hot, onHot, member, onUnpin, style }: {
+export function UsageSliceCard({ ref, id, bucket, label, noun, pinned, hot, onHot, member, onUnpin, style }: {
+  ref?: Ref<HTMLDivElement>;
   id: string;
   bucket: UsageBucket;
   label: string;
@@ -54,7 +55,7 @@ export function UsageSliceCard({ id, bucket, label, noun, pinned, hot, onHot, me
       <b>{usageMoney(item.cost)}</b>
     </li>;
   };
-  return <div id={id} className={`usage-slice-card${pinned ? " is-pinned" : ""}`} style={style}
+  return <div ref={ref} id={id} className={`usage-slice-card${pinned ? " is-pinned" : ""}`} style={style}
     role={pinned ? "group" : undefined} aria-label={pinned ? `${label} slice` : undefined}>
     <div className="usage-slice-card__head"><span>{label}</span><strong>{usageMoney(bucket.cost)}</strong></div>
     <p className="usage-slice-card__sub">{bucket.rows

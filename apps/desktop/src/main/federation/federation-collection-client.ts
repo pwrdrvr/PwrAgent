@@ -28,7 +28,7 @@ export async function readFederationPinnedSnapshot(
       const result: NavigationSnapshot = {
         backend: "all", fetchedAt: Date.now(), unchanged: false,
         threads: [], inboxThreadKeys: [], directories: [],
-        launchpadDefaults: { backend: "codex", executionMode: "default" },
+        launchpadDefaults: { backend: "codex", executionMode: "auto" },
       };
       const nextState: PinnedNavigationReadState = new Map();
       let bytes = 0;

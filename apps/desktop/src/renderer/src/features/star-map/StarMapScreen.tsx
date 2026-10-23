@@ -123,6 +123,7 @@ import {
 import {
   chatCardGroupRect,
   chatCardEdgeToward,
+  chatCardIsInView,
   dockContextRect,
   dockTerminalRect,
   resizeChatCardRect,
@@ -3027,14 +3028,59 @@ export function StarMapScreen(props: StarMapScreenProps) {
             bounds: canvasBoundsRef.current,
           }
         : undefined;
-      chatCards.open(
+      return chatCards.open(
         ownerInstanceId,
         thread,
         placement,
-        { persist: Boolean(remoteOwner || health?.instanceId) },
+        {
+          persist: Boolean(remoteOwner || health?.instanceId),
+          // A thread with no card in this lens (the Star Map manager, a
+          // filtered-out thread) has nothing to open beside, so it opens
+          // where the operator is looking.
+          inView: {
+            view: viewRef.current,
+            viewport: viewportSizeRef.current,
+            bounds: canvasBoundsRef.current,
+          },
+        },
       );
     },
     [bodies, chatCards, health?.instanceId, localInstanceId],
+  );
+
+  /**
+   * The Manager button's open. An already-open card only rises in place,
+   * and a new one opens beside the manager's own thread card when the lens
+   * draws it, so either can sit off-screen (an open card may also be
+   * restored from a previous session) and make the button look dead. Fly
+   * to wherever the card ended up.
+   */
+  const openManagerThread = useCallback(
+    (thread: NavigationThreadSummary) => {
+      const rect = openThread(thread);
+      if (chatCardIsInView(rect, viewRef.current, viewportSizeRef.current)) {
+        return;
+      }
+      // As `flyForAgent` does: a ⌘K pick still waiting for its card would
+      // otherwise land later and fly the map away again.
+      setPendingFlight(undefined);
+      operatorMovedViewRef.current = true;
+      flight.flyTo(
+        starMapViewFocusedOn({
+          rect: {
+            x: rect.left,
+            y: rect.top,
+            width: rect.width,
+            height: rect.height,
+          },
+          canvas: canvasBoundsRef.current,
+          viewport: viewportSizeRef.current,
+          scale: viewRef.current.scale,
+          topAnchored: topAnchoredView,
+        }),
+      );
+    },
+    [flight, openThread, topAnchoredView],
   );
 
   /**
@@ -3074,7 +3120,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
     // unset feeds itself, and the manager that read the empty prop would
     // never find the thread it just created.
     threads: localThreads,
-    openThread,
+    openThread: openManagerThread,
     onDemandThread: setManagerDemand,
     onRefreshLocalThreads: props.onRefreshLocalThreads,
     // Reported through the map's one error banner rather than a second one:

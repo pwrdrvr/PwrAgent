@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.3.0-prerelease.3 - 2026-10-22
+
+- Federated To-dos - Complete remote approvals, questionnaires, replies, and review actions through the owning machine. Synchronize question dismissals across viewers and preserve selected findings when a repair request fails.
+- MCP Diagnostics - Add visible "Test connection" controls with discovery progress and clearer failure details. Improve cancellation and recovery when discovery stalls.
+- Automation MCP Access - Select offered MCP Gateway connections directly in automation allowlists, including connections not already selected by the Agent.
+- Claude Naming - Use Claude's native session titles and respect manual renames. Claude and ACP queue labels no longer trigger implicit Codex helper calls.
+- Git and Navigation - Refresh Claude and ACP branch state for accurate PR discovery, and keep sidebar clicks from jumping to another occurrence of the same thread.
+- Grok Tools - Prevent stale status updates from disconnecting MCP access during an active turn.
+- Helper Safety - Keep lifecycle hooks and notification commands disabled for background Codex helpers, including fallback starts.
+
 ## v1.3.0-prerelease.2 - 2026-10-22
 
 - Claude - Add plan-limit meters and clearer reset countdowns, improve remembered usage limits and sign-in status, and refresh model catalogs with versioned labels.

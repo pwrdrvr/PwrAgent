@@ -2603,11 +2603,12 @@ describe("StarMapScreen", () => {
 });
 
 describe("StarMapScreen manager", () => {
-  it("opens a manager thread that is not on the map's loaded page", async () => {
-    // The map loads its own threads a filtered page at a time. A manager
-    // with ten newer threads ahead of it is not on that page, so the button
-    // has to ask for its row by identity; waiting for a page to bring it
-    // ends in "did not load" on every click.
+  /**
+   * A map whose loaded page holds ten newer threads and not the manager,
+   * so the manager has no card in the lens and its chat card has nothing
+   * to open beside.
+   */
+  async function renderManagerMap(): Promise<{ container: HTMLElement }> {
     const newer = Array.from(
       { length: 10 },
       (_, index) => unreadThread(`newer-${index}`),
@@ -2650,7 +2651,7 @@ describe("StarMapScreen manager", () => {
       })),
     } as unknown as DesktopApi;
 
-    render(
+    const { container } = render(
       <StarMapScreen
         desktopApi={desktopApi}
         sessionKeys={{}}
@@ -2659,13 +2660,110 @@ describe("StarMapScreen manager", () => {
       />,
     );
     await screen.findByRole("button", { name: "Open thread: Thread newer-0" });
+    return { container };
+  }
+
+  async function clickManager(): Promise<HTMLElement> {
     fireEvent.click(
       screen.getByRole("button", { name: "Ask the Star Map manager" }),
     );
+    return await screen.findByRole("region", { name: "Chat: Thread manager" });
+  }
 
-    expect(
-      await screen.findByRole("region", { name: "Chat: Thread manager" }),
-    ).toBeTruthy();
+  function readView(container: HTMLElement): {
+    x: number;
+    y: number;
+    scale: number;
+  } {
+    const transform =
+      container.querySelector<HTMLElement>(".star-map__canvas")?.style
+        .transform ?? "";
+    const match =
+      /translate\((-?[\d.]+)px, (-?[\d.]+)px\) scale\(([\d.]+)\)/.exec(
+        transform,
+      );
+    if (!match) throw new Error(`unreadable canvas transform: ${transform}`);
+    return {
+      x: Number(match[1]),
+      y: Number(match[2]),
+      scale: Number(match[3]),
+    };
+  }
+
+  /** Where the card's top-left paints, in window pixels. */
+  function cardScreenPoint(
+    container: HTMLElement,
+    card: HTMLElement,
+  ): { x: number; y: number } {
+    const view = readView(container);
+    return {
+      x: Number.parseFloat(card.style.left) * view.scale + view.x,
+      y: Number.parseFloat(card.style.top) * view.scale + view.y,
+    };
+  }
+
+  function panBy(container: HTMLElement, dx: number, dy: number): void {
+    fireEvent.pointerDown(
+      container.querySelector(".star-map__viewport")!,
+      { button: 0, clientX: 0, clientY: 0 },
+    );
+    fireEvent.pointerMove(window, { clientX: dx, clientY: dy });
+    fireEvent.pointerUp(window, { clientX: dx, clientY: dy });
+  }
+
+  it("opens a manager thread that is not on the map's loaded page", async () => {
+    // The map loads its own threads a filtered page at a time. A manager
+    // with ten newer threads ahead of it is not on that page, so the button
+    // has to ask for its row by identity; waiting for a page to bring it
+    // ends in "did not load" on every click.
+    await renderManagerMap();
+
+    expect(await clickManager()).toBeTruthy();
     expect(screen.queryByText(/did not load/i)).toBeNull();
+  });
+
+  it("opens the manager card where the operator is looking", async () => {
+    // The card lives in the canvas. It used to cascade from the canvas
+    // origin, so with the view panned anywhere else it opened out of sight
+    // and the button looked like it did nothing.
+    const { container } = await renderManagerMap();
+    const before = readView(container);
+    panBy(container, -900, -600);
+    const panned = readView(container);
+    // Guard against a vacuous pass: the pan has to have moved the view.
+    expect(panned.x !== before.x || panned.y !== before.y).toBe(true);
+
+    const card = await clickManager();
+    const point = cardScreenPoint(container, card);
+    expect(point.x).toBeGreaterThanOrEqual(0);
+    expect(point.x).toBeLessThan(1280);
+    expect(point.y).toBeGreaterThanOrEqual(0);
+    expect(point.y).toBeLessThan(800);
+  });
+
+  it("flies back to an open manager card the view has left", async () => {
+    const { container } = await renderManagerMap();
+    const card = await clickManager();
+    panBy(container, -900, -600);
+    const away = cardScreenPoint(container, card);
+    // Off screen now, or the click below proves nothing.
+    expect(
+      away.x + Number.parseFloat(card.style.width) * readView(container).scale
+        <= 0
+      || away.y
+        + Number.parseFloat(card.style.height) * readView(container).scale
+        <= 0,
+    ).toBe(true);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Ask the Star Map manager" }),
+    );
+    await waitFor(() => {
+      const point = cardScreenPoint(container, card);
+      expect(point.x).toBeGreaterThan(-Number.parseFloat(card.style.width));
+      expect(point.x).toBeLessThan(1280);
+      expect(point.y).toBeGreaterThan(-Number.parseFloat(card.style.height));
+      expect(point.y).toBeLessThan(800);
+    });
   });
 });

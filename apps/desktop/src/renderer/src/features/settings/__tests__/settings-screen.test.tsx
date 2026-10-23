@@ -3527,6 +3527,251 @@ describe("SettingsScreen", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("sets each provider's access for new threads, defaulting Codex and Claude to Auto", async () => {
+    const snapshot = createSnapshot();
+    snapshot.models.providerDefaults = {
+      codex: {
+        model: "gpt-5.6-sol",
+        reasoningEffortsByModel: { "gpt-5.6-sol": "high" },
+      },
+    };
+    const settings = createSettingsState(snapshot);
+    const capabilities = {
+      listThreads: true,
+      createThread: true,
+      resumeThread: true,
+      renameThread: true,
+      readThread: true,
+      startTurn: true,
+      interruptTurn: true,
+      steerTurn: true,
+      transcriptPagination: true,
+      toolUse: true,
+      approvalRequests: true,
+      multiDirectoryThreads: true,
+    };
+    const accessModes = [
+      { mode: "default" as const, label: "Default", available: true, isDefault: true },
+      { mode: "auto" as const, label: "Auto", available: true },
+      { mode: "full-access" as const, label: "Full Access", available: true },
+    ];
+    const desktopApi = {
+      listAcpAgents: vi.fn(async () => ({ fetchedAt: 1000, entries: [] })),
+      listBackends: vi.fn(async () => ({
+        fetchedAt: 1000,
+        backends: [
+          {
+            kind: "codex" as const,
+            label: "Codex",
+            available: true,
+            methods: [],
+            capabilities,
+            executionModes: accessModes,
+            launchpadOptions: {
+              models: [{
+                id: "gpt-5.6-sol",
+                label: "GPT-5.6-Sol",
+                reasoningEfforts: ["low", "high"],
+                supportsReasoning: true,
+              }],
+            },
+          },
+          {
+            kind: "claude" as const,
+            label: "Claude",
+            available: true,
+            methods: [],
+            capabilities,
+            executionModes: accessModes,
+            launchpadOptions: { models: [{ id: "opus", label: "Opus" }] },
+          },
+          {
+            kind: "acp:grok" as const,
+            label: "Grok",
+            available: true,
+            methods: [],
+            capabilities,
+            executionModes: [],
+            launchpadOptions: { models: [{ id: "grok-4", label: "Grok 4" }] },
+          },
+        ],
+      })),
+    } as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"];
+
+    const { rerender } = render(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        initialSection="models"
+        settings={settings}
+      />,
+    );
+
+    const codexAccess = await screen.findByRole("combobox", {
+      name: "Codex access for new threads",
+    });
+    const claudeAccess = screen.getByRole("combobox", {
+      name: "Claude access for new threads",
+    });
+    expect(codexAccess).toHaveAttribute("data-value", "auto");
+    expect(claudeAccess).toHaveAttribute("data-value", "auto");
+    expect(selectOptionLabels(codexAccess)).toEqual([
+      "Default Access",
+      "Auto",
+      "Full Access",
+    ]);
+    // Providers with their own runtime modes get no access default.
+    expect(
+      screen.queryByRole("combobox", { name: "Grok access for new threads" }),
+    ).not.toBeInTheDocument();
+
+    chooseSelectOption(codexAccess, "Default Access");
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenLastCalledWith({
+        models: {
+          providerDefaults: {
+            codex: {
+              model: "gpt-5.6-sol",
+              reasoningEffortsByModel: { "gpt-5.6-sol": "high" },
+              executionMode: "default",
+            },
+          },
+        },
+      });
+    });
+
+    // Full Access reaches every launchpad for the provider, so it asks first.
+    const writesBefore = vi.mocked(settings.writeConfig).mock.calls.length;
+    chooseSelectOption(claudeAccess, "Full Access");
+    expect(
+      await screen.findByText("Start new Claude threads with Full Access?"),
+    ).toBeInTheDocument();
+    expect(settings.writeConfig).toHaveBeenCalledTimes(writesBefore);
+    fireEvent.click(screen.getByRole("button", { name: "Use Full Access" }));
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenLastCalledWith({
+        models: {
+          providerDefaults: {
+            codex: {
+              model: "gpt-5.6-sol",
+              reasoningEffortsByModel: { "gpt-5.6-sol": "high" },
+            },
+            claude: {
+              reasoningEffortsByModel: {},
+              executionMode: "full-access",
+            },
+          },
+        },
+      });
+    });
+
+    // Clearing the model keeps the provider's access choice.
+    const next = createSnapshot();
+    next.models.providerDefaults = {
+      codex: {
+        model: "gpt-5.6-sol",
+        reasoningEffortsByModel: { "gpt-5.6-sol": "high" },
+        executionMode: "full-access",
+      },
+    };
+    rerender(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        initialSection="models"
+        settings={{ ...settings, snapshot: next }}
+      />,
+    );
+    expect(
+      screen.getByRole("combobox", { name: "Codex access for new threads" }),
+    ).toHaveAttribute("data-value", "full-access");
+    fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenLastCalledWith({
+        models: {
+          providerDefaults: {
+            codex: {
+              reasoningEffortsByModel: {},
+              executionMode: "full-access",
+            },
+          },
+        },
+      });
+    });
+  });
+
+  it("shows Default Access when Codex is too old for Auto and holds Full Access while saving", async () => {
+    const snapshot = createSnapshot();
+    const settings = createSettingsState(snapshot);
+    const capabilities = {
+      listThreads: true,
+      createThread: true,
+      resumeThread: true,
+      renameThread: true,
+      readThread: true,
+      startTurn: true,
+      interruptTurn: true,
+      steerTurn: true,
+      transcriptPagination: true,
+      toolUse: true,
+      approvalRequests: true,
+      multiDirectoryThreads: true,
+    };
+    const desktopApi = {
+      listAcpAgents: vi.fn(async () => ({ fetchedAt: 1000, entries: [] })),
+      listBackends: vi.fn(async () => ({
+        fetchedAt: 1000,
+        backends: [{
+          kind: "codex" as const,
+          label: "Codex",
+          available: true,
+          methods: [],
+          capabilities,
+          executionModes: [
+            { mode: "default" as const, label: "Default", available: true, isDefault: true },
+            {
+              mode: "auto" as const,
+              label: "Auto",
+              available: false,
+              unavailableReason: "Auto access requires Codex 0.153.0 or later.",
+            },
+            { mode: "full-access" as const, label: "Full Access", available: true },
+          ],
+          launchpadOptions: { models: [{ id: "gpt-5.6-sol", label: "GPT-5.6-Sol" }] },
+        }],
+      })),
+    } as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"];
+
+    const { rerender } = render(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        initialSection="models"
+        settings={settings}
+      />,
+    );
+
+    // New threads will start on Default Access, so the row says so.
+    const codexAccess = await screen.findByRole("combobox", {
+      name: "Codex access for new threads",
+    });
+    expect(codexAccess).toHaveAttribute("data-value", "default");
+    expect(
+      screen.getByText(
+        "Auto access requires Codex 0.153.0 or later. New threads start on Default Access.",
+      ),
+    ).toBeInTheDocument();
+
+    chooseSelectOption(codexAccess, "Full Access");
+    expect(await screen.findByRole("button", { name: "Use Full Access" })).toBeEnabled();
+    rerender(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        initialSection="models"
+        settings={{ ...settings, saving: true }}
+      />,
+    );
+    // A save in flight must not be answered by a second write.
+    expect(screen.getByRole("button", { name: "Updating…" })).toBeDisabled();
+  });
+
   it("saves defaults without a separate launchpad action and confirms thread and Fast actions", async () => {
     const snapshot = createSnapshot();
     snapshot.models.providerDefaults = {
@@ -3742,7 +3987,7 @@ describe("SettingsScreen", () => {
     ).not.toBeInTheDocument();
     expect(updateDirectoryLaunchpad).not.toHaveBeenCalled();
     expect(screen.getByText(
-      "Changing a model or reasoning updates all launchpads for that provider in this profile. Existing threads keep their settings.",
+      "Changing a model, reasoning, or access updates all launchpads for that provider in this profile. Existing threads keep their settings.",
     )).toBeInTheDocument();
     expect(
       screen.getByRole("combobox", { name: "Codex default model" }),
@@ -9568,6 +9813,52 @@ describe("SettingsScreen", () => {
     expect(
       document.querySelector(".settings-titlebar__current")?.textContent,
     ).toBe("AI Providers");
+  });
+
+  it("names the access default on a provider screen's defaults strip", async () => {
+    const snapshot = createSnapshot();
+    snapshot.models.providerDefaults = {
+      claude: { reasoningEffortsByModel: {}, executionMode: "full-access" },
+    };
+    const desktopApi = {
+      listAcpAgents: vi.fn(async () => ({ fetchedAt: 1000, entries: [] })),
+      listBackends: vi.fn(async () => ({
+        fetchedAt: 1000,
+        backends: [{
+          kind: "claude" as const,
+          label: "Claude",
+          available: true,
+          methods: [],
+          capabilities: {},
+          executionModes: [],
+          launchpadOptions: { models: [{ id: "opus", label: "Opus" }] },
+        }],
+      })),
+    } as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"];
+
+    const { rerender } = render(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        initialSection="models"
+        initialSubsection="claude"
+        settings={createSettingsState(snapshot)}
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(await screen.findByText("Full Access")).toBeInTheDocument();
+    expect(screen.queryByText(/Access access/)).not.toBeInTheDocument();
+
+    rerender(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        initialSection="models"
+        initialSubsection="claude"
+        settings={createSettingsState(createSnapshot())}
+        onClose={() => undefined}
+      />,
+    );
+    expect(await screen.findByText("Auto access")).toBeInTheDocument();
   });
 
   it("sorts Gemini CLI last and marks disabled providers off in the nav", async () => {

@@ -841,12 +841,44 @@ function seedNavigationLaunchpadProviderSettings<T extends NavigationLaunchpadDe
   return providerSettings;
 }
 
+/**
+ * Providers whose new threads start on Auto when nothing else says otherwise.
+ * Both run Auto inside the workspace sandbox; other providers advertise their
+ * own runtime modes and keep Default Access.
+ */
+const AUTO_ACCESS_DEFAULT_BACKENDS: ReadonlySet<AppServerBackendKind> = new Set([
+  "codex",
+  "claude",
+]);
+
+/** Whether Settings offers an access default for this provider. */
+export function supportsProviderExecutionModeDefault(
+  backend: AppServerBackendKind,
+): boolean {
+  return AUTO_ACCESS_DEFAULT_BACKENDS.has(backend);
+}
+
+/**
+ * Access for a new thread when its launchpad has none saved for the provider:
+ * the profile's provider default from Settings, else Auto for Codex and
+ * Claude, else Default Access.
+ */
+export function resolveDefaultLaunchpadExecutionMode(
+  backend: AppServerBackendKind,
+  providerDefaults?: Record<string, Pick<DesktopProviderModelDefaults, "executionMode">>,
+): ThreadExecutionMode {
+  if (!supportsProviderExecutionModeDefault(backend)) return "default";
+  return providerDefaults?.[backend]?.executionMode ?? "auto";
+}
+
 function clearNavigationLaunchpadProviderFields<T extends NavigationLaunchpadDefaults>(
   launchpad: T,
 ): T {
   return {
     ...launchpad,
-    executionMode: "default",
+    // Unset, not "default": the projection then resolves the new provider's
+    // own default instead of carrying this one's access across.
+    executionMode: undefined as unknown as ThreadExecutionMode,
     model: undefined,
     reasoningEffort: undefined,
     serviceTier: undefined,
@@ -869,7 +901,9 @@ export function projectNavigationLaunchpadProviderSettings<
   };
   return {
     ...launchpad,
-    executionMode: settings.executionMode ?? "default",
+    executionMode:
+      settings.executionMode
+      ?? resolveDefaultLaunchpadExecutionMode(launchpad.backend),
     model: settings.model,
     reasoningEffort: settings.reasoningEffort,
     serviceTier: settings.serviceTier,
@@ -956,6 +990,95 @@ export function applyNavigationLaunchpadProviderModelDefaults<T extends Navigati
     };
   }
   return projectNavigationLaunchpadProviderSettings({ ...seeded, providerSettings });
+}
+
+export function changedProviderExecutionModeDefaultBackends(
+  previous: Record<string, DesktopProviderModelDefaults>,
+  next: Record<string, DesktopProviderModelDefaults>,
+): AppServerBackendKind[] {
+  return [...new Set([
+    ...Object.keys(previous),
+    ...Object.keys(next),
+  ])].filter((backend) =>
+    supportsProviderExecutionModeDefault(backend as AppServerBackendKind)
+    && resolveDefaultLaunchpadExecutionMode(backend as AppServerBackendKind, previous)
+      !== resolveDefaultLaunchpadExecutionMode(backend as AppServerBackendKind, next)
+  ) as AppServerBackendKind[];
+}
+
+/**
+ * Replace only the access choice for each changed provider, as a model
+ * default change does; the launchpad's model, prompt, and other providers
+ * stay as they were.
+ */
+export function applyNavigationLaunchpadProviderExecutionModeDefaults<
+  T extends NavigationLaunchpadDefaults,
+>(
+  value: T,
+  defaults: Record<string, DesktopProviderModelDefaults>,
+  changedBackends: AppServerBackendKind[],
+  includeAll = false,
+): T {
+  const relevantBackends = changedBackends.filter((backend) =>
+    includeAll
+    || value.backend === backend
+    || value.providerSettings?.[backend] !== undefined
+  );
+  if (relevantBackends.length === 0) return value;
+  const seeded = applyNavigationLaunchpadProviderSettingsPatch(value, {});
+  const providerSettings = { ...seeded.providerSettings };
+  for (const backend of relevantBackends) {
+    providerSettings[backend] = {
+      ...providerSettings[backend],
+      executionMode: resolveDefaultLaunchpadExecutionMode(backend, defaults),
+    };
+  }
+  return projectNavigationLaunchpadProviderSettings({ ...seeded, providerSettings });
+}
+
+/**
+ * Before Auto became the default, an unset access projected to "default" and
+ * was then saved as if chosen. Forget those saved "default" values for the
+ * providers that now start on Auto, so they resolve to the new default.
+ * Returns the input unchanged when nothing applies.
+ */
+export function forgetLegacyDefaultLaunchpadExecutionModes<
+  T extends NavigationLaunchpadDefaults,
+>(value: T): T {
+  let changed = false;
+  let providerSettings = value.providerSettings;
+  for (const [backend, settings] of Object.entries(value.providerSettings ?? {})) {
+    if (
+      !supportsProviderExecutionModeDefault(backend as AppServerBackendKind)
+      || settings?.executionMode !== "default"
+    ) {
+      continue;
+    }
+    const { executionMode: _executionMode, ...rest } = settings;
+    providerSettings = { ...providerSettings };
+    if (Object.keys(rest).length > 0) {
+      providerSettings[backend as AppServerBackendKind] = rest;
+    } else {
+      delete providerSettings[backend as AppServerBackendKind];
+    }
+    changed = true;
+  }
+  const clearTopLevel =
+    supportsProviderExecutionModeDefault(value.backend)
+    && value.executionMode === "default";
+  if (!changed && !clearTopLevel) return value;
+  const next = {
+    ...value,
+    ...(clearTopLevel
+      ? { executionMode: undefined as unknown as ThreadExecutionMode }
+      : {}),
+  };
+  if (providerSettings && Object.keys(providerSettings).length > 0) {
+    next.providerSettings = providerSettings;
+  } else {
+    delete next.providerSettings;
+  }
+  return projectNavigationLaunchpadProviderSettings(next);
 }
 
 export type NavigationLaunchpadDraft = NavigationLaunchpadDefaults & {
@@ -2319,6 +2442,11 @@ export type AddRemoteThreadPinRequest = {
 
 export type AddRemoteThreadPinResponse = {
   pin: RemoteThreadPin;
+};
+
+/** Exact persisted viewer membership, independent of loaded navigation pages. */
+export type HasRemoteThreadPinRequest = {
+  ref: FederatedThreadRef;
 };
 
 export type RemoveRemoteThreadPinRequest = {

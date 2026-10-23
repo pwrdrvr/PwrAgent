@@ -4,6 +4,7 @@ import { AgentThreadRenameNotice } from "./features/notifications/AgentThreadRen
 import { CloudflareSignInNotice, CLOUDFLARE_SIGN_IN_NOTICE_ID } from "./features/notifications/CloudflareSignInNotice";
 import { CodexAuthProfileLoginDialog } from "./features/settings/CodexAuthProfileSelect";
 import { navigationIdentityFromThreadKey } from "./lib/navigation-query-state";
+import { ensureWindowThreadMounted } from "./lib/ensure-window-thread-mounted";
 import { classifyDirectory, operatorTodoItemKey } from "@pwragent/shared";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "./lib/navigation-loaded-rows";
 import {
@@ -221,6 +222,10 @@ import {
 import { buildGithubPrSamlEnforcementNotice } from "./features/notifications/github-pr-saml-notice";
 import { buildManagedGrokSignatureRejectedNotice } from "./features/notifications/managed-grok-signature-notice";
 import { buildBundledGitLfsNotice } from "./features/notifications/bundled-git-lfs-notice";
+import {
+  AUTO_ACCESS_UPGRADE_NOTICE_ID,
+  buildAutoAccessUpgradeNotice,
+} from "./features/notifications/auto-access-upgrade-notice";
 import { buildGithubPrAuthenticationNotice } from "./features/notifications/github-pr-authentication-notice";
 import {
   buildToolAccountingNotice,
@@ -919,6 +924,42 @@ function DesktopAppShell(props: {
   useEffect(() => {
     if (bundledGitLfsNotice) showAppNotice(bundledGitLfsNotice);
   }, [bundledGitLfsNotice, showAppNotice]);
+
+  // The upgrade that moved new Codex and Claude threads to Auto says so once.
+  // The state DB keeps it pending across restarts until the operator closes it.
+  // A window fronting a peer shows the peer's threads, not this profile's.
+  const [autoAccessUpgradePending, setAutoAccessUpgradePending] = useState(false);
+  useEffect(() => {
+    if (readRendererFederationTarget()) return;
+    let cancelled = false;
+    void desktopApi?.readLaunchpadAccessNoticePending?.()
+      .then((pending) => {
+        if (!cancelled && pending) setAutoAccessUpgradePending(true);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [desktopApi]);
+  const dismissAutoAccessUpgradeNotice = useCallback(() => {
+    dispatchAppNotice({ type: "dismiss", id: AUTO_ACCESS_UPGRADE_NOTICE_ID });
+    setAutoAccessUpgradePending(false);
+    void desktopApi?.dismissLaunchpadAccessNotice?.().catch(() => undefined);
+  }, [desktopApi]);
+  const autoAccessUpgradeNotice = useMemo(() => {
+    return autoAccessUpgradePending
+      ? buildAutoAccessUpgradeNotice({
+          onDismiss: dismissAutoAccessUpgradeNotice,
+          onReviewAccess: () => {
+            dismissAutoAccessUpgradeNotice();
+            openSettingsSection("models");
+          },
+        })
+      : undefined;
+  }, [autoAccessUpgradePending, dismissAutoAccessUpgradeNotice, openSettingsSection]);
+  useEffect(() => {
+    if (autoAccessUpgradeNotice) showAppNotice(autoAccessUpgradeNotice);
+  }, [autoAccessUpgradeNotice, showAppNotice]);
 
   const syncFederationShutdownNotice = useCallback((instanceId: string, notice: AppNoticeToastNotice | undefined): void => {
     if (notice) showAppNotice(notice);
@@ -1931,6 +1972,7 @@ function DesktopAppShell(props: {
     showAppNotice,
     dismissAppNotice,
   );
+  const [operatorFocusPublishRevision, setOperatorFocusPublishRevision] = useState(0);
   const operatorFocus = useMemo(
     () => operatorFocusFor({
       view: mainView,
@@ -1940,7 +1982,7 @@ function DesktopAppShell(props: {
     }),
     [mainView, navigation.browseMode, navigation.selectedThread, navigation.selectedLaunchpad],
   );
-  useOperatorFocusPublisher(directorVoiceApi, operatorFocus);
+  useOperatorFocusPublisher(directorVoiceApi, operatorFocus, operatorFocusPublishRevision);
   const directorVoiceControl = useMemo(
     () => directorVoiceApi ? <DirectorVoiceButton api={directorVoiceApi} /> : undefined,
     [directorVoiceApi],
@@ -2783,8 +2825,16 @@ function DesktopAppShell(props: {
     }
     return desktopApi.onShowThreadRequested((request) => {
       setMainView("thread", () => {
-        queueMessageLinkRequest(request);
-        void navigation.showThread(request);
+        void (async () => {
+          // Commands from agents and auxiliary windows can name a peer's
+          // thread before this main window has mounted it.
+          await ensureWindowThreadMounted(desktopApi, request, navigation.threads, Boolean(readRendererFederationTarget()));
+          queueMessageLinkRequest(request);
+          await navigation.showThread(request);
+          // A command selecting the current thread still needs a fresh UI
+          // acknowledgement; main must not accept a stale focus snapshot.
+          setOperatorFocusPublishRevision((revision) => revision + 1);
+        })().catch((error) => console.warn("Opening the requested thread failed.", error));
       });
     });
   }, [desktopApi, navigation, queueMessageLinkRequest, setMainView]);

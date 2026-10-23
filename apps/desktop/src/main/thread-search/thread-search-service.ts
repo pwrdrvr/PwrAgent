@@ -16,6 +16,7 @@ import {
   normalizeThreadSearchSemanticMode,
 } from "@pwragent/shared";
 import type { ThreadSearchStore } from "./thread-search-store";
+import { awaitThreadSearchRead } from "./thread-search-cancellation";
 import type {
   ThreadContentSearchResponse,
   ProviderTranscriptThreadSearchAdapter,
@@ -35,7 +36,11 @@ export class ThreadSearchService {
     private readonly contentAdapter?: ProviderTranscriptThreadSearchAdapter,
   ) {}
 
-  async search(request: ThreadSearchRequest = {}): Promise<ThreadSearchResponse> {
+  async search(
+    request: ThreadSearchRequest = {},
+    signal?: AbortSignal,
+  ): Promise<ThreadSearchResponse> {
+    signal?.throwIfAborted();
     const filters = normalizeFilters(request.filters);
     const backend = filters.backend ?? "all";
     const contentMode = normalizeThreadSearchContentMode(request.contentMode);
@@ -45,22 +50,21 @@ export class ThreadSearchService {
     const { query, projects } = parseThreadSearchQuery(rawQuery);
 
     const listBackend = backend === "all" ? undefined : backend;
-    const activeThreads = await this.listThreads({
+    const activeThreads = await awaitThreadSearchRead(() => this.listThreads({
       backend: listBackend,
       archived: false,
-    });
+    }), signal);
     const threads = filters.includeArchived
       ? dedupeThreads([
           ...activeThreads,
-          ...(await this.listThreads({
+          ...(await awaitThreadSearchRead(() => this.listThreads({
             backend: listBackend,
             archived: true,
-          })),
+          }), signal)),
         ])
       : activeThreads;
-    for (const thread of threads) {
-      this.store.upsertThread(thread);
-    }
+    signal?.throwIfAborted();
+    this.store.upsertThreads(threads);
     this.store.pruneMissingThreads({
       backend: listBackend,
       includeArchived: filters.includeArchived === true,
@@ -96,6 +100,7 @@ export class ThreadSearchService {
             }),
             limit,
             query,
+            signal,
           });
     const results = mergeSearchResults(metadataResults, contentResults.results).slice(
       0,
@@ -110,7 +115,10 @@ export class ThreadSearchService {
       contentMode,
       semanticMode,
       results,
-      searchedScopes: ["metadata", "projection"],
+      searchedScopes: [
+        "metadata", "projection",
+        ...(contentMode !== "metadata" && this.contentAdapter ? ["provider_content" as const] : []),
+      ],
       unavailableScopes: [
         ...buildUnavailableScopes({
           backend,

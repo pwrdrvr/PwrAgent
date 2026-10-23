@@ -156,6 +156,7 @@ import {
   type FederationJumpSearchRequest,
   type FederationJumpSearchResponse,
   type RemoveRemoteThreadPinRequest,
+  type HasRemoteThreadPinRequest,
   type RemoveRemoteThreadPinResponse,
   type SetRemoteThreadLocalPinRequest,
   type SetRemoteThreadLocalPinResponse,
@@ -298,6 +299,8 @@ import {
   GITHUB_PR_SAML_ENFORCEMENT_EVENT_CHANNEL,
   APP_SERVER_LIST_THREADS_CHANNEL,
   THREAD_SEARCH_CHANNEL,
+  THREAD_SEARCH_PROGRESS_CHANNEL,
+  THREAD_SEARCH_CANCEL_CHANNEL,
   APP_SERVER_ARCHIVE_THREAD_CHANNEL,
   APP_SERVER_ARCHIVE_WORKTREE_CHANNEL,
   APP_SERVER_HANDOFF_THREAD_WORKSPACE_CHANNEL,
@@ -331,6 +334,7 @@ import {
   NAVIGATION_ATTACH_DIRECTORY_TO_THREAD_CHANNEL,
   NAVIGATION_DETACH_DIRECTORY_FROM_THREAD_CHANNEL,
   NAVIGATION_REMOVE_REMOTE_THREAD_PIN_CHANNEL,
+  NAVIGATION_HAS_REMOTE_THREAD_PIN_CHANNEL,
   NAVIGATION_SET_REMOTE_THREAD_LOCAL_PIN_CHANNEL,
   NAVIGATION_DETACH_THREAD_PR_CHANNEL,
   NAVIGATION_PROBE_PR_POLLING_AFTER_RECONNECT_CHANNEL,
@@ -1381,6 +1385,8 @@ function pullRequestStatusFreshness(
   };
 }
 
+const threadSearchControllers = new Map<number, AbortController>();
+
 class DesktopAppServerService {
   private focusedDiffService: FocusedDiffService | null = null;
   private prFetcher: ForgePrFetcher | undefined;
@@ -1610,101 +1616,15 @@ class DesktopAppServerService {
 
   async searchThreads(
     request: ThreadSearchRequest = {},
+    onProgress?: (response: ThreadSearchResponse) => void,
+    signal?: AbortSignal,
   ): Promise<ThreadSearchResponse> {
-    const local = await this.getThreadSearchService().search(request);
-    const federated = await getDesktopFederationRuntime().searchConnectedPeers({
-      query: local.query,
-      limit: request.limit,
-      backend: request.filters?.backend,
-    });
-    const remoteResults = federated.results
-      .filter((result) => isRemoteFederationTarget(result.ref.target))
-      .map((result) => ({
-        backend: result.thread.source,
-        threadId: result.thread.id,
-        identityKey: federatedThreadIdentityKey(result.ref),
-        title: result.thread.title,
-        titleSource: result.thread.titleSource,
-        summary: result.thread.summary,
-        projectKey: result.thread.projectKey,
-        createdAt: result.thread.createdAt,
-        updatedAt: result.thread.updatedAt,
-        archivedAt: result.thread.archivedAt,
-        linkedDirectories: result.thread.linkedDirectories,
-        source: result.thread.source,
-        gitBranch: result.thread.gitBranch,
-        model: result.thread.model,
-        score: result.score,
-        confidence: result.thread.title.trim().toLowerCase() ===
-          local.query.trim().toLowerCase()
-          ? "high" as const
-          : "medium" as const,
-        matchReasons: [
-          {
-            kind: result.thread.title.trim().toLowerCase() ===
-              local.query.trim().toLowerCase()
-              ? "exact_title" as const
-              : "title_token_overlap" as const,
-            field: "title",
-            value: result.thread.title,
-          },
-        ],
-        snippets: [
-          {
-            scope: "metadata" as const,
-            field: "title",
-            text: result.thread.title,
-          },
-          ...(result.thread.summary
-            ? [{
-                scope: "metadata" as const,
-                field: "summary",
-                text: result.thread.summary,
-              }]
-            : []),
-        ],
-        federation: {
-          ref: result.ref,
-          instanceLabel: result.instanceLabel,
-          peerStatus: result.peerStatus,
-        },
-      }));
-    const limit = Math.max(1, Math.min(request.limit ?? 20, 100));
-    const confidenceRank = { high: 3, medium: 2, low: 1 };
-    const results = [...local.results, ...remoteResults]
-      .sort(
-        (left, right) =>
-          confidenceRank[right.confidence] - confidenceRank[left.confidence],
-      )
-      .slice(0, limit);
-    return {
-      ...local,
-      results,
-      unavailableScopes: [
-        ...local.unavailableScopes,
-        ...federated.failures.map((failure) => ({
-          scope: "metadata" as const,
-          reason: "error" as const,
-          message: `${failure.instanceLabel}: ${failure.error}`,
-        })),
-      ],
-      remoteInstances: [
-        ...(federated.searchedInstances ?? []).map((instance) => ({
-          instanceId: instance.instanceId,
-          instanceLabel: instance.instanceLabel,
-          resultCount: instance.resultCount,
-        })),
-        ...federated.failures.map((failure) => ({
-          instanceId: failure.instanceId,
-          instanceLabel: failure.instanceLabel,
-          resultCount: 0,
-          failed: true,
-          error: failure.error,
-        })),
-      ],
-      truncated: local.truncated ||
-        local.results.length + remoteResults.length > results.length,
-    };
+    return await getDesktopFederationRuntime().searchThreadContent(
+      request,
+      async (localRequest, localSignal) => await this.getThreadSearchService().search(localRequest, localSignal),
+      onProgress,
+      signal,
+    );
   }
 
   async listSkills(
@@ -6960,6 +6880,11 @@ class DesktopAppServerService {
     return { pinnedRanks };
   }
 
+  async hasRemoteThreadPin(request: HasRemoteThreadPinRequest): Promise<boolean> {
+    validateRemoteThreadPinRef(request.ref);
+    return await this.getOverlayStore().hasRemoteThreadPin({ ref: request.ref });
+  }
+
   async addRemoteThreadPin(
     request: AddRemoteThreadPinRequest,
   ): Promise<AddRemoteThreadPinResponse> {
@@ -8789,16 +8714,30 @@ export function registerAppServerIpcHandlers(): void {
       });
     }
   );
+  ipcMain.removeHandler(THREAD_SEARCH_CANCEL_CHANNEL);
+  ipcMain.handle(THREAD_SEARCH_CANCEL_CHANNEL, (event) => {
+    threadSearchControllers.get(event.sender.id)?.abort(new Error("Search cancelled."));
+  });
   ipcMain.removeHandler(THREAD_SEARCH_CHANNEL);
-  ipcMain.handle(
-    THREAD_SEARCH_CHANNEL,
-    async (
-      _event,
-      request?: ThreadSearchRequest,
-    ): Promise<ThreadSearchResponse> => {
-      return await appServerService.searchThreads(request);
-    },
-  );
+  ipcMain.handle(THREAD_SEARCH_CHANNEL, async (event, request: ThreadSearchRequest = {}, searchId?: number) => {
+    const sender = event.sender;
+    const senderId = sender.id;
+    threadSearchControllers.get(senderId)?.abort(new Error("Search replaced."));
+    const controller = new AbortController();
+    threadSearchControllers.set(senderId, controller);
+    const abort = (): void => controller.abort(new Error("Search window closed."));
+    sender.once("destroyed", abort);
+    try {
+      return await appServerService.searchThreads(request, (response) => {
+        if (!controller.signal.aborted && !sender.isDestroyed()) {
+          sender.send(THREAD_SEARCH_PROGRESS_CHANNEL, { searchId, response });
+        }
+      }, controller.signal);
+    } finally {
+      sender.removeListener("destroyed", abort);
+      if (threadSearchControllers.get(senderId) === controller) threadSearchControllers.delete(senderId);
+    }
+  });
   ipcMain.removeHandler(APP_SERVER_READ_THREAD_CHANNEL);
   ipcMain.handle(
     APP_SERVER_READ_THREAD_CHANNEL,
@@ -9191,6 +9130,12 @@ export function registerAppServerIpcHandlers(): void {
     },
   );
   ipcMain.removeHandler(NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_HAS_REMOTE_THREAD_PIN_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_HAS_REMOTE_THREAD_PIN_CHANNEL,
+    async (_event, request: HasRemoteThreadPinRequest): Promise<boolean> =>
+      await appServerService.hasRemoteThreadPin(request),
+  );
   ipcMain.handle(
     NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL,
     async (
@@ -9817,6 +9762,7 @@ export function registerAppServerIpcHandlers(): void {
 }
 
 export async function disposeAppServerIpcHandlers(): Promise<void> {
+  ipcMain.removeHandler(NAVIGATION_HAS_REMOTE_THREAD_PIN_CHANNEL);
   ipcMain.removeHandler(THREAD_DEPENDENCIES_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_ATTENTION_VIEW_RELEASE_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_MARK_DIRECTORY_SEEN_CHANNEL);
@@ -9848,6 +9794,9 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(APP_SERVER_HANDOFF_THREAD_WORKSPACE_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_RENAME_THREAD_CHANNEL);
   ipcMain.removeHandler(THREAD_SEARCH_CHANNEL);
+  ipcMain.removeHandler(THREAD_SEARCH_CANCEL_CHANNEL);
+  for (const controller of threadSearchControllers.values()) controller.abort(new Error("Search service stopped."));
+  threadSearchControllers.clear();
   ipcMain.removeHandler(FOCUSED_DIFF_ANALYZE_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SNAPSHOT_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_QUERY_PAGE_CHANNEL);

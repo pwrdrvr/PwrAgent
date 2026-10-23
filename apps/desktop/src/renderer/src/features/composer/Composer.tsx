@@ -142,7 +142,7 @@ import {
 import {
   acpRuntimeModeRequiresFullAccess,
   formatExecutionModeLabel,
-  describeCodexExecutionMode,
+  describeExecutionModeForBackend,
   getAcpRuntimeModeControl,
 } from "../../lib/execution-mode";
 import { isSameWorktreeSubthreadLaunchpad } from "../../lib/subthread-launchpads";
@@ -1063,35 +1063,54 @@ function getDefaultModelOption(backend?: BackendSummary): ModelOption | undefine
  * the thread's own settings; with one, every value resolves against the picked
  * provider's catalog so a model from the thread's provider can never leak into
  * another provider's review.
+ *
+ * A thread whose own provider cannot run reviews (Claude) has no settings to
+ * mirror. The row then defaults to the first provider that can, on that
+ * provider's own defaults, and `fallback` tells submit to send it.
  */
 function resolveReviewerSelection(params: {
   backends?: BackendSummary[];
   override?: ModelSettingsRecent;
+  reviewerBackends: BackendSummary[];
   threadBackend?: AppServerBackendKind;
   threadModel?: string;
   threadReasoningEffort?: string;
 }): {
   backend?: AppServerBackendKind;
+  fallback: boolean;
   model?: ModelOption;
   reasoningEffort?: string;
   summary?: BackendSummary;
 } {
-  const backendKind = params.override?.backend ?? params.threadBackend;
+  const threadSummary = params.backends?.find(
+    (candidate) => candidate.kind === params.threadBackend,
+  );
+  const fallbackSummary =
+    !params.override
+    && threadSummary
+    && threadSummary.capabilities.startReview !== true
+      ? params.reviewerBackends.find(
+          (candidate) => candidate.kind !== params.threadBackend,
+        )
+      : undefined;
+  const backendKind =
+    params.override?.backend ?? fallbackSummary?.kind ?? params.threadBackend;
   const summary = params.backends?.find(
     (candidate) => candidate.kind === backendKind,
   );
   const models = summary?.launchpadOptions?.models ?? [];
   const requestedModel = params.override
     ? params.override.model
-    : params.threadModel;
+    : fallbackSummary ? undefined : params.threadModel;
   const model =
     models.find((candidate) => candidate.id === requestedModel)
     ?? getDefaultModelOption(summary);
   const requestedReasoning = params.override
     ? params.override.reasoningEffort
-    : params.threadReasoningEffort;
+    : fallbackSummary ? undefined : params.threadReasoningEffort;
   return {
     backend: backendKind,
+    fallback: Boolean(fallbackSummary),
     model,
     reasoningEffort: getReasoningEffortValue(summary, model, requestedReasoning),
     summary,
@@ -6417,7 +6436,14 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     // closed by then, so reviewConfig is empty and would silently downgrade the
     // review to the thread's provider. Otherwise take the live panel state,
     // captured before it clears below.
-    const submittedReviewer = reviewCommand.reviewer ?? reviewConfig?.reviewer;
+    const pickedReviewer = reviewCommand.reviewer ?? reviewConfig?.reviewer;
+    // A thread whose provider cannot review sends the row's default reviewer;
+    // omitting it would ask the thread's own provider to review.
+    const submittedReviewer =
+      pickedReviewer
+      ?? (reviewerSelection.fallback && reviewerSelection.backend
+        ? { backend: reviewerSelection.backend }
+        : undefined);
     // A queued reviewer already carries resolved values; only the live panel
     // needs its chips resolved against the picked provider's catalog.
     const submittedModel = reviewCommand.reviewer
@@ -6463,7 +6489,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 : {}),
             }),
       });
-      if (submittedReviewer) {
+      if (pickedReviewer) {
         // Only an explicit pick is worth replaying; recording inherited
         // settings would push real picks off the list.
         void props.desktopApi?.recordModelSettingsRecent?.({
@@ -6475,7 +6501,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             : {}),
           scope: "review",
           recent: {
-            backend: submittedReviewer.backend,
+            backend: pickedReviewer.backend,
             ...(submittedModel ? { model: submittedModel } : {}),
             ...(submittedReasoningEffort
               ? { reasoningEffort: submittedReasoningEffort }
@@ -7708,9 +7734,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           cwd: reviewCommand.cwd,
           // Carry the picked reviewer through the queue so releasing it later
           // does not silently fall back to the thread's own provider.
-          ...(reviewConfig?.reviewer
+          ...((reviewConfig?.reviewer || reviewerSelection.fallback)
+            && reviewerSelection.backend
             ? {
-                reviewBackend: reviewConfig.reviewer.backend,
+                reviewBackend: reviewerSelection.backend,
                 model: reviewerSelection.model?.id,
                 reasoningEffort: reviewerSelection.reasoningEffort,
               }
@@ -10350,6 +10377,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const reviewerSelection = resolveReviewerSelection({
     backends: props.backends,
     override: reviewConfig?.reviewer,
+    reviewerBackends: reviewerOverridesSupported ? reviewerBackendOptions : [],
     threadBackend: props.thread?.source,
     threadModel: selectedModelOption?.id,
     threadReasoningEffort: supportsReasoning ? selectedReasoningEffort : undefined,
@@ -13314,7 +13342,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 value: mode.mode,
                 disabled: !mode.available,
                 tooltip: mode.unavailableReason
-                  ?? (backend?.kind === "codex" ? describeCodexExecutionMode(mode.mode) : undefined),
+                  ?? (backend?.kind === "codex" || backend?.kind === "claude"
+                    ? describeExecutionModeForBackend(backend.kind, mode.mode)
+                    : undefined),
               }))}
               onChange={(value) => {
                 const executionMode = value as ThreadExecutionMode;

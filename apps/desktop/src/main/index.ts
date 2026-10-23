@@ -22,6 +22,7 @@ import type {
   PwrAgentFederationContext,
 } from "@pwragent/shared";
 import { createStarMapAgentToolsHandler } from "./star-map/star-map-agent-tools-service";
+import { createOpenThreadInUi } from "./native-voice/open-thread-in-ui";
 import { createFederationAgentToolsHandler } from "./federation/federation-agent-tools-service";
 import { createFederatedThreadInspectionHandler } from "./federation/federated-thread-inspection-service";
 import { createFederatedThreadMutationHandler } from "./federation/federated-thread-mutation-service";
@@ -141,6 +142,10 @@ import {
 } from "./ipc/profiles";
 import { buildDockProfileMenuTemplate } from "./dock-menu";
 import { disposeRendererErrorIpcHandlers, registerRendererErrorIpcHandlers } from "./ipc/renderer-error";
+import {
+  disposeLaunchpadAccessNoticeIpcHandlers,
+  registerLaunchpadAccessNoticeIpcHandlers,
+} from "./ipc/launchpad-access-notice";
 import {
   disposeRuntimeIdentityIpcHandlers,
   registerRuntimeIdentityIpcHandlers,
@@ -664,6 +669,7 @@ function disposeMainProcessResourcesSync(options?: {
   disposeAppIconDragIpcHandlers();
   disposeDesktopConfigStore();
   disposeWindowPointerIpcHandlers();
+  disposeLaunchpadAccessNoticeIpcHandlers();
   if (isDevelopment) {
     disposeRuntimeIdentityIpcHandlers();
   }
@@ -1555,7 +1561,11 @@ export function bootstrapApp(): void {
     // Reads the view the Star Map renderer publishes, so an Agent turn can
     // resolve "that thread" and "its cloud" against what is on screen.
     getDesktopBackendRegistry().setPwrAgentStarMapHandler(
-      createStarMapAgentToolsHandler(),
+      createStarMapAgentToolsHandler({
+        openThread: createOpenThreadInUi({
+          localInstanceId: async () => (await getDesktopFederationRuntime().health()).instanceId,
+        }),
+      }),
     );
     // Injected rather than owned by the registry: the federation runtime
     // already imports the registry, so the reverse import would be a cycle.
@@ -1771,6 +1781,7 @@ export function bootstrapApp(): void {
       },
     );
     registerWindowPointerIpcHandlers();
+    registerLaunchpadAccessNoticeIpcHandlers();
     if (isDevelopment) {
       registerRuntimeIdentityIpcHandlers();
     }

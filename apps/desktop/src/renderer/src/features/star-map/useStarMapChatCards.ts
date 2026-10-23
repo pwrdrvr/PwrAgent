@@ -14,7 +14,9 @@ import {
 import type { DesktopApi } from "../../lib/desktop-api";
 import {
   cascadeChatCardRect,
+  cascadeChatCardRectInView,
   placeChatCardBesideAnchor,
+  type ChatCardMapView,
   type ChatCardRect,
 } from "./star-map-chat-card-geometry";
 
@@ -101,6 +103,20 @@ export function starMapChatCardReactKey(
     : card.key;
 }
 
+export type StarMapChatCardOpenOptions = {
+  persist?: boolean;
+  /**
+   * The current view, so a card with no `placement` opens where the
+   * operator is looking. Without it the cascade starts at the canvas
+   * origin.
+   */
+  inView?: {
+    view: ChatCardMapView;
+    viewport: { width: number; height: number };
+    bounds: { width: number; height: number };
+  };
+};
+
 export type StarMapChatCardsController = {
   cards: StarMapChatCardEntry[];
   hydrated: boolean;
@@ -115,8 +131,8 @@ export type StarMapChatCardsController = {
       bounds: { width: number; height: number };
       sourceRect: { x: number; y: number; width: number; height: number };
     },
-    options?: { persist?: boolean },
-  ) => void;
+    options?: StarMapChatCardOpenOptions,
+  ) => ChatCardRect;
   raise: (cardKey: string, persist?: boolean) => boolean;
   remapOwner: (placeholderInstanceId: string, durableInstanceId: string) => void;
   /** Pointer-frame update. Deliberately memory-only. */
@@ -536,8 +552,8 @@ export function useStarMapChatCards(params: {
         bounds: { width: number; height: number };
         sourceRect: { x: number; y: number; width: number; height: number };
       },
-      options?: { persist?: boolean },
-    ) => {
+      options?: StarMapChatCardOpenOptions,
+    ): ChatCardRect => {
       const persist = options?.persist ?? true;
       const threadKey = buildThreadIdentityKey(thread.source, thread.id);
       const key = starMapWorkspaceCardKey({
@@ -562,7 +578,7 @@ export function useStarMapChatCards(params: {
           },
           persist,
         );
-        return;
+        return existing.rect;
       }
       const rect = placement
         ? placeChatCardBesideAnchor({
@@ -570,10 +586,15 @@ export function useStarMapChatCards(params: {
             bounds: placement.bounds,
             occupied: current.cards.map((card) => card.rect),
           })
-        : cascadeChatCardRect({
-            openCardCount: current.cards.length,
-            viewport: viewportSize(),
-          });
+        : options?.inView
+          ? cascadeChatCardRectInView({
+              openCardCount: current.cards.length,
+              ...options.inView,
+            })
+          : cascadeChatCardRect({
+              openCardCount: current.cards.length,
+              viewport: viewportSize(),
+            });
       const anchor = placement?.anchor ?? {
         anchor: { kind: "canvas" } as const,
         point: { x: 0, y: 0 },
@@ -607,6 +628,7 @@ export function useStarMapChatCards(params: {
         },
         persist,
       );
+      return rect;
     },
     [applyState],
   );

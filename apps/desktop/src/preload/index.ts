@@ -262,6 +262,7 @@ import type {
   MarkThreadSeenRequest,
   MarkThreadSeenResponse,
   RemoveRemoteThreadPinRequest,
+  HasRemoteThreadPinRequest,
   RemoveRemoteThreadPinResponse,
   SetRemoteThreadLocalPinRequest,
   SetRemoteThreadLocalPinResponse,
@@ -752,6 +753,8 @@ import {
   MANAGED_RUNTIME_PROGRESS_READ_CHANNEL,
   APP_SERVER_LIST_THREADS_CHANNEL,
   THREAD_SEARCH_CHANNEL,
+  THREAD_SEARCH_PROGRESS_CHANNEL,
+  THREAD_SEARCH_CANCEL_CHANNEL,
   APP_SERVER_ARCHIVE_THREAD_CHANNEL,
   APP_SERVER_ARCHIVE_WORKTREE_CHANNEL,
   APP_SERVER_HANDOFF_THREAD_WORKSPACE_CHANNEL,
@@ -932,6 +935,7 @@ import {
   FEDERATION_JUMP_SEARCH_PROGRESS_CHANNEL,
   NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL,
   NAVIGATION_REMOVE_REMOTE_THREAD_PIN_CHANNEL,
+  NAVIGATION_HAS_REMOTE_THREAD_PIN_CHANNEL,
   NAVIGATION_SET_REMOTE_THREAD_LOCAL_PIN_CHANNEL,
   NAVIGATION_REORDER_DIRECTORY_PINS_CHANNEL,
   NAVIGATION_REORDER_THREAD_PINS_CHANNEL,
@@ -986,6 +990,8 @@ import {
   PROFILES_WRITE_SECRETS_CHANNEL,
   RENDERER_ERROR_REPORT_CHANNEL,
   RUNTIME_IDENTITY_CHANNEL,
+  LAUNCHPAD_ACCESS_NOTICE_DISMISS_CHANNEL,
+  LAUNCHPAD_ACCESS_NOTICE_READ_CHANNEL,
   SETTINGS_CHECK_CODEX_AUTH_PROFILE_STATUS_CHANNEL,
   SETTINGS_CLEAR_SECRET_CHANNEL,
   SETTINGS_CREATE_CODEX_AUTH_PROFILE_CHANNEL,
@@ -1150,6 +1156,7 @@ const subscribeToAgentEvent = createEventSubscriptionMultiplexer<AgentEvent>(
 );
 
 let federationJumpSearchRequestSequence = 0;
+let threadSearchRequestSequence = 0;
 
 const desktopApi = Object.freeze({
   manageThreadDependencies: async (request: import("@pwragent/shared").ManageThreadDependenciesRequest): Promise<import("@pwragent/shared").ManageThreadDependenciesResponse> =>
@@ -1612,6 +1619,11 @@ const desktopApi = Object.freeze({
   focusMainWindowFromStarMap: async (): Promise<void> => {
     await ipcRenderer.invoke(STAR_MAP_FOCUS_MAIN_WINDOW_CHANNEL);
   },
+  readLaunchpadAccessNoticePending: async (): Promise<boolean> =>
+    await ipcRenderer.invoke(LAUNCHPAD_ACCESS_NOTICE_READ_CHANNEL),
+  dismissLaunchpadAccessNotice: async (): Promise<void> => {
+    await ipcRenderer.invoke(LAUNCHPAD_ACCESS_NOTICE_DISMISS_CHANNEL);
+  },
   ...(isDevelopment
     ? {
         getRuntimeIdentity: async (): Promise<RuntimeIdentity> =>
@@ -1628,8 +1640,22 @@ const desktopApi = Object.freeze({
     ),
   searchThreads: async (
     request?: ThreadSearchRequest,
-  ): Promise<ThreadSearchResponse> =>
-    await ipcRenderer.invoke(THREAD_SEARCH_CHANNEL, request),
+    onProgress?: (response: ThreadSearchResponse) => void,
+  ): Promise<ThreadSearchResponse> => {
+    const searchId = ++threadSearchRequestSequence;
+    const listener = (_event: Electron.IpcRendererEvent, update: { searchId: number; response: ThreadSearchResponse }): void => {
+      if (update.searchId === searchId) onProgress?.(update.response);
+    };
+    ipcRenderer.on(THREAD_SEARCH_PROGRESS_CHANNEL, listener);
+    try {
+      return await ipcRenderer.invoke(THREAD_SEARCH_CHANNEL, request, searchId);
+    } finally {
+      ipcRenderer.removeListener(THREAD_SEARCH_PROGRESS_CHANNEL, listener);
+    }
+  },
+  cancelThreadSearch: async (): Promise<void> => {
+    await ipcRenderer.invoke(THREAD_SEARCH_CANCEL_CHANNEL);
+  },
   listSkills: async (
     request?: AppServerListSkillsRequest
   ): Promise<AppServerListSkillsResponse> =>
@@ -2518,6 +2544,8 @@ const desktopApi = Object.freeze({
     request: ReorderThreadPinsRequest,
   ): Promise<ReorderThreadPinsResponse> =>
     await ipcRenderer.invoke(NAVIGATION_REORDER_THREAD_PINS_CHANNEL, request),
+  hasRemoteThreadPin: async (request: HasRemoteThreadPinRequest): Promise<boolean> =>
+    await ipcRenderer.invoke(NAVIGATION_HAS_REMOTE_THREAD_PIN_CHANNEL, request),
   addRemoteThreadPin: async (
     request: AddRemoteThreadPinRequest,
   ): Promise<AddRemoteThreadPinResponse> =>

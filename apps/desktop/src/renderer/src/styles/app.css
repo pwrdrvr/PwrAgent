@@ -46367,6 +46367,7 @@ details.launchpad-pending__output > summary .launchpad-pending__command-label {
 .usage-timeline__reset.is-unscheduled { border-left-color: var(--status-warning); }
 .usage-timeline__reset span { position: absolute; top: -2px; left: 3px; color: var(--text-muted); font: 9px var(--font-mono); white-space: nowrap; }
 .usage-timeline__reset.is-unscheduled span { color: var(--status-warning-text); }
+.usage-timeline__reset.is-late span { right: 3px; left: auto; }
 .usage-timeline__axis { padding: 5px 44px 0 52px; color: var(--text-muted); font: 9px var(--font-mono); }
 .usage-timeline__ticks { position: relative; height: 12px; }
 .usage-timeline__ticks span { position: absolute; transform: translateX(-50%); white-space: nowrap; }

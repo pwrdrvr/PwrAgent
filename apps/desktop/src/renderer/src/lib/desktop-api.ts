@@ -237,6 +237,7 @@ import type {
   FederationJumpSearchProgress,
   FederationJumpSearchResponse,
   RemoveRemoteThreadPinRequest,
+  HasRemoteThreadPinRequest,
   RemoveRemoteThreadPinResponse,
   SetRemoteThreadLocalPinRequest,
   SetRemoteThreadLocalPinResponse,
@@ -669,6 +670,10 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
     callback: (state: PwrSuiteInstallerState) => void,
   ) => () => void;
   getRuntimeIdentity?: () => Promise<RuntimeIdentity>;
+  /** Whether the one-time "new threads start on Auto" upgrade notice is pending. */
+  readLaunchpadAccessNoticePending?: () => Promise<boolean>;
+  /** Closes the upgrade notice for good. */
+  dismissLaunchpadAccessNotice?: () => Promise<void>;
   readAppMetadata?: () => Promise<AppMetadata>;
   readLicenseDocument?: (
     kind: AppLicenseDocumentKind,
@@ -1365,7 +1370,9 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   ) => Promise<AppServerListThreadsResponse>;
   searchThreads?: (
     request?: ThreadSearchRequest,
+    onProgress?: (response: ThreadSearchResponse) => void,
   ) => Promise<ThreadSearchResponse>;
+  cancelThreadSearch?: () => Promise<void>;
   markThreadSeen?: (request: MarkThreadSeenRequest) => Promise<unknown>;
   setThreadReaction?: (
     request: SetThreadReactionRequest
@@ -1412,6 +1419,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
    * Stored only on this instance; removal works while the owner is
    * unreachable and never archives the owner's thread.
    */
+  hasRemoteThreadPin?: (request: HasRemoteThreadPinRequest) => Promise<boolean>;
   addRemoteThreadPin?: (
     request: AddRemoteThreadPinRequest
   ) => Promise<AddRemoteThreadPinResponse>;

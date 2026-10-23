@@ -165,6 +165,9 @@ export class ClaudeBackend {
         archiveThread: true, restoreThread: true, archiveWorktree: false,
         transcriptPagination: false, toolUse: true, approvalRequests: true,
         multiDirectoryThreads: false,
+        // Claude runs no reviews itself, but this owner accepts a run mode
+        // for a Claude thread whose review runs on another provider.
+        reviewRunMode: true,
       },
       executionModes: [
         { mode: "default", label: "Default", available: true, isDefault: true },

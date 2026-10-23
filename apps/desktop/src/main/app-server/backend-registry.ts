@@ -273,6 +273,7 @@ import {
   type ReloadCodexMcpConfigResponse,
   applyNavigationLaunchpadProviderSettingsPatch,
   projectNavigationLaunchpadProviderSettings,
+  resolveDefaultLaunchpadExecutionMode,
   type RestoreWorktreeRequest,
   type RestoreWorktreeResponse,
   type ResolveMissingCodexThreadsRequest,
@@ -483,6 +484,7 @@ import {
 import { codexVersionFromUserAgent, resolveCodexProtocolCompatibility } from "../codex-app-server/protocol-compatibility";
 import { subAgentActivityToolCall } from "../codex-app-server/subagent-activity";
 import { ProviderTranscriptThreadSearchAdapter } from "../thread-search/thread-search-provider-adapters";
+import { OwnerContentSearch } from "../thread-search/owner-content-search";
 import { ThreadSearchService } from "../thread-search/thread-search-service";
 import { ThreadSearchStore } from "../thread-search/thread-search-store";
 import {
@@ -9364,6 +9366,7 @@ export class DesktopBackendRegistry {
     | LocalPullRequestAuthorityResolver
     | undefined;
   private threadInspectionSearchService: ThreadSearchService | null | undefined;
+  private ownerThreadSearchService: ThreadSearchService | undefined;
   private readonly headlessAutomationTurns = new Map<
     string,
     {
@@ -17535,7 +17538,7 @@ export class DesktopBackendRegistry {
     this.assertNotBootstrap("startThread");
     const {
       backend,
-      executionMode = "default",
+      executionMode: requestedExecutionMode = "default",
       directoryKey,
       linkedDirectories,
       workMode,
@@ -17550,6 +17553,12 @@ export class DesktopBackendRegistry {
       mcpProviderServersEnabled,
       ...request
     } = params;
+    // A launchpad's access defaults to Auto for Codex and Claude. A Codex older
+    // than 0.153.0 cannot run Auto, so start on Default Access instead of
+    // sending a mode the runtime does not have.
+    const executionMode = requestedExecutionMode === "auto"
+      ? await this.downgradeUnavailableAutoExecutionMode(backend)
+      : requestedExecutionMode;
     // Handoffs and messaging create threads without a launchpad. Apply the
     // profile defaults here too, while preserving an explicit empty selection.
     const mcpConnectionIds = requestedMcpConnectionIds
@@ -20541,9 +20550,10 @@ export class DesktopBackendRegistry {
     const reviewerOverridden = Boolean(params.reviewBackend);
     const reviewBackend = params.reviewBackend ?? params.backend;
     const reviewBackendDiffers = reviewBackend !== params.backend;
-    if (reviewBackendDiffers) {
-      this.assertReviewBackendSupported(reviewBackend);
-    }
+    // Check the reviewer before anything reads its model catalog. A Claude
+    // thread reviewing itself otherwise failed the model check against the
+    // Codex catalog, which named the wrong problem.
+    this.assertReviewBackendSupported(reviewBackend);
     if (params.runMode !== undefined && ![
       "codex-sub-agent", "pwragent-sub-agent",
     ].includes(params.runMode)) {
@@ -20638,7 +20648,10 @@ export class DesktopBackendRegistry {
           // to the same host.
           codexEnvironmentRuntime = undefined;
         }
-      } else if (acpManagedMode) {
+      } else if (managedMode) {
+        // A managed reviewer runs in a new thread, so it needs the parent's
+        // directory. Without it a Codex review of a Claude thread ran in
+        // whatever directory Codex itself started in.
         cwd =
           params.cwd?.trim()
           || await this.resolveThreadEnvironmentCwd(
@@ -26537,7 +26550,7 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind,
     settings: ModelSettings,
   ): Promise<ModelSettings> {
-    if (isAcpBackendId(backend)) {
+    if (backend !== "codex") {
       return await this.resolveModelSettings(backend, settings, "review-start");
     }
 
@@ -27060,6 +27073,19 @@ export class DesktopBackendRegistry {
     }
   }
 
+  private async downgradeUnavailableAutoExecutionMode(
+    backendKind: AppServerBackendKind,
+  ): Promise<ThreadExecutionMode> {
+    const { backends } = await this.listBackends({ includeUnavailable: true });
+    const modes = backends.find((backend) => backend.kind === backendKind)?.executionModes ?? [];
+    const auto = modes.find((mode) => mode.mode === "auto");
+    const defaultAvailable = modes.some((mode) => mode.mode === "default" && mode.available);
+    // Only a runtime that works and lists Auto as unavailable is downgraded.
+    // A missing runtime fails the start on its own, and a provider without
+    // Auto keeps rejecting it.
+    return auto && !auto.available && defaultAvailable ? "default" : "auto";
+  }
+
   private async resolveLaunchpadBackend(
     preferred: AppServerBackendKind,
   ): Promise<BackendSummary> {
@@ -27174,21 +27200,34 @@ export class DesktopBackendRegistry {
     const backend = await this.resolveLaunchpadBackend(
       preferredBackend ?? projectedDefaults.backend,
     );
+    const providerModelDefaults = this.resolveProviderModelDefaultsFn();
+    // Access saved for this provider wins; otherwise the provider's default
+    // from Settings (Auto for Codex and Claude unless changed).
+    const storedExecutionMode =
+      projectedDefaults.providerSettings?.[backend.kind]?.executionMode
+      ?? (backend.kind === storedDefaults.backend
+        ? storedDefaults.executionMode
+        : undefined);
     const backendDefaults =
       backend.kind === projectedDefaults.backend
         ? projectedDefaults
         : projectNavigationLaunchpadProviderSettings({
             ...projectedDefaults,
             backend: backend.kind,
-            executionMode: "default",
+            executionMode: undefined as unknown as ThreadExecutionMode,
             model: undefined,
             reasoningEffort: undefined,
             serviceTier: undefined,
             fastMode: undefined,
             acpRuntime: undefined,
           });
-    const configuredDefaults =
-      this.resolveProviderModelDefaultsFn()[backend.kind];
+    if (storedExecutionMode === undefined) {
+      backendDefaults.executionMode = resolveDefaultLaunchpadExecutionMode(
+        backend.kind,
+        providerModelDefaults,
+      );
+    }
+    const configuredDefaults = providerModelDefaults[backend.kind];
     const configuredModel = configuredDefaults?.model;
     const configuredReasoningEffort = configuredModel
       ? configuredDefaults.reasoningEffortsByModel[configuredModel]
@@ -44297,6 +44336,34 @@ export class DesktopBackendRegistry {
         },
       };
     }
+  }
+
+  readonly ownerContentSearch = new OwnerContentSearch(async (request, signal) => {
+    if (!this.ownerThreadSearchService) {
+      this.ownerThreadSearchService = new ThreadSearchService(
+        new ThreadSearchStore(getAppStateDb()),
+        async (params) => await this.listThreadSearchCandidates(params),
+        new ProviderTranscriptThreadSearchAdapter(async (params) => await this.readThreadForContentSearch(params)),
+      );
+    }
+    return await this.ownerThreadSearchService.search(request, signal);
+  });
+
+  /** Search needs provider text, not selection-time directory, review, or usage hydration. */
+  private async readThreadForContentSearch(request: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    limit: number;
+  }): Promise<AppServerReadThreadResponse> {
+    this.assertNotBootstrap("readThreadForContentSearch");
+    const { backend, threadId, limit } = request;
+    const replay = backend === "claude"
+      ? await this.claudeBackend.readThread(threadId)
+      : isAcpBackendId(backend)
+        ? pageNormalizedReplay(await this.acpBackend.readReplay(backend, threadId), request)
+        : await this.withCodexThreadClient(threadId,
+          async (client) => await client.readThread({ threadId, limit }), undefined, false);
+    return { backend, threadId, fetchedAt: Date.now(), replay };
   }
 
   private getThreadInspectionSearchService(): ThreadSearchService | null {

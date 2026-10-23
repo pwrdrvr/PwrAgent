@@ -2,6 +2,7 @@ import type {
   FlyStarMapToToolArgs,
   HighlightStarMapThreadsToolArgs,
   OperatorFocusSnapshot,
+  OpenThreadToolArgs,
   PwrAgentStarMapRequest,
   PwrAgentStarMapResponse,
   ReadStarMapViewToolArgs,
@@ -33,6 +34,7 @@ export type StarMapAgentToolsDeps = {
   now?: () => number;
   sendCommand?: typeof sendStarMapCommand;
   readFocus?: () => { focus: OperatorFocusSnapshot; receivedAt: number } | undefined;
+  openThread?: (args: OpenThreadToolArgs) => Promise<PwrAgentStarMapResponse<"open_thread">>;
 };
 
 /**
@@ -53,6 +55,10 @@ export function createStarMapAgentToolsHandler(
     request: PwrAgentStarMapRequest,
   ): Promise<PwrAgentStarMapResponse> => {
     switch (request.operation) {
+      case "open_thread":
+        return deps.openThread
+          ? await deps.openThread(request.args)
+          : { ok: false, error: { code: "ui_not_available", message: "No graphical thread navigation handler is available." } };
       case "read_star_map_view":
         return readViewResponse(readView(), request.args, now());
       case "fly_star_map_to":
