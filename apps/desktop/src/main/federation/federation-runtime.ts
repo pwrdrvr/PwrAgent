@@ -28,6 +28,7 @@ import {
   FILE_PUSH_METHOD_CAPABILITIES,
   registerFilePushHandlers,
   pushFederationFile,
+  type PushFederationFileOptions,
 } from "./federation-file-push";
 import { summarizeThreadAgentChange } from "@pwragent/shared";
 import { FederationShutdown } from "./federation-shutdown";
@@ -2729,11 +2730,11 @@ export class DesktopFederationRuntime {
     });
   }
 
-  async pushFile(target: FederationRemoteTarget, sourcePath: string, name?: string) {
+  async pushFile(target: FederationRemoteTarget, sourcePath: string, name?: string, options?: PushFederationFileOptions) {
     const peer = this.visiblePeers().find((candidate) => candidate.id === target.instanceId);
     if (!peer?.capabilities.includes("file_push")) throw new Error("The target does not support file push.");
     if (peer.receiverPermissions?.filePush !== true) throw new Error("The target does not allow incoming files.");
-    return await pushFederationFile(this.rpcFor(target), sourcePath, name);
+    return await pushFederationFile(this.rpcFor(target), sourcePath, name, options);
   }
 
   async handoffInstanceThread(request: HandoffInstanceThreadRequest, sourceInstanceId?: string): Promise<HandoffInstanceThreadResult> {

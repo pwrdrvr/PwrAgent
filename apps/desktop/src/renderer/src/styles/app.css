@@ -40254,6 +40254,62 @@ button.composer__subthread-source-parent:hover {
   color: var(--text-primary);
 }
 
+/* A file on its way to a remote thread's owner: the file pill, with a
+   progress ring where the icon sits and the percent before the remove
+   control. A failed copy carries its tone on the label, not the pill. */
+.composer__file-upload-ring {
+  flex: none;
+  transform: rotate(-90deg);
+}
+
+.composer__file-upload-ring circle {
+  fill: none;
+  stroke-width: 2.5;
+}
+
+.composer__file-upload-ring-track {
+  stroke: var(--border-subtle);
+}
+
+.composer__file-upload-ring-fill {
+  stroke: var(--accent);
+  stroke-linecap: round;
+  transition: stroke-dasharray 150ms linear;
+}
+
+.composer__file-upload-percent {
+  min-width: 3ch;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.composer__file-upload--failed > svg,
+.composer__file-upload--failed .composer__file-attachment-label {
+  color: var(--danger-text);
+}
+
+.composer__file-upload-retry {
+  padding: 0 4px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.composer__file-upload-retry:hover {
+  background: var(--bg-panel-elevated);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .composer__file-upload-ring-fill {
+    transition: none;
+  }
+}
+
 .composer__action-button--busy {
   min-width: 54px;
 }

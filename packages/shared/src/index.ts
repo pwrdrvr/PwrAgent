@@ -28,6 +28,7 @@ export * from "./contracts/federation-cloudflare";
 export * from "./contracts/federation-short-names";
 export * from "./contracts/federation-tools";
 export * from "./contracts/thread-instance-handoff";
+export * from "./contracts/composer-file-push";
 export * from "./contracts/messaging";
 export * from "./contracts/messaging-tools";
 export * from "./contracts/mcp-connection-tools";
