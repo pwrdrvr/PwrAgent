@@ -1,4 +1,4 @@
-import { FORGE_PRODUCTS, forgeKindForRemoteHost, type ForgeKind } from "@pwragent/shared";
+import { FORGE_PRODUCTS, forgeKindForRemoteHost, isWindowsFilesystemPath, type ForgeKind } from "@pwragent/shared";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
@@ -43,7 +43,8 @@ export function parseGitHubRemote(remoteUrl: string): GitHubRepoRef | undefined 
 
 export function parseForgeRemote(remoteUrl: string): GitHubRepoRef | undefined {
   const url = remoteUrl.trim();
-  if (!url) {
+  // A drive-qualified local remote must not be mistaken for an SCP host.
+  if (!url || isWindowsFilesystemPath(url)) {
     return undefined;
   }
 
@@ -297,7 +298,7 @@ function uniqueNonEmptyLines(value: string): string[] {
 
 function readSshHost(remoteUrl: string): string | undefined {
   const url = remoteUrl.trim();
-  if (!url) {
+  if (!url || isWindowsFilesystemPath(url)) {
     return undefined;
   }
   if (!url.includes("://")) {
