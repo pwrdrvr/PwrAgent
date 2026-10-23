@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": false,
   "type": "module",
-  "description": "Coming soon: PwrAgent command-line tools.",
+  "description": "Experimental headless PwrAgent daemon and command-line client.",
   "author": "PwrDrvr LLC <harold@pwrdrvr.com>",
   "license": "MIT",
   "copyright": "Copyright (c) 2026 PwrDrvr LLC",
@@ -27,6 +27,8 @@
   },
   "files": [
     "bin",
+    "src",
+    "examples",
     "README.md",
     "LICENSE"
   ],
@@ -37,6 +39,7 @@
     "pwragent": "bin/pwragent.js"
   },
   "scripts": {
+    "test": "node --test test/*.test.js",
     "pack:check": "npm pack --dry-run"
   }
 }
