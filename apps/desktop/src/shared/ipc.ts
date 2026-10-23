@@ -713,6 +713,10 @@ export const WINDOW_REPLAY_ONBOARDING_CHANNEL = "window:replay-onboarding";
 export const WINDOW_COPY_LOCAL_DIAGNOSTICS_INFO_CHANNEL =
   "window:copy-local-diagnostics-info";
 export const RUNTIME_IDENTITY_CHANNEL = "runtime:get-identity";
+export const LAUNCHPAD_ACCESS_NOTICE_READ_CHANNEL =
+  "launchpad-access-notice:read";
+export const LAUNCHPAD_ACCESS_NOTICE_DISMISS_CHANNEL =
+  "launchpad-access-notice:dismiss";
 export const SETTINGS_READ_CHANNEL = "settings:read";
 export const TOKEN_MISER_READ_USAGE_CHANNEL = "token-miser:read-usage";
 export const SETTINGS_READ_BOOTSTRAP_CHANNEL = "settings:read-bootstrap";

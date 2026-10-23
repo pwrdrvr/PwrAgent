@@ -5,6 +5,8 @@ import {
   isValidatedDiscoveryCandidate,
   MANAGED_CODEX_BUILD_CHANNEL_DEFAULT,
   resolveDecisionModelSettings,
+  resolveDefaultLaunchpadExecutionMode,
+  supportsProviderExecutionModeDefault,
 } from "@pwragent/shared";
 import type {
   BackendModelOption,
@@ -18,8 +20,14 @@ import type {
   DesktopSettingsSecretName,
   DesktopSettingsSnapshot,
   DesktopUpdateChannel,
+  ThreadExecutionMode,
 } from "@pwragent/shared";
+import { Select, type SelectOption } from "../../components/Select";
 import type { DesktopApi } from "../../lib/desktop-api";
+import {
+  describeExecutionModeForBackend,
+  formatExecutionModeLabel,
+} from "../../lib/execution-mode";
 import { useNavigationSettingsPreview, isNavigationPreviewCancelled } from "../../lib/navigation-settings-preview";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
 import { useModalDialog } from "../../lib/useModalDialog";
@@ -913,6 +921,11 @@ function ProviderDefaultsStrip(props: {
   if (effort) {
     items.push(`${effort} effort`);
   }
+  if (backend && supportsProviderExecutionModeDefault(backend.kind)) {
+    const access = resolveDefaultLaunchpadExecutionMode(backend.kind, props.defaults);
+    // "Default Access" and "Full Access" already name themselves.
+    items.push(access === "auto" ? "Auto access" : formatExecutionModeLabel(access));
+  }
   if (props.codexFastAllowed !== undefined) {
     items.push(props.codexFastAllowed ? "Faster speeds allowed" : "Standard speed only");
   }
@@ -1195,7 +1208,7 @@ function ProviderModelDefaultsSettings(props: {
     <SettingsSection
       eyebrow="Defaults"
       title="New thread defaults"
-      description="Changing a model or reasoning updates all launchpads for that provider in this profile. Existing threads keep their settings."
+      description="Changing a model, reasoning, or access updates all launchpads for that provider in this profile. Existing threads keep their settings."
     >
       <div className="settings-fields">
         {providers.map((backend) => {
@@ -1570,7 +1583,7 @@ function ProviderModelDefaultField(props: {
               onChange={(event) => {
                 const model = event.currentTarget.value;
                 if (!model) {
-                  props.onChange(undefined);
+                  props.onChange(withoutModel(props.defaults));
                   return;
                 }
                 const option = models.find((candidate) => candidate.id === model);
@@ -1583,7 +1596,11 @@ function ProviderModelDefaultField(props: {
                 ) {
                   reasoningEffortsByModel[model] = option.defaultReasoningEffort;
                 }
-                props.onChange({ model, reasoningEffortsByModel });
+                props.onChange({
+                  ...props.defaults,
+                  model,
+                  reasoningEffortsByModel,
+                });
               }}
             >
               <option value="">Provider advertised default</option>
@@ -1613,6 +1630,7 @@ function ProviderModelDefaultField(props: {
                     delete reasoningEffortsByModel[selectedModel];
                   }
                   props.onChange({
+                    ...props.defaults,
                     model: selectedModel,
                     reasoningEffortsByModel,
                   });
@@ -1650,11 +1668,19 @@ function ProviderModelDefaultField(props: {
                 className="button button--ghost"
                 disabled={props.disabled}
                 type="button"
-                onClick={() => props.onChange(undefined)}
+                onClick={() => props.onChange(withoutModel(props.defaults))}
               >
                 Reset
               </button>
             </div>
+          ) : null}
+          {supportsProviderExecutionModeDefault(props.backend.kind) ? (
+            <ProviderAccessDefault
+              backend={props.backend}
+              defaults={props.defaults}
+              disabled={props.disabled}
+              onChange={props.onChange}
+            />
           ) : null}
           {props.fastMode ? (
             <div className="settings-provider-defaults__fast">
@@ -1721,6 +1747,118 @@ function ProviderModelDefaultField(props: {
         </div>
       }
     />
+  );
+}
+
+/** Clears the model choice; the provider's access default stays. */
+function withoutModel(
+  defaults: DesktopProviderModelDefaults | undefined,
+): DesktopProviderModelDefaults | undefined {
+  return defaults?.executionMode
+    ? { reasoningEffortsByModel: {}, executionMode: defaults.executionMode }
+    : undefined;
+}
+
+const ACCESS_DEFAULT_MODES: readonly ThreadExecutionMode[] = [
+  "default",
+  "auto",
+  "full-access",
+];
+
+/**
+ * Access for new threads on this provider. Auto is the built-in default, so
+ * choosing it stores nothing; Full Access asks first, since it reaches every
+ * launchpad that uses the provider.
+ */
+function ProviderAccessDefault(props: {
+  backend: BackendSummary;
+  defaults?: DesktopProviderModelDefaults;
+  disabled: boolean;
+  onChange: (defaults: DesktopProviderModelDefaults | undefined) => void;
+}) {
+  const [confirmingFullAccess, setConfirmingFullAccess] = useState(false);
+  const preferred = resolveDefaultLaunchpadExecutionMode(
+    props.backend.kind,
+    props.defaults ? { [props.backend.kind]: props.defaults } : undefined,
+  );
+  // A Codex too old for Auto starts threads on Default Access. Show that
+  // instead of an Auto that new threads will not get.
+  const unavailableAuto = preferred === "auto"
+    ? props.backend.executionModes.find(
+      (mode) => mode.mode === "auto" && !mode.available,
+    )
+    : undefined;
+  const selected: ThreadExecutionMode = unavailableAuto ? "default" : preferred;
+  const options: SelectOption<ThreadExecutionMode>[] = ACCESS_DEFAULT_MODES.map(
+    (mode) => {
+      const advertised = props.backend.executionModes.find(
+        (candidate) => candidate.mode === mode,
+      );
+      const unavailable = advertised ? !advertised.available : false;
+      return {
+        value: mode,
+        label: formatExecutionModeLabel(mode),
+        description: unavailable
+          ? advertised?.unavailableReason ?? "Unavailable"
+          : describeExecutionModeForBackend(props.backend.kind, mode),
+        disabled: unavailable && mode !== selected,
+      };
+    },
+  );
+  const save = (mode: ThreadExecutionMode): void => {
+    const { executionMode: _previous, ...rest } = props.defaults ?? {
+      reasoningEffortsByModel: {},
+    };
+    const next: DesktopProviderModelDefaults = mode === "auto"
+      ? rest
+      : { ...rest, executionMode: mode };
+    const empty = !next.model
+      && Object.keys(next.reasoningEffortsByModel).length === 0
+      && !next.executionMode;
+    props.onChange(empty ? undefined : next);
+  };
+  return (
+    <div className="settings-provider-defaults__fast">
+      <div className="settings-provider-defaults__fast-copy">
+        <strong>Access</strong>
+        <span>
+          {unavailableAuto
+            ? `${unavailableAuto.unavailableReason ?? "Auto is unavailable."} New threads start on Default Access.`
+            : describeExecutionModeForBackend(props.backend.kind, selected)}
+        </span>
+      </div>
+      {confirmingFullAccess ? (
+        <InlineActionConfirmation
+          applying={props.disabled}
+          confirmLabel="Use Full Access"
+          label={`Start new ${props.backend.label} threads with Full Access?`}
+          sub={`${props.backend.label} will run without permission prompts in every launchpad that uses it. Existing threads keep their access.`}
+          onCancel={() => setConfirmingFullAccess(false)}
+          onConfirm={() => {
+            setConfirmingFullAccess(false);
+            save("full-access");
+          }}
+        />
+      ) : (
+        <div className="settings-inline-actions">
+          <Select
+            aria-label={`${props.backend.label} access for new threads`}
+            className="settings-select settings-select--chip"
+            disabled={props.disabled}
+            value={selected}
+            options={options}
+            onChange={(mode) => {
+              if (mode === selected) return;
+              if (mode === "full-access") {
+                setConfirmingFullAccess(true);
+                return;
+              }
+              save(mode);
+            }}
+          />
+        </div>
+      )}
+    </div>
   );
 }
 

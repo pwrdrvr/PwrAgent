@@ -668,6 +668,10 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
     callback: (state: PwrSuiteInstallerState) => void,
   ) => () => void;
   getRuntimeIdentity?: () => Promise<RuntimeIdentity>;
+  /** Whether the one-time "new threads start on Auto" upgrade notice is pending. */
+  readLaunchpadAccessNoticePending?: () => Promise<boolean>;
+  /** Closes the upgrade notice for good. */
+  dismissLaunchpadAccessNotice?: () => Promise<void>;
   readAppMetadata?: () => Promise<AppMetadata>;
   readLicenseDocument?: (
     kind: AppLicenseDocumentKind,

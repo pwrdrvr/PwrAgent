@@ -984,6 +984,8 @@ import {
   PROFILES_WRITE_SECRETS_CHANNEL,
   RENDERER_ERROR_REPORT_CHANNEL,
   RUNTIME_IDENTITY_CHANNEL,
+  LAUNCHPAD_ACCESS_NOTICE_DISMISS_CHANNEL,
+  LAUNCHPAD_ACCESS_NOTICE_READ_CHANNEL,
   SETTINGS_CHECK_CODEX_AUTH_PROFILE_STATUS_CHANNEL,
   SETTINGS_CLEAR_SECRET_CHANNEL,
   SETTINGS_CREATE_CODEX_AUTH_PROFILE_CHANNEL,
@@ -1607,6 +1609,11 @@ const desktopApi = Object.freeze({
   },
   focusMainWindowFromStarMap: async (): Promise<void> => {
     await ipcRenderer.invoke(STAR_MAP_FOCUS_MAIN_WINDOW_CHANNEL);
+  },
+  readLaunchpadAccessNoticePending: async (): Promise<boolean> =>
+    await ipcRenderer.invoke(LAUNCHPAD_ACCESS_NOTICE_READ_CHANNEL),
+  dismissLaunchpadAccessNotice: async (): Promise<void> => {
+    await ipcRenderer.invoke(LAUNCHPAD_ACCESS_NOTICE_DISMISS_CHANNEL);
   },
   ...(isDevelopment
     ? {

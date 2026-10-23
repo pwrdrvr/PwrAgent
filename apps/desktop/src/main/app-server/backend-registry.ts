@@ -273,6 +273,7 @@ import {
   type ReloadCodexMcpConfigResponse,
   applyNavigationLaunchpadProviderSettingsPatch,
   projectNavigationLaunchpadProviderSettings,
+  resolveDefaultLaunchpadExecutionMode,
   type RestoreWorktreeRequest,
   type RestoreWorktreeResponse,
   type ResolveMissingCodexThreadsRequest,
@@ -17506,7 +17507,7 @@ export class DesktopBackendRegistry {
     this.assertNotBootstrap("startThread");
     const {
       backend,
-      executionMode = "default",
+      executionMode: requestedExecutionMode = "default",
       directoryKey,
       linkedDirectories,
       workMode,
@@ -17521,6 +17522,12 @@ export class DesktopBackendRegistry {
       mcpProviderServersEnabled,
       ...request
     } = params;
+    // A launchpad's access defaults to Auto for Codex and Claude. A Codex older
+    // than 0.153.0 cannot run Auto, so start on Default Access instead of
+    // sending a mode the runtime does not have.
+    const executionMode = requestedExecutionMode === "auto"
+      ? await this.downgradeUnavailableAutoExecutionMode(backend)
+      : requestedExecutionMode;
     // Handoffs and messaging create threads without a launchpad. Apply the
     // profile defaults here too, while preserving an explicit empty selection.
     const mcpConnectionIds = requestedMcpConnectionIds
@@ -27035,6 +27042,19 @@ export class DesktopBackendRegistry {
     }
   }
 
+  private async downgradeUnavailableAutoExecutionMode(
+    backendKind: AppServerBackendKind,
+  ): Promise<ThreadExecutionMode> {
+    const { backends } = await this.listBackends({ includeUnavailable: true });
+    const modes = backends.find((backend) => backend.kind === backendKind)?.executionModes ?? [];
+    const auto = modes.find((mode) => mode.mode === "auto");
+    const defaultAvailable = modes.some((mode) => mode.mode === "default" && mode.available);
+    // Only a runtime that works and lists Auto as unavailable is downgraded.
+    // A missing runtime fails the start on its own, and a provider without
+    // Auto keeps rejecting it.
+    return auto && !auto.available && defaultAvailable ? "default" : "auto";
+  }
+
   private async resolveLaunchpadBackend(
     preferred: AppServerBackendKind,
   ): Promise<BackendSummary> {
@@ -27149,21 +27169,34 @@ export class DesktopBackendRegistry {
     const backend = await this.resolveLaunchpadBackend(
       preferredBackend ?? projectedDefaults.backend,
     );
+    const providerModelDefaults = this.resolveProviderModelDefaultsFn();
+    // Access saved for this provider wins; otherwise the provider's default
+    // from Settings (Auto for Codex and Claude unless changed).
+    const storedExecutionMode =
+      projectedDefaults.providerSettings?.[backend.kind]?.executionMode
+      ?? (backend.kind === storedDefaults.backend
+        ? storedDefaults.executionMode
+        : undefined);
     const backendDefaults =
       backend.kind === projectedDefaults.backend
         ? projectedDefaults
         : projectNavigationLaunchpadProviderSettings({
             ...projectedDefaults,
             backend: backend.kind,
-            executionMode: "default",
+            executionMode: undefined as unknown as ThreadExecutionMode,
             model: undefined,
             reasoningEffort: undefined,
             serviceTier: undefined,
             fastMode: undefined,
             acpRuntime: undefined,
           });
-    const configuredDefaults =
-      this.resolveProviderModelDefaultsFn()[backend.kind];
+    if (storedExecutionMode === undefined) {
+      backendDefaults.executionMode = resolveDefaultLaunchpadExecutionMode(
+        backend.kind,
+        providerModelDefaults,
+      );
+    }
+    const configuredDefaults = providerModelDefaults[backend.kind];
     const configuredModel = configuredDefaults?.model;
     const configuredReasoningEffort = configuredModel
       ? configuredDefaults.reasoningEffortsByModel[configuredModel]

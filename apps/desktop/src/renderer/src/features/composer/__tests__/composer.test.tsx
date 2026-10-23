@@ -2646,6 +2646,33 @@ describe("Composer", () => {
       : "Auto requires Codex 0.153.0 or later.");
   });
 
+  it("describes Claude's access modes in Claude's own terms", () => {
+    render(
+      <Composer
+        backends={[{
+          ...backendSummary("claude"),
+          executionModes: [
+            { mode: "default", label: "Default Access", available: true, isDefault: true },
+            { mode: "auto", label: "Auto", available: true },
+          ],
+        }]}
+        disabled={false}
+        onSetExecutionMode={async () => undefined}
+        skills={[]}
+        thread={{
+          id: "thread-1", title: "Access", titleSource: "explicit",
+          source: "claude", executionMode: "default",
+          linkedDirectories: [], inbox: { inInbox: false },
+        }}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Access mode" }));
+    expect(screen.getByRole("option", { name: "Auto" })).toHaveAttribute(
+      "aria-description",
+      "Claude Code's auto mode decides routine permission requests.",
+    );
+  });
+
   it("flags the access-mode chip as danger when full access is selected", () => {
     render(
       <Composer

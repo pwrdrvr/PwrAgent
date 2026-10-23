@@ -142,7 +142,7 @@ import {
 import {
   acpRuntimeModeRequiresFullAccess,
   formatExecutionModeLabel,
-  describeCodexExecutionMode,
+  describeExecutionModeForBackend,
   getAcpRuntimeModeControl,
 } from "../../lib/execution-mode";
 import { isSameWorktreeSubthreadLaunchpad } from "../../lib/subthread-launchpads";
@@ -13342,7 +13342,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 value: mode.mode,
                 disabled: !mode.available,
                 tooltip: mode.unavailableReason
-                  ?? (backend?.kind === "codex" ? describeCodexExecutionMode(mode.mode) : undefined),
+                  ?? (backend?.kind === "codex" || backend?.kind === "claude"
+                    ? describeExecutionModeForBackend(backend.kind, mode.mode)
+                    : undefined),
               }))}
               onChange={(value) => {
                 const executionMode = value as ThreadExecutionMode;

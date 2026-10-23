@@ -1231,7 +1231,8 @@ describe("federation agent tools service", () => {
       const expected = {
         model: undefined,
         reasoningEffort: undefined,
-        executionMode: "default",
+        // Codex starts on Auto when nothing is saved for it.
+        executionMode: backend === "codex" ? "auto" : "default",
         serviceTier: undefined,
         fastMode: undefined,
         acpRuntime: undefined,

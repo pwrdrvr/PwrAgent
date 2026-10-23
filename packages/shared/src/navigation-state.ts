@@ -361,7 +361,7 @@ export function buildNavigationSnapshot(params: {
     }),
     launchpadDefaults: params.launchpadDefaults ?? {
       backend: "codex",
-      executionMode: "default",
+      executionMode: "auto",
     },
   };
 }
@@ -777,7 +777,7 @@ export function serializeNavigationSnapshotForHash(params: {
     })),
     launchpadDefaults: params.launchpadDefaults ?? {
       backend: "codex",
-      executionMode: "default",
+      executionMode: "auto",
     },
   });
 }

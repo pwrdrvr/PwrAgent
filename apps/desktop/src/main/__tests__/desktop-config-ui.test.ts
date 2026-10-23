@@ -48,6 +48,47 @@ describe("desktop config provider model defaults", () => {
     });
   });
 
+  it("round-trips a provider's access default, alone or beside a model", () => {
+    const written = applyTomlEdits("", desktopSettingsPatchToEdits({
+      models: {
+        providerDefaults: {
+          claude: { reasoningEffortsByModel: {}, executionMode: "full-access" },
+          codex: {
+            model: "gpt-5.6-sol",
+            reasoningEffortsByModel: {},
+            executionMode: "default",
+          },
+        },
+      },
+    }));
+
+    expect(written).toContain('execution_mode = "full-access"');
+    expect(parseDesktopSettingsToml(written, "test.toml").models).toEqual({
+      providerDefaults: {
+        claude: { reasoningEffortsByModel: {}, executionMode: "full-access" },
+        codex: {
+          model: "gpt-5.6-sol",
+          reasoningEffortsByModel: {},
+          executionMode: "default",
+        },
+      },
+    });
+  });
+
+  it("reads an unknown access value as unset", () => {
+    const parsed = parseDesktopSettingsToml([
+      "[[models.provider_defaults]]",
+      'provider = "claude"',
+      'execution_mode = "yolo"',
+      'model = "opus"',
+      "",
+    ].join("\n"), "test.toml");
+
+    expect(parsed.models?.providerDefaults).toEqual({
+      claude: { model: "opus", reasoningEffortsByModel: {} },
+    });
+  });
+
   it("keeps unavailable preferences and replaces the full defaults array", () => {
     const existing = applyTomlEdits(
       "",
