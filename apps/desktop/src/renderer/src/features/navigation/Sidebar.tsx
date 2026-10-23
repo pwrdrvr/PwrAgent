@@ -4450,13 +4450,14 @@ function RuntimeIdentityButton(props: {
   const tooltipText = props.copied
     ? "Copied"
     : `${props.value}\nClick to copy to clipboard`;
+  const copyName = `Copy ${
+    props.copyLabel ?? (props.valueKind === "cwd" ? "working directory" : "branch name")
+  }`;
 
   return (
     <>
       <button
-        aria-label={`Copy ${
-          props.copyLabel ?? (props.valueKind === "cwd" ? "working directory" : "branch name")
-        }`}
+        aria-label={copyName.includes(props.label) ? copyName : `${copyName}: ${props.label}`}
         className="runtime-identity__button path-copy-target"
         type="button"
         onBlur={tooltip.hide}

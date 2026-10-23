@@ -36,7 +36,7 @@ test("LiveWorkRail sticky edit header and file-toggle pin without a gap", async 
     ).toBeVisible();
 
     await app.window
-      .getByLabel("Reply")
+      .getByRole("textbox", { name: "Reply", exact: true })
       .fill("Drop in a long changelog entry to force rail-body scroll.");
     await app.window.getByRole("button", { name: "Send" }).click();
     await app.advance({ stepId: "status-active-1" });

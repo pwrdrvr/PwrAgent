@@ -301,7 +301,7 @@ test("keeps transient turn UI through metadata and premature idle notifications"
     ).toBeVisible();
 
     await app.window
-      .getByLabel("Reply")
+      .getByRole("textbox", { name: "Reply", exact: true })
       .fill(
         "Create /tmp/pwragent-turn-lifecycle.txt with exactly the text lifecycle second turn."
       );
@@ -433,7 +433,7 @@ test("renders the context window moon from token usage notifications", async () 
     ).toBeVisible();
 
     await app.window
-      .getByLabel("Reply")
+      .getByRole("textbox", { name: "Reply", exact: true })
       .fill(
         "Create /tmp/pwragent-turn-lifecycle.txt with exactly the text lifecycle second turn."
       );

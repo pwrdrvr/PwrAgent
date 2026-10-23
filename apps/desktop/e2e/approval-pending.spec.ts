@@ -31,7 +31,7 @@ async function openApprovalPendingReplay() {
   ).toBeVisible();
 
   await app.window
-    .getByLabel("Reply")
+    .getByRole("textbox", { name: "Reply", exact: true })
     .fill("Read /etc/hosts and tell me the first three lines.");
   await app.window.getByRole("button", { name: "Send" }).click();
 

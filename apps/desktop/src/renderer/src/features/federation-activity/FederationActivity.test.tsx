@@ -312,7 +312,7 @@ describe("Federation activity surfaces", () => {
       historyPeerId: "remote", historyView: "logical", includeHistory: undefined,
     }));
     // Endpoints has no aggregate, so the filter offers no All chip there.
-    expect(within(screen.getByRole("group", { name: "Peer" })).getAllByRole("button").map((chip) => chip.textContent))
+    expect(within(screen.getByRole("group", { name: "Peer" })).getAllByRole("button").map((chip) => chip.textContent?.trim()))
       .toEqual(["remote"]);
     expect(screen.getByRole("button", { name: "remote" })).toHaveAttribute("aria-pressed", "true");
     fireEvent.click(screen.getByRole("button", { name: "Always on top" }));
@@ -634,15 +634,15 @@ describe("Activity report controls", () => {
     render(<FederationActivityScreen desktopApi={{ readFederationActivity }} />);
     const filter = within(await screen.findByRole("group", { name: "Peer" }));
     // Only peers with a series get a chip: Build VM has none in this view.
-    expect(filter.getAllByRole("button").map((chip) => chip.textContent))
-      .toEqual(["All connections · 2", "Studio MacTS Funnel", "Other peers (attribution limit)"]);
+    expect(filter.getAllByRole("button").map((chip) => chip.textContent?.trim()))
+      .toEqual(["All connections · 2", "Studio Mac TS Funnel", "Other peers (attribution limit)"]);
     expect(filter.getByRole("button", { name: /^All connections/ })).toHaveAttribute("aria-pressed", "true");
-    fireEvent.click(filter.getByRole("button", { name: "Studio Mac" }));
+    fireEvent.click(filter.getByRole("button", { name: "Studio Mac TS Funnel" }));
     await waitFor(() => expect(readFederationActivity).toHaveBeenLastCalledWith({
       historyPeerId: "gateway", historyView: "physical", includeHistory: undefined,
     }));
-    expect(filter.getByRole("button", { name: "Studio Mac" })).toHaveAttribute("aria-pressed", "true");
-    fireEvent.focus(filter.getByRole("button", { name: "Studio Mac" }));
+    expect(filter.getByRole("button", { name: "Studio Mac TS Funnel" })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.focus(filter.getByRole("button", { name: "Studio Mac TS Funnel" }));
     expect(await screen.findByRole("tooltip")).toHaveTextContent("Through Tailscale Funnel");
   });
 

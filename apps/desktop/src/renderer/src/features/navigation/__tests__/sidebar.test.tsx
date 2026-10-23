@@ -8340,7 +8340,7 @@ describe("Sidebar", () => {
     expect(screen.getByText(".worktrees/pwragent-fix-t...ng-moioth2352")).toBeInTheDocument();
     expect(screen.getByText("codex/fix-thread-naming-ephemeral")).toBeInTheDocument();
 
-    const cwdButton = screen.getByRole("button", { name: "Copy working directory" });
+    const cwdButton = screen.getByRole("button", { name: /^Copy working directory: / });
     fireEvent.mouseEnter(cwdButton);
     expect((await screen.findByRole("tooltip")).textContent).toBe(
       "/Users/fixture-user/pwrdrvr/PwrAgent/.worktrees/pwragent-fix-thread-naming-moioth2352\nClick to copy to clipboard"
@@ -8350,7 +8350,7 @@ describe("Sidebar", () => {
 
     const branchButton = within(screen.getByLabelText("Runtime identity")).getByRole(
       "button",
-      { name: "Copy branch name" }
+      { name: /^Copy branch name: / }
     );
     fireEvent.mouseEnter(branchButton);
     expect((await screen.findByRole("tooltip")).textContent).toBe(
@@ -8401,7 +8401,7 @@ describe("Sidebar", () => {
     );
 
     expect(screen.getByText("HEAD")).toBeInTheDocument();
-    await clickElement(screen.getByRole("button", { name: "Copy commit SHA" }));
+    await clickElement(screen.getByRole("button", { name: /^Copy commit SHA: / }));
     expect(copyText).toHaveBeenCalledWith("ab12cd3344556677889900aabbccddeeff001122");
   });
 

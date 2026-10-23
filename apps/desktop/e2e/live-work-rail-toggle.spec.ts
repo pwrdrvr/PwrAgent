@@ -46,7 +46,7 @@ test("LiveWorkRail title and toggles work in a real CSS engine", async () => {
 
       // Kick the turn so turn/diff/updated lands.
       await app.window
-        .getByLabel("Reply")
+        .getByRole("textbox", { name: "Reply", exact: true })
         .fill("Make a small disposable edit to two files.");
       await app.window.getByRole("button", { name: "Send" }).click();
       await app.advance({ stepId: "status-active-1" });

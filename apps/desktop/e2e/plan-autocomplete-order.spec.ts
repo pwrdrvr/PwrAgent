@@ -22,7 +22,7 @@ test("keeps active work activity before later live commentary", async () => {
     const transcript = app.window.getByRole("region", { name: "Transcript" });
     await expect(transcript).toContainText("Ready to continue plan autocomplete coverage.");
 
-    await app.window.getByLabel("Reply").fill("Keep going.");
+    await app.window.getByRole("textbox", { name: "Reply", exact: true }).fill("Keep going.");
     await app.window.getByRole("button", { name: "Send" }).click();
 
     await app.advance({ stepId: "status-active-1" });

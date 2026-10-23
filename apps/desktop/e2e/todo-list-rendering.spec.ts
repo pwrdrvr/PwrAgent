@@ -64,7 +64,7 @@ test("renders live plan updates from turn/plan/updated notifications", async () 
 
   try {
     await app.window
-      .getByLabel("Reply")
+      .getByRole("textbox", { name: "Reply", exact: true })
       .fill("Create a three-step task list before you inspect the renderer.");
     await app.window.getByRole("button", { name: "Send" }).click();
     await expect(app.window.getByTestId("composer-stop-turn")).toBeVisible();

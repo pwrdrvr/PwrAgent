@@ -602,7 +602,7 @@ function KeybindingRow(props: {
               </button>
             ) : null}
             <button
-              aria-label={`Change ${action.label}`}
+              aria-label={`${props.chords.length === 0 ? "Set" : "Change"} ${action.label}`}
               className="button button--secondary"
               type="button"
               onClick={props.onChange}

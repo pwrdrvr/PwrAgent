@@ -1001,7 +1001,9 @@ test.describe("federation remote window", () => {
         name: "Remote gateway thread one",
       });
       const remoteCardOne = remote.locator(".thread-row", {
-        has: remoteRowOne,
+        // `has` resolves inside each row; the browser-region locator above
+        // cannot resolve there because that region is the row's ancestor.
+        has: remote.getByRole("button", { name: "Remote gateway thread one", exact: true }),
       });
       await remoteRowOne.click();
       await expect(

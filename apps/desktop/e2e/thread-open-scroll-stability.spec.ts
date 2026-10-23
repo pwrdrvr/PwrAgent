@@ -297,7 +297,7 @@ test("keeps a bottom-pinned long transcript glued when a reply image preview res
     await expect(jumpToLatest).toHaveCount(0);
 
     await app.window
-      .getByLabel("Reply")
+      .getByRole("textbox", { name: "Reply", exact: true })
       .fill("Here is the screenshot that explains it.");
     await app.window.evaluate(async () => {
       const textarea = document.querySelector<HTMLTextAreaElement>("#thread-composer");

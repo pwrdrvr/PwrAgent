@@ -1371,7 +1371,7 @@ test("desktop-live-work-rail — in-flight turn with diff + plan in the rail", a
 
     // Kick the turn so the rail populates with diff + plan content.
     await app.window
-      .getByLabel("Reply")
+      .getByRole("textbox", { name: "Reply", exact: true })
       .fill("Make a small disposable edit to two files.");
     await app.window.getByRole("button", { name: "Send" }).click();
 
