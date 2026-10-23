@@ -69,7 +69,7 @@ describe("native voice ownership", () => {
     const f = fixture();
     await f.manager.start(1, f.request, f.emit);
     await expect(f.manager.cameraCue(1, { ...f.request, cue: "enthusiastic" })).rejects.toThrow("Enable the camera");
-    f.manager.setCamera(1, f.request.sessionId, true);
+    await f.manager.setCamera(1, f.request.sessionId, true);
     expect(f.manager.allowsCamera(1)).toBe(true);
     expect(f.manager.allowsCamera(2)).toBe(false);
     await expect(f.manager.cameraCue(2, { ...f.request, cue: "enthusiastic" })).rejects.toThrow("Enable the camera");
@@ -83,10 +83,76 @@ describe("native voice ownership", () => {
     await expect(f.manager.cameraCue(1, { ...f.request, cue: "away" })).rejects.toThrow("Enable the camera");
   });
 
+  it("submits camera status even before a confident frame and invalidates observations on opt-out", async () => {
+    const f = fixture();
+    await f.manager.start(1, { ...f.request, mode: "director" }, f.emit);
+    await expect(f.manager.setCamera(2, f.request.sessionId, true)).rejects.toThrow("No voice session");
+    await expect(f.manager.setCamera(1, "old-session", true)).rejects.toThrow("No voice session");
+    expect(f.backend.text).not.toHaveBeenCalled();
+    await f.manager.setCamera(1, f.request.sessionId, true);
+    expect(f.backend.text).toHaveBeenLastCalledWith(f.request.threadId, expect.stringContaining("no confident observation has been submitted"), "developer");
+    await f.manager.setCamera(1, f.request.sessionId, true);
+    expect(f.backend.text).toHaveBeenCalledTimes(1);
+    await f.manager.cameraCue(1, { ...f.request, cue: "head_nod" });
+    expect(f.backend.text).toHaveBeenLastCalledWith(f.request.threadId, expect.stringContaining("operator nodded yes"), "developer");
+    await f.manager.setCamera(1, f.request.sessionId, false);
+    expect(f.backend.text).toHaveBeenLastCalledWith(f.request.threadId, expect.stringContaining("Previous observations are historical"), "developer");
+    expect(f.manager.allowsCamera(1)).toBe(false);
+    expect(f.manager.allowsMicrophone(1)).toBe(true);
+    await f.manager.stopOwner(1);
+    await f.manager.start(1, { ...f.request, sessionId: "next-session" }, f.emit);
+    expect(f.manager.allowsCamera(1)).toBe(false);
+    await f.manager.stopOwner(1);
+  });
+
+  it("fails camera enable without stopping voice when status context is refused", async () => {
+    const f = fixture();
+    await f.manager.start(1, f.request, f.emit);
+    vi.mocked(f.backend.text).mockRejectedValueOnce(new Error("Status refused"));
+    await expect(f.manager.setCamera(1, f.request.sessionId, true)).rejects.toThrow("Status refused");
+    expect(f.manager.allowsCamera(1)).toBe(false);
+    expect(f.manager.allowsMicrophone(1)).toBe(true);
+    await f.manager.stopOwner(1);
+  });
+
+  it("revokes capture before a disabled-status response, including when submission fails", async () => {
+    const f = fixture();
+    await f.manager.start(1, f.request, f.emit);
+    await f.manager.setCamera(1, f.request.sessionId, true);
+    const pending = deferred<void>();
+    vi.mocked(f.backend.text).mockReturnValueOnce(pending.promise);
+    const disabled = f.manager.setCamera(1, f.request.sessionId, false);
+    expect(f.manager.allowsCamera(1)).toBe(false);
+    await expect(f.manager.cameraCue(1, { ...f.request, cue: "stop" })).rejects.toThrow("Enable the camera");
+    pending.resolve();
+    await disabled;
+    await f.manager.setCamera(1, f.request.sessionId, true);
+    vi.mocked(f.backend.text).mockRejectedValueOnce(new Error("Status refused"));
+    await expect(f.manager.setCamera(1, f.request.sessionId, false)).rejects.toThrow("Status refused");
+    expect(f.manager.allowsCamera(1)).toBe(false);
+    expect(f.manager.allowsMicrophone(1)).toBe(true);
+    await f.manager.stopOwner(1);
+  });
+
+  it("does not let an earlier enable failure revoke a later enable", async () => {
+    const f = fixture();
+    await f.manager.start(1, f.request, f.emit);
+    let reject!: (error: Error) => void;
+    vi.mocked(f.backend.text).mockReturnValueOnce(new Promise<void>((_, no) => { reject = no; }));
+    const enabled = f.manager.setCamera(1, f.request.sessionId, true);
+    const refused = expect(enabled).rejects.toThrow("Earlier failure");
+    await f.manager.setCamera(1, f.request.sessionId, false);
+    await f.manager.setCamera(1, f.request.sessionId, true);
+    reject(new Error("Earlier failure"));
+    await refused;
+    expect(f.manager.allowsCamera(1)).toBe(true);
+    await f.manager.stopOwner(1);
+  });
+
   it("awaits camera appendText acknowledgment on the owning thread and propagates rejection", async () => {
     const f = fixture();
     await f.manager.start(1, f.request, f.emit);
-    f.manager.setCamera(1, f.request.sessionId, true);
+    await f.manager.setCamera(1, f.request.sessionId, true);
     const pending = deferred<void>();
     vi.mocked(f.backend.text).mockImplementationOnce(() => pending.promise);
     let acknowledged = false;
