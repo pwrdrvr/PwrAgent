@@ -98,6 +98,9 @@ describe("PwrAgent task monitor agent tools", () => {
       "Omit preferredModel and preferredReasoningEffort",
     );
     expect(createMonitorTool?.description).toContain(
+      "Never pass the parent's own model or effort",
+    );
+    expect(createMonitorTool?.description).toContain(
       "Do not use this for an attached PR",
     );
     expect(createMonitorTool?.description).toContain(
@@ -116,12 +119,12 @@ describe("PwrAgent task monitor agent tools", () => {
         },
         preferredModel: {
           description: expect.stringContaining(
-            "Omit it to use the monitor default",
+            "Only a lightweight model, such as a Luna or mini model, is accepted",
           ),
         },
         preferredReasoningEffort: {
           description: expect.stringContaining(
-            "Omit it to use the monitor default",
+            "Only medium or lower is accepted",
           ),
         },
       },
