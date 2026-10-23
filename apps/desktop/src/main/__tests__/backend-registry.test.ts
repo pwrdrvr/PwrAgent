@@ -59280,6 +59280,10 @@ script = "printf setup"
                     { file: "src/a.ts", line: 4, summary: "Drops the error.", failure_scenario: "A failed write reports success." },
                   ] } }],
               } } as ClaudeMessage;
+              // The card waits for the CLI to accept the call.
+              yield { type: "user", message: { content: [{
+                type: "tool_result", tool_use_id: "toolu_review", content: "1 finding reported.",
+              }] } } as ClaudeMessage;
               yield { type: "result", subtype: "success", is_error: false, result: "" } as ClaudeMessage;
             }
             return Object.assign(messages(), { close: vi.fn(), setPermissionMode: vi.fn() }) as unknown as ClaudeQuery;

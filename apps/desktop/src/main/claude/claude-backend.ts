@@ -73,6 +73,8 @@ type RunningTurn = {
   pendingSteers: Set<string>;
   /** The SDK emits one assistant message per content block, sharing an id. */
   completedMessageText: Map<string, string>;
+  /** ReportFindings calls the CLI has not yet accepted, by tool-use id. */
+  pendingReports: Map<string, { report: ClaudeFindingsReport; model?: string; input: unknown }>;
   inputWrites: Promise<void>;
   ending?: boolean;
   /** One background context probe at a time; a request while it runs reruns it once. */
@@ -283,7 +285,7 @@ export class ClaudeBackend {
     if (this.running.has(params.threadId)) throw new Error("A Claude turn is already active for this thread.");
     const running: RunningTurn = {
       turnId: randomUUID(), controller: new AbortController(), entries: new Map(),
-      input: new ClaudeInputStream(), pendingSteers: new Set(), completedMessageText: new Map(),
+      input: new ClaudeInputStream(), pendingSteers: new Set(), completedMessageText: new Map(), pendingReports: new Map(),
       inputWrites: Promise.resolve(),
     };
     this.running.set(params.threadId, running);
@@ -804,7 +806,10 @@ export class ClaudeBackend {
         if (block.type !== "tool_use") continue;
         const report = block.name === CLAUDE_REPORT_FINDINGS_TOOL ? parseClaudeFindingsReport(block.input) : undefined;
         if (report) {
-          await this.reportFindings({ threadId, turnId, running, toolUseId: block.id, report, model: message.message.model });
+          // The CLI validates the call before it runs it, and the model retries
+          // a rejected one. The card waits for the result, so a retry is not a
+          // second review.
+          running.pendingReports.set(block.id, { report, model: message.message.model, input: block.input });
           continue;
         }
         const input = block.input as Record<string, unknown>;
@@ -830,6 +835,26 @@ export class ClaudeBackend {
     if (message.type === "user" && Array.isArray(message.message.content)) {
       for (const block of message.message.content) {
         if (block.type !== "tool_result") continue;
+        const pendingReport = running.pendingReports.get(block.tool_use_id);
+        if (pendingReport) {
+          running.pendingReports.delete(block.tool_use_id);
+          if (!block.is_error) {
+            await this.reportFindings({
+              threadId, turnId, running, toolUseId: block.tool_use_id,
+              report: pendingReport.report, model: pendingReport.model,
+            });
+            continue;
+          }
+          // A rejected report stays visible as the failed tool call it was.
+          running.entries.set(block.tool_use_id, {
+            type: "activity", id: block.tool_use_id, summary: CLAUDE_REPORT_FINDINGS_TOOL, status: "in_progress",
+            details: [{
+              id: block.tool_use_id, kind: "read", label: CLAUDE_REPORT_FINDINGS_TOOL,
+              markdown: JSON.stringify(pendingReport.input),
+            }],
+            createdAt: Date.now(), turn: { id: turnId },
+          });
+        }
         const entry = running.entries.get(block.tool_use_id);
         if (entry?.type !== "activity") continue;
         entry.status = block.is_error ? "failed" : "completed";
@@ -872,7 +897,11 @@ export class ClaudeBackend {
       const previous = entries.findLast((entry): entry is AppServerThreadReviewEntry =>
         entry.type === "review" && entry.reviewer?.backend === "claude" && entry.output !== undefined
         && entry.id !== params.toolUseId);
-      const outcomes = previous ? matchClaudeFindingOutcomes(reviewEntryFindings(previous), report, session.cwd) : [];
+      // A re-report in the review's own turn repeats it; a later one must
+      // also name one of its findings' locations.
+      const outcomes = previous ? matchClaudeFindingOutcomes(reviewEntryFindings(previous), report, session.cwd, {
+        trustPosition: previous.turn?.id === turnId,
+      }) : [];
       if (previous && outcomes.length > 0) {
         await this.emit({ method: "thread/review/outcomesReported", params: {
           threadId, turnId, reviewId: previous.id, outcomes,

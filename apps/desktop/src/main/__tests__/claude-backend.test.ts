@@ -443,6 +443,51 @@ describe("Claude SDK backend", () => {
       await backend.close();
     });
 
+    it("records no review for a call the CLI rejected, so its retry is the only card", async () => {
+      const rejected: SDKMessage[] = [
+        { type: "assistant", parent_tool_use_id: null, message: {
+          id: "message-rejected", model: "claude-opus-5-5",
+          content: [{ type: "tool_use", id: "review-0", name: "ReportFindings", input: { findings } }],
+        } } as SDKMessage,
+        { type: "user", message: { content: [{
+          type: "tool_result", tool_use_id: "review-0", is_error: true, content: "InputValidationError",
+        }] } } as SDKMessage,
+      ];
+      const f = await fixture(turns([...rejected, ...report("review-1", { findings })]));
+      const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "/code-review" }] });
+      await f.waitForTurn();
+
+      expect(reviewItems(f.events).map((item) => item.id)).toEqual(["review-1"]);
+      const entries = (await f.backend.readThread(threadId)).entries;
+      expect(entries.filter((entry) => entry.type === "review").map((entry) => entry.id)).toEqual(["review-1"]);
+      expect(entries).toContainEqual(expect.objectContaining({
+        id: "review-0", type: "activity", summary: "ReportFindings", status: "failed",
+      }));
+      await f.backend.close();
+    });
+
+    it("does not pair a later turn's same-length outcome report with an unrelated review by position", async () => {
+      const unrelated = [
+        { file: "src/other.ts", line: 3, summary: "Other.", failure_scenario: "x", outcome: "fixed" },
+        { file: "src/third.ts", line: 9, summary: "Third.", failure_scenario: "y" },
+      ];
+      const f = await fixture(turns(
+        report("review-1", { findings }),
+        report("review-2", { findings: unrelated }),
+      ));
+      const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "/code-review" }] });
+      await f.waitForTurn();
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "/code-review --fix" }] });
+      await f.waitForTurn();
+
+      expect(reviewItems(f.events).map((item) => item.id)).toEqual(["review-1", "review-2"]);
+      const reported = f.events.filter((event) => event.notification.method === "thread/review/outcomesReported");
+      expect(reported.map((event) => (event.notification.params as { reviewId: string }).reviewId)).toEqual(["review-2"]);
+      await f.backend.close();
+    });
+
     it("keeps a malformed ReportFindings call as an ordinary tool row", async () => {
       const f = await fixture(turns(report("review-1", { level: "high" })));
       const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });

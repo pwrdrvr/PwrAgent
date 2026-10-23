@@ -117,11 +117,16 @@ export function claudeReviewOutput(report: ClaudeFindingsReport, cwd: string): A
  * asks for "the same findings" again, so the location and title match first,
  * then the location alone, then the position when both lists are the same
  * length. A finding is paired at most once; an unpaired outcome is dropped.
+ *
+ * Position alone is no evidence that two reports are one review: an unrelated
+ * later review can have the same length. It pairs only when a location already
+ * did, or when the caller knows the reports belong together (`trustPosition`).
  */
 export function matchClaudeFindingOutcomes(
   original: AppServerReviewFinding[],
   report: ClaudeFindingsReport,
   cwd: string,
+  options: { trustPosition?: boolean } = {},
 ): AppServerReviewFindingOutcome[] {
   const used = new Set<number>();
   const matches: AppServerReviewFindingOutcome[] = [];
@@ -134,7 +139,8 @@ export function matchClaudeFindingOutcomes(
   const passes: Array<(finding: ClaudeReportedFinding, candidate: AppServerReviewFinding, index: number, position: number) => boolean> = [
     (finding, candidate) => location(finding, candidate) && candidate.title === findingTitle(finding),
     (finding, candidate) => location(finding, candidate),
-    (_finding, _candidate, index, position) => original.length === report.findings.length && index === position,
+    (_finding, _candidate, index, position) => (options.trustPosition || matches.length > 0)
+      && original.length === report.findings.length && index === position,
   ];
   for (const pass of passes) {
     for (const entry of [...pending]) {

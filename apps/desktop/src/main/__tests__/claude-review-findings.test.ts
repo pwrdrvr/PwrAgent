@@ -172,6 +172,16 @@ describe("Claude ReportFindings outcomes", () => {
     expect(matchClaudeFindingOutcomes(original, longer, cwd)).toEqual([{ index: 1, outcome: "fixed" }]);
   });
 
+  it("pairs by position alone only when the caller trusts it", () => {
+    const moved = parseClaudeFindingsReport({ findings: [
+      { file: "src/other.ts", line: 3, summary: "Moved", failure_scenario: "x", outcome: "fixed" },
+      { file: "src/fourth.ts", line: 8, summary: "Also moved", failure_scenario: "y", outcome: "fixed" },
+    ] })!;
+    expect(matchClaudeFindingOutcomes(original, moved, cwd)).toEqual([]);
+    expect(matchClaudeFindingOutcomes(original, moved, cwd, { trustPosition: true }))
+      .toEqual([{ index: 0, outcome: "fixed" }, { index: 1, outcome: "fixed" }]);
+  });
+
   it("pairs each original finding at most once and ignores findings without an outcome", () => {
     const report = parseClaudeFindingsReport({ findings: [
       { ...reported.findings[0], outcome: "fixed" },
