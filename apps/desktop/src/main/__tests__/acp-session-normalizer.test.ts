@@ -2011,6 +2011,146 @@ describe("AcpSessionReplayNormalizer", () => {
     }
   });
 
+  describe("Grok retry_state", () => {
+    // Shapes captured from Grok Build 1.0.45 rollouts. Grok sends one per
+    // upstream retry while the turn stays active, then resumes streaming.
+    const retry = (attempt: number, reason = "API error (status 500 Internal Server Error): error: Service temporarily unavailable.") => ({
+      sessionUpdate: "retry_state",
+      type: "retrying",
+      attempt,
+      max_retries: 15,
+      reason,
+      error_type: "api",
+    });
+
+    const startTurn = (): AcpSessionReplayNormalizer => {
+      const normalizer = new AcpSessionReplayNormalizer({
+        surfaceThoughtsAsMessages: false,
+      });
+      normalizer.recordUserPrompt({
+        sessionId: "session-1",
+        prompt: "Research MCP tasks",
+        turnId: "turn-1",
+        receivedAt: 1000,
+        waitingForAgent: true,
+      });
+      return normalizer;
+    };
+
+    const activities = (normalizer: AcpSessionReplayNormalizer) =>
+      normalizer.replay().entries.filter((entry) => entry.type === "activity");
+
+    it("folds consecutive retries into one updating warning row", () => {
+      const normalizer = startTurn();
+      for (const attempt of [1, 2, 3]) {
+        normalizer.apply({
+          sessionId: "session-1",
+          receivedAt: 1000 + attempt,
+          update: retry(attempt),
+        });
+      }
+
+      expect(activities(normalizer)).toEqual([
+        expect.objectContaining({
+          summary: "Retrying model request · attempt 3 of 15",
+          tone: "warning",
+          status: "in_progress",
+          createdAt: 1001,
+          turn: expect.objectContaining({ id: "turn-1", status: "in_progress" }),
+          details: [
+            expect.objectContaining({
+              label: "API error (status 500 Internal Server Error): error: Service temporarily unavailable.",
+            }),
+          ],
+        }),
+      ]);
+      expect(JSON.stringify(normalizer.replay())).not.toContain("Unknown ACP session update");
+      expect(normalizer.replay().threadStatus).toBe("active");
+    });
+
+    it("settles the row when the model responds again", () => {
+      const normalizer = startTurn();
+      normalizer.apply({ sessionId: "session-1", receivedAt: 1001, update: retry(1) });
+      normalizer.apply({ sessionId: "session-1", receivedAt: 1002, update: retry(2) });
+      // Grok hides thoughts, but a thought still proves the model answered.
+      normalizer.apply({
+        sessionId: "session-1",
+        receivedAt: 1003,
+        update: { sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "Reading" } },
+      });
+
+      expect(activities(normalizer)).toEqual([
+        expect.objectContaining({
+          summary: "Retried model request 2 times",
+          tone: "warning",
+          status: "completed",
+        }),
+      ]);
+    });
+
+    it("starts a new row for a later retry run in the same turn", () => {
+      const normalizer = startTurn();
+      normalizer.apply({ sessionId: "session-1", receivedAt: 1001, update: retry(1) });
+      normalizer.apply({
+        sessionId: "session-1",
+        receivedAt: 1002,
+        update: { sessionUpdate: "agent_message_chunk", content: "Partial answer." },
+      });
+      normalizer.apply({
+        sessionId: "session-1",
+        receivedAt: 1003,
+        update: retry(1, "empty response from model (reasoning_only)"),
+      });
+
+      expect(activities(normalizer)).toEqual([
+        expect.objectContaining({
+          summary: "Retried model request 1 time",
+          status: "completed",
+        }),
+        expect.objectContaining({
+          summary: "Retrying model request · attempt 1 of 15",
+          status: "in_progress",
+          details: [
+            expect.objectContaining({ label: "empty response from model (reasoning_only)" }),
+          ],
+        }),
+      ]);
+    });
+
+    it("marks the row failed when the turn fails while retrying", () => {
+      const normalizer = startTurn();
+      normalizer.apply({ sessionId: "session-1", receivedAt: 1001, update: retry(14) });
+      normalizer.apply({ sessionId: "session-1", receivedAt: 1002, update: retry(15) });
+      normalizer.recordTurnFailed({
+        sessionId: "session-1",
+        turnId: "turn-1",
+        error: "Model unavailable.",
+        receivedAt: 1003,
+      });
+
+      expect(activities(normalizer)).toEqual([
+        expect.objectContaining({
+          summary: "Model request failed after 15 retries",
+          status: "failed",
+        }),
+        expect.objectContaining({ id: "turn-failed:turn-1" }),
+      ]);
+    });
+
+    it("settles an open retry row when the turn finishes", () => {
+      const normalizer = startTurn();
+      normalizer.apply({ sessionId: "session-1", receivedAt: 1001, update: retry(1) });
+      normalizer.recordTurnFinished("turn-1", 1002, "interrupted");
+
+      expect(activities(normalizer)).toEqual([
+        expect.objectContaining({
+          summary: "Retried model request 1 time",
+          status: "completed",
+        }),
+      ]);
+    });
+  });
+
   it("updates known tool progress without splitting a streaming assistant message", () => {
     const normalizer = new AcpSessionReplayNormalizer();
 
