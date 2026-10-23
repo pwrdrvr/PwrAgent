@@ -4,8 +4,9 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { getSessionInfo, query, type AccountInfo, type Options, type Query, type SDKMessage, type SDKUserMessage, type SlashCommand } from "@anthropic-ai/claude-agent-sdk";
 import type {
-  AgentEvent, AppServerAvailableCommandSummary, AppServerPendingRequestNotification, AppServerThreadEntry,
-  AppServerThreadMessageEntry, AppServerThreadMessagePart, AppServerThreadReplay, AppServerThreadSummary,
+  AgentEvent, AppServerAvailableCommandSummary, AppServerPendingRequestNotification, AppServerReviewContext,
+  AppServerThreadEntry, AppServerThreadMessageEntry, AppServerThreadMessagePart, AppServerThreadReplay,
+  AppServerThreadReviewEntry, AppServerThreadSummary,
   AppServerTurnInputItem, BackendModelOption, BackendRateLimitSummary, BackendSummary, ThreadExecutionMode, CodexMcpServerSummary,
 } from "@pwragent/shared";
 import { getMainLogger } from "../log";
@@ -22,6 +23,11 @@ import {
 import { claudeCommandActivity, groupClaudeActivities } from "./claude-activity";
 import { ClaudeSessionStore, type ClaudeSession } from "./claude-session-store";
 import { normalizeClaudeTitle, requestClaudeTitle, type ClaudeTitleQuery } from "./claude-titles";
+import {
+  CLAUDE_REPORT_FINDINGS_TOOL, claudeReviewOutput, isClaudeOutcomeReport, matchClaudeFindingOutcomes,
+  parseClaudeFindingsReport, type ClaudeFindingsReport,
+} from "./claude-review-findings";
+import { formatReviewOutputText, reviewEntryFindings } from "../../shared/review-output";
 
 export type ClaudeBackendOptions = {
   store?: ClaudeSessionStore;
@@ -34,6 +40,8 @@ export type ClaudeBackendOptions = {
   emit: (event: AgentEvent) => Promise<void>;
   request: (request: AppServerPendingRequestNotification, signal: AbortSignal) => Promise<unknown>;
   cancelRequest: (threadId: string, turnId: string, requestId: string) => Promise<void>;
+  /** Workspace, branch, and pull request for a review card. Never fails a review. */
+  resolveReviewContext?: (params: { threadId: string; cwd: string }) => Promise<AppServerReviewContext | undefined>;
 };
 
 const claudeBackendLog = getMainLogger("pwragent:claude-backend");
@@ -794,6 +802,11 @@ export class ClaudeBackend {
       }
       for (const block of message.message.content) {
         if (block.type !== "tool_use") continue;
+        const report = block.name === CLAUDE_REPORT_FINDINGS_TOOL ? parseClaudeFindingsReport(block.input) : undefined;
+        if (report) {
+          await this.reportFindings({ threadId, turnId, running, toolUseId: block.id, report, model: message.message.model });
+          continue;
+        }
         const input = block.input as Record<string, unknown>;
         const command = block.name === "Bash" && typeof input.command === "string" ? input.command : undefined;
         running.entries.set(block.id, {
@@ -840,6 +853,65 @@ export class ClaudeBackend {
         };
         await this.emit({ method: "item/completed", params: { threadId, turnId, item } });
       }
+    }
+  }
+
+  /**
+   * A findings report is the review card, not a tool row. Its tool result is
+   * a count, which nothing renders. A re-report after fixes updates the
+   * review it repeats; one that repeats no earlier review is a new review.
+   */
+  private async reportFindings(params: {
+    threadId: string; turnId: string; running: RunningTurn; toolUseId: string;
+    report: ClaudeFindingsReport; model?: string;
+  }): Promise<void> {
+    const { threadId, turnId, running, report } = params;
+    const session = await this.store.read(threadId);
+    if (isClaudeOutcomeReport(report)) {
+      const entries = [...(await this.store.entries(threadId)), ...running.entries.values()];
+      const previous = entries.findLast((entry): entry is AppServerThreadReviewEntry =>
+        entry.type === "review" && entry.reviewer?.backend === "claude" && entry.output !== undefined
+        && entry.id !== params.toolUseId);
+      const outcomes = previous ? matchClaudeFindingOutcomes(reviewEntryFindings(previous), report, session.cwd) : [];
+      if (previous && outcomes.length > 0) {
+        await this.emit({ method: "thread/review/outcomesReported", params: {
+          threadId, turnId, reviewId: previous.id, outcomes,
+        } });
+        return;
+      }
+    }
+    const output = claudeReviewOutput(report, session.cwd);
+    let context: AppServerReviewContext | undefined;
+    try {
+      context = await this.options.resolveReviewContext?.({ threadId, cwd: session.cwd });
+    } catch (error) {
+      claudeBackendLog.warn("could not resolve review context", { error: error instanceof Error ? error.message : String(error) });
+    }
+    const model = params.model ?? session.thread.model;
+    const reviewer: NonNullable<AppServerThreadReviewEntry["reviewer"]> = {
+      backend: "claude",
+      ...(model ? { model } : {}),
+      // The review's own effort level, which can differ from the thread's.
+      ...(report.level ? { reasoningEffort: report.level } : {}),
+    };
+    const entry: AppServerThreadReviewEntry = {
+      type: "review", id: params.toolUseId, createdAt: Date.now(),
+      review: formatReviewOutputText(output), output, reviewer,
+      ...(context ? { context } : {}),
+      turn: { id: turnId },
+    };
+    running.entries.set(entry.id, entry);
+    await this.store.append(threadId, [entry]);
+    await this.emit({ method: "item/completed", params: { threadId, turnId, item: {
+      id: entry.id, type: "exitedReviewMode", review: entry.review, createdAt: entry.createdAt,
+      data: { reviewOutput: output, reviewer, ...(context ? { context } : {}) },
+    } } });
+    // A first report that already says what was fixed records both at once.
+    if (isClaudeOutcomeReport(report)) {
+      await this.emit({ method: "thread/review/outcomesReported", params: {
+        threadId, turnId, reviewId: entry.id,
+        outcomes: report.findings.flatMap((finding, index) => finding.outcome ? [{ index, outcome: finding.outcome }] : []),
+      } });
     }
   }
 

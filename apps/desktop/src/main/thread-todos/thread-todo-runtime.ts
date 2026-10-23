@@ -37,7 +37,7 @@ import {
   setThreadReviewBroadcast,
   resetThreadReviewServiceForTests,
 } from "../thread-reviews/thread-review-runtime";
-import { completedThreadReview } from "../thread-reviews/thread-review-events";
+import { completedThreadReview, reportedThreadReviewOutcomes } from "../thread-reviews/thread-review-events";
 
 const threadTodoLog = getMainLogger("pwragent:thread-todos");
 
@@ -170,6 +170,16 @@ export function installThreadTodoRuntime(params: {
     }
     const completed = completedThreadReview(event);
     if (completed) importReview(completed.identity, completed.entry, "live");
+    const reported = reportedThreadReviewOutcomes(event);
+    if (reported) {
+      try {
+        reviews.applyReportedOutcomes(reported.identity, reported.sourceKey, reported.outcomes);
+      } catch (error) {
+        threadTodoLog.warn("could not record reported review outcomes", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
     if (event.notification.method === "thread/pullRequests/updated"
       || event.notification.method === "thread/unarchived"
       || event.notification.method === "thread/name/updated") {

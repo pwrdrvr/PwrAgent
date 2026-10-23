@@ -132,6 +132,7 @@ import type { ManagedCodexSelectionChange } from "../settings/desktop-settings-s
 import { managedCodexRoot } from "../codex-build-channel";
 import { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
 import { issueProviderDiscoveryPermit } from "../settings/provider-discovery-permit";
+import type { PwrAgentThreadTodoHandler } from "../agent-tools/pwragent-thread-todo-agent-tools";
 import type { AcpAvailableCommandsRecord } from "../acp/acp-available-commands-store";
 import {
   CodexEnvironmentCommandError,
@@ -59237,6 +59238,99 @@ script = "printf setup"
         }
       });
     }
+  });
+
+  describe("Claude code-review findings", () => {
+    async function fixture() {
+      const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-review-"));
+      const repo = path.join(root, "repo");
+      const cwd = path.join(root, ".pwragent", "worktrees", "fixture", "repo");
+      await mkdir(repo, { recursive: true });
+      await git(repo, ["init", "-b", "main"]);
+      await git(repo, ["commit", "--allow-empty", "-m", "init"]);
+      await git(repo, ["worktree", "add", "-b", "feature/review", cwd]);
+      const threadId = "b2222222-2222-4222-8222-222222222222";
+      const directory: LinkedDirectorySummary = { id: repo, path: repo, worktreePath: cwd, label: "repo", kind: "worktree" };
+      const pr = {
+        provider: "github.com", org: "example", repo: "repo", number: 41, state: "passing",
+        lifecycleState: "open", headRefName: "feature/review", url: "https://github.com/example/repo/pull/41",
+      } as const;
+      const overlayStore = createOverlayStoreMock({ overlays: {
+        [`claude:${threadId}`]: {
+          backend: "claude", threadId, executionMode: "default", extraLinkedDirectories: [directory], prs: [pr],
+        },
+      } });
+      const store = new ClaudeSessionStore(path.join(root, "sessions"));
+      await store.save({ cwd, thread: {
+        id: threadId, source: "claude", title: "Review fixture", titleSource: "explicit", projectKey: cwd,
+        linkedDirectories: [directory],
+      } });
+      const registry = new DesktopBackendRegistry({
+        codexClient: new MockBackendClient({ threads: [] }), overlayStore,
+        claudeBackendOptions: {
+          store,
+          getSessionInfo: vi.fn().mockResolvedValue(undefined),
+          inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+          discoverModels: async () => [],
+          query: () => {
+            async function* messages(): AsyncGenerator<ClaudeMessage> {
+              yield { type: "assistant", parent_tool_use_id: null, message: {
+                id: "review-message", model: "claude-opus-5-5", content: [{ type: "tool_use", id: "toolu_review",
+                  name: "ReportFindings", input: { level: "high", findings: [
+                    { file: "src/a.ts", line: 4, summary: "Drops the error.", failure_scenario: "A failed write reports success." },
+                  ] } }],
+              } } as ClaudeMessage;
+              yield { type: "result", subtype: "success", is_error: false, result: "" } as ClaudeMessage;
+            }
+            return Object.assign(messages(), { close: vi.fn(), setPermissionMode: vi.fn() }) as unknown as ClaudeQuery;
+          },
+        },
+      });
+      onTestFinished(async () => {
+        await registry.close();
+        await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      });
+      return { registry, threadId, cwd, repo, pr };
+    }
+
+    it("publishes a review card naming the workspace, branch, and attached pull request", async () => {
+      const { registry, threadId, cwd, repo, pr } = await fixture();
+      const events: AgentEvent[] = [];
+      registry.onEvent((event) => { events.push(event); });
+      await registry.listBackends({ refreshModels: "claude", includeUnavailable: true },
+        issueProviderDiscoveryPermit("settings-user-action"));
+      await registry.startTurn({ backend: "claude", threadId, input: [{ type: "text", text: "/code-review high" }] });
+      await vi.waitFor(() => expect(events.some((event) => event.notification.method === "turn/completed")).toBe(true));
+
+      const review = events.find((event) => event.notification.method === "item/completed"
+        && (event.notification.params.item as { type?: string }).type === "exitedReviewMode");
+      if (!review) throw new Error("Expected a review card event");
+      expect(review.backend).toBe("claude");
+      const data = (review.notification.params as { item: { data: { context: AppServerReviewContext } } }).item.data;
+      expect(data.context).toMatchObject({
+        workspacePath: cwd, projectLabel: "repo", repositoryPath: repo, gitBranch: "feature/review",
+        pullRequest: { provider: pr.provider, org: pr.org, repo: pr.repo, number: pr.number, url: pr.url },
+      });
+      expect(data.context.headCommit).toMatch(/^[0-9a-f]{40}$/);
+    });
+
+    it("hands the thread's review entries to tracking when the thread is read", async () => {
+      const { registry, threadId } = await fixture();
+      const importReviews = vi.fn();
+      registry.setPwrAgentThreadTodoHandler({ importReviews } as unknown as PwrAgentThreadTodoHandler);
+      const events: AgentEvent[] = [];
+      registry.onEvent((event) => { events.push(event); });
+      await registry.listBackends({ refreshModels: "claude", includeUnavailable: true },
+        issueProviderDiscoveryPermit("settings-user-action"));
+      await registry.startTurn({ backend: "claude", threadId, input: [{ type: "text", text: "/code-review" }] });
+      await vi.waitFor(() => expect(events.some((event) => event.notification.method === "turn/completed")).toBe(true));
+      importReviews.mockClear();
+
+      await registry.readThread({ backend: "claude", threadId });
+      expect(importReviews).toHaveBeenCalledExactlyOnceWith({ backend: "claude", threadId }, [
+        expect.objectContaining({ type: "review", id: "toolu_review", turn: expect.objectContaining({ status: "completed" }) }),
+      ]);
+    });
   });
 
   it("adopts a named branch change from an active turn before notifying listeners", async () => {

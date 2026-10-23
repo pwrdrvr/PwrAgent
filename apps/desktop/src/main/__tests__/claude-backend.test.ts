@@ -8,6 +8,7 @@ import { ClaudeBackend } from "../claude/claude-backend";
 import { ClaudeSessionStore } from "../claude/claude-session-store";
 import { createClaudePermissionHandler, claudePermissionMode } from "../claude/claude-permissions";
 import { buildLiveToolDetails, getNotificationItem } from "../../renderer/src/features/thread-detail/live-transcript-activity";
+import { completedThreadReview, reportedThreadReviewOutcomes } from "../thread-reviews/thread-review-events";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -318,6 +319,141 @@ describe("Claude SDK backend", () => {
         item: expect.objectContaining({ type: "agentMessage", text: "Weekly usage: 25%" }),
       }),
     } }));
+  });
+
+  describe("code-review findings", () => {
+    const findings = [
+      { file: "src/state.ts", line: 12, summary: "Stamps every row.", short_summary: "Stamps every row",
+        failure_scenario: "Empty rows show up as Directories rows.", category: "correctness" },
+      { file: "src/migrate.ts", line: 40, summary: "Unguarded parse.", failure_scenario: "A corrupt row fails startup." },
+    ];
+    const report = (id: string, input: unknown): SDKMessage[] => [
+      { type: "assistant", parent_tool_use_id: null, message: {
+        id: `message-${id}`, model: "claude-opus-5-5", content: [{ type: "tool_use", id, name: "ReportFindings", input }],
+      } } as SDKMessage,
+      { type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, content: "2 findings reported." }] } } as SDKMessage,
+      { type: "result", subtype: "success", is_error: false, result: "" } as SDKMessage,
+    ];
+    const turns = (...scripts: SDKMessage[][]) => {
+      let turn = 0;
+      return async function* () { yield* scripts[turn++] ?? []; };
+    };
+    const reviewItems = (events: AgentEvent[]) => events.flatMap((event) => {
+      if (event.notification.method !== "item/completed") return [];
+      const item = getNotificationItem(event.notification.params) as Record<string, unknown> | undefined;
+      return item?.type === "exitedReviewMode" ? [item] : [];
+    });
+
+    it("turns a ReportFindings call into a review card instead of a tool row", async () => {
+      const f = await fixture(turns(report("review-1", { level: "high", findings })));
+      const context = { workspacePath: f.root, gitBranch: "feature" };
+      const resolveReviewContext = vi.fn().mockResolvedValue(context);
+      const backend = new ClaudeBackend({ ...f.backendOptions, resolveReviewContext });
+      const { threadId } = await backend.startThread({ cwd: f.root, executionMode: "default" });
+      await backend.startTurn({ threadId, input: [{ type: "text", text: "/code-review high" }] });
+      await f.waitForTurn();
+
+      expect(resolveReviewContext).toHaveBeenCalledWith({ threadId, cwd: f.root });
+      const [item] = reviewItems(f.events);
+      expect(item).toEqual(expect.objectContaining({ id: "review-1", type: "exitedReviewMode" }));
+      const data = item.data as { reviewOutput: { findings: Array<{ title: string; code_location: unknown }> }; reviewer: unknown; context: unknown };
+      expect(data.reviewer).toEqual({ backend: "claude", model: "claude-opus-5-5", reasoningEffort: "high" });
+      expect(data.context).toEqual(context);
+      expect(data.reviewOutput.findings.map((finding) => finding.title)).toEqual(["Stamps every row", "Unguarded parse."]);
+      expect(data.reviewOutput.findings[0].code_location).toEqual({
+        absolute_file_path: path.join(f.root, "src/state.ts"), line_range: { start: 12, end: 12 },
+      });
+      // The live event is what review tracking imports into To-dos.
+      const event = f.events.find((candidate) => getNotificationItem(
+        (candidate.notification as { params: Record<string, unknown> }).params)?.id === "review-1")!;
+      expect(completedThreadReview(event)).toEqual(expect.objectContaining({
+        identity: { backend: "claude", threadId },
+        entry: expect.objectContaining({ id: "review-1", output: data.reviewOutput }),
+      }));
+      // No generic tool row: neither a started item nor a stored activity.
+      expect(f.events.some((candidate) => candidate.notification.method === "item/started"
+        && getNotificationItem(candidate.notification.params)?.id === "review-1")).toBe(false);
+      const entries = (await new ClaudeBackend(f.backendOptions).readThread(threadId)).entries;
+      expect(entries.filter((entry) => entry.id === "review-1")).toEqual([expect.objectContaining({
+        type: "review", output: data.reviewOutput, context,
+        reviewer: { backend: "claude", model: "claude-opus-5-5", reasoningEffort: "high" },
+        turn: expect.objectContaining({ status: "completed" }),
+      })]);
+      await backend.close();
+    });
+
+    it("records a re-report's outcomes against the review it repeats", async () => {
+      const f = await fixture(turns(
+        report("review-1", { level: "high", findings }),
+        report("review-2", { level: "high", findings: [
+          { ...findings[1], outcome: "skipped" },
+          { ...findings[0], outcome: "fixed" },
+        ] }),
+      ));
+      const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "/code-review high" }] });
+      await f.waitForTurn();
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Fix the first one." }] });
+      await f.waitForTurn();
+
+      expect(reviewItems(f.events).map((item) => item.id)).toEqual(["review-1"]);
+      const reported = f.events.filter((event) => event.notification.method === "thread/review/outcomesReported");
+      expect(reported).toHaveLength(1);
+      expect(reported[0].notification.params).toEqual(expect.objectContaining({
+        threadId, reviewId: "review-1",
+        outcomes: [{ index: 0, outcome: "fixed" }, { index: 1, outcome: "skipped" }],
+      }));
+      expect(reportedThreadReviewOutcomes(reported[0])).toEqual({
+        identity: { backend: "claude", threadId }, sourceKey: "review-1",
+        outcomes: [{ index: 0, outcome: "fixed" }, { index: 1, outcome: "skipped" }],
+      });
+      const entries = (await f.backend.readThread(threadId)).entries;
+      expect(entries.filter((entry) => entry.type === "review").map((entry) => entry.id)).toEqual(["review-1"]);
+      expect(entries.some((entry) => entry.id === "review-2")).toBe(false);
+      await f.backend.close();
+    });
+
+    it("records an outcome report that repeats no earlier review as a new review", async () => {
+      const f = await fixture(turns(report("review-1", { findings: [{ ...findings[0], outcome: "fixed" }, findings[1]] })));
+      const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "/code-review --fix" }] });
+      await f.waitForTurn();
+
+      expect(reviewItems(f.events).map((item) => item.id)).toEqual(["review-1"]);
+      const reported = f.events.find((event) => event.notification.method === "thread/review/outcomesReported");
+      expect(reported?.notification.params).toEqual(expect.objectContaining({
+        reviewId: "review-1", outcomes: [{ index: 0, outcome: "fixed" }],
+      }));
+      // The card comes first, so tracking has a review to apply them to.
+      expect(f.events.indexOf(reported!)).toBeGreaterThan(f.events.findIndex((event) =>
+        getNotificationItem((event.notification as { params: Record<string, unknown> }).params)?.id === "review-1"));
+      await f.backend.close();
+    });
+
+    it("still shows the review when its context cannot be resolved", async () => {
+      const f = await fixture(turns(report("review-1", { findings })));
+      const backend = new ClaudeBackend({ ...f.backendOptions, resolveReviewContext: vi.fn().mockRejectedValue(new Error("git failed")) });
+      const { threadId } = await backend.startThread({ cwd: f.root, executionMode: "default" });
+      await backend.startTurn({ threadId, input: [{ type: "text", text: "/code-review" }] });
+      await f.waitForTurn();
+      const [item] = reviewItems(f.events);
+      expect(item.data).not.toHaveProperty("context");
+      expect((await backend.readThread(threadId)).entries.find((entry) => entry.id === "review-1"))
+        .toEqual(expect.objectContaining({ type: "review", reviewer: { backend: "claude", model: "claude-opus-5-5" } }));
+      await backend.close();
+    });
+
+    it("keeps a malformed ReportFindings call as an ordinary tool row", async () => {
+      const f = await fixture(turns(report("review-1", { level: "high" })));
+      const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "/code-review" }] });
+      await f.waitForTurn();
+      expect(reviewItems(f.events)).toEqual([]);
+      expect((await f.backend.readThread(threadId)).entries).toContainEqual(expect.objectContaining({
+        id: "review-1", type: "activity", summary: "ReportFindings",
+      }));
+      await f.backend.close();
+    });
   });
 
   it.each([["gif", "image/gif"], ["GIF", "image/gif"], ["jpeg", "image/jpeg"], ["webp", "image/webp"]])(
@@ -701,7 +837,7 @@ describe("Claude SDK backend", () => {
     await backend.startThread({ cwd: f.root, executionMode: "default" });
     expect(discoverModels).not.toHaveBeenCalled();
     await backend.discover();
-    expect(discoverModels).toHaveBeenCalledWith({ executable: "/fixture/claude", env: { PATH: "/fixture" } });
+    expect(discoverModels).toHaveBeenCalledWith({ executable: "/fixture/claude", env: { PATH: "/fixture", CLAUDE_CODE_REPORT_FINDINGS: "1" } });
     expect(backend.summary().launchpadOptions?.models).toEqual(models);
     expect(f.events).toEqual([{ backend: "claude", notification: {
       method: "backend/providerStatus/updated", params: { backend: "claude" },
@@ -961,6 +1097,7 @@ describe("Claude SDK backend", () => {
     expect(f.queries[0].env).not.toHaveProperty("CLAUDE_CODE_OAUTH_TOKEN");
     expect(f.backendOptions.inspectInstallation).toHaveBeenCalledWith({ env: f.queries[0].env });
     expect(f.queries[0].env?.PATH).toBe("/fixture");
+    expect(f.queries[0].env?.CLAUDE_CODE_REPORT_FINDINGS).toBe("1");
     expect(f.queries[0]).not.toHaveProperty("bare");
     expect(f.events.some((event) => event.notification.method === "item/agentMessage/delta")).toBe(true);
     const replay = await f.backend.readThread(threadId);

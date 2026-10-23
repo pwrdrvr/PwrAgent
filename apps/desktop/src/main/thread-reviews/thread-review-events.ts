@@ -1,4 +1,6 @@
-import type { AgentEvent, AppServerThreadReviewEntry, ThreadReviewIdentity } from "@pwragent/shared";
+import type {
+  AgentEvent, AppServerReviewFindingOutcome, AppServerThreadReviewEntry, ThreadReviewIdentity,
+} from "@pwragent/shared";
 import { normalizeReviewOutputRecord } from "../../shared/review-command";
 
 /** Only final review artifacts are persisted; deltas and started items are ignored. */
@@ -27,4 +29,20 @@ export function completedThreadReview(event: AgentEvent): {
       context: data?.context as AppServerThreadReviewEntry["context"],
     },
   };
+}
+
+/** Outcomes a reviewer reported for findings of a review it already completed. */
+export function reportedThreadReviewOutcomes(event: AgentEvent): {
+  identity: ThreadReviewIdentity;
+  sourceKey: string;
+  outcomes: AppServerReviewFindingOutcome[];
+} | undefined {
+  if (event.federationTarget?.scope === "remote" || event.notification.method !== "thread/review/outcomesReported") {
+    return undefined;
+  }
+  const { threadId, reviewId, outcomes } = event.notification.params as Extract<
+    AgentEvent["notification"], { method: "thread/review/outcomesReported" }
+  >["params"];
+  if (!reviewId || !Array.isArray(outcomes)) return undefined;
+  return { identity: { backend: event.backend, threadId }, sourceKey: reviewId, outcomes };
 }

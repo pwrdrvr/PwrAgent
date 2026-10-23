@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type {
+  AppServerReviewFindingOutcome,
   AppServerThreadReviewEntry,
   ListThreadReviewsRequest,
   RecordThreadReviewInput,
@@ -25,6 +26,9 @@ export const THREAD_REVIEW_MAX_FINDINGS = 200;
 /** Rows one list returns, as the to-do store caps the cards it is merged with. */
 const THREAD_REVIEW_LIST_LIMIT = 500;
 const TRACKING_STARTED_KEY = "thread_review_tracking_started_at";
+/** Resolution notes for outcomes the reviewer reported about its own findings. */
+export const REPORTED_FIXED_NOTE = "The reviewer reported this fixed.";
+export const REPORTED_NO_CHANGE_NOTE = "The reviewer reported that no change was needed.";
 
 function excerpt(text: string, limit: number): string {
   return text.length > limit ? `${text.slice(0, limit - 1).trimEnd()}…` : text;
@@ -279,6 +283,51 @@ export class ThreadReviewService {
       return review;
     }).immediate();
     if (changed) this.emit(review);
+    return review;
+  }
+
+  /**
+   * Records what the reviewer later reported about its own findings, in one
+   * commit. Only open findings change: a reviewer's later report never
+   * overrides an outcome the operator or an agent already recorded. A skipped
+   * finding stays open, because it is real and still unaddressed.
+   */
+  applyReportedOutcomes(
+    identity: ThreadReviewIdentity,
+    sourceKey: string,
+    outcomes: AppServerReviewFindingOutcome[],
+  ): ThreadReview | undefined {
+    const id = reviewId(identity, sourceKey);
+    const settles = (review: ThreadReview) => outcomes.some(({ index, outcome }) =>
+      outcome !== "skipped" && review.items[index]?.status === "open");
+    const snapshot = this.get(id);
+    if (!snapshot || !settles(snapshot)) return snapshot;
+    let changed = false;
+    const review = this.db.raw.transaction(() => {
+      const review = this.get(id);
+      if (!review || !settles(review)) return review;
+      const now = this.now();
+      for (const { index, outcome } of outcomes) {
+        const item = review.items[index];
+        if (outcome === "skipped" || item?.status !== "open") continue;
+        item.status = outcome === "fixed" ? "addressed" : "dismissed";
+        item.updatedAt = now;
+        item.resolution = {
+          note: outcome === "fixed" ? REPORTED_FIXED_NOTE : REPORTED_NO_CHANGE_NOTE,
+          actor: "agent", at: now,
+        };
+      }
+      if (review.status === "open" && review.items.every((entry) => entry.status !== "open")) {
+        review.status = "handled";
+        review.resolution = { note: "All findings addressed or declined.", actor: "system", at: now };
+      }
+      review.updatedAt = now;
+      this.db.raw.prepare("UPDATE thread_reviews SET status = ?, updated_at = ?, payload = ? WHERE review_id = ?")
+        .run(review.status, now, JSON.stringify(review), review.id);
+      changed = true;
+      return review;
+    }).immediate();
+    if (changed && review) this.emit(review);
     return review;
   }
 

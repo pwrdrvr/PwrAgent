@@ -92,8 +92,13 @@ describe("Claude executable discovery", () => {
 
   it("does not pass application credentials to the CLI", () => {
     const input = { PATH: "/bin", ANTHROPIC_API_KEY: "key", CLAUDE_CODE_OAUTH_TOKEN: "token" };
-    expect(claudeEnvironment(input)).toEqual({ PATH: "/bin" });
+    expect(claudeEnvironment(input)).toEqual({ PATH: "/bin", CLAUDE_CODE_REPORT_FINDINGS: "1" });
     expect(input.ANTHROPIC_API_KEY).toBe("key");
+  });
+
+  it("declares that PwrAgent renders typed code-review findings", () => {
+    // Without the declaration, /code-review forks and returns plain text.
+    expect(claudeEnvironment({ PATH: "/bin" }).CLAUDE_CODE_REPORT_FINDINGS).toBe("1");
   });
 });
 
