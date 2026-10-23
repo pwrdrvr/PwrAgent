@@ -42,7 +42,7 @@ describe("ThreadSearchPanel", () => {
     expect(searchThreads).toHaveBeenCalledWith(expect.objectContaining({ query: "#779 @disk" }));
   });
 
-  it("submits a search and opens a result", async () => {
+  it("defaults global search to active threads and opens a result", async () => {
     const searchThreads = vi.fn(async (): Promise<ThreadSearchResponse> => ({
       backend: "all",
       contentMode: "available",
@@ -87,6 +87,9 @@ describe("ThreadSearchPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Search" }));
 
     expect(await screen.findByText("Screenshots")).toBeInTheDocument();
+    expect(searchThreads).toHaveBeenCalledWith({
+      contentMode: "available", filters: { includeArchived: false }, limit: 25, query: "branch drift",
+    });
     fireEvent.click(screen.getByRole("button", { name: /Screenshots/ }));
 
     await waitFor(() => {

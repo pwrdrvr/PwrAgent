@@ -2444,6 +2444,11 @@ export type AddRemoteThreadPinResponse = {
   pin: RemoteThreadPin;
 };
 
+/** Exact persisted viewer membership, independent of loaded navigation pages. */
+export type HasRemoteThreadPinRequest = {
+  ref: FederatedThreadRef;
+};
+
 export type RemoveRemoteThreadPinRequest = {
   ref: FederatedThreadRef;
 };

@@ -156,6 +156,7 @@ import {
   type FederationJumpSearchRequest,
   type FederationJumpSearchResponse,
   type RemoveRemoteThreadPinRequest,
+  type HasRemoteThreadPinRequest,
   type RemoveRemoteThreadPinResponse,
   type SetRemoteThreadLocalPinRequest,
   type SetRemoteThreadLocalPinResponse,
@@ -331,6 +332,7 @@ import {
   NAVIGATION_ATTACH_DIRECTORY_TO_THREAD_CHANNEL,
   NAVIGATION_DETACH_DIRECTORY_FROM_THREAD_CHANNEL,
   NAVIGATION_REMOVE_REMOTE_THREAD_PIN_CHANNEL,
+  NAVIGATION_HAS_REMOTE_THREAD_PIN_CHANNEL,
   NAVIGATION_SET_REMOTE_THREAD_LOCAL_PIN_CHANNEL,
   NAVIGATION_DETACH_THREAD_PR_CHANNEL,
   NAVIGATION_PROBE_PR_POLLING_AFTER_RECONNECT_CHANNEL,
@@ -1616,6 +1618,7 @@ class DesktopAppServerService {
       query: local.query,
       limit: request.limit,
       backend: request.filters?.backend,
+      includeArchived: request.filters?.includeArchived,
     });
     const remoteResults = federated.results
       .filter((result) => isRemoteFederationTarget(result.ref.target))
@@ -6960,6 +6963,11 @@ class DesktopAppServerService {
     return { pinnedRanks };
   }
 
+  async hasRemoteThreadPin(request: HasRemoteThreadPinRequest): Promise<boolean> {
+    validateRemoteThreadPinRef(request.ref);
+    return await this.getOverlayStore().hasRemoteThreadPin({ ref: request.ref });
+  }
+
   async addRemoteThreadPin(
     request: AddRemoteThreadPinRequest,
   ): Promise<AddRemoteThreadPinResponse> {
@@ -9191,6 +9199,12 @@ export function registerAppServerIpcHandlers(): void {
     },
   );
   ipcMain.removeHandler(NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_HAS_REMOTE_THREAD_PIN_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_HAS_REMOTE_THREAD_PIN_CHANNEL,
+    async (_event, request: HasRemoteThreadPinRequest): Promise<boolean> =>
+      await appServerService.hasRemoteThreadPin(request),
+  );
   ipcMain.handle(
     NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL,
     async (
@@ -9817,6 +9831,7 @@ export function registerAppServerIpcHandlers(): void {
 }
 
 export async function disposeAppServerIpcHandlers(): Promise<void> {
+  ipcMain.removeHandler(NAVIGATION_HAS_REMOTE_THREAD_PIN_CHANNEL);
   ipcMain.removeHandler(THREAD_DEPENDENCIES_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_ATTENTION_VIEW_RELEASE_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_MARK_DIRECTORY_SEEN_CHANNEL);

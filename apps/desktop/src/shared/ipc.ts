@@ -330,6 +330,8 @@ export const NAVIGATION_REORDER_THREAD_PINS_CHANNEL =
   "navigation:reorder-thread-pins";
 export const NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL =
   "navigation:add-remote-thread-pin";
+export const NAVIGATION_HAS_REMOTE_THREAD_PIN_CHANNEL =
+  "navigation:has-remote-thread-pin";
 export const NAVIGATION_REMOVE_REMOTE_THREAD_PIN_CHANNEL =
   "navigation:remove-remote-thread-pin";
 export const NAVIGATION_SET_REMOTE_THREAD_LOCAL_PIN_CHANNEL =

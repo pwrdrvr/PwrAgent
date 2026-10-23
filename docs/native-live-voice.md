@@ -87,6 +87,53 @@ keeps the latest snapshot in memory only and accepts it only from local main
 windows. When no window has published, the tool returns `focus_not_published`,
 and the manager asks the operator which thread they mean.
 
+`fly_star_map_to` already supports `open: "card"` and `open: "full"`, but it
+requires an open Star Map and follows the map's rule against moving keyboard
+focus. It does not provide a general focused-main-window navigation contract.
+`read_thread` and messaging attachment tools also do not select a graphical
+thread. The window navigation bridge (`window:show-thread`) is the shared
+desktop path for selecting one; `open_thread` exposes that path to agents.
+
+To open or "mount" a requested thread, the manager calls `open_thread` with
+`backend`, `threadId`, and the owning `instanceId` for a peer result. Omit
+`instanceId` for a local thread; the local instance ID is accepted too. This
+tool belongs to the same family and permission as `read_operator_focus`, but
+does not require an open Star Map. It restores and focuses the local main
+window that last published operator focus (falling back to the primary main
+window), mounts a peer thread through the existing remote-thread pin API when
+needed, and selects the thread view. It never sends a focus command to the
+peer machine's graphical interface.
+
+Existing Codex manager threads receive added tools through the negotiated
+`dynamicToolsResumeField: "dynamicTools"` catalog-refresh capability. Older
+runtimes keep the tools registered when a thread was created. On those
+runtimes, update Codex or end director voice, archive the old Voice manager,
+and start director voice again to create a manager with the current catalog.
+
+The tool reports success only when the targeted main window's published focus
+matches the requested backend, thread and owner in the thread view. Dispatch
+alone is not success. A missing or closing window returns `ui_not_available`;
+an unconfirmed selection returns `navigation_timeout` after 15 seconds. A
+timeout can mean a missing thread, an unavailable peer, or an operator who kept
+editing Settings instead of leaving. The focus acknowledgement confirms the
+selection, not that every transcript page has finished rendering. Reading a
+thread with `read_thread` never changes the graphical selection.
+
+Global search (⌘⇧F / Ctrl+Shift+F) searches active threads by default, sending
+`filters.includeArchived: false` to `searchThreads`. Archive lookup remains
+explicit through agent `search_threads`; the manager searches with
+`includeArchived: true` for past work or when an ordinary search misses it.
+Opening an archived thread leaves its archive state intact.
+Content search retains its provider availability and bounded candidate limits;
+including archives does not make unavailable provider history searchable.
+Metadata refresh batches changed entries into one SQLite transaction and skips
+unchanged entries. The checked-in budget measures one initial transaction for
+an active/archived pair and zero writes on the identical repeat search. The
+peer mount budget measures two commits (about 0.025 MB of WAL) for a new mount,
+then zero additional commits for 100 opens of that mounted row: about 2.5 MB/day
+at 100 new peer mounts/day, with no idle writes. Ordinary read-state updates
+continue to follow the selected sidebar lens's existing policy.
+
 Director voice shows in a floating panel. Drag the header to
 move the panel. Drag the corner grip, or focus the grip and use the arrow keys,
 to resize it. It opens at the top right, clear of the notice stack in the

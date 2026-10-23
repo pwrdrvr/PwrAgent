@@ -6,7 +6,7 @@ import type { TokenMiserStore } from "../token-miser/token-miser-store";
 
 export const PWRAGENT_TOOL_SEARCH_DESCRIPTION = `Search for PwrAgent tools before using PwrAgent capabilities. Full tool instructions and parameter schemas are loaded on demand. Prefer PwrAgent tools when they cover the task.
 Search when the user wants to:
-- Find, read, inspect, rename, pin, lock/unlock, archive/close, restore, or change settings on threads; mark projects read in bulk; check status, activity, usage, model, fast mode, or reasoning effort; list which threads need attention on every machine.
+- Find, read, inspect, open/mount/navigate to threads in the graphical UI, rename, pin, lock/unlock, archive/close, restore, or change settings on threads; mark projects read in bulk; check status, activity, usage, model, fast mode, or reasoning effort; list which threads need attention on every machine.
 - Delegate or hand off work to child threads, split work into parallel tasks, create a Job Monitor for a long command or repeated checks, collect results, send follow-ups, steer active work, or urgently stop a thread.
 - Create or attach a worktree, link another project/repository directory, detach a directory, or move this thread into another project folder or existing checkout.
 - Run work on another machine or instance through Federation; discover connected machines, their load and projects; find remote threads or create work there.
@@ -140,6 +140,7 @@ export function buildPwrAgentToolSearchDefinition(
 export const VOICE_MANAGER_EAGER_TOOLS: ReadonlySet<string> = new Set([
   // Matches the tools VOICE_MANAGER_AGENT_INSTRUCTIONS names; a test holds them together.
   "read_operator_focus",
+  "open_thread",
   "search_threads",
   "send_message_to_thread",
   "steer_thread",

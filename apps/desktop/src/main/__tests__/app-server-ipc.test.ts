@@ -28,7 +28,9 @@ import type {
   RestoreThreadRequest,
   SetThreadParentRequest,
   ThreadGitWorkingState,
+  ThreadSearchResponse,
 } from "@pwragent/shared";
+import type { ThreadSearchService } from "../thread-search/thread-search-service";
 import {
   BACKGROUND_WORKTREE_WORKING_STATE_BATCH_SIZE,
   selectStaleWorktreeWorkingStatePaths,
@@ -152,6 +154,7 @@ const federationMock = vi.hoisted(() => {
         capabilities: string[];
       }> => []),
       health: vi.fn(async () => ({ instanceId: "pwr_local" })),
+      searchConnectedPeers: vi.fn(async () => ({ results: [], failures: [], searchedInstances: [] })),
       hydrateThreadMessageOrigins: vi.fn(async (response) => response),
       remoteBackend: vi.fn(() => remoteBackend),
       remoteTargetSupportsCapability: vi.fn(() => true),
@@ -1236,6 +1239,47 @@ vi.mock("../pr-status/git-remote", async () => {
 });
 
 describe("app server ipc", () => {
+  it("reads exact persisted peer membership without repinning or listing navigation rows", async () => {
+    const { NAVIGATION_HAS_REMOTE_THREAD_PIN_CHANNEL } = await import("../../shared/ipc");
+    registerAppServerIpcHandlers();
+    const ref = { backend: "codex" as const, threadId: "off-page", target: { scope: "remote" as const, instanceId: "peer-laptop" } };
+    hasRemoteThreadPin.mockClear();
+    addRemoteThreadPinStore.mockClear();
+    listRemoteThreadPins.mockClear();
+    hasRemoteThreadPin.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    const read = handlers.get(NAVIGATION_HAS_REMOTE_THREAD_PIN_CHANNEL)!;
+    expect(await read({}, { ref })).toBe(true);
+    expect(await read({}, { ref })).toBe(false);
+    expect(hasRemoteThreadPin).toHaveBeenLastCalledWith({ ref });
+    expect(addRemoteThreadPinStore).not.toHaveBeenCalled();
+    expect(listRemoteThreadPins).not.toHaveBeenCalled();
+    await expect(read({}, { ref: { ...ref, target: { scope: "local" } } })).rejects.toThrow("valid remote federation target");
+    expect(hasRemoteThreadPin).toHaveBeenCalledTimes(2);
+  });
+
+  it("forwards the global search archive scope to peers as well as the local search", async () => {
+    const { appServerService } = await import("../ipc/app-server");
+    const local: ThreadSearchResponse = {
+      backend: "all", contentMode: "available", fetchedAt: 1, filters: {}, query: "archived example",
+      results: [], searchedScopes: ["metadata"], semanticMode: "disabled", unavailableScopes: [],
+    };
+    const search = vi.fn(async () => local);
+    const service = appServerService as unknown as { getThreadSearchService: () => Pick<ThreadSearchService, "search"> };
+    const stub = vi.spyOn(service, "getThreadSearchService").mockReturnValue({ search });
+    try {
+      for (const includeArchived of [true, false]) {
+        const request = { query: "archived example", filters: { includeArchived }, limit: 25 };
+        await appServerService.searchThreads(request);
+        expect(search).toHaveBeenLastCalledWith(request);
+        expect(federationMock.runtime.searchConnectedPeers).toHaveBeenLastCalledWith({
+          query: "archived example", limit: 25, backend: undefined, includeArchived,
+        });
+      }
+    } finally {
+      stub.mockRestore();
+    }
+  });
+
   type AppServerIpcModule = typeof import("../ipc/app-server");
   let disposeAppServerIpcHandlers: AppServerIpcModule["disposeAppServerIpcHandlers"];
   let registerAppServerIpcHandlers: AppServerIpcModule["registerAppServerIpcHandlers"];

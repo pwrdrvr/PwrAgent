@@ -236,6 +236,7 @@ import type {
   FederationJumpSearchProgress,
   FederationJumpSearchResponse,
   RemoveRemoteThreadPinRequest,
+  HasRemoteThreadPinRequest,
   RemoveRemoteThreadPinResponse,
   SetRemoteThreadLocalPinRequest,
   SetRemoteThreadLocalPinResponse,
@@ -1414,6 +1415,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
    * Stored only on this instance; removal works while the owner is
    * unreachable and never archives the owner's thread.
    */
+  hasRemoteThreadPin?: (request: HasRemoteThreadPinRequest) => Promise<boolean>;
   addRemoteThreadPin?: (
     request: AddRemoteThreadPinRequest
   ) => Promise<AddRemoteThreadPinResponse>;

@@ -291,6 +291,7 @@ export function ThreadSearchPanel(props: ThreadSearchPanelProps) {
     try {
       const result = await props.desktopApi.searchThreads({
         contentMode: "available",
+        filters: { includeArchived: false },
         limit: 25,
         query: trimmed,
       });
