@@ -13382,7 +13382,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                       currentModeId:
                         acpRuntimeModeControl.source === "mode"
                           ? value
-                          : undefined,
+                          : acpRuntimeModeControl.optionId === "permission_mode"
+                            ? props.launchpad.acpRuntime?.currentModeId
+                            : undefined,
                     },
                   });
                   return;

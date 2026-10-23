@@ -1,4 +1,5 @@
 import { normalizeAcpMcpServerConfigs, type AcpMcpServerConfig } from "@pwrdrvr/agent-acp";
+import { findAcpPermissionModeConfigOption } from "@pwragent/shared";
 import type {
   AcpBackendId,
   AcpThreadRewindPoint,
@@ -1036,6 +1037,7 @@ export class AcpAgentClient {
   private isRuntimeModeConfigOption(optionId: string): boolean {
     return (
       this.runtimeConfigOption("mode")?.id === optionId
+      && findAcpPermissionModeConfigOption(this.runtimeCapabilities)?.id !== optionId
     );
   }
 

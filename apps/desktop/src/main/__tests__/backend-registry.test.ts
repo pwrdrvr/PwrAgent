@@ -12655,7 +12655,7 @@ describe("DesktopBackendRegistry", () => {
       setRuntimeOption: vi.fn(
         async (): Promise<BackendAcpSessionRuntimeState> => ({
           configValues: { [optionId]: "yolo" },
-          currentModeId: "yolo",
+          currentModeId: registryId === "grok" ? "default" : "yolo",
           updatedAt: 2000,
         }),
       ),
@@ -12762,7 +12762,7 @@ describe("DesktopBackendRegistry", () => {
 
     acpClient.setRuntimeOption.mockResolvedValueOnce({
       configValues: { [optionId]: "auto" },
-      currentModeId: "auto",
+      currentModeId: registryId === "grok" ? "default" : "auto",
       updatedAt: 3000,
     });
     await registry.setAcpSessionRuntimeOption({
@@ -12773,7 +12773,8 @@ describe("DesktopBackendRegistry", () => {
       value: "auto",
     });
     expect(sendControlPrompt).not.toHaveBeenCalled();
-    expect(sessions[0]?.acpRuntime?.currentModeId).toBe("auto");
+    expect(sessions[0]?.acpRuntime?.currentModeId).toBe(registryId === "grok" ? "default" : "auto");
+    expect(sessions[0]?.acpRuntime?.configValues?.[optionId]).toBe("auto");
     await expect(
       overlayStore.getThreadOverlayState({
         backend: acpBackendId,
@@ -12781,14 +12782,39 @@ describe("DesktopBackendRegistry", () => {
       }),
     ).resolves.toMatchObject({ executionMode: "default" });
 
+    acpClient.setRuntimeOption.mockResolvedValueOnce({
+      configValues: { [optionId]: "default" },
+      currentModeId: "default",
+      updatedAt: 4000,
+    });
+    await registry.setAcpSessionRuntimeOption({
+      backend: acpBackendId,
+      threadId: "native-permission-session",
+      source: "configOption",
+      optionId,
+      value: "default",
+    });
+    expect(acpClient.setRuntimeOption).toHaveBeenLastCalledWith({
+      sessionId: "native-permission-session",
+      source: "configOption",
+      optionId,
+      value: "default",
+      rejectUnofferedThoughtLevel: true,
+    });
+    expect(sessions[0]?.acpRuntime?.configValues?.[optionId]).toBe("default");
+
     await registry.close();
   });
 
-  it("launches Grok Auto through its permission config option without calling session/set_mode", async () => {
+  it.each(["default", "plan"])("restores Grok Auto independently of inherited %s planning mode", async (planningMode) => {
     const backend = "acp:grok" as AcpBackendId;
     const runtimeCapabilities: BackendAcpRuntimeCapabilities = {
       schemaVersion: 1,
       status: "discovered",
+      modes: {
+        currentModeId: planningMode,
+        availableModes: [{ id: "default", label: "Default" }, { id: "plan", label: "Plan" }],
+      },
       configOptions: [{
         id: "permission_mode",
         label: "Permissions",
@@ -12814,8 +12840,8 @@ describe("DesktopBackendRegistry", () => {
       backend,
       cwd: "/repo/project",
       acpRuntime: {
-        currentModeId: "auto",
-        configValues: { permission_mode: "default" },
+        currentModeId: planningMode,
+        configValues: { permission_mode: "auto" },
         updatedAt: 1000,
       },
     });
@@ -12824,12 +12850,17 @@ describe("DesktopBackendRegistry", () => {
       source: "configOption",
       optionId: "permission_mode",
       value: "auto",
+    }], [{
+      sessionId: "kimi-session-1",
+      source: "mode",
+      optionId: "mode",
+      value: planningMode,
     }]]);
     expect(sendControlPrompt).not.toHaveBeenCalled();
     await registry.close();
   });
 
-  it("runs Grok ACP execution mode changes through /always-approve slash control prompts", async () => {
+  it.each([false, true])("runs Grok slash permission controls with planning modes advertised=%s", async (planningModes) => {
     // Regression test for the Grok-ACP Full Access bug: creating a Grok
     // thread with executionMode="full-access" must persist that mode to
     // session metadata AND surface it via listThreads, so the chip and
@@ -12860,12 +12891,17 @@ describe("DesktopBackendRegistry", () => {
           // here is whatever startAcpSession passes, NOT the
           // user-requested target.
           executionMode: params.executionMode,
+          ...(planningModes ? { acpRuntime: { currentModeId: "plan", updatedAt: 1000 } } : {}),
           status: "idle",
         };
         sessions.push(metadata);
         return metadata;
       }),
       startPrompt: vi.fn(),
+      setRuntimeOption: vi.fn(async (): Promise<BackendAcpSessionRuntimeState> => ({
+        currentModeId: "default",
+        updatedAt: 2000,
+      })),
       sendControlPrompt,
       ensureSession: vi.fn(async () => undefined),
       loadSession: vi.fn(async (): Promise<AppServerThreadReplay> => ({
@@ -12893,6 +12929,16 @@ describe("DesktopBackendRegistry", () => {
           registryId: "grok",
           name: "Grok",
           version: "0.2.3",
+          ...(planningModes ? {
+            runtimeCapabilities: {
+              schemaVersion: 1 as const,
+              status: "discovered" as const,
+              modes: {
+                currentModeId: "default",
+                availableModes: [{ id: "default", label: "Default" }, { id: "plan", label: "Plan" }],
+              },
+            },
+          } : {}),
           distributionKind: "local",
           distributionSource: "grok agent stdio",
           installStatus: "installed",
@@ -12959,6 +13005,21 @@ describe("DesktopBackendRegistry", () => {
     );
     expect(thread).toBeDefined();
     expect(thread?.executionMode).toBe("full-access");
+
+    if (planningModes) {
+      await registry.setAcpSessionRuntimeOption({
+        backend: acpBackendId,
+        threadId: "grok-session-1",
+        source: "mode",
+        optionId: "mode",
+        value: "default",
+      });
+      expect(sessions[0]?.executionMode).toBe("full-access");
+      await expect(overlayStore.getThreadOverlayState({
+        backend: acpBackendId,
+        threadId: "grok-session-1",
+      })).resolves.toMatchObject({ executionMode: "full-access" });
+    }
 
     const permissionEvents: AgentEvent[] = [];
     const unsubscribe = registry.onEvent((event) => {

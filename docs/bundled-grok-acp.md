@@ -150,13 +150,15 @@ Grok's native Auto mode reviews tool calls with its own classifier. PwrAgent
 does not supply a provider-independent approval reviewer. Codex and Claude
 likewise run their own Auto reviewers.
 
-When a Grok runtime advertises an ACP permission config option with category
-`mode`, that selector owns permission state, including Auto when available.
+When a Grok runtime advertises an ACP `permission_mode` config option with
+category `mode`, that selector owns permission state, including Auto when
+available.
 PwrAgent must not also send the legacy `/always-approve` control prompts:
-those prompts represent only Default and Full Access. Older Grok builds that
-advertise no mode selector retain that two-option fallback. A client-wide
-`x.ai/yolo_mode_changed` notification is unsuitable for this integration
-because multiple threads can share a Grok process.
+those prompts represent only Default and Full Access. Native ACP modes such as
+Default and Plan control planning independently; they do not replace permission
+controls. Builds without the permission selector retain the two-option fallback.
+A client-wide `x.ai/yolo_mode_changed` notification is unsuitable for this
+integration because multiple threads can share a Grok process.
 
 ## Updating the pin
 

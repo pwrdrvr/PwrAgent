@@ -5,6 +5,7 @@ import type {
   NavigationThreadSummary,
   ThreadExecutionMode,
 } from "@pwragent/shared";
+import { findAcpPermissionModeConfigOption } from "@pwragent/shared";
 
 export function formatExecutionModeLabel(mode?: ThreadExecutionMode): string {
   return mode === "auto" ? "Auto" : mode === "full-access" ? "Full Access" : "Default Access";
@@ -62,7 +63,7 @@ export function getAcpRuntimeModeControl(
     return undefined;
   }
 
-  const modeConfigOption = runtime.configOptions?.find(
+  const modeConfigOption = findAcpPermissionModeConfigOption(runtime) ?? runtime.configOptions?.find(
     (option) => option.category === "mode" && option.values.length > 0,
   );
   if (modeConfigOption) {
@@ -70,6 +71,7 @@ export function getAcpRuntimeModeControl(
       return undefined;
     }
     const currentModeValue =
+      modeConfigOption.id !== findAcpPermissionModeConfigOption(runtime)?.id &&
       settings?.acpRuntime?.currentModeId &&
       modeConfigOption.values.some(
         (option) => option.value === settings.acpRuntime?.currentModeId,
