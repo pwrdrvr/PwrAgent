@@ -4457,7 +4457,7 @@ function RuntimeIdentityButton(props: {
   return (
     <>
       <button
-        aria-label={copyName.includes(props.label) ? copyName : `${copyName}: ${props.label}`}
+        aria-label={copyName.endsWith(` ${props.label}`) ? copyName : `${copyName}: ${props.label}`}
         className="runtime-identity__button path-copy-target"
         type="button"
         onBlur={tooltip.hide}

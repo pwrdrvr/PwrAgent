@@ -124,7 +124,7 @@ export function ComposerDropdown(props: {
     ?? otherOptions[0];
   const selectedLabel = selectedOption?.label ?? props.value;
   const showsSelectedLabel = !(props.iconOnly && props.icon);
-  const accessibleName = showsSelectedLabel && !props.ariaLabel.includes(selectedLabel)
+  const accessibleName = showsSelectedLabel && props.ariaLabel !== selectedLabel
     ? `${props.ariaLabel}: ${selectedLabel}`
     : props.ariaLabel;
   const closeMenu = useCallback((): void => {

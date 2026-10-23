@@ -31,6 +31,18 @@ function renderAccessMode(showTriggerTooltip = true, autoDisabled = false) {
 }
 
 describe("ComposerDropdown tooltip", () => {
+  it("includes a short selected name that is only part of the field name", () => {
+    render(
+      <ComposerDropdown
+        ariaLabel="Machine"
+        onChange={() => {}}
+        options={[{ label: "Mac", value: "mac" }]}
+        value="mac"
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Machine: Mac" })).toHaveTextContent("Mac");
+  });
+
   it("shows delayed help on disabled menu items without adding help to the trigger", () => {
     vi.useFakeTimers();
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect")
