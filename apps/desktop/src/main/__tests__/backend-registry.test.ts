@@ -3299,7 +3299,8 @@ describe("DesktopBackendRegistry", () => {
         await vi.waitFor(() => expect(events.some((event) => event.notification.method === "turn/completed")).toBe(true));
       }
       expect(revokeBridge).toHaveBeenCalledTimes(2);
-      expect(getSessionInfo).toHaveBeenCalledTimes(2);
+      // Each turn checks for a title at initialization and again at completion.
+      expect(getSessionInfo).toHaveBeenCalledTimes(4);
       expect(optionsSeen[1].resume).toBe(threadId);
       expect(optionsSeen.map(({ model, effort }) => ({ model, effort }))).toEqual([
         { model: "claude-custom-fixture", effort: "max" }, { model: "claude-opus-4-8", effort: "max" },
