@@ -45,6 +45,23 @@ describe("federated operator queue", () => {
     expect(localList).not.toHaveBeenCalled();
   });
 
+  it("preserves expected coverage gaps for remote windows and deduplicates mounted owners", async () => {
+    const unavailable = { instanceId: "owner", label: "Studio Mac", reason: "disconnected" as const };
+    const service = new FederatedOperatorRequestService({ localList: () => structuredClone(local), localMarkSeen: vi.fn(),
+      remote: vi.fn(async (_target, operation) => operation === "list"
+        ? { questions: [], serverRequests: [], seenKeys: [], unavailableInstances: [unavailable] } : []) as
+        ConstructorParameters<typeof FederatedOperatorRequestService>[0]["remote"],
+      mountedThreads: async () => ["one", "two"].map((threadId) => ({ target, backend: "codex", threadId })),
+    });
+    const windowResponse = await service.list({}, target);
+    expect(windowResponse.unavailableInstances).toEqual([unavailable]);
+    expect(windowResponse.questions).toEqual([]);
+    const mountedResponse = await service.list();
+    expect(mountedResponse.questions).toEqual(local.questions);
+    expect(mountedResponse.unavailableInstances).toEqual([unavailable]);
+    expect(mountedResponse.errors).toBeUndefined();
+  });
+
   it("batches seen marks once per owner without persisting remote marks locally", async () => {
     const { service, remote, localMarkSeen } = fixture();
     await service.markSeen({ keys: ["todo:local", projectOperatorItemKey("todo:review:1", target),

@@ -84,6 +84,7 @@ import type {
   FederationInstanceRole,
   FederationLoadStatus,
   FederationPeerSummary,
+  TodoUnavailableInstance,
   FederationPinDisposition,
   FederationProtocolEnvelope,
   FederationSessionId,
@@ -2311,7 +2312,12 @@ export class DesktopFederationRuntime {
   async requestThreadTodoOperation<K extends ThreadTodoOperation>(
     target: FederationRemoteTarget, operation: K, request: ThreadTodoOperationRequest<K>,
   ): Promise<ThreadTodoOperationResponse<K>> {
-    if (!this.remotePeerAdvertisesCapability(target.instanceId, "thread_todos")) {
+    const unavailable = this.todoQueueUnavailableInstance(target, "thread_todos");
+    if (unavailable) {
+      if (operation === "listTodos") {
+        return { todos: [], unavailableInstances: [unavailable] } as ThreadTodoOperationResponse<K>;
+      }
+      if (unavailable.reason === "disconnected") throw new Error(`${unavailable.label} is disconnected.`);
       throw new Error("This Federation owner does not support To-dos. Update that PwrAgent instance.");
     }
     return await this.rpcFor(target).request({ method: FEDERATION_THREAD_TODO_METHODS[operation], params: request,
@@ -2323,7 +2329,13 @@ export class DesktopFederationRuntime {
     target: FederationRemoteTarget, operation: K, request: OperatorQuestionOperationRequest<K>,
   ): Promise<OperatorQuestionOperationResponse<K>> {
     const queueOperation = operation === "list" || operation === "listPending" || operation === "markSeen" || operation === "reply";
-    if (!this.remotePeerAdvertisesCapability(target.instanceId, queueOperation ? "operator_requests" : "operator_questions")) {
+    const unavailable = this.todoQueueUnavailableInstance(target, queueOperation ? "operator_requests" : "operator_questions");
+    if (unavailable) {
+      if (operation === "list") {
+        return { serverRequests: [], questions: [], seenKeys: [], unavailableInstances: [unavailable] } as OperatorQuestionOperationResponse<K>;
+      }
+      if (operation === "listPending") return [] as OperatorQuestionOperationResponse<K>;
+      if (unavailable.reason === "disconnected") throw new Error(`${unavailable.label} is disconnected.`);
       throw new Error(`This Federation owner does not support ${queueOperation ? "the operator request queue" : "question dismissals"}. Update that PwrAgent instance.`);
     }
     if (operation === "listPending" && !this.remotePeerAdvertisesCapability(target.instanceId, "pending_request_control")) {
@@ -2851,6 +2863,23 @@ export class DesktopFederationRuntime {
     } catch {
       return instanceId;
     }
+  }
+
+  private todoQueueUnavailableInstance(
+    target: FederationRemoteTarget,
+    capability: FederationCapability,
+  ): TodoUnavailableInstance | undefined {
+    let peer: FederationPeerSummary | undefined;
+    try {
+      peer = this.visiblePeers().find((candidate) => candidate.id === target.instanceId);
+    } catch {
+      // Direct connections are also authoritative during startup.
+    }
+    const connected = this.router?.getConnection(target.instanceId) || peer?.status === "connected";
+    const reason = !connected ? "disconnected"
+      : !this.viewerCapabilitiesFor(target.instanceId, peer).includes(capability) ? "unsupported"
+        : undefined;
+    return reason ? { instanceId: target.instanceId, label: this.diagnosticInstanceLabel(target.instanceId), reason } : undefined;
   }
 
   private remotePeerAdvertisesCapability(

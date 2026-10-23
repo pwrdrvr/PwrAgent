@@ -254,8 +254,16 @@ export type ListThreadTodosRequest = {
   threadId?: ThreadIdentifier;
 };
 
+/** An expected gap in the To-dos view, rather than a failed operator action. */
+export type TodoUnavailableInstance = {
+  instanceId: string;
+  label: string;
+  reason: "disconnected" | "unsupported";
+};
+
 export type ListThreadTodosResponse = {
   errors?: string[];
+  unavailableInstances?: TodoUnavailableInstance[];
   todos: ThreadTodo[];
   /** What a merge card's primary button does, so its label can say so. */
   mergeMethods?: ThreadTodoMergeMethodPreferences;

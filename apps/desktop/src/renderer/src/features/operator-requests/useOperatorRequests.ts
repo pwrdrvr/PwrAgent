@@ -7,7 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
-import type { DismissOperatorQuestionRequest } from "@pwragent/shared";
+import type { DismissOperatorQuestionRequest, TodoUnavailableInstance } from "@pwragent/shared";
 import { operatorQuestionItemKey } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { buildOperatorWaits, type OperatorWait } from "./operator-waits";
@@ -15,6 +15,7 @@ import { buildOperatorWaits, type OperatorWait } from "./operator-waits";
 export type OperatorRequestsController = {
   ready: boolean;
   error?: string;
+  unavailableInstances: TodoUnavailableInstance[];
   /** Local and mounted threads' waits, most urgent first. */
   waits: OperatorWait[];
   /** Waits per owner-qualified thread key, most urgent first. */
@@ -44,6 +45,7 @@ type OperatorRequestsApi = Pick<
 const EMPTY_WAITS: OperatorWait[] = [];
 const EMPTY_MAP: ReadonlyMap<string, OperatorWait[]> = new Map();
 const EMPTY_SET: ReadonlySet<string> = new Set();
+const EMPTY_UNAVAILABLE: TodoUnavailableInstance[] = [];
 
 /**
  * The owner-backed queue for local and mounted threads, or a remote window.
@@ -58,6 +60,7 @@ export function useOperatorRequests(
   const api = desktopApi;
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string>();
+  const [unavailableInstances, setUnavailableInstances] = useState(EMPTY_UNAVAILABLE);
   const [waits, setWaits] = useState<OperatorWait[]>(EMPTY_WAITS);
   const [seenKeys, setSeenKeys] = useState<ReadonlySet<string>>(EMPTY_SET);
   const loadingRef = useRef(false);
@@ -87,6 +90,7 @@ export function useOperatorRequests(
           const next = buildOperatorWaits(response);
           setReady(true);
           setError(response.errors?.join("\n"));
+          setUnavailableInstances(response.unavailableInstances ?? EMPTY_UNAVAILABLE);
           // A reload that changed no wait keeps the same array, so the
           // sidebar's rows, which read it through context, do not re-render.
           setWaits((current) => sameWaits(current, next)
@@ -176,7 +180,7 @@ export function useOperatorRequests(
 
   return useMemo(
     () => ({
-      ready, error,
+      ready, error, unavailableInstances,
       waits,
       waitsByThreadKey,
       seenKeys,
@@ -184,7 +188,7 @@ export function useOperatorRequests(
       dismissQuestion,
       dismissedQuestionKeys,
     }),
-    [ready, error, waits, waitsByThreadKey, seenKeys, markSeen, dismissQuestion, dismissedQuestionKeys],
+    [ready, error, unavailableInstances, waits, waitsByThreadKey, seenKeys, markSeen, dismissQuestion, dismissedQuestionKeys],
   );
 }
 
