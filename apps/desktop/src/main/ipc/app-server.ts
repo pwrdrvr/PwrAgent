@@ -1,3 +1,4 @@
+import { detachOwnedThreadDirectory } from "../app-server/thread-directory-detach";
 import { ForgeReadService, repositoryFromPr } from "../pr-status/forge-read-service";
 import { ForgeCiClient } from "../pr-status/forge-ci-client";
 import { ForgeReadError, type ForgeReadArgs, type ForgeReadOperation } from "../pr-status/forge-tool-contract";
@@ -925,46 +926,6 @@ function reconcileRemoteLaunchpadBranch(
     return branchName;
   }
   return gitStatus?.currentBranch;
-}
-
-function normalizeLinkedDirectoryPathForMatch(
-  value: string | undefined,
-): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? path.resolve(trimmed).replace(/\\/g, "/") : undefined;
-}
-
-function linkedDirectoriesMatchForDetach(
-  left: Pick<LinkedDirectorySummary, "id" | "kind" | "path" | "worktreePath">,
-  right: Pick<LinkedDirectorySummary, "id" | "kind" | "path" | "worktreePath">,
-): boolean {
-  if (left.id === right.id) {
-    return true;
-  }
-  if (left.kind !== right.kind) {
-    return false;
-  }
-  return (
-    normalizeLinkedDirectoryPathForMatch(left.path) ===
-      normalizeLinkedDirectoryPathForMatch(right.path) &&
-    normalizeLinkedDirectoryPathForMatch(left.worktreePath) ===
-      normalizeLinkedDirectoryPathForMatch(right.worktreePath)
-  );
-}
-
-function countDistinctLinkedDirectories(
-  directories: LinkedDirectorySummary[],
-): number {
-  const seen = new Set<string>();
-  for (const directory of directories) {
-    const key = [
-      directory.kind,
-      normalizeLinkedDirectoryPathForMatch(directory.path),
-      normalizeLinkedDirectoryPathForMatch(directory.worktreePath),
-    ].join("\0");
-    seen.add(key);
-  }
-  return seen.size;
 }
 
 function getPullRequestLookupKey(
@@ -7878,68 +7839,31 @@ class DesktopAppServerService {
   async detachDirectoryFromThread(
     request: DetachDirectoryFromThreadRequest,
   ): Promise<DetachDirectoryFromThreadResponse> {
-    const backend = request.backend ?? "codex";
-    const overlay = await this.getOverlayStore().getThreadOverlayState({
-      backend,
-      threadId: request.threadId,
-    });
-    const currentDirectories = overlay?.extraLinkedDirectories ?? [];
-    const matched = currentDirectories.find((directory) =>
-      linkedDirectoriesMatchForDetach(directory, request.directory),
-    );
-    if (!matched) {
-      return {
-        ok: false,
-        backend,
-        threadId: request.threadId,
-        reason: "primary-directory",
-        message:
-          "Only secondary directories attached to this thread can be detached.",
-      };
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      const { federationTarget, ...ownerRequest } = request;
+      return await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .detachDirectoryFromThread(ownerRequest);
     }
-    const fullThread = await this.listThreads({ backend })
-      .then((response) =>
-        response.threads.find((thread) => thread.id === request.threadId),
-      )
-      .catch(() => undefined);
-    const totalLinkedDirectories = countDistinctLinkedDirectories([
-      ...(fullThread?.linkedDirectories ?? []),
-      ...currentDirectories,
-    ]);
-    if (totalLinkedDirectories <= 1) {
-      return {
-        ok: false,
-        backend,
-        threadId: request.threadId,
-        reason: "last-directory",
-        message:
-          "Cannot detach the last linked directory from a thread.",
-      };
-    }
-
-    const next = await this.getOverlayStore().removeLinkedDirectory({
-      backend,
-      threadId: request.threadId,
-      directory: matched,
-    });
-
-    await getDesktopBackendRegistry().publishLocalEvent({
-      backend,
-      notification: {
-        method: "navigation/threadDirectories/updated",
-        params: {
-          reason: "selected-thread",
-          threadIds: [request.threadId],
-        },
+    return await detachOwnedThreadDirectory(request, {
+      overlayStore: this.getOverlayStore(),
+      readThread: async (backend, threadId) => {
+        const response = await this.listThreads({ backend });
+        return response.threads.find((thread) => thread.id === threadId);
+      },
+      publishUpdate: async (backend, threadId) => {
+        await getDesktopBackendRegistry().publishLocalEvent({
+          backend,
+          notification: {
+            method: "navigation/threadDirectories/updated",
+            params: { reason: "selected-thread", threadIds: [threadId] },
+          },
+        });
       },
     });
-
-    return {
-      ok: true,
-      backend,
-      threadId: request.threadId,
-      directories: next.extraLinkedDirectories,
-    };
   }
 
   async analyzeFocusedDiff(
@@ -9724,9 +9648,15 @@ export function registerAppServerIpcHandlers(): void {
   ipcMain.handle(
     NAVIGATION_DETACH_DIRECTORY_FROM_THREAD_CHANNEL,
     async (
-      _event,
+      event,
       request: DetachDirectoryFromThreadRequest,
     ): Promise<DetachDirectoryFromThreadResponse> => {
+      if (
+        isFederationWindowWebContents(event?.sender)
+        && !(request.federationTarget && isRemoteFederationTarget(request.federationTarget))
+      ) {
+        throw new Error("Remote directory detachments must target the owning instance.");
+      }
       return await appServerService.detachDirectoryFromThread(request);
     },
   );
