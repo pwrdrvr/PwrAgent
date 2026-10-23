@@ -7495,22 +7495,35 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     return this.stateDb.raw.transaction(() => {
       this.writeLaunchpadDefaults(apply(this.readLaunchpadDefaults(), true));
       const update = this.stateDb.raw.prepare(
-        "UPDATE directory_launchpads SET payload = ?, updated_at = ?, settings_touched_at = ? WHERE directory_path = ?",
+        "UPDATE directory_launchpads SET payload = ?, updated_at = ?, settings_touched_at = COALESCE(?, settings_touched_at) WHERE directory_path = ?",
       );
       const now = Date.now();
       let count = 0;
       for (const launchpad of Object.values(this.readAllDirectoryLaunchpads())) {
-        if (
-          changedAccessBackends.length === 0
-          && !changedBackends.some((backend) =>
-            launchpad.backend === backend
-            || launchpad.providerSettings?.[backend] !== undefined
-          )
-        ) continue;
+        const usesChangedModelBackend = changedBackends.some((backend) =>
+          launchpad.backend === backend
+          || launchpad.providerSettings?.[backend] !== undefined
+        );
+        if (changedAccessBackends.length === 0 && !usesChangedModelBackend) continue;
         const updated = apply(launchpad, false);
         updated.updatedAt = now;
-        updated.settingsTouchedAt = now;
-        update.run(JSON.stringify(updated), now, now, updated.directoryKey);
+        // The access pass reaches every launchpad, but a profile setting is
+        // not the operator touching this one. Stamping an untouched launchpad
+        // would make it a Directories row and stop it following the defaults.
+        const settingsTouchedAt = usesChangedModelBackend
+          ? now
+          : launchpad.settingsTouchedAt;
+        if (settingsTouchedAt === undefined) {
+          delete updated.settingsTouchedAt;
+        } else {
+          updated.settingsTouchedAt = settingsTouchedAt;
+        }
+        update.run(
+          JSON.stringify(updated),
+          now,
+          settingsTouchedAt ?? null,
+          updated.directoryKey,
+        );
         count += 1;
       }
       return count;
@@ -7542,7 +7555,14 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         "UPDATE directory_launchpads SET payload = ? WHERE directory_path = ?",
       );
       for (const row of rows) {
-        const stored = JSON.parse(row.payload) as DirectoryLaunchpadOverlayState;
+        // This runs during startup: an unreadable row must not stop the app.
+        let stored: DirectoryLaunchpadOverlayState;
+        try {
+          stored = JSON.parse(row.payload) as DirectoryLaunchpadOverlayState;
+        } catch {
+          continue;
+        }
+        if (typeof stored !== "object" || stored === null) continue;
         const migrated = forgetLegacyDefaultLaunchpadExecutionModes(stored);
         if (migrated !== stored) {
           update.run(JSON.stringify(migrated), row.directory_path);

@@ -147,6 +147,8 @@ describe("SqliteOverlayStore - launchpad defaults", () => {
     expect(claudeLaunchpad).toMatchObject({ executionMode: "full-access", model: "opus", prompt: "draft" });
     const grokLaunchpad = await store.getDirectoryLaunchpad({ directoryKey: "directory:/grok" });
     expect(grokLaunchpad).toMatchObject({ backend: "acp:grok", executionMode: "default", model: "grok-4" });
+    // A profile setting is not the operator touching this launchpad.
+    expect(grokLaunchpad?.settingsTouchedAt).toBeUndefined();
     expect(applyNavigationLaunchpadProviderSettingsPatch(grokLaunchpad!, { backend: "claude" }).executionMode)
       .toBe("full-access");
     const defaults = await store.getLaunchpadDefaults();
