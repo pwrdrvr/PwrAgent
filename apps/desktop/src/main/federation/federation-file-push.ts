@@ -231,11 +231,21 @@ export function registerFilePushHandlers(router: FederationRouter, receiver: Fed
 /** One acknowledged chunk at a time bounds memory and socket pressure on both
  * direct and gateway-relayed routes. A failed transfer is explicitly cancelled;
  * lost connections fall back to the receiver's idle expiry. */
+export type PushFederationFileOptions = {
+  /** Aborting sends `file.push.cancel` and rejects with the signal's reason. */
+  signal?: AbortSignal;
+  /** Called after each acknowledged chunk with bytes the receiver holds. */
+  onProgress?: (sentBytes: number, totalBytes: number) => void;
+};
+
 export async function pushFederationFile(
   rpc: Pick<FederationRpcEndpoint, "request">,
   sourcePath: string,
   name?: string,
+  options: PushFederationFileOptions = {},
 ): Promise<FilePushResult> {
+  const { signal, onProgress } = options;
+  signal?.throwIfAborted();
   if (!path.isAbsolute(sourcePath)) throw new Error("The source file path must be absolute.");
   if (!(await fs.stat(sourcePath)).isFile()) throw new Error("Select a regular file.");
   const file = await fs.open(sourcePath, "r");
@@ -245,6 +255,7 @@ export async function pushFederationFile(
     if (!stat.isFile() || stat.size > FILE_PUSH_MAX_BYTES) throw new Error("Select a regular file of at most 512 MiB.");
     const begin = await rpc.request<{ transferId: string }>({ method: FILE_PUSH_METHODS.begin, params: { name: filename(name ?? path.basename(sourcePath)), sizeBytes: stat.size } });
     transferId = begin.transferId;
+    onProgress?.(0, stat.size);
     const hash = createHash("sha256");
     const buffer = Buffer.alloc(FILE_PUSH_CHUNK_BYTES);
     let offset = 0;
@@ -255,9 +266,12 @@ export async function pushFederationFile(
       hash.update(chunk);
       await rpc.request({ method: FILE_PUSH_METHODS.chunk, params: { transferId, offset, dataBase64: chunk.toString("base64") } });
       offset += bytesRead;
+      onProgress?.(offset, stat.size);
+      signal?.throwIfAborted();
     }
     const after = await file.stat();
     if (after.size !== stat.size || after.mtimeMs !== stat.mtimeMs) throw new Error("Source file changed during transfer.");
+    signal?.throwIfAborted();
     // Finalization can copy the whole file on volumes that deny hard links.
     // Wait for the result or peer disconnect rather than timing out mid-copy.
     return await rpc.request<FilePushResult>({ method: FILE_PUSH_METHODS.finish, params: { transferId, sha256: hash.digest("hex") }, timeoutMs: null });

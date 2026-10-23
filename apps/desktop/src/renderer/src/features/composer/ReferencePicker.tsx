@@ -63,6 +63,12 @@ export type ReferencePickerProps = {
   onPickFileFromDisk?: () => void;
   /** Disable controller-local native pickers in a remote viewer. */
   nativePickingDisabled?: boolean;
+  /**
+   * A remote viewer that can copy files to the thread's owner keeps
+   * "Add file…" while directories stay local-only. Set to the reason when
+   * the owner cannot take files, or `undefined` when it can.
+   */
+  remoteFilePicking?: { disabledReason?: string };
 };
 
 const RECENTS_LIMIT = 10;
@@ -165,8 +171,17 @@ export function ReferencePicker(props: ReferencePickerProps): ReactElement {
     );
   }, [props.recentFiles, trimmedQuery]);
 
+  // The combined dialog can return directories, which a remote owner cannot
+  // receive, so a remote viewer always gets the separate actions.
   const useCombinedPicker =
-    props.platform === "darwin" && Boolean(props.onPickFromDisk);
+    props.platform === "darwin"
+    && Boolean(props.onPickFromDisk)
+    && !props.nativePickingDisabled;
+  const filePickingDisabledReason = props.remoteFilePicking
+    ? props.remoteFilePicking.disabledReason
+    : props.nativePickingDisabled
+      ? REMOTE_NATIVE_PICKER_TOOLTIP
+      : undefined;
 
   return (
     <span
@@ -290,7 +305,7 @@ export function ReferencePicker(props: ReferencePickerProps): ReactElement {
                 <li className="reference-picker__empty">
                   {trimmedQuery
                     ? "No matches."
-                    : props.nativePickingDisabled
+                    : filePickingDisabledReason !== undefined
                       ? "No recent files."
                       : "No recent files. Drop files on the composer or add one below."}
                 </li>
@@ -380,17 +395,9 @@ export function ReferencePicker(props: ReferencePickerProps): ReactElement {
                 <button
                   type="button"
                   className="reference-picker__row reference-picker__row--action"
-                  data-tooltip={
-                    props.nativePickingDisabled
-                      ? REMOTE_NATIVE_PICKER_TOOLTIP
-                      : undefined
-                  }
-                  disabled={props.nativePickingDisabled}
-                  title={
-                    props.nativePickingDisabled
-                      ? REMOTE_NATIVE_PICKER_TOOLTIP
-                      : undefined
-                  }
+                  data-tooltip={filePickingDisabledReason}
+                  disabled={filePickingDisabledReason !== undefined}
+                  title={filePickingDisabledReason}
                   onClick={() => props.onPickFileFromDisk?.()}
                 >
                   <span aria-hidden="true" className="reference-picker__plus">

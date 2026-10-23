@@ -217,6 +217,43 @@ describe("Federation push files", () => {
     expect(await fs.readFile(result.path, "utf8")).toBe("");
   });
 
+  it("reports acknowledged bytes per chunk to the sender", async () => {
+    const source = path.join(root, "progress.bin");
+    const size = FILE_PUSH_CHUNK_BYTES * 2 + 5;
+    await fs.writeFile(source, Buffer.alloc(size, 7));
+    const rpc = { request: ({ method, params }: { method: string; params: unknown }) => call(method, params) } as Pick<FederationRpcEndpoint, "request">;
+    const progress: Array<[number, number]> = [];
+    await pushFederationFile(rpc, source, undefined, {
+      onProgress: (sent, total) => progress.push([sent, total]),
+    });
+    expect(progress).toEqual([
+      [0, size],
+      [FILE_PUSH_CHUNK_BYTES, size],
+      [FILE_PUSH_CHUNK_BYTES * 2, size],
+      [size, size],
+    ]);
+  });
+
+  it("cancels the receiver's transfer when the sender aborts between chunks", async () => {
+    const source = path.join(root, "abort.bin");
+    await fs.writeFile(source, Buffer.alloc(FILE_PUSH_CHUNK_BYTES * 3, 1));
+    const sentMethods: string[] = [];
+    const rpc = { request: ({ method, params }: { method: string; params: unknown }) => {
+      sentMethods.push(method);
+      return call(method, params);
+    } } as Pick<FederationRpcEndpoint, "request">;
+    const controller = new AbortController();
+    const outcome = pushFederationFile(rpc, source, undefined, {
+      signal: controller.signal,
+      onProgress: (sent) => {
+        if (sent === FILE_PUSH_CHUNK_BYTES) controller.abort();
+      },
+    });
+    await expect(outcome).rejects.toThrow(/abort/i);
+    expect(sentMethods).toEqual([methods.begin, methods.chunk, methods.cancel]);
+    expect(await fs.readdir(downloads)).toEqual([]);
+  });
+
   it("waits beyond the default RPC deadline for a slow fallback copy", async () => {
     const router = new FederationRouter({ localInstanceId: "pwr_receiver", methodCapabilities: FILE_PUSH_METHOD_CAPABILITIES });
     registerFilePushHandlers(router, receiver);

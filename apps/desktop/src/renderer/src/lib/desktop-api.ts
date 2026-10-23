@@ -31,6 +31,12 @@ import type { ReadUsageActivityRequest, ReadUsageActivityResponse, AnalyzeUsageA
 import type { ReadThreadFamilyPricingRequest, ReadThreadFamilyPricingResponse } from "@pwragent/shared";
 import type { PrActivitySnapshot } from "@pwragent/shared";
 import type { HandoffInstanceThreadRequest, HandoffInstanceThreadResult } from "@pwragent/shared";
+import type {
+  CancelComposerFilePushRequest,
+  ComposerFilePushProgress,
+  PushComposerFileRequest,
+  PushComposerFileResult,
+} from "@pwragent/shared";
 import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
 import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
 import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
@@ -822,6 +828,19 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   handoffThreadToInstance?: (
     request: HandoffInstanceThreadRequest,
   ) => Promise<HandoffInstanceThreadResult>;
+  /**
+   * Copy a file from this machine to the owner of a remote thread, for a
+   * composer attachment. Resolves with the owner's path to the copy.
+   */
+  pushComposerFile?: (
+    request: PushComposerFileRequest,
+  ) => Promise<PushComposerFileResult>;
+  cancelComposerFilePush?: (
+    request: CancelComposerFilePushRequest,
+  ) => Promise<void>;
+  onComposerFilePushProgress?: (
+    callback: (progress: ComposerFilePushProgress) => void,
+  ) => () => void;
   /** On-demand load poll for Star Map health indicators. Omitted or
    *  local instanceId samples locally; a remote id rides the
    *  short-timeout `backend.getLoadStatus` federation RPC. `load` is
