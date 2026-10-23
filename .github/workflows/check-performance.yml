@@ -44,13 +44,13 @@ jobs:
       - name: Install baseline dependencies
         uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
         with:
-          node-version: "24.21.0"
+          node-version: "24.22.1"
           working-directory: baseline
           cache-electron: "true"
       - name: Install candidate dependencies
         uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
         with:
-          node-version: "24.21.0"
+          node-version: "24.22.1"
           working-directory: candidate
           cache-electron: "true"
       - name: Measure identical check slices on this runner
