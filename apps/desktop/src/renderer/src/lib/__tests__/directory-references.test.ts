@@ -80,6 +80,18 @@ describe("Windows directory reference round trips", () => {
 });
 
 describe("findDirectoryReferenceTrigger", () => {
+  it.each(["C:/Projects/app", "C:\\Projects\\app", "\\\\server\\share\\app"])(
+    "keeps autocomplete open while typing a Windows path: %s",
+    (query) => {
+      const text = `see @${query}`;
+      expect(findDirectoryReferenceTrigger(text, text.length)).toEqual({
+        start: 4,
+        end: text.length,
+        query,
+      });
+    },
+  );
+
   it("matches a bare @ at the start of the draft", () => {
     expect(findDirectoryReferenceTrigger("@", 1)).toEqual({
       start: 0,
@@ -116,6 +128,22 @@ describe("findDirectoryReferenceTrigger", () => {
 
 describe("filterDirectoryReferenceCandidates", () => {
   const directories = [PWRAGNT, CATALOG_PORTAL, CATALOG_SERVICE, UNLINKED];
+
+  it.each([
+    ["C:/Projects/app", "C:\\Projects\\app"],
+    ["C:\\Projects\\app", "Projects/app"],
+    ["//server/share/app", "\\\\server\\share\\app"],
+    ["\\\\server\\share\\app", "//server/share/app"],
+  ])("matches Windows directory %s using query %s", (path, query) => {
+    const directory = makeDirectory({ key: "windows", label: "app", path });
+    expect(filterDirectoryReferenceCandidates([directory], query)).toEqual([directory]);
+  });
+
+  it("keeps backslashes literal when searching POSIX directory names", () => {
+    const directory = makeDirectory({ key: "posix", path: "/repo/folder\\name" });
+    expect(filterDirectoryReferenceCandidates([directory], "folder/name")).toEqual([]);
+    expect(filterDirectoryReferenceCandidates([directory], "folder\\name")).toEqual([directory]);
+  });
 
   it("returns referenceable directories most recently updated first", () => {
     expect(
