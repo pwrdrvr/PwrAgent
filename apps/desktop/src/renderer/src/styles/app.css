@@ -5957,6 +5957,13 @@ a.button {
   user-select: none;
 }
 
+/* The held card is a clone; the row it came from stays in place, dimmed, so
+   the gap it will leave is readable. */
+.thread-row-shell.is-pointer-dragging > .thread-row,
+.directory-row.is-pointer-dragging > .directory-row__header {
+  opacity: 0.38;
+}
+
 .thread-row-shell.is-drop-target-before::before,
 .thread-row-shell.is-drop-target-after::after {
   content: "";
@@ -6199,8 +6206,8 @@ a.button {
    Rows contain buttons, copy targets, PR hover cards, menus, and native-title
    controls; letting those surfaces activate while a card is held creates
    target churn and can open hover UI over the drag. The shared drag guard
-   stamps this attribute for both pointer-driven thread pinning and the native
-   directory/subthread drags. Interactive descendants become transparent while
+   stamps this attribute for every pointer-driven sidebar drag: thread pins,
+   sub-threads, and project folders. Interactive descendants become transparent while
    every hover overlay is suppressed until release, drop, Escape, or blur. */
 :root[data-native-drag-active] .sidebar button,
 :root[data-native-drag-active] .sidebar a,
@@ -7900,22 +7907,46 @@ a.button {
   background: var(--bg-sidebar);
 }
 
-/* Directory pin drop-indicator (plan 2026-05-09-002 Units L + K
-   follow-up). Same visual treatment as
+/* Directory pin drop-indicator. Same visual treatment as
    `.thread-row-shell.is-drop-target-*`: 3px accent bar with a soft
-   glow, positioned just above (`-before`) or just below (`-after`)
-   the directory section. Attached to `.directory-row` (the outer
-   section) rather than the header so the indicator stretches to
-   the bottom of the expanded section when threads are visible.
-   That makes the "drop below this directory" target hit-able
-   anywhere over the expanded threads area, not just the 3px sliver
-   below the header. */
-.directory-row__header[draggable="true"] {
+   glow, just above (`-before`) or just below (`-after`) the directory
+   section. A folder drag folds the list to its headers first, so the
+   section is one header tall while the line shows. */
+.directory-row__header.is-draggable {
   cursor: grab;
 }
 
-.directory-row__header[draggable="true"]:active {
+.directory-row__header.is-draggable:active {
   cursor: grabbing;
+}
+
+.directory-row.is-pointer-dragging > .directory-row__header {
+  cursor: grabbing;
+}
+
+/* While a project header is held, the lens folds to one line per project:
+   the drop is a choice between folders, not a scroll past every expanded
+   thread list. Only a class on the list (`beginDirectoryDrag`), so each
+   project's open state and loaded pages come back untouched on release. The
+   carets read as closed to match. */
+.directory-list.is-folding-directories .directory-row > :not(.directory-row__header),
+.directory-list.is-folding-directories > .sidebar-list--compact {
+  display: none;
+}
+
+.directory-list.is-folding-directories .directory-row__chevron.is-open,
+.thread-row--drag-image .directory-row__chevron.is-open {
+  transform: none;
+}
+
+/* A held card passes over project headers; their hover "+" must not swap in
+   for the counts under it. A draft's permanent "+" stays. */
+:root[data-native-drag-active] .directory-row__header:not(.directory-row__header--has-draft):hover .directory-row__launchpad-cluster {
+  opacity: 0;
+}
+
+:root[data-native-drag-active] .directory-row__header--with-launchpad:hover .directory-row__summary-meta {
+  opacity: 1;
 }
 
 .directory-row.is-drop-target-before::before,

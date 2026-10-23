@@ -2,7 +2,7 @@ import { readNavigationPresentationOrder, type NavigationPresentationOrder } fro
 import type { NavigationPresentedThread } from "../../lib/navigation-loaded-rows";
 import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationWindow";
 import { isNavigationPeerUnavailable, navigationIdentityKey, navigationThreadSelectionKey } from "../../lib/navigation-query-state";
-import { Fragment, useId, useState, type MouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { Fragment, useId, type MouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { useEventCallback } from "../../lib/useEventCallback";
 import type {
   MessagingThreadBindingSummary,
@@ -19,11 +19,8 @@ import {
   resolveThreadParentKey,
 } from "@pwragent/shared";
 import { PinIcon } from "../../icons";
-import {
-  didDragLeaveCurrentTarget,
-  getDropIndicatorPosition,
-  useDropIndicatorController,
-} from "./drag-drop";
+import { useDropIndicatorController } from "./drag-drop";
+import { useSubthreadReorderDrag } from "./useSubthreadReorderDrag";
 import { createSubthreadTrays } from "./subthread-trays";
 import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
 import {
@@ -178,7 +175,6 @@ type RecentsListProps = {
  * the same rank the same way.
  */
 export function RecentsList(props: RecentsListProps) {
-  const dropIndicator = useDropIndicatorController();
   // Pin drags keep their own indicator, as in Directories: a sub-thread
   // reorder and a pin move must never light each other's targets.
   const pinDropIndicator = useDropIndicatorController();
@@ -188,15 +184,16 @@ export function RecentsList(props: RecentsListProps) {
     onReorderThreadPins: props.onReorderThreadPins,
     onSetThreadPin: props.onSetThreadPin,
   });
-  const [draggedThreadKey, setDraggedThreadKey] = useState<string | undefined>(
-    undefined,
-  );
   const threadByKey = new Map(
     (props.loadedThreads ?? props.threads).map((thread) => [
       threadSummaryIdentityKey(thread),
       thread,
     ]),
   );
+  const pointerDownSubthread = useSubthreadReorderDrag({
+    threadByKey,
+    onUpdateSubthreadOrder: props.onUpdateSubthreadOrder,
+  });
   const presentation = props.presentationOrder ?? readNavigationPresentationOrder(props.pagedNavigation?.resources ?? new Map());
   const entries = props.pagedNavigation ? (props.resourceIds ?? ["lens"]).flatMap((id) => presentation.get(id) ?? []) : undefined;
   const pinnedEntries = props.pagedNavigation && props.pinnedResourceId
@@ -327,7 +324,7 @@ export function RecentsList(props: RecentsListProps) {
     }
 
     return (
-      <div className="subthread-list" role="list" aria-label={`Sub-threads of ${parent.title}`}>
+      <div className="subthread-list" role="list" aria-label={`Sub-threads of ${parent.title}`} data-subthread-tray={parentKey}>
         {/* The parent's own workers lead its tray. Trailing them after every
             child read as the last child's workers and buried them under a
             long child list. */}
@@ -350,7 +347,11 @@ export function RecentsList(props: RecentsListProps) {
           }
           const child = entry.thread;
           const childKey = threadSummaryIdentityKey(child);
-          const rowDropKey = `${parentKey}:${childKey}`;
+          const reorderable =
+            canManageSubthreads
+            && directChildKeys.length > 1
+            && directChildKeySet.has(childKey)
+            && Boolean(props.onUpdateSubthreadOrder);
           // A row plus its own worker group, as siblings of this list. A
           // wrapping element would break the tray's flat list semantics.
           return [
@@ -366,12 +367,7 @@ export function RecentsList(props: RecentsListProps) {
               renaming={isRenamingRow(props.renamingRow, childKey, undefined)}
               onRequestRename={props.onRequestRenameThread}
               onCommitRename={props.onCommitRenameThread}
-              draggable={
-                canManageSubthreads
-                && directChildKeys.length > 1
-                && directChildKeySet.has(childKey)
-                && Boolean(props.onUpdateSubthreadOrder)
-              }
+              pointerDraggable={reorderable}
               includeLinkedDirectories
               nested
               nestedDepth={trays.depth(childKey)}
@@ -381,65 +377,7 @@ export function RecentsList(props: RecentsListProps) {
               thinkingThreadKeys={props.thinkingThreadKeys}
               agentCommandThreadKeys={props.agentCommandThreadKeys}
               thread={child}
-              onDragOverThread={(event) => {
-                event.preventDefault();
-                const draggedKey = draggedThreadKey;
-                const draggedThread = draggedKey ? threadByKey.get(draggedKey) : undefined;
-                if (
-                  !draggedThread
-                  || draggedKey === childKey
-                  || !directChildKeySet.has(childKey)
-                  || resolveThreadParentKey(draggedThread, threadByKey) !== parentKey
-                ) {
-                  event.dataTransfer.dropEffect = "none";
-                  dropIndicator.clear();
-                  return;
-                }
-                event.dataTransfer.dropEffect = "move";
-                dropIndicator.show(event.currentTarget, {
-                  targetKey: rowDropKey,
-                  position: getDropIndicatorPosition(event),
-                });
-              }}
-              onDragStartThread={(event) => {
-                setDraggedThreadKey(childKey);
-                event.dataTransfer.effectAllowed = "move";
-                event.dataTransfer.setData("text/plain", childKey);
-                event.dataTransfer.setData("application/x-pwragent-subthread", childKey);
-              }}
-              onDragLeaveThread={(event) => {
-                if (didDragLeaveCurrentTarget(event)) {
-                  dropIndicator.clear();
-                }
-              }}
-              onDragEndThread={() => {
-                setDraggedThreadKey(undefined);
-                dropIndicator.clear();
-              }}
-              onDropOnThread={(event) => {
-                event.preventDefault();
-                setDraggedThreadKey(undefined);
-                dropIndicator.clear();
-                const draggedKey =
-                  event.dataTransfer.getData("application/x-pwragent-subthread") ||
-                  event.dataTransfer.getData("text/plain");
-                const draggedThread = threadByKey.get(draggedKey);
-                if (
-                  !draggedThread
-                  || !directChildKeySet.has(childKey)
-                  || resolveThreadParentKey(draggedThread, threadByKey) !== parentKey
-                ) {
-                  return;
-                }
-                // `subthreadOrder` names this row's own children, so the
-                // move stays inside that list — never the flattened tray,
-                // which also carries rows owned by those children.
-                void props.onUpdateSubthreadOrder?.(parent, {
-                  threadId: draggedThread.id,
-                  anchorThreadId: child.id,
-                  placement: getDropIndicatorPosition(event),
-                });
-              }}
+              onPointerDownThread={reorderable ? pointerDownSubthread : undefined}
               onOpenContextMenu={props.onOpenThreadContextMenu}
               onOpenPullRequestContextMenu={props.onOpenPullRequestContextMenu}
               onDetachPullRequest={props.onDetachPullRequest}
