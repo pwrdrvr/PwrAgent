@@ -5,6 +5,7 @@ import {
   mkdirSync,
   mkdtempSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -1399,6 +1400,29 @@ describe("resolveTerminalShell", () => {
     expect(service.listSessions()).toHaveLength(1);
   });
 
+  it("collects shells opened through an alias and blocks new alias shells during removal", async () => {
+    const root = createTemporaryRoot("pwragent-terminal-alias-");
+    const worktree = path.join(root, "worktree");
+    const alias = path.join(root, "alias");
+    mkdirSync(worktree);
+    symlinkSync(worktree, alias, process.platform === "win32" ? "junction" : "dir");
+    const pty = fakePty();
+    pty.destroy.mockImplementation(() => {
+      for (const [listener] of vi.mocked(pty.onExit).mock.calls) listener({ exitCode: 0 });
+    });
+    const service = new IntegratedTerminalService({ loadNodePty: async () => ({ spawn: vi.fn(() => pty) }) });
+    await service.createOrAttach({ threadKey: "codex:alias", cwd: alias, cols: 80, rows: 24 }, fakeWebContents());
+    try {
+      await service.withWorktreeClosed(worktree, async () => {
+        await expect(service.createOrAttach({ threadKey: "codex:new", cwd: alias, cols: 80, rows: 24 }, fakeWebContents()))
+          .rejects.toThrow("worktree");
+        expect(pty.destroy).toHaveBeenCalledOnce();
+      });
+    } finally {
+      await service.dispose();
+    }
+  });
+
   it("waits for worktree shells to exit and blocks new shells until removal completes", async () => {
     const worktree = createTemporaryRoot("pwragent-terminal-worktree-");
     const child = path.join(worktree, "nested");
@@ -1544,6 +1568,35 @@ describe("resolveTerminalShell", () => {
 });
 
 describe("terminal history lifecycle", () => {
+  it("removes archived worktree terminal checkpoints before deletion and after restart", async () => {
+    const root = createTemporaryRoot("terminal-history-archive-");
+    const worktree = path.join(root, "worktree");
+    mkdirSync(worktree);
+    const historyStore = new TerminalHistoryStore(path.join(root, "history"));
+    const save = vi.spyOn(historyStore, "save");
+    const pty = fakePty();
+    pty.destroy.mockImplementation(() => {
+      for (const [listener] of vi.mocked(pty.onExit).mock.calls) listener({ exitCode: 0 });
+    });
+    const service = new IntegratedTerminalService({ historyStore, loadNodePty: async () => ({ spawn: vi.fn(() => pty) }) });
+    const request = { sessionId: "archived", threadKey: "codex:archived", cwd: worktree, cols: 80, rows: 24 };
+    await service.createOrAttach(request, fakeWebContents());
+    service.rename(request.sessionId, "Build");
+    await vi.waitFor(() => expect(save).toHaveBeenCalledOnce());
+    await save.mock.results[0]!.value;
+    expect(await historyStore.load()).toHaveLength(1);
+    try {
+      await service.withWorktreeClosed(worktree, async () => {
+        expect(await historyStore.load()).toEqual([]);
+      });
+      const restarted = new IntegratedTerminalService({ historyStore, loadNodePty: async () => { throw new Error("must not spawn"); } });
+      await expect(restarted.createOrAttach({ ...request, attachOnly: true }, fakeWebContents())).rejects.toThrow("no longer available");
+      await restarted.dispose();
+    } finally {
+      await service.dispose();
+    }
+  });
+
   it("restores an exited tab without spawning or accepting input and keeps sibling history isolated", async () => {
     const root = createTemporaryRoot("terminal-history-service-");
     const historyStore = new TerminalHistoryStore(path.join(root, "history"));

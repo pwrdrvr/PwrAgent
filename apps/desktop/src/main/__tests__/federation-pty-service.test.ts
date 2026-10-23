@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, symlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { TerminalHistoryStore } from "../terminal/terminal-history-store";
@@ -146,6 +146,30 @@ const OPEN_REQUEST = {
 };
 
 describe("FederationPtyService worktree removal", () => {
+  it("collects remote shells through aliases and blocks new alias shells during removal", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "remote-pty-alias-"));
+    const worktree = path.join(root, "worktree");
+    const alias = path.join(root, "alias");
+    await mkdir(worktree);
+    await symlink(worktree, alias, process.platform === "win32" ? "junction" : "dir");
+    const pty = new FakePty();
+    const { service } = createHarness({
+      platform: process.platform,
+      resolveThreadCwd: async () => alias,
+      spawnPty: async () => ({ pty, cwd: alias, shell: { file: "/bin/zsh", args: [] } }),
+    });
+    try {
+      await service.open("viewer", OPEN_REQUEST);
+      await service.withWorktreeClosed(worktree, async () => {
+        await expect(service.open("viewer", OPEN_REQUEST)).rejects.toThrow("worktree");
+        expect(pty.killed).toBe(true);
+      });
+    } finally {
+      await service.disposeAll();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("rejects a late cwd resolution before it can spawn in a removing worktree", async () => {
     let finishResolve!: (cwd: string) => void;
     const resolveThreadCwd = vi.fn(() => new Promise<string>((resolve) => { finishResolve = resolve; }));

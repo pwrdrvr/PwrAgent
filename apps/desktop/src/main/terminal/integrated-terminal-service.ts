@@ -660,6 +660,7 @@ export class IntegratedTerminalService {
           assertCurrent?.();
           session.closing = true;
           await this.disposeSessionForShutdown(session);
+          await this.historyStore?.remove(session.sessionId);
         }));
       return await work();
     } finally {

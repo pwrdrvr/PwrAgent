@@ -20,6 +20,7 @@ type WorktreeInfo = {
   branch?: string;
   head?: string;
   detached: boolean;
+  locked?: boolean;
 };
 
 type ArchiveWorktreeParams = {
@@ -107,6 +108,7 @@ function parseWorktreeList(output: string): WorktreeInfo[] {
           branch: current.branch,
           head: current.head,
           detached: current.detached ?? false,
+          locked: current.locked,
         });
       }
       current = undefined;
@@ -122,6 +124,7 @@ function parseWorktreeList(output: string): WorktreeInfo[] {
           branch: current.branch,
           head: current.head,
           detached: current.detached ?? false,
+          locked: current.locked,
         });
       }
       current = { path: value, detached: false };
@@ -131,6 +134,8 @@ function parseWorktreeList(output: string): WorktreeInfo[] {
       current = { ...current, branch: value.replace(/^refs\/heads\//, "") };
     } else if (key === "detached") {
       current = { ...current, detached: true };
+    } else if (key === "locked") {
+      current = { ...current, locked: true };
     }
   }
 
@@ -140,6 +145,7 @@ function parseWorktreeList(output: string): WorktreeInfo[] {
       branch: current.branch,
       head: current.head,
       detached: current.detached ?? false,
+      locked: current.locked,
     });
   }
 
@@ -206,6 +212,9 @@ export class WorktreeArchiveService {
     if (!worktree) {
       throw new Error(`Worktree is not registered with Git: ${worktreePath}`);
     }
+    if (worktree.locked) {
+      throw new Error(`Refusing to archive a locked worktree: ${worktreePath}`);
+    }
     if (path.resolve(repositoryPath) === worktreePath) {
       throw new Error("Refusing to archive the primary checkout as a worktree.");
     }
@@ -221,6 +230,15 @@ export class WorktreeArchiveService {
     const assertRemoval = await params.beforeRemove?.();
     assertRemoval?.();
     await withWorktreeTerminalsClosed(worktreePath, async () => {
+      // Removal admission and terminal teardown can await other work. Recheck
+      // Git's lock protection before modifying even ignored link entries.
+      const currentWorktree = findWorktree(await this.listWorktrees(repositoryPath), worktreePath);
+      if (!currentWorktree) {
+        throw new Error(`Worktree is no longer registered with Git: ${worktreePath}`);
+      }
+      if (currentWorktree.locked) {
+        throw new Error(`Refusing to archive a locked worktree: ${worktreePath}`);
+      }
       assertRemoval?.();
       if (process.platform === "win32") {
         await unlinkWindowsWorktreeLinks(worktreePath, assertRemoval);

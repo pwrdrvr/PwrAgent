@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, realpath, stat, writeFile, mkdir, rm, symlink } from "node:fs/promises";
+import { mkdtemp, readFile, readlink, realpath, stat, writeFile, mkdir, rm, symlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -35,6 +35,38 @@ async function pathExists(filePath: string): Promise<boolean> {
 }
 
 describe("WorktreeArchiveService", () => {
+  it.runIf(process.platform === "win32").each([false, true])("preserves ignored links when Git locks the worktree (lock during admission: %s)", async (lockDuringAdmission) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-locked-junction-"));
+    const repoPath = path.join(root, "repo");
+    const worktreePath = path.join(root, "worktree");
+    const target = path.join(root, "dependency");
+    const link = path.join(worktreePath, "node_modules", "dependency");
+    try {
+      await mkdir(repoPath);
+      await git(repoPath, ["init", "-b", "main"]);
+      await git(repoPath, ["-c", "user.email=test@example.com", "-c", "user.name=Test User", "commit", "--allow-empty", "-m", "initial"]);
+      await git(repoPath, ["worktree", "add", "--detach", worktreePath]);
+      await writeFile(path.join(worktreePath, ".gitignore"), "node_modules/\n");
+      await mkdir(path.dirname(link));
+      await mkdir(target);
+      await writeFile(path.join(target, "keep.txt"), "keep");
+      await symlink(target, link, "junction");
+      const originalTarget = await readlink(link);
+      const lock = async () => { await git(repoPath, ["worktree", "lock", "--reason", "fixture lock", worktreePath]); };
+      if (!lockDuringAdmission) await lock();
+
+      await expect(new WorktreeArchiveService().archive({
+        backend: "codex", threadId: "locked-owner", repositoryPath: repoPath, worktreePath,
+        beforeRemove: lockDuringAdmission ? async () => { await lock(); return () => {}; } : undefined,
+      })).rejects.toThrow(/locked/i);
+      expect(await readlink(link)).toBe(originalTarget);
+      expect(await readFile(path.join(link, "keep.txt"), "utf8")).toBe("keep");
+      expect(await git(repoPath, ["worktree", "list", "--porcelain"])).toContain("locked fixture lock");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it.runIf(process.platform === "win32")("removes dependency junctions without traversing their targets", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-junction-archive-"));
     const repoPath = path.join(root, "repo");
