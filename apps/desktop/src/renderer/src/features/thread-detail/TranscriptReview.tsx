@@ -104,21 +104,14 @@ function formatPath(path: string, directoryPaths: string[] | undefined): string 
  * A finding's badge: its priority, else its category (Claude Code classifies
  * findings and never ranks them), else nothing.
  */
-function FindingTag(props: { finding: AppServerReviewFinding }) {
-  const { priority, category } = props.finding;
-  const tag = reviewFindingTag(props.finding);
-  if (!tag) {
-    return null;
-  }
+function FindingTag(props: { finding: AppServerReviewFinding; tag: string }) {
+  const { priority } = props.finding;
   const variant = typeof priority === "number"
     ? priority >= 0 && priority <= 3 ? `p${priority}` : "unknown"
     : "category";
   return (
-    <span
-      className={`transcript-review__priority transcript-review__priority--${variant}`}
-      data-category={variant === "category" ? category : undefined}
-    >
-      {tag}
+    <span className={`transcript-review__priority transcript-review__priority--${variant}`}>
+      {props.tag}
     </span>
   );
 }
@@ -390,15 +383,16 @@ export function TranscriptReview(props: TranscriptReviewProps) {
             const range = finding.code_location.line_range;
             const absoluteFilePath = normalizePath(finding.code_location.absolute_file_path);
             const displayPath = formatPath(absoluteFilePath, props.directoryPaths);
+            const tag = reviewFindingTag(finding);
             return (
               <li
                 className="transcript-review__finding"
                 key={`${finding.code_location.absolute_file_path}:${range.start}:${index}`}
               >
                 <div
-                  className={`transcript-review__finding-head${reviewFindingTag(finding) ? "" : " transcript-review__finding-head--untagged"}`}
+                  className={`transcript-review__finding-head${tag ? "" : " transcript-review__finding-head--untagged"}`}
                 >
-                  <FindingTag finding={finding} />
+                  {tag ? <FindingTag finding={finding} tag={tag} /> : null}
                   <span className="transcript-review__finding-title">
                     {finding.title}
                   </span>

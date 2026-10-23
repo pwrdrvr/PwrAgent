@@ -84,6 +84,9 @@ describe("reviewFindingTag", () => {
     expect(reviewFindingTag({ category: "simplification" })).toBe("Simplification");
     expect(reviewFindingTag({ category: "  " })).toBeUndefined();
     expect(reviewFindingTag({})).toBeUndefined();
+    // Prose in the category field is not a label.
+    expect(reviewFindingTag({ category: "x".repeat(41) })).toBeUndefined();
+    expect(reviewFindingTag({ category: "two\nlines" })).toBeUndefined();
   });
 });
 
@@ -111,6 +114,13 @@ describe("reviewEntryFindings", () => {
       reviewer: { backend: "claude" },
     });
     expect(categoryOnly).toMatchObject({ category: "simplification", body: "Failure scenario: Drift." });
+
+    const [spaced] = reviewEntryFindings({
+      output: legacy("Failure scenario: Drift.\n\nCategory: test coverage"),
+      review: "",
+      reviewer: { backend: "claude" },
+    });
+    expect(spaced).toMatchObject({ category: "test coverage", body: "Failure scenario: Drift." });
   });
 
   it("leaves other reviewers' bodies alone", () => {

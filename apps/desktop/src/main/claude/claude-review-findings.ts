@@ -4,6 +4,7 @@ import type {
   AppServerReviewFindingOutcome,
   AppServerReviewOutput,
 } from "@pwragent/shared";
+import { normalizeReviewCategory } from "../../shared/review-output";
 
 /**
  * Claude Code's typed code-review report. The CLI asks for it only when the
@@ -54,7 +55,7 @@ export function parseClaudeFindingsReport(input: unknown): ClaudeFindingsReport 
       failureScenario: text(finding.failure_scenario) ?? "",
       ...(Number.isInteger(line) && line > 0 ? { line } : {}),
       ...(text(finding.short_summary) ? { shortSummary: text(finding.short_summary) } : {}),
-      ...(text(finding.category) ? { category: text(finding.category) } : {}),
+      ...(normalizeReviewCategory(finding.category) ? { category: normalizeReviewCategory(finding.category) } : {}),
       ...(text(finding.verdict) ? { verdict: text(finding.verdict) } : {}),
       ...(outcome && OUTCOMES.has(outcome) ? { outcome } : {}),
     });

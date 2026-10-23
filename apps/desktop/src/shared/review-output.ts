@@ -93,8 +93,8 @@ export function parseReviewOutputText(
         ...(typeof finding.priority === "number"
           ? { priority: finding.priority }
           : {}),
-        ...(typeof finding.category === "string" && finding.category.trim()
-          ? { category: finding.category.trim() }
+        ...(normalizeReviewCategory(finding.category)
+          ? { category: normalizeReviewCategory(finding.category) }
           : {}),
         code_location: {
           absolute_file_path: location.absolute_file_path,
@@ -215,6 +215,24 @@ export function withoutRedundantPriorityTag<T extends ReviewFinding>(
   return finding.priority === tagged ? { ...finding, title } : finding;
 }
 
+const REVIEW_CATEGORY_MAX_LENGTH = 40;
+
+/**
+ * A category is a short label drawn in a one-line chip. Anything longer, or
+ * spanning lines, is a reviewer's prose in the wrong field and is dropped.
+ */
+export function normalizeReviewCategory(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const category = value.trim();
+  return category
+    && category.length <= REVIEW_CATEGORY_MAX_LENGTH
+    && !/[\r\n]/.test(category)
+    ? category
+    : undefined;
+}
+
 /** "test-coverage" reads as "Test coverage". */
 export function reviewCategoryLabel(category: string): string {
   const words = category.trim().replace(/[-_]+/g, " ");
@@ -233,9 +251,8 @@ export function reviewFindingTag(finding: {
   if (typeof finding.priority === "number") {
     return `P${finding.priority}`;
   }
-  return finding.category?.trim()
-    ? reviewCategoryLabel(finding.category)
-    : undefined;
+  const category = normalizeReviewCategory(finding.category);
+  return category ? reviewCategoryLabel(category) : undefined;
 }
 
 export function formatReviewOutputText(
@@ -334,8 +351,8 @@ export function parsePlainReview(review: string): {
   };
 }
 
-const LEGACY_CLAUDE_FACTS =
-  /\n\n(?:Category: ([\w-]+))?(?: · )?(?:Verdict: (\w+))?$/;
+// The old mapper's last paragraph: the category, then " · " and the verdict.
+const LEGACY_CLAUDE_FACTS = /\n\nCategory: ([^\n·]+?)(?: · Verdict: (\w+))?$/;
 
 /**
  * Claude reviews recorded before findings carried a category wrote it into
@@ -349,13 +366,14 @@ function withLegacyClaudeCategory(
     return finding;
   }
   const facts = LEGACY_CLAUDE_FACTS.exec(finding.body);
-  if (!facts?.[1]) {
+  const category = normalizeReviewCategory(facts?.[1]);
+  if (!facts || !category) {
     return finding;
   }
   const rest = finding.body.slice(0, facts.index);
   return {
     ...finding,
-    category: facts[1],
+    category,
     body: facts[2] ? `${rest}\n\nVerdict: ${facts[2]}` : rest,
   };
 }
