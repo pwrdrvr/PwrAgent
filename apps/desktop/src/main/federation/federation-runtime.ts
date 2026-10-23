@@ -266,6 +266,7 @@ import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
 import { createScratchProjectDirectory, resolveScratchProjectsRoots } from "../app-server/scratch-projects";
 import { dispatchStarMapIntake } from "../app-server/star-map-intake";
 import { spawnTerminalPty } from "../terminal/integrated-terminal-service";
+import { registerWorktreeTerminalOwner } from "../terminal/worktree-terminals";
 import {
   readTranscriptImageProtocolRequest,
   rewriteFederatedTranscriptImageUrlsForRenderer,
@@ -1186,6 +1187,7 @@ export class DesktopFederationRuntime {
     event: CodexEnvironmentSetupProgressEvent,
   ) => void;
   private ptyService?: FederationPtyService;
+  private releaseWorktreeTerminalOwner?: () => void;
   private filePushReceiver?: FederationFilePushReceiver;
   private threadHandoffService?: ThreadInstanceHandoffService;
   private readonly handoffFileReceipts = new Map<string, { peerId: string; sizeBytes: number; sha256: string }>();
@@ -1604,6 +1606,8 @@ export class DesktopFederationRuntime {
     this.filePushReceiver = undefined;
     this.threadHandoffService = undefined;
     this.handoffFileReceipts.clear();
+    this.releaseWorktreeTerminalOwner?.();
+    this.releaseWorktreeTerminalOwner = undefined;
     await this.ptyService?.disposeAll();
     this.ptyService = undefined;
     this.client?.close();
@@ -3495,6 +3499,7 @@ export class DesktopFederationRuntime {
         warn: (message, meta) => log.warn(message, meta),
       },
     });
+    this.releaseWorktreeTerminalOwner = registerWorktreeTerminalOwner(this.ptyService);
     registerFederationPtyHandlers({ router, service: this.ptyService });
     this.router = router;
     this.subscribeLocalBackendEvents();
