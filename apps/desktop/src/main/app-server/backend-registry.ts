@@ -10260,6 +10260,13 @@ export class DesktopBackendRegistry {
           method: "serverRequest/resolved", params: { threadId, turnId, requestId },
         } });
       },
+      resolveReviewContext: async ({ threadId, cwd }) => await this.resolveReviewContext({
+        backend: "claude", cwd, threadId,
+        overlay: await this.overlayStore.getThreadOverlayState({ backend: "claude", threadId }),
+        // `/code-review` reviews the checked-out work, so the branch and its
+        // attached pull request name the card.
+        target: { type: "custom", instructions: "/code-review" },
+      }),
       ...options?.claudeBackendOptions,
     });
     this.acpBackend = new AcpBackendAdapter({
@@ -16469,6 +16476,8 @@ export class DesktopBackendRegistry {
         messageIds,
       }) ?? {};
       const replay = mergeThreadMessageOrigins(storedReplay, origins);
+      this.threadTodoHandler?.importReviews?.({ backend, threadId: request.threadId },
+        replay.entries.filter((entry): entry is AppServerThreadReviewEntry => entry.type === "review"));
       const pendingRequest = this.getPendingRequestForThread({ backend, threadId: request.threadId });
       return { backend, threadId: request.threadId, fetchedAt: Date.now(), replay, pendingRequest, threadStatus: replay.threadStatus };
     }

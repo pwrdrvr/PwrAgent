@@ -1,3 +1,4 @@
+import { detachOwnedThreadDirectory } from "../app-server/thread-directory-detach";
 import type { ThreadTodosChangedEvent } from "@pwragent/shared";
 import { FEDERATION_OPERATOR_QUESTION_CAPABILITIES, FEDERATION_OPERATOR_QUESTION_METHODS,
   registerFederationOperatorQuestionHandlers, type OperatorQuestionOperation,
@@ -43,6 +44,7 @@ import { CloudflareAccessRefusedError, CloudflareSignInRequiredError } from "./c
 import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
 import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
 import { markLocalNavigationDirectorySeen, removeLocalNavigationDirectory } from "../app-server/navigation-directory-actions";
+import { updateLocalSubthreadOrder } from "../app-server/subthread-order-actions";
 import type { ReadQueuedTurnRequest, ReadQueuedTurnResponse } from "@pwragent/shared";
 import { randomBytes, randomUUID } from "node:crypto";
 import { hostname } from "node:os";
@@ -60,6 +62,8 @@ import type {
   AppServerReadThreadResponse,
   AppServerThreadSummary,
   AttachDirectoryToThreadResponse,
+  DetachDirectoryFromThreadRequest,
+  DetachDirectoryFromThreadResponse,
   CancelQueuedTurnResponse,
   MoveQueuedTurnResponse,
   ReleaseQueuedTurnResponse,
@@ -7067,27 +7071,9 @@ function localBackendOperations(): FederationBackendOperations {
     async updateSubthreadOrder(
       request: UpdateSubthreadOrderRequest,
     ): Promise<UpdateSubthreadOrderResponse> {
-      const backend = request.backend ?? "codex";
-      const threadIds = await getDesktopOverlayStore().updateSubthreadOrder({
-        backend,
-        parentThreadId: request.parentThreadId,
-        threadIds: request.threadIds,
-      });
-      await getDesktopBackendRegistry().publishLocalEvent({
-        backend,
-        notification: {
-          method: "thread/subthreadOrder/updated",
-          params: {
-            parentThreadId: request.parentThreadId,
-            threadIds,
-          },
-        },
-      });
-      return {
-        backend,
-        parentThreadId: request.parentThreadId,
-        threadIds,
-      };
+      // A viewer sends relative moves; the owner validates them against its
+      // complete child order, the same as a local drag.
+      return await updateLocalSubthreadOrder(request);
     },
     async setSubthreadsCollapsed(
       request: SetSubthreadsCollapsedRequest,
@@ -7491,6 +7477,24 @@ function localBackendOperations(): FederationBackendOperations {
         threadId: request.threadId,
         directory,
       };
+    },
+    async detachDirectoryFromThread(
+      request: DetachDirectoryFromThreadRequest,
+    ): Promise<DetachDirectoryFromThreadResponse> {
+      return await detachOwnedThreadDirectory(request, {
+        overlayStore: getDesktopOverlayStore(),
+        readThread: async (backend, threadId) =>
+          await getDesktopBackendRegistry().resolveThread({ backend, threadId }),
+        publishUpdate: async (backend, threadId) => {
+          await getDesktopBackendRegistry().publishLocalEvent({
+            backend,
+            notification: {
+              method: "navigation/threadDirectories/updated",
+              params: { reason: "selected-thread", threadIds: [threadId] },
+            },
+          });
+        },
+      });
     },
     async listWorktreeUnpublishedCommits(
       request: ListWorktreeUnpublishedCommitsRequest,

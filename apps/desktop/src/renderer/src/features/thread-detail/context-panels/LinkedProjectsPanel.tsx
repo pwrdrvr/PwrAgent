@@ -90,8 +90,9 @@ export const LinkedProjectsPanel = memo(function LinkedProjectsPanel(props: Link
     setDetachingDirectoryId(directory.id);
     try {
       const detached = await props.desktopApi.detachDirectoryFromThread({
-        backend: props.thread.source,
-        threadId: props.thread.id,
+        backend: props.thread.federation?.ref.backend ?? props.thread.source,
+        federationTarget: props.thread.federation?.ref.target,
+        threadId: props.thread.federation?.ref.threadId ?? props.thread.id,
         directory,
       });
       if (!detached.ok) {

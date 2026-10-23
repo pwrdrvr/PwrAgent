@@ -5,6 +5,7 @@ import type { PwrAgentThreadTodoHandler } from "../agent-tools/pwragent-thread-t
 import { StateDb } from "../state/state-db";
 import { getThreadReviewService } from "../thread-reviews/thread-review-runtime";
 import { installThreadTodoRuntime, resetThreadTodoServiceForTests } from "../thread-todos/thread-todo-runtime";
+import { claudeReviewOutput } from "../claude/claude-review-findings";
 import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 
 let db: StateDb;
@@ -89,6 +90,32 @@ describe("review tracking runtime eligibility", () => {
     expect(broadcast).toHaveBeenCalledTimes(3);
     expect(broadcast).toHaveBeenLastCalledWith(expect.objectContaining(THREAD));
     expect(getThreadReviewService().list({ status: "all" })).toEqual([]);
+  });
+
+  it("tracks a Claude findings report and the outcomes Claude reports for it later", () => {
+    install();
+    const claude = { backend: "claude" as const, threadId: "claude-owner" };
+    const reviewOutput = claudeReviewOutput({ findings: [
+      { file: "src/a.ts", line: 3, summary: "First.", failureScenario: "Breaks." },
+      { file: "src/b.ts", line: 9, summary: "Second.", failureScenario: "Breaks too." },
+    ] }, "/repo");
+    onEvent({ backend: "claude", notification: {
+      method: "item/completed", params: { threadId: claude.threadId, turnId: "turn-1", item: {
+        id: "toolu_review", type: "exitedReviewMode", review: "", data: { reviewOutput, reviewer: { backend: "claude" } },
+      } },
+    } });
+    const [review] = getThreadReviewService().list();
+    expect(review).toMatchObject({ ...claude, sourceKey: "toolu_review", origin: "automatic" });
+    expect(review!.items.map((item) => [item.title, item.status])).toEqual([["First.", "open"], ["Second.", "open"]]);
+
+    const outcomes = { threadId: claude.threadId, turnId: "turn-2", reviewId: "toolu_review", outcomes: [{ index: 1, outcome: "fixed" as const }] };
+    // A peer's event never settles local work.
+    onEvent({ backend: "claude", federationTarget: { scope: "remote", instanceId: "peer" },
+      notification: { method: "thread/review/outcomesReported", params: outcomes } });
+    expect(getThreadReviewService().list()[0]!.items.map((item) => item.status)).toEqual(["open", "open"]);
+    onEvent({ backend: "claude", notification: { method: "thread/review/outcomesReported", params: outcomes } });
+    expect(getThreadReviewService().list()[0]!.items.map((item) => item.status)).toEqual(["open", "addressed"]);
+    expect(broadcast).toHaveBeenCalledTimes(2);
   });
 
   it("refreshes all local To-dos when provider discovery or authentication recovery finishes", () => {

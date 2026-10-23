@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.3.0-prerelease.4 - 2026-10-22
+
+- Claude Reviews - Show `/code-review` findings as tracked review cards and synchronize reported fixes. Standard review actions now choose a supported reviewer and preserve the thread's workspace.
+- Federated Search - Search remote transcript content, not just titles and summaries. Results appear progressively as connected machines respond, with matching snippets and links.
+- Voice and Star Map - Let Voice Manager open local or remote threads in the UI. Keep the Star Map manager card visible when the canvas is panned or zoomed.
+- New Thread Access - Default new Codex and Claude threads to Auto, with per-provider access defaults in Settings. Existing threads retain their access.
+- Usage Charts - Keep usage-detail cards on screen and correctly distinguish five-hour limits from weekly limits, including after resets.
+
+Upgrade note: Legacy Codex/Claude launchpad "Default Access" selections are reset to the new default. Operators who prefer Default Access can select it in Settings.
+
 ## v1.3.0-prerelease.3 - 2026-10-22
 
 - Federated To-dos - Complete remote approvals, questionnaires, replies, and review actions through the owning machine. Synchronize question dismissals across viewers and preserve selected findings when a repair request fails.
