@@ -706,3 +706,60 @@ approve or cancel
 work. Before the first decision, a Clef failure stops camera capture and shows
 a dismissible error while voice remains available. Facial-expression accuracy and the model's spoken
 adaptation still need live evaluation by the operator.
+
+
+### Camera awareness in the live conversation
+
+The Voice manager is the reasoning/tool backend for Director. GPT-Live handles
+camera observations in the live conversation; those observations are not part
+of the manager's spoken transcript. A manager answer about whether camera
+cues arrived therefore does not establish what GPT-Live received.
+
+Director now delegates requests that need backend capabilities or careful
+reasoning, and answers camera-awareness questions from its own current-session
+context. It no longer delegates every request. Camera enable/disable also
+submits a `[Camera status]` update, independently of the confidence filter:
+an enabled camera waiting for a qualified observation is different from an
+off camera. Disabling supersedes earlier observations. Enabling waits for
+status submission before capture starts; failed enable submission revokes
+camera access while leaving voice running. Opt-out aborts inference and
+revokes capture before waiting for its status response.
+
+This follows the separation of conversation and backend work in the
+[GPT-Live prompting guide](https://developers.openai.com/api/docs/guides/live-prompting).
+The desktop continues to use Codex's realtime adapter, rather than sending
+public GPT-Live events into that adapter's version-specific wire protocol.
+An appendText RPC response confirms acceptance by Codex, not verified model
+behavior. The log names that boundary explicitly.
+
+A manual live regression probe uses an ephemeral thread and synthetic silent
+WebRTC audio. It opens no camera or microphone, plays no audible output,
+executes no backend tools, and stops only the sessions/process it creates.
+It uses the selected runtime's authentication through App Server; it does not
+read Codex-owned storage. Run it outside Vitest:
+
+```sh
+pnpm --filter @pwragent/desktop exec tsx scripts/probe-live-camera-context.ts \
+  --codex /absolute/path/to/codex
+```
+
+Pass `--browser /absolute/path/to/chromium` to select an installed headless
+Chromium instead of Playwright's default. This probe makes real realtime
+requests. It asserts waiting-for-cue awareness, synthetic nod recall,
+opt-out, and absence of stale cues after restarting voice on the same thread.
+It also waits for the runtime's `session.context.appended` events. Receipt
+counting is valid here only because the probe has one append in flight and
+no backend output; production must not use that heuristic for concurrent
+appends without correlation IDs.
+
+The probe passed on managed `0.162.0-pwragent.1`: the live model reported an
+enabled camera waiting for a confident cue, identified the synthetic nod,
+reported the camera disabled with earlier observations no longer current,
+and reported no cues after restart. A separate baseline probe using the
+released prompt also recalled an injected nod, but after the simulated
+camera opt-out it still described that nod as current because the old
+implementation submitted no off status. This demonstrates that the
+transport can work; it does not reproduce or establish the cause of every
+operator-reported missed reaction. These tests exercise text context and
+spoken transcript output, not real facial accuracy, local Clef inference,
+or physical camera/microphone permissions.

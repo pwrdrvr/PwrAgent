@@ -59,6 +59,29 @@ beforeEach(() => { vi.clearAllMocks(); mocks.decisionSettings = { model: "local"
 afterEach(() => vi.useRealTimers());
 
 describe("native voice IPC permission boundary", () => {
+  it("aborts an in-flight frame before waiting for the camera-off context response", async () => {
+    const sender = { id: 992, on: vi.fn(), once: vi.fn(), isDestroyed: () => false, send: vi.fn() };
+    const target = { sessionId: "camera-status-session" };
+    await mocks.handlers.get(NATIVE_VOICE_START_CHANNEL)!({ sender }, { ...target, threadId: "camera-status-thread", sdp: "v=0\r\nfixture" });
+    await mocks.handlers.get(NATIVE_VOICE_CAMERA_CHANNEL)!({ sender }, { ...target, enabled: true });
+    let signal!: AbortSignal;
+    mocks.classify.mockImplementationOnce((_target, _image, abort) => {
+      signal = abort;
+      return new Promise((_resolve, reject) => abort.addEventListener("abort", () => reject(abort.reason), { once: true }));
+    });
+    const frame = mocks.handlers.get(NATIVE_VOICE_CAMERA_FRAME_CHANNEL)!({ sender }, { ...target, images: ["data:image/jpeg;base64,AA=="] });
+    await vi.waitFor(() => expect(signal).toBeDefined());
+    let finish!: () => void;
+    mocks.text.mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve; }));
+    const disabled = mocks.handlers.get(NATIVE_VOICE_CAMERA_CHANNEL)!({ sender }, { ...target, enabled: false });
+    expect(signal.aborted).toBe(true);
+    await expect(frame).resolves.toBeUndefined();
+    finish();
+    await disabled;
+    expect(mocks.stop).not.toHaveBeenCalled();
+    await mocks.handlers.get(NATIVE_VOICE_STOP_CHANNEL)!({ sender }, target);
+  });
+
   it("allows a minute-long first decision, keeps it single-flight, then uses normal inference limits", async () => {
     vi.useFakeTimers();
     const sender = { id: 277, on: vi.fn(), once: vi.fn(), isDestroyed: () => false, send: vi.fn() };
