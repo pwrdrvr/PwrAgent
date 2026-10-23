@@ -42,7 +42,7 @@ jobs:
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
         with:
-          node-version: "^24.21.0"
+          node-version: "^24.22.1"
           cache-electron: "true"
           lookup-only: "true"
 
@@ -62,7 +62,7 @@ jobs:
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
         with:
-          node-version: "^24.21.0"
+          node-version: "^24.22.1"
           cache-electron: "true"
 
       - name: Check release metadata
@@ -103,7 +103,7 @@ jobs:
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
         with:
-          node-version: "^24.21.0"
+          node-version: "^24.22.1"
           cache-electron: "true"
 
       # electron-builder compiles build/icon.icon with actool 26. The macos-26
@@ -144,7 +144,7 @@ jobs:
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
         with:
-          node-version: "^24.21.0"
+          node-version: "^24.22.1"
           cache-electron: "true"
 
       - name: Stage pinned Grok ACP runtime
@@ -336,7 +336,7 @@ jobs:
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
         with:
-          node-version: "^24.21.0"
+          node-version: "^24.22.1"
           cache-electron: "true"
 
       - name: Check release metadata
@@ -410,7 +410,7 @@ jobs:
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
         with:
-          node-version: "^24.21.0"
+          node-version: "^24.22.1"
           working-directory: .
           cache-electron: "true"
 

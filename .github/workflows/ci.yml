@@ -126,7 +126,7 @@ jobs:
         uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
         timeout-minutes: 10
         with:
-          node-version: "^24.21.0"
+          node-version: "^24.22.1"
           cache-electron: "true"
           lookup-only: "true"
 
@@ -144,7 +144,7 @@ jobs:
         uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
         timeout-minutes: 10
         with:
-          node-version: "^24.21.0"
+          node-version: "^24.22.1"
           cache-electron: "true"
 
       - name: License metadata
@@ -207,7 +207,7 @@ jobs:
         uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
         timeout-minutes: 10
         with:
-          node-version: "^24.21.0"
+          node-version: "^24.22.1"
           cache-electron: "true"
 
       - name: Build
@@ -237,7 +237,7 @@ jobs:
         uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
         timeout-minutes: 10
         with:
-          node-version: "^24.21.0"
+          node-version: "^24.22.1"
           cache-electron: "true"
 
       - name: Install ripgrep
@@ -301,7 +301,7 @@ jobs:
         uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
         timeout-minutes: 10
         with:
-          node-version: "^24.21.0"
+          node-version: "^24.22.1"
           working-directory: .
           cache-electron: "true"
           lookup-only: "true"
@@ -321,7 +321,7 @@ jobs:
         uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
         timeout-minutes: 10
         with:
-          node-version: "^24.21.0"
+          node-version: "^24.22.1"
           working-directory: .
           cache-electron: "true"
 
@@ -352,7 +352,7 @@ jobs:
         uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
         timeout-minutes: 10
         with:
-          node-version: "^24.21.0"
+          node-version: "^24.22.1"
           working-directory: .
           cache-electron: "true"
 
@@ -386,7 +386,7 @@ jobs:
         uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
         timeout-minutes: 10
         with:
-          node-version: "^24.21.0"
+          node-version: "^24.22.1"
           working-directory: .
           cache-electron: "true"
 
@@ -422,7 +422,7 @@ jobs:
         uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
         timeout-minutes: 15
         with:
-          node-version: "^24.21.0"
+          node-version: "^24.22.1"
           working-directory: .
           cache-electron: "true"
 
@@ -510,7 +510,7 @@ jobs:
         uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
         timeout-minutes: 10
         with:
-          node-version: "^24.21.0"
+          node-version: "^24.22.1"
           cache-electron: "true"
 
       - name: Install Linux window manager
@@ -658,7 +658,7 @@ jobs:
         uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
         timeout-minutes: 10
         with:
-          node-version: "^24.21.0"
+          node-version: "^24.22.1"
           cache-electron: "true"
           lookup-only: "true"
 
@@ -717,7 +717,7 @@ jobs:
         uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
         timeout-minutes: 10
         with:
-          node-version: "^24.21.0"
+          node-version: "^24.22.1"
           cache-electron: "true"
 
       - name: Clear leftover Electron state from previous jobs
@@ -799,7 +799,7 @@ jobs:
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
         with:
-          node-version: "^24.21.0"
+          node-version: "^24.22.1"
           working-directory: .
           cache-electron: "true"
 
