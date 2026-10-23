@@ -2117,6 +2117,34 @@ describe("AcpSessionReplayNormalizer", () => {
       ]);
     });
 
+    it("starts a new row when the attempt counter restarts", () => {
+      // Grok counts attempts per model request. A reset means the previous
+      // request succeeded, even if nothing visible streamed in between.
+      const normalizer = startTurn();
+      normalizer.apply({ sessionId: "session-1", receivedAt: 1001, update: retry(1) });
+      normalizer.apply({ sessionId: "session-1", receivedAt: 1002, update: retry(2) });
+      normalizer.apply({ sessionId: "session-1", receivedAt: 1003, update: retry(1) });
+
+      expect(activities(normalizer)).toEqual([
+        expect.objectContaining({ summary: "Retried model request 2 times", status: "completed" }),
+        expect.objectContaining({ summary: "Retrying model request · attempt 1 of 15", status: "in_progress" }),
+      ]);
+    });
+
+    it("settles the row when Grok reports a completed model response", () => {
+      const normalizer = startTurn();
+      normalizer.apply({ sessionId: "session-1", receivedAt: 1001, update: retry(1) });
+      normalizer.apply({
+        sessionId: "session-1",
+        receivedAt: 1002,
+        update: { sessionUpdate: "response_completed" },
+      });
+
+      expect(activities(normalizer)).toEqual([
+        expect.objectContaining({ summary: "Retried model request 1 time", status: "completed" }),
+      ]);
+    });
+
     it("marks the row failed when the turn fails while retrying", () => {
       const normalizer = startTurn();
       normalizer.apply({ sessionId: "session-1", receivedAt: 1001, update: retry(14) });

@@ -86,6 +86,15 @@ export function isAcpUsageUpdateKind(kind: string | undefined): boolean {
   return kind === "usage_update";
 }
 
+/**
+ * Grok sends `retry_state` each time it retries a failed model request
+ * (`{ type: "retrying", attempt, max_retries, reason, error_type }`) while the
+ * turn stays active. One retry run becomes one transcript row.
+ */
+export function isAcpRetryStateUpdateKind(kind: string | undefined): boolean {
+  return kind === "retry_state";
+}
+
 export function readAcpToolCallId(
   update: Record<string, unknown>,
 ): string | undefined {
@@ -252,6 +261,8 @@ export class AcpSessionReplayNormalizer {
   private assistantMessageSequence = 0;
   private generatedMessageSequence = 0;
   private readonly knownToolCallIds = new Set<string>();
+  /** The retry run whose row is still in progress, if any. */
+  private openRetry?: { id: string; attempts: number };
 
   constructor(private readonly options: AcpSessionReplayNormalizerOptions = {}) {}
 
@@ -266,6 +277,7 @@ export class AcpSessionReplayNormalizer {
     const createdAt = params.receivedAt ?? Date.now();
     const id = `user:${params.turnId}`;
     const normalizedPrompt = normalizeUserPrompt(params.prompt, params.parts);
+    this.settleOpenRetry("completed");
     this.currentTurnId = params.turnId;
     this.currentTurnStartedAt = createdAt;
     this.activeAssistantMessageId = undefined;
@@ -292,6 +304,7 @@ export class AcpSessionReplayNormalizer {
     status: "completed" | "interrupted" = "completed",
   ): AppServerThreadReplay {
     const completedTurnId = turnId ?? this.currentTurnId;
+    this.settleOpenRetry("completed");
     if (completedTurnId) {
       this.removeAgentWaitingActivity(completedTurnId);
       this.completeTurnEntries(completedTurnId, status, completedAt);
@@ -316,6 +329,7 @@ export class AcpSessionReplayNormalizer {
     receivedAt?: number;
   }): AppServerThreadReplay {
     const createdAt = params.receivedAt ?? Date.now();
+    this.settleOpenRetry("failed");
     this.removeAgentWaitingActivity(params.turnId);
     this.completeTurnEntries(params.turnId, "failed", createdAt);
     if (this.currentTurnId === params.turnId) {
@@ -401,6 +415,7 @@ export class AcpSessionReplayNormalizer {
     this.activeAssistantMessagePhase = undefined;
     this.assistantMessageSequence = 0;
     this.knownToolCallIds.clear();
+    this.openRetry = undefined;
     this.status = "idle";
     return this.replay();
   }
@@ -409,6 +424,12 @@ export class AcpSessionReplayNormalizer {
     const kind = readKind(update.update);
     const createdAt =
       readAcpUpdateTimestamp(update.update) ?? update.receivedAt ?? Date.now();
+    if (this.openRetry && isModelProgressUpdate(kind, update.update)) {
+      // Any output after a retry means the model answered. This runs before
+      // the hidden-thought return below: Grok's thoughts are not shown, but
+      // they are usually the first sign that a retry succeeded.
+      this.settleOpenRetry("completed");
+    }
     if (
       kind === "agent_thought_chunk" &&
       this.options.surfaceThoughtsAsMessages === false
@@ -458,6 +479,10 @@ export class AcpSessionReplayNormalizer {
     } else if (isAcpUsageUpdateKind(kind)) {
       // Context-window fill. The backend adapter turns it into the thread's
       // context usage; it has no place in the transcript.
+    } else if (isAcpRetryStateUpdateKind(kind)) {
+      // Not a message boundary: the assistant bubble stays open, as it does
+      // for an unrecognized kind.
+      this.upsertRetryActivity(update, createdAt);
     } else if (kind === "turn_completed" || kind === "turn_finished") {
       // Some agents persist a durable replay terminal before the live
       // session/prompt request resolves. The client defers the live idle
@@ -754,6 +779,72 @@ export class AcpSessionReplayNormalizer {
     this.rebuildEntryIndexes();
   }
 
+  private upsertRetryActivity(update: AcpSessionUpdate, createdAt: number): void {
+    const attempt = readNumber(update.update, "attempt");
+    const maxRetries =
+      readNumber(update.update, "max_retries")
+      ?? readNumber(update.update, "maxRetries");
+    const reason = readString(update.update, "reason")?.trim();
+    if (
+      this.openRetry
+      && attempt !== undefined
+      && attempt <= this.openRetry.attempts
+    ) {
+      // Grok counts attempts per model request, so a reset means the previous
+      // request went through before this one failed.
+      this.settleOpenRetry("completed");
+    }
+    const retry = this.openRetry ?? {
+      id: `acp-retry:${update.sessionId}:${createdAt}`,
+      attempts: 0,
+    };
+    this.openRetry = retry;
+    retry.attempts = attempt ?? retry.attempts + 1;
+    this.removeCurrentAgentWaitingActivity();
+    const index = this.typedEntryIndexes.get(`activity:${retry.id}`);
+    const existing = index === undefined ? undefined : this.entries[index];
+    this.upsertEntry({
+      type: "activity",
+      id: retry.id,
+      createdAt: existing?.createdAt ?? createdAt,
+      summary: maxRetries
+        ? `Retrying model request · attempt ${retry.attempts} of ${maxRetries}`
+        : `Retrying model request · attempt ${retry.attempts}`,
+      tone: "warning",
+      status: "in_progress",
+      details: [
+        {
+          id: `${retry.id}:reason`,
+          kind: "read",
+          label: reason || "The agent provider is retrying the model request.",
+          status: "in_progress",
+        },
+      ],
+    });
+  }
+
+  private settleOpenRetry(status: "completed" | "failed"): void {
+    const retry = this.openRetry;
+    if (!retry) {
+      return;
+    }
+    this.openRetry = undefined;
+    const index = this.typedEntryIndexes.get(`activity:${retry.id}`);
+    const entry = index === undefined ? undefined : this.entries[index];
+    if (index === undefined || entry?.type !== "activity") {
+      return;
+    }
+    const count = retry.attempts;
+    this.entries[index] = {
+      ...entry,
+      summary: status === "failed"
+        ? `Model request failed after ${count} ${count === 1 ? "retry" : "retries"}`
+        : `Retried model request ${count} ${count === 1 ? "time" : "times"}`,
+      status,
+      details: entry.details.map((detail) => ({ ...detail, status })),
+    };
+  }
+
   private upsertEntry(entry: AppServerThreadEntry): void {
     const entryWithTurn = this.withCurrentTurn(entry);
     const index = this.entryIndexes.get(entryWithTurn.id);
@@ -945,6 +1036,29 @@ function shouldSeparateTranscriptChunks(existing: string, next: string): boolean
     return false;
   }
   return /^(?:#{1,6}\s|\*\*[^*]+?\*\*(?:\s|$))/.test(next);
+}
+
+/** Updates that prove the model is answering again after a retry. */
+function isModelProgressUpdate(
+  kind: string,
+  update: Record<string, unknown>,
+): boolean {
+  if (kind === "agent_message_chunk" || kind === "agent_thought_chunk") {
+    const text =
+      readContentText(update, "content") ?? readString(update, "text") ?? "";
+    return text.trim().length > 0;
+  }
+  return (
+    kind === "tool_call"
+    || kind === "tool_call_update"
+    || kind === "plan"
+    || kind === "file"
+    || kind === "terminal"
+    || kind === "turn_completed"
+    || kind === "turn_finished"
+    // Grok's transient marker for a model response that finished.
+    || kind === "response_completed"
+  );
 }
 
 function readKind(update: Record<string, unknown>): string {
