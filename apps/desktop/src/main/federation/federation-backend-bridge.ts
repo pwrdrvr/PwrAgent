@@ -135,6 +135,8 @@ import type {
   OpenDesktopApplicationResponse,
   AttachDirectoryToThreadRequest,
   AttachDirectoryToThreadResponse,
+  DetachDirectoryFromThreadRequest,
+  DetachDirectoryFromThreadResponse,
   QueueThreadExecutionModeRequest,
   QueueThreadExecutionModeResponse,
   RefreshDirectoryGitStatusesRequest,
@@ -556,6 +558,7 @@ export const FEDERATION_BACKEND_METHODS = {
   listModelSettingsRecents: "backend.listModelSettingsRecents",
   recordModelSettingsRecent: "backend.recordModelSettingsRecent",
   attachDirectoryToThread: "backend.attachDirectoryToThread",
+  detachDirectoryFromThread: "backend.detachDirectoryFromThread",
   listWorktreeUnpublishedCommits: "backend.listWorktreeUnpublishedCommits",
   getWorktreeUnpublishedCommitDiff: "backend.getWorktreeUnpublishedCommitDiff",
   materializeDirectoryLaunchpad: "backend.materializeDirectoryLaunchpad",
@@ -702,6 +705,7 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.listModelSettingsRecents]: "remote_window",
   [FEDERATION_BACKEND_METHODS.recordModelSettingsRecent]: "remote_window",
   [FEDERATION_BACKEND_METHODS.attachDirectoryToThread]: "environment_actions",
+  [FEDERATION_BACKEND_METHODS.detachDirectoryFromThread]: "environment_actions",
   [FEDERATION_BACKEND_METHODS.listWorktreeUnpublishedCommits]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.getWorktreeUnpublishedCommitDiff]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.materializeDirectoryLaunchpad]: "environment_actions",
@@ -1006,6 +1010,9 @@ export type FederationBackendOperations = {
   attachDirectoryToThread(
     request: AttachDirectoryToThreadRequest,
   ): Promise<AttachDirectoryToThreadResponse>;
+  detachDirectoryFromThread(
+    request: DetachDirectoryFromThreadRequest,
+  ): Promise<DetachDirectoryFromThreadResponse>;
   listWorktreeUnpublishedCommits(
     request: ListWorktreeUnpublishedCommitsRequest,
   ): Promise<ListWorktreeUnpublishedCommitsResponse>;
@@ -1919,6 +1926,13 @@ export function registerFederationBackendHandlers(params: {
     async (envelope) =>
       await params.backend.attachDirectoryToThread(
         envelope.params as AttachDirectoryToThreadRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.detachDirectoryFromThread,
+    async (envelope) =>
+      await params.backend.detachDirectoryFromThread(
+        envelope.params as DetachDirectoryFromThreadRequest,
       ),
   );
   params.router.registerHandler(
@@ -3008,6 +3022,15 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   ): Promise<AttachDirectoryToThreadResponse> {
     return await this.rpc.request<AttachDirectoryToThreadResponse>({
       method: FEDERATION_BACKEND_METHODS.attachDirectoryToThread,
+      params: request,
+    });
+  }
+
+  async detachDirectoryFromThread(
+    request: DetachDirectoryFromThreadRequest,
+  ): Promise<DetachDirectoryFromThreadResponse> {
+    return await this.rpc.request<DetachDirectoryFromThreadResponse>({
+      method: FEDERATION_BACKEND_METHODS.detachDirectoryFromThread,
       params: request,
     });
   }

@@ -2783,6 +2783,8 @@ export type DetachDirectoryFromThreadFailureReason =
 
 export type DetachDirectoryFromThreadRequest = {
   backend?: AppServerBackendKind;
+  /** Route detachment to the instance that owns the thread and its attachments. */
+  federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   directory: Pick<
     LinkedDirectorySummary,

@@ -29,6 +29,29 @@ import { FEDERATION_MAX_FRAME_BYTES } from "../federation/federation-transport";
 import { pageNormalizedReplay } from "../app-server/thread-replay-pagination";
 
 describe("federation backend bridge", () => {
+  it("round-trips directory detachment and requires environment_actions", async () => {
+    const request = { backend: "codex" as const, threadId: "source-thread",
+      directory: { id: "/owner/PwrGit", kind: "local" as const, label: "PwrGit", path: "/owner/PwrGit" } };
+    const response = { ok: true as const, backend: "codex" as const, threadId: "source-thread", directories: [] };
+    const backend = { detachDirectoryFromThread: vi.fn(async () => response) };
+    const router = new FederationRouter({ localInstanceId: "owner", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES });
+    let rpc: FederationRpcEndpoint;
+    const connect = (capabilities: FederationCapability[]): void => {
+      router.registerConnection({ peerId: "viewer", capabilities,
+        sendEnvelope: (envelope) => { rpc.receiveEnvelope(envelope); } });
+    };
+    registerFederationBackendHandlers({ router, backend: backend as unknown as FederationBackendOperations });
+    rpc = new FederationRpcEndpoint({ localInstanceId: "viewer", remoteInstanceId: "owner",
+      sendEnvelope: (envelope) => { void router.routeEnvelope({ envelope, sourcePeerId: "viewer" }); } });
+    const client = new FederationRemoteBackendClient(rpc);
+    connect(["environment_actions"]);
+    expect(await client.detachDirectoryFromThread(request)).toEqual(response);
+    expect(backend.detachDirectoryFromThread).toHaveBeenCalledWith(request);
+    connect(["thread_navigation"]);
+    await expect(client.detachDirectoryFromThread(request)).rejects.toThrow();
+    expect(backend.detachDirectoryFromThread).toHaveBeenCalledOnce();
+  });
+
   it("round-trips content search and authenticates cancellation with transcript-read permission", async () => {
     const response = { backend: "all", fetchedAt: 1, query: "DKIM", filters: {}, contentMode: "available",
       semanticMode: "disabled", results: [], searchedScopes: ["provider_content"], unavailableScopes: [] };
@@ -3876,6 +3899,7 @@ describe("federation backend bridge", () => {
       listModelSettingsRecents: vi.fn(),
       recordModelSettingsRecent: vi.fn(),
       attachDirectoryToThread: vi.fn(),
+      detachDirectoryFromThread: vi.fn(),
       listWorktreeUnpublishedCommits: vi.fn(),
       getWorktreeUnpublishedCommitDiff: vi.fn(),
       handoffThreadWorkspace: vi.fn(),
@@ -4259,6 +4283,7 @@ describe("federation backend bridge", () => {
         listModelSettingsRecents: vi.fn(),
         recordModelSettingsRecent: vi.fn(),
         attachDirectoryToThread: vi.fn(),
+        detachDirectoryFromThread: vi.fn(),
         listWorktreeUnpublishedCommits: vi.fn(),
         getWorktreeUnpublishedCommitDiff: vi.fn(),
         materializeDirectoryLaunchpad: vi.fn(),
