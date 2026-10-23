@@ -39,6 +39,10 @@ export function claudeEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   ]) {
     delete result[key];
   }
+  // PwrAgent renders typed review findings, so `/code-review` runs inline and
+  // reports them through the ReportFindings tool. Without this, the CLI forks
+  // the review and returns its findings as plain text.
+  result.CLAUDE_CODE_REPORT_FINDINGS = "1";
   return result;
 }
 
