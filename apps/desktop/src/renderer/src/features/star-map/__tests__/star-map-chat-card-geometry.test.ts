@@ -10,8 +10,10 @@ import {
   CHAT_CARD_MIN_HEIGHT,
   CHAT_CARD_MIN_WIDTH,
   cascadeChatCardRect,
+  cascadeChatCardRectInView,
   chatCardGroupRect,
   chatCardEdgeToward,
+  chatCardIsInView,
   clampChatCardRect,
   dockContextRect,
   dockTerminalRect,
@@ -22,6 +24,71 @@ import {
 } from "../star-map-chat-card-geometry";
 
 const viewport = { width: 1440, height: 900 };
+
+describe("cascadeChatCardRectInView", () => {
+  const bounds = { width: 6000, height: 4000 };
+
+  it("opens on screen when the view is panned away from the canvas origin", () => {
+    // Looking at canvas (3000, 2000)-(4440, 2900) at 1:1.
+    const view = { x: -3000, y: -2000, scale: 1 };
+    const rect = cascadeChatCardRectInView({
+      openCardCount: 0,
+      view,
+      viewport,
+      bounds,
+    });
+    expect(rect.left).toBe(3072);
+    expect(rect.top).toBe(2096);
+    expect(chatCardIsInView(rect, view, viewport)).toBe(true);
+  });
+
+  it("keeps the same window inset at any zoom", () => {
+    const view = { x: -1000, y: -500, scale: 0.5 };
+    const rect = cascadeChatCardRectInView({
+      openCardCount: 0,
+      view,
+      viewport,
+      bounds,
+    });
+    // Canvas (left, top) paints at (left * 0.5 - 1000, top * 0.5 - 500).
+    expect(rect.left * view.scale + view.x).toBe(72);
+    expect(rect.top * view.scale + view.y).toBe(96);
+  });
+
+  it("matches the window cascade at the default view", () => {
+    expect(
+      cascadeChatCardRectInView({
+        openCardCount: 2,
+        view: { x: 0, y: 0, scale: 1 },
+        viewport,
+        bounds,
+      }),
+    ).toEqual(cascadeChatCardRect({ openCardCount: 2, viewport: bounds }));
+  });
+});
+
+describe("chatCardIsInView", () => {
+  const rect = { left: 72, top: 96, width: 420, height: 520 };
+
+  it("sees a card at the canvas origin from the default view", () => {
+    expect(chatCardIsInView(rect, { x: 0, y: 0, scale: 1 }, viewport)).toBe(
+      true,
+    );
+  });
+
+  it("misses a card at the canvas origin once the view pans away", () => {
+    expect(
+      chatCardIsInView(rect, { x: -3000, y: -2000, scale: 1 }, viewport),
+    ).toBe(false);
+  });
+
+  it("counts a card that is only partly on screen", () => {
+    // Visible canvas starts at x = 400; the card spans 72-492.
+    expect(chatCardIsInView(rect, { x: -400, y: 0, scale: 1 }, viewport)).toBe(
+      true,
+    );
+  });
+});
 
 describe("cascadeChatCardRect", () => {
   it("opens the first card at the default size", () => {
