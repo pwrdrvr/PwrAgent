@@ -40,7 +40,7 @@ describe("ThreadHeader", () => {
 
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Show selected thread in thread list",
+        name: "Show selected thread in thread list: AI API Rate Limiting",
       }),
     );
 

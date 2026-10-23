@@ -3160,7 +3160,7 @@ describe("App", () => {
     ).toBeInTheDocument();
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Show selected thread in thread list",
+        name: /^Show selected thread in thread list: /,
       }),
     );
     expect(scrollIntoView).toHaveBeenCalledWith({

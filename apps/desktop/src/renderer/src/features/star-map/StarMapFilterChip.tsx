@@ -121,13 +121,6 @@ function StarMapAttentionFilterChip(
         className={`${chrome.className} star-map__filter-chip--attention`}
         tabIndex={chrome.tabIndex}
         aria-hidden={chrome.ariaHidden}
-        // The numbers are drawn as marks, so without this the chip
-        // announces its filter state and nothing about what it counts.
-        aria-label={`${chrome.ariaLabel}. ${describeAttentionCounts(
-          counts,
-          formatUnreadThreadCount,
-          "Unread count unavailable",
-        )}`}
         // The card's consequence lines exist nowhere else — without this
         // they are sighted-only, since the portal sits outside this
         // button's subtree. Gated on `visible`: naming an absent element is
@@ -146,7 +139,15 @@ function StarMapAttentionFilterChip(
         {/* The tab's own layout: turns stacked in one column, the cookie
             beside it. One wrapper gives the pair the tab's inner gap
             without restating it on the chip, whose gap is the strip's. */}
-        <span aria-hidden="true" className="star-map__filter-signals">
+        <span
+          role="img"
+          aria-label={`${chrome.ariaLabel}. ${describeAttentionCounts(
+            counts,
+            formatUnreadThreadCount,
+            "Unread count unavailable",
+          )}`}
+          className="star-map__filter-signals"
+        >
           <AttentionTurnReadouts
             activeLocal={counts.activeLocal}
             activeRemote={counts.activeRemote}

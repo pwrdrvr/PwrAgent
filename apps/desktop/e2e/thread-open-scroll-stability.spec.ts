@@ -158,9 +158,11 @@ test("opens a long transcript without drift and restores saved scroll positions 
 
       const initialMetrics = await readScrollMetrics(list);
       expect(initialMetrics.maxScrollTop).toBeGreaterThan(2000);
-      expect(
-        initialMetrics.maxScrollTop - initialMetrics.scrollTop
-      ).toBeLessThanOrEqual(4);
+      // The final row mounts before ResizeObserver and the scheduled bottom
+      // follow finish its layout. Observe alignment before measuring drift.
+      await expect
+        .poll(() => distanceFromTranscriptBottom(list))
+        .toBeLessThanOrEqual(1);
 
       // Hydrated rows can change total height after the final message mounts.
       // At the bottom the invariant is alignment, not an absolute scrollTop.

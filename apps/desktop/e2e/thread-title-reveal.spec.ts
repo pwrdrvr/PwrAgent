@@ -296,7 +296,7 @@ test("thread title reveals a linked child hidden by collapsed directory sections
     await expect(directorySummary).toHaveAttribute("aria-expanded", "false");
 
     await app.window
-      .getByRole("button", { name: "Show selected thread in thread list" })
+      .getByRole("button", { name: /^Show selected thread in thread list: / })
       .click();
 
     await expect(directorySummary).toHaveAttribute("aria-expanded", "true");

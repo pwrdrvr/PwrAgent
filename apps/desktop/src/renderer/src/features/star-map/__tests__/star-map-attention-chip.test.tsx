@@ -90,9 +90,9 @@ describe("star map attention filter", () => {
       countsKnown={false} attention={{ activeLocal: 3, activeRemote: 0, unread: 0 }}
       attentionKnown={{ local: true, remote: false, unread: false }} showRemoteTurns onCycle={() => {}} />);
     const button = chip();
-    expect(button.getAttribute("aria-label")).toContain("3 active threads");
-    expect(button.getAttribute("aria-label")).toContain("Active thread count on other instances unavailable");
-    expect(button.getAttribute("aria-label")).toContain("Unread count unavailable");
+    expect(button).toHaveAccessibleName(/3 active threads/);
+    expect(button).toHaveAccessibleName(/Active thread count on other instances unavailable/);
+    expect(button).toHaveAccessibleName(/Unread count unavailable/);
     expect(container.querySelector("[data-attention-active-count]")).toHaveAttribute("data-attention-active-count", "3");
     expect(container.querySelector("[data-attention-remote-active-count]")).toBeNull();
     expect(container.querySelectorAll('[data-unknown="true"]')).toHaveLength(2);
@@ -173,7 +173,7 @@ describe("star map attention filter", () => {
     renderMap([working]);
     await waitFor(() => expect(chip()).toBeTruthy());
     expect(chip().textContent).not.toContain("Attention");
-    expect(chip().getAttribute("aria-label")).toMatch(/^Attention:/);
+    expect(chip()).toHaveAccessibleName(/^Attention:/);
     expect(chip().querySelector(".star-map__filter-signals")).not.toBeNull();
     expect(chip().querySelector(".star-map__filter-count")).toBeNull();
   });
@@ -195,8 +195,8 @@ describe("star map attention filter", () => {
   it("says both numbers out loud", async () => {
     renderMap([working, unread]);
     await waitFor(() => expect(chip()).toBeTruthy());
-    expect(chip().getAttribute("aria-label")).toContain("1 active thread");
-    expect(chip().getAttribute("aria-label")).toContain("1 unread");
+    expect(chip()).toHaveAccessibleName(/1 active thread/);
+    expect(chip()).toHaveAccessibleName(/1 unread/);
   });
 
   /**

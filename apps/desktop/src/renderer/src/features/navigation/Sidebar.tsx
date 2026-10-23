@@ -4163,7 +4163,7 @@ function ProfileIdentityButton(props: {
     <>
       <button
         ref={props.buttonRef}
-        aria-label="Open PwrAgent profile menu"
+        aria-label={`Open PwrAgent profile menu: ${props.label}`}
         aria-describedby={tooltip.visible ? tooltip.tooltipId : undefined}
         aria-expanded={props.hasMenu ? props.menuOpen : undefined}
         aria-haspopup={props.hasMenu ? "menu" : undefined}
@@ -4282,7 +4282,6 @@ function AttentionLensTab(props: {
     <>
       <button
         role="tab"
-        aria-label={props.countsReady === false ? "Attention, loading counts" : accessibleName}
         // The card's consequence lines ("Quitting interrupts these") exist
         // nowhere else — without this they are sighted-only, since the portal
         // sits outside this button's subtree. Gated on `visible`: naming an
@@ -4304,13 +4303,19 @@ function AttentionLensTab(props: {
         onMouseEnter={(event) => tooltip.show(event.currentTarget, card)}
         onMouseLeave={tooltip.hide}
       >
-        {props.countsReady === false ? <span aria-label="Loading counts">…</span> : <>
-        <AttentionTurnReadouts
-          activeLocal={props.activeThreadCount}
-          activeRemote={props.remoteActiveThreadCount}
-        />
-        <AttentionReviewReadout count={props.reviewThreadCount} />
-        </>}
+        <span
+          role="img"
+          aria-label={props.countsReady === false ? "Attention, loading counts" : accessibleName}
+          className="signal-count-group"
+        >
+          {props.countsReady === false ? "…" : <>
+            <AttentionTurnReadouts
+              activeLocal={props.activeThreadCount}
+              activeRemote={props.remoteActiveThreadCount}
+            />
+            <AttentionReviewReadout count={props.reviewThreadCount} />
+          </>}
+        </span>
       </button>
       {tooltip.tooltipNode}
     </>

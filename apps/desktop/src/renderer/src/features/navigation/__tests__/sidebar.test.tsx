@@ -931,9 +931,9 @@ describe("Sidebar", () => {
     const lensTabs = within(
       screen.getByRole("tablist", { name: "Thread lenses" })
     ).getAllByRole("tab");
-    // The tabs render an icon and no visible text, so the accessible name is
-    // the whole name — a tab that loses its aria-label announces as unlabeled.
-    expect(lensTabs.map((tab) => tab.getAttribute("aria-label"))).toEqual([
+    // Icon tabs need a complete accessible name, whether it comes from the
+    // tab's label or the Attention readouts' named graphic.
+    const lensNames = [
       "Attention, 0 active threads, 1 thread to review",
       // Drafts announces its emptiness even though it shows no badge: the
       // vanishing count is only readable if you can see the row.
@@ -941,7 +941,11 @@ describe("Sidebar", () => {
       "Updated",
       "Created",
       "Directories",
-    ]);
+    ];
+    expect(lensTabs).toHaveLength(lensNames.length);
+    lensNames.forEach((name, index) => {
+      expect(lensTabs[index]).toHaveAccessibleName(name);
+    });
     expect(lensTabs[4]).toHaveAttribute("aria-selected", "true");
     expect(screen.getAllByText("PwrAgent").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Cross-project cleanup").length).toBeGreaterThan(0);
@@ -2982,7 +2986,8 @@ describe("Sidebar", () => {
       onRefreshRateLimits,
     };
     const { rerender } = render(<Sidebar {...props} />);
-    const button = screen.getByRole("button", { name: "Open PwrAgent profile menu" });
+    const button = screen.getByRole("button", { name: /^Open PwrAgent profile menu: / });
+    expect(button).toHaveAccessibleName(`Open PwrAgent profile menu: ${button.textContent}`);
     fireEvent.mouseEnter(button);
     expect(onRefreshRateLimits).toHaveBeenCalledTimes(1);
     await screen.findByRole("tooltip");
@@ -3073,7 +3078,7 @@ describe("Sidebar", () => {
     );
 
     const profileButton = screen.getByRole("button", {
-      name: "Open PwrAgent profile menu",
+      name: /^Open PwrAgent profile menu: /,
     });
     expect(profileButton).toHaveTextContent("profile:work, codex:work3");
 
@@ -3171,7 +3176,7 @@ describe("Sidebar", () => {
     );
 
     expect(screen.getByRole("button", {
-      name: "Open PwrAgent profile menu",
+      name: /^Open PwrAgent profile menu: /,
     })).toHaveTextContent("profile:work, codex:work3");
   });
 
@@ -9880,7 +9885,7 @@ describe("Sidebar menus from the keyboard", () => {
       profile("studio", false),
     ]);
     const trigger = screen.getByRole("button", {
-      name: "Open PwrAgent profile menu",
+      name: /^Open PwrAgent profile menu: /,
     });
     expect(trigger).toHaveAttribute("aria-haspopup", "menu");
     expect(trigger).toHaveAttribute("aria-expanded", "false");
@@ -9902,7 +9907,7 @@ describe("Sidebar menus from the keyboard", () => {
   it("holds focus on a profile menu whose only profile is the current one", () => {
     renderProfileSidebar([profile("work", true)]);
     const trigger = screen.getByRole("button", {
-      name: "Open PwrAgent profile menu",
+      name: /^Open PwrAgent profile menu: /,
     });
     act(() => trigger.focus());
     act(() => trigger.click());
@@ -9937,7 +9942,7 @@ describe("Sidebar menus from the keyboard", () => {
       />,
     );
     const trigger = screen.getByRole("button", {
-      name: "Open PwrAgent profile menu",
+      name: /^Open PwrAgent profile menu: /,
     });
     // Both triggers stop their click, so neither reaches the other menu's
     // outside-click listener.
