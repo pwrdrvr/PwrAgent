@@ -7323,7 +7323,10 @@ class DesktopAppServerService {
     logDebug("updateSubthreadOrder", {
       backend: response.backend,
       parentThreadId: request.parentThreadId,
-      childCount: response.threadIds?.length,
+      // A relative move answers no order; name what moved instead.
+      ...(response.threadIds
+        ? { childCount: response.threadIds.length }
+        : { movedThreadId: request.move?.threadId ?? request.insertAfter?.threadId }),
     });
     return response;
   }

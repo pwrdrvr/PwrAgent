@@ -20,8 +20,9 @@ export async function updateLocalSubthreadOrder(
   request: Omit<UpdateSubthreadOrderRequest, "federationTarget">,
 ): Promise<UpdateSubthreadOrderResponse> {
   const backend = request.backend ?? "codex";
+  const relative = Boolean(request.move || request.insertAfter);
   let children: { backend: NavigationThreadSummary["source"]; id: string; createdAt?: number }[] | undefined;
-  if (request.move || request.insertAfter) {
+  if (relative) {
     const index = await loadLocalNavigationQueryIndex({ callerReason: "relative-child-move" });
     if (index.coverage && index.coverage.state !== "complete") {
       throw new Error("Wait for complete owner discovery before moving a child.");
@@ -43,7 +44,6 @@ export async function updateLocalSubthreadOrder(
       : request.insertAfter ? { insertAfter: request.insertAfter, children } : { threadIds: request.threadIds }),
   });
 
-  const relative = Boolean(request.move || request.insertAfter);
   await getDesktopBackendRegistry().publishLocalEvent({
     backend,
     notification: {
