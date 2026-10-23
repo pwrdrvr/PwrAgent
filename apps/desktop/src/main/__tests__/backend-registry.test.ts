@@ -50954,6 +50954,12 @@ script = "printf setup"
       expectedEffort: "medium",
     },
     {
+      requested: "gemini-3-pro",
+      requestedEffort: "low",
+      expected: "gpt-6-luna",
+      expectedEffort: "low",
+    },
+    {
       requested: "gpt-5.4-mini",
       requestedEffort: "high",
       expected: "gpt-5.4-mini",
@@ -50977,9 +50983,16 @@ script = "printf setup"
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
       models: [
-        { id: "gpt-6-luna", label: "GPT-6-Luna", supportsReasoning: true },
+        // GPT-6 catalogs offer `max`, so the cap must refuse it by name.
+        {
+          id: "gpt-6-luna",
+          label: "GPT-6-Luna",
+          supportsReasoning: true,
+          reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+        },
         { id: "gpt-5.5", label: "GPT-5.5", supportsReasoning: true },
         { id: "gpt-5.4-mini", label: "GPT-5.4-Mini", supportsReasoning: true },
+        { id: "gemini-3-pro", label: "Gemini 3 Pro", supportsReasoning: true },
       ],
       startThreadResult: { threadId: "monitor-thread" },
     });

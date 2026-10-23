@@ -7348,8 +7348,10 @@ const MONITOR_REASONING_EFFORT_ORDER = [
   "xhigh",
 ] as const;
 
+// Whole name segments only: "gemini-3-pro" must not pass as "mini".
 function isLightweightMonitorModel(modelId: string): boolean {
-  return /(?:mini|lite|flash|haiku|small|nano|luna)/iu.test(modelId);
+  return /(?:^|[^a-z])(?:mini|lite|flash|haiku|small|nano|luna)(?:$|[^a-z])/iu
+    .test(modelId);
 }
 
 /**
@@ -41423,6 +41425,7 @@ export class DesktopBackendRegistry {
       preferredModel !== requestedModel ||
       preferredReasoningEffort !== requestedReasoningEffort
     ) {
+      const codexMonitor = !isAcpBackendId(context.backend);
       backendRegistryLog.info("adjusted task monitor model settings", {
         monitorId,
         parentThreadId,
@@ -41430,6 +41433,14 @@ export class DesktopBackendRegistry {
         preferredReasoningEffort,
         requestedModel,
         requestedReasoningEffort,
+        ...(codexMonitor && requestedModel && !isLightweightMonitorModel(requestedModel)
+          ? { declinedRequestedModel: true }
+          : {}),
+        ...(codexMonitor
+          && requestedReasoningEffort
+          && !isLightweightMonitorReasoningEffort(requestedReasoningEffort)
+          ? { declinedRequestedReasoningEffort: true }
+          : {}),
       });
     }
     const record: TaskMonitorDelegationRecord = {
