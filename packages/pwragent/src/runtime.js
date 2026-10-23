@@ -8,14 +8,18 @@ export class Runtime {
     this.onFailure = onFailure;
     this.codex = new Codex({
       command, home, workspace,
-      onNotification: (message) => this.notification(message),
+      onNotification: (message) => { this.notification(message); this.onEvent?.(message); },
       onRequest: (message) => this.serverRequest(message),
       onFailure,
     });
   }
 
   save(job) {
-    try { return this.store.save(job); } catch (error) {
+    try {
+      const saved = this.store.save(job);
+      this.onEvent?.({ method: "headless/jobChanged", params: saved });
+      return saved;
+    } catch (error) {
       this.onFailure(error);
       throw error;
     }
@@ -47,17 +51,21 @@ export class Runtime {
   }
 
   submit(params) {
-    const { id, prompt, threadId = null, model = null, sandbox = "read-only" } = params;
+    const { id, prompt, threadId = null, model = null, sandbox = "read-only", reasoningEffort = null, serviceTier = null } = params;
     if (!validId(id)) throw new Error("Job ID must be 1–80 letters, digits, underscores or hyphens, beginning with a letter or digit");
     if (typeof prompt !== "string" || !prompt.trim() || Buffer.byteLength(prompt) > 256 * 1024) {
       throw new Error("Prompt must be nonempty and at most 256 KiB");
     }
     if (!["read-only", "workspace-write"].includes(sandbox)) throw new Error("Sandbox must be read-only or workspace-write");
     if (model !== null && (typeof model !== "string" || !model.trim() || model.length > 200)) throw new Error("Invalid model");
-    if (threadId !== null && (typeof threadId !== "string" || ![...this.store.jobs.values()].some((job) => job.threadId === threadId))) {
+    for (const value of [reasoningEffort, serviceTier]) {
+      if (value !== null && (typeof value !== "string" || value.length > 200)) throw new Error("Invalid turn settings");
+    }
+    if (threadId !== null && (typeof threadId !== "string" || (!this.ownsThread?.(threadId) && ![...this.store.jobs.values()].some((job) => job.threadId === threadId)))) {
       throw new Error("Only threads created by this headless profile may be continued");
     }
-    const fingerprint = digest({ prompt, threadId, model, sandbox });
+    // Preserve fingerprints created before optional turn settings were added.
+    const fingerprint = digest({ prompt, threadId, model, sandbox, ...(reasoningEffort ? { reasoningEffort } : {}), ...(serviceTier ? { serviceTier } : {}) });
     const prior = this.store.jobs.get(id);
     if (prior) {
       if (prior.fingerprint !== fingerprint) throw new Error("Job ID was already used with different input");
@@ -66,7 +74,7 @@ export class Runtime {
     if (this.active) throw new Error(`Daemon is busy with job ${this.active}; no job was queued`);
     if (this.store.jobs.size >= 10000) throw new Error("Job retention limit reached (10000); use a new profile");
     const job = this.save({ version: 1, id, fingerprint, status: "starting", threadId,
-      model, sandbox, createdAt: new Date().toISOString() });
+      model, sandbox, reasoningEffort, serviceTier, createdAt: new Date().toISOString() });
     this.active = id;
     this.earlyCompletion = null;
     this.blockedReason = null;
@@ -101,6 +109,8 @@ export class Runtime {
         ? { type: "workspaceWrite", writableRoots: [this.workspace], networkAccess: false, excludeTmpdirEnvVar: true, excludeSlashTmp: true }
         : { type: "readOnly", networkAccess: false },
       ...(job.model ? { model: job.model } : {}),
+      ...(job.reasoningEffort ? { effort: job.reasoningEffort } : {}),
+      ...(job.serviceTier ? { serviceTier: job.serviceTier } : {}),
     });
     if (typeof turn?.turn?.id !== "string" || !turn.turn.id || turn.turn.id.length > 256) {
       this.onFailure(new Error("Codex returned an invalid turn ID; execution outcome is unknown"));

@@ -5,6 +5,16 @@ PwrAgent instances. The first implementation is shaped around a local gateway
 listener exposed through a stable Cloudflare Tunnel endpoint, with client
 instances connecting back over WebSocket.
 
+The Node-only [headless outpost](../packages/pwragent/README.md) uses the same
+transport, identity proofs, enrollment and router through `@pwragent/federation`.
+Desktop wrappers inject desktop logging and storage; the outpost supplies
+private identity files and a bounded Codex backend. It can consume an invite
+over a laptop-initiated SSH reverse forward without Cloudflare or Tailscale.
+Its capability advertisement describes its smaller implemented surface.
+Tunnel presence is independent of peer identity and running work. Federation
+does not replicate its owner-local transcript onto the gateway for recovery
+after loss of the outpost disk.
+
 ## Trust Model
 
 - Cloudflare Tunnel is a reachability and edge-filtering layer. It can restrict

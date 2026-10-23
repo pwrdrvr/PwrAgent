@@ -3,9 +3,10 @@ import net from "node:net";
 import path from "node:path";
 import { JobStore, privateDirectory } from "./store.js";
 import { Runtime } from "./runtime.js";
+import { HeadlessFederation } from "./federation.js";
 import { MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, readMessages } from "./wire.js";
 
-export async function serve({ directory, workspace, home, command }) {
+export async function serve({ directory, workspace, home, command, profile }) {
   if (!["linux", "darwin"].includes(process.platform)) throw new Error("Headless currently supports Linux and macOS only");
   for (const value of [workspace, home, command]) {
     if (!value || !path.isAbsolute(value)) throw new Error("serve requires absolute --workspace, --codex-home and --codex-bin paths");
@@ -32,6 +33,7 @@ export async function serve({ directory, workspace, home, command }) {
     throw error;
   }
   let runtime;
+  let federation;
   let server;
   let listening = false;
   let shutdown;
@@ -45,7 +47,9 @@ export async function serve({ directory, workspace, home, command }) {
     shutdown = (async () => {
       if (listening) server.close();
       for (const socket of sockets) socket.destroy();
-      try { await runtime?.stop(); } finally {
+      try {
+        try { await federation?.stop(); } finally { await runtime?.stop(); }
+      } finally {
         closeSync(lock);
         unlinkSync(lockPath);
         process.off("SIGTERM", signalStop);
@@ -68,6 +72,8 @@ export async function serve({ directory, workspace, home, command }) {
     process.on("SIGTERM", signalStop);
     process.on("SIGINT", signalStop);
     await runtime.codex.initialize();
+    federation = new HeadlessFederation({ directory, runtime, profile, onFailure: (error) => { void stop(error); } });
+    await federation.start();
     if (shutdown) return done;
     server = net.createServer((socket) => {
       if (sockets.size >= 64) { socket.destroy(); return; }
@@ -90,7 +96,17 @@ export async function serve({ directory, workspace, home, command }) {
           respond({ error: "Unsupported headless protocol" });
           return;
         }
-        Promise.resolve().then(() => runtime.handle(message.method, message.params))
+        Promise.resolve().then(() => {
+          const params = message.params || {};
+          switch (message.method) {
+            case "federation-status": return federation.status();
+            case "federation-join": return federation.join(params);
+            case "federation-invite": return federation.invite(params);
+            case "federation-leave": return federation.leave();
+            case "federation-revoke": return federation.revoke(params.peer);
+            default: return runtime.handle(message.method, params);
+          }
+        })
           .then((result) => respond({ result }), (error) => respond({ error: error.message }));
       }, () => socket.destroy());
     });

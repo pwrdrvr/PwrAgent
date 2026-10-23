@@ -74,6 +74,7 @@
     "@pwragent/messaging-provider-slack": "workspace:*",
     "@pwragent/messaging-provider-telegram": "workspace:*",
     "@pwragent/shared": "workspace:*",
+    "@pwragent/federation": "workspace:*",
     "@pwrdrvr/agent-acp": "^0.16.1",
     "@pwrdrvr/agent-client": "^0.8.2",
     "@pwrdrvr/agent-core": "^0.2.0",

@@ -15,9 +15,8 @@ import {
 } from "@pwragent/shared";
 import type { StateDb } from "../state/state-db";
 
-export class DurableTurnRequestError extends Error {
-  constructor(readonly code: string) { super(code); }
-}
+import { DurableTurnRequestError } from "@pwragent/federation/errors";
+export { DurableTurnRequestError } from "@pwragent/federation/errors";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const STALE_DISPATCH_MS = 5 * 60_000;
