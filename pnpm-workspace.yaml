@@ -88,6 +88,8 @@ minimumReleaseAgeExclude:
   # Electron 44.4.5 (23 Sep 2026) carries upstream Chromium, V8, ANGLE, Dawn,
   # and PDFium security backports; 41.x stopped receiving them on 25 Aug 2026.
   - 'electron@44.4.5'
+  # GHSA-jr5w-w6x2-84p9 eMudhra fix; published 2026-10-21T03:31:39.419Z.
+  - 'electron@44.9.3'
   - '@pwrdrvr/agent-core'
   - '@pwrdrvr/agent-transport'
   - '@pwrdrvr/codex-discovery'
