@@ -22,6 +22,7 @@ import {
 import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
 import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
 import { issueProviderDiscoveryPermit } from "../settings/provider-discovery-permit";
+import { threadAssetRoot } from "../app-server/thread-assets";
 
 const fixtureDir = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -54,6 +55,50 @@ describe("inputToAcpPrompt", () => {
       });
     } finally {
       await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("inputToAcpPrompt local image replay", () => {
+  it("records an image part backed by the thread's own asset copy", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-acp-image-"));
+    // A federated image arrives in an expiring receive folder like this one.
+    const imagePath = path.join(root, "received.png");
+    const imageBytes = Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 4, 5, 6,
+    ]);
+    const owner = { backend: "acp:grok" as const, threadId: "thread-replay" };
+    try {
+      await writeFile(imagePath, imageBytes);
+
+      const payload = await inputToAcpPrompt([
+        { type: "text", text: "What is this?" },
+        { type: "localImage", name: "screenshot.png", path: imagePath },
+      ], { owner, privateStorageRoots: [] });
+
+      const imagePart = payload?.parts.find((part) => part.type === "image");
+      expect(payload?.parts.map((part) => part.type)).toEqual(["text", "image"]);
+      expect(payload?.parts).not.toContainEqual(
+        { type: "text", text: "[Local image: screenshot.png]" },
+      );
+      expect(imagePart).toMatchObject({ type: "image", alt: "screenshot.png" });
+      const prefix = "pwragent-image://file/";
+      const url = (imagePart as { url: string }).url;
+      expect(url.startsWith(prefix)).toBe(true);
+      const assetPath = fileURLToPath(decodeURIComponent(url.slice(prefix.length)));
+      expect(assetPath.startsWith(threadAssetRoot(owner))).toBe(true);
+
+      // The replayed part must survive the receive folder's cleanup.
+      await rm(root, { recursive: true, force: true });
+      expect(readFileSync(assetPath)).toEqual(imageBytes);
+      expect(payload?.promptContent).toContainEqual({
+        type: "image",
+        mimeType: "image/png",
+        data: imageBytes.toString("base64"),
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+      await rm(threadAssetRoot(owner), { recursive: true, force: true });
     }
   });
 });

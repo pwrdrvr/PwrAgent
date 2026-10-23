@@ -13748,7 +13748,10 @@ export class DesktopBackendRegistry {
     model?: string;
     reasoningEffort?: string;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
-    const promptPayload = await inputToAcpPrompt(params.input);
+    const promptPayload = await inputToAcpPrompt(params.input, {
+      owner: { backend: params.backend, threadId: params.threadId },
+      privateStorageRoots: this.localFilePrivateStorageRoots,
+    });
     if (!promptPayload) {
       throw new Error("ACP turns require text or image input");
     }
@@ -22433,7 +22436,10 @@ export class DesktopBackendRegistry {
     }
     if (isAcpBackendId(params.backend)) {
       const acpBackend = params.backend;
-      const promptPayload = await inputToAcpPrompt(input);
+      const promptPayload = await inputToAcpPrompt(input, {
+        owner: { backend: acpBackend, threadId: params.threadId },
+        privateStorageRoots: this.localFilePrivateStorageRoots,
+      });
       if (!promptPayload) {
         throw new Error("ACP steering requires text or image input");
       }

@@ -1,5 +1,6 @@
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { app } from "electron";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import {
@@ -44,7 +45,12 @@ import {
   type AcpPromptContentBlock,
 } from "../acp/acp-client";
 import type { AcpProviderStatus } from "../acp/acp-provider-status";
-import { MAX_TURN_INPUT_ATTACHMENT_BYTES } from "./turn-input-attachment-files";
+import {
+  MAX_TURN_INPUT_ATTACHMENT_BYTES,
+  stageLocalTurnInputAttachment,
+} from "./turn-input-attachment-files";
+import type { ThreadAssetOwner } from "./thread-assets";
+import { toTranscriptImageProtocolUrl } from "../transcript-image-protocol";
 import {
   acpRuntimeSupportsHttpMcp,
   buildAutomationInspectionAcpMcpServers,
@@ -957,6 +963,16 @@ export function acpSessionHasConversationHistory(
 
 export async function inputToAcpPrompt(
   input: AppServerTurnInputItem[],
+  options?: {
+    /**
+     * The thread whose asset store keeps a copy of each local image. The
+     * recorded prompt replays from these parts, so an image part must point
+     * at a file that outlives the turn: a federated image arrives in an
+     * expiring receive folder, and a picked file can move.
+     */
+    owner?: ThreadAssetOwner;
+    privateStorageRoots?: readonly string[];
+  },
 ): Promise<AcpPromptPayload | undefined> {
   const promptContent: AcpPromptContentBlock[] = [];
   const parts: AppServerThreadMessagePart[] = [];
@@ -1010,17 +1026,28 @@ export async function inputToAcpPrompt(
     }
 
     const fileName = item.name?.trim() || path.basename(item.path);
-    const text = `[Local image: ${fileName}]`;
-    promptContent.push({ type: "text", text });
-    parts.push({ type: "text", text });
-    const fileInfo = await stat(item.path);
+    const imagePath = options?.owner
+      ? (await stageLocalTurnInputAttachment(item, {
+          owner: options.owner,
+          privateStorageRoots: options.privateStorageRoots,
+        })).path
+      : item.path;
+    promptContent.push({ type: "text", text: `[Local image: ${fileName}]` });
+    // Record the image itself, as the inline-image branch does. A text
+    // placeholder here was all a reopened thread could show.
+    parts.push({
+      type: "image",
+      alt: fileName,
+      url: toTranscriptImageProtocolUrl(pathToFileURL(imagePath).toString()),
+    });
+    const fileInfo = await stat(imagePath);
     if (
       !fileInfo.isFile()
       || fileInfo.size > MAX_TURN_INPUT_ATTACHMENT_BYTES
     ) {
       throw new Error(`Invalid local image attachment: ${fileName}`);
     }
-    const data = await readFile(item.path);
+    const data = await readFile(imagePath);
     const mimeType = detectLocalImageMimeType(data);
     if (!mimeType) {
       throw new Error(`Unsupported local image attachment: ${fileName}`);
