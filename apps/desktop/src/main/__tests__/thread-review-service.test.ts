@@ -2,11 +2,13 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AgentEvent, AppServerThreadReviewEntry, ThreadTodosChangedEvent } from "@pwragent/shared";
 import { threadReviewTodo } from "@pwragent/shared";
 import {
+  REPORTED_FIXED_NOTE,
+  REPORTED_NO_CHANGE_NOTE,
   THREAD_REVIEW_MAX_FINDINGS,
   THREAD_REVIEW_TEXT_LIMITS,
   ThreadReviewService,
 } from "../thread-reviews/thread-review-service";
-import { completedThreadReview } from "../thread-reviews/thread-review-events";
+import { completedThreadReview, reportedThreadReviewOutcomes } from "../thread-reviews/thread-review-events";
 import { StateDb } from "../state/state-db";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
@@ -317,5 +319,69 @@ describe("persistent thread reviews", () => {
     });
     expect(writes.commits).toBe(3);
     expectSqliteWriteBudget({ scenario: "thread-review-lifecycle", note: "One two-finding review, two resolutions (including automatic handling), and 100 duplicate imports/reads. One commit per boundary; no idle writes.", writes });
+  });
+
+  describe("outcomes the reviewer reports", () => {
+    const CLAUDE = { backend: "claude" as const, threadId: "claude-owner" };
+    const THREE = { ...INPUT, items: [...INPUT.items, { title: "Guard the parse" }] };
+
+    it("settles fixed and no-change findings, keeps skipped ones open, and handles the review when none remain", () => {
+      const review = service.record(CLAUDE, THREE, "automatic");
+      const partial = service.applyReportedOutcomes(CLAUDE, THREE.sourceKey, [
+        { index: 0, outcome: "fixed" }, { index: 1, outcome: "skipped" }, { index: 2, outcome: "no_change_needed" },
+      ])!;
+      expect(partial.items.map((item) => item.status)).toEqual(["addressed", "open", "dismissed"]);
+      expect(partial.items[0]!.resolution).toEqual({ note: REPORTED_FIXED_NOTE, actor: "agent", at: expect.any(Number) });
+      expect(partial.items[2]!.resolution).toEqual({ note: REPORTED_NO_CHANGE_NOTE, actor: "agent", at: expect.any(Number) });
+      expect(partial.items[1]!.resolution).toBeUndefined();
+      expect(partial.status).toBe("open");
+      expect(threadReviewTodo(partial).detail).toBe("1 open finding · Two correctness findings.");
+      expect(events).toHaveLength(2);
+
+      const settled = service.applyReportedOutcomes(CLAUDE, THREE.sourceKey, [{ index: 1, outcome: "fixed" }])!;
+      expect(settled.status).toBe("handled");
+      expect(settled.resolution).toMatchObject({ actor: "system", note: "All findings addressed or declined." });
+      expect(service.get(review.id)?.status).toBe("handled");
+    });
+
+    it("never overrides an outcome already recorded for a finding", () => {
+      const review = service.record(CLAUDE, INPUT, "automatic");
+      service.update({ id: review.id, itemId: review.items[0]!.id, status: "dismissed", note: "Intended behavior." }, "user", CLAUDE);
+      const after = service.applyReportedOutcomes(CLAUDE, INPUT.sourceKey, [{ index: 0, outcome: "fixed" }])!;
+      expect(after.items[0]).toMatchObject({ status: "dismissed", resolution: { actor: "user", note: "Intended behavior." } });
+      expect(events).toHaveLength(2);
+    });
+
+    it("ignores unknown reviews, other threads, out-of-range findings, and skipped-only reports", () => {
+      service.record(CLAUDE, INPUT, "automatic");
+      expect(service.applyReportedOutcomes(CLAUDE, "missing", [{ index: 0, outcome: "fixed" }])).toBeUndefined();
+      expect(service.applyReportedOutcomes({ ...CLAUDE, threadId: "other" }, INPUT.sourceKey, [{ index: 0, outcome: "fixed" }])).toBeUndefined();
+      const unchanged = service.applyReportedOutcomes(CLAUDE, INPUT.sourceKey, [{ index: 5, outcome: "fixed" }, { index: 0, outcome: "skipped" }])!;
+      expect(unchanged.items.every((item) => item.status === "open")).toBe(true);
+      expect(events).toHaveLength(1);
+    });
+
+    it("applies a reported-outcomes event through the same parser the runtime uses", () => {
+      service.record(CLAUDE, INPUT, "automatic");
+      const event: AgentEvent = { backend: "claude", notification: { method: "thread/review/outcomesReported", params: {
+        threadId: CLAUDE.threadId, turnId: "turn-2", reviewId: INPUT.sourceKey, outcomes: [{ index: 1, outcome: "fixed" }],
+      } } };
+      const reported = reportedThreadReviewOutcomes(event)!;
+      expect(reportedThreadReviewOutcomes({ ...event, federationTarget: { scope: "remote", instanceId: "peer" } } as AgentEvent)).toBeUndefined();
+      const review = service.applyReportedOutcomes(reported.identity, reported.sourceKey, reported.outcomes)!;
+      expect(review.items.map((item) => item.status)).toEqual(["open", "addressed"]);
+    });
+
+    it("budgets one commit per report that settles findings, and none for repeats", async () => {
+      service.record(CLAUDE, THREE, "automatic");
+      const { writes } = await measureSqliteWrites(() => {
+        const outcomes = [
+          { index: 0, outcome: "fixed" as const }, { index: 1, outcome: "no_change_needed" as const }, { index: 2, outcome: "skipped" as const },
+        ];
+        for (let index = 0; index < 100; index++) service.applyReportedOutcomes(CLAUDE, THREE.sourceKey, outcomes);
+      });
+      expect(writes.commits).toBe(1);
+      expectSqliteWriteBudget({ scenario: "thread-review-reported-outcomes", note: "One re-report settling two of three findings, then 99 identical re-reports. One commit for the whole report; repeats and skipped findings write nothing. ~8 KB per report: ~0.8 MB/day at 100 reports/day, 0 MB/day idle.", writes });
+    });
   });
 });

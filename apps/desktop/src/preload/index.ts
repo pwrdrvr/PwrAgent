@@ -27,6 +27,7 @@ import { THREAD_FAMILY_PRICING_READ_CHANNEL } from "../shared/ipc";
 import { USAGE_ACTIVITY_OPEN_THREAD_CHANNEL, USAGE_ACTIVITY_OPEN_WINDOW_CHANNEL } from "../shared/ipc";
 import type {
   ListThreadTodoProjectsResponse,
+  ListThreadTodoProjectsRequest,
   ListThreadTodosRequest,
   ListThreadTodosResponse,
   ResolveThreadTodoRequest,
@@ -39,7 +40,9 @@ import type {
   ListThreadReviewsRequest,
   UpdateThreadReviewRequest,
   DismissOperatorQuestionRequest,
+  OperatorQuestionThreadRequest,
   ListOperatorRequestsResponse,
+  ListOperatorRequestsRequest,
   MarkOperatorItemsSeenRequest,
   OperatorRequestsChangedEvent,
 } from "@pwragent/shared";
@@ -137,6 +140,7 @@ import type {
   ListAutomationsResponse,
   ListBackendsRequest,
   ListBackendsResponse,
+  ListMcpConnectionsRequest,
   ListMcpConnectionsResponse,
   ListCodexMcpServersRequest,
   ListCodexMcpServersResponse,
@@ -256,6 +260,7 @@ import type {
   MarkThreadSeenRequest,
   MarkThreadSeenResponse,
   RemoveRemoteThreadPinRequest,
+  HasRemoteThreadPinRequest,
   RemoveRemoteThreadPinResponse,
   SetRemoteThreadLocalPinRequest,
   SetRemoteThreadLocalPinResponse,
@@ -646,6 +651,7 @@ import {
   OPERATOR_REQUESTS_CHANGED_EVENT_CHANNEL,
   OPERATOR_REQUESTS_DISMISS_QUESTION_CHANNEL,
   OPERATOR_REQUESTS_LIST_CHANNEL,
+  OPERATOR_QUESTIONS_LIST_DISMISSED_CHANNEL,
   OPERATOR_REQUESTS_MARK_SEEN_CHANNEL,
   AGENT_CANCEL_THREAD_EXECUTION_MODE_QUEUE_CHANNEL,
   AGENT_APPLY_THREAD_MODEL_MIGRATION_CHANNEL,
@@ -745,6 +751,8 @@ import {
   MANAGED_RUNTIME_PROGRESS_READ_CHANNEL,
   APP_SERVER_LIST_THREADS_CHANNEL,
   THREAD_SEARCH_CHANNEL,
+  THREAD_SEARCH_PROGRESS_CHANNEL,
+  THREAD_SEARCH_CANCEL_CHANNEL,
   APP_SERVER_ARCHIVE_THREAD_CHANNEL,
   APP_SERVER_ARCHIVE_WORKTREE_CHANNEL,
   APP_SERVER_HANDOFF_THREAD_WORKSPACE_CHANNEL,
@@ -925,6 +933,7 @@ import {
   FEDERATION_JUMP_SEARCH_PROGRESS_CHANNEL,
   NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL,
   NAVIGATION_REMOVE_REMOTE_THREAD_PIN_CHANNEL,
+  NAVIGATION_HAS_REMOTE_THREAD_PIN_CHANNEL,
   NAVIGATION_SET_REMOTE_THREAD_LOCAL_PIN_CHANNEL,
   NAVIGATION_REORDER_DIRECTORY_PINS_CHANNEL,
   NAVIGATION_REORDER_THREAD_PINS_CHANNEL,
@@ -979,6 +988,8 @@ import {
   PROFILES_WRITE_SECRETS_CHANNEL,
   RENDERER_ERROR_REPORT_CHANNEL,
   RUNTIME_IDENTITY_CHANNEL,
+  LAUNCHPAD_ACCESS_NOTICE_DISMISS_CHANNEL,
+  LAUNCHPAD_ACCESS_NOTICE_READ_CHANNEL,
   SETTINGS_CHECK_CODEX_AUTH_PROFILE_STATUS_CHANNEL,
   SETTINGS_CLEAR_SECRET_CHANNEL,
   SETTINGS_CREATE_CODEX_AUTH_PROFILE_CHANNEL,
@@ -1143,8 +1154,11 @@ const subscribeToAgentEvent = createEventSubscriptionMultiplexer<AgentEvent>(
 );
 
 let federationJumpSearchRequestSequence = 0;
+let threadSearchRequestSequence = 0;
 
 const desktopApi = Object.freeze({
+  manageThreadDependencies: async (request: import("@pwragent/shared").ManageThreadDependenciesRequest): Promise<import("@pwragent/shared").ManageThreadDependenciesResponse> =>
+    await ipcRenderer.invoke("thread:dependencies", request),
   nativeVoiceCapability: () => ipcRenderer.invoke(NATIVE_VOICE_CAPABILITY_CHANNEL),
   startNativeVoice: (request: NativeVoiceStart) => ipcRenderer.invoke(NATIVE_VOICE_START_CHANNEL, request),
   stopNativeVoice: (request: NativeVoiceTarget) => ipcRenderer.invoke(NATIVE_VOICE_STOP_CHANNEL, request),
@@ -1172,8 +1186,8 @@ const desktopApi = Object.freeze({
   },
   readTranscriptImage: async (url: string): Promise<{ dataBase64: string; mimeType: string }> =>
     await ipcRenderer.invoke(TRANSCRIPT_IMAGE_READ_CHANNEL, url),
-  listMcpConnections: async (): Promise<ListMcpConnectionsResponse> =>
-    await ipcRenderer.invoke(MCP_CONNECTION_LIST_CHANNEL),
+  listMcpConnections: async (request?: ListMcpConnectionsRequest): Promise<ListMcpConnectionsResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_LIST_CHANNEL, request),
   createMcpConnection: async (
     request: CreateMcpConnectionRequest,
   ): Promise<CreateMcpConnectionResponse> =>
@@ -1601,6 +1615,11 @@ const desktopApi = Object.freeze({
   focusMainWindowFromStarMap: async (): Promise<void> => {
     await ipcRenderer.invoke(STAR_MAP_FOCUS_MAIN_WINDOW_CHANNEL);
   },
+  readLaunchpadAccessNoticePending: async (): Promise<boolean> =>
+    await ipcRenderer.invoke(LAUNCHPAD_ACCESS_NOTICE_READ_CHANNEL),
+  dismissLaunchpadAccessNotice: async (): Promise<void> => {
+    await ipcRenderer.invoke(LAUNCHPAD_ACCESS_NOTICE_DISMISS_CHANNEL);
+  },
   ...(isDevelopment
     ? {
         getRuntimeIdentity: async (): Promise<RuntimeIdentity> =>
@@ -1617,8 +1636,22 @@ const desktopApi = Object.freeze({
     ),
   searchThreads: async (
     request?: ThreadSearchRequest,
-  ): Promise<ThreadSearchResponse> =>
-    await ipcRenderer.invoke(THREAD_SEARCH_CHANNEL, request),
+    onProgress?: (response: ThreadSearchResponse) => void,
+  ): Promise<ThreadSearchResponse> => {
+    const searchId = ++threadSearchRequestSequence;
+    const listener = (_event: Electron.IpcRendererEvent, update: { searchId: number; response: ThreadSearchResponse }): void => {
+      if (update.searchId === searchId) onProgress?.(update.response);
+    };
+    ipcRenderer.on(THREAD_SEARCH_PROGRESS_CHANNEL, listener);
+    try {
+      return await ipcRenderer.invoke(THREAD_SEARCH_CHANNEL, request, searchId);
+    } finally {
+      ipcRenderer.removeListener(THREAD_SEARCH_PROGRESS_CHANNEL, listener);
+    }
+  },
+  cancelThreadSearch: async (): Promise<void> => {
+    await ipcRenderer.invoke(THREAD_SEARCH_CANCEL_CHANNEL);
+  },
   listSkills: async (
     request?: AppServerListSkillsRequest
   ): Promise<AppServerListSkillsResponse> =>
@@ -2193,8 +2226,8 @@ const desktopApi = Object.freeze({
     request: RunThreadTodoActionRequest,
   ): Promise<ThreadTodoMutationResponse> =>
     await ipcRenderer.invoke(THREAD_TODOS_RUN_ACTION_CHANNEL, request),
-  listThreadTodoProjects: async (): Promise<ListThreadTodoProjectsResponse> =>
-    await ipcRenderer.invoke(THREAD_TODOS_LIST_PROJECTS_CHANNEL),
+  listThreadTodoProjects: async (request?: ListThreadTodoProjectsRequest): Promise<ListThreadTodoProjectsResponse> =>
+    await ipcRenderer.invoke(THREAD_TODOS_LIST_PROJECTS_CHANNEL, request ?? {}),
   setThreadTodoProject: async (
     request: SetThreadTodoProjectRequest,
   ): Promise<ThreadTodoMutationResponse> =>
@@ -2215,8 +2248,10 @@ const desktopApi = Object.freeze({
       ipcRenderer.off(THREAD_TODOS_CHANGED_EVENT_CHANNEL, listener);
     };
   },
-  listOperatorRequests: async (): Promise<ListOperatorRequestsResponse> =>
-    await ipcRenderer.invoke(OPERATOR_REQUESTS_LIST_CHANNEL),
+  listOperatorRequests: async (request?: ListOperatorRequestsRequest): Promise<ListOperatorRequestsResponse> =>
+    await ipcRenderer.invoke(OPERATOR_REQUESTS_LIST_CHANNEL, request),
+  listDismissedOperatorQuestions: async (request: OperatorQuestionThreadRequest): Promise<string[]> =>
+    await ipcRenderer.invoke(OPERATOR_QUESTIONS_LIST_DISMISSED_CHANNEL, request),
   markOperatorItemsSeen: async (
     request: MarkOperatorItemsSeenRequest,
   ): Promise<void> =>
@@ -2505,6 +2540,8 @@ const desktopApi = Object.freeze({
     request: ReorderThreadPinsRequest,
   ): Promise<ReorderThreadPinsResponse> =>
     await ipcRenderer.invoke(NAVIGATION_REORDER_THREAD_PINS_CHANNEL, request),
+  hasRemoteThreadPin: async (request: HasRemoteThreadPinRequest): Promise<boolean> =>
+    await ipcRenderer.invoke(NAVIGATION_HAS_REMOTE_THREAD_PIN_CHANNEL, request),
   addRemoteThreadPin: async (
     request: AddRemoteThreadPinRequest,
   ): Promise<AddRemoteThreadPinResponse> =>

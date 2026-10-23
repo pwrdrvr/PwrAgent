@@ -26,7 +26,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version: "^24.22.1"
           package-manager-cache: false
       - run: python3 -m unittest discover -s scripts -p test_build_artifact.py -v
       - run: node --test scripts/sync-homebrew.node-test.mjs
@@ -42,7 +42,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version: "^24.22.1"
           package-manager-cache: false
       - name: Dispatch or await tap publication without release downloads
         env:

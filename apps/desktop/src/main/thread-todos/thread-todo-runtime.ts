@@ -37,7 +37,7 @@ import {
   setThreadReviewBroadcast,
   resetThreadReviewServiceForTests,
 } from "../thread-reviews/thread-review-runtime";
-import { completedThreadReview } from "../thread-reviews/thread-review-events";
+import { completedThreadReview, reportedThreadReviewOutcomes } from "../thread-reviews/thread-review-events";
 
 const threadTodoLog = getMainLogger("pwragent:thread-todos");
 
@@ -98,6 +98,30 @@ export async function setThreadTodoProject(
 }
 
 /**
+ * Where a card raised on this thread runs its Start thread, and the project
+ * it files under, the way add_todo resolves them. Best effort: a missing
+ * workspace or project leaves the card on the thread alone.
+ */
+export async function readThreadTodoPlacement(
+  registry: Pick<DesktopBackendRegistry, "resolveThreadWorkspaceCwd" | "resolveThreadPrimaryDirectory">,
+  thread: { backend: AppServerBackendKind; threadId: string },
+): Promise<{ cwd?: string; sourceProject?: ThreadTodoProject }> {
+  const [cwd, primaryDirectory, projects] = await Promise.all([
+    registry.resolveThreadWorkspaceCwd(thread.backend, thread.threadId)
+      .catch(() => undefined),
+    registry.resolveThreadPrimaryDirectory(thread.backend, thread.threadId)
+      .catch(() => undefined),
+    (listProjectCandidates?.() ?? Promise.resolve([]))
+      .catch((): ThreadTodoProjectCandidate[] => []),
+  ]);
+  const sourceProject = threadTodoProjectForDirectory(primaryDirectory, projects);
+  return {
+    ...(cwd ? { cwd } : {}),
+    ...(sourceProject ? { sourceProject } : {}),
+  };
+}
+
+/**
  * Connects the service to the registry: the agent tools raise cards through
  * it, and its main-process actions run through the registry, gh, and the
  * federation tools for a peer.
@@ -146,6 +170,16 @@ export function installThreadTodoRuntime(params: {
     }
     const completed = completedThreadReview(event);
     if (completed) importReview(completed.identity, completed.entry, "live");
+    const reported = reportedThreadReviewOutcomes(event);
+    if (reported) {
+      try {
+        reviews.applyReportedOutcomes(reported.identity, reported.sourceKey, reported.outcomes);
+      } catch (error) {
+        threadTodoLog.warn("could not record reported review outcomes", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
     if (event.notification.method === "thread/pullRequests/updated"
       || event.notification.method === "thread/unarchived"
       || event.notification.method === "thread/name/updated") {

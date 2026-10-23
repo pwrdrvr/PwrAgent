@@ -26,6 +26,7 @@ import { agentToolFailure } from "./agent-tool-definition.js";
 import {
   PWRAGENT_AGENT_TOOL_NAMESPACE_DESCRIPTION,
   toMcpToolResponse,
+  type AgentMcpTool,
   type AgentMcpToolCallResponse,
 } from "./agent-tool-router.js";
 
@@ -116,6 +117,10 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     }
     await this.ensureStarted();
     const token = this.tokenForContext(context);
+    agentToolMcpLog.info("registered MCP client", {
+      backend: context.backend,
+      threadId: context.threadId ?? null,
+    });
     return {
       server: {
         name: PWRAGENT_TOOL_NAMESPACE,
@@ -139,6 +144,11 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
           threadId: normalizedThreadId,
         };
         this.contextsByToken.set(token, bound);
+        agentToolMcpLog.info("bound MCP client to thread", {
+          backend: bound.backend,
+          previousThreadId: current.threadId ?? null,
+          threadId: normalizedThreadId,
+        });
         const key = boundThreadKey(bound.backend, normalizedThreadId);
         if (!this.tokensByBoundThread.has(key)) {
           this.tokensByBoundThread.set(key, token);
@@ -260,7 +270,10 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
         capabilities: {
           tools: {},
         },
-        instructions: PWRAGENT_AGENT_TOOL_NAMESPACE_DESCRIPTION,
+        instructions: PWRAGENT_AGENT_TOOL_NAMESPACE_DESCRIPTION
+          + (this.resolveMcpTools().some((tool) => tool.name === "read_tool_guide")
+            ? " Read read_tool_guide for the short tool guide."
+            : ""),
       },
     );
     mcpServer.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -283,6 +296,11 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
         }
         const callContext = await this.options.resolveCallContext(clientContext);
         if (!callContext) {
+          agentToolMcpLog.warn("MCP tool rejected: no unique active turn", {
+            backend: clientContext.backend,
+            threadId: clientContext.threadId,
+            tool: request.params.name,
+          });
           return forbiddenMcpResponse(
             "PwrAgent MCP tools are callable only during an active turn on the registered thread.",
           );
@@ -344,19 +362,8 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     }
   }
 
-  private resolveMcpTools(): Array<{
-    name: string;
-    description: string;
-    inputSchema: Record<string, unknown>;
-  }> {
-    const toolsByName = new Map<
-      string,
-      {
-        name: string;
-        description: string;
-        inputSchema: Record<string, unknown>;
-      }
-    >();
+  private resolveMcpTools(): AgentMcpTool[] {
+    const toolsByName = new Map<string, AgentMcpTool>();
     for (const catalog of this.options.resolveCatalogs()) {
       for (const tool of catalog.router.buildMcpTools()) {
         if (toolsByName.has(tool.name)) {

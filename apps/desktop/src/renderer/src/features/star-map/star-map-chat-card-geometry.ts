@@ -1,9 +1,10 @@
 /**
  * Geometry for the star map's floating chat cards.
  *
- * Cards are windows *over* the star field, not objects *in* it: they do not
- * pan or zoom with the canvas, so every number here is in viewport pixels
- * and never passes through the canvas transform.
+ * Cards are objects *in* the star field: they render inside
+ * `.star-map__canvas`, pan and zoom with it, and every rect here is in
+ * canvas pixels. A position meant to be on screen has to go through the
+ * view first (`visibleCanvasRect`).
  */
 
 export type ChatCardRect = {
@@ -53,6 +54,64 @@ export function cascadeChatCardRect(params: {
       height,
     },
     params.viewport,
+  );
+}
+
+/** The map's pan and zoom: canvas point `p` paints at `p * scale + (x, y)`. */
+export type ChatCardMapView = { x: number; y: number; scale: number };
+
+/** The part of the canvas the window shows, in canvas pixels. */
+export function visibleCanvasRect(
+  view: ChatCardMapView,
+  viewport: { width: number; height: number },
+): ChatCardRect {
+  return {
+    left: -view.x / view.scale,
+    top: -view.y / view.scale,
+    width: viewport.width / view.scale,
+    height: viewport.height / view.scale,
+  };
+}
+
+/**
+ * Where a card with no thread card to sit beside opens: cascading from the
+ * top-left of what the window shows, in canvas pixels.
+ *
+ * Cards live in the canvas, so `cascadeChatCardRect`'s window-pixel origin
+ * means the canvas origin. A Star Map manager opened while the view was
+ * panned anywhere else landed out of sight, and the button looked dead.
+ */
+export function cascadeChatCardRectInView(params: {
+  openCardCount: number;
+  view: ChatCardMapView;
+  viewport: { width: number; height: number };
+  /** Canvas extent, so a card cannot open somewhere unreachable. */
+  bounds: { width: number; height: number };
+}): ChatCardRect {
+  const visible = visibleCanvasRect(params.view, params.viewport);
+  return cascadeChatCardRect({
+    openCardCount: params.openCardCount,
+    viewport: params.bounds,
+    // The same inset from the window's corner as before, at any zoom.
+    origin: {
+      left: visible.left + 72 / params.view.scale,
+      top: visible.top + 96 / params.view.scale,
+    },
+  });
+}
+
+/** True when any part of `rect` (canvas pixels) is on screen. */
+export function chatCardIsInView(
+  rect: ChatCardRect,
+  view: ChatCardMapView,
+  viewport: { width: number; height: number },
+): boolean {
+  const visible = visibleCanvasRect(view, viewport);
+  return (
+    rect.left < visible.left + visible.width
+    && rect.left + rect.width > visible.left
+    && rect.top < visible.top + visible.height
+    && rect.top + rect.height > visible.top
   );
 }
 

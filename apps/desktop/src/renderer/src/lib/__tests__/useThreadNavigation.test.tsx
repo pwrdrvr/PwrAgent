@@ -30,6 +30,7 @@ import {
   endNativeDragInteraction,
 } from "../native-drag-interaction";
 import { useThreadNavigation as useRealThreadNavigation } from "../useThreadNavigation";
+import type { ThreadActionErrorKind } from "../../features/notifications/thread-action-error-notice";
 function useThreadNavigation(api?: DesktopApi, options?: Parameters<typeof useRealThreadNavigation>[1]) {
   const localStore = useComposerDraftStore();
   const composerDraftStore = options?.composerDraftStore ?? localStore;
@@ -62,12 +63,7 @@ function actionDetailApi(...threads: NavigationThreadSummary[]): Pick<DesktopApi
  */
 function latestThreadActionError(
   onThreadActionError: ReturnType<typeof vi.fn>,
-  kind:
-    | "add-directory"
-    | "archive-thread"
-    | "create-thread"
-    | "discard-launchpad"
-    | "rename-thread",
+  kind: ThreadActionErrorKind,
 ): string | undefined {
   const calls = onThreadActionError.mock.calls.filter(
     ([event]) => event?.kind === kind,
@@ -4443,6 +4439,194 @@ describe("useThreadNavigation", () => {
     });
   });
 
+  describe("sidebar grouping failures", () => {
+    // These actions start from a sidebar row or its context menu, often with
+    // the launchpad or a different thread open. Their failures must reach the
+    // notice stack, not the model-settings slot only ThreadView renders.
+    const parent: NavigationThreadSummary = {
+      id: "thread-parent",
+      title: "Parent",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const child: NavigationThreadSummary = {
+      ...parent,
+      id: "thread-child",
+      title: "Child",
+      parentThreadId: "thread-parent",
+      parentThreadBackend: "codex",
+    };
+    const directory = {
+      key: "directory:/repo",
+      kind: "directory" as const,
+      label: "Repo",
+      path: "/repo",
+      threadKeys: [],
+      needsAttentionCount: 0,
+      directoryThreadsCollapsed: false,
+    };
+    const snapshot: NavigationSnapshot = {
+      backend: "all",
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [parent, child],
+      directories: [directory],
+      launchpadDefaults: { backend: "codex", executionMode: "default" },
+    };
+
+    it("publishes an unlink failure and clears it when a retry succeeds", async () => {
+      const setThreadParent = vi.fn()
+        .mockRejectedValueOnce(new Error("Thread parent changed. Refresh and try again."))
+        .mockResolvedValue({ backend: "codex", threadId: "thread-child" });
+      const desktopApi: DesktopApi = {
+        readPopulation: vi.fn(async () => snapshot),
+        onAgentEvent: () => () => undefined,
+        setThreadParent,
+      };
+      const onThreadActionError = vi.fn();
+      const { result } = renderHook(() =>
+        useThreadNavigation(desktopApi, { onThreadActionError }),
+      );
+      await waitFor(() => expect(result.current.threads).toHaveLength(2));
+
+      await act(async () => {
+        await result.current.unlinkThreads([child]);
+      });
+
+      expect(latestThreadActionError(onThreadActionError, "unlink-thread")).toBe(
+        "Thread parent changed. Refresh and try again.",
+      );
+      expect(result.current.setThreadModelSettingsError).toBeUndefined();
+
+      await act(async () => {
+        await result.current.unlinkThreads([child]);
+      });
+
+      expect(setThreadParent).toHaveBeenCalledTimes(2);
+      expect(latestThreadActionError(onThreadActionError, "unlink-thread")).toBeUndefined();
+    });
+
+    it("publishes a single-thread parent change failure as an unlink failure", async () => {
+      const desktopApi: DesktopApi = {
+        readPopulation: vi.fn(async () => snapshot),
+        onAgentEvent: () => () => undefined,
+        setThreadParent: vi.fn(async () => {
+          throw new Error("Parent pin placement is not ready");
+        }),
+      };
+      const onThreadActionError = vi.fn();
+      const { result } = renderHook(() =>
+        useThreadNavigation(desktopApi, { onThreadActionError }),
+      );
+      await waitFor(() => expect(result.current.threads).toHaveLength(2));
+
+      await act(async () => {
+        await result.current.setThreadParent(child, undefined);
+      });
+
+      expect(latestThreadActionError(onThreadActionError, "unlink-thread")).toBe(
+        "Parent pin placement is not ready",
+      );
+    });
+
+    it("keeps a bulk pin failure when a later pin in the batch succeeds", async () => {
+      const desktopApi: DesktopApi = {
+        readPopulation: vi.fn(async () => snapshot),
+        onAgentEvent: () => () => undefined,
+        setThreadPin: vi.fn(async (request) => {
+          if (request.threadId === "thread-parent") throw new Error("Pin store is busy");
+          return { backend: "codex" as const, threadId: request.threadId, pinnedRank: "1024" };
+        }),
+      };
+      const onThreadActionError = vi.fn();
+      const { result } = renderHook(() =>
+        useThreadNavigation(desktopApi, { onThreadActionError }),
+      );
+      await waitFor(() => expect(result.current.threads).toHaveLength(2));
+
+      await act(async () => {
+        await result.current.setThreadPin(parent, true);
+        await result.current.setThreadPin(child, true);
+      });
+
+      expect(latestThreadActionError(onThreadActionError, "update-pin")).toBe("Pin store is busy");
+    });
+
+    it("publishes a pin reorder without a destination instead of a model-settings error", async () => {
+      const reorderThreadPins = vi.fn(async () => ({ pinnedRanks: {} }));
+      const desktopApi: DesktopApi = {
+        readPopulation: vi.fn(async () => snapshot),
+        onAgentEvent: () => () => undefined,
+        reorderThreadPins,
+      };
+      const onThreadActionError = vi.fn();
+      const { result } = renderHook(() =>
+        useThreadNavigation(desktopApi, { onThreadActionError }),
+      );
+      await waitFor(() => expect(result.current.threads).toHaveLength(2));
+
+      await act(async () => {
+        await result.current.reorderThreadPins([]);
+      });
+
+      expect(reorderThreadPins).not.toHaveBeenCalled();
+      expect(latestThreadActionError(onThreadActionError, "reorder-sidebar")).toBe(
+        "A pin move requires an owner-relative destination. Refresh the list and try again.",
+      );
+      expect(result.current.setThreadModelSettingsError).toBeUndefined();
+    });
+
+    it("publishes a failed sub-thread reorder", async () => {
+      const desktopApi: DesktopApi = {
+        readPopulation: vi.fn(async () => snapshot),
+        onAgentEvent: () => () => undefined,
+        updateSubthreadOrder: vi.fn(async () => {
+          throw new Error("Sub-thread order changed");
+        }),
+      };
+      const onThreadActionError = vi.fn();
+      const { result } = renderHook(() =>
+        useThreadNavigation(desktopApi, { onThreadActionError }),
+      );
+      await waitFor(() => expect(result.current.threads).toHaveLength(2));
+
+      await act(async () => {
+        await result.current.updateSubthreadOrder(parent, { threadId: "thread-child", anchorThreadId: "thread-other", placement: "before" });
+      });
+
+      expect(latestThreadActionError(onThreadActionError, "reorder-sidebar")).toBe(
+        "Sub-thread order changed",
+      );
+    });
+
+    it("publishes a directory collapse save failure instead of a model-settings error", async () => {
+      const desktopApi: DesktopApi = {
+        readPopulation: vi.fn(async () => snapshot),
+        onAgentEvent: () => () => undefined,
+        setDirectoryThreadsCollapsed: vi.fn(async () => {
+          throw new Error("Config is read-only");
+        }),
+      };
+      const onThreadActionError = vi.fn();
+      const { result } = renderHook(() =>
+        useThreadNavigation(desktopApi, { onThreadActionError }),
+      );
+      await waitFor(() => expect(result.current.threads).toHaveLength(2));
+
+      await act(async () => {
+        await result.current.setDirectoryThreadsCollapsed(directory, true);
+      });
+
+      expect(latestThreadActionError(onThreadActionError, "save-collapsed")).toBe(
+        "Config is read-only",
+      );
+      expect(result.current.setThreadModelSettingsError).toBeUndefined();
+    });
+  });
+
   it("restores focus to the selected thread when archive fails", async () => {
     const navigationSnapshot = {
       backend: "all" as const,
@@ -7640,6 +7824,35 @@ describe("useThreadNavigation", () => {
     rerender({ providerModelDefaults });
     rerender({ providerModelDefaults: structuredClone(providerModelDefaults) });
     expect(result.current.selectedLaunchpad).toMatchObject({ model: "custom-model", reasoningEffort: "high", prompt: "draft" });
+  });
+
+  it("applies a changed provider access default to open drafts and keeps their models", async () => {
+    const defaults: NavigationLaunchpadDefaults = { backend: "claude", executionMode: "auto" };
+    const launchpad: NavigationLaunchpadDraft = {
+      ...defaults, directoryKey: "directory:/fixture", directoryKind: "directory", directoryLabel: "Fixture",
+      model: "opus", workMode: "local", prompt: "draft", createdAt: 1, updatedAt: 1,
+    };
+    const api: DesktopApi = {
+      readPopulation: vi.fn(async (): Promise<NavigationSnapshot> => ({
+        backend: "all", fetchedAt: 1, unchanged: false, threads: [], inboxThreadKeys: [],
+        directories: [{ key: launchpad.directoryKey, kind: "directory", label: "Fixture",
+          threadKeys: [], needsAttentionCount: 0, launchpad }], launchpadDefaults: defaults,
+      })),
+      ensureDirectoryLaunchpad: vi.fn(async () => ({ launchpad, defaults })),
+      onAgentEvent: () => () => undefined,
+    };
+    const { result, rerender } = renderHook((props) => useThreadNavigation(api, props), {
+      initialProps: { providerModelDefaults: {} as Record<string, DesktopProviderModelDefaults> },
+    });
+    await waitFor(() => expect(result.current.directories).toHaveLength(1));
+    await act(async () => { await result.current.openDirectoryLaunchpad(result.current.directories[0]!); });
+    expect(result.current.selectedLaunchpad).toMatchObject({ executionMode: "auto" });
+    rerender({ providerModelDefaults: {
+      claude: { reasoningEffortsByModel: {}, executionMode: "full-access" },
+    } });
+    await waitFor(() => expect(result.current.selectedLaunchpad).toMatchObject({
+      executionMode: "full-access", model: "opus", prompt: "draft",
+    }));
   });
 
   it("keeps launchpad environment controls stable after prompt-only update responses", async () => {
@@ -14427,6 +14640,24 @@ describe("main selected detail authority", () => {
       );
     },
   );
+
+  it("opens an archived local thread absent from active rows without restoring it", async () => {
+    const snapshot = acpTitleSnapshot("Active row", "explicit", 1);
+    const archived = { ...snapshot.threads[0]!, id: "archived-search-result", archivedAt: 123, title: "Archived example" };
+    const restoreThread = vi.fn();
+    const api = {
+      readPopulation: vi.fn(async () => snapshot),
+      ...actionDetailApi(...snapshot.threads, archived),
+      restoreThread,
+    } as unknown as DesktopApi;
+    const hook = renderHook(() => useThreadNavigation(api));
+    await waitFor(() => expect(hook.result.current.loaded).toBe(true));
+    await act(() => hook.result.current.showThread({ backend: archived.source, threadId: archived.id }));
+    await waitFor(() => expect(hook.result.current.selectedThread?.id).toBe(archived.id));
+    expect(hook.result.current.selectedThread?.archivedAt).toBe(123);
+    expect(hook.result.current.threads.some((row) => row.id === archived.id)).toBe(false);
+    expect(restoreThread).not.toHaveBeenCalled();
+  });
 
   it("keeps an off-page peer selection and hydrates configuration independently of row refresh", async () => {
     const snapshot = acpTitleSnapshot("Loaded row", "explicit", 1);

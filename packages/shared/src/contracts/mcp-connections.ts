@@ -88,6 +88,16 @@ export type McpConnectionStatus = McpConnectionRecord & {
   state: McpConnectionRuntimeState;
   configured: boolean;
   detail?: string;
+  /** In-memory live catalog health, independent of stored authorization. */
+  discovery?: {
+    state: "untested" | "ready" | "failed";
+    lastSuccessAt?: number;
+    lastFailure?: { at: number; message: string };
+  };
+};
+
+export type ListMcpConnectionsRequest = {
+  federationTarget?: FederationRemoteTarget;
 };
 
 export type ListMcpConnectionsResponse = {
@@ -320,6 +330,7 @@ export type OpenPwrGitResponse = OpenPwrSnapResponse;
  * that cannot enforce it.
  */
 export type SetThreadMcpConnectionsRequest = {
+  federationTarget?: FederationRemoteTarget;
   backend: AppServerBackendKind;
   threadId: string;
   connectionIds: McpConnectionId[];
@@ -327,6 +338,7 @@ export type SetThreadMcpConnectionsRequest = {
 };
 
 export type ReadThreadMcpConnectionsRequest = {
+  federationTarget?: FederationRemoteTarget;
   backend: AppServerBackendKind;
   threadId: string;
 };
@@ -639,6 +651,7 @@ export type ThreadMcpConnectionReport = {
 };
 
 export type DescribeThreadMcpConnectionsRequest = {
+  federationTarget?: FederationRemoteTarget;
   backend: AppServerBackendKind;
   threadId: string;
 };

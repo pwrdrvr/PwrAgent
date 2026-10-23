@@ -611,7 +611,6 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     : props.instanceLabel
       ? `Open in a window connected to ${props.instanceLabel}`
       : "Open in a window connected to that instance";
-  const isAcpThread = thread.source.startsWith("acp:");
   const backendSummaries = useBackendSummaries(desktopApi, {
     suspended: props.active === false,
     // The composer needs model/runtime image capability before its first
@@ -631,8 +630,11 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
   const backendSummary = backendSummaries.backends.find(
     (entry) => entry.kind === thread.source,
   );
+  // This card has no reviewer picker, so it offers /review only where the
+  // thread's own provider runs it. Codex is offered before its summary loads.
   const supportsReview =
-    !isAcpThread || backendSummary?.capabilities.startReview === true;
+    thread.source === "codex"
+    || backendSummary?.capabilities.startReview === true;
 
   // The context satellite is a sibling rendered by the screen, so the session
   // data its panels need has to be published rather than passed down.

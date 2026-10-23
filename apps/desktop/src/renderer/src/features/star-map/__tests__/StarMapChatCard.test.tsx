@@ -1139,12 +1139,21 @@ describe("StarMapChatCard slash commands", () => {
     ).toBeTruthy();
   });
 
-  it("does not offer or intercept review for an unsupported ACP backend", async () => {
+  it.each([
+    { kind: "acp:grok" as const, label: "Grok", capabilities: reviewCapabilities(false) },
+    // Claude runs no reviews and has no reviewer picker here. Offering
+    // /review sent the review to Claude, which the owner rejects.
+    {
+      kind: "claude" as const,
+      label: "Claude",
+      capabilities: { ...reviewCapabilities(false), startReview: undefined, reviewRunMode: true },
+    },
+  ])("does not offer or intercept review for $label, which cannot run it", async ({ kind, label, capabilities }) => {
     const startReview = vi.fn();
     const startTurn = vi.fn(async () => ({
-      backend: "acp:grok" as const,
+      backend: kind,
       threadId: "t-local",
-      turnId: "turn-acp-1",
+      turnId: "turn-1",
     }));
     const desktopApi = buildApi({
       listBackends: vi.fn(async () => ({
@@ -1152,10 +1161,10 @@ describe("StarMapChatCard slash commands", () => {
         backends: [
           {
             available: true,
-            capabilities: reviewCapabilities(false),
+            capabilities,
             executionModes: [],
-            kind: "acp:grok" as const,
-            label: "Grok",
+            kind,
+            label,
             methods: [],
           },
         ],
@@ -1165,7 +1174,7 @@ describe("StarMapChatCard slash commands", () => {
     });
     renderCard({
       desktopApi,
-      thread: localThread({ source: "acp:grok" }),
+      thread: localThread({ source: kind }),
     });
     await waitFor(() => {
       expect(desktopApi.listBackends).toHaveBeenCalled();
@@ -1180,7 +1189,7 @@ describe("StarMapChatCard slash commands", () => {
     await waitFor(() => {
       expect(startTurn).toHaveBeenCalledWith(
         expect.objectContaining({
-          backend: "acp:grok",
+          backend: kind,
           input: [{ type: "text", text: "/review" }],
         }),
       );

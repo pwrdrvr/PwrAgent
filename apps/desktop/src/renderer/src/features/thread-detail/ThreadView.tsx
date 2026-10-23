@@ -1,6 +1,8 @@
+import { threadTodoThreadKey, parseRemoteOperatorItemKey } from "@pwragent/shared";
 import type { BackgroundTerminalsViewProps } from "./BackgroundTerminalsView";
 import type { AgentCommandsStatus } from "../../lib/useThreadSessionState";
 import { useEventCallback } from "../../lib/useEventCallback";
+import { useDismissedOperatorQuestions } from "../operator-requests/useDismissedOperatorQuestions";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import { applyLaunchpadEnvironmentSetupProgress, type LaunchpadEnvironmentSetupProgress } from "../../lib/launchpad-setup-progress";
 import {
@@ -159,6 +161,7 @@ import {
   McpAccessPanel,
   ThreadMcpAccessPanel,
   useThreadMcpConnectionCount,
+  supportsThreadMcpAccess,
 } from "./McpAccessPanel";
 import {
   PwrGitConnectionPrompt,
@@ -1236,6 +1239,7 @@ export function ThreadView(props: ThreadViewProps) {
     id: number;
     threadId: string;
     backend: NavigationThreadSummary["source"];
+    federationTarget?: FederationRemoteTarget;
     text: string;
   }>();
   // Dismissing Codex's async questions only hides their controls, so it is
@@ -1387,15 +1391,17 @@ export function ThreadView(props: ThreadViewProps) {
   }, [props.activeTurnId]);
 
   const selectedThread = props.selectedThread;
-  // Cards live in this instance's state, so a peer's thread has none.
-  const threadTodoKey = selectedThread && !selectedThread.federation
+  const threadTodoKey = selectedThread
     ? threadSummaryIdentityKey(selectedThread)
     : undefined;
   const threadTodoDirectory = selectedThread?.linkedDirectories[0];
+  const transcriptThreadLinkTarget =
+    selectedThread?.federation?.ref.target ?? readRendererFederationTarget();
   const threadTodos = props.threadTodos && threadTodoKey
     ? {
         view: props.threadTodos,
         threadKey: threadTodoKey,
+        projectOwner: transcriptThreadLinkTarget?.scope === "remote" ? transcriptThreadLinkTarget : undefined,
         projectKey: threadTodoDirectory
           ? classifyDirectory(threadTodoDirectory).key
           : undefined,
@@ -1403,8 +1409,6 @@ export function ThreadView(props: ThreadViewProps) {
           ?? NO_THREAD_TODOS,
       }
     : undefined;
-  const transcriptThreadLinkTarget =
-    selectedThread?.federation?.ref.target ?? readRendererFederationTarget();
   const transcriptThreadLinkInstanceId =
     transcriptThreadLinkTarget && isRemoteFederationTarget(transcriptThreadLinkTarget)
       ? transcriptThreadLinkTarget.instanceId
@@ -1759,11 +1763,14 @@ export function ThreadView(props: ThreadViewProps) {
   // Closing the panel is the cheap, reliable signal that the selection may
   // have changed; re-reading then keeps the composer badge honest without
   // subscribing to every write.
+  const threadMcpAccessSupported = supportsThreadMcpAccess(selectedThread?.federation);
+  const mcpOwnerTarget = selectedThread?.federation?.ref.target ?? props.activeFederationTarget;
+  const mcpFederationTarget = mcpOwnerTarget?.scope === "remote" ? mcpOwnerTarget : undefined;
   const threadMcpConnectionCount = useThreadMcpConnectionCount({
     backend: selectedThread?.source ?? "codex",
     desktopApi: props.desktopApi,
-    ...(selectedThread && !props.activeFederationTarget
-      ? { threadId: selectedThread.id }
+    ...(selectedThread && threadMcpAccessSupported
+      ? { threadId: selectedThread.id, federationTarget: mcpFederationTarget }
       : {}),
     token: threadMcpAccessOpen ? 1 : 0,
   });
@@ -2481,16 +2488,32 @@ export function ThreadView(props: ThreadViewProps) {
   };
 
   const asyncQuestionThreadKey = selectedThread
-    ? `${selectedThread.source}:${selectedThread.id}`
+    ? threadSummaryIdentityKey(selectedThread)
     : undefined;
+  const questionOwner = selectedThread?.federation?.ref.target ?? readRendererFederationTarget();
+  const questionFederationTarget = questionOwner?.scope === "remote" ? questionOwner : undefined;
+  const dismissalThreadKey = `${questionFederationTarget?.instanceId ?? "local"}:${asyncQuestionThreadKey}`;
+  const ownerDismissedQuestionIds = useDismissedOperatorQuestions(props.desktopApi, selectedThread ? {
+    backend: selectedThread.source, threadId: selectedThread.id, federationTarget: questionFederationTarget,
+  } : undefined);
+  // Apply each owner dismissal once, so Show questions can still reopen a card
+  // for inspection without changing the owner's resolved state.
+  const appliedOwnerDismissals = useRef(new Set<string>());
+  useEffect(() => {
+    const fresh = ownerDismissedQuestionIds.map((id) => `${dismissalThreadKey}\0${id}`)
+      .filter((key) => !appliedOwnerDismissals.current.has(key));
+    if (fresh.length === 0) return;
+    for (const key of fresh) appliedOwnerDismissals.current.add(key);
+    setDismissedAsyncQuestions((current) => new Set([...current, ...fresh]));
+  }, [ownerDismissedQuestionIds, dismissalThreadKey]);
   const dismissedAsyncQuestionMessageIds = useMemo(() => {
-    const prefix = `${asyncQuestionThreadKey}\0`;
+    const prefix = `${dismissalThreadKey}\0`;
     return new Set(
       [...dismissedAsyncQuestions]
         .filter((key) => key.startsWith(prefix))
         .map((key) => key.slice(prefix.length)),
     );
-  }, [asyncQuestionThreadKey, dismissedAsyncQuestions]);
+  }, [dismissalThreadKey, dismissedAsyncQuestions]);
   // The To-dos panel's answers count too: one sent while this thread was off
   // screen may still be waiting to reach the transcript.
   const panelSentAsyncQuestionAnswers = props.threadTodos?.sentQuestionAnswers;
@@ -2524,7 +2547,7 @@ export function ThreadView(props: ThreadViewProps) {
     const id = asyncQuestionReplyId.current;
     const thread = selectedThread;
     asyncQuestionSubmissions.current.set(id, {
-      threadKey: `${thread.source}:${thread.id}`,
+      threadKey: threadSummaryIdentityKey(thread),
       text,
     });
     return new Promise<boolean>((resolve) => {
@@ -2533,6 +2556,7 @@ export function ThreadView(props: ThreadViewProps) {
         id,
         threadId: thread.id,
         backend: thread.source,
+        federationTarget: questionFederationTarget,
         text,
       });
     });
@@ -2543,38 +2567,37 @@ export function ThreadView(props: ThreadViewProps) {
     id: number;
     threadId: string;
     backend: AppServerBackendKind;
+    federationTarget?: FederationRemoteTarget;
   }>();
   // The card's answer about open steps rides along, so the resolve once the
   // review starts sends the override only if the operator confirmed it.
-  const pendingReviewTodoRef = useRef<
-    { todo: ThreadTodo; options?: ThreadTodoResolveOptions } | undefined
-  >(undefined);
+  const pendingReviewTodos = useRef(new Map<number, { todo: ThreadTodo; options?: ThreadTodoResolveOptions }>());
+  const todoReviewRequestId = useRef(0);
   const startTodoReview = useEventCallback((
     todo: ThreadTodo,
     options?: ThreadTodoResolveOptions,
   ) => {
-    pendingReviewTodoRef.current = { todo, options };
-    setTodoReviewRequest((current) => ({
-      id: (current?.id ?? 0) + 1,
+    const id = ++todoReviewRequestId.current;
+    for (const [previousId, pending] of pendingReviewTodos.current) {
+      if (threadTodoThreadKey(pending.todo) === threadTodoThreadKey(todo)) pendingReviewTodos.current.delete(previousId);
+    }
+    pendingReviewTodos.current.set(id, { todo, options });
+    setTodoReviewRequest({
+      id,
       threadId: todo.threadId,
       backend: todo.backend,
-    }));
+      federationTarget: todo.federationTarget,
+    });
   });
-  const handleReviewStarted = useEventCallback(() => {
-    const pending = pendingReviewTodoRef.current;
-    pendingReviewTodoRef.current = undefined;
-    const todo = pending?.todo;
-    if (
-      todo
-      && todo.threadId === selectedThread?.id
-      && todo.backend === selectedThread?.source
-    ) {
-      void props.threadTodos?.resolve(todo, "done", undefined, pending?.options).catch(
-        (error: unknown) => {
-          console.warn("Resolving the review to-do failed.", error);
-        },
-      );
-    }
+  const handleReviewStarted = useEventCallback((threadKey: string, requestId?: number) => {
+    if (requestId === undefined) return;
+    const pending = pendingReviewTodos.current.get(requestId);
+    if (!pending || threadTodoThreadKey(pending.todo) !== threadKey) return;
+    pendingReviewTodos.current.delete(requestId);
+    // The original owner's acceptance can arrive after navigation changes.
+    void props.threadTodos?.resolve(pending.todo, "done", undefined, pending.options).catch(
+      (error: unknown) => setPendingRequestError(String(error)),
+    );
   });
   // "Do it here" sends a handoff's prompt through the same reply path an
   // answered question takes: start, steer or queue, as a typed reply would.
@@ -2590,7 +2613,7 @@ export function ThreadView(props: ThreadViewProps) {
     const { prompt, ...resolveOptions } = options ?? {};
     const handoff = todo.action?.type === "start_thread" ? todo.action.prompt : undefined;
     const text = prompt ?? handoff;
-    if (!text) return false;
+    if (!text || !selectedThread || threadTodoThreadKey(todo) !== threadSummaryIdentityKey(selectedThread)) return false;
     try {
       const accepted = await handleAnswerAsyncQuestions(text);
       if (accepted && prompt === undefined) {
@@ -2598,7 +2621,8 @@ export function ThreadView(props: ThreadViewProps) {
       }
       return accepted;
     } catch (error) {
-      console.warn("Sending the handoff here failed.", error);
+      props.onShowNotice?.({ id: `todo-dispatch:${todo.id}`, tone: "error", title: "To-do dispatch failed",
+        message: error instanceof Error ? error.message : String(error) });
       return false;
     }
   });
@@ -2627,33 +2651,40 @@ export function ThreadView(props: ThreadViewProps) {
   const panelDismissedQuestionKeys = props.threadTodos?.dismissedQuestionKeys;
   const foldedPanelQuestionKeysRef = useRef(new Set<string>());
   useEffect(() => {
-    if (!panelDismissedQuestionKeys || !selectedThread || selectedThread.federation) return;
+    if (!panelDismissedQuestionKeys || !selectedThread) return;
     const prefix = `question:${selectedThread.source}:${selectedThread.id}:`;
-    const fresh = [...panelDismissedQuestionKeys].filter((key) =>
-      key.startsWith(prefix) && !foldedPanelQuestionKeysRef.current.has(key));
-    if (fresh.length === 0) return;
-    for (const key of fresh) foldedPanelQuestionKeysRef.current.add(key);
-    setDismissedAsyncQuestions((current) => {
-      const next = new Set(current);
-      for (const key of fresh) {
-        next.add(`${selectedThread.source}:${selectedThread.id}\0${key.slice(prefix.length)}`);
-      }
-      return next;
+    const fresh = [...panelDismissedQuestionKeys].flatMap((key) => {
+      const projected = parseRemoteOperatorItemKey(key);
+      const localKey = projected?.key ?? key;
+      return projected?.target.instanceId === questionFederationTarget?.instanceId
+        && localKey.startsWith(prefix) && !foldedPanelQuestionKeysRef.current.has(key)
+        ? [{ key, messageId: localKey.slice(prefix.length) }] : [];
     });
-  }, [panelDismissedQuestionKeys, selectedThread]);
+    if (fresh.length === 0) return;
+    for (const { key } of fresh) foldedPanelQuestionKeysRef.current.add(key);
+    setDismissedAsyncQuestions((current) => new Set([...current,
+      ...fresh.map(({ messageId }) => `${dismissalThreadKey}\0${messageId}`),
+    ]));
+  }, [panelDismissedQuestionKeys, selectedThread, dismissalThreadKey, questionFederationTarget?.instanceId]);
   const handleAsyncQuestionsDismissedChange = useEventCallback(
     (messageId: string, dismissed: boolean) => {
       if (!asyncQuestionThreadKey) return;
-      const key = `${asyncQuestionThreadKey}\0${messageId}`;
-      // Closes the question in the To-dos panel as well. A peer's thread is
-      // listed on the peer, which this window cannot reach.
-      if (dismissed && selectedThread && !selectedThread.federation) {
-        void props.threadTodos?.dismissQuestion({
+      const key = `${dismissalThreadKey}\0${messageId}`;
+      if (dismissed && selectedThread) {
+        void props.desktopApi?.dismissOperatorQuestion?.({
           backend: selectedThread.source,
           threadId: selectedThread.id,
           messageId,
+          ...(questionFederationTarget ? { federationTarget: questionFederationTarget } : {}),
         }).catch((error: unknown) => {
-          console.warn("Closing the question in the To-dos panel failed.", error);
+          setDismissedAsyncQuestions((current) => {
+            const next = new Set(current);
+            next.delete(key);
+            return next;
+          });
+          props.onShowNotice?.({ id: `question-dismissal:${key}`, tone: "error", title: "Question dismissal failed",
+            message: error instanceof Error ? error.message : String(error) });
+          console.warn("Dismissing the question failed.", error);
         });
       }
       setDismissedAsyncQuestions((current) => {
@@ -3904,11 +3935,9 @@ export function ThreadView(props: ThreadViewProps) {
         desktopApi={props.desktopApi}
         onShowNotice={props.onShowNotice}
         onShowMcpAccess={
-          props.activeFederationTarget
-            ? undefined
-            : composerLaunchpad
-              ? showLaunchpadMcpAccess
-              : showThreadMcpAccess
+          composerLaunchpad
+            ? props.activeFederationTarget ? undefined : showLaunchpadMcpAccess
+            : threadMcpAccessSupported ? showThreadMcpAccess : undefined
         }
         composerImplementation={props.composerImplementation}
         draftStore={props.composerDraftStore}
@@ -4355,18 +4384,17 @@ export function ThreadView(props: ThreadViewProps) {
         />
       ) : null}
 
-      {/* Managed connections are local to the profile that runs the
-          thread, so a remote thread's selection belongs to its owner
-          and is not editable from here. */}
+      {/* The owner serves its gateway inventory and persists the selection. */}
       {threadMcpAccessOpen
         && selectedThread
-        && !props.activeFederationTarget ? (
+        && threadMcpAccessSupported ? (
         <ThreadMcpAccessPanel
           backend={selectedThread.source}
           desktopApi={props.desktopApi}
           threadId={selectedThread.id}
+          federationTarget={mcpFederationTarget}
           onDismiss={() => setThreadMcpAccessOpen(false)}
-          onOpenSettings={openMcpConnectionSettings}
+          onOpenSettings={mcpFederationTarget ? undefined : openMcpConnectionSettings}
         />
       ) : null}
     </Fragment>
@@ -4417,6 +4445,7 @@ export function ThreadView(props: ThreadViewProps) {
             view: threadTodos.view,
             threadKey: threadTodos.threadKey,
             projectKey: threadTodos.projectKey,
+            projectOwner: threadTodos.projectOwner,
             onStartReview: startTodoReview,
             onDoHere: doTodoHere,
             // The card's own answer path: start, steer or queue.

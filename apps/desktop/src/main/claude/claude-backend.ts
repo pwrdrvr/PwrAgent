@@ -1,26 +1,38 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { query, type Options, type Query, type SDKMessage, type SDKUserMessage, type SlashCommand } from "@anthropic-ai/claude-agent-sdk";
+import { getSessionInfo, query, type AccountInfo, type Options, type Query, type SDKMessage, type SDKUserMessage, type SlashCommand } from "@anthropic-ai/claude-agent-sdk";
 import type {
-  AgentEvent, AppServerAvailableCommandSummary, AppServerPendingRequestNotification, AppServerThreadEntry,
-  AppServerThreadMessageEntry, AppServerThreadMessagePart, AppServerThreadReplay, AppServerThreadSummary,
-  AppServerTurnInputItem, BackendModelOption, BackendSummary, ThreadExecutionMode, CodexMcpServerSummary,
+  AgentEvent, AppServerAvailableCommandSummary, AppServerPendingRequestNotification, AppServerReviewContext,
+  AppServerThreadEntry, AppServerThreadMessageEntry, AppServerThreadMessagePart, AppServerThreadReplay,
+  AppServerThreadReviewEntry, AppServerThreadSummary,
+  AppServerTurnInputItem, BackendModelOption, BackendRateLimitSummary, BackendSummary, ThreadExecutionMode, CodexMcpServerSummary,
 } from "@pwragent/shared";
+import { getMainLogger } from "../log";
 import { resolveActiveProfilePath } from "../profile";
 import { toTranscriptImageProtocolUrl } from "../transcript-image-protocol";
 import { CLAUDE_SETUP_INSTRUCTIONS, claudeEnvironment, inspectClaudeInstallation, type ClaudeInstallation } from "./claude-executable";
 import { createClaudePermissionHandler, claudePermissionMode } from "./claude-permissions";
 import { claudeHarnessOptions, discoverClaudeModels, readClaudeMetadata } from "./claude-models";
 import { CLAUDE_TERMINAL_COMMANDS_SEED, claudeCommandSummaries } from "./claude-commands";
-import { claudeRateLimits, claudeStreamRateLimits, claudeTelemetry, claudeTurnUsage } from "./claude-usage";
+import {
+  claudeRateLimits, claudeStreamRateLimits, claudeTelemetry, claudeTurnUsage, liveClaudeRateLimits,
+  mergeClaudeStreamRateLimits, nextClaudeRateLimitReset,
+} from "./claude-usage";
 import { claudeCommandActivity, groupClaudeActivities } from "./claude-activity";
 import { ClaudeSessionStore, type ClaudeSession } from "./claude-session-store";
+import { normalizeClaudeTitle, requestClaudeTitle, type ClaudeTitleQuery } from "./claude-titles";
+import {
+  CLAUDE_REPORT_FINDINGS_TOOL, claudeReviewOutput, isClaudeOutcomeReport, matchClaudeFindingOutcomes,
+  parseClaudeFindingsReport, type ClaudeFindingsReport,
+} from "./claude-review-findings";
+import { formatReviewOutputText, reviewEntryFindings } from "../../shared/review-output";
 
 export type ClaudeBackendOptions = {
   store?: ClaudeSessionStore;
   query?: typeof query;
+  getSessionInfo?: typeof getSessionInfo;
   inspectInstallation?: typeof inspectClaudeInstallation;
   discoverModels?: typeof discoverClaudeModels;
   readCommands?: (params: { executable: string; env: NodeJS.ProcessEnv; cwd: string }) => Promise<SlashCommand[]>;
@@ -28,7 +40,26 @@ export type ClaudeBackendOptions = {
   emit: (event: AgentEvent) => Promise<void>;
   request: (request: AppServerPendingRequestNotification, signal: AbortSignal) => Promise<unknown>;
   cancelRequest: (threadId: string, turnId: string, requestId: string) => Promise<void>;
+  /** Workspace, branch, and pull request for a review card. Never fails a review. */
+  resolveReviewContext?: (params: { threadId: string; cwd: string }) => Promise<AppServerReviewContext | undefined>;
 };
+
+const claudeBackendLog = getMainLogger("pwragent:claude-backend");
+
+/** setTimeout's longest delay; a later reset re-arms on wake. */
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
+/** Signed out, or billed outside a Claude subscription: no plan limit applies. */
+function claudeHasNoPlanLimits({ authStatus, authMethod }: ClaudeInstallation): boolean {
+  return authStatus === "sign-in-required" || authMethod === "api-key" || authMethod === "external";
+}
+
+/** Tells accounts apart without keeping their identifiers. */
+function claudeAccountKey(info: AccountInfo): string {
+  return createHash("sha256")
+    .update(JSON.stringify([info.apiProvider ?? "", info.organization ?? "", info.email ?? ""]))
+    .digest("hex").slice(0, 16);
+}
 
 type RunningTurn = {
   turnId: string;
@@ -42,10 +73,14 @@ type RunningTurn = {
   pendingSteers: Set<string>;
   /** The SDK emits one assistant message per content block, sharing an id. */
   completedMessageText: Map<string, string>;
+  /** ReportFindings calls the CLI has not yet accepted, by tool-use id. */
+  pendingReports: Map<string, { report: ClaudeFindingsReport; model?: string; input: unknown }>;
   inputWrites: Promise<void>;
   ending?: boolean;
   /** One background context probe at a time; a request while it runs reruns it once. */
   contextRefresh?: { promise: Promise<void>; again: boolean };
+  titlePrompt?: string;
+  titleEnv?: NodeJS.ProcessEnv;
 };
 
 /** One input pump owns the SDK's stdin until the logical turn finishes. */
@@ -79,8 +114,16 @@ export class ClaudeBackend {
   private readonly running = new Map<string, RunningTurn>();
   private installation: ClaudeInstallation = { authStatus: "unknown", message: CLAUDE_SETUP_INSTRUCTIONS };
   private discovery?: { models: boolean; promise: Promise<void> };
+  private modelDiscovery?: Promise<void>;
+  private nextModelRefreshAt = 0;
   private models?: BackendModelOption[];
+  // Account-wide, so one thread's turn must never clear another's view.
   private rateLimits: BackendSummary["rateLimits"];
+  private rateLimitsLoad?: Promise<void>;
+  private rateLimitWrites = Promise.resolve();
+  /** The account the limits describe, as `claudeAccountKey`. */
+  private rateLimitAccount?: string;
+  private rateLimitExpiry?: ReturnType<typeof setTimeout>;
   // Last command list Claude reported per working directory. Project
   // commands and skills differ by folder, so the folder is the key.
   private readonly commandsByCwd = new Map<string, AppServerAvailableCommandSummary[]>();
@@ -104,9 +147,12 @@ export class ClaudeBackend {
         const env = claudeEnvironment(await this.options.resolveEnv?.() ?? process.env);
         this.installation = await (this.options.inspectInstallation ?? inspectClaudeInstallation)({ env });
         if (models && this.installation.executable && this.installation.authStatus !== "sign-in-required") {
-          this.models = await (this.options.discoverModels ?? discoverClaudeModels)({
-            executable: this.installation.executable, env,
-          });
+          await this.refreshModelCatalog(env);
+        }
+        if (claudeHasNoPlanLimits(this.installation)) {
+          this.setRateLimits([]);
+        } else {
+          await this.loadRateLimits();
         }
       })(),
     };
@@ -119,7 +165,8 @@ export class ClaudeBackend {
     return {
       kind: "claude", source: "builtin", label: "Claude", available,
       claude: { ...this.installation },
-      rateLimits: this.rateLimits,
+      // Remembered limits describe a usable install; hide them while Claude is unavailable.
+      rateLimits: this.rateLimits && (available ? liveClaudeRateLimits(this.rateLimits, Date.now()) : []),
       unavailableReason: available ? undefined : this.installation.message,
       methods: [],
       capabilities: {
@@ -128,13 +175,16 @@ export class ClaudeBackend {
         archiveThread: true, restoreThread: true, archiveWorktree: false,
         transcriptPagination: false, toolUse: true, approvalRequests: true,
         multiDirectoryThreads: false,
+        // Claude runs no reviews itself, but this owner accepts a run mode
+        // for a Claude thread whose review runs on another provider.
+        reviewRunMode: true,
       },
       executionModes: [
         { mode: "default", label: "Default", available: true, isDefault: true },
         { mode: "auto", label: "Auto", available: true },
         { mode: "full-access", label: "Full Access", available: true },
       ],
-      // Stable aliases remain usable before explicit Settings/setup discovery.
+      // Stable aliases remain usable until global discovery reports models.
       launchpadOptions: { models: this.models ?? [
         { id: "sonnet", label: "Sonnet", supportsImage: true },
         { id: "opus", label: "Opus", supportsImage: true },
@@ -238,7 +288,7 @@ export class ClaudeBackend {
     if (this.running.has(params.threadId)) throw new Error("A Claude turn is already active for this thread.");
     const running: RunningTurn = {
       turnId: randomUUID(), controller: new AbortController(), entries: new Map(),
-      input: new ClaudeInputStream(), pendingSteers: new Set(), completedMessageText: new Map(),
+      input: new ClaudeInputStream(), pendingSteers: new Set(), completedMessageText: new Map(), pendingReports: new Map(),
       inputWrites: Promise.resolve(),
     };
     this.running.set(params.threadId, running);
@@ -256,6 +306,7 @@ export class ClaudeBackend {
         createdAt: Date.now(), turn: { id: running.turnId, status: "in_progress" },
       };
       const firstPrompt = params.input.find((item) => item.type === "text" && item.text.trim());
+      running.titlePrompt = firstPrompt?.type === "text" ? firstPrompt.text : undefined;
       if (session.thread.titleSource === "fallback" && firstPrompt?.type === "text") {
         session.thread.title = firstPrompt.text.replace(/\s+/g, " ").trim().slice(0, 80);
         session.thread.titleSource = "derived";
@@ -273,7 +324,7 @@ export class ClaudeBackend {
         item: { id: user.id, type: "userMessage", text: user.text, content: parts },
       } });
       const env = claudeEnvironment(await this.options.resolveEnv?.() ?? process.env);
-      this.rateLimits = undefined;
+      running.titleEnv = env;
       const permissionMode = claudePermissionMode(params.executionMode ?? session.thread.executionMode ?? "default");
       const sdkOptions: Options = {
         ...claudeHarnessOptions(executable, env),
@@ -281,6 +332,7 @@ export class ClaudeBackend {
         ...(session.sdkSessionId ? { resume: session.sdkSessionId } : { sessionId: params.threadId }),
         systemPrompt: { type: "preset", preset: "claude_code", ...(params.instructions ? { append: params.instructions } : {}) },
         persistSession: true,
+        ...(session.thread.titleSource === "explicit" ? { title: session.thread.title } : {}),
         includePartialMessages: true,
         permissionMode,
         // Enables an explicit Full Access selection through setPermissionMode;
@@ -342,6 +394,36 @@ export class ClaudeBackend {
     await this.options.emit({ backend: "claude", notification });
   }
 
+  private async publishModels(models: BackendModelOption[]): Promise<void> {
+    if (models.length === 0) return;
+    const changed = JSON.stringify(this.models) !== JSON.stringify(models);
+    this.models = models;
+    if (changed) await this.emit({ method: "backend/providerStatus/updated", params: { backend: "claude" } });
+  }
+
+  private refreshModelCatalog(env: NodeJS.ProcessEnv): Promise<void> {
+    if (this.modelDiscovery) return this.modelDiscovery;
+    const { executable, version } = this.installation;
+    if (!executable) return Promise.resolve();
+    this.modelDiscovery = (async () => {
+      const models = await (this.options.discoverModels ?? discoverClaudeModels)({
+        executable, env, ...(version ? { cliVersion: version } : {}),
+      });
+      this.nextModelRefreshAt = Date.now() + 60_000;
+      await this.publishModels(models);
+    })().finally(() => { this.modelDiscovery = undefined; });
+    return this.modelDiscovery;
+  }
+
+  private async refreshGlobalModels(): Promise<void> {
+    if (Date.now() < this.nextModelRefreshAt) return;
+    // A new turn can recover missing/stale metadata, but never spawns more
+    // than one global probe per minute or waits for it to consume the stream.
+    this.nextModelRefreshAt = Date.now() + 60_000;
+    const env = claudeEnvironment(await this.options.resolveEnv?.() ?? process.env);
+    await this.refreshModelCatalog(env);
+  }
+
   private async consume(session: ClaudeSession, running: RunningTurn): Promise<void> {
     const threadId = session.thread.id;
     const turnId = running.turnId;
@@ -353,13 +435,19 @@ export class ClaudeBackend {
     try {
       for await (const message of running.query!) {
         if (message.type === "system" && message.subtype === "init") {
+          // Never publish this query's project-scoped supportedModels() to
+          // the backend-wide picker. Recover through separate global discovery.
+          void this.refreshGlobalModels().catch(() => {});
           session.sdkSessionId = message.session_id;
           const current = await this.store.read(threadId);
           current.sdkSessionId = message.session_id;
           await this.store.save(current);
           if (message.terminal_slash_commands) this.terminalCommands = new Set(message.terminal_slash_commands);
           await Promise.all([
-            this.refreshUsage(running), this.refreshContext(session, running),
+            // A probe that finds no windows keeps the last reading, so the
+            // account must be confirmed first.
+            this.checkAccount(running).then(() => this.refreshUsage(running)),
+            this.refreshContext(session, running),
             claudeTelemetry(() => running.query!.supportedCommands())
               .then((commands) => commands && this.publishCommands(session, commands)),
           ]);
@@ -382,10 +470,10 @@ export class ClaudeBackend {
           }
         }
         if (message.type === "rate_limit_event") {
-          const limits = new Map(this.rateLimits?.map((limit) => [limit.limitId, limit]));
-          for (const limit of claudeStreamRateLimits(message.rate_limit_info)) limits.set(limit.limitId, limit);
-          this.rateLimits = [...limits.values()];
-          await this.emit({ method: "backend/providerStatus/updated", params: { backend: "claude" } });
+          const update = claudeStreamRateLimits(message.rate_limit_info);
+          if (this.setRateLimits(mergeClaudeStreamRateLimits(this.rateLimits ?? [], update, Date.now()))) {
+            await this.emit({ method: "backend/providerStatus/updated", params: { backend: "claude" } });
+          }
         }
         await this.consumeCompleteMessage(message, threadId, running);
         // The probe is a control round-trip that can wait 1.5s; never hold
@@ -403,12 +491,19 @@ export class ClaudeBackend {
           const finished = message.is_error || running.pendingSteers.size === 0;
           if (finished) running.ending = true;
           receivedResult = true;
-          const hasUsage = message.modelUsage && Object.values(message.modelUsage).some((value) =>
+          const requestedTitle = finished && !message.is_error && !running.controller.signal.aborted
+            ? await this.updateTitle(session, running) : false;
+          await running.contextRefresh?.promise;
+          const [, usage] = await Promise.all([this.refreshContext(session, running), this.refreshUsage(running)]);
+          // Native title generation shares this session's account and model
+          // totals. Its request can land after the result's usage snapshot.
+          const modelUsage = requestedTitle ? usage?.session?.model_usage ?? message.modelUsage : message.modelUsage;
+          const hasUsage = modelUsage && Object.values(modelUsage).some((value) =>
             value.inputTokens + value.outputTokens + value.cacheReadInputTokens + value.cacheCreationInputTokens > 0);
           if (hasUsage) {
             const canAttribute = !needsUsageBaseline;
-            const tokenUsage = claudeTurnUsage(message.modelUsage, usageBaseline);
-            session.modelUsage = message.modelUsage;
+            const tokenUsage = claudeTurnUsage(modelUsage, usageBaseline);
+            session.modelUsage = modelUsage;
             // Without an old session's baseline, cumulative spend cannot be
             // attributed to this turn. Save it for the next turn, do not bill
             // the pre-existing transcript as new work.
@@ -416,8 +511,6 @@ export class ClaudeBackend {
               await this.emit({ method: "thread/tokenUsage/updated", params: { threadId, turnId, model: tokenUsage.model, tokenUsage } });
             }
           }
-          await running.contextRefresh?.promise;
-          await Promise.all([this.refreshContext(session, running), this.refreshUsage(running)]);
           if (message.is_error) failure = message.subtype === "success" ? message.result : message.errors.join("\n");
           if (finished) break;
         }
@@ -463,13 +556,134 @@ export class ClaudeBackend {
     }
   }
 
+  /** Prefer a durable provider title; SDK headless sessions otherwise need an explicit control request. */
+  private async updateTitle(session: ClaudeSession, running: RunningTurn): Promise<boolean> {
+    const threadId = session.thread.id;
+    try {
+      let current = await this.store.read(threadId);
+      if (current.thread.titleSource === "explicit" || !session.sdkSessionId) return false;
+      // getSessionInfo uses the SDK host's config directory, not Options.env.
+      // Do not inspect a different account's session store.
+      if (running.titleEnv?.CLAUDE_CONFIG_DIR !== process.env.CLAUDE_CONFIG_DIR) return false;
+      // The SDK may spawn Git in this workspace (with its own timeout).
+      // Unlike query telemetry, this read cannot be cancelled by closing the
+      // query. Keep it owned by the turn so shutdown cannot release the
+      // workspace while an abandoned read still holds its directory open.
+      const info = await (this.options.getSessionInfo ?? getSessionInfo)(session.sdkSessionId, { dir: session.cwd });
+      let title = normalizeClaudeTitle(info?.customTitle);
+      current = await this.store.read(threadId);
+      if (current.thread.titleSource === "explicit") return false;
+      const query = running.query as ClaudeTitleQuery;
+      const disabled = ["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "CLAUDE_CODE_DISABLE_TERMINAL_TITLE"]
+        .some((key) => ["1", "true", "yes", "on"].includes(running.titleEnv?.[key]?.trim().toLowerCase() ?? ""));
+      const canRequest = !title && !current.titleGenerationAttempted && !disabled && typeof query.generateSessionTitle === "function"
+        && Boolean(running.titlePrompt?.trim()) && !running.controller.signal.aborted;
+      if (!title && !canRequest) return false;
+      // Persist the attempt before spending quota so failure/restart cannot
+      // create a title request on every turn.
+      if (!current.titleGenerationAttempted) {
+        current.titleGenerationAttempted = true;
+        await this.store.save(current);
+      }
+      if (canRequest) title = await requestClaudeTitle(query, running.titlePrompt!, running.controller.signal);
+      if (title && !running.controller.signal.aborted) {
+        current = await this.store.read(threadId);
+        if (current.thread.titleSource !== "explicit" && current.thread.title !== title) {
+          current.thread.title = title;
+          current.thread.titleSource = "derived";
+          await this.store.save(current);
+          await this.emit({ method: "thread/name/updated", params: { threadId, threadName: title, titleSource: "derived" } });
+        }
+      }
+      return canRequest;
+    } catch {
+      // An unreadable provider session must not trigger a speculative title
+      // request or fail the actual turn. The local prompt name remains usable.
+      return false;
+    }
+  }
+
   private async refreshUsage(running: RunningTurn) {
     const usage = await claudeTelemetry(() => running.query!.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true }));
-    // An unavailable optional probe must not erase windows observed on the
-    // stream during this turn. A known non-subscription account does clear them.
-    if (usage && (!usage.rate_limits_available || usage.rate_limits)) this.rateLimits = claudeRateLimits(usage);
+    // The snapshot is complete, so it replaces every window. A probe that
+    // timed out or returned nothing keeps the last good reading. Only an
+    // account Claude does not meter by subscription clears it.
+    const limits = usage?.rate_limits_available && usage.rate_limits ? claudeRateLimits(usage) : [];
+    if (limits.length > 0) this.setRateLimits(limits);
+    else if (usage && !usage.rate_limits_available && claudeHasNoPlanLimits(this.installation)) {
+      this.setRateLimits([]);
+    }
+    // Emitted after every probe, changed or not: it marks the turn's provider
+    // refresh as settled for listeners.
     await this.emit({ method: "backend/providerStatus/updated", params: { backend: "claude" } });
     return usage;
+  }
+
+  /**
+   * Installation checks are cached for the session, so a sign-in to another
+   * account shows up here first. Limits from a different account are cleared.
+   */
+  private async checkAccount(running: RunningTurn): Promise<void> {
+    const info = await claudeTelemetry(() => running.query!.accountInfo());
+    if (!info) return;
+    const account = claudeAccountKey(info);
+    await this.loadRateLimits();
+    if (account === this.rateLimitAccount) return;
+    const previous = this.rateLimitAccount;
+    this.rateLimitAccount = account;
+    // A file from before accounts were recorded is adopted, not discarded.
+    if (previous !== undefined) this.setRateLimits([]);
+    else this.saveRateLimits();
+  }
+
+  private async loadRateLimits(): Promise<void> {
+    this.rateLimitsLoad ??= this.store.readRateLimits().then(({ limits, account }) => {
+      // A reading taken since launch is newer than the file.
+      if (this.rateLimits !== undefined) return;
+      this.rateLimits = liveClaudeRateLimits(limits, Date.now());
+      this.rateLimitAccount ??= account;
+      this.scheduleRateLimitExpiry();
+    });
+    await this.rateLimitsLoad;
+  }
+
+  /** Returns whether the reading changed; a change is also written for the next launch. */
+  private setRateLimits(limits: BackendRateLimitSummary[]): boolean {
+    if (this.rateLimits && JSON.stringify(limits) === JSON.stringify(this.rateLimits)) return false;
+    this.rateLimits = limits;
+    this.saveRateLimits();
+    this.scheduleRateLimitExpiry();
+    return true;
+  }
+
+  private saveRateLimits(): void {
+    const limits = this.rateLimits ?? [];
+    const account = this.rateLimitAccount;
+    this.rateLimitWrites = this.rateLimitWrites
+      .then(() => this.store.saveRateLimits(limits, account))
+      .catch((error: unknown) => {
+        claudeBackendLog.warn("Could not save Claude usage limits", error);
+      });
+  }
+
+  /**
+   * summary() hides a window once it resets. Tell listeners when that
+   * happens, so a surface that refreshes only on events drops the row.
+   */
+  private scheduleRateLimitExpiry(): void {
+    if (this.rateLimitExpiry) clearTimeout(this.rateLimitExpiry);
+    this.rateLimitExpiry = undefined;
+    const next = nextClaudeRateLimitReset(this.rateLimits ?? [], Date.now());
+    if (next === undefined) return;
+    this.rateLimitExpiry = setTimeout(() => {
+      this.rateLimitExpiry = undefined;
+      this.scheduleRateLimitExpiry();
+      if (next > Date.now()) return;
+      this.emit({ method: "backend/providerStatus/updated", params: { backend: "claude" } }).catch((error: unknown) => {
+        claudeBackendLog.warn("Could not report an expired Claude usage limit", error);
+      });
+    }, Math.min(next - Date.now() + 1, MAX_TIMER_DELAY_MS));
+    this.rateLimitExpiry.unref?.();
   }
 
   private scheduleContextRefresh(session: ClaudeSession, running: RunningTurn): void {
@@ -593,6 +807,14 @@ export class ClaudeBackend {
       }
       for (const block of message.message.content) {
         if (block.type !== "tool_use") continue;
+        const report = block.name === CLAUDE_REPORT_FINDINGS_TOOL ? parseClaudeFindingsReport(block.input) : undefined;
+        if (report) {
+          // The CLI validates the call before it runs it, and the model retries
+          // a rejected one. The card waits for the result, so a retry is not a
+          // second review.
+          running.pendingReports.set(block.id, { report, model: message.message.model, input: block.input });
+          continue;
+        }
         const input = block.input as Record<string, unknown>;
         const command = block.name === "Bash" && typeof input.command === "string" ? input.command : undefined;
         running.entries.set(block.id, {
@@ -616,6 +838,26 @@ export class ClaudeBackend {
     if (message.type === "user" && Array.isArray(message.message.content)) {
       for (const block of message.message.content) {
         if (block.type !== "tool_result") continue;
+        const pendingReport = running.pendingReports.get(block.tool_use_id);
+        if (pendingReport) {
+          running.pendingReports.delete(block.tool_use_id);
+          if (!block.is_error) {
+            await this.reportFindings({
+              threadId, turnId, running, toolUseId: block.tool_use_id,
+              report: pendingReport.report, model: pendingReport.model,
+            });
+            continue;
+          }
+          // A rejected report stays visible as the failed tool call it was.
+          running.entries.set(block.tool_use_id, {
+            type: "activity", id: block.tool_use_id, summary: CLAUDE_REPORT_FINDINGS_TOOL, status: "in_progress",
+            details: [{
+              id: block.tool_use_id, kind: "read", label: CLAUDE_REPORT_FINDINGS_TOOL,
+              markdown: JSON.stringify(pendingReport.input),
+            }],
+            createdAt: Date.now(), turn: { id: turnId },
+          });
+        }
         const entry = running.entries.get(block.tool_use_id);
         if (entry?.type !== "activity") continue;
         entry.status = block.is_error ? "failed" : "completed";
@@ -639,6 +881,69 @@ export class ClaudeBackend {
         };
         await this.emit({ method: "item/completed", params: { threadId, turnId, item } });
       }
+    }
+  }
+
+  /**
+   * A findings report is the review card, not a tool row. Its tool result is
+   * a count, which nothing renders. A re-report after fixes updates the
+   * review it repeats; one that repeats no earlier review is a new review.
+   */
+  private async reportFindings(params: {
+    threadId: string; turnId: string; running: RunningTurn; toolUseId: string;
+    report: ClaudeFindingsReport; model?: string;
+  }): Promise<void> {
+    const { threadId, turnId, running, report } = params;
+    const session = await this.store.read(threadId);
+    if (isClaudeOutcomeReport(report)) {
+      const entries = [...(await this.store.entries(threadId)), ...running.entries.values()];
+      const previous = entries.findLast((entry): entry is AppServerThreadReviewEntry =>
+        entry.type === "review" && entry.reviewer?.backend === "claude" && entry.output !== undefined
+        && entry.id !== params.toolUseId);
+      // A re-report in the review's own turn repeats it; a later one must
+      // also name one of its findings' locations.
+      const outcomes = previous ? matchClaudeFindingOutcomes(reviewEntryFindings(previous), report, session.cwd, {
+        trustPosition: previous.turn?.id === turnId,
+      }) : [];
+      if (previous && outcomes.length > 0) {
+        await this.emit({ method: "thread/review/outcomesReported", params: {
+          threadId, turnId, reviewId: previous.id, outcomes,
+        } });
+        return;
+      }
+    }
+    const output = claudeReviewOutput(report, session.cwd);
+    let context: AppServerReviewContext | undefined;
+    try {
+      context = await this.options.resolveReviewContext?.({ threadId, cwd: session.cwd });
+    } catch (error) {
+      claudeBackendLog.warn("could not resolve review context", { error: error instanceof Error ? error.message : String(error) });
+    }
+    const model = params.model ?? session.thread.model;
+    const reviewer: NonNullable<AppServerThreadReviewEntry["reviewer"]> = {
+      backend: "claude",
+      ...(model ? { model } : {}),
+      // The review's own effort level, which can differ from the thread's.
+      ...(report.level ? { reasoningEffort: report.level } : {}),
+    };
+    const entry: AppServerThreadReviewEntry = {
+      type: "review", id: params.toolUseId, createdAt: Date.now(),
+      review: formatReviewOutputText(output), output, reviewer,
+      ...(context ? { context } : {}),
+      turn: { id: turnId },
+    };
+    running.entries.set(entry.id, entry);
+    await this.store.append(threadId, [entry]);
+    await this.emit({ method: "item/completed", params: { threadId, turnId, item: {
+      id: entry.id, type: "exitedReviewMode", review: entry.review, createdAt: entry.createdAt,
+      data: { reviewOutput: output, reviewer, ...(context ? { context } : {}) },
+    } } });
+    // A first report that already says what was fixed records both at once.
+    if (isClaudeOutcomeReport(report)) {
+      await this.emit({ method: "thread/review/outcomesReported", params: {
+        threadId, turnId, reviewId: entry.id,
+        outcomes: report.findings.flatMap((finding, index) => finding.outcome ? [{ index, outcome: finding.outcome }] : []),
+      } });
     }
   }
 
@@ -709,6 +1014,8 @@ export class ClaudeBackend {
   }
 
   async close(): Promise<void> {
+    if (this.rateLimitExpiry) clearTimeout(this.rateLimitExpiry);
+    this.rateLimitExpiry = undefined;
     await Promise.all([...this.running.entries()].map(([threadId, running]) => this.interruptTurn({ threadId, turnId: running.turnId })));
   }
 }

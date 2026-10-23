@@ -1,12 +1,65 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ModelInfo, Query, query } from "@anthropic-ai/claude-agent-sdk";
-import { claudeModelOptions, discoverClaudeModels } from "../claude/claude-models";
+import { claudeModelOptions, discoverClaudeModels, readClaudeMetadata } from "../claude/claude-models";
+
+const catalogLog = vi.hoisted(() => ({ info: vi.fn() }));
+vi.mock("../log", () => ({ getMainLogger: () => catalogLog }));
 
 const model = (value: string, displayName: string, extra: Partial<ModelInfo> = {}): ModelInfo => ({
   value, displayName, description: "Fixture model", ...extra,
 });
 
 describe("Claude model catalog", () => {
+  it("labels the SDK's generic catalog using resolved versions without changing selectable IDs", () => {
+    const options = claudeModelOptions([
+      model("default", "Default (recommended)", { resolvedModel: "claude-opus-5-5" }),
+      model("opus", "Opus", { resolvedModel: "claude-opus-5-5" }),
+      model("claude-fable-5-1[1m]", "Fable", { resolvedModel: "claude-fable-5-1" }),
+      model("sonnet", "Sonnet", { resolvedModel: "claude-sonnet-5-5" }),
+      model("haiku", "Haiku", { resolvedModel: "claude-haiku-5-5" }),
+    ]);
+    expect(options.map(({ id, label }) => ({ id, label }))).toEqual([
+      { id: "opus", label: "Opus 5.5" },
+      { id: "claude-fable-5-1[1m]", label: "Fable 5.1 (1M context)" },
+      { id: "sonnet", label: "Sonnet 5.5" },
+      { id: "haiku", label: "Haiku 5.5" },
+    ]);
+    expect(options.filter((option) => option.current).map((option) => option.id)).toEqual(["opus"]);
+  });
+
+  it("groups resolved older versions and preserves explicit, custom, and unresolved labels", () => {
+    const options = claudeModelOptions([
+      model("opus", "Opus", { resolvedModel: "claude-opus-5-5" }),
+      model("claude-opus-5", "Claude Opus"),
+      model("claude-opus-4-8-20260101", "Opus"),
+      model("explicit", "Opus 5.5 (extended context)", { resolvedModel: "claude-opus-5-5[1m]" }),
+      model("custom", "My organization model", { resolvedModel: "claude-opus-5-5" }),
+      model("unresolved", "Haiku"),
+      model("opaque", "Sonnet", { resolvedModel: "provider-specific-id" }),
+    ]);
+    expect(options.slice(0, 3).map(({ label, other }) => ({ label, other }))).toEqual([
+      { label: "Opus 5.5", other: undefined },
+      { label: "Claude Opus 5", other: true },
+      { label: "Opus 4.8", other: true },
+    ]);
+    expect(options.slice(3).map((option) => option.label)).toEqual([
+      "Opus 5.5 (extended context)", "My organization model", "Haiku", "Sonnet",
+    ]);
+  });
+
+  it("logs aggregate catalog provenance without custom names or model IDs", () => {
+    catalogLog.info.mockClear();
+    claudeModelOptions([
+      model("opus", "Opus", { resolvedModel: "claude-opus-5-5" }),
+      model("sonnet", "Sonnet 5.5"),
+      model("private-deployment-id", "Private organization model"),
+    ], { source: "session", cliVersion: "2.1.296" });
+    expect(catalogLog.info.mock.calls).toEqual([["Claude model catalog received", {
+      source: "session", cliVersion: "2.1.296", modelCount: 3,
+      versionedNameCount: 1, resolvedGenericNameCount: 1,
+    }]]);
+  });
+
   it("uses versioned CLI names, keeps the latest family versions primary, and removes the duplicate default row", () => {
     const options = claudeModelOptions([
       model("default", "Default (recommended)", { resolvedModel: "claude-fable-5-1" }),
@@ -51,12 +104,29 @@ describe("Claude model catalog", () => {
       .resolves.toMatchObject([{ id: "fable", label: "Fable 5.1" }]);
     const args = (run.mock.calls as unknown as [Parameters<typeof query>[0]][])[0][0];
     expect(args.options).toMatchObject({ pathToClaudeCodeExecutable: "/fixture/claude", persistSession: false,
-      systemPrompt: { type: "preset", preset: "claude_code" }, settingSources: ["user", "project", "local"],
+      systemPrompt: { type: "preset", preset: "claude_code" }, settingSources: ["user"],
       tools: [], strictMcpConfig: true,
     });
     expect(typeof args.prompt).not.toBe("string");
     if (typeof args.prompt !== "string") expect(await args.prompt[Symbol.asyncIterator]().next()).toEqual({ done: true, value: undefined });
     expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("keeps project/local availableModels out of global discovery while retaining them for project metadata", async () => {
+    const globalModels = [model("opus", "Opus 5.5"), model("haiku", "Haiku 5.5")];
+    const projectModels = [globalModels[1]];
+    const run = vi.fn((args: Parameters<typeof query>[0]) => ({
+      supportedModels: async () => args.options?.settingSources?.some((source) => source !== "user") ? projectModels : globalModels,
+      close: vi.fn(),
+    }) as unknown as Query);
+    await expect(discoverClaudeModels({ executable: "/fixture/claude", env: {}, query: run }))
+      .resolves.toMatchObject([{ id: "opus" }, { id: "haiku" }]);
+    await expect(readClaudeMetadata({ executable: "/fixture/claude", env: {}, query: run,
+      cwd: "/fixture/restricted-project", read: (session) => session.supportedModels(), timeoutMessage: "Fixture timeout",
+    })).resolves.toEqual(projectModels);
+    expect(run.mock.calls[1][0].options).toMatchObject({
+      cwd: "/fixture/restricted-project", settingSources: ["user", "project", "local"],
+    });
   });
 
   it.each(["empty", "failure", "timeout"])("closes discovery on %s", async (failure) => {

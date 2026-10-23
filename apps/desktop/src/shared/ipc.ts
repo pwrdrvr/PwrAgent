@@ -6,6 +6,8 @@ export const FEDERATION_OPEN_ACTIVITY_CHANNEL = "federation:open-activity";
 export const FEDERATION_ACTIVITY_TOPMOST_CHANNEL = "federation:activity-topmost";
 export const APP_SERVER_LIST_THREADS_CHANNEL = "app-server:list-threads";
 export const THREAD_SEARCH_CHANNEL = "thread-search:search";
+export const THREAD_SEARCH_PROGRESS_CHANNEL = "thread-search:progress";
+export const THREAD_SEARCH_CANCEL_CHANNEL = "thread-search:cancel";
 export const FEDERATION_OPEN_WINDOW_CHANNEL = "federation:open-window";
 export const FEDERATION_GET_HEALTH_CHANNEL = "federation:get-health";
 export const FEDERATION_READ_INSTANCE_LOAD_CHANNEL =
@@ -183,13 +185,14 @@ export const THREAD_TODOS_SET_ITEM_CHECKED_CHANNEL = "thread-todos:set-item-chec
  */
 export const THREAD_TODOS_CHANGED_EVENT_CHANNEL = "thread-todos:changed";
 export const OPERATOR_REQUESTS_LIST_CHANNEL = "operator-requests:list";
+export const OPERATOR_QUESTIONS_LIST_DISMISSED_CHANNEL = "operator-requests:list-dismissed-questions";
 export const OPERATOR_REQUESTS_MARK_SEEN_CHANNEL = "operator-requests:mark-seen";
 export const OPERATOR_REQUESTS_DISMISS_QUESTION_CHANNEL =
   "operator-requests:dismiss-question";
 /**
  * Marker event: what local threads are waiting on the operator for, or what
  * the operator has seen, changed. Listeners refetch with
- * `operator-requests:list`. Local windows only.
+ * `operator-requests:list`. Scoped question changes also reach owner viewers.
  */
 export const OPERATOR_REQUESTS_CHANGED_EVENT_CHANNEL = "operator-requests:changed";
 export const AGENT_START_REVIEW_CHANNEL = "agent:start-review";
@@ -329,6 +332,8 @@ export const NAVIGATION_REORDER_THREAD_PINS_CHANNEL =
   "navigation:reorder-thread-pins";
 export const NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL =
   "navigation:add-remote-thread-pin";
+export const NAVIGATION_HAS_REMOTE_THREAD_PIN_CHANNEL =
+  "navigation:has-remote-thread-pin";
 export const NAVIGATION_REMOVE_REMOTE_THREAD_PIN_CHANNEL =
   "navigation:remove-remote-thread-pin";
 export const NAVIGATION_SET_REMOTE_THREAD_LOCAL_PIN_CHANNEL =
@@ -712,6 +717,10 @@ export const WINDOW_REPLAY_ONBOARDING_CHANNEL = "window:replay-onboarding";
 export const WINDOW_COPY_LOCAL_DIAGNOSTICS_INFO_CHANNEL =
   "window:copy-local-diagnostics-info";
 export const RUNTIME_IDENTITY_CHANNEL = "runtime:get-identity";
+export const LAUNCHPAD_ACCESS_NOTICE_READ_CHANNEL =
+  "launchpad-access-notice:read";
+export const LAUNCHPAD_ACCESS_NOTICE_DISMISS_CHANNEL =
+  "launchpad-access-notice:dismiss";
 export const SETTINGS_READ_CHANNEL = "settings:read";
 export const TOKEN_MISER_READ_USAGE_CHANNEL = "token-miser:read-usage";
 export const SETTINGS_READ_BOOTSTRAP_CHANNEL = "settings:read-bootstrap";

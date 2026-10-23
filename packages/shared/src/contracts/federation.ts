@@ -47,6 +47,13 @@ export const FEDERATION_CAPABILITIES = [
    * thread's queued messages. A viewer offers no drag without it.
    */
   "turn_queue_reorder",
+  /** Owner-side gateway inventory and per-thread MCP selection. */
+  "thread_mcp_connections",
+  /** Owner-local To-do and tracked review reads, mutations, and invalidations. */
+  "thread_todos",
+  /** Owner-persisted async question dismissals and change notifications. */
+  "operator_questions",
+  "operator_requests",
 ] as const;
 
 export const FEDERATION_SHUTDOWN_METHOD = "federation/shutdown";

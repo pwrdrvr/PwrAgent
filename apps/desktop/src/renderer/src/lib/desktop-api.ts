@@ -7,6 +7,7 @@ import type {
 } from "@pwragent/shared";
 import type {
   ListThreadTodoProjectsResponse,
+  ListThreadTodoProjectsRequest,
   ListThreadTodosRequest,
   ListThreadTodosResponse,
   ResolveThreadTodoRequest,
@@ -19,7 +20,9 @@ import type {
   ListThreadReviewsRequest,
   UpdateThreadReviewRequest,
   DismissOperatorQuestionRequest,
+  OperatorQuestionThreadRequest,
   ListOperatorRequestsResponse,
+  ListOperatorRequestsRequest,
   MarkOperatorItemsSeenRequest,
   OperatorRequestsChangedEvent,
 } from "@pwragent/shared";
@@ -189,6 +192,7 @@ import type {
   ListAutomationsResponse,
   ListBackendsRequest,
   ListBackendsResponse,
+  ListMcpConnectionsRequest,
   ListMcpConnectionsResponse,
   ListCodexMcpServersRequest,
   ListCodexMcpServersResponse,
@@ -232,6 +236,7 @@ import type {
   FederationJumpSearchProgress,
   FederationJumpSearchResponse,
   RemoveRemoteThreadPinRequest,
+  HasRemoteThreadPinRequest,
   RemoveRemoteThreadPinResponse,
   SetRemoteThreadLocalPinRequest,
   SetRemoteThreadLocalPinResponse,
@@ -598,7 +603,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   copyText?: (text: string) => Promise<void>;
   copyRichText?: (payload: { text: string; html: string }) => Promise<void>;
   readTranscriptImage?: (url: string) => Promise<{ dataBase64: string; mimeType: string }>;
-  listMcpConnections?: () => Promise<ListMcpConnectionsResponse>;
+  listMcpConnections?: (request?: ListMcpConnectionsRequest) => Promise<ListMcpConnectionsResponse>;
   createMcpConnection?: (
     request: CreateMcpConnectionRequest,
   ) => Promise<CreateMcpConnectionResponse>;
@@ -664,6 +669,10 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
     callback: (state: PwrSuiteInstallerState) => void,
   ) => () => void;
   getRuntimeIdentity?: () => Promise<RuntimeIdentity>;
+  /** Whether the one-time "new threads start on Auto" upgrade notice is pending. */
+  readLaunchpadAccessNoticePending?: () => Promise<boolean>;
+  /** Closes the upgrade notice for good. */
+  dismissLaunchpadAccessNotice?: () => Promise<void>;
   readAppMetadata?: () => Promise<AppMetadata>;
   readLicenseDocument?: (
     kind: AppLicenseDocumentKind,
@@ -918,6 +927,9 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   readThread?: (
     request: AppServerReadThreadRequest
   ) => Promise<AppServerReadThreadResponse>;
+  manageThreadDependencies?: (
+    request: import("@pwragent/shared").ManageThreadDependenciesRequest,
+  ) => Promise<import("@pwragent/shared").ManageThreadDependenciesResponse>;
   readUsageActivity?: (request: ReadUsageActivityRequest) => Promise<ReadUsageActivityResponse>;
   /** Stored totals for a local thread and every sub-thread under it. */
   readThreadFamilyPricing?: (request: ReadThreadFamilyPricingRequest) => Promise<ReadThreadFamilyPricingResponse>;
@@ -1023,7 +1035,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
     request: RunThreadTodoActionRequest,
   ) => Promise<ThreadTodoMutationResponse>;
   /** The projects a card's project menu offers. */
-  listThreadTodoProjects?: () => Promise<ListThreadTodoProjectsResponse>;
+  listThreadTodoProjects?: (request?: ListThreadTodoProjectsRequest) => Promise<ListThreadTodoProjectsResponse>;
   /** The operator's pick from a card's project menu. */
   setThreadTodoProject?: (
     request: SetThreadTodoProjectRequest,
@@ -1032,15 +1044,16 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   setThreadTodoItemChecked?: (
     request: SetThreadTodoItemCheckedRequest,
   ) => Promise<ThreadTodoMutationResponse>;
-  /** Marker event; refetch with `listThreadTodos`. Local windows only. */
+  /** Marker event; refetch owner-routed cards with `listThreadTodos`. */
   onThreadTodosChanged?: (
     callback: (event: ThreadTodosChangedEvent) => void,
   ) => () => void;
   /** Every local thread's pending requests and open async questions. */
-  listOperatorRequests?: () => Promise<ListOperatorRequestsResponse>;
+  listOperatorRequests?: (request?: ListOperatorRequestsRequest) => Promise<ListOperatorRequestsResponse>;
+  listDismissedOperatorQuestions?: (request: OperatorQuestionThreadRequest) => Promise<string[]>;
   markOperatorItemsSeen?: (request: MarkOperatorItemsSeenRequest) => Promise<void>;
   dismissOperatorQuestion?: (request: DismissOperatorQuestionRequest) => Promise<void>;
-  /** Marker event; refetch with `listOperatorRequests`. Local windows only. */
+  /** Marker event; refetch with `listOperatorRequests`. */
   onOperatorRequestsChanged?: (
     callback: (event: OperatorRequestsChangedEvent) => void,
   ) => () => void;
@@ -1355,7 +1368,9 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   ) => Promise<AppServerListThreadsResponse>;
   searchThreads?: (
     request?: ThreadSearchRequest,
+    onProgress?: (response: ThreadSearchResponse) => void,
   ) => Promise<ThreadSearchResponse>;
+  cancelThreadSearch?: () => Promise<void>;
   markThreadSeen?: (request: MarkThreadSeenRequest) => Promise<unknown>;
   setThreadReaction?: (
     request: SetThreadReactionRequest
@@ -1402,6 +1417,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
    * Stored only on this instance; removal works while the owner is
    * unreachable and never archives the owner's thread.
    */
+  hasRemoteThreadPin?: (request: HasRemoteThreadPinRequest) => Promise<boolean>;
   addRemoteThreadPin?: (
     request: AddRemoteThreadPinRequest
   ) => Promise<AddRemoteThreadPinResponse>;

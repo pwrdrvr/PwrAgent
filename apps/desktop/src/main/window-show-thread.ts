@@ -12,6 +12,8 @@ export type RequestShowThreadOptions = {
    * somewhere it was never mounted.
    */
   preferWebContents?: WebContents;
+  /** Never route a window-scoped command to another subscriber. */
+  requirePreferred?: boolean;
 };
 
 export function requestShowThread(
@@ -30,6 +32,8 @@ export function requestShowThread(
     preferred.send(WINDOW_SHOW_THREAD_CHANNEL, request);
     return preferred;
   }
+
+  if (options.requirePreferred) return undefined;
 
   if (focused && !focused.isDestroyed()) {
     const focusedSubscriber = subscribers.find(

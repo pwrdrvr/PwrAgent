@@ -16,6 +16,7 @@ import {
   type ListMcpConnectionToolsResponse,
   isRemoteFederationTarget,
   type ConnectPwrGitResponse,
+  type ListMcpConnectionsRequest,
   type ListMcpConnectionsResponse,
   type McpConnectionStatus,
   type MutateMcpConnectionResponse,
@@ -106,8 +107,18 @@ export function registerMcpConnectionIpcHandlers(
   ipcMain.removeHandler(MCP_CONNECTION_LIST_CHANNEL);
   ipcMain.handle(
     MCP_CONNECTION_LIST_CHANNEL,
-    async (event): Promise<ListMcpConnectionsResponse> => {
-      requireLocalOwner(event);
+    async (
+      event,
+      request: ListMcpConnectionsRequest = {},
+    ): Promise<ListMcpConnectionsResponse> => {
+      const target =
+        federationWindowTargetForWebContents(event.sender)
+        ?? request.federationTarget;
+      if (target && isRemoteFederationTarget(target)) {
+        return await getDesktopFederationRuntime()
+          .remoteBackend(target)
+          .listMcpConnections();
+      }
       return { connections: await service.listConnections() };
     },
   );
@@ -242,11 +253,16 @@ export function registerMcpConnectionIpcHandlers(
       event,
       request: SetThreadMcpConnectionsRequest,
     ): Promise<SetThreadMcpConnectionsResponse> => {
-      // Managed connections belong to the profile that runs the thread. A
-      // federated viewer editing this would write a selection the executing
-      // machine cannot honor, so the guard matches the rest of this surface.
-      requireLocalOwner(event);
-      return await getDesktopBackendRegistry().setThreadMcpConnections(request);
+      const target =
+        federationWindowTargetForWebContents(event.sender)
+        ?? request.federationTarget;
+      const { federationTarget: _federationTarget, ...ownerRequest } = request;
+      if (target && isRemoteFederationTarget(target)) {
+        return await getDesktopFederationRuntime()
+          .remoteBackend(target)
+          .setThreadMcpConnections(ownerRequest);
+      }
+      return await getDesktopBackendRegistry().setThreadMcpConnections(ownerRequest);
     },
   );
   ipcMain.removeHandler(MCP_CONNECTION_READ_THREAD_CHANNEL);
@@ -256,8 +272,16 @@ export function registerMcpConnectionIpcHandlers(
       event,
       request: ReadThreadMcpConnectionsRequest,
     ): Promise<SetThreadMcpConnectionsResponse> => {
-      requireLocalOwner(event);
-      return await getDesktopBackendRegistry().readThreadMcpConnections(request);
+      const target =
+        federationWindowTargetForWebContents(event.sender)
+        ?? request.federationTarget;
+      const { federationTarget: _federationTarget, ...ownerRequest } = request;
+      if (target && isRemoteFederationTarget(target)) {
+        return await getDesktopFederationRuntime()
+          .remoteBackend(target)
+          .readThreadMcpConnections(ownerRequest);
+      }
+      return await getDesktopBackendRegistry().readThreadMcpConnections(ownerRequest);
     },
   );
   ipcMain.removeHandler(MCP_CONNECTION_DESCRIBE_THREAD_CHANNEL);
@@ -267,9 +291,16 @@ export function registerMcpConnectionIpcHandlers(
       event,
       request: DescribeThreadMcpConnectionsRequest,
     ): Promise<DescribeThreadMcpConnectionsResponse> => {
-      requireLocalOwner(event);
-      return await getDesktopBackendRegistry()
-        .describeThreadMcpConnections(request);
+      const target =
+        federationWindowTargetForWebContents(event.sender)
+        ?? request.federationTarget;
+      const { federationTarget: _federationTarget, ...ownerRequest } = request;
+      if (target && isRemoteFederationTarget(target)) {
+        return await getDesktopFederationRuntime()
+          .remoteBackend(target)
+          .describeThreadMcpConnections(ownerRequest);
+      }
+      return await getDesktopBackendRegistry().describeThreadMcpConnections(ownerRequest);
     },
   );
   ipcMain.removeHandler(MCP_CONNECTION_UPDATE_CHANNEL);

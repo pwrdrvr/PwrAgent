@@ -1,5 +1,43 @@
 # Changelog
 
+## v1.3.0-prerelease.4 - 2026-10-22
+
+- Claude Reviews - Show `/code-review` findings as tracked review cards and synchronize reported fixes. Standard review actions now choose a supported reviewer and preserve the thread's workspace.
+- Federated Search - Search remote transcript content, not just titles and summaries. Results appear progressively as connected machines respond, with matching snippets and links.
+- Voice and Star Map - Let Voice Manager open local or remote threads in the UI. Keep the Star Map manager card visible when the canvas is panned or zoomed.
+- New Thread Access - Default new Codex and Claude threads to Auto, with per-provider access defaults in Settings. Existing threads retain their access.
+- Usage Charts - Keep usage-detail cards on screen and correctly distinguish five-hour limits from weekly limits, including after resets.
+
+Upgrade note: Legacy Codex/Claude launchpad "Default Access" selections are reset to the new default. Operators who prefer Default Access can select it in Settings.
+
+## v1.3.0-prerelease.3 - 2026-10-22
+
+- Federated To-dos - Complete remote approvals, questionnaires, replies, and review actions through the owning machine. Synchronize question dismissals across viewers and preserve selected findings when a repair request fails.
+- MCP Diagnostics - Add visible "Test connection" controls with discovery progress and clearer failure details. Improve cancellation and recovery when discovery stalls.
+- Automation MCP Access - Select offered MCP Gateway connections directly in automation allowlists, including connections not already selected by the Agent.
+- Claude Naming - Use Claude's native session titles and respect manual renames. Claude and ACP queue labels no longer trigger implicit Codex helper calls.
+- Git and Navigation - Refresh Claude and ACP branch state for accurate PR discovery, and keep sidebar clicks from jumping to another occurrence of the same thread.
+- Grok Tools - Prevent stale status updates from disconnecting MCP access during an active turn.
+- Helper Safety - Keep lifecycle hooks and notification commands disabled for background Codex helpers, including fallback starts.
+
+## v1.3.0-prerelease.2 - 2026-10-22
+
+- Claude - Add plan-limit meters and clearer reset countdowns, improve remembered usage limits and sign-in status, and refresh model catalogs with versioned labels.
+- Remote MCP Access - Select and verify a remote thread's MCP connections from mounted threads and remote viewers, subject to owner permissions.
+- Federated To-dos and Reviews - View and act on remote To-dos and tracked review findings, with actions routed to the owning machine. Requires updated builds on both ends.
+- Navigation Reliability - Show unread sub-threads in their own project, recover navigation coverage after provider failures, and surface failed sidebar actions as notices.
+- Pull Requests - Prevent unrelated fork PRs from being attached automatically and repair stale automatic attachments while preserving explicit selections.
+- Cleanup Safety and Performance - Protect replaced worktree directories during Windows cleanup and stop repeatedly processing archives whose cleanup is already complete.
+
+## v1.3.0-prerelease.1 - 2026-10-21
+
+- Claude - Added built-in Claude support through the official Agent SDK, with model and effort selection, approvals, questionnaires, MCP connections, resumable conversations, and usage reporting.
+- Continue After - Resume a thread when another turn finishes, a PR becomes reviewable, CI passes, or a PR merges. Dependencies survive restarts without model-driven polling.
+- Dependency Reminders - Choose a reminder instead of an automatic continuation, with an optional action to start a new thread.
+- Message Queues - Drag queued messages into a new order in the composer and Star Map, with keyboard controls.
+- Context Compaction - Honor the selected model and reasoning settings, recover from known invalid-message-ID failures, and release queued follow-ups after compaction.
+- Archive Performance - Reduce redundant work during bulk cleanup and improve diagnostics for delayed cleanup.
+
 ## v1.2.2 - 2026-10-19
 
 - Terminals - Keep multiple terminal tabs per thread, with names, activity indicators, and restored scrollback after restarting. Commands are not replayed.

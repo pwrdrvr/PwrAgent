@@ -24,6 +24,7 @@ import type { FederationThreadTarget } from "../../chrome/federation-thread-targ
 import type { FederationProjectDirectory } from "../../chrome/useFederationProjectStates";
 import { HOVER_TRANSITION_GRACE_MS } from "../../../lib/useHoverTransitionGrace";
 import { threadSummaryIdentityKey } from "../../../lib/federated-thread-events";
+import { ThreadDependencyIndicatorsContext } from "../../thread-dependencies/useThreadDependencyIndicators";
 import { FixtureSidebar as Sidebar } from "../../../test/navigation-presentation-fixture";
 import { useState, type ComponentProps } from "react";
 import type { Editor } from "@tiptap/react";
@@ -316,6 +317,20 @@ function releaseThreadPinPointer(
     clientX: point.x,
     clientY: point.y,
     pointerId: THREAD_PIN_POINTER_ID,
+  });
+}
+
+function mockElementRect(element: Element, top: number, height: number, left = 0, width = 300): void {
+  vi.spyOn(element, "getBoundingClientRect").mockReturnValue({
+    bottom: top + height,
+    height,
+    left,
+    right: left + width,
+    toJSON: () => ({}),
+    top,
+    width,
+    x: left,
+    y: top,
   });
 }
 
@@ -1413,37 +1428,95 @@ describe("Sidebar", () => {
     expect(container.querySelector(".subthread-list")).toContainElement(
       threadCard(screen.getByRole("button", { name: "Remote child A" })),
     );
+    const tray = container.querySelector<HTMLElement>(".subthread-list")!;
     const source = screen.getByRole("button", { name: "Remote child A" })
       .closest<HTMLElement>(".thread-row-shell")!;
     const targetRow = screen.getByRole("button", { name: "Remote child B" })
       .closest<HTMLElement>(".thread-row-shell")!;
-    vi.spyOn(targetRow, "getBoundingClientRect").mockReturnValue({
-      bottom: 100,
-      height: 100,
-      left: 0,
-      right: 300,
-      toJSON: () => ({}),
-      top: 0,
-      width: 300,
-      x: 0,
-      y: 0,
-    });
-    const values = new Map<string, string>();
-    const dataTransfer = {
-      dropEffect: "move",
-      effectAllowed: "move",
-      getData: vi.fn((type: string) => values.get(type) ?? ""),
-      setData: vi.fn((type: string, value: string) => values.set(type, value)),
-      setDragImage: vi.fn(),
-    };
-    fireEvent.dragStart(source, { dataTransfer });
-    fireEvent.dragOver(targetRow, { clientY: 75, dataTransfer });
+    mockElementRect(tray, 0, 200);
+    mockElementRect(source, 0, 100);
+    mockElementRect(targetRow, 100, 100);
+
+    startThreadPinPointerDrag(source, { x: 50, y: 50 });
+    moveThreadPinPointer({ x: 50, y: 180 });
+    // The held card is the tilted pointer preview, not a native drag image.
+    expect(document.body.querySelector(".thread-row--drag-image")).not.toBeNull();
+    await waitFor(() => expect(targetRow).toHaveClass("is-drop-target-after"));
     await act(async () => {
-      fireEvent.drop(targetRow, { clientY: 75, dataTransfer });
+      releaseThreadPinPointer({ x: 50, y: 180 });
     });
 
+    expect(document.body.querySelector(".thread-row--drag-image")).toBeNull();
     expect(onUpdateSubthreadOrder).toHaveBeenCalledWith(remoteParent, {
-      threadId: "remote-child-a", anchorThreadId: "remote-child-b", placement: "before",
+      threadId: "remote-child-a", anchorThreadId: "remote-child-b", placement: "after",
+    });
+  });
+
+  it("drags a Claude sub-thread among its Codex siblings, past a grandchild's subtree", async () => {
+    const parent: NavigationThreadSummary = {
+      ...sharedThread,
+      id: "game-plan",
+      title: "Game plan",
+      subthreadOrder: ["gondola", "steam", "design"],
+    };
+    const child = (source: "codex" | "claude", id: string, title: string, parentId = parent.id) => ({
+      ...sharedThread,
+      source,
+      id,
+      title,
+      parentThreadBackend: parentId === parent.id ? "codex" as const : source,
+      parentThreadId: parentId,
+    });
+    const gondola = child("codex", "gondola", "Gondola materials");
+    const steam = child("codex", "steam", "Steam locomotive");
+    const smokestack = child("codex", "smokestack", "Smokestack pass", "steam");
+    const design = child("claude", "design", "Use Claude Design");
+    const threads = [parent, gondola, steam, smokestack, design];
+    const onUpdateSubthreadOrder = vi.fn(async () => undefined);
+
+    const { container } = render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        directories={[]}
+        inboxThreads={threads}
+        loading={false}
+        selectedItemKey={undefined}
+        threads={threads}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onUpdateSubthreadOrder={onUpdateSubthreadOrder}
+      />,
+    );
+
+    const tray = container.querySelector<HTMLElement>(".subthread-list")!;
+    const shell = (name: string) => screen.getByRole("button", { name }).closest<HTMLElement>(".thread-row-shell")!;
+    expect(shell("Smokestack pass")).toHaveAttribute("data-nested-depth", "2");
+    expect(shell("Smokestack pass")).not.toHaveClass("is-draggable");
+    expect(shell("Use Claude Design")).toHaveClass("is-draggable");
+    mockElementRect(tray, 0, 160);
+    mockElementRect(shell("Gondola materials"), 0, 40);
+    mockElementRect(shell("Steam locomotive"), 40, 40);
+    mockElementRect(shell("Smokestack pass"), 80, 40);
+    mockElementRect(shell("Use Claude Design"), 120, 40);
+
+    startThreadPinPointerDrag(shell("Use Claude Design"), { x: 50, y: 140 });
+    // Over the grandchild: the drop lands after Steam's whole subtree, which
+    // is where the Claude child already is.
+    moveThreadPinPointer({ x: 50, y: 95 });
+    await waitFor(() => expect(document.querySelector(".thread-row--drag-image")).not.toBeNull());
+    expect(tray.querySelector(".is-drop-target-before, .is-drop-target-after")).toBeNull();
+    // Above Steam's midpoint: before Steam.
+    moveThreadPinPointer({ x: 50, y: 50 });
+    await waitFor(() => expect(shell("Steam locomotive")).toHaveClass("is-drop-target-before"));
+    await act(async () => {
+      releaseThreadPinPointer({ x: 50, y: 50 });
+    });
+
+    expect(onUpdateSubthreadOrder).toHaveBeenCalledWith(parent, {
+      threadId: "design", anchorThreadId: "steam", placement: "before",
     });
   });
 
@@ -7324,6 +7397,103 @@ describe("Sidebar", () => {
     expect(screen.queryByRole("menuitem", { name: "Send to Another Machine…" })).toBeNull();
   });
 
+  it("offers Continue After beside Lock Thread, counting the thread's waiting registrations", async () => {
+    const onContinueAfter = vi.fn();
+    render(
+      <ThreadDependencyIndicatorsContext.Provider value={{
+        byThreadKey: new Map([[threadSummaryIdentityKey(sharedThread), { count: 2, label: "2 waiting", alert: false, tooltip: "" }]]),
+      }}>
+        <Sidebar
+          backends={backends}
+          browseMode="recents"
+          directories={directories}
+          inboxThreads={[sharedThread]}
+          loading={false}
+          creatingThread={undefined}
+          selectedItemKey="codex:thread-1"
+          threads={[sharedThread]}
+          onBrowseModeChange={() => undefined}
+          onContinueAfter={onContinueAfter}
+          onCreateThread={async () => undefined}
+          onOpenLaunchpad={async () => undefined}
+          onSelectThread={() => undefined}
+          onSetThreadLock={async () => undefined}
+        />
+      </ThreadDependencyIndicatorsContext.Provider>
+    );
+
+    const trigger = screen.getByRole("button", { name: "Open thread actions" });
+    trigger.focus();
+    fireEvent.click(trigger);
+    const items = within(screen.getByRole("menu")).getAllByRole("menuitem");
+    const lock = items.findIndex((item) => menuItemLabel(item) === "Lock Thread…");
+    expect(items[lock + 1]).toHaveAccessibleName("Continue After, 2 waiting");
+    await clickElement(screen.getByRole("menuitem", { name: "Continue After, 2 waiting" }));
+
+    // The menu item is gone once the dialog opens, so focus returns to the
+    // control that opened the menu.
+    expect(onContinueAfter).toHaveBeenCalledWith(sharedThread, expect.objectContaining({ current: trigger }));
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  it("omits Continue After without a dialog to open or for a peer's thread", () => {
+    const peerThread: NavigationThreadSummary = {
+      ...sharedThread,
+      id: "thread-peer",
+      title: "Peer thread",
+      federation: {
+        ref: {
+          backend: "codex",
+          target: { scope: "remote", instanceId: "peer-laptop" },
+          threadId: "thread-peer",
+        },
+        instanceLabel: "Laptop",
+        peerStatus: "connected",
+        capabilities: ["turn_control"],
+      },
+    };
+    const { rerender } = render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Open thread actions" }));
+    expect(screen.queryByRole("menuitem", { name: /Continue After/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Open thread actions" }));
+
+    rerender(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        directories={directories}
+        inboxThreads={[peerThread]}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-peer"
+        threads={[peerThread]}
+        onBrowseModeChange={() => undefined}
+        onContinueAfter={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />
+    );
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Peer thread" }));
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: /Continue After/ })).toBeNull();
+  });
+
   it("flips the thread actions menu above the overflow button near the viewport bottom", () => {
     Object.defineProperty(window, "innerHeight", {
       configurable: true,
@@ -8368,17 +8538,23 @@ describe("Sidebar", () => {
  * carry pin affordances).
  */
 describe("Sidebar directory pinning", () => {
-  function createDirectoryDataTransfer(directoryKey: string) {
-    return {
-      effectAllowed: "move",
-      getData: vi.fn((type: string) =>
-        type === "application/x-pwragent-directory" || type === "text/plain"
-          ? directoryKey
-          : "",
-      ),
-      setDragImage: vi.fn(),
-      setData: vi.fn(),
-    };
+  /**
+   * Lay the Directories lens out as it reads mid-drag: one 30px header per
+   * project, the divider where the pins end. jsdom has no layout, and the
+   * folder drag hit-tests rectangles.
+   */
+  function layoutDirectoryHeaders(rows: Array<[RegExp, number]>, dividerTop?: number): void {
+    mockElementRect(document.querySelector(".directory-list")!, 0, 600);
+    for (const [label, top] of rows) {
+      mockElementRect(getDirectorySummary(label).closest(".directory-row")!, top, 30);
+    }
+    if (dividerTop !== undefined) {
+      mockElementRect(screen.getByRole("separator", { name: "Unpinned directories" }), dividerTop, 20);
+    }
+  }
+
+  function directoryHeader(label: RegExp): HTMLElement {
+    return getDirectorySummary(label).closest<HTMLElement>(".directory-row__header")!;
   }
 
   const projectADirectory: NavigationDirectorySummary = {
@@ -8682,15 +8858,22 @@ describe("Sidebar directory pinning", () => {
       onReorderDirectoryPins,
     });
 
+    layoutDirectoryHeaders([[/ProjectA/i, 0], [/ProjectB/i, 50]], 30);
+
+    startThreadPinPointerDrag(directoryHeader(/ProjectB/i), { x: 50, y: 60 });
+    moveThreadPinPointer({ x: 50, y: 40 });
+    // Over the divider, an unpinned folder joins the pins at their end.
+    await waitFor(() => expect(getDirectorySummary(/ProjectA/i).closest(".directory-row"))
+      .toHaveClass("is-drop-target-after"));
+    expect(document.querySelector(".thread-row__drop-label")).toHaveTextContent("Pin");
     await act(async () => {
-      fireEvent.drop(
-        screen.getByRole("separator", { name: "Unpinned directories" }),
-        { dataTransfer: createDirectoryDataTransfer(projectBDirectory.key) },
-      );
+      releaseThreadPinPointer({ x: 50, y: 40 });
     });
 
     expect(onSetDirectoryPin).toHaveBeenCalledWith(expect.objectContaining({ key: projectBDirectory.key }), true);
-    expect(onReorderDirectoryPins).not.toHaveBeenCalled();
+    await waitFor(() => expect(onReorderDirectoryPins).toHaveBeenCalledWith([], {
+      key: projectBDirectory.key, anchorKey: projectADirectory.key, placement: "after",
+    }));
   });
 
   it("reorders pinned directories when one is dropped on another pinned directory", async () => {
@@ -8709,25 +8892,67 @@ describe("Sidebar directory pinning", () => {
       onReorderDirectoryPins,
     });
 
-    // Drop pinnedB onto pinnedA's header. With JSDOM's default
-    // bounding rect (all zeros), getDropIndicatorPosition returns
-    // "before", so moveDirectoryKey relocates pinnedB to the slot
-    // before pinnedA → [B, A]. This locks the call site without
-    // depending on a synthesized clientY/rect interaction.
-    const pinnedASummary = getDirectorySummary(/ProjectA/i);
-    const headerA = pinnedASummary.closest(".directory-row__header");
-    expect(headerA).not.toBeNull();
+    layoutDirectoryHeaders([[/ProjectA/i, 0], [/ProjectB/i, 30]], 60);
 
+    startThreadPinPointerDrag(directoryHeader(/ProjectB/i), { x: 50, y: 40 });
+    moveThreadPinPointer({ x: 50, y: 5 });
+    await waitFor(() => expect(getDirectorySummary(/ProjectA/i).closest(".directory-row"))
+      .toHaveClass("is-drop-target-before"));
     await act(async () => {
-      fireEvent.drop(headerA!, {
-        dataTransfer: createDirectoryDataTransfer(pinnedB.key),
-      });
+      releaseThreadPinPointer({ x: 50, y: 5 });
     });
 
     expect(onReorderDirectoryPins).toHaveBeenCalledWith([
       pinnedB.key,
       pinnedA.key,
     ], { key: pinnedB.key, anchorKey: pinnedA.key, placement: "before" });
+  });
+
+  it("folds the lens to project headers while a folder is held, then restores it", async () => {
+    const pinnedA: NavigationDirectorySummary = { ...projectADirectory, pinnedRank: "1024" };
+    renderSidebar([pinnedA, projectBDirectory], {
+      onSetDirectoryPin: async () => undefined,
+      onReorderDirectoryPins: async () => undefined,
+    });
+    layoutDirectoryHeaders([[/ProjectA/i, 0], [/ProjectB/i, 50]], 30);
+    const list = document.querySelector(".directory-list")!;
+    const sectionA = getDirectorySummary(/ProjectA/i).closest(".directory-row")!;
+
+    startThreadPinPointerDrag(directoryHeader(/ProjectA/i), { x: 50, y: 10 });
+    // Under the 4px lift a press is still a click.
+    moveThreadPinPointer({ x: 52, y: 11 });
+    expect(list).not.toHaveClass("is-folding-directories");
+    moveThreadPinPointer({ x: 50, y: 20 });
+    expect(list).toHaveClass("is-folding-directories");
+    expect(sectionA).toHaveClass("is-pointer-dragging");
+    expect(document.querySelector(".thread-row--drag-image")).not.toBeNull();
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(list).not.toHaveClass("is-folding-directories");
+    expect(sectionA).not.toHaveClass("is-pointer-dragging");
+    expect(document.querySelector(".thread-row--drag-image")).toBeNull();
+    releaseThreadPinPointer({ x: 50, y: 20 });
+  });
+
+  it("unpins a pinned directory dropped below the divider", async () => {
+    const onSetDirectoryPin = vi.fn(async () => undefined);
+    const onReorderDirectoryPins = vi.fn(async () => undefined);
+    const pinnedA: NavigationDirectorySummary = { ...projectADirectory, pinnedRank: "1024" };
+    renderSidebar([pinnedA, projectBDirectory], { onSetDirectoryPin, onReorderDirectoryPins });
+    layoutDirectoryHeaders([[/ProjectA/i, 0], [/ProjectB/i, 50]], 30);
+    const divider = screen.getByRole("separator", { name: "Unpinned directories" });
+
+    startThreadPinPointerDrag(directoryHeader(/ProjectA/i), { x: 50, y: 10 });
+    moveThreadPinPointer({ x: 50, y: 70 });
+    await waitFor(() => expect(divider).toHaveClass("is-drop-target"));
+    expect(document.querySelector(".thread-row__drop-label")).toHaveTextContent("Unpin");
+    await act(async () => {
+      releaseThreadPinPointer({ x: 50, y: 70 });
+    });
+
+    expect(divider).not.toHaveClass("is-drop-target");
+    expect(onSetDirectoryPin).toHaveBeenCalledWith(expect.objectContaining({ key: projectADirectory.key }), false);
+    expect(onReorderDirectoryPins).not.toHaveBeenCalled();
   });
 
   it("keeps the directory launchpad button a single click and puts machines behind the chevron", async () => {
@@ -8984,14 +9209,11 @@ describe("Sidebar directory pinning", () => {
   });
 
   it("suppresses the synthetic post-drag click on the directory summary button", async () => {
-    // Regression: an earlier ref-based suppression flag could get
-    // stuck `true` if `dragend` didn't fire (e.g., React detached
-    // the listener during a re-render that moved the row between
-    // pinned/unpinned). The current implementation stores a
-    // timestamp at every drag-end and bails on clicks within
-    // POST_DRAG_CLICK_SUPPRESS_MS. This test covers both halves:
-    // (1) a click immediately after drag-end is suppressed, and
-    // (2) a click well after drag-end fires the expand toggle.
+    // The browser fires a click on the element under the pointer when a
+    // drag releases. The drag session swallows that one click and stops
+    // listening POST_DRAG_CLICK_SUPPRESS_MS after release, so it can never
+    // get stuck. This test covers both halves: (1) a click right after the
+    // release is suppressed, and (2) a later click toggles the project.
     const pinnedA: NavigationDirectorySummary = {
       ...projectADirectory,
       pinnedRank: "1024",
@@ -9013,14 +9235,12 @@ describe("Sidebar directory pinning", () => {
     const summary = getDirectorySummary(/ProjectA/i);
     expect(summary.getAttribute("aria-expanded")).toBe("false");
 
-    // Drop something on the section (simulates the trailing edge
-    // of a reorder gesture). This stamps the suppression
-    // timestamp via the section's onDrop handler.
-    const sectionA = summary.closest(".directory-row") as HTMLElement;
+    // A real drag gesture: lift, move onto B, release.
+    layoutDirectoryHeaders([[/ProjectA/i, 0], [/ProjectB/i, 30]], 60);
+    startThreadPinPointerDrag(directoryHeader(/ProjectA/i), { x: 50, y: 10 });
+    moveThreadPinPointer({ x: 50, y: 50 });
     await act(async () => {
-      fireEvent.drop(sectionA, {
-        dataTransfer: createDirectoryDataTransfer(pinnedB.key),
-      });
+      releaseThreadPinPointer({ x: 50, y: 50 });
     });
 
     // The synthetic post-drag click that browsers fire on the

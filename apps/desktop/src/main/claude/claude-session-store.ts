@@ -2,15 +2,26 @@ import type { ClaudeUsageTotals } from "./claude-usage";
 import { randomUUID } from "node:crypto";
 import { appendFile, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { AppServerThreadEntry, AppServerThreadSummary } from "@pwragent/shared";
+import type { AppServerThreadEntry, AppServerThreadSummary, BackendRateLimitSummary } from "@pwragent/shared";
+
+/** Not a thread id, so list() never reads it as session metadata. */
+const RATE_LIMITS_FILE = "rate-limits.json";
 
 export type ClaudeSession = {
   thread: AppServerThreadSummary;
   cwd: string;
   /** Set only after the SDK confirms initialization; used by query({ resume }). */
   sdkSessionId?: string;
+  /** At most one native title request, including failed requests, across restarts. */
+  titleGenerationAttempted?: boolean;
   modelUsage?: ClaudeUsageTotals;
   contextWindow?: { usedTokens: number; modelContextWindow: number };
+};
+
+export type ClaudeRateLimitsRecord = {
+  limits: BackendRateLimitSummary[];
+  /** Hash of the account the limits describe; never the account's own identifiers. */
+  account?: string;
 };
 
 /**
@@ -39,6 +50,53 @@ export class ClaudeSessionStore {
     const temporary = `${destination}.${randomUUID()}.tmp`;
     try {
       await writeFile(temporary, JSON.stringify(session), { mode: 0o600 });
+      await rename(temporary, destination);
+    } finally {
+      await rm(temporary, { force: true });
+    }
+  }
+
+  /** Account-wide limits last reported by Claude, so a restart does not start blank. */
+  async readRateLimits(): Promise<ClaudeRateLimitsRecord> {
+    let value: unknown;
+    try {
+      value = JSON.parse(await readFile(path.join(this.root, RATE_LIMITS_FILE), "utf8"));
+    } catch {
+      return { limits: [] };
+    }
+    // The first release wrote a bare array, with no account.
+    const record = Array.isArray(value) ? { limits: value } : value;
+    if (!record || typeof record !== "object" || !("limits" in record) || !Array.isArray(record.limits)) {
+      return { limits: [] };
+    }
+    const finite = (number: unknown): number is number => typeof number === "number" && Number.isFinite(number);
+    const limits = record.limits.flatMap((limit: unknown): BackendRateLimitSummary[] => {
+      if (!limit || typeof limit !== "object" || !("name" in limit) || !("limitId" in limit)
+        || typeof limit.name !== "string" || typeof limit.limitId !== "string") return [];
+      const { usedPercent, resetAt, ...row } = limit as BackendRateLimitSummary;
+      // A meter without a reading draws nothing; a reset without a time is no reset.
+      if (usedPercent !== undefined && !finite(usedPercent)) return [];
+      return [{
+        ...row,
+        ...(usedPercent !== undefined ? { usedPercent } : {}),
+        ...(finite(resetAt) ? { resetAt } : {}),
+      }];
+    });
+    const account = "account" in record && typeof record.account === "string" ? record.account : undefined;
+    return { limits, ...(account ? { account } : {}) };
+  }
+
+  async saveRateLimits(limits: BackendRateLimitSummary[], account?: string): Promise<void> {
+    const destination = path.join(this.root, RATE_LIMITS_FILE);
+    if (limits.length === 0) {
+      await rm(destination, { force: true });
+      return;
+    }
+    await mkdir(this.root, { recursive: true, mode: 0o700 });
+    const temporary = `${destination}.${randomUUID()}.tmp`;
+    const record: ClaudeRateLimitsRecord = { limits, ...(account ? { account } : {}) };
+    try {
+      await writeFile(temporary, JSON.stringify(record), { mode: 0o600 });
       await rename(temporary, destination);
     } finally {
       await rm(temporary, { force: true });

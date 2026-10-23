@@ -1059,13 +1059,36 @@ describe("PluginsSettings", () => {
 
       // A managed list is read once and kept, so a server that gained a tool
       // needs a way to be asked again.
-      fireEvent.click(row.getByRole("button", { name: "Refresh tools" }));
+      fireEvent.click(row.getByRole("button", { name: "Test connection" }));
       await waitFor(() => {
         expect(api.listMcpConnectionTools).toHaveBeenLastCalledWith({
           connectionId: "datadog",
           refresh: true,
         });
       });
+    });
+
+    it("tests a collapsed connection, shows progress, and retries a failure", async () => {
+      const api = managedApi([managed()], ["search"]);
+      render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
+      const article = await findRow("Datadog");
+      const row = within(article);
+      expect(await row.findByText("1 tool")).toBeInTheDocument();
+      expect(row.getByRole("button", { name: /^Datadog/ })).toHaveAttribute("aria-expanded", "false");
+      let rejectTest!: (error: Error) => void;
+      vi.mocked(api.listMcpConnectionTools!).mockImplementationOnce(async () => await new Promise((_resolve, reject) => { rejectTest = reject; }));
+      fireEvent.click(row.getByRole("button", { name: "Test connection" }));
+      expect(row.getByRole("button", { name: "Testing..." })).toBeDisabled();
+      expect(row.getByRole("status")).toHaveTextContent("Testing Datadog...");
+      expect(api.listMcpConnectionTools).toHaveBeenLastCalledWith({ connectionId: "datadog", refresh: true });
+      await act(async () => { rejectTest(new Error("datadog: initialize — upstream HTTP 504")); });
+      expect(row.getByRole("status")).toHaveTextContent(/Connection test failed after/);
+      expect(row.getByText("datadog: initialize — upstream HTTP 504")).toBeInTheDocument();
+      expect(article).toHaveAttribute("data-health", "failed");
+      fireEvent.click(row.getByRole("button", { name: "Test connection" }));
+      await waitFor(() => expect(row.getByRole("status")).toHaveTextContent(/Connection test passed · 1 tool · [0-9.]+ s/));
+      expect(article).toHaveAttribute("data-health", "ready");
+      expect(api.listMcpConnectionTools).toHaveBeenCalledTimes(3);
     });
 
     it("does not ask a connection that cannot answer", async () => {
@@ -1079,6 +1102,7 @@ describe("PluginsSettings", () => {
       expect(row.getByText("no tools — sign-in required")).toBeInTheDocument();
       expect(row.getByText("Sign-in required")).toBeInTheDocument();
       expect(api.listMcpConnectionTools).not.toHaveBeenCalled();
+      expect(row.getByRole("button", { name: "Test connection" })).toBeDisabled();
     });
 
     it("says when a listing failed, instead of claiming an empty server", async () => {

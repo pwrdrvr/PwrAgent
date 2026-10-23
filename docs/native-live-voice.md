@@ -87,6 +87,53 @@ keeps the latest snapshot in memory only and accepts it only from local main
 windows. When no window has published, the tool returns `focus_not_published`,
 and the manager asks the operator which thread they mean.
 
+`fly_star_map_to` already supports `open: "card"` and `open: "full"`, but it
+requires an open Star Map and follows the map's rule against moving keyboard
+focus. It does not provide a general focused-main-window navigation contract.
+`read_thread` and messaging attachment tools also do not select a graphical
+thread. The window navigation bridge (`window:show-thread`) is the shared
+desktop path for selecting one; `open_thread` exposes that path to agents.
+
+To open or "mount" a requested thread, the manager calls `open_thread` with
+`backend`, `threadId`, and the owning `instanceId` for a peer result. Omit
+`instanceId` for a local thread; the local instance ID is accepted too. This
+tool belongs to the same family and permission as `read_operator_focus`, but
+does not require an open Star Map. It restores and focuses the local main
+window that last published operator focus (falling back to the primary main
+window), mounts a peer thread through the existing remote-thread pin API when
+needed, and selects the thread view. It never sends a focus command to the
+peer machine's graphical interface.
+
+Existing Codex manager threads receive added tools through the negotiated
+`dynamicToolsResumeField: "dynamicTools"` catalog-refresh capability. Older
+runtimes keep the tools registered when a thread was created. On those
+runtimes, update Codex or end director voice, archive the old Voice manager,
+and start director voice again to create a manager with the current catalog.
+
+The tool reports success only when the targeted main window's published focus
+matches the requested backend, thread and owner in the thread view. Dispatch
+alone is not success. A missing or closing window returns `ui_not_available`;
+an unconfirmed selection returns `navigation_timeout` after 15 seconds. A
+timeout can mean a missing thread, an unavailable peer, or an operator who kept
+editing Settings instead of leaving. The focus acknowledgement confirms the
+selection, not that every transcript page has finished rendering. Reading a
+thread with `read_thread` never changes the graphical selection.
+
+Global search (⌘⇧F / Ctrl+Shift+F) searches active threads by default, sending
+`filters.includeArchived: false` to `searchThreads`. Archive lookup remains
+explicit through agent `search_threads`; the manager searches with
+`includeArchived: true` for past work or when an ordinary search misses it.
+Opening an archived thread leaves its archive state intact.
+Content search retains its provider availability and bounded candidate limits;
+including archives does not make unavailable provider history searchable.
+Metadata refresh batches changed entries into one SQLite transaction and skips
+unchanged entries. The checked-in budget measures one initial transaction for
+an active/archived pair and zero writes on the identical repeat search. The
+peer mount budget measures two commits (about 0.025 MB of WAL) for a new mount,
+then zero additional commits for 100 opens of that mounted row: about 2.5 MB/day
+at 100 new peer mounts/day, with no idle writes. Ordinary read-state updates
+continue to follow the selected sidebar lens's existing policy.
+
 Director voice shows in a floating panel. Drag the header to
 move the panel. Drag the corner grip, or focus the grip and use the arrow keys,
 to resize it. It opens at the top right, clear of the notice stack in the
@@ -659,3 +706,60 @@ approve or cancel
 work. Before the first decision, a Clef failure stops camera capture and shows
 a dismissible error while voice remains available. Facial-expression accuracy and the model's spoken
 adaptation still need live evaluation by the operator.
+
+
+### Camera awareness in the live conversation
+
+The Voice manager is the reasoning/tool backend for Director. GPT-Live handles
+camera observations in the live conversation; those observations are not part
+of the manager's spoken transcript. A manager answer about whether camera
+cues arrived therefore does not establish what GPT-Live received.
+
+Director now delegates requests that need backend capabilities or careful
+reasoning, and answers camera-awareness questions from its own current-session
+context. It no longer delegates every request. Camera enable/disable also
+submits a `[Camera status]` update, independently of the confidence filter:
+an enabled camera waiting for a qualified observation is different from an
+off camera. Disabling supersedes earlier observations. Enabling waits for
+status submission before capture starts; failed enable submission revokes
+camera access while leaving voice running. Opt-out aborts inference and
+revokes capture before waiting for its status response.
+
+This follows the separation of conversation and backend work in the
+[GPT-Live prompting guide](https://developers.openai.com/api/docs/guides/live-prompting).
+The desktop continues to use Codex's realtime adapter, rather than sending
+public GPT-Live events into that adapter's version-specific wire protocol.
+An appendText RPC response confirms acceptance by Codex, not verified model
+behavior. The log names that boundary explicitly.
+
+A manual live regression probe uses an ephemeral thread and synthetic silent
+WebRTC audio. It opens no camera or microphone, plays no audible output,
+executes no backend tools, and stops only the sessions/process it creates.
+It uses the selected runtime's authentication through App Server; it does not
+read Codex-owned storage. Run it outside Vitest:
+
+```sh
+pnpm --filter @pwragent/desktop exec tsx scripts/probe-live-camera-context.ts \
+  --codex /absolute/path/to/codex
+```
+
+Pass `--browser /absolute/path/to/chromium` to select an installed headless
+Chromium instead of Playwright's default. This probe makes real realtime
+requests. It asserts waiting-for-cue awareness, synthetic nod recall,
+opt-out, and absence of stale cues after restarting voice on the same thread.
+It also waits for the runtime's `session.context.appended` events. Receipt
+counting is valid here only because the probe has one append in flight and
+no backend output; production must not use that heuristic for concurrent
+appends without correlation IDs.
+
+The probe passed on managed `0.162.0-pwragent.1`: the live model reported an
+enabled camera waiting for a confident cue, identified the synthetic nod,
+reported the camera disabled with earlier observations no longer current,
+and reported no cues after restart. A separate baseline probe using the
+released prompt also recalled an injected nod, but after the simulated
+camera opt-out it still described that nod as current because the old
+implementation submitted no off status. This demonstrates that the
+transport can work; it does not reproduce or establish the cause of every
+operator-reported missed reaction. These tests exercise text context and
+spoken transcript output, not real facial accuracy, local Clef inference,
+or physical camera/microphone permissions.

@@ -170,6 +170,31 @@ function availableParentIdentity(
   return candidates.some((candidate) => candidate.source === parent.backend) ? parent : undefined;
 }
 
+/** Directory grouping can only hide a child under a parent in that directory.
+ * Use complete membership, before pin splitting or pagination, so a parent
+ * in another project cannot leave a counted child without a visible root.
+ * The row keeps its actual relationship for other lenses and group actions.
+ */
+function directoryParentResolver(
+  members: readonly NavigationThreadSummary[],
+  parentCandidates: ReadonlyMap<string, readonly NavigationThreadSummary[]>,
+): (thread: NavigationThreadSummary) => NavigationIdentity | undefined {
+  const memberKeys = new Set(members.map(threadKey));
+  return (thread) => {
+    const parent = parentIdentity(thread, parentCandidates);
+    return parent && memberKeys.has(identityKey(parent)) ? parent : undefined;
+  };
+}
+
+function directoryMemberThreads(
+  directory: NavigationDirectorySummary | undefined,
+  threadsByLegacyKey: ReadonlyMap<string, NavigationThreadSummary>,
+): NavigationThreadSummary[] {
+  return directory?.threadKeys
+    .map((key) => threadsByLegacyKey.get(key))
+    .filter((thread): thread is NavigationThreadSummary => Boolean(thread)) ?? [];
+}
+
 function isActive(thread: NavigationThreadSummary): boolean {
   return thread.threadStatus === "active" || thread.hasActiveSubAgent === true;
 }
@@ -382,10 +407,9 @@ function buildDirectoryRows(params: {
   parentCandidates: ReadonlyMap<string, readonly NavigationThreadSummary[]>;
 }): NavigationDirectoryRow[] {
   return params.snapshot.directories.map((directory) => {
-    const memberThreads = directory.threadKeys
-      .map((key) => params.threadsByLegacyKey.get(key))
-      .filter((thread): thread is NavigationThreadSummary => Boolean(thread));
-    const rootThreads = memberThreads.filter((thread) => !availableParentIdentity(thread, params.parentCandidates, params.snapshot.coverage));
+    const memberThreads = directoryMemberThreads(directory, params.threadsByLegacyKey);
+    const parentOf = directoryParentResolver(memberThreads, params.parentCandidates);
+    const rootThreads = memberThreads.filter((thread) => !parentOf(thread));
     const pinnedRootCount = rootThreads.filter((thread) => thread.pinnedRank).length;
     const gitStatus = projectDirectoryGitStatus(directory);
     return {
@@ -676,11 +700,11 @@ function selectQueryThreads(params: {
     );
     if (!directory) return [];
     const disclosedParents = new Set(query.disclosedParentThreadKeys ?? []);
-    return directory.threadKeys
-      .map((key) => params.threadsByLegacyKey.get(key))
-      .filter((thread): thread is NavigationThreadSummary => Boolean(thread))
+    const members = directoryMemberThreads(directory, params.threadsByLegacyKey);
+    const parentOf = directoryParentResolver(members, params.parentCandidates);
+    return members
       .filter((thread) => {
-        const parent = availableParentIdentity(thread, params.parentCandidates, params.index.coverage);
+        const parent = parentOf(thread);
         if (parent) return disclosedParents.has(buildThreadIdentityKey(parent.backend, parent.threadId));
         return query.roots === "pinned" ? thread.pinnedRank !== undefined
           : query.roots === "unpinned" ? thread.pinnedRank === undefined : true;
@@ -833,7 +857,7 @@ export function explainMissingNavigationAnchor(params: {
   if (!directory) return "directory-not-indexed";
   const threadsByLegacyKey = buildThreadsByLegacyKey(params.index);
   if (!directory.threadKeys.some((key) => threadsByLegacyKey.get(key) === thread)) return "other-directory";
-  const parent = availableParentIdentity(thread, buildParentCandidates(params.index), params.index.coverage);
+  const parent = directoryParentResolver(directoryMemberThreads(directory, threadsByLegacyKey), buildParentCandidates(params.index))(thread);
   if (parent) {
     return query.disclosedParentThreadKeys?.includes(buildThreadIdentityKey(parent.backend, parent.threadId))
       ? "ref-mismatch" : "child";
@@ -922,11 +946,16 @@ export function projectNavigationQuery(params: {
   // can regroup them. Preserve the actual relationship in row metadata for actions.
   const attentionMemberKeys = query.kind === "lens" && query.lens === "attention"
     ? new Set(selectedThreads.map(threadKey)) : undefined;
+  const directoryMembers = query.kind === "directory"
+    ? directoryMemberThreads(params.index.directories.find((directory) => directory.key === query.directoryKey), threadsByLegacyKey)
+    : undefined;
+  const directoryParentOf = directoryMembers ? directoryParentResolver(directoryMembers, parentCandidates) : undefined;
   const entries = selectedThreads.map((thread, index): NavigationQueryEntry => {
     const parent = parentIdentity(thread, parentCandidates);
     const placementParent = attentionMemberKeys && parent && !attentionMemberKeys.has(identityKey(parent))
       ? undefined
-      : query.kind === "directory" || (query.kind === "exact" && query.includeAncestry)
+      : directoryParentOf ? directoryParentOf(thread)
+      : query.kind === "exact" && query.includeAncestry
       ? availableParentIdentity(thread, parentCandidates, params.index.coverage) : parent;
     return {
       row: projectNavigationRow({
@@ -949,12 +978,7 @@ export function projectNavigationQuery(params: {
   const includeDirectories = query.kind === "directory-index"
     || query.kind === "star-map-geometry";
   const countsThreads = query.kind === "directory"
-    ? params.index.directories
-        .find((directory) => directory.key === query.directoryKey)
-        ?.threadKeys
-        .map((key) => threadsByLegacyKey.get(key))
-        .filter((thread): thread is NavigationThreadSummary => Boolean(thread))
-      ?? []
+    ? directoryMembers ?? []
     : query.kind === "star-map"
       ? (query.projectKey === undefined ? params.index.threads.filter(isStarMapOwnerThread) : selectedThreads)
       : query.kind === "exact"

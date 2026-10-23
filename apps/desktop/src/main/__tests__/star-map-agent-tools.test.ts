@@ -710,6 +710,28 @@ describe("highlight_star_map_threads and set_star_map_view", () => {
   });
 });
 
+describe("open_thread", () => {
+  it("is discoverable, mutates the UI, validates its target and delegates without a Star Map", async () => {
+    const openThread = vi.fn(async () => ({ ok: true as const, data: { focus: { view: "thread" as const } } }));
+    const definition = buildPwrAgentStarMapToolDefinitions(createStarMapAgentToolsHandler({ openThread }))
+      .find((tool) => tool.name === "open_thread")!;
+    expect(definition.annotations?.readOnlyHint).toBe(false);
+    const context = {} as AgentToolCallContext;
+    for (const args of [{}, { backend: "unknown", threadId: "t" }, { backend: "codex", threadId: " " },
+      { backend: "codex", threadId: "t", instanceId: 1 }, { backend: "codex", threadId: "t", extra: true }]) {
+      expect((await definition.dispatch(args, context)).ok).toBe(false);
+    }
+    expect(openThread).not.toHaveBeenCalled();
+    expect((await definition.dispatch({ backend: "codex", threadId: "t", instanceId: "peer" }, context)).ok).toBe(true);
+    expect(openThread).toHaveBeenCalledWith({ backend: "codex", threadId: "t", instanceId: "peer" });
+  });
+
+  it("does not pretend that a missing graphical handler opened a thread", async () => {
+    expect(await createStarMapAgentToolsHandler()({ operation: "open_thread", context: {}, args: { backend: "codex", threadId: "t" } }))
+      .toMatchObject({ ok: false, error: { code: "ui_not_available" } });
+  });
+});
+
 describe("read_operator_focus", () => {
   const focus = {
     view: "thread" as const,

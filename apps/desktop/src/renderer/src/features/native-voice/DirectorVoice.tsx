@@ -237,7 +237,7 @@ export function operatorFocusFor(params: {
  * Tell main what the operator is looking at, for `read_operator_focus`.
  * Republishes on window focus so the answer follows the window in use.
  */
-export function useOperatorFocusPublisher(api: NativeVoiceApi | undefined, focus: OperatorFocusSnapshot): void {
+export function useOperatorFocusPublisher(api: NativeVoiceApi | undefined, focus: OperatorFocusSnapshot, revision = 0): void {
   const key = JSON.stringify(focus);
   const latest = useRef(focus);
   latest.current = focus;
@@ -246,7 +246,7 @@ export function useOperatorFocusPublisher(api: NativeVoiceApi | undefined, focus
     if (!publish) return;
     const timer = window.setTimeout(() => { void publish(latest.current).catch(() => undefined); }, 150);
     return () => window.clearTimeout(timer);
-  }, [api, key]);
+  }, [api, key, revision]);
   useEffect(() => {
     const publish = api?.publishOperatorFocus;
     if (!publish) return;

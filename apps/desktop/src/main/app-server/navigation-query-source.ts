@@ -148,11 +148,18 @@ async function buildLocalNavigationQueryIndex(params: {
       gitStatus: directoryStatusCache[directory.key]?.gitStatus,
     }),
   );
-  const providerRefresh = registry.getStartupProviderRefreshStatus?.();
+  // Startup refresh status says only whether live listings have begun: it
+  // records one attempt, and a Claude or ACP discovery failure in it says
+  // nothing about rows PwrAgent stores itself. Completeness belongs to the
+  // listing this index was built from, so a recovered Codex completes the
+  // next index and a later Codex failure cannot pass as complete.
+  const coverage: NavigationQueryIndex["coverage"] =
+    registry.getStartupProviderRefreshStatus?.()?.state === "checking"
+      ? { state: "checking" }
+      : registry.isIncompleteThreadList?.(listedThreads)
+        ? { state: "degraded", failedProviders: 1 }
+        : { state: "complete" };
   return { directories, threads: registry.withNavigationSubAgentActivity(threads), inputRequestThreadKeys: registry.getNavigationInputRequestThreadKeys(),
-    coverage: providerRefresh ? {
-      state: providerRefresh.state === "ready" ? "complete" : providerRefresh.state,
-      ...(providerRefresh.failedProviders ? { failedProviders: providerRefresh.failedProviders } : {}),
-    } : { state: "complete" },
+    coverage,
   };
 }

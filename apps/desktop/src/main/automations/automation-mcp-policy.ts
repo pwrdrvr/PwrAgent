@@ -29,7 +29,7 @@ export function buildAutomationMcpPolicy(params: {
   const identities = (server: AutomationMcpServer) => [server.name, ...(server.aliases ?? [])];
   const unknown = [...allowed].filter((name) => !params.servers.some((server) => identities(server).includes(name)));
   if (unknown.length) {
-    throw new Error(`Automation MCP servers are not configured for the Agent: ${unknown.join(", ")}. Check the Agent's MCP settings.`);
+    throw new Error(`Automation MCP servers are not configured for the Agent: ${unknown.join(", ")}. Check the Agent's MCP settings, or turn on Offer to threads for a gateway connection in Settings → Plugins → MCP Gateway.`);
   }
   const ambiguous = [...allowed].filter((name) => params.servers.filter((server) => identities(server).includes(name)).length > 1);
   if (ambiguous.length) {

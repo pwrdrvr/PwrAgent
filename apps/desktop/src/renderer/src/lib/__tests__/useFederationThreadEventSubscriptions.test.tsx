@@ -49,6 +49,19 @@ const fullCapabilities: FederationCapability[] = [
 ];
 
 describe("useFederationThreadEventSubscriptions", () => {
+  it("subscribes a thread-detail viewer without pending-request-control access to transcript changes", () => {
+    const selected = remoteThread({
+      capabilities: ["event_subscriptions", "thread_detail", "operator_questions"],
+      id: "selected",
+      instanceId: "owner_one",
+    });
+    expect(buildFederationThreadEventSubscriptions({ selectedThread: selected, threads: [selected] })).toEqual([{
+      sourceInstanceId: "owner_one",
+      eventClasses: ["transcript"],
+      threadSelection: { kind: "threads", threads: [{ backend: "codex", threadId: "selected" }] },
+    }]);
+  });
+
   it("does not subscribe other pins on the selected owner to detail payloads", () => {
     const selected = remoteThread({ capabilities: fullCapabilities, id: "A", instanceId: "owner_one" });
     const background = remoteThread({ capabilities: fullCapabilities, id: "B", instanceId: "owner_one" });

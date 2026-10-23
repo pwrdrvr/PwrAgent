@@ -3,22 +3,27 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Options, Query, SDKMessage, query } from "@anthropic-ai/claude-agent-sdk";
-import type { AgentEvent } from "@pwragent/shared";
+import type { AgentEvent, BackendModelOption } from "@pwragent/shared";
 import { ClaudeBackend } from "../claude/claude-backend";
 import { ClaudeSessionStore } from "../claude/claude-session-store";
 import { createClaudePermissionHandler, claudePermissionMode } from "../claude/claude-permissions";
 import { buildLiveToolDetails, getNotificationItem } from "../../renderer/src/features/thread-detail/live-transcript-activity";
+import { completedThreadReview, reportedThreadReviewOutcomes } from "../thread-reviews/thread-review-events";
 
 const roots: string[] = [];
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-async function fixture(messages?: (options: Options) => AsyncGenerator<SDKMessage>, controls: Partial<Query> = {}) {
+async function fixture(messages?: (options: Options) => AsyncGenerator<SDKMessage>, controls: Partial<Query> & {
+  generateSessionTitle?: (description: string, options?: { persist?: boolean }) => Promise<string | null>;
+} = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-"));
   roots.push(root);
   const store = new ClaudeSessionStore(root);
   const events: AgentEvent[] = [];
+  const turnCompletions = new Map<string, ReturnType<typeof Promise.withResolvers<void>>>();
+  let latestTurnId: string | undefined;
   const queries: Options[] = [];
   const close = vi.fn();
   const run = vi.fn((args: Parameters<typeof query>[0]) => {
@@ -44,22 +49,235 @@ async function fixture(messages?: (options: Options) => AsyncGenerator<SDKMessag
   const backendOptions = {
     store,
     query: run,
+    getSessionInfo: vi.fn().mockResolvedValue(undefined),
+    discoverModels: vi.fn().mockResolvedValue([]),
     inspectInstallation: vi.fn(async (_options?: Parameters<typeof import("../claude/claude-executable").inspectClaudeInstallation>[0]) => ({
       executable: "/fixture/claude", authStatus: "signed-in" as const,
     })),
-    emit: async (event: AgentEvent) => { events.push(event); },
+    emit: async (event: AgentEvent) => {
+      events.push(event);
+      const method = event.notification.method;
+      if (method === "turn/started") {
+        const { turn } = event.notification.params as { turn: { id: string } };
+        latestTurnId = turn.id;
+        turnCompletions.set(turn.id, Promise.withResolvers<void>());
+      } else if (["turn/completed", "turn/failed", "turn/cancelled"].includes(method)) {
+        const { turn } = event.notification.params as { turn: { id: string } };
+        turnCompletions.get(turn.id)?.resolve();
+      }
+    },
     request: async () => ({ decision: "accept" }),
     cancelRequest: async () => {},
-    resolveEnv: async () => ({ PATH: "/fixture", ANTHROPIC_API_KEY: "must-not-reach-child", CLAUDE_CODE_OAUTH_TOKEN: "must-not-reach-child" }),
+    resolveEnv: async (): Promise<NodeJS.ProcessEnv> => ({ PATH: "/fixture", ANTHROPIC_API_KEY: "must-not-reach-child", CLAUDE_CODE_OAUTH_TOKEN: "must-not-reach-child" }),
   };
   const backend = new ClaudeBackend(backendOptions);
   async function waitForTurn() {
-    await vi.waitFor(() => expect(events.some((event) => ["turn/completed", "turn/failed", "turn/cancelled"].includes(event.notification.method))).toBe(true));
+    // Join the current turn's persisted terminal event. The test timeout
+    // bounds a stuck turn; a separate polling deadline races filesystem I/O
+    // on Windows and an older terminal event can release a later turn early.
+    const completion = latestTurnId && turnCompletions.get(latestTurnId);
+    if (!completion) throw new Error("No Claude turn has started in this fixture.");
+    await completion.promise;
   }
   return { backend, backendOptions, store, events, queries, run, close, waitForTurn, root };
 }
 
 describe("Claude SDK backend", () => {
+  it("consumes a stored provider title without another title request", async () => {
+    const generateSessionTitle = vi.fn().mockResolvedValue("Redundant title");
+    const f = await fixture(undefined, { generateSessionTitle });
+    f.backendOptions.getSessionInfo.mockResolvedValue({ customTitle: "Provider title", summary: "Raw prompt" });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Investigate title behavior" }] });
+    await f.waitForTurn();
+    expect((await f.store.read(threadId)).thread).toMatchObject({ title: "Provider title", titleSource: "derived" });
+    expect(f.backendOptions.getSessionInfo).toHaveBeenCalledWith("5a85c1ad-85c1-4930-ae19-50f721ad13dd", { dir: f.root });
+    expect(generateSessionTitle).not.toHaveBeenCalled();
+  });
+
+  it("requests one native title across resumed turns and includes its usage", async () => {
+    const generateSessionTitle = vi.fn().mockResolvedValue("  Fix\nClaude naming  ");
+    const totals = { haiku: { inputTokens: 25, outputTokens: 5, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+      costUSD: 0.002, contextWindow: 200_000, maxOutputTokens: 32_000, webSearchRequests: 0 } };
+    const f = await fixture(undefined, { generateSessionTitle,
+      usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: vi.fn().mockResolvedValue({ session: { model_usage: totals } }),
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Investigate title behavior" }] });
+    await f.waitForTurn();
+    expect((await f.store.read(threadId)).thread).toMatchObject({ title: "Fix Claude naming", titleSource: "derived" });
+    expect(generateSessionTitle).toHaveBeenCalledWith("Investigate title behavior", { persist: true });
+    expect(f.events.find((event) => event.notification.method === "thread/tokenUsage/updated")?.notification)
+      .toMatchObject({ params: { tokenUsage: { claudeCostUSD: 0.002 } } });
+    f.events.length = 0;
+    const resumed = new ClaudeBackend(f.backendOptions);
+    await resumed.startTurn({ threadId, input: [{ type: "text", text: "Follow up" }] });
+    await f.waitForTurn();
+    expect(generateSessionTitle).toHaveBeenCalledTimes(1);
+    expect(f.run).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves an operator name and supplies it to a new native session", async () => {
+    const generateSessionTitle = vi.fn().mockResolvedValue("Unwanted title");
+    const f = await fixture(undefined, { generateSessionTitle });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.renameThread(threadId, "Operator name");
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Investigate title behavior" }] });
+    await f.waitForTurn();
+    expect(f.queries[0].title).toBe("Operator name");
+    expect((await f.store.read(threadId)).thread.title).toBe("Operator name");
+    expect(generateSessionTitle).not.toHaveBeenCalled();
+    expect(f.backendOptions.getSessionInfo).not.toHaveBeenCalled();
+  });
+
+  it("preserves an operator rename while a native title request is pending", async () => {
+    const pending = Promise.withResolvers<string>();
+    const generateSessionTitle = vi.fn(() => pending.promise);
+    const f = await fixture(undefined, { generateSessionTitle });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Investigate title behavior" }] });
+    await vi.waitFor(() => expect(generateSessionTitle).toHaveBeenCalledOnce());
+    await f.backend.renameThread(threadId, "Operator wins");
+    pending.resolve("Generated title");
+    await f.waitForTurn();
+    expect((await f.store.read(threadId)).thread).toMatchObject({ title: "Operator wins", titleSource: "explicit" });
+  });
+
+  it("keeps a local fallback after a failed native title request without retrying", async () => {
+    const generateSessionTitle = vi.fn().mockRejectedValue(new Error("usage limit"));
+    const f = await fixture(undefined, { generateSessionTitle });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    for (let turn = 0; turn < 2; turn += 1) {
+      f.events.length = 0;
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Investigate title behavior" }] });
+      await f.waitForTurn();
+      expect(f.events.some((event) => event.notification.method === "turn/completed")).toBe(true);
+    }
+    expect((await f.store.read(threadId)).thread.title).toBe("Investigate title behavior");
+    expect(generateSessionTitle).toHaveBeenCalledOnce();
+  });
+
+  it.each(["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "CLAUDE_CODE_DISABLE_TERMINAL_TITLE"].flatMap((key) =>
+    ["1", "true", "yes", "on", " true ", " ON "].map((value) => ({ key, value }))))(
+    "respects $key=$value without making a native title request", async ({ key, value }) => {
+      const generateSessionTitle = vi.fn().mockResolvedValue("Unwanted title");
+      const f = await fixture(undefined, { generateSessionTitle });
+      f.backendOptions.resolveEnv = async () => ({ PATH: "/fixture", [key]: value });
+      const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Investigate title behavior" }] });
+      await f.waitForTurn();
+      expect(generateSessionTitle).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps the prompt fallback when the SDK has no native title control", async () => {
+    const f = await fixture();
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Investigate title behavior" }] });
+    await f.waitForTurn();
+    expect((await f.store.read(threadId)).thread.title).toBe("Investigate title behavior");
+    expect(f.run).toHaveBeenCalledOnce();
+  });
+
+  it("does not request a speculative title when provider metadata cannot be read", async () => {
+    const generateSessionTitle = vi.fn().mockResolvedValue("Unwanted title");
+    const f = await fixture(undefined, { generateSessionTitle });
+    f.backendOptions.getSessionInfo.mockRejectedValue(new Error("unreadable session"));
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Investigate title behavior" }] });
+    await f.waitForTurn();
+    expect(generateSessionTitle).not.toHaveBeenCalled();
+    expect(f.events.some((event) => event.notification.method === "turn/completed")).toBe(true);
+  });
+
+  it("drains a pending SDK metadata read before shutdown releases the workspace", async () => {
+    const pending = Promise.withResolvers<undefined>();
+    const f = await fixture();
+    f.backendOptions.getSessionInfo.mockReturnValue(pending.promise);
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    // Keep real filesystem scheduling out of this control-operation race.
+    let session = await f.store.read(threadId);
+    vi.spyOn(f.store, "read").mockImplementation(async () => structuredClone(session));
+    vi.spyOn(f.store, "save").mockImplementation(async (value) => { session = structuredClone(value); });
+    vi.spyOn(f.store, "append").mockResolvedValue(undefined);
+    vi.useFakeTimers();
+    let closing: Promise<void> | undefined;
+    try {
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Investigate title behavior" }] });
+      await vi.waitFor(() => expect(f.backendOptions.getSessionInfo).toHaveBeenCalledOnce());
+      let closed = false;
+      closing = f.backend.close().then(() => { closed = true; });
+      await vi.advanceTimersByTimeAsync(1600);
+      expect(closed).toBe(false);
+      expect(f.events.some((event) => ["turn/completed", "turn/cancelled"].includes(event.notification.method))).toBe(false);
+      pending.resolve(undefined);
+      await closing;
+      expect(closed).toBe(true);
+    } finally {
+      pending.resolve(undefined);
+      await closing;
+      vi.useRealTimers();
+    }
+  });
+
+  it("consumes a provider title arriving after a failed request without spending again", async () => {
+    const generateSessionTitle = vi.fn().mockRejectedValue(new Error("temporary failure"));
+    const f = await fixture(undefined, { generateSessionTitle });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Investigate title behavior" }] });
+    await f.waitForTurn();
+    f.backendOptions.getSessionInfo.mockResolvedValue({ customTitle: "Late provider title" });
+    f.events.length = 0;
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Follow up" }] });
+    await f.waitForTurn();
+    expect((await f.store.read(threadId)).thread.title).toBe("Late provider title");
+    expect(generateSessionTitle).toHaveBeenCalledOnce();
+  });
+
+  it("does not request a native title after a failed turn", async () => {
+    const generateSessionTitle = vi.fn().mockResolvedValue("Unwanted title");
+    const f = await fixture(async function* () {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      yield { type: "result", subtype: "error_during_execution", is_error: true, errors: ["usage limit"] } as SDKMessage;
+    }, { generateSessionTitle });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Investigate title behavior" }] });
+    await f.waitForTurn();
+    expect(generateSessionTitle).not.toHaveBeenCalled();
+    expect(f.events.some((event) => event.notification.method === "turn/failed")).toBe(true);
+  });
+
+  it("waits for the current turn when an earlier turn already completed", async () => {
+    const enteredSecondTurn = Promise.withResolvers<void>();
+    const finishSecondTurn = Promise.withResolvers<void>();
+    let turns = 0;
+    const f = await fixture(async function* () {
+      if (++turns === 2) {
+        enteredSecondTurn.resolve();
+        await finishSecondTurn.promise;
+      }
+      yield { type: "result", subtype: "success", is_error: false, result: "Done" } as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "First" }] });
+    await f.waitForTurn();
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Second" }] });
+    await enteredSecondTurn.promise;
+    let completed = false;
+    const waiting = f.waitForTurn().then(() => { completed = true; });
+    try {
+      // Flush promise callbacks while the second SDK result is held. A
+      // terminal event from the first turn cannot satisfy this wait.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(completed).toBe(false);
+    } finally {
+      finishSecondTurn.resolve();
+      await waiting;
+      await f.backend.close();
+    }
+    expect(completed).toBe(true);
+  });
+
   it.each([false, true])("preserves all completed text blocks without duplicating deltas (streaming=%s)", async (streaming) => {
     const f = await fixture(async function* () {
       yield { type: "stream_event", parent_tool_use_id: null, event: {
@@ -101,6 +319,186 @@ describe("Claude SDK backend", () => {
         item: expect.objectContaining({ type: "agentMessage", text: "Weekly usage: 25%" }),
       }),
     } }));
+  });
+
+  describe("code-review findings", () => {
+    const findings = [
+      { file: "src/state.ts", line: 12, summary: "Stamps every row.", short_summary: "Stamps every row",
+        failure_scenario: "Empty rows show up as Directories rows.", category: "correctness" },
+      { file: "src/migrate.ts", line: 40, summary: "Unguarded parse.", failure_scenario: "A corrupt row fails startup." },
+    ];
+    const report = (id: string, input: unknown): SDKMessage[] => [
+      { type: "assistant", parent_tool_use_id: null, message: {
+        id: `message-${id}`, model: "claude-opus-5-5", content: [{ type: "tool_use", id, name: "ReportFindings", input }],
+      } } as SDKMessage,
+      { type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, content: "2 findings reported." }] } } as SDKMessage,
+      { type: "result", subtype: "success", is_error: false, result: "" } as SDKMessage,
+    ];
+    const turns = (...scripts: SDKMessage[][]) => {
+      let turn = 0;
+      return async function* () { yield* scripts[turn++] ?? []; };
+    };
+    const reviewItems = (events: AgentEvent[]) => events.flatMap((event) => {
+      if (event.notification.method !== "item/completed") return [];
+      const item = getNotificationItem(event.notification.params) as Record<string, unknown> | undefined;
+      return item?.type === "exitedReviewMode" ? [item] : [];
+    });
+
+    it("turns a ReportFindings call into a review card instead of a tool row", async () => {
+      const f = await fixture(turns(report("review-1", { level: "high", findings })));
+      const context = { workspacePath: f.root, gitBranch: "feature" };
+      const resolveReviewContext = vi.fn().mockResolvedValue(context);
+      const backend = new ClaudeBackend({ ...f.backendOptions, resolveReviewContext });
+      const { threadId } = await backend.startThread({ cwd: f.root, executionMode: "default" });
+      await backend.startTurn({ threadId, input: [{ type: "text", text: "/code-review high" }] });
+      await f.waitForTurn();
+
+      expect(resolveReviewContext).toHaveBeenCalledWith({ threadId, cwd: f.root });
+      const [item] = reviewItems(f.events);
+      expect(item).toEqual(expect.objectContaining({ id: "review-1", type: "exitedReviewMode" }));
+      const data = item.data as { reviewOutput: { findings: Array<{ title: string; code_location: unknown }> }; reviewer: unknown; context: unknown };
+      expect(data.reviewer).toEqual({ backend: "claude", model: "claude-opus-5-5", reasoningEffort: "high" });
+      expect(data.context).toEqual(context);
+      expect(data.reviewOutput.findings.map((finding) => finding.title)).toEqual(["Stamps every row", "Unguarded parse."]);
+      expect(data.reviewOutput.findings[0].code_location).toEqual({
+        absolute_file_path: path.join(f.root, "src/state.ts"), line_range: { start: 12, end: 12 },
+      });
+      // The live event is what review tracking imports into To-dos.
+      const event = f.events.find((candidate) => getNotificationItem(
+        (candidate.notification as { params: Record<string, unknown> }).params)?.id === "review-1")!;
+      expect(completedThreadReview(event)).toEqual(expect.objectContaining({
+        identity: { backend: "claude", threadId },
+        entry: expect.objectContaining({ id: "review-1", output: data.reviewOutput }),
+      }));
+      // No generic tool row: neither a started item nor a stored activity.
+      expect(f.events.some((candidate) => candidate.notification.method === "item/started"
+        && getNotificationItem(candidate.notification.params)?.id === "review-1")).toBe(false);
+      const entries = (await new ClaudeBackend(f.backendOptions).readThread(threadId)).entries;
+      expect(entries.filter((entry) => entry.id === "review-1")).toEqual([expect.objectContaining({
+        type: "review", output: data.reviewOutput, context,
+        reviewer: { backend: "claude", model: "claude-opus-5-5", reasoningEffort: "high" },
+        turn: expect.objectContaining({ status: "completed" }),
+      })]);
+      await backend.close();
+    });
+
+    it("records a re-report's outcomes against the review it repeats", async () => {
+      const f = await fixture(turns(
+        report("review-1", { level: "high", findings }),
+        report("review-2", { level: "high", findings: [
+          { ...findings[1], outcome: "skipped" },
+          { ...findings[0], outcome: "fixed" },
+        ] }),
+      ));
+      const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "/code-review high" }] });
+      await f.waitForTurn();
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Fix the first one." }] });
+      await f.waitForTurn();
+
+      expect(reviewItems(f.events).map((item) => item.id)).toEqual(["review-1"]);
+      const reported = f.events.filter((event) => event.notification.method === "thread/review/outcomesReported");
+      expect(reported).toHaveLength(1);
+      expect(reported[0].notification.params).toEqual(expect.objectContaining({
+        threadId, reviewId: "review-1",
+        outcomes: [{ index: 0, outcome: "fixed" }, { index: 1, outcome: "skipped" }],
+      }));
+      expect(reportedThreadReviewOutcomes(reported[0])).toEqual({
+        identity: { backend: "claude", threadId }, sourceKey: "review-1",
+        outcomes: [{ index: 0, outcome: "fixed" }, { index: 1, outcome: "skipped" }],
+      });
+      const entries = (await f.backend.readThread(threadId)).entries;
+      expect(entries.filter((entry) => entry.type === "review").map((entry) => entry.id)).toEqual(["review-1"]);
+      expect(entries.some((entry) => entry.id === "review-2")).toBe(false);
+      await f.backend.close();
+    });
+
+    it("records an outcome report that repeats no earlier review as a new review", async () => {
+      const f = await fixture(turns(report("review-1", { findings: [{ ...findings[0], outcome: "fixed" }, findings[1]] })));
+      const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "/code-review --fix" }] });
+      await f.waitForTurn();
+
+      expect(reviewItems(f.events).map((item) => item.id)).toEqual(["review-1"]);
+      const reported = f.events.find((event) => event.notification.method === "thread/review/outcomesReported");
+      expect(reported?.notification.params).toEqual(expect.objectContaining({
+        reviewId: "review-1", outcomes: [{ index: 0, outcome: "fixed" }],
+      }));
+      // The card comes first, so tracking has a review to apply them to.
+      expect(f.events.indexOf(reported!)).toBeGreaterThan(f.events.findIndex((event) =>
+        getNotificationItem((event.notification as { params: Record<string, unknown> }).params)?.id === "review-1"));
+      await f.backend.close();
+    });
+
+    it("still shows the review when its context cannot be resolved", async () => {
+      const f = await fixture(turns(report("review-1", { findings })));
+      const backend = new ClaudeBackend({ ...f.backendOptions, resolveReviewContext: vi.fn().mockRejectedValue(new Error("git failed")) });
+      const { threadId } = await backend.startThread({ cwd: f.root, executionMode: "default" });
+      await backend.startTurn({ threadId, input: [{ type: "text", text: "/code-review" }] });
+      await f.waitForTurn();
+      const [item] = reviewItems(f.events);
+      expect(item.data).not.toHaveProperty("context");
+      expect((await backend.readThread(threadId)).entries.find((entry) => entry.id === "review-1"))
+        .toEqual(expect.objectContaining({ type: "review", reviewer: { backend: "claude", model: "claude-opus-5-5" } }));
+      await backend.close();
+    });
+
+    it("records no review for a call the CLI rejected, so its retry is the only card", async () => {
+      const rejected: SDKMessage[] = [
+        { type: "assistant", parent_tool_use_id: null, message: {
+          id: "message-rejected", model: "claude-opus-5-5",
+          content: [{ type: "tool_use", id: "review-0", name: "ReportFindings", input: { findings } }],
+        } } as SDKMessage,
+        { type: "user", message: { content: [{
+          type: "tool_result", tool_use_id: "review-0", is_error: true, content: "InputValidationError",
+        }] } } as SDKMessage,
+      ];
+      const f = await fixture(turns([...rejected, ...report("review-1", { findings })]));
+      const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "/code-review" }] });
+      await f.waitForTurn();
+
+      expect(reviewItems(f.events).map((item) => item.id)).toEqual(["review-1"]);
+      const entries = (await f.backend.readThread(threadId)).entries;
+      expect(entries.filter((entry) => entry.type === "review").map((entry) => entry.id)).toEqual(["review-1"]);
+      expect(entries).toContainEqual(expect.objectContaining({
+        id: "review-0", type: "activity", summary: "ReportFindings", status: "failed",
+      }));
+      await f.backend.close();
+    });
+
+    it("does not pair a later turn's same-length outcome report with an unrelated review by position", async () => {
+      const unrelated = [
+        { file: "src/other.ts", line: 3, summary: "Other.", failure_scenario: "x", outcome: "fixed" },
+        { file: "src/third.ts", line: 9, summary: "Third.", failure_scenario: "y" },
+      ];
+      const f = await fixture(turns(
+        report("review-1", { findings }),
+        report("review-2", { findings: unrelated }),
+      ));
+      const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "/code-review" }] });
+      await f.waitForTurn();
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "/code-review --fix" }] });
+      await f.waitForTurn();
+
+      expect(reviewItems(f.events).map((item) => item.id)).toEqual(["review-1", "review-2"]);
+      const reported = f.events.filter((event) => event.notification.method === "thread/review/outcomesReported");
+      expect(reported.map((event) => (event.notification.params as { reviewId: string }).reviewId)).toEqual(["review-2"]);
+      await f.backend.close();
+    });
+
+    it("keeps a malformed ReportFindings call as an ordinary tool row", async () => {
+      const f = await fixture(turns(report("review-1", { level: "high" })));
+      const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "/code-review" }] });
+      await f.waitForTurn();
+      expect(reviewItems(f.events)).toEqual([]);
+      expect((await f.backend.readThread(threadId)).entries).toContainEqual(expect.objectContaining({
+        id: "review-1", type: "activity", summary: "ReportFindings",
+      }));
+      await f.backend.close();
+    });
   });
 
   it.each([["gif", "image/gif"], ["GIF", "image/gif"], ["jpeg", "image/jpeg"], ["webp", "image/webp"]])(
@@ -188,7 +586,7 @@ describe("Claude SDK backend", () => {
     let holdEnv = false;
     const backend = new ClaudeBackend({ ...f.backendOptions,
       emit: async (event: AgentEvent) => {
-        f.events.push(event);
+        await f.backendOptions.emit(event);
         if (event.notification.method === "turn/started") holdEnv = true;
       },
       resolveEnv: async () => {
@@ -287,6 +685,142 @@ describe("Claude SDK backend", () => {
     ]));
   });
 
+  it("keeps the full limit snapshot across turns, coarse stream events, and a restart", async () => {
+    const resetsAt = Date.now() + 86_400_000;
+    const snapshot = { rate_limits_available: true, rate_limits: {
+      seven_day: { utilization: 56, resets_at: new Date(resetsAt).toISOString() },
+      iguana_necktie: { utilization: 30, resets_at: new Date(resetsAt).toISOString() },
+      model_scoped: [{ display_name: "Fable", utilization: 96, resets_at: new Date(resetsAt).toISOString() }],
+    }, session: { model_usage: {} } };
+    // The first turn reads the snapshot; every later probe times out or fails.
+    const usage = vi.fn().mockResolvedValueOnce(snapshot).mockResolvedValueOnce(snapshot)
+      .mockRejectedValue(new Error("Probe unavailable"));
+    const f = await fixture(async function* () {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      yield { type: "rate_limit_event", rate_limit_info: { status: "allowed", rateLimitType: "seven_day",
+        utilization: 0.55, resetsAt: Math.round(resetsAt / 1000) + 3600 } } as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: false } as SDKMessage;
+    }, { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: usage });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    for (let turn = 0; turn < 3; turn += 1) {
+      f.events.length = 0;
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Hi" }] });
+      await f.waitForTurn();
+    }
+    const expected = [
+      expect.objectContaining({ limitId: "seven_day", usedPercent: 56, resetAt: resetsAt }),
+      expect.objectContaining({ limitId: "iguana_necktie", usedPercent: 30 }),
+      expect.objectContaining({ limitId: "model_scoped:Fable", usedPercent: 96 }),
+    ];
+    expect(f.backend.summary().rateLimits).toEqual(expected);
+
+    const restarted = new ClaudeBackend(f.backendOptions);
+    expect(restarted.summary().rateLimits).toBeUndefined();
+    await vi.waitFor(async () => expect((await f.store.readRateLimits()).limits).toHaveLength(3));
+    await restarted.discover({ models: false });
+    expect(restarted.summary().rateLimits).toEqual(expected);
+  });
+
+  it("clears remembered limits when Claude is signed out", async () => {
+    const f = await fixture();
+    await f.store.saveRateLimits([{ name: "Weekly limit", limitId: "seven_day", usedPercent: 40 }]);
+    f.backendOptions.inspectInstallation.mockResolvedValueOnce({ executable: "/fixture/claude", authStatus: "sign-in-required" } as never);
+    await f.backend.discover({ models: false });
+    expect(f.backend.summary().rateLimits).toEqual([]);
+    await vi.waitFor(async () => expect(await f.store.readRateLimits()).toEqual({ limits: [] }));
+  });
+
+  it("hides remembered limits while Claude is unavailable, without forgetting them", async () => {
+    const f = await fixture();
+    const saved = [{ name: "Weekly limit", limitId: "seven_day", usedPercent: 40 }];
+    await f.store.saveRateLimits(saved);
+    f.backendOptions.inspectInstallation.mockResolvedValueOnce({ authStatus: "unknown" } as never);
+    await f.backend.discover({ models: false });
+    expect(f.backend.summary()).toMatchObject({ available: false, rateLimits: [] });
+    await f.backend.discover({ models: false });
+    expect(f.backend.summary()).toMatchObject({ available: true, rateLimits: saved });
+    expect((await f.store.readRateLimits()).limits).toEqual(saved);
+  });
+
+  it("clears limits when Claude signs in to another account mid-session", async () => {
+    const resetsAt = Date.now() + 86_400_000;
+    const snapshot = { rate_limits_available: true, rate_limits: {
+      seven_day: { utilization: 56, resets_at: new Date(resetsAt).toISOString() },
+    }, session: { model_usage: {} } };
+    // The new account's probe answers with no windows, which alone keeps a reading.
+    const usage = vi.fn().mockResolvedValueOnce(snapshot).mockResolvedValueOnce(snapshot)
+      .mockResolvedValue({ rate_limits_available: true, rate_limits: null, session: { model_usage: {} } });
+    const accountInfo = vi.fn().mockResolvedValueOnce({ apiProvider: "firstParty", email: "first@example.com" })
+      .mockResolvedValue({ apiProvider: "firstParty", email: "second@example.com" });
+    const f = await fixture(async function* () {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: false } as SDKMessage;
+    }, { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: usage, accountInfo });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Hi" }] });
+    await f.waitForTurn();
+    expect(f.backend.summary().rateLimits).toEqual([expect.objectContaining({ limitId: "seven_day", usedPercent: 56 })]);
+    await vi.waitFor(async () => expect((await f.store.readRateLimits()).account).toMatch(/^[0-9a-f]{16}$/));
+    // The file keeps a hash of the account, never its identifiers.
+    expect(JSON.stringify(await f.store.readRateLimits())).not.toContain("example.com");
+
+    f.events.length = 0;
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Hi" }] });
+    await f.waitForTurn();
+    expect(f.backend.summary().rateLimits).toEqual([]);
+    await vi.waitFor(async () => expect(await f.store.readRateLimits()).toEqual({ limits: [] }));
+  });
+
+  it("keeps limits when an account of unknown method reports none, and clears them for an API key", async () => {
+    const saved = [{ name: "Weekly limit", limitId: "seven_day", usedPercent: 40, resetAt: Date.now() + 86_400_000 }];
+    const f = await fixture(undefined, { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: vi.fn()
+      .mockResolvedValue({ rate_limits_available: false, rate_limits: null, session: { model_usage: {} } }) });
+    await f.store.saveRateLimits(saved);
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Hi" }] });
+    await f.waitForTurn();
+    expect(f.backend.summary().rateLimits).toEqual(saved);
+
+    f.backendOptions.inspectInstallation.mockResolvedValueOnce(
+      { executable: "/fixture/claude", authStatus: "signed-in", authMethod: "api-key" } as never);
+    await f.backend.discover({ models: false });
+    expect(f.backend.summary().rateLimits).toEqual([]);
+  });
+
+  it("reports a window passing its reset so event-driven surfaces drop it", async () => {
+    const f = await fixture(undefined, { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: vi.fn()
+      .mockImplementation(async () => ({ rate_limits_available: true, rate_limits: {
+        five_hour: { utilization: 98, resets_at: new Date(Date.now() + 400).toISOString() },
+        seven_day: { utilization: 20, resets_at: new Date(Date.now() + 86_400_000).toISOString() },
+      }, session: { model_usage: {} } })) });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Hi" }] });
+    await f.waitForTurn();
+    f.events.length = 0;
+    await vi.waitFor(() => expect(f.events.map((event) => event.notification.method))
+      .toContain("backend/providerStatus/updated"), { timeout: 3_000 });
+    expect(f.backend.summary().rateLimits).toEqual([expect.objectContaining({ limitId: "seven_day" })]);
+    await f.backend.close();
+  });
+
+  it("reads saved limits from the first file shape and drops malformed readings", async () => {
+    const f = await fixture();
+    await writeFile(path.join(f.root, "rate-limits.json"), JSON.stringify([
+      { name: "Weekly limit", limitId: "seven_day", usedPercent: 40, resetAt: 1_000 },
+      { name: "5-hour limit", limitId: "five_hour", usedPercent: "high" },
+      { name: "Weekly Opus limit", limitId: "seven_day_opus", usedPercent: 10, resetAt: "soon" },
+      { name: "Unnamed" },
+    ]));
+    expect(await f.store.readRateLimits()).toEqual({ limits: [
+      { name: "Weekly limit", limitId: "seven_day", usedPercent: 40, resetAt: 1_000 },
+      { name: "Weekly Opus limit", limitId: "seven_day_opus", usedPercent: 10 },
+    ] });
+    await writeFile(path.join(f.root, "rate-limits.json"), JSON.stringify({ account: "abc", limits: [
+      { name: "Weekly limit", limitId: "seven_day", usedPercent: null },
+    ] }));
+    expect(await f.store.readRateLimits()).toEqual({ account: "abc", limits: [] });
+  });
+
   it("records only new resumed usage, exposes Claude limits, and restores the context moon", async () => {
     let count = 0;
     const context = vi.fn().mockResolvedValue({ totalTokens: 1200, maxTokens: 200_000 });
@@ -340,7 +874,7 @@ describe("Claude SDK backend", () => {
     await expect(f.backend.listMcpServers(threadId)).rejects.toThrow("while a turn is running");
   });
 
-  it("discovers the model catalog only on an explicit refresh and retains it when a later refresh fails", async () => {
+  it("publishes discovery immediately and retains the catalog when a later refresh fails", async () => {
     const f = await fixture();
     const models = [{ id: "fable", label: "Fable 5.1", current: true }];
     const discoverModels = vi.fn().mockResolvedValue(models);
@@ -348,11 +882,112 @@ describe("Claude SDK backend", () => {
     await backend.startThread({ cwd: f.root, executionMode: "default" });
     expect(discoverModels).not.toHaveBeenCalled();
     await backend.discover();
-    expect(discoverModels).toHaveBeenCalledWith({ executable: "/fixture/claude", env: { PATH: "/fixture" } });
+    expect(discoverModels).toHaveBeenCalledWith({ executable: "/fixture/claude", env: { PATH: "/fixture", CLAUDE_CODE_REPORT_FINDINGS: "1" } });
     expect(backend.summary().launchpadOptions?.models).toEqual(models);
+    expect(f.events).toEqual([{ backend: "claude", notification: {
+      method: "backend/providerStatus/updated", params: { backend: "claude" },
+    } }]);
     discoverModels.mockRejectedValueOnce(new Error("Discovery failed"));
     await expect(backend.discover()).rejects.toThrow("Discovery failed");
     expect(backend.summary().launchpadOptions?.models).toEqual(models);
+  });
+
+  it("shares pending global discovery across differently configured projects without publishing either session catalog", async () => {
+    const supportedModels = vi.fn()
+      .mockResolvedValueOnce([{ value: "haiku", displayName: "Haiku 5.5", description: "Project A only" }])
+      .mockResolvedValue([{ value: "sonnet", displayName: "Sonnet 5.5", description: "Project B only" }]);
+    const f = await fixture(undefined, { supportedModels });
+    let resolveDiscovery!: (models: BackendModelOption[]) => void;
+    const discoverModels = vi.fn(() => new Promise<BackendModelOption[]>((resolve) => { resolveDiscovery = resolve; }));
+    const backend = new ClaudeBackend({ ...f.backendOptions, discoverModels });
+    const discovery = backend.discover();
+    await vi.waitFor(() => expect(discoverModels).toHaveBeenCalledTimes(1));
+    const directories = [path.join(f.root, "project-a"), path.join(f.root, "project-b")];
+    for (const cwd of directories) {
+      f.events.length = 0;
+      const { threadId } = await backend.startThread({ cwd, executionMode: "default" });
+      await backend.startTurn({ threadId, input: [{ type: "text", text: "Hi" }] });
+      await f.waitForTurn();
+      expect(backend.summary().launchpadOptions?.models?.map((model) => model.label)).toEqual(["Sonnet", "Opus", "Haiku"]);
+    }
+    expect(discoverModels).toHaveBeenCalledTimes(1);
+    expect(supportedModels).not.toHaveBeenCalled();
+    expect(f.queries.map((options) => options.cwd)).toEqual(directories);
+    for (const options of f.queries) expect(options.settingSources).toEqual(["user", "project", "local"]);
+    const globalModels = [{ id: "opus", label: "Opus 5.5" }, { id: "fable", label: "Fable 5.1" }];
+    resolveDiscovery(globalModels);
+    await discovery;
+    expect(backend.summary().launchpadOptions?.models).toEqual(globalModels);
+    // Subsequent turns in the restricted project keep the shared global catalog.
+    f.events.length = 0;
+    const { threadId } = await backend.startThread({ cwd: directories[0], executionMode: "default" });
+    await backend.startTurn({ threadId, input: [{ type: "text", text: "Hi again" }] });
+    await f.waitForTurn();
+    expect(backend.summary().launchpadOptions?.models).toEqual(globalModels);
+    expect(discoverModels).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["failed", "signed-out"])("recovers the global catalog in the background after %s startup discovery", async (startup) => {
+    const supportedModels = vi.fn().mockResolvedValue([
+      { value: "haiku", displayName: "Haiku 5.5", description: "Restricted project" },
+    ]);
+    const f = await fixture(undefined, { supportedModels });
+    const globalModels = [
+      { id: "opus", label: "Opus 5.5" },
+      { id: "fable", label: "Fable 5.1", reasoningEfforts: ["default", "high"] },
+    ];
+    const discoverModels = vi.fn().mockResolvedValue(globalModels);
+    if (startup === "failed") discoverModels.mockRejectedValueOnce(new Error("Startup discovery unavailable"));
+    const inspectInstallation = vi.fn()
+      .mockResolvedValueOnce({ executable: "/fixture/claude", authStatus: startup === "signed-out" ? "sign-in-required" : "signed-in" })
+      .mockResolvedValue({ executable: "/fixture/claude", authStatus: "signed-in" });
+    const backend = new ClaudeBackend({ ...f.backendOptions, inspectInstallation, discoverModels });
+    if (startup === "failed") await expect(backend.discover()).rejects.toThrow("Startup discovery unavailable");
+    else await backend.discover();
+    expect(backend.summary().launchpadOptions?.models?.map((model) => model.label)).toEqual(["Sonnet", "Opus", "Haiku"]);
+    const { threadId } = await backend.startThread({ cwd: f.root, executionMode: "default" });
+    await backend.startTurn({ threadId, input: [{ type: "text", text: "Hi" }] });
+    await f.waitForTurn();
+    expect(backend.summary().launchpadOptions?.models).toEqual(globalModels);
+    expect(f.events).toContainEqual({ backend: "claude", notification: {
+      method: "backend/providerStatus/updated", params: { backend: "claude" },
+    } });
+    expect(supportedModels).not.toHaveBeenCalled();
+    expect(f.run).toHaveBeenCalledTimes(1);
+    expect(discoverModels).toHaveBeenCalledTimes(startup === "failed" ? 2 : 1);
+  });
+
+  it("streams during global recovery and throttles later failed or empty probes while retaining the catalog", async () => {
+    const f = await fixture();
+    let resolveModels!: (models: BackendModelOption[]) => void;
+    const discoverModels = vi.fn().mockImplementationOnce(() => new Promise<BackendModelOption[]>((resolve) => { resolveModels = resolve; }))
+      .mockRejectedValueOnce(new Error("Metadata unavailable")).mockResolvedValue([]);
+    const backend = new ClaudeBackend({ ...f.backendOptions, discoverModels });
+    let now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      const { threadId } = await backend.startThread({ cwd: f.root, executionMode: "default" });
+      const turn = async () => {
+        f.events.length = 0;
+        await backend.startTurn({ threadId, input: [{ type: "text", text: "Hi" }] });
+        await f.waitForTurn();
+      };
+      await turn();
+      expect((await backend.readThread(threadId)).lastAssistantMessage).toBe("Hello world");
+      expect(discoverModels).toHaveBeenCalledTimes(1);
+      resolveModels([{ id: "opus", label: "Opus 5.5" }]);
+      await vi.waitFor(() => expect(backend.summary().launchpadOptions?.models?.[0].label).toBe("Opus 5.5"));
+      await turn();
+      expect(discoverModels).toHaveBeenCalledTimes(1);
+      for (const attempt of [2, 3]) {
+        now += 60_001;
+        await turn();
+        expect(discoverModels).toHaveBeenCalledTimes(attempt);
+        expect(backend.summary().launchpadOptions?.models?.[0].label).toBe("Opus 5.5");
+        await turn();
+        expect(discoverModels).toHaveBeenCalledTimes(attempt);
+      }
+    } finally { clock.mockRestore(); }
   });
 
   it.each(["max", "default"])("passes an explicit effort and preserves the CLI default (%s)", async (reasoningEffort) => {
@@ -507,6 +1142,7 @@ describe("Claude SDK backend", () => {
     expect(f.queries[0].env).not.toHaveProperty("CLAUDE_CODE_OAUTH_TOKEN");
     expect(f.backendOptions.inspectInstallation).toHaveBeenCalledWith({ env: f.queries[0].env });
     expect(f.queries[0].env?.PATH).toBe("/fixture");
+    expect(f.queries[0].env?.CLAUDE_CODE_REPORT_FINDINGS).toBe("1");
     expect(f.queries[0]).not.toHaveProperty("bare");
     expect(f.events.some((event) => event.notification.method === "item/agentMessage/delta")).toBe(true);
     const replay = await f.backend.readThread(threadId);

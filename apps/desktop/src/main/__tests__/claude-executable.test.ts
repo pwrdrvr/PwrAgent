@@ -2,7 +2,7 @@ import { chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { claudeEnvironment, inspectClaudeInstallation as inspectInstallation, resolveClaudeExecutable, selectClaudeExecutable, claudeLoginCommand } from "../claude/claude-executable";
+import { claudeEnvironment, inspectClaudeInstallation as inspectInstallation, resolveClaudeExecutable, selectClaudeExecutable, claudeLoginCommand, CLAUDE_SIGN_IN_REQUIRED } from "../claude/claude-executable";
 
 const inspectClaudeInstallation = (options: Parameters<typeof inspectInstallation>[0]) => inspectInstallation({
   resolveBundledExecutable: async () => undefined,
@@ -92,8 +92,13 @@ describe("Claude executable discovery", () => {
 
   it("does not pass application credentials to the CLI", () => {
     const input = { PATH: "/bin", ANTHROPIC_API_KEY: "key", CLAUDE_CODE_OAUTH_TOKEN: "token" };
-    expect(claudeEnvironment(input)).toEqual({ PATH: "/bin" });
+    expect(claudeEnvironment(input)).toEqual({ PATH: "/bin", CLAUDE_CODE_REPORT_FINDINGS: "1" });
     expect(input.ANTHROPIC_API_KEY).toBe("key");
+  });
+
+  it("declares that PwrAgent renders typed code-review findings", () => {
+    // Without the declaration, /code-review forks and returns plain text.
+    expect(claudeEnvironment({ PATH: "/bin" }).CLAUDE_CODE_REPORT_FINDINGS).toBe("1");
   });
 });
 
@@ -135,8 +140,10 @@ describe("Claude binary selection", () => {
     });
     expect(installation).toMatchObject({ source: "bundled", version: "2.1.296", authStatus: "sign-in-required" });
     expect(readAuthStatus.mock.calls[0][0]).toBe("/Applications/PwrAgent App/claude");
-    expect(installation.message).toContain("/Applications/PwrAgent App/claude");
+    expect(installation.loginCommand).toContain("/Applications/PwrAgent App/claude");
     expect(installation.loginCommand).toContain("auth login");
+    // The command, with its bundle path, stays out of the message.
+    expect(installation.message).toBe(CLAUDE_SIGN_IN_REQUIRED);
   });
 
   it("quotes the bundled login path for POSIX shells and Windows PowerShell", () => {

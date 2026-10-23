@@ -287,3 +287,41 @@ it.each([
     mocks.store.readNavigationQueryIndex.mockImplementation(originalProjection!);
   }
 });
+
+describe("owner index coverage", () => {
+  function readCoverage(params: {
+    startup?: { state: "checking" | "degraded" | "ready"; failedProviders?: number };
+    incomplete: boolean;
+  }) {
+    const listed: NavigationThreadSummary[] = [];
+    const registry = {
+      listThreads: async () => listed,
+      isIncompleteThreadList: (threads: unknown) => params.incomplete && threads === listed,
+      getStartupProviderRefreshStatus: () => params.startup,
+      onEvent: () => () => {},
+      canonicalizeNavigationThreadPullRequests: async (threads: []) => threads,
+      hydrateThreadGitWorkingStates: async (threads: []) => threads,
+      withNavigationSubAgentActivity: (threads: []) => threads,
+      getNavigationInputRequestThreadKeys: () => new Set<string>(),
+    } as unknown as DesktopBackendRegistry;
+    return loadLocalNavigationQueryIndex({ registry, callerReason: "coverage-regression" })
+      .then((index) => index.coverage);
+  }
+
+  it("completes an index built from a complete listing after a degraded startup", async () => {
+    // A Claude or ACP discovery failure at startup, or a Codex failure that has
+    // since recovered, must not block group archive for the whole session.
+    await expect(readCoverage({ startup: { state: "degraded", failedProviders: 2 }, incomplete: false }))
+      .resolves.toEqual({ state: "complete" });
+  });
+
+  it("degrades an index whose listing stood in an empty Codex inventory after a ready startup", async () => {
+    await expect(readCoverage({ startup: { state: "ready" }, incomplete: true }))
+      .resolves.toEqual({ state: "degraded", failedProviders: 1 });
+  });
+
+  it("keeps an index checking until the startup provider refresh settles", async () => {
+    await expect(readCoverage({ startup: { state: "checking" }, incomplete: false }))
+      .resolves.toEqual({ state: "checking" });
+  });
+});

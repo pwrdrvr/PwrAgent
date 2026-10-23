@@ -89,6 +89,7 @@ describe("AgentToolRouter", () => {
       {
         namespace: "pwragent_test",
         name: "inspect",
+        annotations: { readOnlyHint: true },
         description: "Inspect test state.",
         inputSchema: { type: "object" },
         dispatch,
@@ -98,6 +99,7 @@ describe("AgentToolRouter", () => {
     expect(router.buildMcpTools()).toEqual([
       {
         name: "inspect",
+        annotations: { readOnlyHint: true },
         description: "Inspect test state.",
         inputSchema: { type: "object" },
       },

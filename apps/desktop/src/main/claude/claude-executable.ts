@@ -12,6 +12,14 @@ const runFile = promisify(execFile);
 export const CLAUDE_SETUP_INSTRUCTIONS =
   "Install Claude Code from https://code.claude.com/docs/en/setup, then run `claude auth login` in your terminal.";
 
+// Never put the sign-in command in these. For the bundled CLI it is an
+// absolute path inside the app bundle; the Claude Settings pane shows it
+// with a Copy button.
+export const CLAUDE_SIGN_IN_REQUIRED =
+  "Claude Code sign-in required. Sign in from Settings → AI Providers → Claude.";
+export const CLAUDE_SIGN_IN_UNVERIFIED =
+  "Could not verify the Claude Code sign-in. Check Settings → AI Providers → Claude.";
+
 export type ClaudeInstallation = {
   executable?: string;
   source?: "system" | "bundled";
@@ -31,6 +39,10 @@ export function claudeEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   ]) {
     delete result[key];
   }
+  // PwrAgent renders typed review findings, so `/code-review` runs inline and
+  // reports them through the ReportFindings tool. Without this, the CLI forks
+  // the review and returns its findings as plain text.
+  result.CLAUDE_CODE_REPORT_FINDINGS = "1";
   return result;
 }
 
@@ -170,13 +182,13 @@ export async function inspectClaudeInstallation(options: {
             : undefined;
       return { ...installation, authStatus: status.loggedIn ? "signed-in" : "sign-in-required",
         ...(status.loggedIn && authMethod ? { authMethod } : {}),
-        ...(!status.loggedIn ? { message: `Run ${loginCommand} in your terminal, then check again.` } : {}),
+        ...(!status.loggedIn ? { message: CLAUDE_SIGN_IN_REQUIRED } : {}),
       };
     }
   } catch {
     // Older CLI versions may not implement auth status. Do not claim login.
   }
   return { ...installation, authStatus: "unknown",
-    message: `Could not verify CLI sign-in. Run ${loginCommand} in your terminal.`,
+    message: CLAUDE_SIGN_IN_UNVERIFIED,
   };
 }

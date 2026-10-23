@@ -87,6 +87,42 @@ is an ordinary To-do card; a completed review awaiting resolution is a review.
 The same predicates filter scope counts and resolved rows. No filter picker
 is introduced in this change.
 
+## Claude Code reviews
+
+PwrAgent sets `CLAUDE_CODE_REPORT_FINDINGS=1` for the Claude CLI. This
+declares that the host renders typed findings. Claude Code then runs
+`/code-review` inline and reports through its `ReportFindings` tool. Without
+the variable, the CLI forks the review into a subagent and returns only a
+rendered text list as `local_command_output`, and the SDK stream carries no
+structured findings.
+
+The Claude backend turns each `ReportFindings` call into a review entry, not a
+tool row, and publishes it as `exitedReviewMode`, so the import above tracks it.
+It waits for the call's tool result: the CLI validates the input first, and the
+model retries a rejected call, so a rejected call stays a failed tool row and
+only the accepted retry becomes the review.
+A finding's short summary is its title. Its body holds the full summary, the
+failure scenario, and the category and verdict when present. Claude reports
+no priority, verdict, or confidence, so findings keep the reported order,
+render as `P?`, and the card's verdict follows from whether any finding was
+reported. Provenance resolves the way a native review's does: the workspace,
+its checked-out branch, and the attached pull request on that branch.
+
+After `--fix`, or when later work fixes findings, Claude reports the same
+findings again with an `outcome` on each one. That re-report does not create a
+second review. The backend pairs it with the latest Claude review in the thread
+by location and title, then by location, then by position when both lists have
+the same length. Position alone pairs only within the review's own turn; a
+later turn's report must also match one finding's location. It publishes
+`thread/review/outcomesReported`. Tracking marks `fixed` findings addressed
+and `no_change_needed` findings dismissed, with the agent as the actor, in one
+commit. `skipped` findings stay open. A reported
+outcome never overrides an outcome already recorded for that finding. An
+outcome report that matches no earlier review is recorded as a new review with
+those outcomes. The checked-in `thread-review-reported-outcomes` budget
+measures one commit per settling report (~8 KB WAL, about 0.8 MB/day at 100
+reports per day). Repeats and skipped-only reports make no commits.
+
 ## Controls
 
 An open review's To-do card lists its findings, open ones first by priority,

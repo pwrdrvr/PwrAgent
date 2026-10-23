@@ -73,6 +73,7 @@ export function buildPwrAgentThreadReviewToolDefinitions(
   return PWRAGENT_THREAD_REVIEW_OPERATION_NAMES.map((operation) => ({
     namespace: PWRAGENT_TOOL_NAMESPACE,
     name: operation,
+    annotations: { readOnlyHint: operation === "list_reviews" },
     description: descriptions[operation],
     inputSchema: schemas[operation],
     deferLoading: true,

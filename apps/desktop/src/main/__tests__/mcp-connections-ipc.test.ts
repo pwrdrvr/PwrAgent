@@ -25,9 +25,17 @@ const mocks = vi.hoisted(() => {
   };
   return {
     handlers,
+    listMcpConnections: vi.fn(async () => ({ connections: [{ id: "rovo" }] })),
+    readThreadMcpConnections: vi.fn(async () => ({ connectionIds: ["rovo"], providerServersEnabled: true })),
+    setThreadMcpConnections: vi.fn(async () => ({ connectionIds: ["rovo"], providerServersEnabled: false })),
+    describeThreadMcpConnections: vi.fn(async () => ({ connections: [{ connectionId: "rovo" }] })),
     readRemoteStatus: vi.fn(async () => remoteStatus),
     remoteBackend: vi.fn(() => ({
       readPwrSnapConnectionStatus: mocks.readRemoteStatus,
+      listMcpConnections: mocks.listMcpConnections,
+      readThreadMcpConnections: mocks.readThreadMcpConnections,
+      setThreadMcpConnections: mocks.setThreadMcpConnections,
+      describeThreadMcpConnections: mocks.describeThreadMcpConnections,
     })),
   };
 });
@@ -113,6 +121,7 @@ describe("MCP connection IPC", () => {
   };
 
   beforeEach(() => {
+    vi.clearAllMocks();
     mocks.handlers.clear();
     mocks.readRemoteStatus.mockClear();
     mocks.remoteBackend.mockClear();
@@ -161,6 +170,48 @@ describe("MCP connection IPC", () => {
    * bound to the disposed service. Derive the expectation from what register
    * installed, so the next channel cannot drift the same way.
    */
+  it.each([
+    ["MCP_CONNECTION_LIST_CHANNEL", "listMcpConnections", {}],
+    ["MCP_CONNECTION_READ_THREAD_CHANNEL", "readThreadMcpConnections", { backend: "codex", threadId: "thread-1" }],
+    ["MCP_CONNECTION_SET_THREAD_CHANNEL", "setThreadMcpConnections", { backend: "codex", threadId: "thread-1", connectionIds: ["rovo"], providerServersEnabled: false }],
+    ["MCP_CONNECTION_DESCRIBE_THREAD_CHANNEL", "describeThreadMcpConnections", { backend: "codex", threadId: "thread-1" }],
+  ] as const)("routes %s to the owner for mounted and remote windows", async (channel, method, request) => {
+    const { registerMcpConnectionIpcHandlers } = await import("../ipc/mcp-connections");
+    const channels = await import("../../shared/ipc");
+    registerMcpConnectionIpcHandlers(service as never, pwrGit as never, installer as never);
+    const handler = mocks.handlers.get(channels[channel])!;
+    const operation = mocks[method];
+
+    for (const [sender, target] of [
+      [remoteSender, undefined],
+      [{ id: 18 }, federationTarget],
+      [remoteSender, { scope: "remote", instanceId: "wrong-owner" }],
+    ] as const) {
+      const response = await handler({ sender }, { ...request, ...(target ? { federationTarget: target } : {}) });
+      expect(mocks.remoteBackend).toHaveBeenLastCalledWith(federationTarget);
+      if (method === "listMcpConnections") {
+        expect(operation).toHaveBeenLastCalledWith();
+      } else {
+        expect(operation).toHaveBeenLastCalledWith(request);
+      }
+      expect(response).toEqual(await operation.mock.results.at(-1)!.value);
+    }
+    expect(operation).toHaveBeenCalledTimes(3);
+    expect(service.listConnections).not.toHaveBeenCalled();
+  });
+
+  it("surfaces an unavailable owner without falling back to local connections", async () => {
+    const { registerMcpConnectionIpcHandlers } = await import("../ipc/mcp-connections");
+    const { MCP_CONNECTION_LIST_CHANNEL } = await import("../../shared/ipc");
+    registerMcpConnectionIpcHandlers(service as never, pwrGit as never, installer as never);
+    mocks.listMcpConnections.mockRejectedValueOnce(new Error("Owner disconnected"));
+
+    await expect(mocks.handlers.get(MCP_CONNECTION_LIST_CHANNEL)?.(
+      { sender: { id: 18 } }, { federationTarget },
+    )).rejects.toThrow("Owner disconnected");
+    expect(service.listConnections).not.toHaveBeenCalled();
+  });
+
   it("removes every handler it registered", async () => {
     const {
       disposeMcpConnectionIpcHandlers,
@@ -323,7 +374,6 @@ describe("MCP connection IPC", () => {
     expect(service.removeConnection).toHaveBeenCalledWith("datadog");
 
     for (const channel of [
-      MCP_CONNECTION_LIST_CHANNEL,
       MCP_CONNECTION_CREATE_CHANNEL,
       MCP_CONNECTION_AUTHORIZE_CHANNEL,
       MCP_CONNECTION_DISCONNECT_CHANNEL,

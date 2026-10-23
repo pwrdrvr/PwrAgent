@@ -11,7 +11,7 @@ import {
   type AutomationInspectionHandler,
 } from "../automations/automation-inspection-agent-tools.js";
 import {
-  buildPwrAgentAppToolRouter,
+  buildPwrAgentAppToolDefinitions,
   type PwrAgentAppManagementHandler,
 } from "./pwragent-app-agent-tools.js";
 import {
@@ -46,6 +46,7 @@ import {
   buildPwrAgentThreadTodoToolRouter,
   type PwrAgentThreadTodoHandler,
 } from "./pwragent-thread-todo-agent-tools.js";
+import { buildPwrAgentToolGuideDefinition } from "./pwragent-tool-guide.js";
 import { AgentToolRouter } from "./agent-tool-router.js";
 import { buildTokenMiserToolDefinitions } from "./token-miser-agent-tools.js";
 import type { TokenMiserStore } from "../token-miser/token-miser-store.js";
@@ -81,7 +82,10 @@ export function resolveAgentToolCatalogs(params: {
     params.automationInspectionHandler,
   );
   const automationDynamicTools = automationRouter.buildDynamicToolSpecs();
-  const appRouter = buildPwrAgentAppToolRouter(params.appManagementHandler);
+  const appRouter = new AgentToolRouter([
+    ...buildPwrAgentAppToolDefinitions(params.appManagementHandler),
+    buildPwrAgentToolGuideDefinition(),
+  ]);
   const appDynamicTools = appRouter.buildDynamicToolSpecs();
   const threadRouter = buildPwrAgentThreadToolRouter(params.threadInspectionHandler, { additionalDefinitions: buildForgeReadToolDefinitions(params.forgeReadHandler) });
   const threadDynamicTools = threadRouter.buildDynamicToolSpecs();

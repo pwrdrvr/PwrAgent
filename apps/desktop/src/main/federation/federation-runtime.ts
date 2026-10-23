@@ -1,3 +1,10 @@
+import type { ThreadTodosChangedEvent } from "@pwragent/shared";
+import { FEDERATION_OPERATOR_QUESTION_CAPABILITIES, FEDERATION_OPERATOR_QUESTION_METHODS,
+  registerFederationOperatorQuestionHandlers, type OperatorQuestionOperation,
+  type OperatorQuestionOperationRequest, type OperatorQuestionOperationResponse } from "./federation-operator-questions";
+import { localThreadTodoOperations } from "../thread-todos/thread-todo-operations";
+import { FEDERATION_THREAD_TODO_CAPABILITIES, FEDERATION_THREAD_TODO_METHODS, registerFederationThreadTodoHandlers,
+  type ThreadTodoOperation, type ThreadTodoOperationRequest, type ThreadTodoOperationResponse } from "./federation-thread-todos";
 import { createTerminalHistoryStore } from "../terminal/terminal-history";
 import type {
   ListBackgroundTerminalsRequest,
@@ -32,6 +39,7 @@ import { CloudflareAccessRefusedError, CloudflareSignInRequiredError } from "./c
 import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
 import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
 import { markLocalNavigationDirectorySeen, removeLocalNavigationDirectory } from "../app-server/navigation-directory-actions";
+import { updateLocalSubthreadOrder } from "../app-server/subthread-order-actions";
 import type { ReadQueuedTurnRequest, ReadQueuedTurnResponse } from "@pwragent/shared";
 import { randomBytes, randomUUID } from "node:crypto";
 import { hostname } from "node:os";
@@ -174,6 +182,12 @@ import {
   type InterruptTurnRequest,
   type ListWorktreeUnpublishedCommitsRequest,
   type ListWorktreeUnpublishedCommitsResponse,
+  type ListMcpConnectionsResponse,
+  type ReadThreadMcpConnectionsRequest,
+  type SetThreadMcpConnectionsRequest,
+  type SetThreadMcpConnectionsResponse,
+  type DescribeThreadMcpConnectionsRequest,
+  type DescribeThreadMcpConnectionsResponse,
   type ListThreadMcpServersRequest,
   type MaterializeDirectoryLaunchpadRequest,
   type MaterializeDirectoryLaunchpadOptions,
@@ -299,6 +313,8 @@ import {
   decodeFederationInvite,
   encodeFederationInvite,
 } from "./federation-enrollment";
+import { searchFederatedContent } from "./federated-content-search-service";
+import type { ThreadSearchRequest, ThreadSearchResponse } from "@pwragent/shared";
 import { FederatedSearchService } from "./federated-search-service";
 import {
   collectFederationHostInfo,
@@ -574,6 +590,10 @@ export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "shutdown_notice",
   "navigation_directory_set_events",
   "turn_queue_reorder",
+  "thread_mcp_connections",
+  "thread_todos",
+  "operator_questions",
+  "operator_requests",
 ];
 
 const REMOTE_THREAD_SUMMARY_EVENT_CONSUMER_ID =
@@ -703,6 +723,10 @@ export function federationEventClassForMethod(
   if (method === "thread/scheduledAction/updated") {
     return "scheduled_actions";
   }
+  if (method === "thread/operatorQuestions/changed") {
+    // Dismissed-question state is readable with thread_detail access.
+    return "transcript";
+  }
   if (
     method === "item/tool/requestUserInput"
     || method === "mcpServer/elicitation/request"
@@ -720,7 +744,7 @@ export function federationEventClassForMethod(
   ) {
     return "star_map";
   }
-  if (method === "navigation/invalidated") {
+  if (method === "navigation/invalidated" || method === "thread/todos/changed" || method === "thread/operatorRequests/changed") {
     return "navigation";
   }
   if (method === NAVIGATION_DIRECTORY_SET_CHANGED_METHOD) {
@@ -936,7 +960,9 @@ export function eventMatchesThreadSelection(
   // a shared resource rather than one thread. Sparse consumers still need the
   // tiny invalidation so they can refresh their selected rows; the expensive
   // snapshot response remains filtered.
-  if (!threadId) return eventClass === "navigation" || event.notification.method === "federation/eventStream/changed";
+  if (!threadId) return eventClass === "navigation" || event.notification.method === "federation/eventStream/changed"
+    || ((event.notification.method === "thread/todoDetails/changed" || event.notification.method === "thread/operatorRequestDetails/changed")
+      && selection.threads.length > 0);
   const actionBackend =
     typeof scheduledAction?.backend === "string"
     && isAppServerBackendKind(scheduledAction.backend)
@@ -2275,6 +2301,53 @@ export class DesktopFederationRuntime {
     };
   }
 
+  async requestThreadTodoOperation<K extends ThreadTodoOperation>(
+    target: FederationRemoteTarget, operation: K, request: ThreadTodoOperationRequest<K>,
+  ): Promise<ThreadTodoOperationResponse<K>> {
+    if (!this.remotePeerAdvertisesCapability(target.instanceId, "thread_todos")) {
+      throw new Error("This Federation owner does not support To-dos. Update that PwrAgent instance.");
+    }
+    return await this.rpcFor(target).request({ method: FEDERATION_THREAD_TODO_METHODS[operation], params: request,
+      ...(operation === "runAction" ? { timeoutMs: null } : {}),
+    });
+  }
+
+  async requestOperatorQuestionOperation<K extends OperatorQuestionOperation>(
+    target: FederationRemoteTarget, operation: K, request: OperatorQuestionOperationRequest<K>,
+  ): Promise<OperatorQuestionOperationResponse<K>> {
+    const queueOperation = operation === "list" || operation === "listPending" || operation === "markSeen" || operation === "reply";
+    if (!this.remotePeerAdvertisesCapability(target.instanceId, queueOperation ? "operator_requests" : "operator_questions")) {
+      throw new Error(`This Federation owner does not support ${queueOperation ? "the operator request queue" : "question dismissals"}. Update that PwrAgent instance.`);
+    }
+    if (operation === "listPending" && !this.remotePeerAdvertisesCapability(target.instanceId, "pending_request_control")) {
+      return [] as OperatorQuestionOperationResponse<K>;
+    }
+    return await this.rpcFor(target).request({
+      method: FEDERATION_OPERATOR_QUESTION_METHODS[operation], params: request,
+    });
+  }
+
+  publishOperatorQuestionsChanged(params: { backend: AppServerBackendKind; threadId: string }): void {
+    this.forwardLocalBackendEvent({ backend: params.backend,
+      notification: { method: "thread/operatorQuestions/changed", params } });
+  }
+
+  publishOperatorRequestsChanged(params: { reason: "requests" | "questions" | "seen"; backend?: AppServerBackendKind; threadId?: string }): void {
+    this.forwardLocalBackendEvent({ backend: params.backend ?? "codex",
+      notification: { method: "thread/operatorRequests/changed", params } });
+    this.forwardLocalBackendEvent({ backend: params.backend ?? "codex",
+      notification: { method: "thread/operatorRequestDetails/changed", params } });
+  }
+
+  publishThreadTodosChanged(event: ThreadTodosChangedEvent): void {
+    this.forwardLocalBackendEvent({ backend: event.backend ?? "codex",
+      notification: { method: "thread/todos/changed", params: event } });
+    // Detail-only viewers have no navigation subscription. Keep the sparse
+    // navigation marker for background queues and also refresh selected details.
+    this.forwardLocalBackendEvent({ backend: event.backend ?? "codex",
+      notification: { method: "thread/todoDetails/changed", params: event } });
+  }
+
   remoteBackend(target: FederationRemoteTarget): FederationRemoteBackendClient {
     return new FederationRemoteBackendClient(
       this.rpcFor(target),
@@ -3152,6 +3225,20 @@ export class DesktopFederationRuntime {
     }
   }
 
+  async searchThreadContent(
+    request: ThreadSearchRequest,
+    local: (request: ThreadSearchRequest, signal?: AbortSignal) => Promise<ThreadSearchResponse>,
+    onProgress?: (response: ThreadSearchResponse) => void,
+    signal?: AbortSignal,
+  ): Promise<ThreadSearchResponse> {
+    const visible = this.visiblePeers();
+    return await searchFederatedContent({ request, local, signal, onProgress,
+      peers: visible.filter((peer) => peer.status === "connected" && peer.capabilities.includes("thread_detail"))
+        .map((peer) => ({ instanceId: peer.id, label: formatFederationPeerDisplayLabel(peer, visible),
+          backend: this.remoteBackend({ scope: "remote", instanceId: peer.id }) })),
+    });
+  }
+
   async searchConnectedPeers(
     request: FederatedSearchRequest,
   ): Promise<FederatedSearchResponse> {
@@ -3260,6 +3347,8 @@ export class DesktopFederationRuntime {
           : undefined),
       methodCapabilities: {
         ...FEDERATION_BACKEND_METHOD_CAPABILITIES,
+        ...FEDERATION_THREAD_TODO_CAPABILITIES,
+        ...FEDERATION_OPERATOR_QUESTION_CAPABILITIES,
         ...FEDERATION_PTY_METHOD_CAPABILITIES,
         ...FILE_PUSH_METHOD_CAPABILITIES,
         [THREAD_HANDOFF_METHODS.send]: "thread_handoff",
@@ -3268,13 +3357,15 @@ export class DesktopFederationRuntime {
         [FILE_PULL_MARKDOWN_METHOD]: "file_pull",
         [FILE_RESOLVE_TRANSCRIPT_METHOD]: "file_pull",
       },
-      additionalRequiredCapabilities: (envelope) => envelope.method === THREAD_HANDOFF_METHODS.import
-        ? ["file_push", "turn_control", "environment_actions"]
-        : envelope.method === THREAD_HANDOFF_METHODS.send
-          ? ["turn_control", "environment_actions"]
-          : envelope.method === THREAD_HANDOFF_METHODS.prepare
-            ? ["environment_actions"]
-            : additionalFederationBackendCapabilities(envelope),
+      additionalRequiredCapabilities: (envelope) => envelope.method === FEDERATION_THREAD_TODO_METHODS.runAction
+        ? ["environment_actions"]
+        : envelope.method === THREAD_HANDOFF_METHODS.import
+          ? ["file_push", "turn_control", "environment_actions"]
+          : envelope.method === THREAD_HANDOFF_METHODS.send
+            ? ["turn_control", "environment_actions"]
+            : envelope.method === THREAD_HANDOFF_METHODS.prepare
+              ? ["environment_actions"]
+              : additionalFederationBackendCapabilities(envelope),
     });
     router.registerBlobChunkHandler(async (envelope) => {
       await this.turnInputAttachmentReceiver.receive(
@@ -3282,6 +3373,8 @@ export class DesktopFederationRuntime {
         envelope.sourceInstanceId,
       );
     });
+    registerFederationThreadTodoHandlers(router, localThreadTodoOperations);
+    registerFederationOperatorQuestionHandlers(router);
     registerFederationBackendHandlers({
       router,
       backend: localBackendOperations(),
@@ -6539,6 +6632,12 @@ function localBackendOperations(): FederationBackendOperations {
     async searchNavigationThreads(request) {
       return await messagingBridge.searchNavigationThreads(request);
     },
+    async searchThreadContent(request, rpcOptions) {
+      return await getDesktopBackendRegistry().ownerContentSearch.run(request, rpcOptions);
+    },
+    async cancelThreadContentSearch(request, rpcOptions) {
+      getDesktopBackendRegistry().ownerContentSearch.cancel(request.searchId, rpcOptions);
+    },
     async searchFederatedThreads(request, rpcOptions) {
       return await messagingBridge.searchFederatedThreads(request, rpcOptions);
     },
@@ -6845,27 +6944,9 @@ function localBackendOperations(): FederationBackendOperations {
     async updateSubthreadOrder(
       request: UpdateSubthreadOrderRequest,
     ): Promise<UpdateSubthreadOrderResponse> {
-      const backend = request.backend ?? "codex";
-      const threadIds = await getDesktopOverlayStore().updateSubthreadOrder({
-        backend,
-        parentThreadId: request.parentThreadId,
-        threadIds: request.threadIds,
-      });
-      await getDesktopBackendRegistry().publishLocalEvent({
-        backend,
-        notification: {
-          method: "thread/subthreadOrder/updated",
-          params: {
-            parentThreadId: request.parentThreadId,
-            threadIds,
-          },
-        },
-      });
-      return {
-        backend,
-        parentThreadId: request.parentThreadId,
-        threadIds,
-      };
+      // A viewer sends relative moves; the owner validates them against its
+      // complete child order, the same as a local drag.
+      return await updateLocalSubthreadOrder(request);
     },
     async setSubthreadsCollapsed(
       request: SetSubthreadsCollapsedRequest,
@@ -7029,6 +7110,24 @@ function localBackendOperations(): FederationBackendOperations {
       request: CompactThreadRequest,
     ): Promise<CompactThreadResponse> {
       return await getDesktopBackendRegistry().compactThread(request);
+    },
+    async listMcpConnections(): Promise<ListMcpConnectionsResponse> {
+      return { connections: await getMcpConnectionGatewayService().listConnections() };
+    },
+    async readThreadMcpConnections(
+      request: ReadThreadMcpConnectionsRequest,
+    ): Promise<SetThreadMcpConnectionsResponse> {
+      return await getDesktopBackendRegistry().readThreadMcpConnections(request);
+    },
+    async setThreadMcpConnections(
+      request: SetThreadMcpConnectionsRequest,
+    ): Promise<SetThreadMcpConnectionsResponse> {
+      return await getDesktopBackendRegistry().setThreadMcpConnections(request);
+    },
+    async describeThreadMcpConnections(
+      request: DescribeThreadMcpConnectionsRequest,
+    ): Promise<DescribeThreadMcpConnectionsResponse> {
+      return await getDesktopBackendRegistry().describeThreadMcpConnections(request);
     },
     async listThreadMcpServers(
       request: ListThreadMcpServersRequest,

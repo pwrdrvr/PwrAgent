@@ -18,6 +18,27 @@ afterEach(() => {
 });
 
 describe("ThreadSearchStore", () => {
+  it("refreshes changed archived metadata even when its provider timestamp is unchanged", () => {
+    const original = threadSummary({ id: "same-time", title: "Original title", updatedAt: 100 });
+    store.upsertThreads([original]);
+    store.upsertThreads([{ ...original, title: "Updated title", archivedAt: 200, model: "fixture-model" }]);
+    expect(store.search({ query: "Original", includeArchived: true, limit: 10 })).toEqual([]);
+    expect(store.search({ query: "Updated", includeArchived: true, limit: 10 })).toMatchObject([
+      { threadId: "same-time", archivedAt: 200, model: "fixture-model" },
+    ]);
+  });
+
+  it("rolls back the entire projection refresh if one changed document cannot be indexed", () => {
+    const original = threadSummary({ id: "existing", title: "Original title" });
+    store.upsertThread(original);
+    expect(() => store.upsertThreads([
+      { ...original, title: "Changed title" },
+      threadSummary({ id: "invalid", title: null as never }),
+    ])).toThrow();
+    expect(store.search({ query: "Original", limit: 10 })).toMatchObject([{ threadId: "existing" }]);
+    expect(store.search({ query: "Changed", limit: 10 })).toEqual([]);
+  });
+
   it("creates metadata and FTS tables without transcript columns", () => {
     const tables = stateDb.raw
       .prepare(
@@ -74,6 +95,17 @@ describe("ThreadSearchStore", () => {
         .search({ query: "7f2f4bd1-8e7b-4d3b-92e5", limit: 10 })
         .map((result) => result.threadId),
     ).toEqual(["7f2f4bd1-8e7b-4d3b-92e5-0e9ef15c9c84"]);
+  });
+
+  it("refreshes changed metadata after skipping an unchanged projection", () => {
+    const original = threadSummary({ id: "audit", title: "Original mail setup", model: "old-model" });
+    store.upsertThread(original);
+    store.upsertThread(original);
+    store.upsertThread({ ...original, title: "Updated mail audit", model: "new-model", summary: "DKIM settings" });
+    expect(store.search({ query: "Original", limit: 10 })).toEqual([]);
+    expect(store.search({ query: "DKIM", limit: 10 })).toEqual([
+      expect.objectContaining({ title: "Updated mail audit", model: "new-model", summary: "DKIM settings" }),
+    ]);
   });
 
   it("searches by prefixed ACP thread ids and their embedded UUIDs", () => {

@@ -3,13 +3,16 @@ import type {
   AppServerBackendKind,
   AppServerPendingRequestNotification,
   ListOperatorRequestsResponse,
+  ListOperatorRequestsRequest,
   OperatorRequestsChangedEvent,
   OperatorServerRequest,
+  OperatorQuestionThreadRequest,
 } from "@pwragent/shared";
 import {
   MAX_OPERATOR_ITEM_KEY_LENGTH,
   codexAsyncQuestionReplyMessageId,
   operatorServerRequestItemKey,
+  operatorQuestionItemKey,
   readCodexAsyncQuestionRepliesFromNotification,
   readCodexAsyncQuestionsFromNotification,
 } from "@pwragent/shared";
@@ -80,12 +83,21 @@ export class OperatorRequestService {
     this.unsubscribe = undefined;
   }
 
-  list(): ListOperatorRequestsResponse {
-    return {
-      serverRequests: this.listServerRequests(),
-      questions: this.store.listOpenQuestions(),
-      seenKeys: this.store.listSeenKeys(),
-    };
+  list(filter: ListOperatorRequestsRequest = {}): ListOperatorRequestsResponse {
+    const matches = (backend: AppServerBackendKind, threadId: string) =>
+      (!filter.backend || backend === filter.backend) && (!filter.threadId || threadId === filter.threadId);
+    const serverRequests = this.listServerRequests().filter((entry) => matches(entry.backend, entry.notification.params.threadId));
+    const questions = this.store.listOpenQuestions().filter((entry) => matches(entry.backend, entry.threadId));
+    let seenKeys = this.store.listSeenKeys();
+    if (filter.backend || filter.threadId) {
+      const visibleKeys = new Set([
+        ...this.store.listTodoItemKeys(filter),
+        ...questions.map((entry) => operatorQuestionItemKey(entry.backend, entry.threadId, entry.messageId)),
+        ...serverRequests.map((entry) => operatorServerRequestItemKey(entry.backend, entry.notification.params.threadId, entry.notification.params.requestId)),
+      ]);
+      seenKeys = seenKeys.filter((key) => visibleKeys.has(key));
+    }
+    return { serverRequests, questions, seenKeys };
   }
 
   markSeen(keys: readonly string[]): void {
@@ -96,19 +108,20 @@ export class OperatorRequestService {
     }
   }
 
+  listDismissedQuestions(params: OperatorQuestionThreadRequest): string[] {
+    return this.store.listDismissedQuestionMessageIds(params);
+  }
+
   dismissQuestion(params: {
     backend: AppServerBackendKind;
     threadId: string;
     messageId: string;
   }): void {
-    const changed = this.store.resolveQuestions({
-      backend: params.backend,
-      threadId: params.threadId,
-      messageIds: [params.messageId],
-      status: "dismissed",
+    const changed = this.store.dismissQuestion({
+      ...params,
       now: this.now(),
     });
-    if (changed) this.broadcast({ reason: "questions" });
+    if (changed) this.broadcast({ reason: "questions", backend: params.backend, threadId: params.threadId });
   }
 
   private handleEvent(event: AgentEvent): void {
@@ -125,7 +138,7 @@ export class OperatorRequestService {
         threadId: notification.params.threadId,
         now: this.now(),
       });
-      if (changed) this.broadcast({ reason: "questions" });
+      if (changed) this.broadcast({ reason: "questions", backend: event.backend, threadId: notification.params.threadId });
       return;
     }
     if (notification.method !== "item/completed") return;
@@ -140,7 +153,7 @@ export class OperatorRequestService {
         questions: asked.questions,
         now: this.now(),
       });
-      if (inserted) this.broadcast({ reason: "questions" });
+      if (inserted) this.broadcast({ reason: "questions", backend: event.backend, threadId });
       return;
     }
     const replies = readCodexAsyncQuestionRepliesFromNotification(notification);
@@ -153,7 +166,7 @@ export class OperatorRequestService {
         status: "answered",
         now: this.now(),
       });
-      if (changed) this.broadcast({ reason: "questions" });
+      if (changed) this.broadcast({ reason: "questions", backend: event.backend, threadId });
     }
   }
 

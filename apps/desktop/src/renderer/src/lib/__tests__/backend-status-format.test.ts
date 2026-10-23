@@ -288,7 +288,10 @@ describe("backend status formatting", () => {
     const resetAt = new Date(2026, 9, 5, 8).getTime();
     const row = describeRateLimitRow({ name: "Weekly limit", usedPercent: 53, resetAt }, now);
     expect(row).toMatchObject({ label: "Weekly limit", figure: "53%", text: "used", usedPercent: 53 });
-    expect(row.reset).toBe(`resets ${new Intl.DateTimeFormat(undefined, { weekday: "short", hour: "numeric" }).format(resetAt)}`);
+    expect(row.reset).toBe(`resets ${new Intl.DateTimeFormat(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" }).format(resetAt)}`);
+    // On the hour, the minutes still print. Compared by format, since the
+    // separator is locale-specific (fi-FI prints "8.00").
+    expect(row.reset).not.toBe(`resets ${new Intl.DateTimeFormat(undefined, { weekday: "short", hour: "numeric" }).format(resetAt)}`);
   });
 
   it("describes individual usage as used of total, and remaining percent as used", () => {

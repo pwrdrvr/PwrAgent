@@ -142,8 +142,8 @@ export function registerNativeVoiceIpcHandlers(): void {
       if (!availability.available) throw new Error(availability.reason);
       cameraApiKeys.set(event.sender.id, await getDesktopSettingsService().resolveDecisionApiKey("local"));
     }
-    sessions.setCamera(event.sender.id, request.sessionId, request.enabled);
     if (!request.enabled) abortCamera(event.sender.id, request.sessionId);
+    await sessions.setCamera(event.sender.id, request.sessionId, request.enabled);
   });
   ipcMain.handle(NATIVE_VOICE_CAMERA_CUE_CHANNEL, async (event, request: VoiceCameraCue) => {
     validTarget(request);

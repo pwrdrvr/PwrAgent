@@ -61,6 +61,8 @@ import type {
   FederationCapability,
   FederationJumpSearchRequest,
   FederationJumpSearchResponse,
+  FederationContentSearchRequest,
+  ThreadSearchResponse,
   FederationThreadSearchRequest,
   FederationThreadSearchResponse,
   FederationInstanceId,
@@ -81,6 +83,12 @@ import type {
   InterruptTurnResponse,
   ListBackendsRequest,
   ListBackendsResponse,
+  DescribeThreadMcpConnectionsRequest,
+  DescribeThreadMcpConnectionsResponse,
+  ListMcpConnectionsResponse,
+  ReadThreadMcpConnectionsRequest,
+  SetThreadMcpConnectionsRequest,
+  SetThreadMcpConnectionsResponse,
   ListThreadMcpServersRequest,
   ListThreadMcpServersResponse,
   ListModelSettingsRecentsRequest,
@@ -461,6 +469,8 @@ export const FEDERATION_BACKEND_METHODS = {
   getNavigationSnapshot: "backend.getNavigationSnapshot",
   searchNavigationThreads: "backend.searchNavigationThreads",
   searchFederatedThreads: "backend.searchFederatedThreads",
+  searchThreadContent: "backend.searchThreadContent",
+  cancelThreadContentSearch: "backend.cancelThreadContentSearch",
   /** @deprecated Collection enumeration; use bounded queries or exact-ID archive lookup. */
   listThreads: "backend.listThreads",
   resolveThread: "backend.resolveThread",
@@ -511,6 +521,10 @@ export const FEDERATION_BACKEND_METHODS = {
   cancelScheduledThreadAction: "backend.cancelScheduledThreadAction",
   sendScheduledThreadActionNow: "backend.sendScheduledThreadActionNow",
   compactThread: "backend.compactThread",
+  listMcpConnections: "backend.listMcpConnections",
+  readThreadMcpConnections: "backend.readThreadMcpConnections",
+  setThreadMcpConnections: "backend.setThreadMcpConnections",
+  describeThreadMcpConnections: "backend.describeThreadMcpConnections",
   listThreadMcpServers: "backend.listThreadMcpServers",
   reloadCodexMcpConfig: "backend.reloadCodexMcpConfig",
   controlActiveTurn: "backend.controlActiveTurn",
@@ -593,6 +607,8 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.getNavigationSnapshot]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.searchNavigationThreads]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.searchFederatedThreads]: "federated_search",
+  [FEDERATION_BACKEND_METHODS.searchThreadContent]: "thread_detail",
+  [FEDERATION_BACKEND_METHODS.cancelThreadContentSearch]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.listThreads]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.resolveThread]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.resolveThreadAdmissionState]: "messaging_route",
@@ -649,6 +665,10 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.cancelScheduledThreadAction]: "scheduled_actions",
   [FEDERATION_BACKEND_METHODS.sendScheduledThreadActionNow]: "scheduled_actions",
   [FEDERATION_BACKEND_METHODS.compactThread]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.listMcpConnections]: "thread_detail",
+  [FEDERATION_BACKEND_METHODS.readThreadMcpConnections]: "thread_detail",
+  [FEDERATION_BACKEND_METHODS.setThreadMcpConnections]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.describeThreadMcpConnections]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.listThreadMcpServers]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.reloadCodexMcpConfig]: "turn_control",
   [FEDERATION_BACKEND_METHODS.controlActiveTurn]: "turn_control",
@@ -775,6 +795,14 @@ export type FederationBackendOperations = {
     request: FederationThreadSearchRequest,
     rpcOptions?: FederationRpcRequestOptions,
   ): Promise<FederationThreadSearchResponse>;
+  searchThreadContent?(
+    request: FederationContentSearchRequest,
+    rpcOptions?: FederationRpcRequestOptions,
+  ): Promise<ThreadSearchResponse>;
+  cancelThreadContentSearch?(
+    request: { searchId: string },
+    rpcOptions?: FederationRpcRequestOptions,
+  ): Promise<void>;
   listThreads(
     request?: AppServerListThreadsRequest,
     rpcOptions?: FederationRpcRequestOptions,
@@ -886,6 +914,16 @@ export type FederationBackendOperations = {
     request: ScheduledThreadActionIdRequest,
   ): Promise<ScheduledThreadActionMutationResponse>;
   compactThread(request: CompactThreadRequest): Promise<CompactThreadResponse>;
+  listMcpConnections(): Promise<ListMcpConnectionsResponse>;
+  readThreadMcpConnections(
+    request: ReadThreadMcpConnectionsRequest,
+  ): Promise<SetThreadMcpConnectionsResponse>;
+  setThreadMcpConnections(
+    request: SetThreadMcpConnectionsRequest,
+  ): Promise<SetThreadMcpConnectionsResponse>;
+  describeThreadMcpConnections(
+    request: DescribeThreadMcpConnectionsRequest,
+  ): Promise<DescribeThreadMcpConnectionsResponse>;
   listThreadMcpServers(
     request: ListThreadMcpServersRequest,
   ): Promise<ListThreadMcpServersResponse>;
@@ -1181,6 +1219,18 @@ export function registerFederationBackendHandlers(params: {
         );
       },
     );
+  }
+  if (params.backend.searchThreadContent) {
+    params.router.registerHandler(FEDERATION_BACKEND_METHODS.searchThreadContent, async (envelope) =>
+      await params.backend.searchThreadContent!(envelope.params as FederationContentSearchRequest, {
+        deadlineAt: envelope.deadlineAt, requesterInstanceId: envelope.sourceInstanceId,
+      }));
+  }
+  if (params.backend.cancelThreadContentSearch) {
+    params.router.registerHandler(FEDERATION_BACKEND_METHODS.cancelThreadContentSearch, async (envelope) =>
+      await params.backend.cancelThreadContentSearch!(envelope.params as { searchId: string }, {
+        requesterInstanceId: envelope.sourceInstanceId,
+      }));
   }
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.listThreads,
@@ -1612,6 +1662,31 @@ export function registerFederationBackendHandlers(params: {
     async (envelope) =>
       await params.backend.compactThread(
         envelope.params as CompactThreadRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.listMcpConnections,
+    async () => await params.backend.listMcpConnections(),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.readThreadMcpConnections,
+    async (envelope) =>
+      await params.backend.readThreadMcpConnections(
+        envelope.params as ReadThreadMcpConnectionsRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.setThreadMcpConnections,
+    async (envelope) =>
+      await params.backend.setThreadMcpConnections(
+        envelope.params as SetThreadMcpConnectionsRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.describeThreadMcpConnections,
+    async (envelope) =>
+      await params.backend.describeThreadMcpConnections(
+        envelope.params as DescribeThreadMcpConnectionsRequest,
       ),
   );
   params.router.registerHandler(
@@ -2135,6 +2210,19 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
     });
   }
 
+  async searchThreadContent(
+    request: FederationContentSearchRequest,
+    rpcOptions?: FederationRpcRequestOptions,
+  ): Promise<ThreadSearchResponse> {
+    return await this.rpc.request<ThreadSearchResponse>({
+      method: FEDERATION_BACKEND_METHODS.searchThreadContent, params: request, ...rpcOptions,
+    });
+  }
+
+  async cancelThreadContentSearch(request: { searchId: string }): Promise<void> {
+    await this.rpc.request({ method: FEDERATION_BACKEND_METHODS.cancelThreadContentSearch, params: request });
+  }
+
   async listThreads(
     _request: AppServerListThreadsRequest = {},
     _rpcOptions?: FederationRpcRequestOptions,
@@ -2581,6 +2669,40 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   ): Promise<CompactThreadResponse> {
     return await this.rpc.request<CompactThreadResponse>({
       method: FEDERATION_BACKEND_METHODS.compactThread,
+      params: request,
+    });
+  }
+
+  async listMcpConnections(): Promise<ListMcpConnectionsResponse> {
+    return await this.rpc.request<ListMcpConnectionsResponse>({
+      method: FEDERATION_BACKEND_METHODS.listMcpConnections,
+      params: {},
+    });
+  }
+
+  async readThreadMcpConnections(
+    request: ReadThreadMcpConnectionsRequest,
+  ): Promise<SetThreadMcpConnectionsResponse> {
+    return await this.rpc.request<SetThreadMcpConnectionsResponse>({
+      method: FEDERATION_BACKEND_METHODS.readThreadMcpConnections,
+      params: request,
+    });
+  }
+
+  async setThreadMcpConnections(
+    request: SetThreadMcpConnectionsRequest,
+  ): Promise<SetThreadMcpConnectionsResponse> {
+    return await this.rpc.request<SetThreadMcpConnectionsResponse>({
+      method: FEDERATION_BACKEND_METHODS.setThreadMcpConnections,
+      params: request,
+    });
+  }
+
+  async describeThreadMcpConnections(
+    request: DescribeThreadMcpConnectionsRequest,
+  ): Promise<DescribeThreadMcpConnectionsResponse> {
+    return await this.rpc.request<DescribeThreadMcpConnectionsResponse>({
+      method: FEDERATION_BACKEND_METHODS.describeThreadMcpConnections,
       params: request,
     });
   }

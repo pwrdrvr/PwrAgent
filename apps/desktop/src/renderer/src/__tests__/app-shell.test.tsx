@@ -1304,6 +1304,58 @@ describe("App", () => {
   });
 
   it.each([
+    { action: "Got it", opensSettings: false },
+    { action: "Review access", opensSettings: true },
+  ])("closes the Auto access upgrade notice for good from $action", async ({
+    action,
+    opensSettings,
+  }) => {
+    const dismissLaunchpadAccessNotice = vi.fn(async () => undefined);
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: ownerApi({
+        getNavigationSnapshot: async () => ({
+          backend: "all" as const,
+          fetchedAt: Date.now(),
+          unchanged: false,
+          inboxThreadKeys: [],
+          threads: [],
+          directories: [],
+          launchpadDefaults: {
+            backend: "codex" as const,
+            executionMode: "auto" as const,
+          },
+        }),
+        listBackends: async () => ({ fetchedAt: Date.now(), backends: [] }),
+        readLaunchpadAccessNoticePending: async () => true,
+        dismissLaunchpadAccessNotice,
+        readSettings: async () =>
+          await new Promise<never>(() => {
+            // Keep the shell mounted without needing a full settings fixture.
+          }),
+      }),
+    });
+
+    render(<App />);
+    expect(await screen.findByText("New threads start on Auto")).toBeInTheDocument();
+    expect(dismissLaunchpadAccessNotice).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: action }));
+
+    expect(dismissLaunchpadAccessNotice).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("New threads start on Auto")).not.toBeInTheDocument();
+    if (opensSettings) {
+      await act(async () => {
+        await vi.dynamicImportSettled();
+      });
+      const providersButton = screen
+        .getAllByRole("button", { name: "AI Providers" })
+        .find((button) => button.classList.contains("settings-nav__button"));
+      expect(providersButton).toHaveAttribute("aria-current", "page");
+    }
+  });
+
+  it.each([
     {
       label: "the local window",
       rendererTarget: undefined,

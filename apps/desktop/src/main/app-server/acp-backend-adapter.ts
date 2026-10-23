@@ -3058,18 +3058,11 @@ export class AcpBackendAdapter {
                 },
           });
         }
-        await this.emit({
-          backend: agent.backendId,
-          notification: {
-            method: "thread/status/changed",
-            params: {
-              threadId: sessionId,
-              status: {
-                type: replay.threadStatus ?? "unknown",
-              },
-            },
-          },
-        });
+        // Replay status belongs to the snapshot captured when this update
+        // arrived. Metadata and session-load callbacks can finish after a
+        // newer prompt starts; publishing their old idle snapshot would retire
+        // that running turn. Live lifecycle is owned by turn/started and the
+        // prompt-settled terminal events, not transcript replay snapshots.
       },
       onPromptError: async ({ sessionId, turnId, error }) => {
         this.liveTurnUsage.delete(
@@ -3095,16 +3088,6 @@ export class AcpBackendAdapter {
                   message: error instanceof Error ? error.message : String(error),
                 },
               },
-            },
-          },
-        });
-        await this.emit({
-          backend: agent.backendId,
-          notification: {
-            method: "thread/status/changed",
-            params: {
-              threadId: sessionId,
-              status: { type: "idle" },
             },
           },
         });

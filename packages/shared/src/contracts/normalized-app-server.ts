@@ -202,6 +202,16 @@ export type AppServerReviewFinding = {
   };
 };
 
+/**
+ * What a reviewer later reported about one of its own findings, by the
+ * finding's index in the review's output. Claude Code re-reports a review's
+ * findings this way after `/code-review --fix`, or after later work fixes them.
+ */
+export type AppServerReviewFindingOutcome = {
+  index: number;
+  outcome: "fixed" | "skipped" | "no_change_needed";
+};
+
 export type AppServerReviewOutput = {
   findings: AppServerReviewFinding[];
   overall_correctness: "patch is correct" | "patch is incorrect";
@@ -630,6 +640,8 @@ export type AppServerThreadMessageOriginKind =
 
 export type AppServerThreadMessageOrigin = {
   kind: AppServerThreadMessageOriginKind;
+  /** Durable cross-thread prerequisite admission. */
+  dependencyId?: string;
   systemReason?: "monitor-job-suggestion" | "thread-correspondence";
   sourceThread?: {
     /** Sender correspondence message, when PwrAgent has a durable breadcrumb. */
@@ -1682,7 +1694,27 @@ export type AppServerMcpElicitationRequestNotification = {
 };
 
 export type AppServerNotification =
+  | { method: "thread/operatorQuestions/changed"; params: { backend: AppServerBackendKind; threadId: string } }
+  | { method: "thread/operatorRequests/changed" | "thread/operatorRequestDetails/changed"; params: import("./operator-requests").OperatorRequestsChangedEvent }
+  | { method: "thread/todos/changed" | "thread/todoDetails/changed"; params: import("./thread-todos").ThreadTodosChangedEvent }
+  | {
+      method: "thread/dependencies/updated";
+      params: { threadId: string; dependencyId: string };
+    }
   | NavigationThreadGitWorkingStateUpdatedNotification
+  | {
+      /**
+       * A reviewer reported outcomes for findings of a review it already
+       * completed. `reviewId` is the review entry's id in the transcript.
+       */
+      method: "thread/review/outcomesReported";
+      params: {
+        threadId: string;
+        turnId: string;
+        reviewId: string;
+        outcomes: AppServerReviewFindingOutcome[];
+      };
+    }
   | {
       method: "error";
       params: {
@@ -1750,7 +1782,7 @@ export type AppServerNotification =
         turnId: string;
         turn: {
           id: string;
-          status: "completed";
+          status: "completed" | "interrupted" | "cancelled";
           startedAt?: number | null;
           completedAt?: number | null;
           durationMs?: number | null;

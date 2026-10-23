@@ -2,6 +2,7 @@ import type {
   AppServerBackendKind,
   CodexAsyncQuestion,
   OperatorAsyncQuestion,
+  ListOperatorRequestsRequest,
 } from "@pwragent/shared";
 import { normalizeCodexAsyncQuestions } from "@pwragent/shared";
 import type { StateDb } from "../state/state-db.js";
@@ -92,6 +93,16 @@ export class OperatorRequestStore {
     return result.changes > 0;
   }
 
+  dismissQuestion(params: { backend: AppServerBackendKind; threadId: string; messageId: string; now: number }): boolean {
+    const open = this.stateDb.raw.prepare(
+      `SELECT 1 FROM operator_async_questions
+        WHERE backend = ? AND thread_id = ? AND message_id = ? AND status = 'open'`,
+    ).get(params.backend, params.threadId, params.messageId);
+    // Duplicate RPCs and clicks avoid even a zero-row write transaction.
+    if (!open) return false;
+    return this.resolveQuestions({ ...params, messageIds: [params.messageId], status: "dismissed" });
+  }
+
   listOpenQuestions(): OperatorAsyncQuestion[] {
     const rows = this.stateDb.raw
       .prepare(
@@ -115,6 +126,14 @@ export class OperatorRequestStore {
     });
   }
 
+  listDismissedQuestionMessageIds(params: { backend: AppServerBackendKind; threadId: string }): string[] {
+    return (this.stateDb.raw.prepare(
+      `SELECT message_id FROM operator_async_questions
+        WHERE backend = ? AND thread_id = ? AND status = 'dismissed'`,
+    ).all(params.backend, params.threadId) as Array<{ message_id: string }>)
+      .map((row) => row.message_id);
+  }
+
   listSeenKeys(): string[] {
     return (
       this.stateDb.raw
@@ -123,15 +142,33 @@ export class OperatorRequestStore {
     ).map((row) => row.item_key);
   }
 
+  /** Seen marks for cards on the requested owner-local thread(s), including reviews. */
+  listTodoItemKeys(filter: ListOperatorRequestsRequest): string[] {
+    return (this.stateDb.raw.prepare(`
+      SELECT 'todo:' || todo_id AS item_key FROM thread_todos
+        WHERE (? IS NULL OR backend = ?) AND (? IS NULL OR thread_id = ?)
+      UNION ALL
+      SELECT 'todo:review:' || review_id AS item_key FROM thread_reviews
+        WHERE (? IS NULL OR backend = ?) AND (? IS NULL OR thread_id = ?)
+    `).all(filter.backend ?? null, filter.backend ?? null, filter.threadId ?? null, filter.threadId ?? null,
+      filter.backend ?? null, filter.backend ?? null, filter.threadId ?? null, filter.threadId ?? null) as Array<{ item_key: string }>)
+      .map((row) => row.item_key);
+  }
+
   /** Marks items seen in one commit; returns how many were new. */
   markSeen(keys: readonly string[], now: number): number {
     if (keys.length === 0) return 0;
+    const exists = this.stateDb.raw.prepare("SELECT 1 FROM operator_seen_items WHERE item_key = ?");
+    const fresh = [...new Set(keys)].filter((key) => !exists.get(key));
+    // Several viewers can mark the same item. Avoid even an empty write
+    // transaction on retries; INSERT OR IGNORE still handles concurrent writers.
+    if (fresh.length === 0) return 0;
     const insert = this.stateDb.raw.prepare(
       "INSERT OR IGNORE INTO operator_seen_items (item_key, seen_at) VALUES (?, ?)",
     );
     return this.stateDb.raw.transaction(() => {
       let added = 0;
-      for (const key of keys) {
+      for (const key of fresh) {
         added += insert.run(key, now).changes;
       }
       return added;

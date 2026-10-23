@@ -14,12 +14,12 @@ import type {
   ThreadTodoMergeMethodPreferences,
   ThreadTodoStatus,
 } from "@pwragent/shared";
-import { buildThreadIdentityKey } from "@pwragent/shared";
+import { threadTodoThreadKey } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
-import { readRendererFederationTarget } from "../../lib/federation-window";
 import type { ThreadTodoResolveOptions } from "./thread-todos-view";
 
 export type ThreadTodosController = {
+  error?: string;
   /** Open cards, newest first. */
   openTodos: ThreadTodo[];
   /** Open cards per `backend:threadId`, newest first. */
@@ -64,17 +64,17 @@ const EMPTY_MAP: ReadonlyMap<string, ThreadTodo[]> = new Map();
 const EMPTY_SET: ReadonlySet<string> = new Set();
 
 /**
- * Open thread to-dos for this window. Cards live in the owning instance's
- * state, so a window fronting a peer shows none.
+ * Open thread to-dos for this window, routed to each owning instance.
  *
  * The change event is a marker: every one triggers one list call, and calls
  * that arrive while a list is in flight collapse into a single follow-up.
  */
 export function useThreadTodos(
   desktopApi: ThreadTodosApi | undefined,
+  mountedThreadKeys = "",
 ): ThreadTodosController {
-  const remoteWindow = readRendererFederationTarget() !== undefined;
-  const api = remoteWindow ? undefined : desktopApi;
+  const api = desktopApi;
+  const [error, setError] = useState<string>();
   const [openTodos, setOpenTodos] = useState<ThreadTodo[]>(EMPTY_TODOS);
   const [revision, setRevision] = useState(0);
   const [mergeMethods, setMergeMethods] = useState<ThreadTodoMergeMethodPreferences>();
@@ -95,10 +95,11 @@ export function useThreadTodos(
         reloadQueuedRef.current = false;
         try {
           const response = await list({ status: "open" });
+          setError(response.errors?.join("\n"));
           setOpenTodos(response.todos.length > 0 ? response.todos : EMPTY_TODOS);
           if (response.mergeMethods) setMergeMethods(response.mergeMethods);
         } catch (error) {
-          console.warn("Loading thread to-dos failed.", error);
+          setError(error instanceof Error ? error.message : String(error));
         }
       } while (reloadQueuedRef.current);
     } finally {
@@ -113,7 +114,7 @@ export function useThreadTodos(
       void reload();
     });
     return () => unsubscribe?.();
-  }, [api, reload]);
+  }, [api, reload, mountedThreadKeys]);
 
   const resolve = useCallback(
     async (
@@ -163,7 +164,7 @@ export function useThreadTodos(
     if (openTodos.length === 0) return EMPTY_MAP;
     const map = new Map<string, ThreadTodo[]>();
     for (const todo of openTodos) {
-      const key = buildThreadIdentityKey(todo.backend, todo.threadId);
+      const key = threadTodoThreadKey(todo);
       const list = map.get(key);
       if (list) list.push(todo);
       else map.set(key, [todo]);
@@ -173,6 +174,7 @@ export function useThreadTodos(
 
   return useMemo(
     () => ({
+      error,
       openTodos,
       openByThreadKey,
       revision,
@@ -183,6 +185,7 @@ export function useThreadTodos(
       setItemChecked,
     }),
     [
+      error,
       openTodos,
       openByThreadKey,
       revision,

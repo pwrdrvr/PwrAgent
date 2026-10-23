@@ -1,3 +1,4 @@
+import { threadTodoThreadKey } from "@pwragent/shared";
 import {
   useEffect,
   useId,
@@ -5,10 +6,9 @@ import {
   type ComponentType,
   type KeyboardEvent,
 } from "react";
-import type { ThreadTodo, ThreadTodoKind } from "@pwragent/shared";
+import type { FederationRemoteTarget, ThreadTodo, ThreadTodoKind } from "@pwragent/shared";
 import {
   THREAD_TODO_RESOLUTION_RESULTS,
-  buildThreadIdentityKey,
   codexAsyncQuestionItemId,
   operatorTodoItemKey,
   threadTodoItemProgress,
@@ -40,7 +40,10 @@ const KIND_ICONS: Record<ThreadTodoKind, ComponentType<IconProps> | undefined> =
   handoff: HandoffIcon,
 };
 
-const NO_PROJECT_KEY = "";
+/** Presentation identity only: card project keys stay owner-local for mutations. */
+function projectGroupKey(key: string | undefined, owner?: FederationRemoteTarget): string {
+  return JSON.stringify([owner?.instanceId ?? null, key ?? null]);
+}
 
 /** Results an operator's own resolve wrote; those can be taken back. */
 const RESOLUTION_RESULTS: ReadonlySet<string> = new Set(
@@ -75,6 +78,8 @@ export type ThreadTodosPanelProps = {
   threadRunning?: boolean;
   /** Directory key of that thread's project, when it has one. */
   projectKey?: string;
+  /** Owner of the selected project; absent for this instance. */
+  projectOwner?: FederationRemoteTarget;
   onStartReview: (todo: ThreadTodo, options?: ThreadTodoResolveOptions) => void;
   onDoHere?: (
     todo: ThreadTodo,
@@ -102,6 +107,7 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
   const { view, threadKey, projectKey } = props;
   const [scope, setScopeState] = useState<ThreadTodoScope>(rememberedScope);
   const [showResolved, setShowResolved] = useState(false);
+  const [actionError, setActionError] = useState<string>();
   const [resolved, setResolved] = useState<ThreadTodo[]>();
   const controlId = useId();
   const listResolved = view.listResolved;
@@ -115,11 +121,14 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
   useEffect(() => {
     if (!showResolved || !listResolved) return;
     let cancelled = false;
+    setActionError(undefined);
     void listResolved().then((todos) => {
       if (!cancelled) setResolved(todos);
     }).catch((error: unknown) => {
-      console.warn("Loading resolved to-dos failed.", error);
-      if (!cancelled) setResolved([]);
+      if (!cancelled) {
+        setActionError(String(error));
+        setResolved([]);
+      }
     });
     return () => {
       cancelled = true;
@@ -130,9 +139,10 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
   const todoInScope = (todo: ThreadTodo, lens: ThreadTodoScope): boolean => {
     switch (lens) {
       case "thread":
-        return buildThreadIdentityKey(todo.backend, todo.threadId) === threadKey;
+        return threadTodoThreadKey(todo) === threadKey;
       case "project":
         return projectKey !== undefined
+          && todo.federationTarget?.instanceId === props.projectOwner?.instanceId
           && (todo.sourceProject?.key === projectKey
             || todo.targetProject?.key === projectKey);
       case "all":
@@ -145,6 +155,7 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
         return wait.threadKey === threadKey;
       case "project":
         return projectKey !== undefined
+          && wait.federationTarget?.instanceId === props.projectOwner?.instanceId
           && threadProjectForKey(wait.threadKey)?.key === projectKey;
       case "all":
         return true;
@@ -217,6 +228,7 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
   return (
     <section className="context-panel__section thread-todos-panel">
       <h3>To-dos</h3>
+      {actionError || view.queueError ? <p className="thread-todo-card__error" role="alert">{actionError ?? view.queueError}</p> : null}
       <div className="thread-todos-panel__controls">
         <div
           aria-label="To-do scope"
@@ -332,7 +344,7 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
                     );
                   }
                   const { todo } = item;
-                  const mine = buildThreadIdentityKey(todo.backend, todo.threadId) === threadKey;
+                  const mine = threadTodoThreadKey(todo) === threadKey;
                   return (
                     <li key={todo.id}>
                       {mine && todo.status === "open" ? (
@@ -344,23 +356,26 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
                           instances={view.instances}
                           projectMenu={view.projectMenu}
                           onResolve={(target, status, resolution, options) => {
+                            setActionError(undefined);
                             void view.resolve(target, status, resolution, options).catch(
                               (error: unknown) => {
-                                console.warn("Resolving a to-do failed.", error);
+                                setActionError(String(error));
                               },
                             );
                           }}
                           onRun={(target, options) => {
+                            setActionError(undefined);
                             void view.run(target, options).catch((error: unknown) => {
-                              console.warn("Running a to-do failed.", error);
+                              setActionError(String(error));
                             });
                           }}
                           onStartReview={props.onStartReview}
                           onDoHere={props.onDoHere}
                           onSetItemChecked={(target, item, checked) => {
+                            setActionError(undefined);
                             void view.setItemChecked(target, item.id, checked).catch(
                               (error: unknown) => {
-                                console.warn("Checking a to-do step failed.", error);
+                                setActionError(String(error));
                               },
                             );
                           }}
@@ -514,14 +529,14 @@ function groupItems(
     let title: string;
     if (item.type === "wait") {
       const project = view.threadProjectForKey(item.wait.threadKey);
-      key = scope === "all" ? project?.key ?? NO_PROJECT_KEY : item.wait.threadKey;
+      key = scope === "all" ? projectGroupKey(project?.key, item.wait.federationTarget) : item.wait.threadKey;
       title = scope === "all"
         ? project?.label ?? "No project"
         : view.threadTitleForKey(item.wait.threadKey);
     } else {
       key = scope === "all"
-        ? item.todo.sourceProject?.key ?? NO_PROJECT_KEY
-        : buildThreadIdentityKey(item.todo.backend, item.todo.threadId);
+        ? projectGroupKey(item.todo.sourceProject?.key, item.todo.federationTarget)
+        : threadTodoThreadKey(item.todo);
       title = scope === "all"
         ? item.todo.sourceProject?.label ?? "No project"
         : view.threadTitle(item.todo);
@@ -536,7 +551,9 @@ function groupItems(
       groups.set(key, { key, title, items: [item], paused });
     }
   }
-  const first = scope === "all" ? props.projectKey : props.threadKey;
+  const first = scope === "all"
+    ? props.projectKey === undefined ? undefined : projectGroupKey(props.projectKey, props.projectOwner)
+    : props.threadKey;
   const ordered = [...groups.values()];
   const current = ordered.findIndex((group) => group.key === first);
   if (current > 0) {

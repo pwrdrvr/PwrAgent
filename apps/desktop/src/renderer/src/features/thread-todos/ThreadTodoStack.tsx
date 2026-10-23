@@ -102,7 +102,7 @@ export function ThreadTodoStack(props: ThreadTodoStackProps) {
         });
       }
     }).catch((error: unknown) => {
-      console.warn("Resolving a to-do failed.", error);
+      showNotice({ todo: target, text: String(error), undoable: false });
     });
   };
   const run = (target: ThreadTodo, options?: ThreadTodoRunOptions): void => {
@@ -111,21 +111,20 @@ export function ThreadTodoStack(props: ThreadTodoStackProps) {
         showNotice({ todo: ended, text: ended.result, undoable: false });
       }
     }).catch((error: unknown) => {
-      console.warn("Running a to-do failed.", error);
+      showNotice({ todo: target, text: String(error), undoable: false });
     });
   };
   const onDoHere = props.onDoHere;
   const doHere = onDoHere
-    ? (target: ThreadTodo, options?: ThreadTodoDoHereOptions): void => {
-        void onDoHere(target, options).then((sent) => {
-          if (!sent) {
-            showNotice({
-              todo: target,
-              text: "The composer is busy. Try again once it is free.",
-              undoable: false,
-            });
-          }
-        });
+    ? async (target: ThreadTodo, options?: ThreadTodoDoHereOptions): Promise<boolean> => {
+        try {
+          const sent = await onDoHere(target, options);
+          if (!sent) showNotice({ todo: target, text: "The composer is busy. Try again once it is free.", undoable: false });
+          return sent;
+        } catch (error) {
+          showNotice({ todo: target, text: String(error), undoable: false });
+          return false;
+        }
       }
     : undefined;
   const className = `thread-todo-stack${props.findOpen ? " is-below-find" : ""}`;
@@ -198,7 +197,7 @@ export function ThreadTodoStack(props: ThreadTodoStackProps) {
             onDoHere={doHere}
             onSetItemChecked={(target, item, checked) => {
               void view.setItemChecked(target, item.id, checked).catch((error: unknown) => {
-                console.warn("Checking a to-do step failed.", error);
+                showNotice({ todo: target, text: String(error), undoable: false });
               });
             }}
           />
@@ -225,7 +224,7 @@ export function ThreadTodoStack(props: ThreadTodoStackProps) {
                 setSelectedId(notice.todo.id);
                 void view.resolve(notice.todo, "open").catch(
                   (error: unknown) => {
-                    console.warn("Reopening a to-do failed.", error);
+                    showNotice({ todo: notice.todo, text: String(error), undoable: false });
                   },
                 );
               }}

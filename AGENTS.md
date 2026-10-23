@@ -689,6 +689,15 @@ Render a brand through `BrandLockup`
   - The **Pinned** and **Keep at Top** check items toggle in place and keep
     the menu open. Return or a click outside closes it.
 - Sort unpinned directory threads by thread creation time.
+- Project folders, sub-threads, and pins all use one pointer drag:
+  a 4px lift, the tilted held card, the dimmed source, Escape to cancel.
+  Never native HTML drag (see `pointer-reorder-drag.ts`).
+  - Holding a project header folds Directories to one line per project
+    (`.is-folding-directories`), so a drop is a choice between folders.
+    It is a class on the list, never a disclosure change.
+  - A pinned folder dropped below the **Directories** divider is unpinned.
+  - Only a tray's direct children reorder, across providers. The owner
+    resolves each child's provider from its own child list.
 
 ### Unread behavior
 

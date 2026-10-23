@@ -696,6 +696,14 @@ test("directory launchpad keeps selected environment controls after restart", as
     });
     seededHomeRoot = undefined;
 
+    // The environment belongs to this directory's saved launchpad. Open it
+    // after discovery publishes the row instead of relying on startup's
+    // implicit selection while provider discovery is still in flight.
+    await secondApp.window.getByRole("tab", { name: "directories" }).click();
+    await secondApp.window
+      .getByRole("button", { name: "Open new thread launchpad for FixtureRepo" })
+      .click();
+
     const settings = secondApp.window.getByLabel("New thread settings");
     await expect(
       secondApp.window.getByRole("textbox", { name: "New thread" }),

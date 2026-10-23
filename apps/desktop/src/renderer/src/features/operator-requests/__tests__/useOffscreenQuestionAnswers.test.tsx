@@ -30,22 +30,23 @@ function deferred<T>() {
 }
 
 describe("useOffscreenQuestionAnswers", () => {
-  it("reports the reply only once the thread's owner took it", async () => {
+  it.each([undefined, { scope: "remote" as const, instanceId: "owner" }])("reports the reply only once its owner takes it (%j)", async (federationTarget) => {
+    const [ownedWait] = buildOperatorWaits({ serverRequests: [], seenKeys: [], questions: [{ ...wait!.question!, federationTarget }] });
     const admitted = deferred<SubmitThreadReplyResponse>();
     const submitThreadReply = vi.fn((_request: SubmitThreadReplyRequest) => admitted.promise);
     const onUserRepliedToThread = vi.fn();
     const { result } = renderHook(() => useOffscreenQuestionAnswers({
       submitThreadReply,
-      findThread: (threadKey) => (threadKey === "codex:thread-b" ? thread : undefined),
+      findThread: (threadKey) => (threadKey === ownedWait!.threadKey ? thread : undefined),
       onUserRepliedToThread,
     }));
 
     let answered!: Promise<boolean>;
     act(() => {
-      answered = result.current.answerQuestion!(wait!, text);
+      answered = result.current.answerQuestion!(ownedWait!, text);
     });
     expect(submitThreadReply).toHaveBeenCalledWith({
-      backend: "codex", threadId: "thread-b", input: [{ type: "text", text }],
+      backend: "codex", threadId: "thread-b", federationTarget, input: [{ type: "text", text }],
     });
     // Sending is not replying: Attention keeps the thread until it is taken.
     expect(onUserRepliedToThread).not.toHaveBeenCalled();
@@ -58,7 +59,7 @@ describe("useOffscreenQuestionAnswers", () => {
       await expect(answered).resolves.toBe(true);
     });
     expect(onUserRepliedToThread).toHaveBeenCalledWith(thread);
-    expect(result.current.sentQuestionAnswers.get(`codex:thread-b\0${itemId}`)).toBe("staging");
+    expect(result.current.sentQuestionAnswers.get(`${ownedWait!.threadKey}\0${itemId}`)).toBe("staging");
   });
 
   it("passes a refusal on and leaves the thread unreplied", async () => {

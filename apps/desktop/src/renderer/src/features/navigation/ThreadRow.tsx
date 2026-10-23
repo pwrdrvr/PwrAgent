@@ -7,7 +7,6 @@ import {
   type CSSProperties,
   type KeyboardEvent,
   type MouseEvent,
-  type DragEvent,
   type PointerEvent,
 } from "react";
 import type {
@@ -28,7 +27,6 @@ import { useThreadLinkHoverTarget } from "../../lib/thread-links";
 import { isNativeDragInteractionActive } from "../../lib/native-drag-interaction";
 import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
 import { PrChip } from "../pr-status/PrChip";
-import type { DropIndicatorPosition } from "./drag-drop";
 import { ReactionPicker } from "./ReactionPicker";
 import { ThreadMetaChips } from "./ThreadMetaChips";
 import {
@@ -36,9 +34,9 @@ import {
   isThreadRemoteWorkHere,
   ThreadRowStatus,
 } from "./ThreadRowStatus";
-import { setThreadRowNativeDragPreview } from "./thread-row-drag-preview";
 import { InlineRenameInput } from "./InlineRenameInput";
 import { matchMoveHotkey } from "./thread-action-hotkeys";
+import { threadRowInstanceKey, type ThreadRowInstance } from "./thread-row-instance";
 
 const HOVER_PREFETCH_DELAY_MS = 750;
 const absoluteDateFormatter = new Intl.DateTimeFormat(undefined, {
@@ -56,16 +54,7 @@ const absoluteDateFormatter = new Intl.DateTimeFormat(undefined, {
  * no matter how stable the row's data was. Handing the identity back instead
  * lets a list hold ONE handler for all of its rows.
  */
-export type ThreadRowRef = {
-  /**
-   * The directory section this row renders under. The Directories lens shows
-   * a thread once per directory it is linked to, so the thread alone does not
-   * say which row was acted on. Absent in the lenses with no directory
-   * sections.
-   */
-  directoryKey?: string;
-  /** `threadSummaryIdentityKey(thread)`, so the list need not recompute it. */
-  threadKey: string;
+export type ThreadRowRef = ThreadRowInstance & {
   /** Whether this row renders in its directory's pinned group. */
   pinned: boolean;
 };
@@ -90,8 +79,9 @@ type ThreadRowProps = {
   compact?: boolean;
   /** Reported back through the row's callbacks as `ThreadRowRef`. */
   directoryKey?: string;
-  dropIndicator?: DropIndicatorPosition;
-  draggable?: boolean;
+  parentThreadKey?: string;
+  /** undefined uses thread selection; null preserves the current scroll position. */
+  revealThreadRowKey?: string | null;
   pointerDraggable?: boolean;
   includeLinkedDirectories?: boolean;
   linkedDirectoryMode?: "label" | "kind";
@@ -171,11 +161,6 @@ type ThreadRowProps = {
    * to collapse an already-collapsed section forever.
    */
   onToggleSubthreads?: (thread: NavigationThreadSummary) => void;
-  onDragStartThread?: (event: DragEvent<HTMLDivElement>) => void;
-  onDragOverThread?: (event: DragEvent<HTMLDivElement>) => void;
-  onDragLeaveThread?: (event: DragEvent<HTMLDivElement>) => void;
-  onDragEndThread?: (event: DragEvent<HTMLDivElement>) => void;
-  onDropOnThread?: (event: DragEvent<HTMLDivElement>) => void;
   onPointerDownThread?: (
     event: PointerEvent<HTMLDivElement>,
     row: ThreadRowRef,
@@ -281,9 +266,13 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
   // one handler for every row instead of a closure per row. See `ThreadRowRef`.
   const rowIdentity: ThreadRowRef = {
     directoryKey: props.directoryKey,
+    parentThreadKey: props.parentThreadKey,
     threadKey,
     pinned: props.threadPinState === "pinned",
   };
+  const rowInstanceKey = threadRowInstanceKey(rowIdentity);
+  const revealActive = active && (props.revealThreadRowKey === undefined
+    || props.revealThreadRowKey === rowInstanceKey);
   const onPointerDownThreadProp = props.onPointerDownThread;
 
   // Stable identities for everything handed to a memoized chip below. These
@@ -317,7 +306,7 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
     }
   }, []);
   useEffect(() => {
-    if (!active) {
+    if (!revealActive) {
       return;
     }
 
@@ -344,7 +333,7 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
       });
       return () => window.cancelAnimationFrame(frame);
     }
-  }, [active, threadKey, revealSelectedThreadRequest, onRevealSelectedThreadComplete]);
+  }, [revealActive, rowInstanceKey, revealSelectedThreadRequest, onRevealSelectedThreadComplete]);
   const armHoverPrefetch = (): void => {
     if (isNativeDragInteractionActive()) return;
     if (
@@ -381,14 +370,10 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
   return (
     <div
       className={`thread-row-shell${
-        props.draggable || props.pointerDraggable ? " is-draggable" : ""
-      }${
-        props.dropIndicator ? ` is-drop-target-${props.dropIndicator}` : ""
+        props.pointerDraggable ? " is-draggable" : ""
       }${props.nested ? " thread-row-shell--nested" : ""}${
         props.subthreadCount ? " has-subthreads" : ""
       }`}
-      // Chromium will not drag-select text in a field inside a draggable.
-      draggable={props.draggable && !props.renaming}
       style={
         props.nested && (props.nestedDepth ?? 1) > 1
           ? ({
@@ -398,20 +383,12 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
       }
       data-hover-stable-row="thread"
       data-thread-key={threadKey}
+      data-thread-row-key={rowInstanceKey}
       data-thread-directory-key={props.directoryKey}
       data-thread-pin-key={props.threadPinState ? threadKey : undefined}
       data-thread-pin-state={props.threadPinState}
+      data-nested-depth={props.nested ? props.nestedDepth ?? 1 : undefined}
       role="listitem"
-      onDragStart={(event) => {
-        if (props.draggable) {
-          setThreadRowNativeDragPreview(event);
-        }
-        props.onDragStartThread?.(event);
-      }}
-      onDragOver={props.onDragOverThread}
-      onDragLeave={props.onDragLeaveThread}
-      onDragEnd={props.onDragEndThread}
-      onDrop={props.onDropOnThread}
       onPointerDown={
         onPointerDownThreadProp
           ? (event) => onPointerDownThreadProp(event, rowIdentity)

@@ -151,6 +151,7 @@ export function buildPwrAgentThreadOrchestrationToolDefinitions(
   return PWRAGENT_THREAD_ORCHESTRATION_OPERATION_NAMES.map((operation) => ({
     namespace: options.namespace ?? PWRAGENT_TOOL_NAMESPACE,
     name: operation,
+    annotations: { readOnlyHint: false },
     description: descriptionForOperation(operation),
     inputSchema: inputSchemaForOperation(operation),
     deferLoading: false,

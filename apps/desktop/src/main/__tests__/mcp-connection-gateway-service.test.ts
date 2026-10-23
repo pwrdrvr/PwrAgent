@@ -114,6 +114,30 @@ describe("McpConnectionGatewayService", () => {
     await expect(service.requestGatewayToolOperation({ ...base, operation: "gateway/tools/call", invocation })).rejects.toThrow("not available");
   });
 
+  it("gives live gateway catalog pages one 60-second budget", async () => {
+    const service = new McpConnectionGatewayService({ readGatewaySelection: async () => ["pwrsnap"], registry: temporaryRegistry(), settings: createSettings(createAuthorizedCredential()), leaseManager: null });
+    services.push(service);
+    let now = Date.now();
+    const timeouts: number[] = [];
+    const listTools = vi.fn(async (_params: unknown, options: { timeout: number }) => {
+      timeouts.push(options.timeout);
+      now += timeouts.length === 1 ? 45_000 : 15_000;
+      return { tools: [], nextCursor: `page-${timeouts.length + 1}` };
+    });
+    const close = vi.fn(async () => undefined);
+    Object.assign(service, { connectUpstreamClient: async () => ({ client: { listTools, close }, transport: { close } }) });
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      await expect(service.requestGatewayToolOperation({
+        connectionId: "pwrsnap", scopeKey: JSON.stringify(["gateway", "codex", "fixture"]),
+        operation: "gateway/tools/list", signal: new AbortController().signal,
+      })).rejects.toThrow("discovery deadline expired");
+      expect(timeouts).toEqual([60_000, 15_000]);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it("rejects repeated pagination cursors instead of approving an incomplete catalog", async () => {
     const service = new McpConnectionGatewayService({ readGatewaySelection: async () => ["pwrsnap"], registry: temporaryRegistry(), settings: createSettings(createAuthorizedCredential()), leaseManager: null });
     services.push(service);
@@ -165,7 +189,7 @@ describe("McpConnectionGatewayService", () => {
     const close = vi.fn(async () => undefined);
     Object.assign(service, { connectUpstreamClient: async () => { opened(); await gate; return { client: { close }, transport: { close } }; } });
     const read = service.requestGatewayToolOperation({ connectionId: "pwrsnap", scopeKey: JSON.stringify(["gateway", "codex", "fixture"]), operation: "gateway/tools/list", signal: new AbortController().signal });
-    const rejected = expect(read).rejects.toThrow("changed while its session was opening");
+    const rejected = expect(read).rejects.toThrow("request cancelled");
     await opening;
     await service.setConnectionEnabled("pwrsnap", false);
     await service.setConnectionEnabled("pwrsnap", true);
@@ -685,8 +709,7 @@ describe("McpConnectionGatewayService", () => {
       const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
       try {
         const timeouts: (number | undefined)[] = [];
-        // Each page takes 15 s and names another one. Two fit the budget;
-        // the third would be past it.
+        // Each page consumes 15 s of the shared 60 s allowance.
         const upstream = fakeUpstream(async (params, options) => {
           timeouts.push(options?.timeout);
           now += 15_000;
@@ -697,8 +720,8 @@ describe("McpConnectionGatewayService", () => {
 
         await expect(
           service.listConnectionTools({ connectionId: connection.id }),
-        ).rejects.toThrow("Datadog did not list its tools within 20 seconds.");
-        expect(timeouts).toEqual([20_000, 5_000]);
+        ).rejects.toThrow("tools/list page 4 — discovery deadline expired");
+        expect(timeouts).toEqual([60_000, 45_000, 30_000, 15_000]);
         expect(upstream.close).toHaveBeenCalledOnce();
       } finally {
         clock.mockRestore();

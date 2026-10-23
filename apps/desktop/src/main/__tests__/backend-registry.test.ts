@@ -132,6 +132,7 @@ import type { ManagedCodexSelectionChange } from "../settings/desktop-settings-s
 import { managedCodexRoot } from "../codex-build-channel";
 import { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
 import { issueProviderDiscoveryPermit } from "../settings/provider-discovery-permit";
+import type { PwrAgentThreadTodoHandler } from "../agent-tools/pwragent-thread-todo-agent-tools";
 import type { AcpAvailableCommandsRecord } from "../acp/acp-available-commands-store";
 import {
   CodexEnvironmentCommandError,
@@ -153,6 +154,7 @@ import { WorktreeArchiveService } from "../app-server/worktree-archive-service";
 import { GitWorkspaceHandoffService } from "../app-server/git-workspace-handoff-service";
 import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
 import { AcpRolloutStore } from "../acp/acp-rollout-store";
+import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
 import { AcpSessionStore, type AcpSessionMetadata } from "../acp/acp-session-store";
 import { TestTokenMiserStore as TokenMiserStore } from "./token-miser-test-store";
 import type { ThreadSearchService } from "../thread-search/thread-search-service";
@@ -3168,6 +3170,34 @@ afterEach(() => {
 });
 
 describe("DesktopBackendRegistry", () => {
+  it("leaves ACP Claude naming to the provider without launching a redundant title helper", async () => {
+    const backend = "acp:claude" as const;
+    const titleService = { generateTitle: vi.fn(async () => ({ status: "generated" as const, title: "Redundant helper title" })) };
+    const sessions: AcpSessionMetadata[] = [{ backendId: backend, sessionId: "claude-title-session", title: "ACP session", titleSource: "fallback",
+      cwd: "/tmp/claude-title-workspace", createdAt: 1000, updatedAt: 1000, executionMode: "default", status: "idle" }];
+    const { registry } = createKimiAcpRegistry({
+      acpBackendId: backend,
+      sessionId: "claude-title-session",
+      sessions,
+      threadTitleGenerationService: titleService,
+    });
+    try {
+      await registry.startTurn({ backend, threadId: "claude-title-session", input: [{ type: "text", text: "Investigate Claude titles" }] });
+      await registry.whenThreadTitleGenerationSettledForTests();
+      expect(titleService.generateTitle).not.toHaveBeenCalled();
+      expect(sessions[0]).toMatchObject({ title: "Investigate Claude titles", titleSource: "fallback" });
+      // The real ACP client stores accepted session_info_update titles before
+      // publishing the corresponding notification.
+      Object.assign(sessions[0], { title: "Provider generated Claude title", titleSource: "derived" });
+      await registry.publishLocalEvent({ backend, notification: { method: "thread/name/updated", params: {
+        threadId: "claude-title-session", threadName: "Provider generated Claude title", titleSource: "derived",
+      } } });
+      expect(await registry.listThreads({ backend, forceRefresh: true })).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: "claude-title-session", title: "Provider generated Claude title", titleSource: "derived" }),
+      ]));
+    } finally { await registry.close(); }
+  });
+
   it("routes Claude creation, replay, approvals, resume and lifecycle without a Codex or ACP client", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-registry-"));
     const store = new ClaudeSessionStore(path.join(root, "sessions"));
@@ -3177,6 +3207,7 @@ describe("DesktopBackendRegistry", () => {
     const optionsSeen: ClaudeOptions[] = [];
     const decisions: unknown[] = [];
     const closeQuery = vi.fn();
+    const getSessionInfo = vi.fn().mockResolvedValue(undefined);
     const revokeBridge = vi.fn();
     const registerBridge = vi.fn(async () => ({
       server: { name: "fixture_gateway", command: "/fixture/bridge", args: ["--stdio"], env: {} },
@@ -3204,6 +3235,8 @@ describe("DesktopBackendRegistry", () => {
       pdfToolMcpServer: null,
       claudeBackendOptions: {
         store,
+        // This fixture owns a mocked Claude session, not SDK transcript/Git probes.
+        getSessionInfo,
         inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
         discoverModels: async () => [
           { id: "fable", label: "Fable 5.1", current: true },
@@ -3266,6 +3299,7 @@ describe("DesktopBackendRegistry", () => {
         await vi.waitFor(() => expect(events.some((event) => event.notification.method === "turn/completed")).toBe(true));
       }
       expect(revokeBridge).toHaveBeenCalledTimes(2);
+      expect(getSessionInfo).toHaveBeenCalledTimes(2);
       expect(optionsSeen[1].resume).toBe(threadId);
       expect(optionsSeen.map(({ model, effort }) => ({ model, effort }))).toEqual([
         { model: "claude-custom-fixture", effort: "max" }, { model: "claude-opus-4-8", effort: "max" },
@@ -5228,6 +5262,49 @@ describe("DesktopBackendRegistry", () => {
     expect(generateStructuredObject).not.toHaveBeenCalled();
   });
 
+  it.each(["signed-out", "rejected"] as const)("skips auxiliary Codex turns while authentication is %s", async (auth) => {
+    const codexClient = Object.assign(new MockBackendClient({
+      account: auth === "signed-out"
+        ? { requiresOpenaiAuth: true }
+        : { type: "chatgpt", requiresOpenaiAuth: true },
+    }), {
+      isAuthenticationRequired: vi.fn(() => false),
+      generateStructuredObject: vi.fn(async () => ({ status: "ok" as const, object: { title: "Queue title" } })),
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    onTestFinished(() => registry.close());
+    await discoverCodexBackendForTest(registry);
+    codexClient.isAuthenticationRequired.mockReturnValue(auth === "rejected");
+
+    await expect(registry.generateStructuredObject({
+      helper: "queued_message_titles",
+      system: "Label the message.",
+      prompt: "A long message to label.",
+      schema: { type: "object", required: ["title"], properties: { title: { type: "string" } } },
+    })).resolves.toEqual({ status: "unavailable", reason: "codex_structured_generation_unavailable" });
+    expect(codexClient.generateStructuredObject).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { type: "apiKey", requiresOpenaiAuth: true },
+    { requiresOpenaiAuth: false },
+  ] satisfies BackendAccountSummary[])("allows auxiliary Codex turns for an account that needs no login: %j", async (account) => {
+    const codexClient = Object.assign(new MockBackendClient({ account }), {
+      generateStructuredObject: vi.fn(async () => ({ status: "ok" as const, object: { title: "Queue title" } })),
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    onTestFinished(() => registry.close());
+    await discoverCodexBackendForTest(registry);
+
+    await expect(registry.generateStructuredObject({
+      helper: "queued_message_titles",
+      system: "Label the message.",
+      prompt: "A long message to label.",
+      schema: { type: "object", required: ["title"], properties: { title: { type: "string" } } },
+    })).resolves.toMatchObject({ status: "ok", object: { title: "Queue title" } });
+    expect(codexClient.generateStructuredObject).toHaveBeenCalledOnce();
+  });
+
   it("publishes owner Token Miser settings and persists overrides through the registry", async () => {
     const overlayStore = createOverlayStoreMock();
     let enabled = true;
@@ -5448,6 +5525,70 @@ describe("DesktopBackendRegistry", () => {
         expect(codexClient.refreshThreadTools).not.toHaveBeenCalled();
       } finally { await registry.close(); }
     });
+  });
+
+  it.each([
+    { version: "0.152.0", expected: "default" },
+    { version: "0.153.0", expected: "auto" },
+  ])("starts an Auto launchpad thread on $expected under Codex $version", async ({
+    version,
+    expected,
+  }) => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "pwragent-codex-auto-start-"));
+    const configStore = new DesktopConfigStore({
+      configPath: path.join(tempRoot, "config.toml"),
+    });
+    const command = "/opt/homebrew/bin/codex";
+    configStore.recordProviderDiscovery("codex", {
+      candidates: [{ command, source: "path", version }],
+      selectedCommand: command,
+      selectedVersion: version,
+    });
+    const codexClient = new MockBackendClient({
+      threads: [],
+      initializeResult: { userAgent: `pwragent/${version} (Mac OS 26.6.2; arm64) unknown` },
+    });
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({ codexClient, configStore, overlayStore });
+    try {
+      await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
+      await registry.startThread({
+        backend: "codex",
+        cwd: process.cwd(),
+        executionMode: "auto",
+      });
+      expect(
+        (await overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }))
+          ?.executionMode,
+      ).toBe(expected);
+      expect(
+        (codexClient.lastStartThreadParams as { approvalsReviewer?: string } | undefined)
+          ?.approvalsReviewer,
+      ).toBe(expected === "auto" ? "auto_review" : "user");
+    } finally {
+      await registry.close();
+      configStore.dispose();
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("dispatches the advertised tool guide only from a live owning turn", async () => {
+    const codexClient = new MockBackendClient({ threads: [] });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    try {
+      await registry.startThread({ backend: "codex", cwd: process.cwd() });
+      expect(pwragentDynamicTools(codexClient.lastStartThreadParams?.dynamicTools).map((tool) => tool.name)).toContain("read_tool_guide");
+      const call = {
+        method: "item/tool/call",
+        params: { threadId: "thread-1", turnId: "guide-turn", callId: "guide-1", requestId: "guide-1", namespace: "pwragent", tool: "read_tool_guide", arguments: {} },
+      } as AppServerPendingRequestNotification;
+      expect(await codexClient.emitRequest(call)).toMatchObject({ success: false });
+      await registry.publishLocalEvent({ backend: "codex", notification: { method: "turn/started", params: { threadId: "thread-1", turnId: "guide-turn", turn: { id: "guide-turn" } } } });
+      expect(await codexClient.emitRequest({ ...call, params: { ...call.params, callId: "guide-2", requestId: "guide-2" } })).toMatchObject({
+        success: true,
+        contentItems: [{ type: "inputText", text: expect.stringContaining("Use get_thread_status for compact state.") }],
+      });
+    } finally { await registry.close(); }
   });
 
   it("refreshes tool discovery in both directions and authorizes only live searches", async () => {
@@ -10129,6 +10270,106 @@ describe("DesktopBackendRegistry", () => {
     })).resolves.toEqual([expect.objectContaining({ id: "recovered-thread" })]);
     expect(listing).not.toHaveBeenCalled();
     await registry.close();
+  });
+
+  async function createSelectedCodexRegistry(codexClient: MockBackendClient) {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "pwragent-incomplete-listing-"));
+    const configStore = new DesktopConfigStore({ configPath: path.join(tempRoot, "config.toml") });
+    const command = path.join(tempRoot, "codex");
+    configStore.recordProviderDiscovery("codex", {
+      candidates: [{ command, source: "path", version: "0.160.0" }],
+      selectedCommand: command,
+      selectedVersion: "0.160.0",
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      configStore,
+      overlayStore: createOverlayStoreMock(),
+      discoverLocalAcpAgents: async () => [],
+    });
+    onTestFinished(async () => {
+      await registry.close();
+      configStore.dispose();
+      await rm(tempRoot, { recursive: true, force: true });
+    });
+    return registry;
+  }
+
+  it("marks a navigation listing incomplete when a selected Codex fails, then completes once Codex answers", async () => {
+    const codexClient = new MockBackendClient({ threads: [] });
+    const registry = await createSelectedCodexRegistry(codexClient);
+    const listing = vi.spyOn(codexClient, "listThreads")
+      .mockRejectedValueOnce(new Error("codex app server client closed"));
+
+    const failed = await registry.listThreads({ callerReason: "navigation-snapshot" });
+    expect(failed).toEqual([]);
+    expect(registry.isIncompleteThreadList(failed)).toBe(true);
+    // The Codex-only listing the aggregate reused carries the same mark.
+    const codexOnly = await registry.listThreads({ backend: "codex", callerReason: "navigation-snapshot" });
+    expect(registry.isIncompleteThreadList(codexOnly)).toBe(true);
+    expect(listing).toHaveBeenCalledTimes(1);
+
+    codexClient.setThreads([{
+      id: "recovered-thread",
+      source: "codex",
+      title: "Recovered",
+      titleSource: "explicit",
+      linkedDirectories: [],
+      updatedAt: 200,
+    }]);
+    // An incomplete listing is not reused for the whole five-minute window.
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 16_000);
+    onTestFinished(() => { clock.mockRestore(); });
+    const recovered = await registry.listThreads({ callerReason: "navigation-snapshot" });
+    expect(recovered).toEqual([expect.objectContaining({ id: "recovered-thread" })]);
+    expect(registry.isIncompleteThreadList(recovered)).toBe(false);
+  });
+
+  it("marks a navigation listing incomplete when native Codex sub-agent discovery fails", async () => {
+    const codexClient = new MockBackendClient({ threads: [{
+      id: "parent-thread",
+      source: "codex",
+      title: "Parent",
+      titleSource: "explicit",
+      linkedDirectories: [],
+      updatedAt: 100,
+    }] });
+    vi.spyOn(codexClient, "listNativeSubAgentThreads")
+      .mockRejectedValueOnce(new Error("native discovery failed"));
+    const registry = await createSelectedCodexRegistry(codexClient);
+
+    const listed = await registry.listThreads({ callerReason: "navigation-snapshot" });
+    expect(listed).toEqual([expect.objectContaining({ id: "parent-thread" })]);
+    expect(registry.isIncompleteThreadList(listed)).toBe(true);
+  });
+
+  it("marks a navigation listing incomplete when a managed Codex runtime fails without a recorded selection", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ listThreadsError: new Error("codex app server client closed") }),
+      overlayStore: createOverlayStoreMock(),
+      discoverLocalAcpAgents: async () => [],
+      resolveCodexRuntimeCommand: async () => ({ command: "/managed/codex", version: "0.160.0" }),
+    });
+    onTestFinished(async () => { await registry.close(); });
+
+    const listed = await registry.listThreads({ callerReason: "navigation-snapshot" });
+    expect(listed).toEqual([]);
+    expect(registry.isIncompleteThreadList(listed)).toBe(true);
+  });
+
+  it("does not mark a listing incomplete when no Codex executable is selected", async () => {
+    const noExecutable = new Error("Codex discovery has not selected an executable. Refresh Codex in Settings.");
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ listThreadsError: noExecutable }),
+      overlayStore: createOverlayStoreMock(),
+      discoverLocalAcpAgents: async () => [],
+      resolveCodexRuntimeCommand: async () => { throw noExecutable; },
+    });
+    onTestFinished(async () => { await registry.close(); });
+
+    const listed = await registry.listThreads({ callerReason: "navigation-snapshot" });
+    expect(listed).toEqual([]);
+    expect(registry.isIncompleteThreadList(listed)).toBe(false);
   });
 
   it("marks Gemini ACP thread workspace handoff unavailable after conversation history", async () => {
@@ -16271,6 +16512,7 @@ script = "echo setup"
         PWRAGENT_MCP_CONNECTION_SOCKET: "/tmp/pwragent.sock",
         PWRAGENT_MCP_CONNECTION_TOKEN: "local-grant",
       },
+      startup_timeout_sec: 75,
       tool_timeout_sec: 720,
     });
     await expect(overlayStore.getThreadOverlayState({
@@ -28346,7 +28588,7 @@ command = "pnpm dev"
     await registry.close();
   });
 
-  it("applies generated title helper names to ACP prompt-derived fallback sessions", async () => {
+  it.each(["missing", "signed-out"] as const)("names ACP sessions on their own provider when Codex is %s", async (codexState) => {
     const acpBackendId = "acp:kimi" as AcpBackendId;
     const prompt =
       "We're testing something here... just tell me your favorite cereal.";
@@ -28425,8 +28667,13 @@ command = "pnpm dev"
     const overlayStore = createOverlayStoreMock();
     const upsertSubAgentSpy = vi.spyOn(overlayStore, "upsertThreadSubAgent");
     const upsertUsageLineSpy = vi.spyOn(overlayStore, "upsertThreadUsageLine");
+    const codexClient = new MockBackendClient({
+      threads: [],
+      initializeError: new Error(codexState === "missing" ? "spawn codex ENOENT" : "Codex is not logged in"),
+      account: { requiresOpenaiAuth: true },
+    });
     const registry = new DesktopBackendRegistry({
-      codexClient: new MockBackendClient({ threads: [] }),
+      codexClient,
       overlayStore,
       acpAgentStore: createAcpAgentStoreMock([createKimiAgentRecord(acpBackendId)]),
       acpSessionStore: createAcpSessionStoreMock(sessions),
@@ -28512,6 +28759,9 @@ command = "pnpm dev"
         threadId: "kimi-title-helper",
       }),
     });
+    expect(codexClient.initializeCallCount).toBe(0);
+    expect(codexClient.listModelsCallCount).toBe(0);
+    expect(codexClient.listThreadsCallCount).toBe(0);
 
     await registry.close();
   });
@@ -29528,6 +29778,142 @@ command = "pnpm dev"
     ).rejects.toThrow(/cannot run reviews/);
 
     await registry.close();
+  });
+
+  it("rejects a Claude thread's own review before checking its model against Codex", async () => {
+    // A Claude thread's composer once sent its own provider and model as the
+    // reviewer. The model check then read the Codex catalog and reported
+    // "opus" missing from a list of GPT models.
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start", "review/start"] },
+      models: [{ id: "gpt-5.5", label: "GPT-5.5", current: true, supportsReasoning: true }],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      pdfToolMcpServer: null,
+      claudeBackendOptions: {
+        inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+        discoverModels: async () => [],
+      },
+    });
+    try {
+      const review = registry.startReview({
+        backend: "claude",
+        threadId: "claude-thread",
+        target: { type: "baseBranch", branch: "main" },
+        delivery: "inline",
+        model: "opus",
+        reasoningEffort: "high",
+      });
+      await expect(review).rejects.toThrow(
+        "Selected review provider cannot run reviews: claude",
+      );
+      expect(codexClient.lastStartReviewParams).toBeUndefined();
+      expect(codexClient.lastStartThreadParams).toBeUndefined();
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("runs a Codex review child in its Claude parent's workspace", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-review-"));
+    const worktreePath = "/repo/.worktrees/claude-review";
+    const claudeId = "7b2e3d4c-5f60-4b8c-9dae-1f2a3b4c5d6e";
+    const store = new ClaudeSessionStore(path.join(root, "sessions"));
+    await store.save({ cwd: worktreePath, thread: {
+      id: claudeId, title: "Claude parent", titleSource: "explicit", source: "claude", updatedAt: 1,
+      linkedDirectories: [{ id: worktreePath, kind: "local", label: "claude-review", path: worktreePath }],
+    } });
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start"] },
+      models: [{ id: "gpt-5.5", label: "GPT-5.5", current: true, supportsReasoning: true }],
+      startThreadResult: { threadId: "codex-review-child" },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      pdfToolMcpServer: null,
+      claudeBackendOptions: {
+        store,
+        inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+        discoverModels: async () => [],
+      },
+    });
+    try {
+      const response = await registry.startReview({
+        backend: "claude",
+        reviewBackend: "codex",
+        runMode: "pwragent-sub-agent",
+        threadId: claudeId,
+        target: { type: "baseBranch", branch: "main" },
+        delivery: "inline",
+        model: "gpt-5.5",
+        reasoningEffort: "high",
+      });
+      expect(response).toMatchObject({
+        backend: "claude",
+        threadId: claudeId,
+        reviewThreadId: "codex-review-child",
+      });
+      // Without the parent's directory Codex reviews whatever directory its
+      // own process started in.
+      expect(codexClient.lastStartThreadParams).toMatchObject({
+        cwd: worktreePath,
+        ephemeral: true,
+        model: "gpt-5.5",
+      });
+      expect(codexClient.lastStartTurnParams).toMatchObject({
+        cwd: worktreePath,
+        model: "gpt-5.5",
+        reasoningEffort: "high",
+      });
+      await codexClient.emit({
+        method: "turn/completed",
+        params: {
+          threadId: response.reviewThreadId,
+          turnId: response.turnId,
+          turn: {
+            id: response.turnId,
+            status: "completed",
+            output: [{ type: "text", text: JSON.stringify({
+              findings: [],
+              overall_correctness: "patch is correct",
+              overall_explanation: "No blocking findings.",
+              overall_confidence_score: 0.98,
+            }) }],
+          },
+        },
+      });
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("advertises Claude review modes without claiming Claude runs reviews", async () => {
+    // The owner accepts a run mode for a Claude thread, because the review
+    // itself runs on another provider. Claude is never a reviewer.
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({}),
+      overlayStore: createOverlayStoreMock(),
+      pdfToolMcpServer: null,
+      claudeBackendOptions: {
+        inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+        discoverModels: async () => [],
+      },
+    });
+    try {
+      const claudeBackend = (
+        await registry.listBackends({ includeUnavailable: true })
+      ).backends.find((backend) => backend.kind === "claude");
+      expect(claudeBackend?.capabilities).toMatchObject({ reviewRunMode: true });
+      expect(claudeBackend?.capabilities.reviewRunner).not.toBe(true);
+      expect(claudeBackend?.capabilities.reviewCodexSubAgent).not.toBe(true);
+      expect(claudeBackend?.capabilities.startReview).not.toBe(true);
+    } finally {
+      await registry.close();
+    }
   });
 
   it("advertises codex as a reviewer override target", async () => {
@@ -32205,6 +32591,36 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("refreshes lightweight budget pricing on the normal live usage flush", async () => {
+    vi.useFakeTimers();
+    const codexClient = new MockBackendClient({ initializeResult: { methods: ["thread/read"] } });
+    const baseStore = createOverlayStoreMock();
+    const request = { backend: "codex" as const, threadId: "thread-1", includeTurns: false };
+    const overlayStore = {
+      ...baseStore,
+      upsertThreadUsageLines: async ({ lines }: { lines: ThreadUsageLineRecord[] }) => {
+        for (const line of lines) await baseStore.upsertThreadUsageLine({ line });
+        return await baseStore.readThreadPricing(request);
+      },
+    };
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    try {
+      await codexClient.emit({ method: "thread/tokenUsage/updated", params: {
+        threadId: request.threadId, turnId: "turn-live", model: "gpt-6-astra",
+        tokenUsage: { last: { inputTokens: 1000, cachedInputTokens: 200, outputTokens: 50, totalTokens: 1050 }, total: { inputTokens: 1000, cachedInputTokens: 200, outputTokens: 50, totalTokens: 1050 } },
+      } });
+      expect((await registry.readThread(request)).pricing?.lines).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect((await registry.readThread(request)).pricing?.lines).toEqual(expect.arrayContaining([
+        expect.objectContaining({ turnId: "turn-live", totalTokens: 1050, inputTokens: 1000, cachedInputTokens: 200 }),
+      ]));
+      expect(codexClient.readThreadCalls.every((call) => call.includeTurns === false)).toBe(true);
+    } finally {
+      await registry.close();
+      vi.useRealTimers();
+    }
+  });
+
   it("persists live thread pricing from turn usage, not cumulative thread totals", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/read"] },
@@ -32275,6 +32691,11 @@ command = "pnpm dev"
       uncachedInputTokens: 800,
     });
     expect(pricing.lines[0]?.cumulativeTotalCostMicros).toBeUndefined();
+
+    // Headless budget polling must retain live usage without hydrating history.
+    const budgetView = await registry.readThread({ backend: "codex", threadId: "thread-1", includeTurns: false });
+    expect(budgetView.pricing?.lines).toEqual(pricing.lines);
+    expect(codexClient.readThreadCalls.at(-1)).toMatchObject({ threadId: "thread-1", includeTurns: false });
 
     await registry.close();
   });
@@ -34200,6 +34621,11 @@ command = "pnpm dev"
     const updates = usageEvents.filter((event) => event.notification.method === "thread/subAgents/updated");
     expect(updates).toHaveLength(2);
     expect(updates.every((event) => (event.notification.params as { navigationChanged?: false }).navigationChanged === false)).toBe(true);
+    const budgetView = await registry.readThread({ backend: "codex", threadId: "thread-parent", includeTurns: false });
+    expect(budgetView.pricing?.lines).toEqual(expect.arrayContaining([
+      expect.objectContaining({ scope: "monitor", threadId: nativeThreadId, inputTokens: 131_000, cachedInputTokens: 124_000, outputTokens: 1_800 }),
+    ]));
+    expect(codexClient.readThreadCalls.at(-1)).toMatchObject({ threadId: "thread-parent", includeTurns: false });
     unsubscribe();
     await registry.close();
   });
@@ -42700,6 +43126,35 @@ script = "printf setup"
     await waitForCondition(() => codexClient.startTurnCallCount === 1);
   });
 
+  it.each(["claude", "acp:kimi"] as const)("keeps queued %s messages independent of Codex even when it is available", async (backend) => {
+    const codexClient = Object.assign(new MockBackendClient({}), {
+      generateStructuredObject: vi.fn(async () => ({ status: "ok" as const, object: { title: "Unexpected Codex title" } })),
+    });
+    const overlayStore = createOverlayStoreMock();
+    const recordHelper = vi.spyOn(overlayStore, "upsertThreadSubAgent");
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore, threadTitleGenerationService: null });
+    onTestFinished(() => registry.close());
+    await discoverCodexBackendForTest(registry);
+    await registry.publishLocalEvent({ backend, notification: {
+      method: "turn/started", params: { threadId: "recipient", turnId: "active", turn: { id: "active" } },
+    } });
+    const input = [{ type: "text" as const, text: "Docs child: the migration guide now covers the renamed config keys and the new default port." }];
+    try {
+      await registry.submitTurn({ backend, threadId: "recipient", queueEntryId: "long", delivery: "new_turn", input });
+      await registry.queuedMessageTitlesIdle();
+
+      const snapshot = registry.getQueuedTurnsSnapshot()[buildThreadIdentityKey(backend, "recipient")];
+      expect(snapshot).toHaveLength(1);
+      expect(snapshot?.[0]?.title).toBeUndefined();
+      expect((await registry.readQueuedTurn({ backend, threadId: "recipient", queueEntryId: "long" })).input).toEqual(input);
+      expect(codexClient.generateStructuredObject).not.toHaveBeenCalled();
+      expect(recordHelper).not.toHaveBeenCalled();
+    } finally {
+      registry.cancelQueuedTurn("long");
+      await emitCompletedTurn(registry, backend, "recipient");
+    }
+  });
+
   it("titles a long queued message once and drops a title the input outgrew", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
@@ -47622,6 +48077,74 @@ script = "printf setup"
       branch: "feature/pr",
     });
 
+    await registry.close();
+  });
+
+  it("routes durable dependencies with the trusted waiting thread defaults", async () => {
+    const codexClient = new MockBackendClient({ initializeResult: { methods: ["thread/list"] } });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const handler = vi.fn(async () => ({ ok: true as const, data: { threadDependencies: { dependencies: [] } } }));
+    registry.setThreadDependencyToolHandler(handler);
+    await registry.publishLocalEvent({ backend: "codex", notification: {
+      method: "turn/started", params: { threadId: "waiting-thread", turnId: "turn-1", turn: { id: "turn-1" } },
+    } });
+    const response = await codexClient.emitRequest({ method: "item/tool/call", params: {
+      threadId: "waiting-thread", turnId: "turn-1", callId: "call-dependency", requestId: "call-dependency",
+      namespace: "pwragent", tool: "manage_thread_dependencies",
+      arguments: { action: "create", continuation: "Rebase onto the helper.", conditions: [{ backend: "codex", threadId: "foundation", when: "ci_passed" }] },
+    } } as AppServerPendingRequestNotification);
+    expect(handler).toHaveBeenCalledExactlyOnceWith({ action: "create", backend: "codex", threadId: "waiting-thread",
+      continuation: "Rebase onto the helper.",
+      conditions: [{ backend: "codex", threadId: "foundation", when: "ci_passed" }],
+    });
+    expect(response).toMatchObject({ success: true });
+    await registry.close();
+  });
+
+  it("requires agents to write down what the resumed turn should do", async () => {
+    const codexClient = new MockBackendClient({ initializeResult: { methods: ["thread/list"] } });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const handler = vi.fn(async () => ({ ok: true as const, data: { threadDependencies: { dependencies: [] } } }));
+    registry.setThreadDependencyToolHandler(handler);
+    await registry.publishLocalEvent({ backend: "codex", notification: {
+      method: "turn/started", params: { threadId: "waiting-thread", turnId: "turn-1", turn: { id: "turn-1" } },
+    } });
+    for (const [index, continuation] of [undefined, "   "].entries()) {
+      const response = await codexClient.emitRequest({ method: "item/tool/call", params: {
+        threadId: "waiting-thread", turnId: "turn-1", callId: `call-dependency-${index}`, requestId: `call-dependency-${index}`,
+        namespace: "pwragent", tool: "manage_thread_dependencies",
+        arguments: { action: "create", ...(continuation === undefined ? {} : { continuation }), conditions: [{ backend: "codex", threadId: "foundation", when: "ci_passed" }] },
+      } } as AppServerPendingRequestNotification);
+      expect(response).toMatchObject({ success: false });
+      expect(JSON.stringify(response)).toContain("Provide continuation");
+    }
+    expect(handler).not.toHaveBeenCalled();
+    await registry.close();
+  });
+
+  it("saves prerequisite titles for agent-registered dependencies that omit them", async () => {
+    const foundation: AppServerThreadSummary = { id: "foundation", title: "Extract retry helper", titleSource: "explicit", source: "codex", updatedAt: 1000, linkedDirectories: [] };
+    const codexClient = new MockBackendClient({ threads: [foundation], initializeResult: { methods: ["thread/list"] } });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    const handler = vi.fn(async () => ({ ok: true as const, data: { threadDependencies: { dependencies: [] } } }));
+    registry.setThreadDependencyToolHandler(handler);
+    await registry.publishLocalEvent({ backend: "codex", notification: {
+      method: "turn/started", params: { threadId: "waiting-thread", turnId: "turn-1", turn: { id: "turn-1" } },
+    } });
+    await codexClient.emitRequest({ method: "item/tool/call", params: {
+      threadId: "waiting-thread", turnId: "turn-1", callId: "call-dependency", requestId: "call-dependency",
+      namespace: "pwragent", tool: "manage_thread_dependencies",
+      arguments: { action: "create", continuation: "Adopt the helper.", conditions: [
+        { backend: "codex", threadId: "foundation", when: "ci_passed" },
+        { backend: "codex", threadId: "unknown", when: "pr_merged" },
+        { backend: "codex", threadId: "foundation", when: "turn_completed", title: "Agent's name" },
+      ] },
+    } } as AppServerPendingRequestNotification);
+    expect(handler).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ conditions: [
+      { backend: "codex", threadId: "foundation", when: "ci_passed", title: "Extract retry helper" },
+      { backend: "codex", threadId: "unknown", when: "pr_merged" },
+      { backend: "codex", threadId: "foundation", when: "turn_completed", title: "Agent's name" },
+    ] }));
     await registry.close();
   });
 
@@ -57742,9 +58265,14 @@ script = "printf setup"
       warnings: [],
       completedAt: 1000,
     }));
+    const overlayStore = createOverlayStoreMock();
+    await overlayStore.setThreadParent({
+      backend: acpBackendId, threadId: "session-1", parentThreadId: "parent", parentThreadBackend: "codex",
+    });
+    const replaceWorkspace = vi.spyOn(overlayStore, "replaceWorkspaceLinkedDirectory");
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
-      overlayStore: createOverlayStoreMock(),
+      overlayStore,
       acpAgentStore: createAcpAgentStoreMock([
         {
           backendId: acpBackendId,
@@ -57789,6 +58317,9 @@ script = "printf setup"
       direction: "to-project",
       targetPath: "/projects/demo",
     });
+    expect(replaceWorkspace).toHaveBeenCalledWith(expect.objectContaining({
+      backend: acpBackendId, threadId: "session-1", resetProjectState: true,
+    }));
     await registry.startTurn({
       backend: acpBackendId,
       threadId: "session-1",
@@ -58653,6 +59184,50 @@ script = "printf setup"
     await registry.close();
   });
 
+  it("uses concurrent branch adoption when an unchanged drift observation skips persistence", async () => {
+    const identity = { backend: "codex" as const, threadId: "thread-1" };
+    const previousBranch = "feature/previous";
+    const adoptedBranch = "fix/adopted";
+    const thread: AppServerThreadSummary = {
+      id: identity.threadId, source: identity.backend, title: "Concurrent branch adoption",
+      titleSource: "explicit", linkedDirectories: [],
+      gitBranch: previousBranch, observedGitBranch: adoptedBranch,
+    };
+    const overlayStore = createOverlayStoreMock({ overlays: {
+      "codex:thread-1": {
+        ...identity, executionMode: "default", extraLinkedDirectories: [],
+        gitBranch: previousBranch, observedGitBranch: adoptedBranch,
+      },
+    } });
+    const setThreadObservedBranch = vi.spyOn(overlayStore, "setThreadObservedBranch");
+    const lookupStarted = createDeferred<void>();
+    const releaseLookup = createDeferred<void>();
+    const client = new MockBackendClient({ threads: [thread], listThreadsDelay: releaseLookup.promise });
+    const listThreads = client.listThreads.bind(client);
+    vi.spyOn(client, "listThreads").mockImplementation(async (...args) => {
+      lookupStarted.resolve();
+      return await listThreads(...args);
+    });
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore });
+    try {
+      const response = registry.checkThreadBranchDrift({ ...identity, expectedBranch: previousBranch });
+      await lookupStarted.promise;
+      await overlayStore.setThreadExpectedBranch({ ...identity, branch: adoptedBranch });
+      releaseLookup.resolve();
+
+      await expect(response).resolves.toMatchObject({
+        expectedBranch: adoptedBranch, observedBranch: adoptedBranch, drifted: false,
+      });
+      expect(setThreadObservedBranch).not.toHaveBeenCalled();
+      expect(await overlayStore.getThreadOverlayState(identity)).toMatchObject({
+        gitBranch: adoptedBranch, observedGitBranch: adoptedBranch,
+      });
+    } finally {
+      releaseLookup.resolve();
+      await registry.close();
+    }
+  });
+
   it("does not persist branch drift after registry shutdown starts", async () => {
     let releaseListThreads!: () => void;
     const listThreadsDelay = new Promise<void>((resolve) => {
@@ -58707,6 +59282,240 @@ script = "printf setup"
     expect(setThreadObservedBranch).not.toHaveBeenCalled();
 
     await closePromise;
+  });
+
+  describe.each([
+    "claude", "acp:gemini", "acp:grok", "acp:kimi", "acp:qwen", "acp:registry-fixture",
+  ] as const)("%s Git branch monitoring", (backend) => {
+    async function fixture(initialBranch: string, observedOnly = false) {
+      const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-provider-branch-"));
+      const repo = path.join(root, "repo");
+      const cwd = path.join(root, ".pwragent", "worktrees", "fixture", "repo");
+      await mkdir(repo, { recursive: true });
+      await git(repo, ["init", "-b", "main"]);
+      await git(repo, ["commit", "--allow-empty", "-m", "init"]);
+      await git(repo, ["worktree", "add", "--detach", cwd]);
+      if (initialBranch !== "HEAD") await git(cwd, ["switch", "-c", initialBranch]);
+      const threadId = "a1111111-1111-4111-8111-111111111111";
+      const directory: LinkedDirectorySummary = {
+        id: repo, path: repo, worktreePath: cwd, label: "repo", kind: "worktree",
+      };
+      const identity = { backend, threadId };
+      const overlayStore = createOverlayStoreMock({ overlays: {
+        [`${backend}:${threadId}`]: {
+          ...identity, executionMode: "default", gitBranch: observedOnly ? undefined : initialBranch,
+          observedGitBranch: initialBranch, extraLinkedDirectories: [directory],
+        },
+      } });
+      let registry: DesktopBackendRegistry;
+      if (backend === "claude") {
+        const store = new ClaudeSessionStore(path.join(root, "sessions"));
+        await store.save({ cwd, thread: {
+          id: threadId, source: backend, title: "Branch fixture", titleSource: "explicit",
+          projectKey: cwd, linkedDirectories: [directory],
+        } });
+        registry = new DesktopBackendRegistry({
+          codexClient: new MockBackendClient({ threads: [] }), overlayStore,
+          claudeBackendOptions: { store },
+        });
+      } else {
+        ({ registry } = createKimiAcpRegistry({
+          acpBackendId: backend, sessionId: threadId, overlayStore,
+          sessions: [{ backendId: backend, sessionId: threadId, cwd, title: "Branch fixture",
+            createdAt: 1_000, updatedAt: 2_000, executionMode: "default", status: "idle" }],
+        }));
+      }
+      onTestFinished(async () => {
+        await registry.close();
+        await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      });
+      return { registry, overlayStore, identity, cwd };
+    }
+
+    it.each(["turn/completed", "turn/failed", "turn/cancelled", "thread/status/changed"] as const)(
+      "adopts a branch created from detached HEAD before publishing %s",
+      async (method) => {
+        const { registry, overlayStore, identity, cwd } = await fixture("HEAD");
+        const events: string[] = [];
+        let overlayAtBoundary: ThreadOverlayState | undefined;
+        registry.onEvent(async (event) => {
+          events.push(event.notification.method);
+          if (event.notification.method === method) {
+            overlayAtBoundary = await overlayStore.getThreadOverlayState(identity);
+          }
+        });
+        await registry.publishLocalEvent({ backend, notification: {
+          method: "turn/started", params: { threadId: identity.threadId, turnId: "turn-branch",
+            turn: { id: "turn-branch", status: "in_progress" } },
+        } });
+        await git(cwd, ["switch", "-c", "fix/provider-branch"]);
+        await registry.publishLocalEvent({ backend, notification: method === "thread/status/changed"
+          ? { method, params: { threadId: identity.threadId, status: { type: "idle" } } }
+          : { method, params: { threadId: identity.threadId, turnId: "turn-branch",
+              turn: { id: "turn-branch", status: "completed", output: [], error: { message: "Fixture failure" } } } },
+        } as AgentEvent);
+        expect(overlayAtBoundary).toMatchObject({
+          gitBranch: "fix/provider-branch", observedGitBranch: "fix/provider-branch",
+        });
+        expect(events).toContain("thread/branch/updated");
+      },
+    );
+
+    it.each(["HEAD", "feature/original", "observed-only HEAD"])("refreshes an external branch change from %s on hover", async (storedBranch) => {
+      const initialBranch = storedBranch === "observed-only HEAD" ? "HEAD" : storedBranch;
+      const { registry, overlayStore, identity, cwd } = await fixture(initialBranch, storedBranch === "observed-only HEAD");
+      const events: AgentEvent[] = [];
+      registry.onEvent((event) => { events.push(event); });
+      await registry.listThreads({ backend });
+      await git(cwd, ["switch", "-c", "fix/external-branch"]);
+      await registry.refreshThreadDirectoryRelationship(identity);
+      expect(await overlayStore.getThreadOverlayState(identity)).toMatchObject({
+        gitBranch: initialBranch === "HEAD" ? "fix/external-branch" : initialBranch,
+        observedGitBranch: "fix/external-branch",
+      });
+      expect(events).toEqual(expect.arrayContaining([expect.objectContaining({
+        backend, notification: expect.objectContaining({ method: "navigation/threadDirectories/updated" }),
+      })]));
+      events.length = 0;
+      await registry.refreshThreadDirectoryRelationship(identity);
+      expect(events).toEqual([]);
+    });
+
+    it("does not publish an unchanged observation with no expected branch", async () => {
+      const { registry, identity } = await fixture("feature/original", true);
+      const events: AgentEvent[] = [];
+      registry.onEvent((event) => { events.push(event); });
+      await registry.refreshThreadDirectoryRelationship(identity);
+      expect(events).toEqual([]);
+    });
+
+    it("does not adopt an unowned terminal event", async () => {
+      const { registry, overlayStore, identity, cwd } = await fixture("HEAD");
+      await git(cwd, ["switch", "-c", "fix/stale-terminal"]);
+      await registry.publishLocalEvent({ backend, notification: {
+        method: "turn/completed", params: { threadId: identity.threadId, turnId: "stale",
+          turn: { id: "stale", status: "completed", output: [] } },
+      } });
+      expect(await overlayStore.getThreadOverlayState(identity)).toMatchObject({
+        gitBranch: "HEAD", observedGitBranch: "HEAD",
+      });
+    });
+
+    if (backend === "claude") {
+      it("ignores a stale terminal while another Claude turn owns the workspace", async () => {
+        const { registry, overlayStore, identity, cwd } = await fixture("HEAD");
+        await registry.publishLocalEvent({ backend, notification: {
+          method: "turn/started", params: { threadId: identity.threadId, turnId: "current",
+            turn: { id: "current", status: "in_progress" } },
+        } });
+        await git(cwd, ["switch", "-c", "fix/current-turn"]);
+        for (const turnId of ["stale", "current"]) {
+          await registry.publishLocalEvent({ backend, notification: {
+            method: "turn/completed", params: { threadId: identity.threadId, turnId,
+              turn: { id: turnId, status: "completed", output: [] } },
+          } });
+          expect((await overlayStore.getThreadOverlayState(identity))?.gitBranch)
+            .toBe(turnId === "stale" ? "HEAD" : "fix/current-turn");
+        }
+      });
+    }
+  });
+
+  describe("Claude code-review findings", () => {
+    async function fixture() {
+      const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-review-"));
+      const repo = path.join(root, "repo");
+      const cwd = path.join(root, ".pwragent", "worktrees", "fixture", "repo");
+      await mkdir(repo, { recursive: true });
+      await git(repo, ["init", "-b", "main"]);
+      await git(repo, ["commit", "--allow-empty", "-m", "init"]);
+      await git(repo, ["worktree", "add", "-b", "feature/review", cwd]);
+      const threadId = "b2222222-2222-4222-8222-222222222222";
+      const directory: LinkedDirectorySummary = { id: repo, path: repo, worktreePath: cwd, label: "repo", kind: "worktree" };
+      const pr = {
+        provider: "github.com", org: "example", repo: "repo", number: 41, state: "passing",
+        lifecycleState: "open", headRefName: "feature/review", url: "https://github.com/example/repo/pull/41",
+      } as const;
+      const overlayStore = createOverlayStoreMock({ overlays: {
+        [`claude:${threadId}`]: {
+          backend: "claude", threadId, executionMode: "default", extraLinkedDirectories: [directory], prs: [pr],
+        },
+      } });
+      const store = new ClaudeSessionStore(path.join(root, "sessions"));
+      await store.save({ cwd, thread: {
+        id: threadId, source: "claude", title: "Review fixture", titleSource: "explicit", projectKey: cwd,
+        linkedDirectories: [directory],
+      } });
+      const registry = new DesktopBackendRegistry({
+        codexClient: new MockBackendClient({ threads: [] }), overlayStore,
+        claudeBackendOptions: {
+          store,
+          getSessionInfo: vi.fn().mockResolvedValue(undefined),
+          inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+          discoverModels: async () => [],
+          query: () => {
+            async function* messages(): AsyncGenerator<ClaudeMessage> {
+              yield { type: "assistant", parent_tool_use_id: null, message: {
+                id: "review-message", model: "claude-opus-5-5", content: [{ type: "tool_use", id: "toolu_review",
+                  name: "ReportFindings", input: { level: "high", findings: [
+                    { file: "src/a.ts", line: 4, summary: "Drops the error.", failure_scenario: "A failed write reports success." },
+                  ] } }],
+              } } as ClaudeMessage;
+              // The card waits for the CLI to accept the call.
+              yield { type: "user", message: { content: [{
+                type: "tool_result", tool_use_id: "toolu_review", content: "1 finding reported.",
+              }] } } as ClaudeMessage;
+              yield { type: "result", subtype: "success", is_error: false, result: "" } as ClaudeMessage;
+            }
+            return Object.assign(messages(), { close: vi.fn(), setPermissionMode: vi.fn() }) as unknown as ClaudeQuery;
+          },
+        },
+      });
+      onTestFinished(async () => {
+        await registry.close();
+        await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      });
+      return { registry, threadId, cwd, repo, pr };
+    }
+
+    it("publishes a review card naming the workspace, branch, and attached pull request", async () => {
+      const { registry, threadId, cwd, repo, pr } = await fixture();
+      const events: AgentEvent[] = [];
+      registry.onEvent((event) => { events.push(event); });
+      await registry.listBackends({ refreshModels: "claude", includeUnavailable: true },
+        issueProviderDiscoveryPermit("settings-user-action"));
+      await registry.startTurn({ backend: "claude", threadId, input: [{ type: "text", text: "/code-review high" }] });
+      await vi.waitFor(() => expect(events.some((event) => event.notification.method === "turn/completed")).toBe(true));
+
+      const review = events.find((event) => event.notification.method === "item/completed"
+        && (event.notification.params.item as { type?: string }).type === "exitedReviewMode");
+      if (!review) throw new Error("Expected a review card event");
+      expect(review.backend).toBe("claude");
+      const data = (review.notification.params as { item: { data: { context: AppServerReviewContext } } }).item.data;
+      expect(data.context).toMatchObject({
+        workspacePath: cwd, projectLabel: "repo", repositoryPath: repo, gitBranch: "feature/review",
+        pullRequest: { provider: pr.provider, org: pr.org, repo: pr.repo, number: pr.number, url: pr.url },
+      });
+      expect(data.context.headCommit).toMatch(/^[0-9a-f]{40}$/);
+    });
+
+    it("hands the thread's review entries to tracking when the thread is read", async () => {
+      const { registry, threadId } = await fixture();
+      const importReviews = vi.fn();
+      registry.setPwrAgentThreadTodoHandler({ importReviews } as unknown as PwrAgentThreadTodoHandler);
+      const events: AgentEvent[] = [];
+      registry.onEvent((event) => { events.push(event); });
+      await registry.listBackends({ refreshModels: "claude", includeUnavailable: true },
+        issueProviderDiscoveryPermit("settings-user-action"));
+      await registry.startTurn({ backend: "claude", threadId, input: [{ type: "text", text: "/code-review" }] });
+      await vi.waitFor(() => expect(events.some((event) => event.notification.method === "turn/completed")).toBe(true));
+      importReviews.mockClear();
+
+      await registry.readThread({ backend: "claude", threadId });
+      expect(importReviews).toHaveBeenCalledExactlyOnceWith({ backend: "claude", threadId }, [
+        expect.objectContaining({ type: "review", id: "toolu_review", turn: expect.objectContaining({ status: "completed" }) }),
+      ]);
+    });
   });
 
   it("adopts a named branch change from an active turn before notifying listeners", async () => {
@@ -61068,6 +61877,96 @@ script = "printf setup"
     });
 
     await registry.close();
+  });
+
+  it("keeps Grok MCP calls active when an idle metadata update finishes after turn start", async () => {
+    const backend = "acp:grok" as AcpBackendId;
+    const threadId = "grok-mcp-lifecycle";
+    const transport = new FakeAcpAgentTransport({
+      initialize: {
+        protocolVersion: 1,
+        agentCapabilities: { loadSession: true, mcp: { http: true } },
+      },
+      "session/new": { sessionId: threadId },
+    });
+    let finishPrompt!: (result: unknown) => void;
+    const prompt = new Promise<unknown>((resolve) => { finishPrompt = resolve; });
+    const request = transport.request.bind(transport);
+    vi.spyOn(transport, "request").mockImplementation(async (method, params) =>
+      method === "session/prompt" ? await prompt : await request(method, params),
+    );
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([{
+        ...createKimiAgentRecord(backend, {
+          schemaVersion: 1,
+          status: "discovered",
+          agentCapabilities: { loadSession: true, mcp: { http: true } },
+          checkedAt: 1000,
+        }),
+        registryId: "grok",
+        name: "Grok",
+      }]),
+      acpSessionStore: createAcpSessionStoreMock([]),
+      createAcpTransport: () => transport,
+      threadTitleGenerationService: null,
+    });
+    const client = new McpClient({ name: "grok-lifecycle-fixture", version: "1.0.0" });
+    let releaseMetadata!: () => void;
+    const metadataGate = new Promise<void>((resolve) => { releaseMetadata = resolve; });
+    let metadataStarted!: () => void;
+    const metadataPending = new Promise<void>((resolve) => { metadataStarted = resolve; });
+    const events: AgentEvent[] = [];
+    registry.onEvent(async (event) => {
+      events.push(event);
+      if (event.notification.method === "thread/availableCommands/updated") {
+        metadataStarted();
+        await metadataGate;
+      }
+    });
+    try {
+      await registry.startThread({ backend, cwd: "/repo", executionMode: "default" });
+      const sessionNew = transport.requests.find((call) => call.method === "session/new");
+      const servers = sessionNew?.params?.mcpServers as AgentToolMcpRegistration["server"][];
+      expect(servers).toEqual(expect.arrayContaining([expect.objectContaining({ name: "pwragent" })]));
+      const server = servers.find((candidate) => candidate.name === "pwragent")!;
+      await client.connect(new StreamableHTTPClientTransport(new URL(server.url), {
+        requestInit: {
+          headers: Object.fromEntries(server.headers.map(({ name, value }) => [name, value])),
+        },
+      }));
+      transport.emitSessionUpdate(threadId, {
+        sessionUpdate: "available_commands_update",
+        availableCommands: [],
+      });
+      await metadataPending;
+      const turn = await registry.startTurn({
+        backend, threadId, input: [{ type: "text", text: "Inspect this thread." }],
+      });
+      releaseMetadata();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      const search = await client.callTool({ name: "search_threads", arguments: { includeRemote: false } });
+      expect(search.isError, JSON.stringify(search)).not.toBe(true);
+      expect(search.structuredContent).toHaveProperty("threads");
+      expect(registry.getActiveTurnForThread({ backend, threadId })).toMatchObject({ turnId: turn.turnId });
+
+      transport.emitSessionUpdate(threadId, {
+        sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Done." },
+      });
+      finishPrompt({ stopReason: "end_turn" });
+      await vi.waitFor(() => expect(events.some((event) => event.notification.method === "turn/completed")).toBe(true));
+      expect(registry.getActiveTurnForThread({ backend, threadId })).toBeUndefined();
+      const afterTurn = await client.callTool({ name: "search_threads", arguments: { includeRemote: false } });
+      expect(afterTurn.isError).toBe(true);
+      expect(JSON.stringify(afterTurn)).toContain("only during an active turn");
+    } finally {
+      releaseMetadata();
+      finishPrompt({ stopReason: "cancelled" });
+      await client.close();
+      await registry.close();
+    }
   });
 
   it("creates same-backend handoff threads from an ACP MCP parent", async () => {

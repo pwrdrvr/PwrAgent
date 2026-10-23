@@ -19,7 +19,7 @@ function readReviews(api: DesktopApi, identity: ThreadReviewIdentity): Promise<T
     pending = new Map();
     pendingReads.set(api, pending);
   }
-  const key = JSON.stringify([identity.backend, identity.threadId]);
+  const key = JSON.stringify([identity.federationTarget?.instanceId, identity.backend, identity.threadId]);
   const current = pending.get(key);
   if (current) return current;
   const request = api.listThreadReviews!({ ...identity, status: "all" })
@@ -36,7 +36,8 @@ export function useTrackedReview(
   target: { id?: string; sourceKey?: string },
 ) {
   const desktopApi = useDesktopApi();
-  const api = readRendererFederationTarget() ? undefined : desktopApi;
+  const api = desktopApi;
+  const instanceId = identity?.federationTarget?.instanceId ?? readRendererFederationTarget()?.instanceId;
   const [review, setReview] = useState<ThreadReview>();
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
@@ -62,7 +63,9 @@ export function useTrackedReview(
       try {
         do {
           queued = false;
-          const reviews = await readReviews(api, { backend, threadId });
+          const reviews = await readReviews(api, { backend, threadId,
+            ...(instanceId ? { federationTarget: { scope: "remote", instanceId } } : {}),
+          });
           if (!cancelled) setReview(reviews.find((entry) => id ? entry.id === id : entry.sourceKey === sourceKey));
         } while (queued && !cancelled);
       } catch (error) {
@@ -73,6 +76,7 @@ export function useTrackedReview(
     };
     void reload();
     const unsubscribe = api.onThreadTodosChanged?.((event) => {
+      if (event.federationTarget?.instanceId !== instanceId && event.backend !== undefined) return;
       if (event.backend === undefined || (event.backend === backend && event.threadId === threadId)) void reload();
     });
     return () => {
@@ -80,21 +84,23 @@ export function useTrackedReview(
       cancelled = true;
       unsubscribe?.();
     };
-  }, [api, backend, threadId, id, sourceKey]);
+  }, [api, backend, threadId, instanceId, id, sourceKey]);
   const update = useCallback<ReviewUpdate>(async (request) => {
     if (!review || !api?.updateThreadReview) return;
     const startedGeneration = generation.current;
     setBusy(true);
     setError(undefined);
     try {
-      const response = await api.updateThreadReview({ id: review.id, ...request });
+      const response = await api.updateThreadReview({ id: review.id, ...request,
+        ...(instanceId ? { federationTarget: { scope: "remote", instanceId } } : {}),
+      });
       if (generation.current === startedGeneration) setReview(response.review);
     } catch (error) {
       if (generation.current === startedGeneration) setError(error instanceof Error ? error.message : String(error));
     } finally {
       if (generation.current === startedGeneration) setBusy(false);
     }
-  }, [api, review]);
+  }, [api, review, instanceId]);
   return { review, update, busy, error };
 }
 

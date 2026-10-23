@@ -38,6 +38,17 @@ afterEach(() => {
 });
 
 describe("review status controls", () => {
+  it("loads and updates tracked findings on a mounted remote thread", async () => {
+    const target = { scope: "remote" as const, instanceId: "peer" };
+    const api = installApi({ ...review, status: "handled" });
+    render(<TranscriptReview entry={entry} parentThreadId="owner"
+      fileViewerContext={{ key: "remote-thread", title: "Remote thread", federationTarget: target }} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Mark addressed: Abort pending exports" }));
+    expect(api.listThreadReviews).toHaveBeenCalledWith({ backend: "codex", threadId: "owner", status: "all", federationTarget: target });
+    expect(api.updateThreadReview).toHaveBeenCalledWith({ id: "review", itemId: "finding", status: "addressed", federationTarget: target });
+    await screen.findByText("Handled");
+  });
+
   it("reloads transcript status when provider recovery refreshes all To-dos", async () => {
     const api = installApi(review);
     vi.mocked(api.listThreadReviews!).mockResolvedValueOnce({ reviews: [] });
@@ -96,12 +107,14 @@ describe("review status controls", () => {
     expect(screen.queryByText("Stored body")).not.toBeInTheDocument();
   });
 
-  it("never looks up peer reviews in the local database", () => {
+  it("routes review reads in a remote window to the peer", async () => {
     const api = installApi(review);
     Object.assign(window, { __pwragentFederationTarget: { scope: "remote", instanceId: "peer" } });
     render(<TranscriptReview entry={entry} parentThreadId="owner" />);
-    expect(api.listThreadReviews).not.toHaveBeenCalled();
-    expect(screen.queryByRole("button", { name: "Dismiss review" })).not.toBeInTheDocument();
+    await screen.findByRole("button", { name: "Dismiss review" });
+    expect(api.listThreadReviews).toHaveBeenCalledWith({ backend: "codex", threadId: "owner", status: "all",
+      federationTarget: { scope: "remote", instanceId: "peer" },
+    });
   });
 });
 
