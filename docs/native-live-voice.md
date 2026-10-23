@@ -119,11 +119,11 @@ editing Settings instead of leaving. The focus acknowledgement confirms the
 selection, not that every transcript page has finished rendering. Reading a
 thread with `read_thread` never changes the graphical selection.
 
-Global search (⌘⇧F / Ctrl+Shift+F) includes archived threads by sending
-`filters.includeArchived: true` to `searchThreads`, and labels archived
-results. Opening an archived thread leaves its archive state intact. Agent
-`search_threads` keeps its existing default; the manager searches with
+Global search (⌘⇧F / Ctrl+Shift+F) searches active threads by default, sending
+`filters.includeArchived: false` to `searchThreads`. Archive lookup remains
+explicit through agent `search_threads`; the manager searches with
 `includeArchived: true` for past work or when an ordinary search misses it.
+Opening an archived thread leaves its archive state intact.
 Content search retains its provider availability and bounded candidate limits;
 including archives does not make unavailable provider history searchable.
 Metadata refresh batches changed entries into one SQLite transaction and skips

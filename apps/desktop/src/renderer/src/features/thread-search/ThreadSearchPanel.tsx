@@ -189,7 +189,6 @@ function ThreadSearchResultRow(props: {
         <span className="thread-search-result__title">{result.title}</span>
         <span className="thread-search-result__meta">
           <span className="chip chip--backend">{result.backend}</span>
-          {result.archivedAt !== undefined ? <span className="chip">Archived</span> : null}
           {props.isAgent ? <AgentThreadChip /> : null}
           {result.federation ? (
             <span className="chip">{result.federation.instanceLabel}</span>
@@ -292,7 +291,7 @@ export function ThreadSearchPanel(props: ThreadSearchPanelProps) {
     try {
       const result = await props.desktopApi.searchThreads({
         contentMode: "available",
-        filters: { includeArchived: true },
+        filters: { includeArchived: false },
         limit: 25,
         query: trimmed,
       });
@@ -374,7 +373,7 @@ export function ThreadSearchPanel(props: ThreadSearchPanelProps) {
           <div id={helpId} className="thread-search__help" role="region" aria-label="Search syntax">
             <strong>Search tips</strong>
             <p>Type <code>@</code> or <code>in:@</code> to choose a project. Use ↑ / ↓ to browse and Enter or Tab to select. Add another mention to search multiple projects.</p>
-            <p>Search titles, message content, branches, PR numbers (like #779), or Agent names. Archived threads are included and labeled. Opening one leaves it archived. Use <code>"ad hoc"</code> to search a phrase.</p>
+            <p>Search titles, message content, branches, PR numbers (like #779), or Agent names. Use <code>"ad hoc"</code> to search a phrase.</p>
             <p><code>build @disk</code> or <code>build in:@disk</code> searches projects whose names start with “disk”. Names are case-insensitive.</p>
             <p><code>build @PwrAgent @PwrSnap</code> searches either project. Use <code>@"My Project"</code> for spaces, or a full path to distinguish checkouts.</p>
             <p>A project mention alone lists its recent threads. Quote a literal mention, like <code>"@disk"</code>, to search its text.</p>
