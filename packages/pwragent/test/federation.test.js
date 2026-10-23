@@ -8,7 +8,7 @@ import {
   connectFederationClient, decodeFederationInvite, FederationRpcEndpoint,
   generateFederationIdentityKeyPair, generateNoiseStaticKeyPair,
 } from "../dist/federation-core.js";
-import { HEADLESS_CAPABILITIES } from "../src/federation.js";
+import { HEADLESS_CAPABILITIES, HeadlessFederation } from "../src/federation.js";
 import { setup, eventually } from "./helpers.js";
 
 async function port() {
@@ -156,3 +156,107 @@ test("ungranted mutation capabilities and wrong pinned keys fail closed", { time
   t.after(() => reconnected.connection.close());
   assert.deepEqual(reconnected.connection.capabilities, HEADLESS_CAPABILITIES);
 });
+
+for (const relay of [false, true]) {
+  test(`event classes require their own grants over encrypted ${relay ? "relayed" : "direct"} connections`, { timeout: 20000 }, async (t) => {
+    const gateway = await setup(t);
+    const gatewayPort = await port();
+    const issue = async () => decodeFederationInvite((await gateway.rpc("federation-invite", { port: gatewayPort })).invite);
+    const invite = await issue();
+    const owner = relay ? await setup(t) : gateway;
+    if (relay) await owner.rpc("federation-join", { invite: (await gateway.rpc("federation-invite", { port: gatewayPort })).invite });
+    const ownerId = (await owner.rpc("federation-status")).instanceId;
+    const subscribers = [];
+    for (const grants of [[], ["thread_navigation"], ["thread_detail"], ["thread_navigation", "thread_detail"]]) {
+      const v = await viewer(subscribers.length ? await issue() : invite, undefined, "enroll", ["event_subscriptions", "gateway_relay", ...grants]);
+      t.after(() => v.connection.close());
+      const remote = new FederationRpcEndpoint({ localInstanceId: v.identity.id, remoteInstanceId: ownerId,
+        sendEnvelope: (envelope) => v.connection.sendEnvelope(envelope), defaultTimeoutMs: 3000 });
+      const originalReceive = v.rpc.receiveEnvelope.bind(v.rpc);
+      v.rpc.receiveEnvelope = (envelope) => remote.receiveEnvelope(envelope) || originalReceive(envelope);
+      v.connection.sendEnvelope({ kind: "notification", id: randomUUID(), protocolVersion: 1,
+        sourceInstanceId: v.identity.id, targetInstanceId: ownerId, createdAt: Date.now(), method: "federation.eventSubscription",
+        params: { eventClasses: ["navigation", "transcript", "unknown"], threadSelection: { kind: "all" },
+          eventClassSelections: { navigation: { kind: "all" }, transcript: { kind: "all" } } } });
+      // An RPC on the same stream fences the preceding subscription. A denied
+      // read is also a response, without giving that subscriber extra grants.
+      await remote.request({ method: "backend.listBackends", params: {} }).catch(() => {});
+      subscribers.push({ v, grants, remote });
+    }
+    await owner.submit("private-conversation", "private conversation content");
+    await owner.finished("private-conversation");
+    await eventually(() => subscribers.at(-1).v.events.some((event) => event.params?.notification?.method === "turn/completed"));
+    for (const { v, grants, remote } of subscribers) {
+      await remote.request({ method: "backend.listBackends", params: {} }).catch(() => {});
+      const notifications = v.events.filter((event) => event.method === "backend.event").map((event) => event.params.notification);
+      const navigation = notifications.filter((event) => event.method === "navigation/invalidated");
+      const transcript = notifications.filter((event) => event.method !== "navigation/invalidated");
+      assert.equal(navigation.length > 0, grants.includes("thread_navigation"));
+      assert.equal(transcript.some((event) => event.method === "turn/completed"), grants.includes("thread_detail"));
+      if (!grants.includes("thread_detail")) assert.deepEqual(transcript, [], "subscription permission alone never grants conversation content");
+    }
+  });
+}
+
+test("leave removes the upstream router entry and subscriptions before asynchronous close", async () => {
+  const id = randomUUID();
+  let closed = false;
+  let unregistered = false;
+  const client = { close: () => { closed = true; } };
+  const federation = Object.assign(Object.create(HeadlessFederation.prototype), {
+    state: { instanceId: randomUUID(), gateway: { gatewayInstanceId: id } }, client,
+    generation: 0, connections: new Map([[id, client]]), subscriptions: new Map([["viewer", { via: id }]]),
+    router: { unregisterConnection: (peer) => { assert.equal(peer, id); unregistered = true; } }, save: () => {},
+  });
+  const status = await federation.leave();
+  assert.equal(status.gateway, undefined);
+  assert.deepEqual(status.peers, []);
+  assert.equal(federation.subscriptions.size, 0);
+  assert.equal(unregistered, true);
+  assert.equal(closed, true);
+});
+
+for (const outcome of ["success", "failure"]) {
+  test(`a superseded ${outcome} handshake releases the dial guard to the newly joined gateway`, { timeout: 20000 }, async (t) => {
+    const first = await setup(t);
+    const next = await setup(t);
+    const outpost = await setup(t);
+    const firstInvite = (await first.rpc("federation-invite", { port: await port() })).invite;
+    const firstPort = Number(new URL(decodeFederationInvite(firstInvite).gatewayUrl).port);
+    const nextInvite = (await next.rpc("federation-invite", { port: await port() })).invite;
+    const sockets = new Set();
+    const pending = [];
+    let held = false;
+    const proxy = net.createServer((socket) => {
+      sockets.add(socket);
+      socket.on("error", () => {});
+      socket.on("close", () => sockets.delete(socket));
+      const forward = () => {
+        const upstream = net.createConnection({ host: "127.0.0.1", port: firstPort });
+        sockets.add(upstream);
+        upstream.on("error", () => socket.destroy());
+        upstream.on("close", () => sockets.delete(upstream));
+        socket.pipe(upstream).pipe(socket);
+      };
+      if (held) pending.push({ socket, forward }); else forward();
+    });
+    await new Promise((resolve) => proxy.listen(0, "127.0.0.1", resolve));
+    t.after(() => { for (const socket of sockets) socket.destroy(); proxy.close(); });
+    await outpost.rpc("federation-join", { invite: firstInvite, gateway: `ws://127.0.0.1:${proxy.address().port}` });
+    held = true;
+    for (const socket of sockets) socket.destroy();
+    await eventually(() => pending.length > 0);
+    assert.deepEqual((await outpost.rpc("federation-leave")).peers, []);
+    await outpost.rpc("federation-join", { invite: nextInvite });
+    for (const request of pending) {
+      if (outcome === "success") request.forward(); else request.socket.destroy();
+    }
+    const connected = await eventually(async () => {
+      const status = await outpost.rpc("federation-status");
+      return status.gateway.status === "connected" ? status : null;
+    });
+    assert.equal(connected.gateway.instanceId, decodeFederationInvite(nextInvite).gatewayInstanceId);
+    assert.deepEqual(connected.peers.map((peer) => peer.id), [connected.gateway.instanceId]);
+    assert.deepEqual((await outpost.rpc("federation-leave")).peers, []);
+  });
+}

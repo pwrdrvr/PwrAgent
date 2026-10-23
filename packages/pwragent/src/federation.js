@@ -13,6 +13,12 @@ import { HeadlessBackend, METHOD_CAPABILITIES } from "./federation-backend.js";
 
 export const HEADLESS_CAPABILITIES = ["remote_window", "thread_navigation", "thread_detail", "turn_control", "event_subscriptions", "gateway_relay", "transport_brotli"];
 
+const EVENT_CAPABILITIES = new Map([
+  ["navigation", "thread_navigation"], ["star_map", "thread_navigation"],
+  ["directory_set", "thread_navigation"], ["transcript", "thread_detail"],
+  ["pending_requests", "pending_request_control"], ["scheduled_actions", "scheduled_actions"],
+]);
+
 function forwardEndpoint(value) {
   const url = new URL(value);
   if (url.username || url.password || url.search || url.hash
@@ -190,6 +196,7 @@ export class HeadlessFederation {
       // Enrollment may already have succeeded before its acknowledgment was
       // persisted. Reconnect first, so a consumed one-time token is not reused.
       try { client = await dial("reconnect"); } catch (error) {
+        if (this.stopping || generation !== this.generation) throw error;
         if (error.message !== "unknown_peer" || !gateway.token || gateway.expiresAt <= Date.now()) throw error;
         client = await dial("enroll");
       }
@@ -201,9 +208,15 @@ export class HeadlessFederation {
       this.register(gateway.gatewayInstanceId, client.capabilities, client);
       client.startReceiving();
     } catch (error) {
+      if (this.stopping || generation !== this.generation) return;
       this.connectionError = ["revoked_peer", "unknown_peer", "missing_invite"].includes(error.message) ? error.message : "connection_failed";
       if (this.connectionError === "connection_failed") this.schedule();
-    } finally { this.connecting = false; }
+    } finally {
+      this.connecting = false;
+      // A leave/join can replace the pairing while this handshake owns the
+      // dial guard. Its completion must release admission to the new pairing.
+      if (generation !== this.generation && !this.stopping) void this.connect();
+    }
   }
 
   schedule() {
@@ -227,10 +240,10 @@ export class HeadlessFederation {
   }
 
   receive(envelope, peerId) {
-    if (envelope.kind === "notification" && envelope.method === "federation.eventSubscription" && envelope.targetInstanceId === this.state.instanceId) {
+    if (envelope.kind === "notification" && envelope.method === "federation.eventSubscription") {
       if (envelope.sourceInstanceId !== peerId && (peerId !== this.state.gateway?.gatewayInstanceId || !(envelope.hopCount >= 1))) return;
-      if (!this.router.getConnection(peerId)?.capabilities.includes("event_subscriptions")) return;
-      if (this.subscriptions.size >= 128 && !this.subscriptions.has(envelope.sourceInstanceId)) return;
+      const capabilities = this.router.getConnection(peerId)?.capabilities || [];
+      if (!capabilities.includes("event_subscriptions")) return;
       const subscription = envelope.params;
       const validSelection = (selection) => selection?.kind === "all" || (selection?.kind === "threads"
         && Array.isArray(selection.threads) && selection.threads.length <= 100
@@ -238,8 +251,18 @@ export class HeadlessFederation {
       if (!Array.isArray(subscription?.eventClasses) || subscription.eventClasses.length > 16
         || (subscription.threadSelection !== undefined && !validSelection(subscription.threadSelection))
         || (subscription.eventClassSelections && !Object.values(subscription.eventClassSelections).every(validSelection))) return;
-      this.subscriptions.set(envelope.sourceInstanceId, { ...subscription, threadSelection: subscription.threadSelection || { kind: "all" }, via: peerId });
-      return;
+      const eventClasses = subscription.eventClasses.filter((eventClass) => capabilities.includes(EVENT_CAPABILITIES.get(eventClass)));
+      const authorized = { ...subscription, eventClasses, threadSelection: subscription.threadSelection || { kind: "all" } };
+      if (envelope.targetInstanceId === this.state.instanceId) {
+        if (!eventClasses.length) this.subscriptions.delete(envelope.sourceInstanceId);
+        else if (this.subscriptions.size < 128 || this.subscriptions.has(envelope.sourceInstanceId)) {
+          this.subscriptions.set(envelope.sourceInstanceId, { ...authorized, via: peerId });
+        }
+        return;
+      }
+      // Filter at the first hop, before a trusted relay could amplify the
+      // subscriber's grants. Empty replacements also clear earlier demand.
+      envelope = { ...envelope, params: authorized };
     }
     void this.router.routeEnvelope({ envelope, sourcePeerId: peerId }).catch(() => { /* Transport shutdown can race a response. */ });
   }
@@ -260,9 +283,13 @@ export class HeadlessFederation {
     this.generation++;
     clearTimeout(this.retryTimer);
     this.retryTimer = null;
+    const gatewayId = this.state?.gateway?.gatewayInstanceId;
+    const client = this.client;
     if (this.state) { delete this.state.gateway; this.save(); }
-    this.client?.close();
+    if (client) this.unregister(gatewayId, client);
     this.client = null;
+    client?.close();
+    this.connectionError = undefined;
     return this.status();
   }
 
