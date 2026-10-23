@@ -142,7 +142,7 @@ test("renders the desktop shell with the black-first Tangerine Terminal theme", 
     const activeLens = app.window.locator(".lens-switch__button.is-active");
     const selectedRow = app.window.locator(".thread-row.is-selected").first();
     const primaryButton = app.window.locator(".composer__send-split-pill").first();
-    const composerInput = app.window.getByLabel("Reply");
+    const composerInput = app.window.getByRole("textbox", { name: "Reply", exact: true });
     // The editor fills its scroller edge to edge, which clipped all of its
     // own outline, so the box around it draws the ring.
     const composerBox = app.window.locator(".composer-tiptap-input", {
@@ -243,7 +243,7 @@ test("keeps workflow states, scanner phases, and narrow desktop layout stable", 
     ).toBeVisible();
 
     await app.window
-      .getByLabel("Reply")
+      .getByRole("textbox", { name: "Reply", exact: true })
       .fill("Read /etc/hosts and tell me the first three lines.");
     await app.window.getByRole("button", { name: "Send" }).click();
     await app.advance({ stepId: "status-active-1" });

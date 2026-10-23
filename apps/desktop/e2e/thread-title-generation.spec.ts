@@ -148,7 +148,7 @@ test("applies a generated title even when the latest title lookup has not caught
       })
     ).toBeVisible();
 
-    await app.window.getByLabel("Reply").fill(PROMPT);
+    await app.window.getByRole("textbox", { name: "Reply", exact: true }).fill(PROMPT);
     await app.window.getByRole("button", { name: "Send" }).click();
 
     await expect

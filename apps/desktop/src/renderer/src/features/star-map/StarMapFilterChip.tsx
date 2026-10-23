@@ -66,7 +66,7 @@ export function StarMapFilterChip(props: StarMapFilterChipProps) {
       onClick={props.onCycle}
     >
       <ExcludeMark state={chrome.state} />
-      <span>{props.definition.label}</span>
+      <span>{props.definition.label}</span>{" "}
       <span className="star-map__filter-count">{props.countsKnown === false ? "—" : props.count}</span>
     </button>
   );
@@ -121,13 +121,6 @@ function StarMapAttentionFilterChip(
         className={`${chrome.className} star-map__filter-chip--attention`}
         tabIndex={chrome.tabIndex}
         aria-hidden={chrome.ariaHidden}
-        // The numbers are drawn as marks, so without this the chip
-        // announces its filter state and nothing about what it counts.
-        aria-label={`${chrome.ariaLabel}. ${describeAttentionCounts(
-          counts,
-          formatUnreadThreadCount,
-          "Unread count unavailable",
-        )}`}
         // The card's consequence lines exist nowhere else — without this
         // they are sighted-only, since the portal sits outside this
         // button's subtree. Gated on `visible`: naming an absent element is
@@ -146,7 +139,15 @@ function StarMapAttentionFilterChip(
         {/* The tab's own layout: turns stacked in one column, the cookie
             beside it. One wrapper gives the pair the tab's inner gap
             without restating it on the chip, whose gap is the strip's. */}
-        <span aria-hidden="true" className="star-map__filter-signals">
+        <span
+          role="img"
+          aria-label={`${chrome.ariaLabel}. ${describeAttentionCounts(
+            counts,
+            formatUnreadThreadCount,
+            "Unread count unavailable",
+          )}`}
+          className="star-map__filter-signals"
+        >
           <AttentionTurnReadouts
             activeLocal={counts.activeLocal}
             activeRemote={counts.activeRemote}
@@ -170,6 +171,9 @@ function StarMapAttentionFilterChip(
  */
 function chipChrome(props: StarMapFilterChipProps) {
   const state = filterState(props.selection, props.definition.key);
+  const countLabel = props.attention
+    ? ""
+    : `${props.countsKnown === false ? "—" : props.count}, `;
   const next =
     state === "neutral"
       ? "show only these"
@@ -186,7 +190,7 @@ function chipChrome(props: StarMapFilterChipProps) {
     // still in the tab order, focusable, and invisible.
     tabIndex: props.dropped ? -1 : undefined,
     ariaHidden: props.dropped ? true : undefined,
-    ariaLabel: `${props.definition.label}: ${
+    ariaLabel: `${props.definition.label}: ${countLabel}${
       state === "neutral"
         ? "not filtered"
         : state === "include"

@@ -76,7 +76,7 @@ afterEach(() => {
  */
 function openDiscontinuedDrawer() {
   const header = screen.getByRole("button", {
-    name: "Soon to be discontinued",
+    name: /Soon to be discontinued/,
   });
   if (header.getAttribute("aria-expanded") !== "true") {
     fireEvent.click(header);
@@ -7021,7 +7021,8 @@ describe("SettingsScreen", () => {
       name: "Slack messaging settings",
     });
     const openSection = (title: string) => {
-      const header = within(pane).getByRole("button", { name: title });
+      const header = within(pane).getByRole("heading", { level: 2, name: title })
+        .closest<HTMLElement>('[role="button"]')!;
       if (header.getAttribute("aria-expanded") !== "true") {
         fireEvent.click(header);
       }
@@ -7148,7 +7149,7 @@ describe("SettingsScreen", () => {
     ).toEqual(["Connect", "Access & responses", "Start talking", "Advanced"]);
 
     const connect = within(pane)
-      .getByRole("button", { name: "Connect" })
+      .getByRole("heading", { level: 2, name: "Connect" })
       .closest("section") as HTMLElement;
     const stages = Array.from(
       connect.querySelectorAll<HTMLElement>(".automation-stage"),
@@ -7241,7 +7242,7 @@ describe("SettingsScreen", () => {
       });
     });
     const connect = screen
-      .getByRole("button", { name: "Connect" })
+      .getByRole("heading", { level: 2, name: "Connect" })
       .closest("section") as HTMLElement;
     const progress = () =>
       Array.from(

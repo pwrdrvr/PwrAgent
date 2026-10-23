@@ -100,9 +100,9 @@ test("OpenAI new-thread selector uses concrete model and reasoning defaults", as
     await expect(app.window.getByRole("heading", { level: 2, name: "New thread" })).toBeVisible();
 
     const settings = app.window.getByLabel("New thread settings");
-    const providerSelect = settings.getByLabel("Provider");
-    const modelSelect = settings.getByLabel("Model", { exact: true });
-    const reasoningSelect = settings.getByLabel("Reasoning", { exact: true });
+    const providerSelect = settings.getByLabel(/^Provider(?::|$)/);
+    const modelSelect = settings.getByLabel(/^Model(?::|$)/, { exact: true });
+    const reasoningSelect = settings.getByLabel(/^Reasoning(?::|$)/, { exact: true });
     await expect(providerSelect).toHaveAttribute("data-value", "codex");
     await expect(modelSelect).toHaveAttribute("data-value", "gpt-5.5");
     await expect(reasoningSelect).toHaveAttribute("data-value", "medium");
@@ -140,8 +140,8 @@ test("OpenAI new-thread launchpad wins when sticky ACP Grok defaults are unavail
     await expect(app.window.getByText("OpenAI", { exact: true }).first()).toBeVisible();
 
     const settings = app.window.getByLabel("New thread settings");
-    const providerSelect = settings.getByLabel("Provider");
-    const modelSelect = settings.getByLabel("Model", { exact: true });
+    const providerSelect = settings.getByLabel(/^Provider(?::|$)/);
+    const modelSelect = settings.getByLabel(/^Model(?::|$)/, { exact: true });
     const prompt = app.window.getByRole("textbox", { name: "New thread" });
 
     await expect(providerSelect).toHaveAttribute("data-value", "codex");

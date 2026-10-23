@@ -1,4 +1,3 @@
-import { useId } from "react";
 import type { FederationActivitySeries } from "@pwragent/shared";
 import { formatTrafficBytes } from "./format-traffic-bytes";
 
@@ -17,7 +16,6 @@ export function FederationTrafficCard(props: {
   series: FederationActivitySeries;
   onOpen?: () => void;
 }) {
-  const numbersId = useId();
   const points = props.series.history.slice(-FEDERATION_TRAFFIC_CARD_SECONDS);
   const minute = props.series.windows["1m"];
   const max = Math.max(1, ...points.flatMap((point) =>
@@ -26,11 +24,10 @@ export function FederationTrafficCard(props: {
   const sent = formatTrafficBytes(minute.sent.wireBytes);
   const received = formatTrafficBytes(minute.received.wireBytes);
   return <button type="button" className="federation-traffic" disabled={!props.onOpen}
-    aria-label="Open Federation Activity" aria-describedby={numbersId}
     onClick={props.onOpen}>
     <span className="federation-traffic__head">
       <span className="federation-traffic__title">Traffic · last 60 seconds</span>
-      <span className="federation-traffic__nums" id={numbersId}>
+      <span className="federation-traffic__nums">
         <span className="federation-traffic__sent">↑ {sent} sent</span>{" "}
         <span>↓ {received} received</span>
       </span>
@@ -50,7 +47,7 @@ export function FederationTrafficCard(props: {
         </g>;
       })}
     </svg>
-    <span className="federation-traffic__axis-labels" aria-hidden="true">
+    <span className="federation-traffic__axis-labels">
       <span>60s ago</span><span>Open Federation Activity ↗</span><span>now</span>
     </span>
   </button>;

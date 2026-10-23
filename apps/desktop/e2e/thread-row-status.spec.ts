@@ -228,7 +228,7 @@ test("shows initiated background turns as thinking, then unread once they finish
       })
     ).toBeVisible();
 
-    await app.window.getByLabel("Reply").fill("Keep working on this thread.");
+    await app.window.getByRole("textbox", { name: "Reply", exact: true }).fill("Keep working on this thread.");
     await app.window.getByRole("button", { name: "Send" }).click();
 
     await browseSection.getByRole("button", { name: /Reference thread/i }).click();

@@ -101,7 +101,7 @@ function renderShell(notices: readonly AppNoticeToastNotice[]) {
   stack.style.setProperty("--chrome-band-h", "40px");
   place(stack, { left: 16, top: 544, right: 436, bottom: 752 });
   // Partly under the stack at the bottom.
-  place(screen.getByRole("button", { name: "Workspace mode" }), {
+  place(screen.getByRole("button", { name: /^Workspace mode(?::|$)/ }), {
     left: 376, top: 686, right: 455, bottom: 712,
   });
   // Entirely under the stack at the bottom.
@@ -157,7 +157,7 @@ describe("AppNoticeStack placement", () => {
 
     // Partly covered: still visible, so the stack stays.
     await user.tab();
-    expect(screen.getByRole("button", { name: "Workspace mode" })).toHaveFocus();
+    expect(screen.getByRole("button", { name: /^Workspace mode(?::|$)/ })).toHaveFocus();
     await nextFrame();
     expect(stack).toHaveAttribute("data-placement", "bottom");
 
@@ -223,7 +223,7 @@ describe("AppNoticeStack placement", () => {
     const user = userEvent.setup();
     const { stack } = renderShell([NOTICE]);
     await user.tab();
-    expect(screen.getByRole("button", { name: "Workspace mode" })).toHaveFocus();
+    expect(screen.getByRole("button", { name: /^Workspace mode(?::|$)/ })).toHaveFocus();
     await nextFrame();
     expect(stack).toHaveAttribute("data-placement", "bottom");
 

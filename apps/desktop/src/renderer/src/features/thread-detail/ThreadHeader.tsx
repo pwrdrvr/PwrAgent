@@ -244,7 +244,7 @@ export function ThreadHeader(props: ThreadHeaderProps) {
                   />
                 ) : props.onRevealSelectedThreadInList ? (
                   <button
-                    aria-label="Show selected thread in thread list"
+                    aria-label={`Show selected thread in thread list: ${props.thread.title}`}
                     className="thread-header__title-button"
                     title="Show in thread list"
                     type="button"

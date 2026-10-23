@@ -483,7 +483,6 @@ export function SettingsSection(props: {
         ref={headerRef}
         aria-controls={bodyId}
         aria-expanded={!collapsed}
-        aria-label={props.title}
         className="settings-panel__header settings-section__header-button"
         role="button"
         tabIndex={0}
@@ -584,7 +583,6 @@ export function SettingsSectionGroup(props: {
       <div
         aria-controls={bodyId}
         aria-expanded={!collapsed}
-        aria-label={props.title}
         className="settings-panel__header settings-section__header-button"
         role="button"
         tabIndex={0}

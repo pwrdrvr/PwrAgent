@@ -1339,7 +1339,7 @@ describe("StarMapChatCard slash commands", () => {
       fireEvent.click(
         within(dialog).getByRole("button", { name: /Current changes/ }),
       );
-      const mode = within(dialog).getByRole("button", { name: "Review run mode" });
+      const mode = within(dialog).getByRole("button", { name: /^Review run mode(?::|$)/ });
       if (backend === "codex") {
         fireEvent.click(mode);
         fireEvent.click(within(dialog).getByRole("option", { name: "PwrAgent Sub Agent" }));

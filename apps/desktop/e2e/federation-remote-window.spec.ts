@@ -380,8 +380,9 @@ test.describe("federation remote window", () => {
       });
       const { window } = app;
 
-      const localRow = window.getByRole("button", {
+      const localRow = window.getByRole("region", { name: "Thread browser" }).getByRole("button", {
         name: "Local colliding thread",
+        exact: true,
       });
       await expect(localRow).toBeVisible({ timeout: 30_000 });
       await localRow.click();
@@ -473,6 +474,7 @@ test.describe("federation remote window", () => {
 
       const remoteRow = window.getByRole("button", {
         name: "Remote colliding thread",
+        exact: true,
       }).first();
       await expect(remoteRow).toBeVisible({ timeout: 30_000 });
       await remoteRow.click();
@@ -508,10 +510,12 @@ test.describe("federation remote window", () => {
       await expect(window.getByText("Local thread is ready.")).toBeVisible();
       await expect(window.getByText("#41 · CI failed")).toBeVisible();
       await expect(
-        window.getByRole("button", { name: "Remote colliding thread" }),
+        window.getByRole("region", { name: "Thread browser" })
+          .getByRole("button", { name: "Remote colliding thread" }),
       ).toHaveCount(1);
       await expect(
-        window.getByRole("button", { name: "Local colliding thread" }),
+        window.getByRole("region", { name: "Thread browser" })
+          .getByRole("button", { name: "Local colliding thread" }),
       ).toHaveCount(1);
       await expect(
         window.locator(".thread-row__open[aria-pressed=\"true\"]"),
@@ -870,6 +874,7 @@ test.describe("federation remote window", () => {
       await window.getByRole("button", { name: /Exit Settings/i }).click();
       const locallyMountedRemoteRow = window.getByRole("button", {
         name: "Remote gateway thread one",
+        exact: true,
       });
       // Row state (selection, offline dim) lives on the CARD; the button is
       // only the title line inside it, because the chip flow beside it
@@ -995,11 +1000,14 @@ test.describe("federation remote window", () => {
 
       // Opening a remote thread renders the peer transcript with the
       // remote-PTY terminal toggle enabled (the gateway granted remote_pty).
-      const remoteRowOne = remote.getByRole("button", {
+      const remoteRowOne = remote.getByRole("region", { name: "Thread browser" }).getByRole("button", {
         name: "Remote gateway thread one",
+        exact: true,
       });
       const remoteCardOne = remote.locator(".thread-row", {
-        has: remoteRowOne,
+        // `has` resolves inside each row; the browser-region locator above
+        // cannot resolve there because that region is the row's ancestor.
+        has: remote.getByRole("button", { name: "Remote gateway thread one", exact: true }),
       });
       await remoteRowOne.click();
       await expect(
@@ -1181,7 +1189,7 @@ test.describe("federation remote window", () => {
       await expect(childPrompt).toBeVisible();
       const childSettings = remote.getByLabel("New thread settings");
       const childProvider = childSettings.getByRole("button", {
-        name: "Provider",
+        name: /^Provider(?::|$)/,
         exact: true,
       });
       await expect(childProvider).toContainText("Kimi");
@@ -1191,7 +1199,7 @@ test.describe("federation remote window", () => {
 
       const childTools = remote.getByLabel("Composer tools");
       const childEnvironment = childTools.getByRole("button", {
-        name: "Environment",
+        name: /^Environment(?::|$)/,
         exact: true,
       });
       await expect(childEnvironment).toBeVisible();
@@ -1970,7 +1978,7 @@ test.describe("federation remote window", () => {
 
       const childSettings = remote.getByLabel("New thread settings");
       const childProvider = childSettings.getByRole("button", {
-        name: "Provider",
+        name: /^Provider(?::|$)/,
         exact: true,
       });
       await expect(childProvider).toContainText("Kimi");
@@ -1978,7 +1986,7 @@ test.describe("federation remote window", () => {
       await remote.getByRole("option", { name: "OpenAI", exact: true }).click();
       await expect(childProvider).toContainText("OpenAI");
 
-      const childAccessMode = childSettings.getByLabel("Access mode");
+      const childAccessMode = childSettings.getByLabel(/^Access mode(?::|$)/);
       if (await childAccessMode.getAttribute("data-value") !== "full-access") {
         await childAccessMode.click();
         await remote.getByRole("option", { name: "Full Access" }).click();
@@ -1991,7 +1999,7 @@ test.describe("federation remote window", () => {
 
       const childEnvironment = remote
         .getByLabel("Composer tools")
-        .getByRole("button", { name: "Environment", exact: true });
+        .getByRole("button", { name: /^Environment(?::|$)/, exact: true });
       await expect(childEnvironment).toBeVisible();
       await childEnvironment.click();
       await remote.getByRole("option", { name: "PwrAgent", exact: true }).click();

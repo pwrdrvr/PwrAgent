@@ -96,7 +96,7 @@ for (const theme of ["dark", "light"] as const) {
       await expect(panel.getByText("Running · connected")).toBeVisible();
       // Hover is verified above. Give this interactive popover keyboard focus
       // before the audit/capture so native pointer departure cannot dismiss it.
-      const openActivity = panel.getByRole("button", { name: "Open Federation Activity", exact: true });
+      const openActivity = panel.getByRole("button", { name: /Open Federation Activity/, exact: true });
       await openActivity.focus();
       await expect(openActivity).toBeFocused();
       const popoverAudit = await new AxeBuilder({ page: app.window })
