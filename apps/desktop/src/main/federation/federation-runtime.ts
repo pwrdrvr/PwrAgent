@@ -312,6 +312,8 @@ import {
   decodeFederationInvite,
   encodeFederationInvite,
 } from "./federation-enrollment";
+import { searchFederatedContent } from "./federated-content-search-service";
+import type { ThreadSearchRequest, ThreadSearchResponse } from "@pwragent/shared";
 import { FederatedSearchService } from "./federated-search-service";
 import {
   collectFederationHostInfo,
@@ -3220,6 +3222,20 @@ export class DesktopFederationRuntime {
     if (refreshed.length > 0) {
       await overlayStore.updateRemoteThreadPinSnapshots(refreshed);
     }
+  }
+
+  async searchThreadContent(
+    request: ThreadSearchRequest,
+    local: (request: ThreadSearchRequest, signal?: AbortSignal) => Promise<ThreadSearchResponse>,
+    onProgress?: (response: ThreadSearchResponse) => void,
+    signal?: AbortSignal,
+  ): Promise<ThreadSearchResponse> {
+    const visible = this.visiblePeers();
+    return await searchFederatedContent({ request, local, signal, onProgress,
+      peers: visible.filter((peer) => peer.status === "connected" && peer.capabilities.includes("thread_detail"))
+        .map((peer) => ({ instanceId: peer.id, label: formatFederationPeerDisplayLabel(peer, visible),
+          backend: this.remoteBackend({ scope: "remote", instanceId: peer.id }) })),
+    });
   }
 
   async searchConnectedPeers(
@@ -6614,6 +6630,12 @@ function localBackendOperations(): FederationBackendOperations {
     },
     async searchNavigationThreads(request) {
       return await messagingBridge.searchNavigationThreads(request);
+    },
+    async searchThreadContent(request, rpcOptions) {
+      return await getDesktopBackendRegistry().ownerContentSearch.run(request, rpcOptions);
+    },
+    async cancelThreadContentSearch(request, rpcOptions) {
+      getDesktopBackendRegistry().ownerContentSearch.cancel(request.searchId, rpcOptions);
     },
     async searchFederatedThreads(request, rpcOptions) {
       return await messagingBridge.searchFederatedThreads(request, rpcOptions);

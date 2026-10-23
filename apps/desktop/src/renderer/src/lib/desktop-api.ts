@@ -1368,7 +1368,9 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   ) => Promise<AppServerListThreadsResponse>;
   searchThreads?: (
     request?: ThreadSearchRequest,
+    onProgress?: (response: ThreadSearchResponse) => void,
   ) => Promise<ThreadSearchResponse>;
+  cancelThreadSearch?: () => Promise<void>;
   markThreadSeen?: (request: MarkThreadSeenRequest) => Promise<unknown>;
   setThreadReaction?: (
     request: SetThreadReactionRequest
