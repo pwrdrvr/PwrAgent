@@ -1,5 +1,6 @@
 import type {
   AppServerBackendKind,
+  AppServerReviewFinding,
   AppServerReviewOutput,
   AppServerThreadReviewEntry,
   DesktopApplicationsSnapshot,
@@ -9,7 +10,11 @@ import { formatPathRelativeToDirectories } from "@pwragent/shared";
 import { useCallback, useMemo, type MouseEvent } from "react";
 import { normalizeReviewDisplayText } from "../../../../shared/review-command";
 import { pullRequestReviewPromptUrl } from "../../../../shared/pull-request-review";
-import { parsePlainReview, reviewEntryFindings } from "../../../../shared/review-output";
+import {
+  parsePlainReview,
+  reviewEntryFindings,
+  reviewFindingTag,
+} from "../../../../shared/review-output";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -95,17 +100,27 @@ function formatPath(path: string, directoryPaths: string[] | undefined): string 
   return formatPathRelativeToDirectories(normalizePath(path), directoryPaths);
 }
 
-function priorityLabel(priority: number | undefined): string {
-  return typeof priority === "number" ? `P${priority}` : "P?";
-}
-
-function priorityClassName(priority: number | undefined): string {
-  const normalizedPriority =
-    typeof priority === "number" && priority >= 0 && priority <= 3
-      ? `p${priority}`
-      : "unknown";
-
-  return `transcript-review__priority transcript-review__priority--${normalizedPriority}`;
+/**
+ * A finding's badge: its priority, else its category (Claude Code classifies
+ * findings and never ranks them), else nothing.
+ */
+function FindingTag(props: { finding: AppServerReviewFinding }) {
+  const { priority, category } = props.finding;
+  const tag = reviewFindingTag(props.finding);
+  if (!tag) {
+    return null;
+  }
+  const variant = typeof priority === "number"
+    ? priority >= 0 && priority <= 3 ? `p${priority}` : "unknown"
+    : "category";
+  return (
+    <span
+      className={`transcript-review__priority transcript-review__priority--${variant}`}
+      data-category={variant === "category" ? category : undefined}
+    >
+      {tag}
+    </span>
+  );
 }
 
 /**
@@ -221,8 +236,12 @@ export function TranscriptReview(props: TranscriptReviewProps) {
   // One array feeds the rows and both copy buttons, so the tag is dropped once
   // for all three. Review tracking records the same list, in the same order.
   const findings = useMemo(
-    () => reviewEntryFindings({ output, review: props.entry.review }),
-    [output, props.entry.review],
+    () => reviewEntryFindings({
+      output,
+      review: props.entry.review,
+      reviewer: props.entry.reviewer,
+    }),
+    [output, props.entry.review, props.entry.reviewer],
   );
   const findingCount = output?.findings.length;
   const displayText = props.entry.displayText;
@@ -376,10 +395,10 @@ export function TranscriptReview(props: TranscriptReviewProps) {
                 className="transcript-review__finding"
                 key={`${finding.code_location.absolute_file_path}:${range.start}:${index}`}
               >
-                <div className="transcript-review__finding-head">
-                  <span className={priorityClassName(finding.priority)}>
-                    {priorityLabel(finding.priority)}
-                  </span>
+                <div
+                  className={`transcript-review__finding-head${reviewFindingTag(finding) ? "" : " transcript-review__finding-head--untagged"}`}
+                >
+                  <FindingTag finding={finding} />
                   <span className="transcript-review__finding-title">
                     {finding.title}
                   </span>

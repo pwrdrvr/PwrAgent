@@ -29967,6 +29967,12 @@ div.composer-error-row__toggle {
   align-items: baseline;
 }
 
+/* No priority and no category: the title leads and takes the flexible
+   column. */
+.transcript-review__finding-head--untagged {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 /* Smaller than the card-level control, and aligned to the title's first line
    rather than to its baseline, which the box would otherwise sit below.
    24px is the floor: WCAG 2.2 `target-size` is what `a11y.spec.ts` gates on,
@@ -30021,6 +30027,14 @@ div.composer-error-row__toggle {
   border-color: var(--info-border);
   background: var(--info-soft);
   color: var(--info-text);
+}
+
+/* A category is a word, not a rank: neutral, in the text face, and never
+   coloured as though it were a severity. */
+.transcript-review__priority--category {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 .transcript-review__finding-title {
@@ -47376,6 +47390,11 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   align-items: center;
   gap: 6px;
   border-top: 1px solid var(--border-subtle);
+}
+
+/* A review that ranks nothing (Claude Code's) gets no priority column. */
+.review-todo__findings[data-unranked] .review-todo__finding {
+  grid-template-columns: minmax(0, 1fr) auto;
 }
 
 .review-todo__state {

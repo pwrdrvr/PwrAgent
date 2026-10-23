@@ -107,6 +107,31 @@ describe("ThreadTodoStack", () => {
     expect(screen.getByRole("button", { name: /Fix 1 selected/ }).hasAttribute("disabled")).toBe(false);
   });
 
+  it("gives a review that ranks nothing no priority column, and keeps it for one that does", async () => {
+    const review = (id: string, priority?: number): ThreadReview => ({
+      id, backend: "claude", threadId: "thread-a", sourceKey: id,
+      title: "Review", status: "open", createdAt: 1, updatedAt: 1,
+      items: [
+        { id: `${id}-a`, title: "Duplicate CSS rule", category: "simplification", status: "open", createdAt: 1, updatedAt: 1 },
+        { id: `${id}-b`, title: "Ranked finding", ...(priority === undefined ? {} : { priority }), status: "open", createdAt: 1, updatedAt: 1 },
+      ],
+    });
+    for (const [entry, ranked] of [[review("unranked"), false], [review("ranked", 1), true]] as const) {
+      Object.assign(window, { pwragent: {
+        listThreadReviews: vi.fn(async () => ({ reviews: [entry] })),
+        onThreadTodosChanged: () => () => {},
+      } });
+      const card = threadReviewTodo(entry);
+      render(<ThreadTodoStack threadKey={threadTodoThreadKey(card)} todos={[card]}
+        view={createView([card])} onStartReview={vi.fn()} onDoHere={vi.fn()} />);
+      const list = await screen.findByRole("list", { name: "Findings" });
+      expect(list.hasAttribute("data-unranked")).toBe(!ranked);
+      expect(list.querySelectorAll(".review-todo__priority").length).toBe(ranked ? 2 : 0);
+      expect(within(list).queryByText("P?")).toBeNull();
+      cleanup();
+    }
+  });
+
   it("pages through this thread's cards", () => {
     const todos = [todo({ id: "1" }), todo({ id: "2" }), todo({ id: "3" })];
     render(

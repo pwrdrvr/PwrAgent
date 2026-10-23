@@ -93,6 +93,9 @@ export function parseReviewOutputText(
         ...(typeof finding.priority === "number"
           ? { priority: finding.priority }
           : {}),
+        ...(typeof finding.category === "string" && finding.category.trim()
+          ? { category: finding.category.trim() }
+          : {}),
         code_location: {
           absolute_file_path: location.absolute_file_path,
           line_range: {
@@ -212,6 +215,29 @@ export function withoutRedundantPriorityTag<T extends ReviewFinding>(
   return finding.priority === tagged ? { ...finding, title } : finding;
 }
 
+/** "test-coverage" reads as "Test coverage". */
+export function reviewCategoryLabel(category: string): string {
+  const words = category.trim().replace(/[-_]+/g, " ");
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+/**
+ * What labels a finding: its priority, else its category. Codex-style
+ * reviewers rank findings; Claude Code classifies them and never ranks.
+ * A finding with neither has no label, rather than a "P?" placeholder.
+ */
+export function reviewFindingTag(finding: {
+  priority?: number;
+  category?: string;
+}): string | undefined {
+  if (typeof finding.priority === "number") {
+    return `P${finding.priority}`;
+  }
+  return finding.category?.trim()
+    ? reviewCategoryLabel(finding.category)
+    : undefined;
+}
+
 export function formatReviewOutputText(
   output: AppServerReviewOutput,
 ): string {
@@ -223,12 +249,10 @@ export function formatReviewOutputText(
   }
   lines.push("");
   for (const finding of output.findings.map(withoutRedundantPriorityTag)) {
-    const priority = finding.priority === undefined
-      ? "P?"
-      : `P${finding.priority}`;
+    const tag = reviewFindingTag(finding);
     const range = finding.code_location.line_range;
     lines.push(
-      `- [${priority}] ${finding.title} (${finding.code_location.absolute_file_path}:${range.start}-${range.end})`,
+      `- ${tag ? `[${tag}] ` : ""}${finding.title} (${finding.code_location.absolute_file_path}:${range.start}-${range.end})`,
       `  ${finding.body}`,
     );
   }
@@ -310,6 +334,32 @@ export function parsePlainReview(review: string): {
   };
 }
 
+const LEGACY_CLAUDE_FACTS =
+  /\n\n(?:Category: ([\w-]+))?(?: · )?(?:Verdict: (\w+))?$/;
+
+/**
+ * Claude reviews recorded before findings carried a category wrote it into
+ * the body's last paragraph ("Category: correctness · Verdict: CONFIRMED").
+ * Lift it back out so those reviews get the same badge as new ones.
+ */
+function withLegacyClaudeCategory(
+  finding: AppServerReviewFinding,
+): AppServerReviewFinding {
+  if (finding.category !== undefined || finding.priority !== undefined) {
+    return finding;
+  }
+  const facts = LEGACY_CLAUDE_FACTS.exec(finding.body);
+  if (!facts?.[1]) {
+    return finding;
+  }
+  const rest = finding.body.slice(0, facts.index);
+  return {
+    ...finding,
+    category: facts[1],
+    body: facts[2] ? `${rest}\n\nVerdict: ${facts[2]}` : rest,
+  };
+}
+
 /**
  * A review entry's findings in display order, without a title's redundant
  * priority tag. The transcript renders these and review tracking records them,
@@ -318,8 +368,12 @@ export function parsePlainReview(review: string): {
 export function reviewEntryFindings(entry: {
   output?: AppServerReviewOutput;
   review: string;
+  reviewer?: { backend: string };
 }): AppServerReviewFinding[] {
   const output = entry.output ?? parseReviewOutputText(entry.review);
-  return output?.findings.map(withoutRedundantPriorityTag)
+  const findings = output?.findings.map(withoutRedundantPriorityTag)
     ?? parsePlainReview(entry.review).findings;
+  return entry.reviewer?.backend === "claude"
+    ? findings.map(withLegacyClaudeCategory)
+    : findings;
 }

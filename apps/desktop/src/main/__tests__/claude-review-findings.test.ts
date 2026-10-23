@@ -83,9 +83,12 @@ describe("Claude ReportFindings mapping", () => {
           body: [
             "An access-default change stamps every launchpad row.",
             "Failure scenario: Changing Claude's access stamps empty rows, which then show as Directories rows.",
-            "Category: correctness · Verdict: CONFIRMED",
+            "Verdict: CONFIRMED",
           ].join("\n\n"),
           confidence_score: 0,
+          // Claude classifies instead of ranking: the category takes the
+          // badge a priority would, and stays out of the body.
+          category: "correctness",
           code_location: { absolute_file_path: path.join(cwd, "src/state.ts"), line_range: { start: 7511, end: 7511 } },
         },
         {
@@ -120,7 +123,8 @@ describe("Claude ReportFindings mapping", () => {
       code_location: { absolute_file_path: path.join(cwd, "math.js"), line_range: { start: 2, end: 2 } },
     })]);
     expect(output.findings[0].body).toContain("Failure scenario: div(6, 2)");
-    expect(output.findings[0].body).toContain("Category: correctness");
+    expect(output.findings[0].category).toBe("correctness");
+    expect(output.findings[0].body).not.toContain("Category:");
   });
 
   it("reports a clean review as correct", () => {

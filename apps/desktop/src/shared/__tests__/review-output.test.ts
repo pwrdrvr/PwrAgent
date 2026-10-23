@@ -2,6 +2,8 @@ import type { AppServerReviewOutput } from "@pwragent/shared";
 import { describe, expect, it } from "vitest";
 import {
   formatReviewOutputText,
+  reviewEntryFindings,
+  reviewFindingTag,
   withoutRedundantPriorityTag,
 } from "../review-output";
 
@@ -58,5 +60,63 @@ describe("formatReviewOutputText", () => {
 
     expect(text).toContain("- [P2] Persist provenance (/repo/src/registry.ts:17646-17657)");
     expect(text).not.toContain("[P2] [P2]");
+  });
+
+  it("labels a finding by its category when it has no priority, and otherwise not at all", () => {
+    const text = formatReviewOutputText({
+      findings: [
+        { ...finding("Duplicate CSS rule"), category: "test-coverage" },
+        finding("Unlabelled"),
+      ],
+      overall_correctness: "patch is incorrect",
+      overall_explanation: "Two findings.",
+    });
+
+    expect(text).toContain("- [Test coverage] Duplicate CSS rule (");
+    expect(text).toContain("- Unlabelled (");
+    expect(text).not.toContain("P?");
+  });
+});
+
+describe("reviewFindingTag", () => {
+  it("prefers the priority, then the category, then nothing", () => {
+    expect(reviewFindingTag({ priority: 1, category: "correctness" })).toBe("P1");
+    expect(reviewFindingTag({ category: "simplification" })).toBe("Simplification");
+    expect(reviewFindingTag({ category: "  " })).toBeUndefined();
+    expect(reviewFindingTag({})).toBeUndefined();
+  });
+});
+
+describe("reviewEntryFindings", () => {
+  const legacy = (body: string): AppServerReviewOutput => ({
+    findings: [{ ...finding("Duplicate CSS rule"), body }],
+    overall_correctness: "patch is incorrect",
+    overall_explanation: "",
+  });
+
+  it("lifts the category a Claude review recorded into the body", () => {
+    const [lifted] = reviewEntryFindings({
+      output: legacy("Defined twice.\n\nFailure scenario: Drift.\n\nCategory: correctness · Verdict: CONFIRMED"),
+      review: "",
+      reviewer: { backend: "claude" },
+    });
+    expect(lifted).toMatchObject({
+      category: "correctness",
+      body: "Defined twice.\n\nFailure scenario: Drift.\n\nVerdict: CONFIRMED",
+    });
+
+    const [categoryOnly] = reviewEntryFindings({
+      output: legacy("Failure scenario: Drift.\n\nCategory: simplification"),
+      review: "",
+      reviewer: { backend: "claude" },
+    });
+    expect(categoryOnly).toMatchObject({ category: "simplification", body: "Failure scenario: Drift." });
+  });
+
+  it("leaves other reviewers' bodies alone", () => {
+    const body = "Failure scenario: Drift.\n\nCategory: correctness";
+    const [kept] = reviewEntryFindings({ output: legacy(body), review: "", reviewer: { backend: "codex" } });
+    expect(kept.body).toBe(body);
+    expect(kept.category).toBeUndefined();
   });
 });

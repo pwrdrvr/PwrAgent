@@ -9,6 +9,7 @@ import type {
 import { BanIcon, CheckIcon } from "../../icons";
 import { useDesktopApi, type DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
+import { reviewFindingTag } from "../../../../shared/review-output";
 
 const pendingReads = new WeakMap<DesktopApi, Map<string, Promise<ThreadReview[]>>>();
 
@@ -127,8 +128,8 @@ export function openReviewItems(review: ThreadReview): ThreadReviewItem[] {
  */
 export function fixReviewFindingsPrompt(reviewTitle: string, items: readonly ThreadReviewItem[]): string {
   const findings = items.map((item, index) => {
-    const priority = typeof item.priority === "number" ? `[P${item.priority}] ` : "";
-    return `${index + 1}. ${priority}${item.title}`;
+    const tag = reviewFindingTag(item);
+    return `${index + 1}. ${tag ? `[${tag}] ` : ""}${item.title}`;
   });
   return [
     items.length === 1

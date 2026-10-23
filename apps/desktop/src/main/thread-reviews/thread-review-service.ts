@@ -204,10 +204,11 @@ export class ThreadReviewService {
       clean: output?.findings.length === 0,
       // Past the cap the rest stay in the transcript; recording none would
       // fail the import again on every read.
-      items: reviewEntryFindings({ output, review: entry.review })
+      items: reviewEntryFindings({ output, review: entry.review, reviewer: entry.reviewer })
         .slice(0, THREAD_REVIEW_MAX_FINDINGS)
         .map((finding) => ({
           title: finding.title, body: finding.body, priority: finding.priority,
+          ...(finding.category ? { category: finding.category } : {}),
           codeLocation: finding.code_location,
         })),
     }, "automatic");
