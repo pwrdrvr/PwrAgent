@@ -165,6 +165,9 @@ describe("Composer file attachments on a remote thread", () => {
       await screen.findByText(`On ${OWNER_LABEL}: /Users/owner/Downloads/report.pdf`),
     ).toBeInTheDocument();
     fireEvent.blur(remove.parentElement!);
+    // The same local file is already on the owner; dropping it again reuses it.
+    dropFile("report.pdf");
+    expect(pushComposerFile).toHaveBeenCalledTimes(1);
     const send = screen.getByRole("button", { name: "Send" });
     expect(send).toBeEnabled();
     fireEvent.click(send);

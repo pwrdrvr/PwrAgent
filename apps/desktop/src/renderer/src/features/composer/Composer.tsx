@@ -3303,9 +3303,16 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     enabled: remoteFileTarget !== undefined,
     suspended: remoteFileTarget === undefined,
   });
-  const remoteFilePushTarget = remoteFileTarget
-    ? resolveRemoteFilePushTarget(remoteFileTargetHealth, remoteFileTarget.instanceId)
-    : undefined;
+  const remoteFileTargetInstanceId = remoteFileTarget?.instanceId;
+  const remoteFilePushTarget = useMemo(
+    () => remoteFileTargetInstanceId
+      ? resolveRemoteFilePushTarget(remoteFileTargetHealth, remoteFileTargetInstanceId)
+      : undefined,
+    [remoteFileTargetHealth, remoteFileTargetInstanceId],
+  );
+  // Owner path → the local file it was copied from, so dropping the same
+  // file again reuses the copy that is already in the tray.
+  const remoteCopySourcesRef = useRef(new Map<string, string>());
   const canPushRemoteFiles = Boolean(
     remoteFilePushTarget
       && props.desktopApi?.pushComposerFile
@@ -3316,6 +3323,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     target: remoteFileTarget,
     scopeKey: composerScopeKey,
     onUploaded: (files) => {
+      for (const file of files) {
+        remoteCopySourcesRef.current.set(file.path, file.sourcePath);
+      }
       attachFilePaths(files.map((file) => file.path));
     },
   });
@@ -9718,9 +9728,13 @@ export const Composer = memo(function Composer(props: ComposerProps) {
    * copy lands. Shares the tray's per-message cap.
    */
   const startRemoteFileUploads = (paths: string[]): void => {
-    const pending = new Set(
-      remoteFileUploads.uploads.map((upload) => upload.sourcePath),
-    );
+    const pending = new Set([
+      ...remoteFileUploads.uploads.map((upload) => upload.sourcePath),
+      ...fileAttachments.flatMap((attachment) => {
+        const source = remoteCopySourcesRef.current.get(attachment.path);
+        return source ? [source] : [];
+      }),
+    ]);
     const fresh = [...new Set(paths)].filter((path) => path && !pending.has(path));
     if (fresh.length === 0) {
       return;
@@ -14571,7 +14585,7 @@ function RemoteFileUploadPill({
   targetLabel: string;
   upload: RemoteFileUpload;
 }) {
-  const { show, showAfterDelay, hide, visible, tooltipId, tooltipNode } =
+  const { show, showAfterDelay, hide, update, visible, tooltipId, tooltipNode } =
     useViewportTooltip({
       className: "viewport-tooltip composer__attachment-tooltip",
     });
@@ -14582,6 +14596,10 @@ function RemoteFileUploadPill({
     : upload.totalBytes !== undefined
       ? `Copying to ${targetLabel} · ${formatByteCount(upload.sentBytes)} of ${formatByteCount(upload.totalBytes)}`
       : `Copying to ${targetLabel}`;
+  // An open tooltip follows the transfer instead of freezing at hover time.
+  useEffect(() => {
+    if (visible) update(content);
+  }, [content, update, visible]);
 
   return (
     <span

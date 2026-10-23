@@ -18,7 +18,7 @@ export type RemoteFileUpload = {
   error?: string;
 };
 
-type UploadedFile = { label: string; path: string };
+type UploadedFile = { label: string; path: string; sourcePath: string };
 
 function errorMessage(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error);
@@ -110,7 +110,10 @@ export function useRemoteFileUploads(params: {
         .then((result) => {
           if (!liveIdsRef.current.delete(upload.id)) return;
           setUploads((current) => current.filter((entry) => entry.id !== upload.id));
-          setFinished((current) => [...current, { label: upload.label, path: result.path }]);
+          setFinished((current) => [
+            ...current,
+            { label: upload.label, path: result.path, sourcePath: upload.sourcePath },
+          ]);
         })
         .catch((error: unknown) => {
           if (!liveIdsRef.current.has(upload.id)) return;
