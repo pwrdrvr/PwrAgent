@@ -4,6 +4,7 @@ import type {
   AppServerReviewFindingOutcome,
   AppServerReviewOutput,
 } from "@pwragent/shared";
+import { normalizeReviewCategory } from "../../shared/review-output";
 
 /**
  * Claude Code's typed code-review report. The CLI asks for it only when the
@@ -54,7 +55,7 @@ export function parseClaudeFindingsReport(input: unknown): ClaudeFindingsReport 
       failureScenario: text(finding.failure_scenario) ?? "",
       ...(Number.isInteger(line) && line > 0 ? { line } : {}),
       ...(text(finding.short_summary) ? { shortSummary: text(finding.short_summary) } : {}),
-      ...(text(finding.category) ? { category: text(finding.category) } : {}),
+      ...(normalizeReviewCategory(finding.category) ? { category: normalizeReviewCategory(finding.category) } : {}),
       ...(text(finding.verdict) ? { verdict: text(finding.verdict) } : {}),
       ...(outcome && OUTCOMES.has(outcome) ? { outcome } : {}),
     });
@@ -76,29 +77,27 @@ function findingTitle(finding: ClaudeReportedFinding): string {
 }
 
 function findingBody(finding: ClaudeReportedFinding): string {
-  const facts = [
-    finding.category ? `Category: ${finding.category}` : undefined,
-    finding.verdict ? `Verdict: ${finding.verdict}` : undefined,
-  ].filter(Boolean).join(" · ");
   return [
     // A short title leaves the full claim to the body.
     finding.shortSummary ? finding.summary : undefined,
     finding.failureScenario ? `Failure scenario: ${finding.failureScenario}` : undefined,
-    facts || undefined,
+    finding.verdict ? `Verdict: ${finding.verdict}` : undefined,
   ].filter(Boolean).join("\n\n");
 }
 
 /**
  * The report in the shape every review surface already reads. Claude reports
- * no priority, verdict, or confidence. Findings arrive most-severe first and
- * keep that order. A finding's confidence is 0, as for a plain-text review:
- * nothing reads it, and the field is required.
+ * no priority or confidence; its category takes the badge a priority would.
+ * Findings arrive most-severe first and keep that order. A finding's
+ * confidence is 0, as for a plain-text review: nothing reads it, and the
+ * field is required.
  */
 export function claudeReviewOutput(report: ClaudeFindingsReport, cwd: string): AppServerReviewOutput {
   const findings: AppServerReviewFinding[] = report.findings.map((finding) => ({
     title: findingTitle(finding),
     body: findingBody(finding),
     confidence_score: 0,
+    ...(finding.category ? { category: finding.category } : {}),
     code_location: {
       absolute_file_path: findingPath(finding.file, cwd),
       // A finding without a line anchors to the file's first line.
