@@ -771,7 +771,7 @@ describe("archive cleanup pipeline", () => {
       : []);
   });
 
-  it("still rejects a different thread's archive notification during removal admission", async () => {
+  it.each(["codex", "claude"] as const)("still rejects a different %s thread's archive notification during removal admission", async (backend) => {
     vi.useFakeTimers();
     const target = codexThread({ id: "target", linkedDirectories: [{
       id: "directory", kind: "worktree", label: "repo", path: "/contrived/repo", worktreePath: "/contrived/worktree",
@@ -780,7 +780,7 @@ describe("archive cleanup pipeline", () => {
     const listPage = fixture.client.listArchiveCleanupThreadsPage.getMockImplementation()!;
     let reads = 0;
     fixture.client.listArchiveCleanupThreadsPage.mockImplementation(async (params) => {
-      if (++reads === 3) await publishNotification(fixture.registry, { method: "thread/archived", params: { threadId: "other" } });
+      if (++reads === 3) await publishNotification(fixture.registry, { method: "thread/archived", params: { threadId: "other" } }, backend);
       return await listPage(params);
     });
 
