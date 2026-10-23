@@ -22776,10 +22776,15 @@ export class DesktopBackendRegistry {
   private usesGrokSlashExecutionModes(
     backend: AppServerBackendKind,
   ): backend is AcpBackendId {
-    return (
-      isAcpBackendId(backend) &&
-      this.acpBackend.getInstalledAgent(backend)?.registryId === "grok"
-    );
+    if (!isAcpBackendId(backend)) {
+      return false;
+    }
+    const agent = this.acpBackend.getInstalledAgent(backend);
+    // A native permission selector can include Grok's Auto reviewer. Once
+    // advertised, it owns permission state; /always-approve cannot represent
+    // Auto and must not overwrite it during launch or mode changes.
+    return agent?.registryId === "grok"
+      && !acpAdvertisesRuntimeModeSelector(agent.runtimeCapabilities);
   }
 
   /**

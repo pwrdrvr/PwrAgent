@@ -12619,13 +12619,10 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
-  it("does not send /yolo for Kimi once it advertises runtime modes (#658)", async () => {
-    // The #658 fix: when kimi exposes its own runtime modes, approval policy is
-    // controlled via the runtime "yolo" mode (session/set_mode), NOT the legacy
-    // /yolo slash command (which current kimi rejects). So the registry must
-    // suppress the hardcoded execution modes AND never send /yolo.
+  it.each(["kimi", "grok"])("uses the native %s permission selector without legacy slash commands", async (registryId) => {
     const sessions: AcpSessionMetadata[] = [];
-    const acpBackendId = "acp:kimi" as AcpBackendId;
+    const acpBackendId = `acp:${registryId}` as AcpBackendId;
+    const optionId = registryId === "grok" ? "permission_mode" : "approval-mode";
     const sendControlPrompt = vi.fn(async () => ({ text: "" }));
     const acpClient = {
       initialize: vi.fn(async () => undefined),
@@ -12633,7 +12630,7 @@ describe("DesktopBackendRegistry", () => {
       startSession: vi.fn(async (params: { cwd?: string; executionMode: "default" | "auto" | "full-access" }) => {
         const metadata: AcpSessionMetadata = {
           backendId: acpBackendId,
-          sessionId: "kimi-session-1",
+          sessionId: "native-permission-session",
           title: "ACP session",
           cwd: params.cwd,
           createdAt: 1000,
@@ -12657,7 +12654,7 @@ describe("DesktopBackendRegistry", () => {
       cancelSession: vi.fn(),
       setRuntimeOption: vi.fn(
         async (): Promise<BackendAcpSessionRuntimeState> => ({
-          configValues: { "approval-mode": "yolo" },
+          configValues: { [optionId]: "yolo" },
           currentModeId: "yolo",
           updatedAt: 2000,
         }),
@@ -12676,15 +12673,15 @@ describe("DesktopBackendRegistry", () => {
       acpAgentStore: createAcpAgentStoreMock([
         {
           backendId: acpBackendId,
-          registryId: "kimi",
-          name: "Kimi Code CLI",
+          registryId,
+          name: registryId,
           version: "1.44.0",
           distributionKind: "local",
-          distributionSource: "kimi acp",
+          distributionSource: `${registryId} acp`,
           installStatus: "installed",
           authStatus: "not-required",
           verificationStatus: "not-applicable",
-          allowlistRuleId: "local-kimi-cli",
+          allowlistRuleId: `local-${registryId}-cli`,
           installedAt: 1000,
           updatedAt: 2000,
           runtimeCapabilities: {
@@ -12693,13 +12690,14 @@ describe("DesktopBackendRegistry", () => {
             checkedAt: 1000,
             configOptions: [
               {
-                id: "approval-mode",
+                id: optionId,
                 label: "Permission mode",
                 type: "select",
                 category: "mode",
                 currentValue: "default",
                 values: [
                   { value: "default", label: "Default" },
+                  { value: "auto", label: "Auto" },
                   { value: "yolo", label: "Yolo" },
                 ],
               },
@@ -12707,9 +12705,9 @@ describe("DesktopBackendRegistry", () => {
           },
           launchDescriptor: {
             backendId: acpBackendId,
-            registryId: "kimi",
+            registryId,
             distributionKind: "local",
-            command: "kimi",
+            command: registryId,
             args: ["acp"],
             env: {},
           },
@@ -12727,7 +12725,7 @@ describe("DesktopBackendRegistry", () => {
         ?.executionModes,
     ).toEqual([]);
 
-    // Even a full-access thread + an execution-mode change must NOT send /yolo.
+    // A stored Full Access selection must not drive the legacy slash path.
     await registry.startThread({
       backend: acpBackendId,
       cwd: "/repo/project",
@@ -12735,32 +12733,53 @@ describe("DesktopBackendRegistry", () => {
     });
     await registry.setThreadExecutionMode({
       backend: acpBackendId,
-      threadId: "kimi-session-1",
+      threadId: "native-permission-session",
       executionMode: "default",
     });
     await registry.setAcpSessionRuntimeOption({
       backend: acpBackendId,
-      threadId: "kimi-session-1",
+      threadId: "native-permission-session",
       source: "configOption",
-      optionId: "approval-mode",
+      optionId,
       value: "yolo",
     });
     expect(sendControlPrompt).not.toHaveBeenCalled();
     expect(acpClient.setRuntimeOption).toHaveBeenCalledWith({
-      sessionId: "kimi-session-1",
+      sessionId: "native-permission-session",
       source: "configOption",
-      optionId: "approval-mode",
+      optionId,
       value: "yolo",
       rejectUnofferedThoughtLevel: true,
     });
     await expect(
       overlayStore.getThreadOverlayState({
         backend: acpBackendId,
-        threadId: "kimi-session-1",
+        threadId: "native-permission-session",
       }),
     ).resolves.toMatchObject({
       executionMode: "full-access",
     });
+
+    acpClient.setRuntimeOption.mockResolvedValueOnce({
+      configValues: { [optionId]: "auto" },
+      currentModeId: "auto",
+      updatedAt: 3000,
+    });
+    await registry.setAcpSessionRuntimeOption({
+      backend: acpBackendId,
+      threadId: "native-permission-session",
+      source: "configOption",
+      optionId,
+      value: "auto",
+    });
+    expect(sendControlPrompt).not.toHaveBeenCalled();
+    expect(sessions[0]?.acpRuntime?.currentModeId).toBe("auto");
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: acpBackendId,
+        threadId: "native-permission-session",
+      }),
+    ).resolves.toMatchObject({ executionMode: "default" });
 
     await registry.close();
   });
@@ -14739,22 +14758,22 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
-  it("does not auto-approve ACP permission requests for Auto runtime sessions", async () => {
-    const acpBackendId = "acp:qwen" as AcpBackendId;
+  it.each(["qwen", "grok"])("keeps human approvals for requests escalated by %s Auto", async (registryId) => {
+    const acpBackendId = `acp:${registryId}` as AcpBackendId;
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: createOverlayStoreMock(),
       acpAgentStore: createAcpAgentStoreMock([
         {
           backendId: acpBackendId,
-          registryId: "qwen",
-          name: "Qwen Code",
+          registryId,
+          name: registryId,
           distributionKind: "local",
-          distributionSource: "qwen --experimental-acp",
+          distributionSource: `${registryId} acp`,
           installStatus: "installed",
           authStatus: "not-required",
           verificationStatus: "not-applicable",
-          allowlistRuleId: "local-qwen-cli",
+          allowlistRuleId: `local-${registryId}-cli`,
           installedAt: 1000,
           updatedAt: 2000,
           runtimeCapabilities: {
@@ -14782,8 +14801,8 @@ describe("DesktopBackendRegistry", () => {
       acpSessionStore: createAcpSessionStoreMock([
         {
           backendId: acpBackendId,
-          sessionId: "qwen-session-1",
-          title: "Qwen thread",
+          sessionId: "auto-session-1",
+          title: "Auto thread",
           cwd: "/repo/project",
           createdAt: 1000,
           updatedAt: 2000,
@@ -14805,7 +14824,7 @@ describe("DesktopBackendRegistry", () => {
     const request: AppServerPendingRequestNotification = {
       method: "item/commandExecution/requestApproval",
       params: {
-        threadId: "qwen-session-1",
+        threadId: "auto-session-1",
         turnId: "turn-1",
         requestId: "approval-1",
         acpMethod: "session/request_permission",
@@ -14834,7 +14853,7 @@ describe("DesktopBackendRegistry", () => {
     });
     await registry.submitServerRequest({
       backend: acpBackendId,
-      threadId: "qwen-session-1",
+      threadId: "auto-session-1",
       requestId: "approval-1",
       response: { decision: "approve" },
     });

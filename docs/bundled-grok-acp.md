@@ -144,6 +144,20 @@ whenever it is doing that, and **Use newest build** clears it. With managed
 builds on, discovery already ranks the newest managed build ahead of every PATH
 install, so no override is needed to prefer one.
 
+## Permission selector compatibility
+
+Grok's native Auto mode reviews tool calls with its own classifier. PwrAgent
+does not supply a provider-independent approval reviewer. Codex and Claude
+likewise run their own Auto reviewers.
+
+When a Grok runtime advertises an ACP permission config option with category
+`mode`, that selector owns permission state, including Auto when available.
+PwrAgent must not also send the legacy `/always-approve` control prompts:
+those prompts represent only Default and Full Access. Older Grok builds that
+advertise no mode selector retain that two-option fallback. A client-wide
+`x.ai/yolo_mode_changed` notification is unsuitable for this integration
+because multiple threads can share a Grok process.
+
 ## Updating the pin
 
 1. Sync and test the `pwragent` branch of the downstream Grok fork.
