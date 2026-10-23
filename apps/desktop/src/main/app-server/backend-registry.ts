@@ -13858,10 +13858,21 @@ export class DesktopBackendRegistry {
     // model's option has to be written first. `configValues` carries whatever
     // insertion order earlier merges left, and a level measured against the
     // agent's default model is dropped by the session's own menu.
-    const thoughtLevelOptionId = findAcpThoughtLevelConfigOption(
-      this.acpBackend.getInstalledAgent(backend)?.runtimeCapabilities,
-    )?.id;
-    const configValues = Object.entries(runtime?.configValues ?? {}).sort(
+    const capabilities = this.acpBackend.getInstalledAgent(backend)?.runtimeCapabilities;
+    const thoughtLevelOptionId = findAcpThoughtLevelConfigOption(capabilities)?.id;
+    const modeConfigOption = capabilities?.configOptions?.find(
+      (option) => option.category === "mode"
+        && option.values.some((value) => value.value === runtime?.currentModeId),
+    );
+    // currentModeId also mirrors config-option selectors. Restore those via
+    // their config ID, not session/set_mode, whose IDs can mean something else
+    // (Grok's native session modes control planning rather than permissions).
+    const configValues = Object.entries({
+      ...runtime?.configValues,
+      ...(modeConfigOption && runtime?.currentModeId
+        ? { [modeConfigOption.id]: runtime.currentModeId }
+        : {}),
+    }).sort(
       ([left], [right]) =>
         Number(left === thoughtLevelOptionId)
         - Number(right === thoughtLevelOptionId),
@@ -13874,7 +13885,7 @@ export class DesktopBackendRegistry {
         value,
       });
     }
-    if (runtime?.currentModeId) {
+    if (runtime?.currentModeId && !modeConfigOption) {
       await client.setRuntimeOption?.({
         sessionId,
         source: "mode",

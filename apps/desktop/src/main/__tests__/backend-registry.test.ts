@@ -12784,6 +12784,51 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("launches Grok Auto through its permission config option without calling session/set_mode", async () => {
+    const backend = "acp:grok" as AcpBackendId;
+    const runtimeCapabilities: BackendAcpRuntimeCapabilities = {
+      schemaVersion: 1,
+      status: "discovered",
+      configOptions: [{
+        id: "permission_mode",
+        label: "Permissions",
+        category: "mode",
+        type: "select",
+        currentValue: "default",
+        values: [
+          { value: "default", label: "Default Access" },
+          { value: "auto", label: "Auto" },
+          { value: "yolo", label: "Full Access" },
+        ],
+      }],
+    };
+    const { registry, acpClient, sendControlPrompt } = createKimiAcpRegistry({
+      acpBackendId: backend,
+      installedAgent: {
+        ...createKimiAgentRecord(backend, runtimeCapabilities),
+        registryId: "grok",
+        name: "Grok",
+      },
+    });
+    await registry.startThread({
+      backend,
+      cwd: "/repo/project",
+      acpRuntime: {
+        currentModeId: "auto",
+        configValues: { permission_mode: "default" },
+        updatedAt: 1000,
+      },
+    });
+    expect(acpClient.setRuntimeOption.mock.calls).toEqual([[{
+      sessionId: "kimi-session-1",
+      source: "configOption",
+      optionId: "permission_mode",
+      value: "auto",
+    }]]);
+    expect(sendControlPrompt).not.toHaveBeenCalled();
+    await registry.close();
+  });
+
   it("runs Grok ACP execution mode changes through /always-approve slash control prompts", async () => {
     // Regression test for the Grok-ACP Full Access bug: creating a Grok
     // thread with executionMode="full-access" must persist that mode to
