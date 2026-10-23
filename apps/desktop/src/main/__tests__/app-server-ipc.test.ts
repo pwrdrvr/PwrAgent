@@ -31,6 +31,7 @@ import type {
   ThreadSearchResponse,
 } from "@pwragent/shared";
 import type { ThreadSearchService } from "../thread-search/thread-search-service";
+import type { DesktopFederationRuntime } from "../federation/federation-runtime";
 import {
   BACKGROUND_WORKTREE_WORKING_STATE_BATCH_SIZE,
   selectStaleWorktreeWorkingStatePaths,
@@ -154,7 +155,7 @@ const federationMock = vi.hoisted(() => {
         capabilities: string[];
       }> => []),
       health: vi.fn(async () => ({ instanceId: "pwr_local" })),
-      searchConnectedPeers: vi.fn(async () => ({ results: [], failures: [], searchedInstances: [] })),
+      searchThreadContent: vi.fn<DesktopFederationRuntime["searchThreadContent"]>(),
       hydrateThreadMessageOrigins: vi.fn(async (response) => response),
       remoteBackend: vi.fn(() => remoteBackend),
       remoteTargetSupportsCapability: vi.fn(() => true),
@@ -1269,11 +1270,19 @@ describe("app server ipc", () => {
     try {
       for (const includeArchived of [true, false]) {
         const request = { query: "archived example", filters: { includeArchived }, limit: 25 };
-        await appServerService.searchThreads(request);
-        expect(search).toHaveBeenLastCalledWith(request);
-        expect(federationMock.runtime.searchConnectedPeers).toHaveBeenLastCalledWith({
-          query: "archived example", limit: 25, backend: undefined, includeArchived,
+        const controller = new AbortController();
+        const onProgress = vi.fn();
+        federationMock.runtime.searchThreadContent.mockImplementationOnce(async (ownerRequest, localSearch, progress, signal) => {
+          const response = await localSearch(ownerRequest, signal);
+          progress?.(response);
+          return response;
         });
+        await expect(appServerService.searchThreads(request, onProgress, controller.signal)).resolves.toBe(local);
+        expect(federationMock.runtime.searchThreadContent).toHaveBeenLastCalledWith(
+          request, expect.any(Function), onProgress, controller.signal,
+        );
+        expect(search).toHaveBeenLastCalledWith(request, controller.signal);
+        expect(onProgress).toHaveBeenCalledWith(local);
       }
     } finally {
       stub.mockRestore();
@@ -1363,6 +1372,7 @@ describe("app server ipc", () => {
     federationMock.remoteBackend.listWorktreeUnpublishedCommits.mockClear();
     federationMock.remoteBackend.getWorktreeUnpublishedCommitDiff.mockClear();
     federationMock.runtime.remoteBackend.mockClear();
+    federationMock.runtime.searchThreadContent.mockReset();
     federationMock.runtime.connectedPeerTargets.mockReset();
     federationMock.runtime.connectedPeerTargets.mockReturnValue([]);
     federationMock.runtime.remoteTargetSupportsCapability.mockReset();
