@@ -1,8 +1,10 @@
-import type { IntegratedTerminalService } from "./integrated-terminal-service";
+type WorktreeTerminalOwner = {
+  withWorktreeClosed<T>(worktreePath: string, work: () => Promise<T>): Promise<T>;
+};
 
-let owner: Pick<IntegratedTerminalService, "withWorktreeClosed"> | undefined;
+let owner: WorktreeTerminalOwner | undefined;
 
-export function registerWorktreeTerminalOwner(service: Pick<IntegratedTerminalService, "withWorktreeClosed">): () => void {
+export function registerWorktreeTerminalOwner(service: WorktreeTerminalOwner): () => void {
   owner = service;
   return () => { if (owner === service) owner = undefined; };
 }
