@@ -145,6 +145,59 @@ const OPEN_REQUEST = {
   rows: 24,
 };
 
+describe("FederationPtyService worktree removal", () => {
+  it("rejects a late cwd resolution before it can spawn in a removing worktree", async () => {
+    let finishResolve!: (cwd: string) => void;
+    const resolveThreadCwd = vi.fn(() => new Promise<string>((resolve) => { finishResolve = resolve; }));
+    const spawnPty = vi.fn();
+    const { service } = createHarness({ resolveThreadCwd, spawnPty });
+    const opening = service.open("viewer", OPEN_REQUEST);
+    await vi.waitFor(() => expect(resolveThreadCwd).toHaveBeenCalledOnce());
+    await service.withWorktreeClosed("/owner/worktree", async () => {
+      finishResolve("/owner/worktree");
+      await expect(opening).rejects.toThrow("worktree");
+      expect(spawnPty).not.toHaveBeenCalled();
+    });
+    await service.disposeAll();
+  });
+
+  it("waits for remote shells to exit and blocks new shells until removal settles", async () => {
+    const { pty, service } = createHarness();
+    pty.kill = vi.fn(() => { pty.killed = true; });
+    await service.open("viewer", OPEN_REQUEST);
+    let finishRemoval!: () => void;
+    const remove = vi.fn(() => new Promise<void>((resolve) => { finishRemoval = resolve; }));
+    const removing = service.withWorktreeClosed("/owner/worktree", remove);
+    await vi.waitFor(() => expect(pty.killed).toBe(true));
+    expect(remove).not.toHaveBeenCalled();
+    await expect(service.open("viewer", OPEN_REQUEST)).rejects.toThrow("worktree");
+    pty.emitExit(0);
+    await vi.waitFor(() => expect(remove).toHaveBeenCalledOnce());
+    await expect(service.open("viewer", OPEN_REQUEST)).rejects.toThrow("worktree");
+    finishRemoval();
+    await removing;
+    await service.disposeAll();
+  });
+
+  it("drains an in-flight remote spawn before removing its worktree", async () => {
+    const pty = new FakePty();
+    let finishSpawn!: (value: { pty: FakePty; cwd: string; shell: { file: string; args: string[] } }) => void;
+    const spawnPty = vi.fn(() => new Promise<{ pty: FakePty; cwd: string; shell: { file: string; args: string[] } }>((resolve) => { finishSpawn = resolve; }));
+    const { service } = createHarness({ spawnPty });
+    const opening = service.open("viewer", OPEN_REQUEST);
+    await vi.waitFor(() => expect(spawnPty).toHaveBeenCalledOnce());
+    const remove = vi.fn(async () => 42);
+    const removing = service.withWorktreeClosed("/owner/worktree", remove);
+    expect(remove).not.toHaveBeenCalled();
+    finishSpawn({ pty, cwd: "/owner/worktree", shell: { file: "/bin/zsh", args: [] } });
+    await opening;
+    await expect(removing).resolves.toBe(42);
+    expect(pty.killed).toBe(true);
+    expect(service.sessionCountForPeer("viewer")).toBe(0);
+    await service.disposeAll();
+  });
+});
+
 describe("FederationPtyService capability map", () => {
   it("requires remote_pty for every control method", () => {
     const methods = Object.values(FEDERATION_PTY_METHODS);

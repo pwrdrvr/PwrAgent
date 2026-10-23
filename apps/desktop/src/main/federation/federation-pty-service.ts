@@ -2,6 +2,8 @@ import type { IntegratedTerminalSessionSummary, TerminalSnapshot } from "../../s
 import { restoredHistoryPrelude, TerminalReplay } from "../terminal/terminal-replay";
 import { TerminalHistoryStore, type TerminalHistoryRecord } from "../terminal/terminal-history-store";
 import { randomUUID } from "node:crypto";
+import { homedir } from "node:os";
+import { isWithinWorktree } from "../terminal/worktree-terminals";
 import type {
   AppServerBackendKind,
   FederationCapability,
@@ -181,7 +183,8 @@ export type FederationPtyProcess = {
   readonly process?: string;
   write(data: string): void;
   resize(cols: number, rows: number): void;
-  kill(): void;
+  kill(signal?: string): void;
+  destroy?(): void;
   pause(): void;
   resume(): void;
   onData(listener: (data: string) => void): { dispose(): void };
@@ -294,6 +297,8 @@ export class FederationPtyService {
   /** Spawns that have not registered a session yet, counted toward the
    *  per-peer cap so concurrent opens cannot slip past it. */
   private readonly spawningCountByPeer = new Map<FederationInstanceId, number>();
+  private readonly pendingOpens = new Set<{ cwd?: string; promise: Promise<FederationPtyOpenResponse> }>();
+  private readonly removingWorktrees = new Set<string>();
   private disposed = false;
   private readonly archived = new Map<string, TerminalHistoryRecord>();
   private readonly ready: Promise<void>;
@@ -397,6 +402,21 @@ export class FederationPtyService {
     peerId: FederationInstanceId,
     request: FederationPtyOpenRequest,
   ): Promise<FederationPtyOpenResponse> {
+    // openSession yields before resolving cwd, so the record is installed
+    // before any spawn can cross removal admission.
+    const pending: { cwd?: string; promise: Promise<FederationPtyOpenResponse> } = {
+      promise: this.openSession(peerId, request, (cwd) => { pending.cwd = cwd; }),
+    };
+    this.pendingOpens.add(pending);
+    try { return await pending.promise; }
+    finally { this.pendingOpens.delete(pending); }
+  }
+
+  private async openSession(
+    peerId: FederationInstanceId,
+    request: FederationPtyOpenRequest,
+    onCwd: (cwd: string) => void,
+  ): Promise<FederationPtyOpenResponse> {
     await this.ready;
     if (this.options.allowOpen?.() === false) throw new Error("This machine does not allow remote shells.");
     if (this.disposed) {
@@ -430,6 +450,8 @@ export class FederationPtyService {
         backend: request.backend,
         threadId,
       });
+      onCwd(cwd ?? homedir());
+      this.assertWorktreeAvailable(cwd);
       if (this.options.allowOpen?.() === false) throw new Error("This machine does not allow remote shells.");
       spawned = await this.options.spawnPty({
         cwd,
@@ -618,6 +640,39 @@ export class FederationPtyService {
           this.clearAckWatchdog(session);
         });
       }
+    }
+  }
+
+  private assertWorktreeAvailable(cwd: string | undefined): void {
+    if ([...this.removingWorktrees].some((worktree) => this.isInWorktree(cwd, worktree))) {
+      throw new Error("This worktree is being removed; a remote terminal cannot be opened here.");
+    }
+  }
+
+  private isInWorktree(cwd: string | undefined, worktreePath: string): boolean {
+    return isWithinWorktree(cwd, worktreePath, this.options.platform ?? process.platform);
+  }
+
+  async withWorktreeClosed<T>(worktreePath: string, work: () => Promise<T>, assertCurrent?: () => void): Promise<T> {
+    assertCurrent?.();
+    this.assertWorktreeAvailable(worktreePath);
+    this.removingWorktrees.add(worktreePath);
+    try {
+      // Unknown cwd resolutions must pass the guard above before spawning.
+      // Spawns already admitted here must finish registering before collection.
+      await Promise.allSettled([...this.pendingOpens]
+        .filter((pending) => pending.cwd !== undefined && this.isInWorktree(pending.cwd, worktreePath))
+        .map((pending) => pending.promise));
+      assertCurrent?.();
+      await Promise.all([...this.sessionsById.values()]
+        .filter((session) => this.isInWorktree(session.cwd, worktreePath))
+        .map(async (session) => {
+          assertCurrent?.();
+          await this.closeSessionForWorktreeRemoval(session);
+        }));
+      return await work();
+    } finally {
+      this.removingWorktrees.delete(worktreePath);
     }
   }
 
@@ -875,10 +930,38 @@ export class FederationPtyService {
     }
   }
 
-  private deleteSession(session: FederationPtySession, reason: string): void {
+  private async closeSessionForWorktreeRemoval(session: FederationPtySession): Promise<void> {
+    let resolveExit!: () => void;
+    const exited = new Promise<void>((resolve) => { resolveExit = resolve; });
+    const exitListener = session.pty.onExit(() => resolveExit());
+    session.reapReason = "close";
+    this.options.sendNotification(session.peerId, FEDERATION_PTY_EXIT_METHOD, {
+      sessionId: session.sessionId, exitCode: null, signal: null,
+    } satisfies FederationPtyExitParams);
+    const replayDisposed = this.deleteSession(session, "worktree_archive");
+    void this.options.historyStore?.remove(session.sessionId).catch(() => undefined);
+    let forceKill: NodeJS.Timeout | undefined;
+    try {
+      if (session.pty.destroy) session.pty.destroy();
+      else session.pty.kill();
+      if ((this.options.platform ?? process.platform) !== "win32") {
+        forceKill = setTimeout(() => {
+          try { session.pty.kill("SIGKILL"); }
+          catch (error) { this.options.log?.warn("remote pty force kill failed", { sessionId: session.sessionId, error: String(error) }); }
+        }, 500);
+      }
+      await exited;
+      await replayDisposed;
+    } finally {
+      if (forceKill) clearTimeout(forceKill);
+      exitListener.dispose();
+    }
+  }
+
+  private deleteSession(session: FederationPtySession, reason: string): Promise<void> {
     // A queued resize must not reach a PTY that is being torn down.
     session.resizes.dispose();
-    void session.replay.dispose();
+    const replayDisposed = session.replay.dispose();
     if (session.reapTimer) {
       clearTimeout(session.reapTimer);
       session.reapTimer = undefined;
@@ -910,6 +993,7 @@ export class FederationPtyService {
       sessionId: session.sessionId,
       detail: reason,
     });
+    return replayDisposed;
   }
 }
 

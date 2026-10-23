@@ -33,6 +33,7 @@ import { getDesktopSettingsService } from "../settings/desktop-settings-singleto
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { resolvePwragentRoot } from "../profile";
 import { terminalHasForegroundCommand } from "./terminal-foreground-command";
+import { isWithinWorktree } from "./worktree-terminals";
 
 import { restoredHistoryPrelude, TerminalReplay } from "./terminal-replay";
 import { TerminalHistoryStore, type TerminalHistoryRecord } from "./terminal-history-store";
@@ -628,9 +629,7 @@ export class IntegratedTerminalService {
   }
 
   private isInWorktree(cwd: string | undefined, worktreePath: string): boolean {
-    const paths = this.platform === "win32" ? path.win32 : path.posix;
-    const relative = paths.relative(paths.resolve(worktreePath), paths.resolve(cwd?.trim() || homedir()));
-    return relative === "" || (relative !== ".." && !relative.startsWith(`..${paths.sep}`) && !paths.isAbsolute(relative));
+    return isWithinWorktree(cwd, worktreePath, this.platform);
   }
 
   private assertWorktreeAvailable(cwd: string | undefined): void {
