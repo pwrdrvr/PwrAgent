@@ -12619,13 +12619,10 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
-  it("does not send /yolo for Kimi once it advertises runtime modes (#658)", async () => {
-    // The #658 fix: when kimi exposes its own runtime modes, approval policy is
-    // controlled via the runtime "yolo" mode (session/set_mode), NOT the legacy
-    // /yolo slash command (which current kimi rejects). So the registry must
-    // suppress the hardcoded execution modes AND never send /yolo.
+  it.each(["kimi", "grok"])("uses the native %s permission selector without legacy slash commands", async (registryId) => {
     const sessions: AcpSessionMetadata[] = [];
-    const acpBackendId = "acp:kimi" as AcpBackendId;
+    const acpBackendId = `acp:${registryId}` as AcpBackendId;
+    const optionId = registryId === "grok" ? "permission_mode" : "approval-mode";
     const sendControlPrompt = vi.fn(async () => ({ text: "" }));
     const acpClient = {
       initialize: vi.fn(async () => undefined),
@@ -12633,7 +12630,7 @@ describe("DesktopBackendRegistry", () => {
       startSession: vi.fn(async (params: { cwd?: string; executionMode: "default" | "auto" | "full-access" }) => {
         const metadata: AcpSessionMetadata = {
           backendId: acpBackendId,
-          sessionId: "kimi-session-1",
+          sessionId: "native-permission-session",
           title: "ACP session",
           cwd: params.cwd,
           createdAt: 1000,
@@ -12657,8 +12654,8 @@ describe("DesktopBackendRegistry", () => {
       cancelSession: vi.fn(),
       setRuntimeOption: vi.fn(
         async (): Promise<BackendAcpSessionRuntimeState> => ({
-          configValues: { "approval-mode": "yolo" },
-          currentModeId: "yolo",
+          configValues: { [optionId]: "yolo" },
+          currentModeId: registryId === "grok" ? "default" : "yolo",
           updatedAt: 2000,
         }),
       ),
@@ -12676,15 +12673,15 @@ describe("DesktopBackendRegistry", () => {
       acpAgentStore: createAcpAgentStoreMock([
         {
           backendId: acpBackendId,
-          registryId: "kimi",
-          name: "Kimi Code CLI",
+          registryId,
+          name: registryId,
           version: "1.44.0",
           distributionKind: "local",
-          distributionSource: "kimi acp",
+          distributionSource: `${registryId} acp`,
           installStatus: "installed",
           authStatus: "not-required",
           verificationStatus: "not-applicable",
-          allowlistRuleId: "local-kimi-cli",
+          allowlistRuleId: `local-${registryId}-cli`,
           installedAt: 1000,
           updatedAt: 2000,
           runtimeCapabilities: {
@@ -12693,13 +12690,14 @@ describe("DesktopBackendRegistry", () => {
             checkedAt: 1000,
             configOptions: [
               {
-                id: "approval-mode",
+                id: optionId,
                 label: "Permission mode",
                 type: "select",
                 category: "mode",
                 currentValue: "default",
                 values: [
                   { value: "default", label: "Default" },
+                  { value: "auto", label: "Auto" },
                   { value: "yolo", label: "Yolo" },
                 ],
               },
@@ -12707,9 +12705,9 @@ describe("DesktopBackendRegistry", () => {
           },
           launchDescriptor: {
             backendId: acpBackendId,
-            registryId: "kimi",
+            registryId,
             distributionKind: "local",
-            command: "kimi",
+            command: registryId,
             args: ["acp"],
             env: {},
           },
@@ -12727,7 +12725,7 @@ describe("DesktopBackendRegistry", () => {
         ?.executionModes,
     ).toEqual([]);
 
-    // Even a full-access thread + an execution-mode change must NOT send /yolo.
+    // A stored Full Access selection must not drive the legacy slash path.
     await registry.startThread({
       backend: acpBackendId,
       cwd: "/repo/project",
@@ -12735,37 +12733,134 @@ describe("DesktopBackendRegistry", () => {
     });
     await registry.setThreadExecutionMode({
       backend: acpBackendId,
-      threadId: "kimi-session-1",
+      threadId: "native-permission-session",
       executionMode: "default",
     });
     await registry.setAcpSessionRuntimeOption({
       backend: acpBackendId,
-      threadId: "kimi-session-1",
+      threadId: "native-permission-session",
       source: "configOption",
-      optionId: "approval-mode",
+      optionId,
       value: "yolo",
     });
     expect(sendControlPrompt).not.toHaveBeenCalled();
     expect(acpClient.setRuntimeOption).toHaveBeenCalledWith({
-      sessionId: "kimi-session-1",
+      sessionId: "native-permission-session",
       source: "configOption",
-      optionId: "approval-mode",
+      optionId,
       value: "yolo",
       rejectUnofferedThoughtLevel: true,
     });
     await expect(
       overlayStore.getThreadOverlayState({
         backend: acpBackendId,
-        threadId: "kimi-session-1",
+        threadId: "native-permission-session",
       }),
     ).resolves.toMatchObject({
       executionMode: "full-access",
     });
 
+    acpClient.setRuntimeOption.mockResolvedValueOnce({
+      configValues: { [optionId]: "auto" },
+      currentModeId: registryId === "grok" ? "default" : "auto",
+      updatedAt: 3000,
+    });
+    await registry.setAcpSessionRuntimeOption({
+      backend: acpBackendId,
+      threadId: "native-permission-session",
+      source: "configOption",
+      optionId,
+      value: "auto",
+    });
+    expect(sendControlPrompt).not.toHaveBeenCalled();
+    expect(sessions[0]?.acpRuntime?.currentModeId).toBe(registryId === "grok" ? "default" : "auto");
+    expect(sessions[0]?.acpRuntime?.configValues?.[optionId]).toBe("auto");
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: acpBackendId,
+        threadId: "native-permission-session",
+      }),
+    ).resolves.toMatchObject({ executionMode: "default" });
+
+    acpClient.setRuntimeOption.mockResolvedValueOnce({
+      configValues: { [optionId]: "default" },
+      currentModeId: "default",
+      updatedAt: 4000,
+    });
+    await registry.setAcpSessionRuntimeOption({
+      backend: acpBackendId,
+      threadId: "native-permission-session",
+      source: "configOption",
+      optionId,
+      value: "default",
+    });
+    expect(acpClient.setRuntimeOption).toHaveBeenLastCalledWith({
+      sessionId: "native-permission-session",
+      source: "configOption",
+      optionId,
+      value: "default",
+      rejectUnofferedThoughtLevel: true,
+    });
+    expect(sessions[0]?.acpRuntime?.configValues?.[optionId]).toBe("default");
+
     await registry.close();
   });
 
-  it("runs Grok ACP execution mode changes through /always-approve slash control prompts", async () => {
+  it.each(["default", "plan"])("restores Grok Auto independently of inherited %s planning mode", async (planningMode) => {
+    const backend = "acp:grok" as AcpBackendId;
+    const runtimeCapabilities: BackendAcpRuntimeCapabilities = {
+      schemaVersion: 1,
+      status: "discovered",
+      modes: {
+        currentModeId: planningMode,
+        availableModes: [{ id: "default", label: "Default" }, { id: "plan", label: "Plan" }],
+      },
+      configOptions: [{
+        id: "permission_mode",
+        label: "Permissions",
+        category: "mode",
+        type: "select",
+        currentValue: "default",
+        values: [
+          { value: "default", label: "Default Access" },
+          { value: "auto", label: "Auto" },
+          { value: "yolo", label: "Full Access" },
+        ],
+      }],
+    };
+    const { registry, acpClient, sendControlPrompt } = createKimiAcpRegistry({
+      acpBackendId: backend,
+      installedAgent: {
+        ...createKimiAgentRecord(backend, runtimeCapabilities),
+        registryId: "grok",
+        name: "Grok",
+      },
+    });
+    await registry.startThread({
+      backend,
+      cwd: "/repo/project",
+      acpRuntime: {
+        currentModeId: planningMode,
+        configValues: { permission_mode: "auto" },
+        updatedAt: 1000,
+      },
+    });
+    expect(acpClient.setRuntimeOption.mock.calls).toEqual([[{
+      sessionId: "kimi-session-1",
+      source: "configOption",
+      optionId: "permission_mode",
+      value: "auto",
+    }], [{
+      sessionId: "kimi-session-1",
+      source: "mode",
+      optionId: "mode",
+      value: planningMode,
+    }]]);
+    expect(sendControlPrompt).not.toHaveBeenCalled();
+    await registry.close();
+  });
+
+  it.each([false, true])("runs Grok slash permission controls with planning modes advertised=%s", async (planningModes) => {
     // Regression test for the Grok-ACP Full Access bug: creating a Grok
     // thread with executionMode="full-access" must persist that mode to
     // session metadata AND surface it via listThreads, so the chip and
@@ -12796,12 +12891,17 @@ describe("DesktopBackendRegistry", () => {
           // here is whatever startAcpSession passes, NOT the
           // user-requested target.
           executionMode: params.executionMode,
+          ...(planningModes ? { acpRuntime: { currentModeId: "plan", updatedAt: 1000 } } : {}),
           status: "idle",
         };
         sessions.push(metadata);
         return metadata;
       }),
       startPrompt: vi.fn(),
+      setRuntimeOption: vi.fn(async (): Promise<BackendAcpSessionRuntimeState> => ({
+        currentModeId: "default",
+        updatedAt: 2000,
+      })),
       sendControlPrompt,
       ensureSession: vi.fn(async () => undefined),
       loadSession: vi.fn(async (): Promise<AppServerThreadReplay> => ({
@@ -12829,6 +12929,16 @@ describe("DesktopBackendRegistry", () => {
           registryId: "grok",
           name: "Grok",
           version: "0.2.3",
+          ...(planningModes ? {
+            runtimeCapabilities: {
+              schemaVersion: 1 as const,
+              status: "discovered" as const,
+              modes: {
+                currentModeId: "default",
+                availableModes: [{ id: "default", label: "Default" }, { id: "plan", label: "Plan" }],
+              },
+            },
+          } : {}),
           distributionKind: "local",
           distributionSource: "grok agent stdio",
           installStatus: "installed",
@@ -12895,6 +13005,21 @@ describe("DesktopBackendRegistry", () => {
     );
     expect(thread).toBeDefined();
     expect(thread?.executionMode).toBe("full-access");
+
+    if (planningModes) {
+      await registry.setAcpSessionRuntimeOption({
+        backend: acpBackendId,
+        threadId: "grok-session-1",
+        source: "mode",
+        optionId: "mode",
+        value: "default",
+      });
+      expect(sessions[0]?.executionMode).toBe("full-access");
+      await expect(overlayStore.getThreadOverlayState({
+        backend: acpBackendId,
+        threadId: "grok-session-1",
+      })).resolves.toMatchObject({ executionMode: "full-access" });
+    }
 
     const permissionEvents: AgentEvent[] = [];
     const unsubscribe = registry.onEvent((event) => {
@@ -14739,22 +14864,22 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
-  it("does not auto-approve ACP permission requests for Auto runtime sessions", async () => {
-    const acpBackendId = "acp:qwen" as AcpBackendId;
+  it.each(["qwen", "grok"])("keeps human approvals for requests escalated by %s Auto", async (registryId) => {
+    const acpBackendId = `acp:${registryId}` as AcpBackendId;
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: createOverlayStoreMock(),
       acpAgentStore: createAcpAgentStoreMock([
         {
           backendId: acpBackendId,
-          registryId: "qwen",
-          name: "Qwen Code",
+          registryId,
+          name: registryId,
           distributionKind: "local",
-          distributionSource: "qwen --experimental-acp",
+          distributionSource: `${registryId} acp`,
           installStatus: "installed",
           authStatus: "not-required",
           verificationStatus: "not-applicable",
-          allowlistRuleId: "local-qwen-cli",
+          allowlistRuleId: `local-${registryId}-cli`,
           installedAt: 1000,
           updatedAt: 2000,
           runtimeCapabilities: {
@@ -14782,8 +14907,8 @@ describe("DesktopBackendRegistry", () => {
       acpSessionStore: createAcpSessionStoreMock([
         {
           backendId: acpBackendId,
-          sessionId: "qwen-session-1",
-          title: "Qwen thread",
+          sessionId: "auto-session-1",
+          title: "Auto thread",
           cwd: "/repo/project",
           createdAt: 1000,
           updatedAt: 2000,
@@ -14805,7 +14930,7 @@ describe("DesktopBackendRegistry", () => {
     const request: AppServerPendingRequestNotification = {
       method: "item/commandExecution/requestApproval",
       params: {
-        threadId: "qwen-session-1",
+        threadId: "auto-session-1",
         turnId: "turn-1",
         requestId: "approval-1",
         acpMethod: "session/request_permission",
@@ -14834,7 +14959,7 @@ describe("DesktopBackendRegistry", () => {
     });
     await registry.submitServerRequest({
       backend: acpBackendId,
-      threadId: "qwen-session-1",
+      threadId: "auto-session-1",
       requestId: "approval-1",
       response: { decision: "approve" },
     });

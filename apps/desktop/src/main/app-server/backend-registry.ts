@@ -5,6 +5,7 @@ import { ForgeReadError, validateForgeReadArgs, type ForgeReadRequest } from "..
 import { sweepThreadArchiveRetention, archivedThreadFamily, archiveRetentionFamilyEligible } from "./thread-archive-retention";
 import { runGitCommand } from "./git-executable";
 import {
+  findAcpPermissionModeConfigOption,
   DEFAULT_THREAD_ARCHIVE_POLICY,
   RENAME_THREAD_EXPECTED_NAME_MISMATCH,
   classifyDirectory,
@@ -2336,10 +2337,13 @@ function acpRuntimeModeDefaultsFromCapabilities(
         : [],
     ),
   );
+  const hasMirroredModeConfigOption = modeConfigOptions.some(
+    (option) => option.id !== findAcpPermissionModeConfigOption(runtimeCapabilities)?.id,
+  );
   const state: BackendAcpSessionRuntimeState = {
     updatedAt: now,
     ...(Object.keys(configValues).length > 0 ? { configValues } : {}),
-    ...(modeConfigOptions.length === 0 && runtimeCapabilities?.modes?.currentModeId
+    ...(!hasMirroredModeConfigOption && runtimeCapabilities?.modes?.currentModeId
       ? { currentModeId: runtimeCapabilities.modes.currentModeId }
       : {}),
   };
@@ -2701,12 +2705,17 @@ function pendingRequestDecisionFromMessagingApproval(
 }
 
 function acpRuntimeHasExecutionModeSelection(params: {
+  registryId?: string;
   runtime?: BackendAcpSessionRuntimeState;
   runtimeCapabilities?: BackendAcpRuntimeCapabilities;
 }): boolean {
   const { runtime, runtimeCapabilities } = params;
   if (!runtime) {
     return false;
+  }
+  if (params.registryId === "grok") {
+    const permissionOption = findAcpPermissionModeConfigOption(runtimeCapabilities);
+    return Boolean(permissionOption && runtime.configValues?.[permissionOption.id]);
   }
   if (runtime.currentModeId) {
     return true;
@@ -13858,10 +13867,21 @@ export class DesktopBackendRegistry {
     // model's option has to be written first. `configValues` carries whatever
     // insertion order earlier merges left, and a level measured against the
     // agent's default model is dropped by the session's own menu.
-    const thoughtLevelOptionId = findAcpThoughtLevelConfigOption(
-      this.acpBackend.getInstalledAgent(backend)?.runtimeCapabilities,
-    )?.id;
-    const configValues = Object.entries(runtime?.configValues ?? {}).sort(
+    const capabilities = this.acpBackend.getInstalledAgent(backend)?.runtimeCapabilities;
+    const thoughtLevelOptionId = findAcpThoughtLevelConfigOption(capabilities)?.id;
+    const modeConfigOption = capabilities?.configOptions?.find(
+      (option) => option.category === "mode"
+        && option.id !== findAcpPermissionModeConfigOption(capabilities)?.id
+        && option.values.some((value) => value.value === runtime?.currentModeId),
+    );
+    // Legacy mode selectors mirror currentModeId. The independent permission
+    // config owns its value in configValues; currentModeId remains planning.
+    const configValues = Object.entries({
+      ...runtime?.configValues,
+      ...(modeConfigOption && runtime?.currentModeId
+        ? { [modeConfigOption.id]: runtime.currentModeId }
+        : {}),
+    }).sort(
       ([left], [right]) =>
         Number(left === thoughtLevelOptionId)
         - Number(right === thoughtLevelOptionId),
@@ -13874,7 +13894,7 @@ export class DesktopBackendRegistry {
         value,
       });
     }
-    if (runtime?.currentModeId) {
+    if (runtime?.currentModeId && !modeConfigOption) {
       await client.setRuntimeOption?.({
         sessionId,
         source: "mode",
@@ -14017,7 +14037,8 @@ export class DesktopBackendRegistry {
       }),
     );
     const mergedRuntime = mergeAcpRuntimeState(session.acpRuntime, runtimeState);
-    const nextExecutionMode = this.isAcpRuntimeExecutionModeOption(params)
+    const changesExecutionMode = this.isAcpRuntimeExecutionModeOption(params);
+    const nextExecutionMode = changesExecutionMode
       ? acpRuntimeValueLooksPrivileged(params.value)
         ? "full-access"
         : "default"
@@ -14032,7 +14053,7 @@ export class DesktopBackendRegistry {
       executionMode: nextExecutionMode,
       updatedAt,
     });
-    if (this.isAcpRuntimeExecutionModeOption(params)) {
+    if (changesExecutionMode) {
       await this.overlayStore.setThreadExecutionMode({
         backend: params.backend,
         threadId: params.threadId,
@@ -14052,12 +14073,10 @@ export class DesktopBackendRegistry {
       threadId: params.threadId,
       transition: {
         id: randomUUID(),
-        fromExecutionMode: acpRuntimeValueLooksPrivileged(fromValue)
-          ? "full-access"
-          : "default",
-        toExecutionMode: acpRuntimeValueLooksPrivileged(params.value)
-          ? "full-access"
-          : "default",
+        fromExecutionMode: changesExecutionMode
+          ? acpRuntimeValueLooksPrivileged(fromValue) ? "full-access" : "default"
+          : session.executionMode ?? "default",
+        toExecutionMode: nextExecutionMode ?? "default",
         fromLabel,
         toLabel,
         status: "applied",
@@ -14215,7 +14234,7 @@ export class DesktopBackendRegistry {
     if (
       params.source === "configOption" &&
       runtime?.currentModeId &&
-      this.isAcpRuntimeModeConfigOption(params.backend, params.optionId)
+      this.acpRuntimeConfigOptionMirrorsMode(params.backend, params.optionId)
     ) {
       return runtime.currentModeId;
     }
@@ -14239,7 +14258,7 @@ export class DesktopBackendRegistry {
             updatedAt,
           }
         : params.source === "mode" ||
-            this.isAcpRuntimeModeConfigOption(params.backend, params.optionId)
+            this.acpRuntimeConfigOptionMirrorsMode(params.backend, params.optionId)
           ? {
               configValues:
                 params.source === "configOption"
@@ -14270,9 +14289,27 @@ export class DesktopBackendRegistry {
     );
   }
 
+  private acpRuntimeConfigOptionMirrorsMode(
+    backend: AppServerBackendKind,
+    optionId: string,
+  ): boolean {
+    const capabilities = isAcpBackendId(backend)
+      ? this.acpBackend.getInstalledAgent(backend)?.runtimeCapabilities
+      : undefined;
+    return this.isAcpRuntimeModeConfigOption(backend, optionId)
+      && findAcpPermissionModeConfigOption(capabilities)?.id !== optionId;
+  }
+
   private isAcpRuntimeExecutionModeOption(
     params: Pick<SetAcpSessionRuntimeOptionRequest, "backend" | "source" | "optionId">,
   ): boolean {
+    const agent = isAcpBackendId(params.backend)
+      ? this.acpBackend.getInstalledAgent(params.backend)
+      : undefined;
+    if (agent?.registryId === "grok") {
+      return params.source === "configOption"
+        && params.optionId === findAcpPermissionModeConfigOption(agent.runtimeCapabilities)?.id;
+    }
     return (
       params.source === "mode" ||
       this.isAcpRuntimeModeConfigOption(params.backend, params.optionId)
@@ -22776,10 +22813,15 @@ export class DesktopBackendRegistry {
   private usesGrokSlashExecutionModes(
     backend: AppServerBackendKind,
   ): backend is AcpBackendId {
-    return (
-      isAcpBackendId(backend) &&
-      this.acpBackend.getInstalledAgent(backend)?.registryId === "grok"
-    );
+    if (!isAcpBackendId(backend)) {
+      return false;
+    }
+    const agent = this.acpBackend.getInstalledAgent(backend);
+    // A native permission selector can include Grok's Auto reviewer. Once
+    // advertised, it owns permission state; /always-approve cannot represent
+    // Auto and must not overwrite it during launch or mode changes.
+    return agent?.registryId === "grok"
+      && (findAcpPermissionModeConfigOption(agent.runtimeCapabilities)?.values.length ?? 0) < 2;
   }
 
   /**
@@ -37366,6 +37408,7 @@ export class DesktopBackendRegistry {
       const runtimeCapabilities =
         this.acpBackend.getInstalledAgent(backend)?.runtimeCapabilities;
       const runtimeControlsExecutionMode = acpRuntimeHasExecutionModeSelection({
+        registryId: this.acpBackend.getInstalledAgent(backend)?.registryId,
         runtime: session?.acpRuntime,
         runtimeCapabilities,
       });
@@ -38121,6 +38164,7 @@ export class DesktopBackendRegistry {
       // Match ACP permission approvals: a runtime selector is authoritative
       // over a stale session executionMode value.
       return acpRuntimeHasExecutionModeSelection({
+        registryId: this.acpBackend.getInstalledAgent(context.backend)?.registryId,
         runtime: session?.acpRuntime,
         runtimeCapabilities,
       })

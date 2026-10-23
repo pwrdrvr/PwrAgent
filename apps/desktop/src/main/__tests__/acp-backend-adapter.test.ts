@@ -476,6 +476,28 @@ describe("describeInstalledAcpBackend", () => {
     expect(backend.executionModes).toEqual([]);
   });
 
+  it("keeps Grok permission controls when only a planning config selector is advertised", () => {
+    const backend = describeInstalledAcpBackend({
+      ...buildInstalledAgent(),
+      backendId: "acp:grok",
+      registryId: "grok",
+      name: "Grok",
+      runtimeCapabilities: {
+        schemaVersion: 1,
+        status: "discovered",
+        configOptions: [{
+          id: "planning_mode",
+          category: "mode",
+          label: "Planning",
+          type: "select",
+          currentValue: "default",
+          values: [{ value: "default", label: "Default" }, { value: "plan", label: "Plan" }],
+        }],
+      },
+    });
+    expect(backend.executionModes.map((mode) => mode.mode)).toEqual(["default", "full-access"]);
+  });
+
   it("keeps execution modes when only a single runtime mode is advertised", () => {
     // Mainline kimi advertises ONLY "default" (a single mode = no real
     // selector), so there's no runtime dropdown to defer to.

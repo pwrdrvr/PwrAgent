@@ -3,6 +3,7 @@ import path from "node:path";
 import { app } from "electron";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import {
+  findAcpPermissionModeConfigOption,
   type AcpBackendId,
   type AcpThreadRewindPoint,
   type AgentEvent,
@@ -627,10 +628,11 @@ function buildAcpExecutionModes(
   // Default/Full Access modes on top produced TWO overlapping mode dropdowns
   // (#658) that mirror each other — and the legacy slash-command path they
   // drive (kimi `/yolo`) is rejected by current kimi, failing the launch.
-  // Defer entirely to the runtime modes whenever the agent advertises a
-  // selector; only fall back to these hardcoded modes for agents (e.g. grok)
-  // that expose no runtime mode selector of their own.
-  if (acpAdvertisesRuntimeModeSelector(agent.runtimeCapabilities)) {
+  // Grok's native modes control planning. Only its explicit permission_mode
+  // config can replace the slash-driven permission control.
+  if (agent.registryId === "grok"
+    ? (findAcpPermissionModeConfigOption(agent.runtimeCapabilities)?.values.length ?? 0) >= 2
+    : acpAdvertisesRuntimeModeSelector(agent.runtimeCapabilities)) {
     return [];
   }
   return [

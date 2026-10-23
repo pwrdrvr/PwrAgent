@@ -33,6 +33,47 @@ afterEach(() => {
   removeTempStateDbDir(tempDir);
 });
 
+it("keeps Grok planning provenance when selecting permissions and receiving mode updates", async () => {
+  const configOptions = [{
+    id: "permission_mode",
+    category: "mode",
+    currentValue: "auto",
+    options: [{ value: "default", name: "Default" }, { value: "auto", name: "Auto" }],
+  }];
+  const modes = {
+    currentModeId: "plan",
+    availableModes: [{ id: "default", name: "Default" }, { id: "plan", name: "Plan" }],
+  };
+  const transport = new FakeAcpAgentTransport({
+    "session/new": { sessionId: "grok-session", configOptions, modes },
+    "session/set_config_option": {
+      configOptions: [{ ...configOptions[0], currentValue: "default" }],
+      modes,
+    },
+  });
+  const client = new AcpAgentClient({ backendId: "acp:grok", store, transport });
+  await client.initialize();
+  await client.startSession({ cwd: "/repo", executionMode: "default" });
+  await expect(client.setRuntimeOption({
+    sessionId: "grok-session",
+    source: "configOption",
+    optionId: "permission_mode",
+    value: "default",
+  })).resolves.toMatchObject({
+    currentModeId: "plan",
+    configValues: { permission_mode: "default" },
+  });
+  transport.emitSessionUpdate("grok-session", {
+    sessionUpdate: "current_mode_update",
+    currentModeId: "default",
+  });
+  expect(store.getSession("acp:grok", "grok-session")?.acpRuntime).toMatchObject({
+    currentModeId: "default",
+    configValues: { permission_mode: "default" },
+  });
+  await client.dispose();
+});
+
 function createDeferred<T>(): {
   promise: Promise<T>;
   reject: (reason?: unknown) => void;
