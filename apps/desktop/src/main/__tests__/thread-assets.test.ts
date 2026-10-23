@@ -52,10 +52,11 @@ describe("thread-owned attachments", () => {
     const forwarded = await stageLocalTurnInputAttachment(original, { owner: recipient });
     expect(forwarded.path).not.toBe(original.path);
     expect(original.path.startsWith(resolveActiveProfilePath("state/thread-assets/codex/source/"))).toBe(true);
-    const originalStat = await stat(original.path);
-    const forwardedStat = await stat(forwarded.path);
+    // Windows file IDs can exceed Number.MAX_SAFE_INTEGER; compare them exactly.
+    const originalStat = await stat(original.path, { bigint: true });
+    const forwardedStat = await stat(forwarded.path, { bigint: true });
     expect(forwardedStat.ino).toBe(originalStat.ino);
-    expect(forwardedStat.nlink).toBeGreaterThanOrEqual(2);
+    expect(forwardedStat.nlink).toBeGreaterThanOrEqual(2n);
 
     await rm(resolveActiveProfilePath("state/thread-assets/codex/source"), { recursive: true, force: true });
     await expect(readFile(forwarded.path)).resolves.toEqual(bytes);
@@ -69,7 +70,7 @@ describe("thread-owned attachments", () => {
     const owned = await stageLocalTurnInputAttachment({ type: "localImage", path: externalPath }, { owner: source });
     await writeFile(externalPath, Buffer.from([4, 5, 6]));
     await expect(readFile(owned.path)).resolves.toEqual(Buffer.from([1, 2, 3]));
-    expect((await stat(owned.path)).ino).not.toBe((await stat(externalPath)).ino);
+    expect((await stat(owned.path, { bigint: true })).ino).not.toBe((await stat(externalPath, { bigint: true })).ino);
   });
 
   it("shares immutable assets across profiles without making the recipient depend on the source profile", async () => {
@@ -77,7 +78,7 @@ describe("thread-owned attachments", () => {
     const original = await stageTurnInputAttachment({ type: "localImage", name: "image.png", data: Buffer.from([1, 2, 3]) }, source);
     vi.stubEnv("PWRAGENT_PROFILE", "recipient-profile");
     const forwarded = await stageLocalTurnInputAttachment(original, { owner: recipient });
-    expect((await stat(forwarded.path)).ino).toBe((await stat(original.path)).ino);
+    expect((await stat(forwarded.path, { bigint: true })).ino).toBe((await stat(original.path, { bigint: true })).ino);
     await rm(path.join(testRoot, "profiles", "source-profile"), { recursive: true, force: true });
     await expect(readFile(forwarded.path)).resolves.toEqual(Buffer.from([1, 2, 3]));
   });
@@ -91,7 +92,7 @@ describe("thread-owned attachments", () => {
       copyFile: copy,
     });
     expect(copy).toHaveBeenCalledWith(original.path, expect.any(String), constants.COPYFILE_EXCL | constants.COPYFILE_FICLONE);
-    expect((await stat(forwarded)).ino).not.toBe((await stat(original.path)).ino);
+    expect((await stat(forwarded, { bigint: true })).ino).not.toBe((await stat(original.path, { bigint: true })).ino);
     await deleteThreadAssets(source);
     await expect(readFile(forwarded)).resolves.toEqual(bytes);
   });
@@ -104,7 +105,7 @@ describe("thread-owned attachments", () => {
     await stageTurnInputAttachment({ type: "localImage", name: "image.png", data: bytes }, source);
     await expect(readFile(original.path)).resolves.toEqual(bytes);
     await expect(readFile(forwarded.path)).resolves.toEqual(Buffer.from([9, 9, 9]));
-    expect((await stat(original.path)).ino).not.toBe((await stat(forwarded.path)).ino);
+    expect((await stat(original.path, { bigint: true })).ino).not.toBe((await stat(forwarded.path, { bigint: true })).ino);
   });
 
   it("expires unowned staging uploads while preserving old thread-owned assets", async () => {
