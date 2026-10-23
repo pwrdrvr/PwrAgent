@@ -26,7 +26,7 @@ test("renders captured Codex review findings as separate cards without duplicate
       })
     ).toBeVisible();
 
-    await app.window.getByLabel("Reply").fill("/review main");
+    await app.window.getByRole("textbox", { name: "Reply", exact: true }).fill("/review main");
     await app.window.getByRole("button", { name: "Send" }).click();
 
     await expect

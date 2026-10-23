@@ -101,7 +101,7 @@ test("pasted WebP image is uploaded as bounded JPEG or PNG", async () => {
         name: "Image normalization",
       }),
     ).toBeVisible();
-    await app.window.getByLabel("Reply").waitFor();
+    await app.window.getByRole("textbox", { name: "Reply", exact: true }).waitFor();
 
     await app.window.evaluate(async () => {
       const textarea = document.querySelector<HTMLTextAreaElement>("#thread-composer");
@@ -142,7 +142,7 @@ test("pasted WebP image is uploaded as bounded JPEG or PNG", async () => {
     });
 
     await expect(app.window.getByAltText("large.webp")).toBeVisible();
-    await app.window.getByLabel("Reply").fill("Describe the pasted image");
+    await app.window.getByRole("textbox", { name: "Reply", exact: true }).fill("Describe the pasted image");
     await app.window.getByRole("button", { name: "Send" }).click();
 
     // `.toBeDefined()`, not `.not.toBeNull()`: the replay driver returns
@@ -196,7 +196,7 @@ test("dropped GIF image is uploaded as GIF and previewed without normalization",
         name: "Image normalization",
       }),
     ).toBeVisible();
-    await app.window.getByLabel("Reply").waitFor();
+    await app.window.getByRole("textbox", { name: "Reply", exact: true }).waitFor();
 
     await app.window.evaluate(async () => {
       const textarea = document.querySelector<HTMLTextAreaElement>("#thread-composer");
@@ -230,7 +230,7 @@ test("dropped GIF image is uploaded as GIF and previewed without normalization",
     await expect(preview).toBeVisible();
     await expect(preview).toHaveAttribute("src", /^data:image\/gif;base64,/);
 
-    await app.window.getByLabel("Reply").fill("Describe the dropped gif");
+    await app.window.getByRole("textbox", { name: "Reply", exact: true }).fill("Describe the dropped gif");
     await app.window.getByRole("button", { name: "Send" }).click();
 
     // `.toBeDefined()`, not `.not.toBeNull()`: the replay driver returns

@@ -2047,6 +2047,7 @@ function DesktopAppShell(props: {
   useNavigationReadErrorNotices({
     admissionError: navigation.pagedNavigation.admissionError,
     resources: navigation.pagedNavigation.resources,
+    instances: federationMachines,
   }, dispatchAppNotice);
   /* Incident-notice inputs the live notification handler reads without
      re-subscribing: which thread is on screen, whether the operator has

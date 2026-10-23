@@ -866,7 +866,7 @@ describe("App", () => {
     expect(await screen.findByRole("textbox", { name: "New thread" }))
       .toBeInTheDocument();
     // The composer says where the thread will start, before anything is sent.
-    expect(screen.getByRole("button", { name: "Machine" }))
+    expect(screen.getByRole("button", { name: /^Machine(?::|$)/ }))
       .toHaveTextContent("Studio Mac / work");
 
     fireEvent.click(screen.getByRole("button", { name: "Choose a project" }));
@@ -1141,7 +1141,7 @@ describe("App", () => {
     render(<App />);
     await waitFor(() => expect(readFederationHealth).toHaveBeenCalled());
     await clickButton("New thread");
-    const chip = await screen.findByRole("button", { name: "Machine" });
+    const chip = await screen.findByRole("button", { name: /^Machine(?::|$)/ });
     expect(chip).toHaveTextContent("Harold-MBP-M5-Max");
     expect(chip).not.toHaveTextContent("Harold-Mac-Mini-M4");
     expect(chip.closest(".composer-dropdown")).toHaveClass("composer-dropdown--remote");
@@ -1166,9 +1166,9 @@ describe("App", () => {
     }
     pasteComposerText(await screen.findByRole("textbox", { name: "New thread" }), "Create this on the M5");
     if (otherPeers) {
-      fireEvent.click(screen.getByRole("button", { name: "Machine" }));
+      fireEvent.click(screen.getByRole("button", { name: /^Machine(?::|$)/ }));
       fireEvent.click(screen.getByRole("option", { name: "Laptop" }));
-      await waitFor(() => expect(screen.getByRole("button", { name: "Machine" })).toHaveTextContent("Laptop"));
+      await waitFor(() => expect(screen.getByRole("button", { name: /^Machine(?::|$)/ })).toHaveTextContent("Laptop"));
       expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith(expect.objectContaining({
         federationTarget: { scope: "remote", instanceId: "laptop" },
       }));
@@ -1180,14 +1180,14 @@ describe("App", () => {
             params: { instanceId: target.instanceId, status: ownerStatus } },
         });
       });
-      fireEvent.click(screen.getByRole("button", { name: "Machine" }));
+      fireEvent.click(screen.getByRole("button", { name: /^Machine(?::|$)/ }));
       const disconnectedOwner = await screen.findByRole("option", { name: /Harold-MBP-M5-Max/, description: "Offline" });
       expect(disconnectedOwner).toHaveAttribute("aria-disabled", "true");
       const launchpadReadCount = ensureDirectoryLaunchpad.mock.calls.length;
       fireEvent.click(disconnectedOwner);
       await flushReactUpdates();
       expect(ensureDirectoryLaunchpad).toHaveBeenCalledTimes(launchpadReadCount);
-      expect(screen.getByRole("button", { name: "Machine" })).toHaveTextContent("Laptop");
+      expect(screen.getByRole("button", { name: /^Machine(?::|$)/ })).toHaveTextContent("Laptop");
       expect(getComposerValueHost(screen.getByRole("textbox", { name: "New thread" })))
         .toHaveAttribute("data-value", "Create this on the M5");
 
@@ -1200,7 +1200,7 @@ describe("App", () => {
         });
       });
       fireEvent.click(await screen.findByRole("option", { name: /Harold-MBP-M5-Max/, description: "This window" }));
-      await waitFor(() => expect(screen.getByRole("button", { name: "Machine" })).toHaveTextContent("Harold-MBP-M5-Max"));
+      await waitFor(() => expect(screen.getByRole("button", { name: /^Machine(?::|$)/ })).toHaveTextContent("Harold-MBP-M5-Max"));
       expect(getComposerValueHost(screen.getByRole("textbox", { name: "New thread" })))
         .toHaveAttribute("data-value", "Create this on the M5");
     }
@@ -3160,7 +3160,7 @@ describe("App", () => {
     ).toBeInTheDocument();
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Show selected thread in thread list",
+        name: /^Show selected thread in thread list: /,
       }),
     );
     expect(scrollIntoView).toHaveBeenCalledWith({
@@ -4638,7 +4638,7 @@ describe("App", () => {
       });
 
       const { container } = render(<App />);
-      await waitFor(() => expect(screen.getByRole("button", { name: "Access mode" })).toHaveTextContent("Full Access"));
+      await waitFor(() => expect(screen.getByRole("button", { name: /^Access mode(?::|$)/ })).toHaveTextContent("Full Access"));
       if (entryPoint === "Cmd+N") {
         expect(openNewThreadListener).toBeDefined();
         await act(async () => { openNewThreadListener!(); });
@@ -4666,7 +4666,7 @@ describe("App", () => {
       expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith(expect.objectContaining({
         directoryKey: entryPoint.includes("workspace") ? "workspace:new-thread" : project.key,
       }));
-      expect(screen.getByRole("button", { name: "Access mode" })).toHaveTextContent("Auto");
+      expect(screen.getByRole("button", { name: /^Access mode(?::|$)/ })).toHaveTextContent("Auto");
       expect(updateDirectoryLaunchpad).not.toHaveBeenCalled();
     },
   );

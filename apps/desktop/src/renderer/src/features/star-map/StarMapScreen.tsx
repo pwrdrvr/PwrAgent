@@ -6719,7 +6719,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
           <button
             type="button"
             className="star-map__filter-chip star-map__find"
-            aria-label="Find a thread on the map"
+            title="Find a thread on the map"
             onClick={() => setJumpOpen(true)}
           >
             <SearchIcon size={13} />

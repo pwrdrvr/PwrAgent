@@ -61,7 +61,7 @@ test("visually docks user messages right and assistant messages left", async () 
     });
 
     await app.window
-      .getByLabel("Reply")
+      .getByRole("textbox", { name: "Reply", exact: true })
       .fill("What would it take to add Telegram support?");
     await app.window.getByRole("button", { name: "Send" }).click();
 

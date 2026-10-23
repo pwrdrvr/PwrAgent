@@ -122,6 +122,11 @@ export function ComposerDropdown(props: {
     [...props.options, ...otherOptions].find((option) => option.value === props.value)
     ?? props.options[0]
     ?? otherOptions[0];
+  const selectedLabel = selectedOption?.label ?? props.value;
+  const showsSelectedLabel = !(props.iconOnly && props.icon);
+  const accessibleName = showsSelectedLabel && props.ariaLabel !== selectedLabel
+    ? `${props.ariaLabel}: ${selectedLabel}`
+    : props.ariaLabel;
   const closeMenu = useCallback((): void => {
     setOpen(false);
     setShowOther(false);
@@ -299,7 +304,7 @@ export function ComposerDropdown(props: {
         aria-expanded={open}
         aria-busy={props.busy || undefined}
         aria-haspopup="listbox"
-        aria-label={props.ariaLabel}
+        aria-label={accessibleName}
         className="composer-dropdown__button"
         data-value={props.value}
         ref={buttonRef}
@@ -339,7 +344,7 @@ export function ComposerDropdown(props: {
         ) : null}
         {props.iconOnly && Icon ? null : (
           <span className="composer-dropdown__label">
-            {selectedOption?.label ?? props.value}
+            {selectedLabel}
           </span>
         )}
       </button>

@@ -58,12 +58,12 @@ describe("ThreadView machine chip", () => {
       />,
     );
 
-    const picker = screen.getByRole("button", { name: "Machine" });
+    const picker = screen.getByRole("button", { name: /^Machine(?::|$)/ });
     expect(picker).toHaveTextContent("Harbor");
     expect(picker.closest(".thread-header__machine")).not.toBeNull();
     expect(
       within(screen.getByLabelText("New thread settings"))
-        .queryByRole("button", { name: "Machine" }),
+        .queryByRole("button", { name: /^Machine(?::|$)/ }),
     ).toBeNull();
   });
 

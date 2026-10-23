@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, realpath, rm, stat } from "node:fs/promises";
+import { mkdtemp, mkdir, readdir, realpath, rm, stat, unlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type {
@@ -8,6 +8,7 @@ import type {
 } from "@pwragent/shared";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { runGitCommand } from "./git-executable";
+import { withWorktreeTerminalsClosed } from "../terminal/worktree-terminals";
 
 type GitResult = {
   stdout: string;
@@ -19,6 +20,7 @@ type WorktreeInfo = {
   branch?: string;
   head?: string;
   detached: boolean;
+  locked?: boolean;
 };
 
 type ArchiveWorktreeParams = {
@@ -106,6 +108,7 @@ function parseWorktreeList(output: string): WorktreeInfo[] {
           branch: current.branch,
           head: current.head,
           detached: current.detached ?? false,
+          locked: current.locked,
         });
       }
       current = undefined;
@@ -121,6 +124,7 @@ function parseWorktreeList(output: string): WorktreeInfo[] {
           branch: current.branch,
           head: current.head,
           detached: current.detached ?? false,
+          locked: current.locked,
         });
       }
       current = { path: value, detached: false };
@@ -130,6 +134,8 @@ function parseWorktreeList(output: string): WorktreeInfo[] {
       current = { ...current, branch: value.replace(/^refs\/heads\//, "") };
     } else if (key === "detached") {
       current = { ...current, detached: true };
+    } else if (key === "locked") {
+      current = { ...current, locked: true };
     }
   }
 
@@ -139,6 +145,7 @@ function parseWorktreeList(output: string): WorktreeInfo[] {
       branch: current.branch,
       head: current.head,
       detached: current.detached ?? false,
+      locked: current.locked,
     });
   }
 
@@ -151,6 +158,26 @@ function findWorktree(
 ): WorktreeInfo | undefined {
   const resolvedPath = path.resolve(worktreePath);
   return worktrees.find((worktree) => path.resolve(worktree.path) === resolvedPath);
+}
+
+async function unlinkWindowsWorktreeLinks(worktreePath: string, assertRemoval?: () => void): Promise<void> {
+  const directories = [worktreePath];
+  for (let index = 0; index < directories.length; index++) {
+    const directory = directories[index]!;
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const entryPath = path.join(directory, entry.name);
+      if (entry.isSymbolicLink()) {
+        // Git for Windows aborts recursive removal on a dangling junction.
+        // pnpm's .pnpm directory sorts before its links, so Git itself can
+        // make those links dangling halfway through deletion. Unlink links
+        // first; never traverse their targets (which may be outside checkout).
+        assertRemoval?.();
+        await unlink(entryPath);
+      } else if (entry.isDirectory()) {
+        directories.push(entryPath);
+      }
+    }
+  }
 }
 
 export class WorktreeArchiveService {
@@ -185,6 +212,9 @@ export class WorktreeArchiveService {
     if (!worktree) {
       throw new Error(`Worktree is not registered with Git: ${worktreePath}`);
     }
+    if (worktree.locked) {
+      throw new Error(`Refusing to archive a locked worktree: ${worktreePath}`);
+    }
     if (path.resolve(repositoryPath) === worktreePath) {
       throw new Error("Refusing to archive the primary checkout as a worktree.");
     }
@@ -199,14 +229,30 @@ export class WorktreeArchiveService {
     await this.runGit(repositoryPath, ["update-ref", snapshotRef, snapshotCommit]);
     const assertRemoval = await params.beforeRemove?.();
     assertRemoval?.();
-    await this.runGit(
-      repositoryPath,
-      ["worktree", "remove", "--force", worktreePath],
-      // Git for Windows can hand work to another git.exe after the launcher
-      // exits. Own that complete process tree atomically and do not report the
-      // archive complete until the Job's active-process count reaches zero.
-      { ownProcessTree: true, beforeSpawn: assertRemoval },
-    );
+    await withWorktreeTerminalsClosed(worktreePath, async () => {
+      // Removal admission and terminal teardown can await other work. Recheck
+      // Git's lock protection before modifying even ignored link entries.
+      const currentWorktree = findWorktree(await this.listWorktrees(repositoryPath), worktreePath);
+      if (!currentWorktree) {
+        throw new Error(`Worktree is no longer registered with Git: ${worktreePath}`);
+      }
+      if (currentWorktree.locked) {
+        throw new Error(`Refusing to archive a locked worktree: ${worktreePath}`);
+      }
+      assertRemoval?.();
+      if (process.platform === "win32") {
+        await unlinkWindowsWorktreeLinks(worktreePath, assertRemoval);
+      }
+      assertRemoval?.();
+      await this.runGit(
+        repositoryPath,
+        ["worktree", "remove", "--force", worktreePath],
+        // Git for Windows can hand work to another git.exe after the launcher
+        // exits. Own that complete process tree atomically and do not report the
+        // archive complete until the Job's active-process count reaches zero.
+        { ownProcessTree: true, beforeSpawn: assertRemoval },
+      );
+    }, assertRemoval);
 
     const archivedAt = params.now ?? Date.now();
     return {

@@ -499,3 +499,69 @@ it("does not flash a retained selection's old PR status over the current row", a
   await act(async () => { release(); await pending; });
   await waitFor(() => expect(result.current.threads.find((thread) => thread.id === "thread-0")?.prs?.[0]?.state).toBe("failing"));
 });
+
+it.each([
+  { owner: "local", outcome: "success" },
+  { owner: "local", outcome: "failure" },
+  { owner: "remote", outcome: "success" },
+  { owner: "remote", outcome: "failure" },
+])("keeps unrelated peer reads out of a $owner Claude archive $outcome", async ({ owner, outcome }) => {
+  const f = fixture();
+  const originalRead = f.read.getMockImplementation()!;
+  const peer = { scope: "remote" as const, instanceId: "unrelated-peer" };
+  const mounted = { ...row("mounted"), ref: { ...row("mounted").ref, ownerInstanceId: peer.instanceId },
+    federation: { ref: { backend: "codex" as const, threadId: "mounted", target: peer }, instanceLabel: "Fixture peer" } };
+  const archiveOwner = { scope: "remote" as const, instanceId: "archive-owner" };
+  const claude: NavigationRow = { ...row("claude-target"), source: "claude",
+    ref: { backend: "claude", threadId: "claude-target", ...(owner === "remote" ? { ownerInstanceId: archiveOwner.instanceId } : {}) },
+    ...(owner === "remote" ? { federation: { ref: { backend: "claude" as const, threadId: "claude-target", target: archiveOwner }, instanceLabel: "Archive owner" } } : {}) };
+  let archived = false;
+  let peerBusy = false;
+  f.read.mockImplementation(async (request, consumer) => {
+    if (request.federationTarget?.scope === "remote" && request.federationTarget.instanceId === peer.instanceId && peerBusy) {
+      throw new Error("handler_failed: [navigation_busy] Navigation read cancelled or its deadline expired.");
+    }
+    const page = await originalRead(request, consumer);
+    if (request.query.kind === "exact" && request.query.identities[0]?.threadId === claude.id) {
+      return { ...page, entries: archived ? [] : [{ row: claude, placement: { kind: "root" }, orderKey: "a" }] };
+    }
+    if (request.query.kind === "lens" && request.query.roots !== "pinned") {
+      return { ...page, complete: true, nextCursor: undefined, entries: [
+        ...(archived ? [] : [{ row: claude, placement: { kind: "root" as const }, orderKey: "a" }]),
+        { row: row("survivor"), placement: { kind: "root" as const }, orderKey: "a2" },
+        { row: mounted, placement: { kind: "root" as const }, orderKey: "b" },
+      ] };
+    }
+    return page;
+  });
+  const archiveThread = vi.fn<NonNullable<DesktopApi["archiveThread"]>>(async () => {
+    if (outcome === "failure") throw new Error("Claude archive failed");
+    archived = true;
+    return { backend: "claude", threadId: claude.id, archivedAt: 1, cleanup: [] };
+  });
+  const removeRemoteThreadPin = vi.fn(async () => ({ removed: true }));
+  const api = { ...f.api, archiveThread, removeRemoteThreadPin };
+  const { result, unmount } = renderHook(() => useThreadNavigation(api));
+  await waitFor(() => {
+    expect(result.current.threads.some((thread) => thread.id === claude.id)).toBe(true);
+    expect([...result.current.pagedNavigation.resources.values()].some((resource) =>
+      resource.state.request.federationTarget?.scope === "remote" && resource.state.page && !resource.loading)).toBe(true);
+    expect([...result.current.pagedNavigation.resources.values()].every((resource) => !resource.loading)).toBe(true);
+  });
+  f.read.mockClear();
+  peerBusy = true;
+  await act(async () => { await result.current.archiveThread(claude); });
+  expect(archiveThread).toHaveBeenCalledWith({ backend: "claude", threadId: claude.id,
+    ...(owner === "remote" ? { federationTarget: archiveOwner } : { backgroundCleanup: true }) });
+  expect(f.read.mock.calls.some(([request]) => request.federationTarget?.scope === "remote"
+    && request.federationTarget.instanceId === peer.instanceId)).toBe(false);
+  expect(f.read.mock.calls.some(([request]) => request.federationTarget?.scope !== "remote")).toBe(true);
+  if (owner === "remote" && outcome === "failure") {
+    expect(f.read.mock.calls.some(([request]) => request.federationTarget?.scope === "remote"
+      && request.federationTarget.instanceId === archiveOwner.instanceId)).toBe(true);
+  }
+  expect([...result.current.pagedNavigation.resources.values()].some((resource) => resource.state.error)).toBe(false);
+  expect(result.current.threads.some((thread) => thread.id === claude.id)).toBe(outcome === "failure");
+  expect(removeRemoteThreadPin).toHaveBeenCalledTimes(owner === "remote" && outcome === "success" ? 1 : 0);
+  unmount();
+});

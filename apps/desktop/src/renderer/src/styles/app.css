@@ -5204,6 +5204,14 @@ textarea,
   padding: 0 7px;
 }
 
+/* The icon/count pairs form one named graphic; the tab takes its name from
+   that graphic rather than replacing the visible numeric text with a label. */
+.signal-count-group {
+  display: inline-flex;
+  align-items: center;
+  gap: inherit;
+}
+
 /* One mark and the number it counts, on every surface that says it: the
    Attention tab and the Star Map's Attention chip, the directory header
    counts, and the sub-agent / automation strips. See `SignalCount.tsx` for

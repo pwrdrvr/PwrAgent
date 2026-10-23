@@ -74,12 +74,15 @@ export function federationChipFaceLabel(chip: FederationInstanceChipModel): stri
 }
 
 /**
- * A chip's accessible name. It starts with the face text, so voice control
- * can say what it sees (WCAG 2.5.3), and then names the full machine label
- * a short name stands in for.
+ * A chip's accessible name. It starts with the face text and transport, so
+ * voice control can say what it sees (WCAG 2.5.3), and then names the full
+ * machine label a short name stands in for.
  */
-export function federationChipName(chip: FederationInstanceChipModel): string {
-  const face = federationChipFaceLabel(chip);
+export function federationChipName(
+  chip: FederationInstanceChipModel,
+  transport: string | undefined = chip.transport,
+): string {
+  const face = `${federationChipFaceLabel(chip)}${transport ? ` ${transport}` : ""}`;
   return chip.fullHost ? `${face} (${chip.fullHost})` : face;
 }
 
@@ -114,7 +117,7 @@ export function FederationChipFace({ chip }: { chip: FederationInstanceChipModel
   return <>
     {chip.icon ? <CelestialIcon icon={chip.icon} size={12} />
       : <InstanceGlyph instanceId={chip.instanceId} size={12} />}
-    <span className="federation-chip__label">{federationChipFaceLabel(chip)}</span>
+    <span className="federation-chip__label">{federationChipFaceLabel(chip)}</span>{" "}
     {chip.transport ? <span className={`federation-chip__tag federation-chip__tag--${chip.transport.toLowerCase().replace(/ /g, "-")}`}>
       {chip.transport}</span> : null}
     {chip.online ? null : <span className="federation-chip__offline" aria-label="Offline" />}

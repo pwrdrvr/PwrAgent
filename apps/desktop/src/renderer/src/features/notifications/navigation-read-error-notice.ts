@@ -41,28 +41,68 @@ export function navigationReadErrorNoticeId(kind: NavigationPageErrorKind): stri
 export const NAVIGATION_READ_ERROR_NOTICE_IDS: readonly string[] =
   (Object.keys(NAVIGATION_READ_ERROR_NOTICES) as NavigationPageErrorKind[]).map(navigationReadErrorNoticeId);
 
+type NavigationReadError = { error?: string; instanceId?: string };
+type FederationInstanceLabel = { instanceId: string; label: string };
+
 /**
  * `admissionError` is the window's own demand outgrowing its budget, which
  * the operator relieves the same way as the owner's retained-page budget.
  */
 export function resolveNavigationReadErrorNotices(params: {
   admissionError?: string;
-  pageErrors: Iterable<string | undefined>;
+  pageErrors: Iterable<NavigationReadError>;
+  instances?: readonly FederationInstanceLabel[];
 }): AppNoticeToastNotice[] {
-  const errorsByKind = new Map<NavigationPageErrorKind, string>();
-  if (params.admissionError) errorsByKind.set("page-budget", params.admissionError);
-  for (const error of params.pageErrors) {
+  const errorsByKind = new Map<NavigationPageErrorKind, Map<string, NavigationReadError>>();
+  const add = (kind: NavigationPageErrorKind, failure: NavigationReadError) => {
+    const errors = errorsByKind.get(kind) ?? new Map<string, NavigationReadError>();
+    const key = JSON.stringify([failure.instanceId ?? null, failure.error]);
+    if (!errors.has(key)) errors.set(key, failure);
+    errorsByKind.set(kind, errors);
+  };
+  if (params.admissionError) add("page-budget", { error: params.admissionError });
+  for (const failure of params.pageErrors) {
+    const { error } = failure;
     const kind = navigationPageErrorKind(error);
-    if (kind && error && !errorsByKind.has(kind)) errorsByKind.set(kind, error);
+    if (kind && error) add(kind, failure);
   }
-  return [...errorsByKind].map(([kind, error]) => ({
-    autoDismiss: false,
-    // The owner's own message, for a bug report; the toast shows the copy.
-    copyText: error,
-    id: navigationReadErrorNoticeId(kind),
-    ...NAVIGATION_READ_ERROR_NOTICES[kind],
-    tone: "error",
-  }));
+  const labels = new Map(params.instances?.map((instance) => [instance.instanceId, instance.label]));
+  return [...errorsByKind].map(([kind, errors]) => {
+    const failures = [...errors.values()];
+    const local = failures.some(({ instanceId }) => !instanceId);
+    const remoteOwners = new Set(failures.flatMap(({ instanceId }) => instanceId ? [instanceId] : []));
+    const remote = [...remoteOwners].map((instanceId) => ({ instanceId, label: labels.get(instanceId) ?? instanceId }));
+    const facts = [
+      ...(local ? [{ label: "Instance", value: "This instance" }] : []),
+      ...(remote.length ? [{ label: remote.length === 1 ? "Federation instance" : "Federation instances",
+        value: remote.map(({ label }) => label).join(", ") }] : []),
+    ];
+    let { title, message } = NAVIGATION_READ_ERROR_NOTICES[kind];
+    if (kind === "read-failed") {
+      // Busy includes admission contention and cancellation, not just a slow
+      // connection. Do not diagnose a network timeout from this shared code.
+      if (failures.every(({ error }) => error?.includes("[navigation_busy]"))) {
+        title = "Thread loading delayed";
+        message = !local
+          ? `Thread lists from ${remote.length === 1 ? "this federation instance are" : "these federation instances are"} busy or taking too long to load.`
+          : remote.length ? "Some thread lists are busy or taking too long to load."
+            : "Thread lists on this instance are busy or taking too long to load.";
+      } else if (!local) {
+        message = `Thread lists from ${remote.length === 1 ? "this federation instance" : "these federation instances"} couldn't be loaded.`;
+      }
+    }
+    return {
+      autoDismiss: false,
+      // Keep raw owner errors copyable, with the source missing from wrapped
+      // federation exceptions. Local-only diagnostics keep their old shape.
+      copyText: failures.map(({ error, instanceId }) => instanceId
+        ? `Federation instance: ${labels.get(instanceId) ?? instanceId} (${instanceId})\n${error}`
+        : remote.length ? `This instance\n${error}` : error).join("\n\n"),
+      facts,
+      id: navigationReadErrorNoticeId(kind), title, message,
+      tone: "error" as const,
+    };
+  });
 }
 
 /**
@@ -76,21 +116,23 @@ export function resolveNavigationReadErrorNotices(params: {
  * failure's toast down and put it back on every refresh, undoing a dismissal.
  */
 export function useNavigationReadErrorNotices(
-  params: { admissionError?: string; resources: ReadonlyMap<string, NavigationWindowResource> },
+  params: { admissionError?: string; resources: ReadonlyMap<string, NavigationWindowResource>; instances?: readonly FederationInstanceLabel[] },
   dispatch: (action: AppNoticeAction) => void,
 ): void {
-  const { admissionError, resources } = params;
-  const settledErrorsRef = useRef(new Map<string, string | undefined>());
+  const { admissionError, resources, instances } = params;
+  const settledErrorsRef = useRef(new Map<string, NavigationReadError>());
   const shownKeyRef = useRef<string | undefined>(undefined);
   useEffect(() => {
-    const settled = new Map<string, string | undefined>();
+    const settled = new Map<string, NavigationReadError>();
     for (const [id, resource] of resources) {
-      settled.set(id, resource.loading && !resource.state.error
-        ? settledErrorsRef.current.get(id)
-        : resource.state.error);
+      const target = resource.state.request.federationTarget;
+      const instanceId = target?.scope === "remote" ? target.instanceId : undefined;
+      const previous = settledErrorsRef.current.get(id);
+      settled.set(id, { instanceId, error: resource.loading && !resource.state.error && previous?.instanceId === instanceId
+        ? previous?.error : resource.state.error });
     }
     settledErrorsRef.current = settled;
-    const notices = resolveNavigationReadErrorNotices({ admissionError, pageErrors: settled.values() });
+    const notices = resolveNavigationReadErrorNotices({ admissionError, pageErrors: settled.values(), instances });
     const key = JSON.stringify(notices.map((notice) => [notice.id, notice.copyText]));
     if (key === shownKeyRef.current) return;
     shownKeyRef.current = key;
@@ -98,5 +140,5 @@ export function useNavigationReadErrorNotices(
       if (!notices.some((notice) => notice.id === id)) dispatch({ type: "dismiss", id });
     }
     for (const notice of notices) dispatch({ type: "show", notice });
-  }, [admissionError, dispatch, resources]);
+  }, [admissionError, dispatch, instances, resources]);
 }

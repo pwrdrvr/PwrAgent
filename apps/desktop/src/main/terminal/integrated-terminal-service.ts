@@ -33,6 +33,7 @@ import { getDesktopSettingsService } from "../settings/desktop-settings-singleto
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { resolvePwragentRoot } from "../profile";
 import { terminalHasForegroundCommand } from "./terminal-foreground-command";
+import { isWithinWorktree } from "./worktree-terminals";
 
 import { restoredHistoryPrelude, TerminalReplay } from "./terminal-replay";
 import { TerminalHistoryStore, type TerminalHistoryRecord } from "./terminal-history-store";
@@ -315,7 +316,11 @@ export class IntegratedTerminalService {
    *  in one window used to install 10 and trip Node's max-listeners warning. */
   private readonly subscribedWebContents = new Set<WebContents>();
   private readonly archived = new Map<string, TerminalHistoryRecord>();
-  private readonly pendingCreates = new Map<string, Promise<IntegratedTerminalCreateResponse>>();
+  private readonly pendingCreates = new Map<string, {
+    request: IntegratedTerminalCreateRequest;
+    promise: Promise<IntegratedTerminalCreateResponse>;
+  }>();
+  private readonly removingWorktrees = new Set<string>();
   private readonly historyStore?: TerminalHistoryStore;
   private readonly ready: Promise<void>;
   private disposing = false;
@@ -343,10 +348,11 @@ export class IntegratedTerminalService {
     webContents: WebContents,
   ): Promise<IntegratedTerminalCreateResponse> {
     if (this.disposing) throw new Error("Terminal service is shutting down.");
+    this.assertWorktreeAvailable(request.cwd);
     const key = request.sessionId || `thread:${request.threadKey}`;
     const pending = this.pendingCreates.get(key);
     if (pending) {
-      const response = await pending;
+      const response = await pending.promise;
       const session = this.sessionsById.get(response.sessionId);
       if (response.threadKey !== request.threadKey.trim()) throw new Error("Terminal thread mismatch.");
       if (!session) return response;
@@ -354,7 +360,7 @@ export class IntegratedTerminalService {
       return this.toCreateResponse(session);
     }
     const creation = this.createSession(request, webContents);
-    this.pendingCreates.set(key, creation);
+    this.pendingCreates.set(key, { request, promise: creation });
     try { return await creation; }
     finally { this.pendingCreates.delete(key); }
   }
@@ -374,6 +380,7 @@ export class IntegratedTerminalService {
       ? this.sessionsById.get(requestedId)
       : this.sessionsForThread(threadKey)[0];
     if (existing) {
+      this.assertWorktreeAvailable(existing.cwd);
       if (existing.threadKey !== threadKey) {
         // The id outlived the pane that held it and now names some other
         // thread's shell. Attaching would show one thread's terminal inside
@@ -391,6 +398,7 @@ export class IntegratedTerminalService {
     }
 
     const archived = requestedId ? this.archived.get(requestedId) : undefined;
+    this.assertWorktreeAvailable(archived?.summary.cwd ?? request.cwd);
     if (archived) {
       if (archived.summary.threadKey !== threadKey) throw new Error("Terminal thread mismatch.");
       if (!request.resume) return { ...archived.summary, snapshot: archived.snapshot };
@@ -620,13 +628,53 @@ export class IntegratedTerminalService {
     }
   }
 
+  private isInWorktree(cwd: string | undefined, worktreePath: string): boolean {
+    return isWithinWorktree(cwd, worktreePath, this.platform);
+  }
+
+  private assertWorktreeAvailable(cwd: string | undefined): void {
+    if ([...this.removingWorktrees].some((worktree) => this.isInWorktree(cwd, worktree))) {
+      throw new Error("This worktree is being removed; a terminal cannot be opened here.");
+    }
+  }
+
+  async withWorktreeClosed<T>(worktreePath: string, work: () => Promise<T>, assertCurrent?: () => void): Promise<T> {
+    assertCurrent?.();
+    this.assertWorktreeAvailable(worktreePath);
+    this.removingWorktrees.add(worktreePath);
+    try {
+      // Creations already past admission must finish registering their PTYs
+      // before we collect them. New creations under this checkout are blocked
+      // until the destructive operation has settled, including on failure.
+      await this.ready;
+      await Promise.allSettled([...this.pendingCreates.values()]
+        .filter(({ request }) => this.isInWorktree(
+          (request.sessionId ? this.archived.get(request.sessionId)?.summary.cwd : undefined) ?? request.cwd,
+          worktreePath,
+        ))
+        .map(({ promise }) => promise));
+      assertCurrent?.();
+      await Promise.all([...this.sessionsById.values()]
+        .filter((session) => this.isInWorktree(session.cwd, worktreePath))
+        .map(async (session) => {
+          assertCurrent?.();
+          session.closing = true;
+          await this.disposeSessionForShutdown(session);
+          await this.historyStore?.remove(session.sessionId);
+        }));
+      return await work();
+    } finally {
+      this.removingWorktrees.delete(worktreePath);
+    }
+  }
+
   dispose(): Promise<void> {
     if (this.disposePromise) {
       return this.disposePromise;
     }
     this.disposing = true;
     this.disposePromise = Promise.all([
-      ...this.pendingCreates.values(),
+      ...[...this.pendingCreates.values()].map(({ promise }) => promise),
       ...Array.from(this.sessionsById.values()).map((session) => Promise.all([
         this.checkpoint(session),
         this.disposeSessionForShutdown(session),
@@ -819,14 +867,15 @@ export class IntegratedTerminalService {
     }
   }
 
-  private deleteSession(session: TerminalSession, announce = true): void {
+  private deleteSession(session: TerminalSession, announce = true): Promise<void> {
     // Before the listeners: a queued resize must not reach a dead PTY.
     session.resizes.dispose();
     this.disposeSessionListeners(session);
     this.sessionsById.delete(session.sessionId);
     session.subscribers.clear();
-    void session.replay.dispose();
+    const disposed = session.replay.dispose();
     if (announce) this.emitSessionsChanged();
+    return disposed;
   }
 
   private async disposeSessionForShutdown(
@@ -840,7 +889,7 @@ export class IntegratedTerminalService {
     const exited = new Promise<void>((resolve) => {
       exitDisposable = session.pty.onExit(() => resolve());
     });
-    this.deleteSession(session);
+    const replayDisposed = this.deleteSession(session);
     try {
       const destroy = (session.pty as DestroyablePty).destroy;
       if (destroy) {
@@ -877,6 +926,7 @@ export class IntegratedTerminalService {
     }
     try {
       await exited;
+      await replayDisposed;
     } finally {
       if (forceKillTimer) {
         clearTimeout(forceKillTimer);
