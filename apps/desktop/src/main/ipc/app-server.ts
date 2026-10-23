@@ -396,6 +396,7 @@ import { getDesktopNavigationQueryPool } from "../app-server/navigation-query-po
 import { searchNavigationOwners } from "../app-server/navigation-jump-search";
 import { appendViewerNavigationPins, attachRemoteThreadsToLocalDirectories, findRemoteHomeDirectoryIndex, loadViewerNavigationPins, loadViewerWatchedNavigationRows } from "../app-server/navigation-viewer-pins";
 import { loadLocalNavigationQueryIndex } from "../app-server/navigation-query-source";
+import { updateLocalSubthreadOrder } from "../app-server/subthread-order-actions";
 import { getDesktopNavigationDetailService } from "../app-server/navigation-detail-service";
 import {
   isFederationPeerUnavailableError,
@@ -7318,46 +7319,13 @@ class DesktopAppServerService {
         .remoteBackend(federationTarget)
         .updateSubthreadOrder(ownerRequest);
     }
-    const backend = request.backend ?? "codex";
-    let children: { id: string; createdAt?: number }[] | undefined;
-    if (request.move || request.insertAfter) {
-      const index = await loadLocalNavigationQueryIndex({ backend, callerReason: "relative-child-move" });
-      if (index.coverage && index.coverage.state !== "complete") {
-        throw new Error("Wait for complete owner discovery before moving a child.");
-      }
-      if (!index.threads.some((thread) => thread.source === backend && thread.id === request.parentThreadId
-        && !thread.archivedAt && !thread.federation)) throw new Error("The owning group no longer exists.");
-      children = index.threads.filter((thread) => thread.source === backend
-        && thread.parentThreadId === request.parentThreadId
-        && (thread.parentThreadBackend ?? thread.source) === backend
-        && !thread.parentThreadInstanceId && !thread.archivedAt && !thread.federation && !thread.codexNativeSubAgent)
-        .map(({ id, createdAt }) => ({ id, createdAt }));
-    }
-    const threadIds = await this.getOverlayStore().updateSubthreadOrder({
-      backend,
-      parentThreadId: request.parentThreadId,
-      ...(request.move ? { move: request.move, children }
-        : request.insertAfter ? { insertAfter: request.insertAfter, children } : { threadIds: request.threadIds }),
-    });
-
+    const response = await updateLocalSubthreadOrder(request);
     logDebug("updateSubthreadOrder", {
-      backend,
+      backend: response.backend,
       parentThreadId: request.parentThreadId,
-      childCount: threadIds.length,
+      childCount: response.threadIds?.length,
     });
-
-    await getDesktopBackendRegistry().publishLocalEvent({
-      backend,
-      notification: {
-        method: "thread/subthreadOrder/updated",
-        params: {
-          parentThreadId: request.parentThreadId,
-          ...(request.move || request.insertAfter ? {} : { threadIds }),
-        },
-      },
-    });
-
-    return { backend, parentThreadId: request.parentThreadId, ...(request.move || request.insertAfter ? {} : { threadIds }) };
+    return response;
   }
 
   async setSubthreadsCollapsed(

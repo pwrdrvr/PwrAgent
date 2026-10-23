@@ -2205,20 +2205,19 @@ describe("Tangerine Terminal theme contract", () => {
     // time, not visually after merge.
     const draggableRule = extractRuleBody(
       css,
-      '.directory-row__header[draggable="true"]',
+      ".directory-row__header.is-draggable",
     );
     expect(draggableRule).toContain("cursor: grab;");
     const activeRule = extractRuleBody(
       css,
-      '.directory-row__header[draggable="true"]:active',
+      ".directory-row__header.is-draggable:active",
     );
     expect(activeRule).toContain("cursor: grabbing;");
 
     // Drop-indicator pseudo-elements: 3px accent bar with shadow,
     // positioned above (before) / below (after) the directory
-    // section. Attached to `.directory-row` (not the header) so
-    // the indicator stretches the full height of an expanded
-    // directory's drop zone.
+    // section. A folder drag folds the list to its headers first,
+    // so the section is one header tall while the line shows.
     expect(css).toMatch(
       /\.directory-row\.is-drop-target-before::before,\s*\.directory-row\.is-drop-target-after::after\s*\{[\s\S]*?height:\s*3px;[\s\S]*?background:\s*var\(--accent\);[\s\S]*?\}/,
     );
