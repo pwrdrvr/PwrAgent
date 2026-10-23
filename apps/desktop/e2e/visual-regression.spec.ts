@@ -194,7 +194,7 @@ test.describe("visual regression", () => {
         }),
       ).toBeVisible();
 
-      await app.window.getByLabel("Reply").fill("Run the proposed validation.");
+      await app.window.getByRole("textbox", { name: "Reply", exact: true }).fill("Run the proposed validation.");
       await app.window.getByRole("button", { name: "Send" }).click();
       await app.advance({ stepId: "status-active-1" });
       await app.advance({ stepId: "turn-started-1" });

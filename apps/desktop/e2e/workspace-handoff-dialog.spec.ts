@@ -34,7 +34,7 @@ test("centers the local-to-worktree handoff dialog in the window", async () => {
   try {
     await app.window.getByRole("button", { name: "Local handoff thread" }).click();
 
-    await app.window.getByLabel("Workspace mode").click();
+    await app.window.getByLabel(/^Workspace mode(?::|$)/).click();
     await app.window.getByRole("menuitem", { name: "Handoff to New Worktree" }).click();
 
     const dialog = app.window.getByRole("dialog", { name: "Handoff to New Worktree" });
@@ -46,7 +46,7 @@ test("centers the local-to-worktree handoff dialog in the window", async () => {
     // `exact` matters: the branch picker's listbox is labelled
     // "Leave current checkout on options", and getByLabel matches substrings.
     await expect(
-      dialog.getByLabel("Leave current checkout on", { exact: true }),
+      dialog.getByLabel(/^Leave current checkout on(?::|$)/, { exact: true }),
     ).toHaveAttribute("data-value", "HEAD");
 
     await dialog.getByRole("radio", { name: /Handoff to New Branch/ }).click();
@@ -76,7 +76,7 @@ test("centers the worktree-to-local handoff dialog in the window", async () => {
       .getByRole("button", { name: "Worktree handoff thread" })
       .click();
 
-    await app.window.getByLabel("Workspace mode").click();
+    await app.window.getByLabel(/^Workspace mode(?::|$)/).click();
     await app.window.getByRole("menuitem", { name: "Handoff to Local" }).click();
 
     const dialog = app.window.getByRole("dialog", { name: "Handoff to Local" });

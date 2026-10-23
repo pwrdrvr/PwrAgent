@@ -270,6 +270,7 @@ import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
 import { createScratchProjectDirectory, resolveScratchProjectsRoots } from "../app-server/scratch-projects";
 import { dispatchStarMapIntake } from "../app-server/star-map-intake";
 import { spawnTerminalPty } from "../terminal/integrated-terminal-service";
+import { registerWorktreeTerminalOwner } from "../terminal/worktree-terminals";
 import {
   readTranscriptImageProtocolRequest,
   rewriteFederatedTranscriptImageUrlsForRenderer,
@@ -1194,6 +1195,7 @@ export class DesktopFederationRuntime {
   private services?: FederationServices;
   private readonly serviceForwarder = new FederationServiceForwarder();
   private readonly serviceViews = new Map<number, { viewId: string; instanceId: string; thread: ServiceThread }>();
+  private releaseWorktreeTerminalOwner?: () => void;
   private filePushReceiver?: FederationFilePushReceiver;
   private threadHandoffService?: ThreadInstanceHandoffService;
   private readonly handoffFileReceipts = new Map<string, { peerId: string; sizeBytes: number; sha256: string }>();
@@ -1616,6 +1618,8 @@ export class DesktopFederationRuntime {
     this.serviceForwarder.dispose();
     this.services?.dispose();
     this.services = undefined;
+    this.releaseWorktreeTerminalOwner?.();
+    this.releaseWorktreeTerminalOwner = undefined;
     await this.ptyService?.disposeAll();
     this.ptyService = undefined;
     this.client?.close();
@@ -3612,6 +3616,7 @@ export class DesktopFederationRuntime {
         warn: (message, meta) => log.warn(message, meta),
       },
     });
+    this.releaseWorktreeTerminalOwner = registerWorktreeTerminalOwner(this.ptyService);
     registerFederationPtyHandlers({ router, service: this.ptyService });
     registerFederationServices(router, this.threadServices());
     this.router = router;

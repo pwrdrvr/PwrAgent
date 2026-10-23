@@ -685,7 +685,7 @@ test("directory launchpad can switch from local checkout to a new worktree", asy
     await expectDirectoryLaunchpadHeader(app, "FixtureRepo");
 
     const settings = app.window.getByLabel("New thread settings");
-    const workspaceMode = settings.getByLabel("Workspace mode");
+    const workspaceMode = settings.getByLabel(/^Workspace mode(?::|$)/);
 
     await expect(workspaceMode).toBeEnabled();
     await expect(workspaceMode).toHaveAttribute("data-value", "local");
@@ -695,7 +695,7 @@ test("directory launchpad can switch from local checkout to a new worktree", asy
     await app.window.getByRole("option", { name: "New worktree" }).click();
 
     await expect(workspaceMode).toHaveAttribute("data-value", "worktree");
-    await expect(settings.getByLabel("Base branch")).toHaveAttribute("data-value", "main");
+    await expect(settings.getByLabel(/^Base branch(?::|$)/)).toHaveAttribute("data-value", "main");
   } finally {
     await app.close();
     await fixture.cleanup();
@@ -807,14 +807,14 @@ test("new-thread picker hydrates git status for a newly added directory", async 
     await expectDirectoryLaunchpadHeader(app, "PickedRepo");
 
     const settings = app.window.getByLabel("New thread settings");
-    const workspaceMode = settings.getByLabel("Workspace mode");
+    const workspaceMode = settings.getByLabel(/^Workspace mode(?::|$)/);
 
     await expect(workspaceMode).toBeEnabled();
     await expect(workspaceMode).toContainText("Local (main)");
     await workspaceMode.click();
     await expect(app.window.getByRole("option", { name: "New worktree" })).toHaveCount(1);
     await app.window.getByRole("option", { name: "New worktree" }).click();
-    await expect(settings.getByLabel("Base branch")).toHaveAttribute("data-value", "main");
+    await expect(settings.getByLabel(/^Base branch(?::|$)/)).toHaveAttribute("data-value", "main");
   } finally {
     await app.close();
     await fixture.cleanup();
@@ -842,7 +842,7 @@ test("new-thread picker starts a newly added directory in local checkout by defa
     await expectDirectoryLaunchpadHeader(app, "PickedRepo");
 
     const settings = app.window.getByLabel("New thread settings");
-    const workspaceMode = settings.getByLabel("Workspace mode");
+    const workspaceMode = settings.getByLabel(/^Workspace mode(?::|$)/);
     await expect(workspaceMode).toBeEnabled();
     await expect(workspaceMode).toHaveAttribute("data-value", "local");
     await expect(workspaceMode).toContainText("Local (main)");
@@ -892,7 +892,7 @@ test("directory launchpad starts a local thread from an unborn git HEAD", async 
       });
     }, directoryKey);
 
-    await expect(app.window.getByLabel("Workspace mode")).toHaveAttribute(
+    await expect(app.window.getByLabel(/^Workspace mode(?::|$)/)).toHaveAttribute(
       "data-value",
       "local",
     );
@@ -1073,7 +1073,7 @@ test("directory launchpad keeps full access as the sticky default after user cha
       .click();
 
     const settings = app.window.getByLabel("New thread settings");
-    const accessMode = settings.getByLabel("Access mode");
+    const accessMode = settings.getByLabel(/^Access mode(?::|$)/);
     // A Codex launchpad with no saved access starts on Auto.
     await expect(accessMode).toHaveAttribute("data-value", "auto");
     await selectComposerOption({
@@ -1095,7 +1095,7 @@ test("directory launchpad keeps full access as the sticky default after user cha
       .getByRole("button", { name: "Open new thread launchpad for OtherRepo" })
       .click();
     await expectDirectoryLaunchpadHeader(app, "OtherRepo");
-    await expect(settings.getByLabel("Access mode")).toHaveAttribute(
+    await expect(settings.getByLabel(/^Access mode(?::|$)/)).toHaveAttribute(
       "data-value",
       "full-access",
     );
@@ -1118,7 +1118,7 @@ test("directory launchpad keeps new worktree as the sticky default after startin
       .click();
 
     const settings = app.window.getByLabel("New thread settings");
-    const workspaceMode = settings.getByLabel("Workspace mode");
+    const workspaceMode = settings.getByLabel(/^Workspace mode(?::|$)/);
 
     await selectComposerOption({
       select: workspaceMode,
@@ -1189,8 +1189,8 @@ test("directory launchpad keeps new worktree as the sticky default after startin
       .click();
     await expectDirectoryLaunchpadHeader(app, "FixtureRepo");
 
-    await expect(settings.getByLabel("Workspace mode")).toHaveAttribute("data-value", "worktree");
-    await expect(settings.getByLabel("Base branch")).toHaveAttribute("data-value", "main");
+    await expect(settings.getByLabel(/^Workspace mode(?::|$)/)).toHaveAttribute("data-value", "worktree");
+    await expect(settings.getByLabel(/^Base branch(?::|$)/)).toHaveAttribute("data-value", "main");
   } finally {
     await app.close();
     await fixture.cleanup();
@@ -1212,7 +1212,7 @@ test("local-to-worktree handoff records PwrAgent workspace state without rewriti
       .getByRole("button", { name: "Local handoff thread" })
       .click();
 
-    const workspaceMode = app.window.getByLabel("Workspace mode");
+    const workspaceMode = app.window.getByLabel(/^Workspace mode(?::|$)/);
     await workspaceMode.click();
     await app.window
       .getByRole("menuitem", { name: "Handoff to New Worktree" })
@@ -1291,7 +1291,7 @@ test("directory launchpad does not duplicate a materialized worktree thread unde
 
     const settings = app.window.getByLabel("New thread settings");
     await selectComposerOption({
-      select: settings.getByLabel("Workspace mode"),
+      select: settings.getByLabel(/^Workspace mode(?::|$)/),
       window: app.window,
       option: "New worktree",
     });
@@ -1313,7 +1313,8 @@ test("directory launchpad does not duplicate a materialized worktree thread unde
       has: app.window.getByText("FixtureRepo", { exact: true }),
     })).toHaveCount(1);
     await expect(
-      app.window.getByRole("button", { name: /Use a sticky worktree default/ }),
+      app.window.getByRole("region", { name: "Thread browser" })
+        .getByRole("button", { name: /Use a sticky worktree default/ }),
     ).toHaveCount(1);
   } finally {
     await app.close();
@@ -1343,7 +1344,7 @@ test("directory launchpad keeps Tiptap Markdown focus and fenced-code formatting
 
     const settings = app.window.getByLabel("New thread settings");
     await selectComposerOption({
-      select: settings.getByLabel("Workspace mode"),
+      select: settings.getByLabel(/^Workspace mode(?::|$)/),
       window: app.window,
       option: "New worktree",
     });
@@ -1380,13 +1381,13 @@ test("directory launchpad applies new worktree sticky defaults to stale empty dr
       .getByRole("button", { name: "Open new thread launchpad for FixtureRepo" })
       .click();
     const settings = app.window.getByLabel("New thread settings");
-    await expect(settings.getByLabel("Workspace mode")).toHaveAttribute("data-value", "local");
+    await expect(settings.getByLabel(/^Workspace mode(?::|$)/)).toHaveAttribute("data-value", "local");
 
     await app.window
       .getByRole("button", { name: "Open new thread launchpad for OtherRepo" })
       .click();
     await expectDirectoryLaunchpadHeader(app, "OtherRepo");
-    const otherWorkspaceMode = settings.getByLabel("Workspace mode");
+    const otherWorkspaceMode = settings.getByLabel(/^Workspace mode(?::|$)/);
     await otherWorkspaceMode.click();
     await expect(app.window.getByRole("option", { name: "New worktree" })).toHaveCount(1);
     await app.window.getByRole("option", { name: "New worktree" }).click();
@@ -1397,8 +1398,8 @@ test("directory launchpad applies new worktree sticky defaults to stale empty dr
       .click();
     await expectDirectoryLaunchpadHeader(app, "FixtureRepo");
 
-    await expect(settings.getByLabel("Workspace mode")).toHaveAttribute("data-value", "worktree");
-    await expect(settings.getByLabel("Base branch")).toHaveAttribute("data-value", "main");
+    await expect(settings.getByLabel(/^Workspace mode(?::|$)/)).toHaveAttribute("data-value", "worktree");
+    await expect(settings.getByLabel(/^Base branch(?::|$)/)).toHaveAttribute("data-value", "main");
   } finally {
     await app.close();
     await fixture.cleanup();

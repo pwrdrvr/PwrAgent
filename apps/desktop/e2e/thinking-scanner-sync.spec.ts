@@ -13,7 +13,7 @@ test("keeps restarted thinking scanners on the shared epoch", async () => {
   try {
     await app.window.emulateMedia({ reducedMotion: "no-preference" });
     await app.window.getByRole("button", { name: /Approval pending replay/i }).first().click();
-    await app.window.getByLabel("Reply").fill("Scanner synchronization fixture");
+    await app.window.getByRole("textbox", { name: "Reply", exact: true }).fill("Scanner synchronization fixture");
     await app.window.getByRole("button", { name: "Send" }).click();
     await app.advance({ stepId: "status-active-1" });
     await app.advance({ stepId: "turn-started-1" });

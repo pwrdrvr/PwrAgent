@@ -50,7 +50,7 @@ describe("ActiveSubAgentsStrip", () => {
     const stopSubAgent = vi.fn<NonNullable<DesktopApi["stopSubAgent"]>>(async (request) => ({ ...request, stoppedAt: 3 }));
     const thread = { ...buildThread([]), subAgents: undefined, activeSubAgents: [running, blocked, failed] };
     const view = render(<ActiveSubAgentsStrip thread={thread} desktopApi={{ stopSubAgent }} />);
-    fireEvent.click(screen.getByRole("button", { name: "Active sub-agents (2), 1 failed" }));
+    fireEvent.click(screen.getByRole("button", { name: "Active sub-agents, 2, 1 failed" }));
     expect(screen.getByText("Blocked", { exact: true })).toBeVisible();
     expect(screen.getByRole("button", { name: "Dismiss failed sub-agent: Build package" })).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Stop sub-agent: Watch the deployment" }));
@@ -74,7 +74,7 @@ describe("ActiveSubAgentsStrip", () => {
     const monitor = buildSubAgent({ agentName: "Watcher", task: "Watch the deployment" });
     const thread = { ...buildThread([]), subAgents: undefined, activeSubAgents: [worker, unnamed, monitor] };
     render(<ActiveSubAgentsStrip thread={thread} desktopApi={{ stopSubAgent: vi.fn() }} />);
-    fireEvent.click(screen.getByRole("button", { name: "Active sub-agents (3)" }));
+    fireEvent.click(screen.getByRole("button", { name: "Active sub-agents, 3" }));
     expect(screen.getByText("breakfast_politics")).toBeVisible();
     expect(screen.queryByText("Codex sub-agent 1d8b90cc")).not.toBeInTheDocument();
     // No name yet: the placeholder carries the id it falls back to.
@@ -200,7 +200,7 @@ describe("ActiveSubAgentsStrip", () => {
       );
       expect(
         screen.getByRole("button", {
-          name: "Active sub-agents (1), 12 failed",
+          name: "Active sub-agents, 1, 12 failed",
         }),
       ).toBeInTheDocument();
       expect(screen.getByText("12 failed")).toBeInTheDocument();
@@ -521,7 +521,7 @@ describe("ActiveSubAgentsStrip", () => {
         />,
       );
       expect(
-        screen.getByRole("button", { name: "Active sub-agents (1)" }),
+        screen.getByRole("button", { name: "Active sub-agents, 1" }),
       ).toBeInTheDocument();
     });
 

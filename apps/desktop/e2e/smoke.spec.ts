@@ -28,7 +28,7 @@ test("opens a thread and enables replies with oversized historical sub-agent det
     await app.window.reload();
     await app.window.getByRole("button", { name: /Replay smoke thread/i }).first().click();
     await expect(app.window.getByText("The replay harness is live.")).toBeVisible();
-    await app.window.getByLabel("Reply").fill("A reply remains available with a large history.");
+    await app.window.getByRole("textbox", { name: "Reply", exact: true }).fill("A reply remains available with a large history.");
     await expect(app.window.getByRole("button", { name: "Send", exact: true })).toBeEnabled();
     await expect(app.window.getByText(/Selected thread detail exceeds the result budget/)).toHaveCount(0);
   } finally {

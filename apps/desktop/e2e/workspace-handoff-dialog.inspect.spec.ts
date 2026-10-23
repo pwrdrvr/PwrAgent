@@ -22,7 +22,7 @@ test("opens the local-to-worktree handoff dialog until Electron is closed manual
   try {
     await app.window.getByRole("button", { name: "Local handoff thread" }).click();
 
-    const workspaceMode = app.window.getByLabel("Workspace mode");
+    const workspaceMode = app.window.getByLabel(/^Workspace mode(?::|$)/);
     await workspaceMode.click();
     await app.window.getByRole("menuitem", { name: "Handoff to New Worktree" }).click();
 
@@ -34,7 +34,7 @@ test("opens the local-to-worktree handoff dialog until Electron is closed manual
     // `exact` matters: the branch picker's listbox is labelled
     // "Leave current checkout on options", and getByLabel matches substrings.
     await expect(
-      dialog.getByLabel("Leave current checkout on", { exact: true }),
+      dialog.getByLabel(/^Leave current checkout on(?::|$)/, { exact: true }),
     ).toHaveAttribute("data-value", "HEAD");
     await expect(dialog).toContainText("Ignored files are not moved by handoff.");
 

@@ -923,7 +923,7 @@ describe("ThreadView", () => {
       await Promise.resolve();
     });
 
-    expect(screen.getByLabelText("Base branch")).toHaveValue("origin/main");
+    expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue("origin/main");
 
     fireEvent.change(screen.getByLabelText("Review project"), {
       target: {
@@ -933,7 +933,7 @@ describe("ThreadView", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByLabelText("Base branch")).toHaveValue("origin/develop");
+      expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue("origin/develop");
     });
 
     await act(async () => {

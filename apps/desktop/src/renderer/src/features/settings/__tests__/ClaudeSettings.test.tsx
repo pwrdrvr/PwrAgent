@@ -18,7 +18,7 @@ describe("Claude settings", () => {
     expect(screen.getByRole("link", { name: "Open install guide" }))
       .toHaveAttribute("href", "https://code.claude.com/docs/en/setup");
     expect(screen.getByText("claude auth login")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /copy/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^copy\b/i })).toBeInTheDocument();
     // Not installed is said once, by the status chip and the install field.
     expect(screen.queryByText("Claude Code", { selector: ".settings-field__label" })).not.toBeInTheDocument();
     expect(screen.queryByText("Sign in")).not.toBeInTheDocument();

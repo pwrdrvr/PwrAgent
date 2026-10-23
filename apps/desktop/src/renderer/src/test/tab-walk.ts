@@ -48,29 +48,37 @@ function keydown(key: string, shiftKey: boolean): KeyboardEvent {
 export function pressTab({ shift = false }: { shift?: boolean } = {}): KeyboardEvent {
   const event = keydown("Tab", shift);
   if (event.defaultPrevented) return event;
-  const stops = documentTabStops();
-  if (stops.length === 0) return event;
+  const candidates = [...document.querySelectorAll<HTMLElement>(TABBABLE)];
   const active = document.activeElement as HTMLElement | null;
-  const at = active === null ? -1 : stops.indexOf(active);
-  let next: HTMLElement;
-  if (at !== -1) {
-    next = stops[(at + (shift ? -1 : 1) + stops.length) % stops.length]!;
+  const at = active === null ? -1 : candidates.indexOf(active);
+  // Only the next stop needs a visibility check. Walking the entire page's
+  // computed styles on every Tab makes a trapped dialog pay for all the
+  // settings controls behind it, even though focus never reaches them.
+  let next: HTMLElement | undefined;
+  if (at !== -1 && active !== null && isTabStop(active)) {
+    const ordered = shift
+      ? [...candidates.slice(0, at).reverse(), ...candidates.slice(at).reverse()]
+      : [...candidates.slice(at + 1), ...candidates.slice(0, at + 1)];
+    next = ordered.find(isTabStop);
   } else if (active === null || active === document.body) {
-    next = shift ? stops.at(-1)! : stops[0]!;
+    next = (shift ? candidates.reverse() : candidates).find(isTabStop);
   } else if (shift) {
     // Focus on something that is not a stop (a tabIndex={-1} container):
     // Chromium continues from its position in the document. Its descendants
     // follow it, and its ancestors do not precede it.
-    next = stops
+    next = candidates
       .filter((stop) =>
         Boolean(active.compareDocumentPosition(stop) & Node.DOCUMENT_POSITION_PRECEDING)
         && !stop.contains(active))
-      .at(-1) ?? stops.at(-1)!;
+      .reverse()
+      .find(isTabStop) ?? candidates.reverse().find(isTabStop);
   } else {
-    next = stops.find((stop) =>
-      Boolean(active.compareDocumentPosition(stop) & Node.DOCUMENT_POSITION_FOLLOWING))
-      ?? stops[0]!;
+    next = candidates.find((stop) =>
+      Boolean(active.compareDocumentPosition(stop) & Node.DOCUMENT_POSITION_FOLLOWING)
+      && isTabStop(stop))
+      ?? candidates.find(isTabStop);
   }
+  if (next === undefined) return event;
   act(() => {
     next.focus();
   });

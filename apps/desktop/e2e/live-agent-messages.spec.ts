@@ -57,7 +57,7 @@ test("preserves live assistant commentary messages, exploration activity, and fi
     await expect(hydratedWorkToggle).toHaveAttribute("aria-expanded", "false");
 
     await app.window
-      .getByLabel("Reply")
+      .getByRole("textbox", { name: "Reply", exact: true })
       .fill("What would it take to add Telegram support?");
     await app.window.getByRole("button", { name: "Send" }).click();
 
@@ -192,7 +192,7 @@ test("does not pull the reader back to the bottom while assistant output streams
     const list = app.window.locator(".transcript-list__items");
 
     await app.window
-      .getByLabel("Reply")
+      .getByRole("textbox", { name: "Reply", exact: true })
       .fill("What would it take to add Telegram support?");
     await app.window.getByRole("button", { name: "Send" }).click();
 

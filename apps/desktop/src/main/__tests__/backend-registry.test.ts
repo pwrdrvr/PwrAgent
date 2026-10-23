@@ -55635,8 +55635,10 @@ script = "printf setup"
     const observeArchivedThreads = vi.fn(async () => {});
     Object.assign(overlayStore, { observeArchivedThreads });
     const setThreadParent = vi.spyOn(overlayStore, "setThreadParent");
+    const codexClient = new MockBackendClient({ initializeResult: { methods: ["thread/list"] }, threads: [childThread] });
+    const archiveCodexThread = vi.spyOn(codexClient, "archiveThread");
     const registry = new DesktopBackendRegistry({
-      codexClient: new MockBackendClient({ initializeResult: { methods: ["thread/list"] }, threads: [childThread] }),
+      codexClient,
       overlayStore,
       pdfToolMcpServer: null,
       claudeBackendOptions: {
@@ -55647,6 +55649,8 @@ script = "printf setup"
     });
     try {
       await registry.archiveThread({ backend: "claude", threadId: parentId });
+      expect(archiveCodexThread).not.toHaveBeenCalled();
+      expect((await store.read(parentId)).thread.archivedAt).toEqual(expect.any(Number));
       expect(observeArchivedThreads).toHaveBeenCalledWith([{ backend: "claude", threadId: parentId }], expect.any(Number));
       expect(setThreadParent).toHaveBeenCalledWith({
         backend: "codex",

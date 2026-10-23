@@ -25,7 +25,7 @@ test("screenshots the rail with a long diff scrolled into the middle", async () 
       .first()
       .click();
     await app.window
-      .getByLabel("Reply")
+      .getByRole("textbox", { name: "Reply", exact: true })
       .fill("Drop in a long changelog entry to force rail-body scroll.");
     await app.window.getByRole("button", { name: "Send" }).click();
     await app.advance({ stepId: "status-active-1" });

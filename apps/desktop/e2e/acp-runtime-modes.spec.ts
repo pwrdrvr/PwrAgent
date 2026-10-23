@@ -648,7 +648,7 @@ test("renders ACP-native runtime modes and keeps live mode chrome in sync", asyn
     // and ACP threads surface the Agent-mode control instead). This test's
     // focus is that toggling the ACP runtime mode keeps the agent-mode chrome
     // in sync without leaking a [MODE_UPDATE] marker.
-    const agentMode = app.window.getByLabel("Agent mode");
+    const agentMode = app.window.getByLabel(/^Agent mode(?::|$)/);
     await expect(agentMode).toBeEnabled();
     await expect(agentMode).toHaveAttribute("data-value", "default");
 
@@ -678,7 +678,7 @@ test("keeps ACP config-option mode controls in sync when the agent echoes stale 
 
     // Access mode is no longer shown in the header; the Agent-mode control is
     // the ACP runtime mode surface under test here.
-    const agentMode = app.window.getByLabel("Agent mode");
+    const agentMode = app.window.getByLabel(/^Agent mode(?::|$)/);
     await expect(agentMode).toHaveAttribute("data-value", "default");
 
     await agentMode.click();
@@ -705,7 +705,7 @@ test("shows ACP tool progress while a turn is still running", async () => {
   try {
     await app.window.getByRole("button", { name: /ACP Live Tool Thread/i }).click();
 
-    await app.window.getByLabel("Reply").fill("Inspect the project README.");
+    await app.window.getByRole("textbox", { name: "Reply", exact: true }).fill("Inspect the project README.");
     await app.window.getByRole("button", { name: "Send" }).click();
 
     await expect(app.window.getByTestId("composer-stop-turn")).toBeVisible();
@@ -788,7 +788,7 @@ test("disables workspace handoff for ACP threads after conversation history", as
   try {
     await app.window.getByRole("button", { name: /ACP Handoff Thread/i }).click();
 
-    const workspaceMode = app.window.getByLabel("Workspace mode");
+    const workspaceMode = app.window.getByLabel(/^Workspace mode(?::|$)/);
     await expect(workspaceMode).toBeDisabled();
     await expect(workspaceMode).toHaveAttribute("value", "local");
     await workspaceMode.click({ force: true });

@@ -29,7 +29,7 @@ async function openMcpElicitationReplay(gatewayApproval = false, urlLogin = fals
   ).toBeVisible();
 
   await app.window
-    .getByLabel("Reply")
+    .getByRole("textbox", { name: "Reply", exact: true })
     .fill("Use the browser tabs MCP tool.");
   await app.window.getByRole("button", { name: "Send" }).click();
 

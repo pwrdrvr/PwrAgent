@@ -33,7 +33,7 @@ export function findDirectoryReferenceTrigger(
   caret: number,
 ): DirectoryReferenceTrigger | undefined {
   const prefix = text.slice(0, caret);
-  const match = /(?:^|\s)@([A-Za-z0-9._~/-]*)$/.exec(prefix);
+  const match = /(?:^|\s)@([A-Za-z0-9._~:/\\-]*)$/.exec(prefix);
   if (!match) {
     return undefined;
   }
@@ -79,11 +79,14 @@ export function filterDirectoryReferenceCandidates<T extends ReferenceDirectory>
         return true;
       }
       const label = directory.label.toLowerCase();
-      const path = (directory.path ?? "").toLowerCase();
+      const rawPath = (directory.path ?? "").toLowerCase();
+      const windowsPath = isWindowsFilesystemPath(rawPath);
+      const path = windowsPath ? rawPath.replace(/\\/g, "/") : rawPath;
+      const pathQuery = windowsPath ? trimmed.replace(/\\/g, "/") : trimmed;
       return (
         label.includes(trimmed)
-        || path.includes(trimmed)
-        || tildifyPath(directory.path ?? "").toLowerCase().includes(trimmed)
+        || path.includes(pathQuery)
+        || (!windowsPath && tildifyPath(directory.path ?? "").toLowerCase().includes(trimmed))
       );
     })
     .sort((left, right) => {

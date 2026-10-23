@@ -434,7 +434,7 @@ describe("Star Map ⌘K", () => {
   it("offers the palette to the pointer as well as the keyboard", async () => {
     renderMap([thread("t1", "Windows job wrapper")]);
     fireEvent.click(
-      screen.getByRole("button", { name: "Find a thread on the map" }),
+      screen.getByRole("button", { name: "Find" }),
     );
     await screen.findByRole("dialog", { name: "Fly to thread" });
   });

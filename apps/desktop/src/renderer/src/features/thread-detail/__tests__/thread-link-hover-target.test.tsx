@@ -58,7 +58,7 @@ const TARGET_LINK = `[handoff](pwragent://thread/${TARGET_THREAD_ID})`;
 const OTHER_LINK = `[other](pwragent://thread/${OTHER_THREAD_ID})`;
 const CHIP_NAME = "Open thread RELATED query deranking issue";
 const OTHER_CHIP_NAME = "Open thread Unrelated thread";
-const TITLE_LINK_NAME = "Show selected thread in thread list";
+const TITLE_LINK_NAME = /^Show selected thread in thread list: /;
 
 function rowFor(thread: NavigationThreadSummary) {
   return (
