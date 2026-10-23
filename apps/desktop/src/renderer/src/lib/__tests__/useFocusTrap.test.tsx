@@ -105,6 +105,17 @@ describe("useFocusTrap", () => {
     expect(focusedLabel()).toBe("First");
   });
 
+  it("uses current visibility when a control appears between Tab presses", () => {
+    const { rerender } = render(<Dialog open hideMiddle />);
+    button("Last").focus();
+    pressTab({ shift: true });
+    expect(focusedLabel()).toBe("First");
+
+    rerender(<Dialog open />);
+    pressTab();
+    expect(focusedLabel()).toBe("Middle");
+  });
+
   it("returns focus to whatever opened it", () => {
     const { rerender } = render(<Dialog open={false} />);
     rerender(<Dialog open />);
