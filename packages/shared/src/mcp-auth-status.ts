@@ -91,8 +91,18 @@ export function formatMcpAuthStatus(status: CodexMcpAuthStatus): string {
  * PwrAgent here, Codex there.
  */
 export function describeMcpConnectionAuth(
-  connection: Pick<McpConnectionStatus, "configured" | "state">,
+  connection: Pick<McpConnectionStatus, "configured" | "state"> & Partial<Pick<McpConnectionStatus, "authMode" | "sandboxerCliState" | "detail">>,
 ): McpAuthStatusPresentation {
+  if (connection.authMode === "local_cli") {
+    return {
+      label: connection.sandboxerCliState === "cli_missing" ? "CLI missing"
+        : connection.sandboxerCliState === "unavailable" ? "Status unavailable"
+        : connection.configured ? "Signed in" : "Not signed in",
+      description: connection.detail ?? "Uses the Sandboxer CLI login on this machine.",
+      tone: connection.configured ? "ok" : "warn",
+      canSignIn: false,
+    };
+  }
   const signedIn =
     connection.configured
     && connection.state !== "disconnected"

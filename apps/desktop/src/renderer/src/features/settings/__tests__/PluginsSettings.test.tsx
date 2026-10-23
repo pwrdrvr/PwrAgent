@@ -1032,6 +1032,27 @@ describe("PluginsSettings", () => {
       return article;
     }
 
+    it("offers Sandboxer CLI status and compute controls without OAuth actions", async () => {
+      const sandboxer = managed({
+        id: "sandboxer", displayName: "Sandboxer", kind: "sandboxer", authMode: "local_cli",
+        serverUrl: "sandboxer:compute", sandboxerRole: "compute", sandboxerCliState: "signed_in",
+        enabled: false, selectForNewThreads: false, toolApproval: "prompt",
+        detail: "Signed in through the Sandboxer CLI.",
+      });
+      const api = managedApi([sandboxer], ["create_sandbox", "stop_sandbox"]);
+      api.authorizeMcpConnection = vi.fn(async () => ({ connection: sandboxer }));
+      render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
+      const row = (await screen.findByText("Sandboxer")).closest("article")!;
+      expect(within(row).queryByRole("button", { name: "Authorize" })).toBeNull();
+      expect(within(row).queryByRole("button", { name: "Disconnect" })).toBeNull();
+      expect(within(row).queryByRole("button", { name: "Remove" })).toBeNull();
+      expect(within(row).getByText(/Full Access never asks/)).toBeInTheDocument();
+      expect(within(row).getByText("/usr/local/bin/sbx mcp --type small --ttl 1800")).toBeInTheDocument();
+      fireEvent.click(within(row).getByRole("button", { name: "Refresh status" }));
+      await waitFor(() => expect(api.authorizeMcpConnection).toHaveBeenCalledWith({ connectionId: "sandboxer" }));
+      await waitFor(() => expect(within(row).getByRole("button", { name: "Refresh status" })).toBeEnabled());
+    });
+
     /**
      * The Codex list below has always shown every tool of every server; a
      * managed connection showed a name and a URL. The gateway can read the

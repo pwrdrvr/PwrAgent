@@ -1972,7 +1972,7 @@ function ManagedMcpConnectionRow(props: {
             * here and a Stop waiting at the top of the card, which on a long
             * list was a screen away from the row it stopped.
             */}
-          {props.authorizing ? (
+          {props.authorizing && connection.kind !== "sandboxer" ? (
             <SignInWait
               name={connection.displayName}
               title={`Stop waiting for ${connection.displayName}. The sign-in page already open in your browser stops working; start again for a fresh one.`}
@@ -1980,7 +1980,16 @@ function ManagedMcpConnectionRow(props: {
             />
           ) : (
             <>
-              {app ? (
+              {connection.kind === "sandboxer" ? (
+                <button
+                  className="button button--secondary"
+                  disabled={disabled}
+                  type="button"
+                  onClick={props.onAuthorize}
+                >
+                  {props.authorizing ? "Checking status..." : "Refresh status"}
+                </button>
+              ) : app ? (
                 <LocalConnectionActions
                   app={app}
                   busy={props.busy}
@@ -2017,7 +2026,7 @@ function ManagedMcpConnectionRow(props: {
                 * nothing on screen said so -- two destructive-looking buttons side
                 * by side with no way to tell which one you wanted.
                 */}
-              {connection.configured ? (
+              {connection.configured && connection.authMode !== "local_cli" ? (
                 <button
                   className="button button--ghost"
                   disabled={props.disabled}
@@ -2071,8 +2080,9 @@ function ManagedMcpConnectionRow(props: {
         <SettingsCopyValue
           compact
           desktopApi={props.desktopApi}
-          label={`${connection.displayName} MCP URL`}
-          value={connection.serverUrl}
+          label={`${connection.displayName} ${connection.kind === "sandboxer" ? "MCP command" : "MCP URL"}`}
+          value={connection.kind === "sandboxer"
+            ? "/usr/local/bin/sbx mcp --type small --ttl 1800" : connection.serverUrl}
         />
         {/*
           * While it waits, the remedy line would still be telling the operator
@@ -2080,10 +2090,19 @@ function ManagedMcpConnectionRow(props: {
           * actually is instead.
           */}
         <p className="settings-mcp-row__state">
-          {props.authorizing
+          {props.authorizing && connection.kind !== "sandboxer"
             ? `Finish signing in to ${connection.displayName} in your browser.`
             : setup.detail}
         </p>
+        {connection.kind === "sandboxer" ? (
+          <p className="settings-mcp-row__state">
+            Your agent stays on this computer. Sandboxer provides Linux compute and bills per second
+            while running. New sandboxes default to small (2 vCPU / 4 GB) and stop after 30 minutes;
+            the agent can request a different size or TTL. Stop sandboxes when work is done.
+            Tool approval defaults to Prompt in Default and Auto threads. Full Access never asks.
+            Uses your existing CLI login; SANDBOXER_API_KEY is a headless/CI fallback.
+          </p>
+        ) : null}
         {props.authorizationError ? (
           <p
             className="settings-mcp-row__error settings-mcp-row__error--sign-in"

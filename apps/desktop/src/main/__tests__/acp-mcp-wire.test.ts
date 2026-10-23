@@ -1,3 +1,4 @@
+import { sandboxerStub } from "./helpers/sandboxer-stub";
 import schema from "@agentclientprotocol/sdk/schema/schema.json";
 import Ajv2020 from "ajv/dist/2020.js";
 import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
@@ -52,6 +53,7 @@ describe("ACP MCP request serialization", () => {
     cleanup.push(() => db.close());
     const store = new AcpSessionStore(db);
     const snap = new McpConnectionGatewayService({
+      sandboxer: sandboxerStub(),
       leaseManager: null,
       gatewayEnabled: () => true,
       settings: {} as never,

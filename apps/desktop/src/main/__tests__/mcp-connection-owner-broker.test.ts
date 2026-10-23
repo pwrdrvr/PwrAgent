@@ -1,3 +1,4 @@
+import { sandboxerStub } from "./helpers/sandboxer-stub";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -54,6 +55,7 @@ describe("MCP connection owner broker", () => {
     const ownerLease = lease("owner", 101);
     ownerLease.acquire("mcp_connections");
     const viewer = new McpConnectionGatewayService({
+      sandboxer: sandboxerStub(),
       brokerDiscovery: discovery, leaseManager: lease("viewer", 202),
       registry: new McpConnectionRegistry({ configPath: path.join(directory, "config.toml") }),
       settings: createSettings(),
@@ -91,6 +93,7 @@ describe("MCP connection owner broker", () => {
     const store = new AppRuntimeInstanceStore(stateDb);
     const discovery = new McpConnectionBrokerDiscovery({ filePath: path.join(directory, "broker.json") });
     const service = (instanceId: string, processId: number) => new McpConnectionGatewayService({
+      sandboxer: sandboxerStub(),
       brokerDiscovery: discovery,
       leaseManager: new RuntimeLeaseManager({
         instanceId, processId, profileName: "dev", runtimeIdentityIsAlive: () => true, store,
@@ -133,6 +136,7 @@ describe("MCP connection owner broker", () => {
     const ownerLease = lease("owner", 101);
     ownerLease.acquire("mcp_connections");
     const viewer = new McpConnectionGatewayService({
+      sandboxer: sandboxerStub(),
       brokerDiscovery: discovery, leaseManager: lease("viewer", 202),
       registry: new McpConnectionRegistry({ configPath: path.join(directory, "config.toml") }),
       settings: createSettings(),
@@ -202,6 +206,7 @@ describe("MCP connection owner broker", () => {
     const ownerLease = lease("owner", 101);
     ownerLease.acquire("mcp_connections");
     const viewer = new McpConnectionGatewayService({
+      sandboxer: sandboxerStub(),
       brokerDiscovery: discovery, leaseManager: lease("viewer", 202),
       registry: new McpConnectionRegistry({ configPath: path.join(directory, "config.toml") }),
       settings: createSettings(),
@@ -236,6 +241,7 @@ describe("MCP connection owner broker", () => {
     });
     const settings = createSettings();
     const owner = new McpConnectionGatewayService({
+      sandboxer: sandboxerStub(),
       bridgeEntryPath: "/owner/mcp-connection-bridge.js",
       readGatewaySelection: async () => [id],
       brokerDiscovery: discovery,
@@ -253,6 +259,7 @@ describe("MCP connection owner broker", () => {
       settings,
     });
     const viewer = new McpConnectionGatewayService({
+      sandboxer: sandboxerStub(),
       bridgeEntryPath: "/viewer/mcp-connection-bridge.js",
       brokerDiscovery: discovery,
       leaseManager: new RuntimeLeaseManager({

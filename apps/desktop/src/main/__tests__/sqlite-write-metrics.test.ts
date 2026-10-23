@@ -1,3 +1,4 @@
+import { sandboxerStub } from "./helpers/sandboxer-stub";
 import type { Query as ClaudeQuery, SDKMessage as ClaudeMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { ClaudeSessionStore } from "../claude/claude-session-store";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -3129,12 +3130,14 @@ describe("sqlite write metrics", () => {
       store: instances,
     });
     const owner = new McpConnectionGatewayService({
+      sandboxer: sandboxerStub(),
       brokerDiscovery: discovery,
       leaseManager: ownerLeases,
       registry,
       settings,
     });
     const viewer = new McpConnectionGatewayService({
+      sandboxer: sandboxerStub(),
       brokerDiscovery: discovery,
       leaseManager: viewerLeases,
       registry,

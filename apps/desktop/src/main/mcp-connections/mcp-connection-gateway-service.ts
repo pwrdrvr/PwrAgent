@@ -11,10 +11,12 @@ import {
   type Socket,
 } from "node:net";
 import { shell } from "electron";
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { ErrorCode, McpError, ToolListChangedNotificationSchema, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { McpDiscovery, McpDiscoveryError, mcpDiscoveryContext, mcpDiscoveryPhaseContext, mcpRequestSignalContext, waitForMcp } from "./mcp-discovery";
+import { SandboxerConnection } from "./sandboxer-connection";
 import { ConnectionRpcClient } from "./mcp-connection-rpc-client";
 import { gatewayToolRevision, validateGatewayArguments, type McpGatewayTool, type McpGatewayInvocation } from "./mcp-gateway-catalog";
 import {
@@ -22,6 +24,7 @@ import {
   PWRGIT_MCP_CONNECTION_ID,
   PWRSNAP_SESSION_REVOKED_DETAIL,
   isAcpBackendId,
+  isBuiltInMcpConnectionId,
   isMcpConnectionToolApproval,
   type AppServerBackendKind,
   type CreateMcpConnectionRequest,
@@ -106,7 +109,7 @@ type BridgeGrant = {
 
 type UpstreamSession = {
   client: Client;
-  transport: StreamableHTTPClientTransport;
+  transport: Transport;
 };
 
 type BridgeRequest = {
@@ -157,6 +160,7 @@ type FetchLike = (
 ) => Promise<Response>;
 
 export type McpConnectionGatewayServiceOptions = {
+  sandboxer?: SandboxerConnection;
   readGatewaySelection?: (context: { backend: AppServerBackendKind; threadId: string }) => Promise<string[]>;
   bridgeEntryPath?: string;
   fetchFn?: FetchLike;
@@ -502,7 +506,10 @@ export class McpConnectionGatewayService {
   private brokerToken?: string;
   private nonOwnerHolder?: RuntimeLeaseHolder;
 
+  private readonly sandboxer: SandboxerConnection;
+
   constructor(options: McpConnectionGatewayServiceOptions = {}) {
+    this.sandboxer = options.sandboxer ?? new SandboxerConnection();
     this.readGatewaySelection = options.readGatewaySelection
       ?? (async (context) => (await getAppOverlayStore().getThreadOverlayState(context))?.mcpConnectionIds ?? []);
     this.bridgeEntryPath =
@@ -649,6 +656,14 @@ export class McpConnectionGatewayService {
       );
     }
     const connection = this.requireConnection(connectionId);
+    if (connection.kind === "sandboxer") {
+      // The CLI may have logged into a different account since this process
+      // started. Retire servers holding its previous login and cached catalog.
+      await this.closeConnectionSessions(connectionId);
+      this.invalidateConnectionTools(connectionId);
+      await this.sandboxer.readStatus(true);
+      return await this.connectionStatus(connection);
+    }
     // Restore the first attempt's state before its callback rejection runs.
     this.coordinatorFor(connection).abandonAuthorization();
     this.abandonPendingAuthorization(
@@ -717,6 +732,7 @@ export class McpConnectionGatewayService {
       );
     }
     const connection = this.requireConnection(connectionId);
+    if (connection.kind === "sandboxer") return await this.connectionStatus(connection);
     // Retire the attempt in the coordinator *before* ending its wait, so the
     // rejection that follows lands on a stale attempt and cannot report a
     // called-off authorization as `reauthorization_required`. Doing it the
@@ -833,6 +849,9 @@ export class McpConnectionGatewayService {
     }
     const connection = this.requireConnection(connectionId);
     await this.closeConnectionSessions(connectionId);
+    if (connection.kind === "sandboxer") {
+      return await this.connectionStatus(this.registry.setEnabled(connectionId, false));
+    }
     await this.coordinatorFor(connection).disconnect();
     this.invalidateConnectionTools(connectionId);
     if (connection.id === PWRSNAP_MCP_CONNECTION_ID) {
@@ -1032,7 +1051,7 @@ export class McpConnectionGatewayService {
         { connectionId },
       );
     }
-    if (connectionId === PWRSNAP_MCP_CONNECTION_ID || connectionId === PWRGIT_MCP_CONNECTION_ID) {
+    if (isBuiltInMcpConnectionId(connectionId)) {
       throw new Error("Built-in MCP connections cannot be removed.");
     }
     this.requireConnection(connectionId);
@@ -1064,14 +1083,16 @@ export class McpConnectionGatewayService {
     // problem, and telling the operator to reauthorize would send them to
     // the wrong control.
     const connection = this.requireAvailableConnection(connectionId);
-    const configured = await this.coordinatorFor(connection).configured();
+    const status = await this.connectionStatus(connection);
+    const configured = status.configured;
     signal?.throwIfAborted();
     if (
       !configured
       && !(connection.id === PWRSNAP_MCP_CONNECTION_ID && this.sessionRevoked)
     ) {
       throw new Error(
-        `${connection.displayName} is not connected to PwrAgent. Reauthorize it in Settings → Plugins.`,
+        connection.kind === "sandboxer" ? status.detail
+          : `${connection.displayName} is not connected to PwrAgent. Reauthorize it in Settings → Plugins.`,
       );
     }
     const registrationKey = threadId
@@ -1697,6 +1718,7 @@ export class McpConnectionGatewayService {
   private coordinatorFor(
     connection: McpConnectionRecord,
   ): McpOAuthSessionCoordinator {
+    if (connection.authMode !== "oauth") throw new Error("This connection uses the local CLI login, not OAuth.");
     let coordinator = this.coordinators.get(connection.id);
     if (!coordinator) {
       const serverUrl = new URL(connection.serverUrl);
@@ -1754,6 +1776,13 @@ export class McpConnectionGatewayService {
   private async connectionStatus(
     connection: McpConnectionRecord,
   ): Promise<McpConnectionStatus> {
+    if (connection.kind === "sandboxer") {
+      return {
+        ...connection,
+        ...await this.sandboxer.readStatus(),
+        discovery: this.discoveryHealth.get(connection.id) ?? { state: "untested" },
+      };
+    }
     const coordinator = this.coordinatorFor(connection);
     const configured = await coordinator.configured();
     return {
@@ -1847,18 +1876,25 @@ export class McpConnectionGatewayService {
       discovery: McpDiscovery;
     },
   ): Promise<UpstreamSession> {
-    const coordinator = this.coordinatorFor(connection);
-    if (!(await coordinator.configured())) {
-      throw new Error(
-        connection.id === PWRSNAP_MCP_CONNECTION_ID && this.sessionRevoked
-          ? PWRSNAP_SESSION_REVOKED_ERROR
-          : `${connection.displayName} needs to be reauthorized in Settings → Plugins.`,
+    let transport: Transport;
+    if (connection.kind === "sandboxer") {
+      const status = await this.sandboxer.readStatus();
+      if (!status.configured) throw new Error(status.detail);
+      transport = this.sandboxer.createTransport();
+    } else {
+      const coordinator = this.coordinatorFor(connection);
+      if (!(await coordinator.configured())) {
+        throw new Error(
+          connection.id === PWRSNAP_MCP_CONNECTION_ID && this.sessionRevoked
+            ? PWRSNAP_SESSION_REVOKED_ERROR
+            : `${connection.displayName} needs to be reauthorized in Settings → Plugins.`,
+        );
+      }
+      transport = new StreamableHTTPClientTransport(
+        new URL(connection.serverUrl),
+        { fetch: coordinator.authorizedFetch() },
       );
     }
-    const transport = new StreamableHTTPClientTransport(
-      new URL(connection.serverUrl),
-      { fetch: coordinator.authorizedFetch() },
-    );
     const client = new Client(
       {
         name: options.clientName,
@@ -2207,9 +2243,11 @@ export class McpConnectionGatewayService {
         throw new Error("Invalid MCP bridge registration request.");
       }
       const connection = this.requireAvailableConnection(values.connectionId);
-      if (!(await this.coordinatorFor(connection).configured())) {
+      const status = await this.connectionStatus(connection);
+      if (!status.configured) {
         throw new Error(
-          `${connection.displayName} is not connected to PwrAgent. Reauthorize it in Settings → Plugins.`,
+          connection.kind === "sandboxer" ? status.detail
+            : `${connection.displayName} is not connected to PwrAgent. Reauthorize it in Settings → Plugins.`,
         );
       }
       const threadId = typeof values.threadId === "string"

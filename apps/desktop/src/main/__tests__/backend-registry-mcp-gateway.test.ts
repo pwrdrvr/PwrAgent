@@ -1,3 +1,4 @@
+import { sandboxerStub } from "./helpers/sandboxer-stub";
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -132,6 +133,7 @@ describe("backend MCP gateway dispatch", () => {
     await store.setThreadMcpConnectionIds({ backend: "codex", threadId: "thread-1", connectionIds: ["pwrsnap"] });
     let credentials: string | undefined;
     const broker = new McpConnectionGatewayService({
+      sandboxer: sandboxerStub(),
       registry: new McpConnectionRegistry({ configPath: path.join(directory, "config.toml") }),
       leaseManager: null,
       readGatewaySelection: async (context) => (await store.getThreadOverlayState(context))?.mcpConnectionIds ?? [],

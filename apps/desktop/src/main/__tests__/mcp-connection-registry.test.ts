@@ -22,6 +22,31 @@ afterEach(() => {
 });
 
 describe("McpConnectionRegistry", () => {
+  it("synthesizes Sandboxer with opt-in compute and persists independent profile choices", () => {
+    const target = configPath();
+    const registry = new McpConnectionRegistry({ configPath: target, randomId: () => "custom" });
+    expect(registry.get("sandboxer")).toMatchObject({
+      kind: "sandboxer", authMode: "local_cli", sandboxerRole: "compute",
+      enabled: false, selectForNewThreads: false, toolApproval: "prompt",
+    });
+    expect(registry.get("pwrsnap")?.toolApproval).toBe("auto");
+    expect(registry.get("pwrgit")?.toolApproval).toBe("auto");
+    registry.setEnabled("sandboxer", true);
+    registry.setSelectForNewThreads("sandboxer", true);
+    registry.setToolApproval("sandboxer", "auto");
+    const reread = new McpConnectionRegistry({ configPath: target });
+    expect(reread.get("sandboxer")).toMatchObject({ enabled: true, selectForNewThreads: true, toolApproval: "auto" });
+    registry.setEnabled("sandboxer", false);
+    expect(registry.get("sandboxer")?.selectForNewThreads).toBe(true);
+    registry.setToolApproval("sandboxer", "prompt");
+    expect(fs.readFileSync(target, "utf8")).not.toContain("sandboxer_tool_approval");
+    expect(registry.get("sandboxer")?.toolApproval).toBe("prompt");
+    expect(() => registry.remove("sandboxer")).toThrow("Built-in");
+    expect(() => registry.update({ connectionId: "sandboxer", serverUrl: "https://example.com" })).toThrow("Built-in");
+    expect(registry.create({ displayName: "Sandboxer", serverUrl: "https://example.com/mcp" }).id).toBe("sandboxer-custom");
+    expect(fs.readFileSync(target, "utf8")).not.toContain("sandboxer:compute");
+  });
+
   it("reserves PwrGit's routing ID when creating a custom connection", () => {
     const registry = new McpConnectionRegistry({
       configPath: configPath(),
@@ -140,6 +165,7 @@ describe("McpConnectionRegistry", () => {
     expect(registry.list()).toMatchObject([
       { id: "pwrsnap", kind: "pwrsnap" },
       { id: "pwrgit", kind: "pwrgit" },
+      { id: "sandboxer", kind: "sandboxer" },
       {
         id: "atlassian-rovo",
         kind: "remote",
@@ -152,6 +178,7 @@ describe("McpConnectionRegistry", () => {
     expect(registry.list().map((connection) => connection.id)).toEqual([
       "pwrsnap",
       "pwrgit",
+      "sandboxer",
     ]);
     expect(fs.readFileSync(target, "utf8")).toContain("theme = \"dark\"");
   });
@@ -223,7 +250,7 @@ describe("McpConnectionRegistry", () => {
     });
 
     expect(registry.list().map((connection) => connection.id))
-      .toEqual(["pwrsnap", "pwrgit", "acme"]);
+      .toEqual(["pwrsnap", "pwrgit", "sandboxer", "acme"]);
 
     registry.setEnabled("acme", false);
 
@@ -277,7 +304,7 @@ describe("McpConnectionRegistry", () => {
 
     expect(registry.remove("acme")).toBe(true);
     expect(registry.list().map((connection) => connection.id))
-      .toEqual(["pwrsnap", "pwrgit"]);
+      .toEqual(["pwrsnap", "pwrgit", "sandboxer"]);
     expect(fs.readFileSync(target, "utf8")).not.toContain("acme");
   });
 

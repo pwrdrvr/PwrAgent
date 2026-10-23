@@ -3,6 +3,11 @@ import type { FederationRemoteTarget } from "./federation";
 
 export const PWRSNAP_MCP_CONNECTION_ID = "pwrsnap" as const;
 export const PWRGIT_MCP_CONNECTION_ID = "pwrgit" as const;
+export const SANDBOXER_MCP_CONNECTION_ID = "sandboxer" as const;
+
+/** Remote compute today; a remote PwrAgent runtime is reserved for later work. */
+export type SandboxerRole = "compute" | "remote_agent";
+export type SandboxerCliState = "signed_in" | "not_signed_in" | "cli_missing" | "unavailable";
 
 /**
  * Shown on the New thread PwrSnap band next to the Connect to PwrSnap button
@@ -14,6 +19,7 @@ export const PWRSNAP_SESSION_REVOKED_DETAIL =
 export const MCP_CONNECTION_IDS = [
   PWRSNAP_MCP_CONNECTION_ID,
   PWRGIT_MCP_CONNECTION_ID,
+  SANDBOXER_MCP_CONNECTION_ID,
 ] as const;
 /**
  * Any connection id. Remote connections are slugged from their display name,
@@ -21,12 +27,12 @@ export const MCP_CONNECTION_IDS = [
  */
 export type McpConnectionId = string;
 
-/** The two connections PwrAgent synthesizes rather than stores. */
+/** The connections PwrAgent synthesizes rather than stores. */
 export type BuiltInMcpConnectionId = (typeof MCP_CONNECTION_IDS)[number];
 
-export type McpConnectionAuthMode = "oauth";
+export type McpConnectionAuthMode = "oauth" | "local_cli";
 
-export type McpConnectionKind = "remote" | "pwrsnap" | "pwrgit";
+export type McpConnectionKind = "remote" | "pwrsnap" | "pwrgit" | "sandboxer";
 
 export type McpConnectionRecord = {
   id: McpConnectionId;
@@ -34,6 +40,8 @@ export type McpConnectionRecord = {
   serverUrl: string;
   authMode: McpConnectionAuthMode;
   kind: McpConnectionKind;
+  /** Only Sandboxer uses this domain role. remote_agent is not implemented. */
+  sandboxerRole?: SandboxerRole;
   enabled: boolean;
   /**
    * Whether a new thread starts with this connection already selected.
@@ -86,6 +94,7 @@ export type McpConnectionRuntimeState =
 
 export type McpConnectionStatus = McpConnectionRecord & {
   state: McpConnectionRuntimeState;
+  sandboxerCliState?: SandboxerCliState;
   configured: boolean;
   detail?: string;
   /** In-memory live catalog health, independent of stored authorization. */
@@ -243,6 +252,7 @@ export function isBuiltInMcpConnectionId(
 export const MCP_CONNECTION_DISPLAY_NAMES: Record<BuiltInMcpConnectionId, string> = {
   [PWRSNAP_MCP_CONNECTION_ID]: "PwrSnap",
   [PWRGIT_MCP_CONNECTION_ID]: "PwrGit",
+  [SANDBOXER_MCP_CONNECTION_ID]: "Sandboxer",
 };
 
 /**
@@ -380,9 +390,9 @@ export function canIsolateMcpProviderServers(
   return backend === "codex";
 }
 
-/** A connection PwrAgent reaches by launching a local PwrSuite application. */
+/** A built-in connection reached through a local application or CLI. */
 export function isLocalMcpConnectionKind(kind: McpConnectionKind): boolean {
-  return kind === "pwrsnap" || kind === "pwrgit";
+  return kind === "pwrsnap" || kind === "pwrgit" || kind === "sandboxer";
 }
 
 /**
@@ -470,6 +480,20 @@ export function resolveMcpConnectionSetup(
       "No thread can reach this while the managed gateway is off. Credentials stay stored.",
       "idle",
     );
+  }
+
+  if (connection.kind === "sandboxer") {
+    const detail = connection.detail ?? "Check Sandboxer with /usr/local/bin/sbx status.";
+    if (connection.sandboxerCliState === "cli_missing") {
+      return build("app_not_installed", "CLI missing", detail, "idle");
+    }
+    if (connection.sandboxerCliState === "unavailable") {
+      return build("unavailable", "Unavailable", detail, "err");
+    }
+    if (!configured) return build("login_required", "Not signed in", detail, "warn");
+    return build(connection.enabled ? "ready" : "parked",
+      connection.enabled ? "Signed in" : "Parked", detail,
+      connection.enabled ? "ok" : "warn");
   }
 
   if (localAvailability === "not_installed") {
