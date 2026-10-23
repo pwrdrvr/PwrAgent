@@ -182,7 +182,7 @@ describe("ThreadSearchPanel", () => {
     expect(await screen.findByText("Screenshots")).toBeInTheDocument();
     expect(searchThreads).toHaveBeenCalledWith({
       contentMode: "available", filters: { includeArchived: false }, limit: 25, query: "branch drift",
-    });
+    }, expect.any(Function));
     fireEvent.click(screen.getByRole("button", { name: /Screenshots/ }));
 
     await waitFor(() => {

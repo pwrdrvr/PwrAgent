@@ -9365,6 +9365,7 @@ export class DesktopBackendRegistry {
     | LocalPullRequestAuthorityResolver
     | undefined;
   private threadInspectionSearchService: ThreadSearchService | null | undefined;
+  private ownerThreadSearchService: ThreadSearchService | undefined;
   private readonly headlessAutomationTurns = new Map<
     string,
     {
@@ -44272,10 +44273,32 @@ export class DesktopBackendRegistry {
   }
 
   readonly ownerContentSearch = new OwnerContentSearch(async (request, signal) => {
-    const service = this.getThreadInspectionSearchService();
-    if (!service) throw new Error("Thread content search is unavailable.");
-    return await service.search(request, signal);
+    if (!this.ownerThreadSearchService) {
+      this.ownerThreadSearchService = new ThreadSearchService(
+        new ThreadSearchStore(getAppStateDb()),
+        async (params) => await this.listThreadSearchCandidates(params),
+        new ProviderTranscriptThreadSearchAdapter(async (params) => await this.readThreadForContentSearch(params)),
+      );
+    }
+    return await this.ownerThreadSearchService.search(request, signal);
   });
+
+  /** Search needs provider text, not selection-time directory, review, or usage hydration. */
+  private async readThreadForContentSearch(request: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    limit: number;
+  }): Promise<AppServerReadThreadResponse> {
+    this.assertNotBootstrap("readThreadForContentSearch");
+    const { backend, threadId, limit } = request;
+    const replay = backend === "claude"
+      ? await this.claudeBackend.readThread(threadId)
+      : isAcpBackendId(backend)
+        ? pageNormalizedReplay(await this.acpBackend.readReplay(backend, threadId), request)
+        : await this.withCodexThreadClient(threadId,
+          async (client) => await client.readThread({ threadId, limit }), undefined, false);
+    return { backend, threadId, fetchedAt: Date.now(), replay };
+  }
 
   private getThreadInspectionSearchService(): ThreadSearchService | null {
     if (this.threadInspectionSearchService !== undefined) {

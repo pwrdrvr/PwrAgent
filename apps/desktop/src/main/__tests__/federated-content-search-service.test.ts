@@ -127,7 +127,7 @@ describe("federated content search", () => {
       expect(writes.commits).toBeGreaterThan(0);
       expect(writes.walBytes).toBeGreaterThan(0);
       expectSqliteWriteBudget({ scenario: "owner-content-search", writes,
-        note: "First owner query with one known thread: one metadata projection commit (~37 KB); 1000 newly discovered threads once/day project ~37 MB/day, zero idle writes. No transcript index." });
+        note: "First owner query with one known thread: one batched metadata commit (~37 KB); 20 equivalent cold batches/day project ~0.74 MB/day per owner, unchanged repeats and idle add 0 MB/day. No transcript index." });
       const repeated = await measureSqliteWrites(async () => {
         for (let index = 0; index < 20; index += 1) {
           await owner.run({ searchId: `repeat-${index}`, request: { query: "DKIM" } }, { requesterInstanceId: "viewer" });

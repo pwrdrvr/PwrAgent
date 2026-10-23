@@ -774,7 +774,9 @@
     "rowsChanged": 5,
     "statements": 5
   },
-  "owner-content-search": {"commits": 1, "note": "First owner query with one known thread: one metadata projection commit (~37 KB); 1000 newly discovered threads once/day project ~37 MB/day, zero idle writes. No transcript index.", "observedWalBytes": 37080, "rowsChanged": 2, "statements": 3},
+  "owner-content-search": {"commits": 1, "note": "First owner query with one known thread: one batched metadata commit (~37 KB); 20 equivalent cold batches/day project ~0.74 MB/day per owner, unchanged repeats and idle add 0 MB/day. No transcript index.", "observedWalBytes": 37080, "rowsChanged": 2, "statements": 3},
+  "owner-content-search-cold-usage": {"commits": 1, "note": "Real registry and SQLite: one metadata batch for three cold candidates with 60 usage lines, including two nonmatches; no usage/pricing/directory hydration. Transcript persistence adds 0 MB/day.", "observedWalBytes": 37080, "rowsChanged": 6, "statements": 9},
+  "owner-content-search-cold-usage-repeated": {"commits": 0, "note": "20 real owner searches of unchanged metadata and unhydrated usage-bearing transcripts: 0 commits and 0 MB/day at 20 queries/day.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "owner-content-search-unchanged": {"commits": 0, "note": "20 repeated owner searches with unchanged metadata: zero commits and 0 MB/day at 20 searches/day; transcript reads add no search persistence.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "owner-pr-candidate-bootstrap": {
     "commits": 1,
