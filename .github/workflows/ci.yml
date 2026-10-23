@@ -248,6 +248,11 @@ jobs:
         timeout-minutes: 10
         run: pnpm test --shard=${{ matrix.lane }}/2
 
+      - name: Test standalone headless CLI
+        if: matrix.lane == 1
+        timeout-minutes: 2
+        run: pnpm --filter pwragent test
+
   test-result:
     # Preserve the required `Test` status-check context while the work runs
     # as matrix lanes. `always()` is required so a failed lane reaches this
