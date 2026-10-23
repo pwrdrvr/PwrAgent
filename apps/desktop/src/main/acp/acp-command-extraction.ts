@@ -25,6 +25,13 @@ export function readAcpToolDescription(
 export function readAcpToolInvocation(
   record: Record<string, unknown>,
 ): string | undefined {
+  const mcpToolName = readAcpMcpToolName(record);
+  if (mcpToolName) {
+    const input = asRecord(record.rawInput)?.tool_input;
+    return input === undefined
+      ? mcpToolName
+      : `${mcpToolName}\n${JSON.stringify(input, null, 2)}`;
+  }
   const webSearch = readAcpWebSearch(record);
   if (webSearch) {
     return webSearch.query
@@ -37,6 +44,20 @@ export function readAcpToolInvocation(
   }
 
   return readAcpCodeSearch(record)?.invocation;
+}
+
+/** Grok's MCP dispatcher exposes the invoked tool inside its UseTool input. */
+export function readAcpMcpToolName(
+  record: Record<string, unknown>,
+): string | undefined {
+  const rawInput = asRecord(record.rawInput);
+  if (
+    readString(rawInput ?? {}, "variant") !== "UseTool"
+    && readString(readAcpToolMetadata(record) ?? {}, "name") !== "use_tool"
+  ) {
+    return undefined;
+  }
+  return readString(rawInput ?? {}, "tool_name")?.trim() || undefined;
 }
 
 export type AcpCodeSearch = {

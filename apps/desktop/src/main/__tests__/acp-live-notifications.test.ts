@@ -9,6 +9,39 @@ import {
 } from "../acp/acp-live-notifications";
 
 describe("acpToolUpdateNotifications", () => {
+  it("exposes the invoked Grok MCP tool and arguments rather than its UseTool wrapper", () => {
+    const notifications = acpToolUpdateNotifications({
+      threadId: "session-1",
+      turnId: "turn-1",
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "mcp-1",
+        title: "use_tool",
+        kind: "other",
+        status: "in_progress",
+        rawInput: {
+          variant: "UseTool",
+          tool_name: "pwragent__list_federation_instances",
+          tool_input: { query: "Fixture", includeLoad: false },
+        },
+        _meta: {
+          "x.ai/tool": { name: "use_tool", kind: "use_tool", namespace: "grok_build" },
+        },
+      },
+    });
+
+    expect(notifications[0]).toMatchObject({
+      params: {
+        item: {
+          command: 'pwragent__list_federation_instances\n{\n  "query": "Fixture",\n  "includeLoad": false\n}',
+          commandSource: "tool",
+          toolName: "pwragent__list_federation_instances",
+          commandActions: [{ type: "unknown", name: "pwragent__list_federation_instances" }],
+        },
+      },
+    });
+  });
+
   it("uses an explicit diagnostic when an ACP terminal update lacks tool metadata", () => {
     const notifications = acpToolUpdateNotifications({
       threadId: "session-1",

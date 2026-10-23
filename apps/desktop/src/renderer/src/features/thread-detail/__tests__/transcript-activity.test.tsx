@@ -1,13 +1,58 @@
 import "@testing-library/jest-dom/vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { AppServerThreadActivityDetail, NavigationThreadSummary } from "@pwragent/shared";
 import { ThreadLinkProvider } from "../../../lib/thread-links";
 import { TranscriptActivity } from "../TranscriptActivity";
 
 describe("TranscriptActivity", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it.each([false, true])("renders a title-only tool once without an empty expansion (command: %s)", (withCommand) => {
+    render(
+      <TranscriptActivity
+        expanded
+        entry={{
+          type: "activity",
+          id: "tool-1",
+          summary: "use_tool",
+          details: [{
+            id: "tool-1:detail",
+            kind: "command",
+            label: "use_tool",
+            ...(withCommand ? { command: { displayCommand: "use_tool", source: "tool" as const } } : {}),
+          }],
+        }}
+      />,
+    );
+
+    expect(screen.getAllByText("use_tool")).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "use_tool" })).not.toBeInTheDocument();
+  });
+
+  it.each<Partial<AppServerThreadActivityDetail>>([
+    { command: { displayCommand: 'use_tool\n{"query":"Fixture"}', source: "tool" } },
+    { command: { displayCommand: "use_tool", source: "tool", output: "Done" } },
+    { command: { displayCommand: "use_tool", source: "shell" } },
+    { path: "/repo/fixture.ts" },
+    { markdown: "Additional tool information" },
+    { url: "https://example.com/fixture" },
+    { status: "failed" },
+  ])("keeps expansion when a repeated label has additional data: %j", (detail) => {
+    render(
+      <TranscriptActivity
+        entry={{
+          type: "activity",
+          id: "tool-1",
+          summary: "use_tool",
+          details: [{ id: "tool-1:detail", kind: "command", label: "use_tool", ...detail }],
+        }}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "use_tool" })).toHaveAttribute("aria-expanded", "false");
   });
 
   it("shows a direct activity path relative to the longest thread directory", async () => {

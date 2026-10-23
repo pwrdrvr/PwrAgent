@@ -43,7 +43,8 @@ export const TranscriptActivity = memo(function TranscriptActivity(props: Transc
   const details = useTranscriptActivityDetails({ entry: props.entry, expanded: isExpanded, desktopApi: props.desktopApi, instanceId: props.threadLinkSource?.instanceId });
   const entry = details.entry;
   const [expandedDetailIds, setExpandedDetailIds] = useState(() => new Set<string>());
-  const hasDetails = entry.details.length > 0;
+  const hasDetails = Boolean(entry.detailsRef)
+    || (entry.details.length > 0 && !hasOnlyRepeatedLabel(entry));
   const directDetail = singleDirectDetail(entry);
   const images = entry.details.flatMap((detail) => detail.images ?? []);
   const activityCopyText = buildActivityCopyText(entry);
@@ -176,7 +177,7 @@ export const TranscriptActivity = memo(function TranscriptActivity(props: Transc
         </div>
       ) : isExpanded && entry.detailsRef ? (
         <div id={detailsId} className="transcript-activity__detail-body" role="status">Loading activity details…</div>
-      ) : directDetail && isExpanded ? (
+      ) : hasDetails && directDetail && isExpanded ? (
         <div id={detailsId} className="transcript-activity__detail-body">
           <TranscriptCommandOutput
             applications={props.applications}
@@ -302,6 +303,31 @@ export const TranscriptActivity = memo(function TranscriptActivity(props: Transc
     </aside>
   );
 });
+
+function hasOnlyRepeatedLabel(entry: AppServerThreadActivityEntry): boolean {
+  const detail = entry.details.length === 1 ? entry.details[0] : undefined;
+  if (!detail || detail.label.trim() !== entry.summary.trim()) {
+    return false;
+  }
+  const command = detail.command;
+  const hasCommandDetails = command && (
+    command.source !== "tool"
+    || command.displayCommand.trim() !== detail.label.trim()
+    || command.rawCommand !== undefined
+    || command.output !== undefined
+    || command.exitCode !== undefined
+    || command.durationMs !== undefined
+    || command.cwd !== undefined
+    || command.subAgent !== undefined
+  );
+  return !hasCommandDetails
+    && !detail.fileDiff
+    && !detail.markdown
+    && !detail.url
+    && !detail.path
+    && !detail.images?.length
+    && (!detail.status || detail.status === entry.status);
+}
 
 function singleDirectDetail(
   entry: AppServerThreadActivityEntry,

@@ -14,6 +14,7 @@ import { stripManagedReviewContextBlock } from "../../shared/review-command.js";
 import {
   isGenericShellToolTitle,
   readAcpCodeSearch,
+  readAcpMcpToolName,
   readAcpToolCommand,
   readAcpToolContentCommand,
   readAcpToolDescription,
@@ -1353,6 +1354,7 @@ function toolActivity(
   const invocation = readAcpToolInvocation(update.update);
   const displayCommand = rawCommand ?? invocation;
   const labelCandidate =
+    readAcpMcpToolName(update.update) ??
     description ??
     readString(update.update, "title") ??
     readString(update.update, "name") ??
@@ -1550,6 +1552,7 @@ function isGenericActivityLabel(value: string): boolean {
     "list_dir",
     "tool call",
     "tool_call",
+    "use_tool",
     "tool call update",
     "tool_call_update",
     "searching web",

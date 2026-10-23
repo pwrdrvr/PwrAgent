@@ -7,6 +7,64 @@ import {
 import grokReviewSession from "./fixtures/grok-managed-review-session.json";
 
 describe("AcpSessionReplayNormalizer", () => {
+  it.each(["use_tool", "pwragent__list_federation_instances"])(
+    "preserves Grok UseTool names and inputs with title %s across sparse completion updates",
+    (title) => {
+      const normalizer = new AcpSessionReplayNormalizer();
+      normalizer.apply({
+        sessionId: "session-1",
+        receivedAt: 999,
+        update: {
+          sessionUpdate: "tool_call",
+          toolCallId: "mcp-1",
+          title: "use_tool",
+          status: "in_progress",
+        },
+      });
+      normalizer.apply({
+        sessionId: "session-1",
+        receivedAt: 1000,
+        update: {
+          sessionUpdate: "tool_call",
+          toolCallId: "mcp-1",
+          title,
+          status: "in_progress",
+          rawInput: {
+            variant: "UseTool",
+            tool_name: "pwragent__list_federation_instances",
+            tool_input: { query: "Fixture", includeLoad: false },
+          },
+          _meta: {
+            "x.ai/tool": { name: "use_tool", kind: "use_tool", namespace: "grok_build" },
+          },
+        },
+      });
+      const replay = normalizer.apply({
+        sessionId: "session-1",
+        receivedAt: 1001,
+        update: {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "mcp-1",
+          status: "completed",
+        },
+      });
+
+      expect(replay.entries).toEqual([
+        expect.objectContaining({
+          summary: "pwragent__list_federation_instances",
+          status: "completed",
+          details: [expect.objectContaining({
+            label: "pwragent__list_federation_instances",
+            command: expect.objectContaining({
+              displayCommand: 'pwragent__list_federation_instances\n{\n  "query": "Fixture",\n  "includeLoad": false\n}',
+              source: "tool",
+            }),
+          })],
+        }),
+      ]);
+    },
+  );
+
   it("rewinds the local replay to the selected user prompt boundary", () => {
     const normalizer = new AcpSessionReplayNormalizer();
     for (const [receivedAt, role, content] of [
