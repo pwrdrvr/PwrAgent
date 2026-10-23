@@ -9,6 +9,7 @@ import type {
   NavigationThreadSummary,
 } from "@pwragent/shared";
 import { ThreadRow } from "../ThreadRow";
+import { createThreadRowPointerDragPreview } from "../thread-row-drag-preview";
 import {
   beginNativeDragInteraction,
   endNativeDragInteraction,
@@ -654,23 +655,11 @@ describe("ThreadRow chip flow", () => {
   });
 
   it("uses a full card without action controls for the drag preview", () => {
-    vi.useFakeTimers();
+    const { container } = renderRow({ compact: true, pointerDraggable: true });
+    const shell = container.querySelector(".thread-row-shell") as HTMLElement;
+
+    const preview = createThreadRowPointerDragPreview(shell, { x: 12, y: 18 });
     try {
-      const { container } = renderRow({
-        compact: true,
-        draggable: true,
-      });
-      const shell = container.querySelector(".thread-row-shell") as HTMLElement;
-      const dataTransfer = {
-        setDragImage: vi.fn(),
-      };
-
-      fireEvent.dragStart(shell, {
-        clientX: 12,
-        clientY: 18,
-        dataTransfer,
-      });
-
       const dragImage = document.body.querySelector(".thread-row--drag-image");
       expect(dragImage).not.toBeNull();
       expect(dragImage).not.toHaveClass("thread-row--compact");
@@ -681,22 +670,21 @@ describe("ThreadRow chip flow", () => {
       expect(dragImage?.querySelector(".thread-row__overflow-button")).toBeNull();
       // The timestamp shares the actions with those controls and stays.
       expect(dragImage?.querySelector(".thread-row__time")).not.toBeNull();
-      expect(dataTransfer.setDragImage).toHaveBeenCalledWith(
-        dragImage,
-        expect.any(Number),
-        expect.any(Number),
-      );
     } finally {
-      vi.runOnlyPendingTimers();
-      vi.useRealTimers();
+      preview?.remove();
     }
   });
 
-  it("marks the active drop edge on the row shell", () => {
-    const { container } = renderRow({ dropIndicator: "after" });
-    expect(container.querySelector(".thread-row-shell")).toHaveClass(
-      "is-drop-target-after",
-    );
+  it("keeps a project header's compact geometry on its held card", () => {
+    const { container } = renderRow({ compact: true });
+    const shell = container.querySelector(".thread-row-shell") as HTMLElement;
+
+    const preview = createThreadRowPointerDragPreview(shell, { x: 12, y: 18 }, { compact: true });
+    try {
+      expect(document.body.querySelector(".thread-row--drag-image")).toHaveClass("thread-row--compact");
+    } finally {
+      preview?.remove();
+    }
   });
 
   it("still selects the thread when the row body (outside chips) is clicked", () => {

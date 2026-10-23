@@ -47,8 +47,8 @@ export function subscribeNativeDragInteraction(
  * Navigation refreshes can rebuild hundreds of sidebar rows. If a full
  * snapshot or delta arrives during a sidebar drag, defer its React commit until
  * the held card is released so Chromium can keep servicing the gesture. This
- * state covers both native directory/subthread drags and pointer-driven thread
- * pin drags. The boolean tells the caller whether it waited, which lets refresh
+ * state covers every sidebar drag: thread pins, sub-threads, and project
+ * folders, all pointer-driven. The boolean tells the caller whether it waited, which lets refresh
  * code preserve any pin change made by the drop over stale data.
  */
 export function waitForNativeDragInteractionEnd(): Promise<boolean> {

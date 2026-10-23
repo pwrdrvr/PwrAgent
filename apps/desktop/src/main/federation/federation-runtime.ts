@@ -39,6 +39,7 @@ import { CloudflareAccessRefusedError, CloudflareSignInRequiredError } from "./c
 import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
 import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
 import { markLocalNavigationDirectorySeen, removeLocalNavigationDirectory } from "../app-server/navigation-directory-actions";
+import { updateLocalSubthreadOrder } from "../app-server/subthread-order-actions";
 import type { ReadQueuedTurnRequest, ReadQueuedTurnResponse } from "@pwragent/shared";
 import { randomBytes, randomUUID } from "node:crypto";
 import { hostname } from "node:os";
@@ -6943,27 +6944,9 @@ function localBackendOperations(): FederationBackendOperations {
     async updateSubthreadOrder(
       request: UpdateSubthreadOrderRequest,
     ): Promise<UpdateSubthreadOrderResponse> {
-      const backend = request.backend ?? "codex";
-      const threadIds = await getDesktopOverlayStore().updateSubthreadOrder({
-        backend,
-        parentThreadId: request.parentThreadId,
-        threadIds: request.threadIds,
-      });
-      await getDesktopBackendRegistry().publishLocalEvent({
-        backend,
-        notification: {
-          method: "thread/subthreadOrder/updated",
-          params: {
-            parentThreadId: request.parentThreadId,
-            threadIds,
-          },
-        },
-      });
-      return {
-        backend,
-        parentThreadId: request.parentThreadId,
-        threadIds,
-      };
+      // A viewer sends relative moves; the owner validates them against its
+      // complete child order, the same as a local drag.
+      return await updateLocalSubthreadOrder(request);
     },
     async setSubthreadsCollapsed(
       request: SetSubthreadsCollapsedRequest,

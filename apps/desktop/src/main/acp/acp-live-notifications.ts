@@ -9,6 +9,7 @@ import {
 } from "./acp-session-normalizer";
 import {
   isGenericShellToolTitle,
+  readAcpMcpToolName,
   readAcpToolCommand,
   readAcpToolContentCommand,
   readAcpToolDescription,
@@ -343,9 +344,9 @@ function liveItemForAcpToolUpdate(
     readString(update, "itemId") ??
     readString(update, "item_id");
   const rawCommand = readAcpToolCommand(update);
-  const description = rawCommand
-    ? readAcpToolDescription(update)
-    : undefined;
+  const mcpToolName = readAcpMcpToolName(update);
+  const description = mcpToolName
+    ?? (rawCommand ? readAcpToolDescription(update) : undefined);
   const title =
     description ??
     readString(update, "title") ??
@@ -392,7 +393,7 @@ function liveItemForAcpToolUpdate(
   const item: Record<string, unknown> = {
     id: id ?? `${toolKind}:${title}`,
     type: "commandExecution",
-    toolName: webFetchUrl ? "web_fetch" : toolKind,
+    toolName: mcpToolName ?? (webFetchUrl ? "web_fetch" : toolKind),
     status,
     command,
     commandSource: rawCommand ? "shell" : "tool",
