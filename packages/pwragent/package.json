@@ -30,7 +30,8 @@
     "src",
     "examples",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "dist"
   ],
   "publishConfig": {
     "access": "public"
@@ -40,6 +41,14 @@
   },
   "scripts": {
     "test": "node --test test/*.test.js",
-    "pack:check": "npm pack --dry-run"
+    "pack:check": "npm pack --dry-run",
+    "build": "node scripts/build.mjs",
+    "pretest": "node scripts/build.mjs",
+    "prepack": "node scripts/build.mjs"
+  },
+  "devDependencies": {
+    "@pwragent/federation": "workspace:*",
+    "@pwragent/shared": "workspace:*",
+    "esbuild": "0.28.1"
   }
 }

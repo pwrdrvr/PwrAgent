@@ -46,7 +46,9 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
     acknowledged = true;
   } else {
     assert.ok(acknowledged);
-    if (method === "thread/start" || method === "thread/resume") {
+    if (method === "model/list") {
+      reply({ data: [{ id: "fixture-model", displayName: "Fixture model", isDefault: true, supportedReasoningEfforts: [] }] });
+    } else if (method === "thread/start" || method === "thread/resume") {
       assert.equal(params.approvalPolicy, "never");
       assert.ok(["read-only", "workspace-write"].includes(params.sandbox));
       assert.equal(params.cwd, process.cwd());
@@ -77,6 +79,9 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
         writeFileSync(path.join(process.cwd(), "fixture-result.txt"), prompt);
         complete(prompt === "fail" ? "failed" : "completed");
       }, ["slow", "descendant", "approval", "question"].includes(prompt) ? 30000 : 100);
+    } else if (method === "turn/steer") {
+      assert.equal(params.expectedTurnId, active.id);
+      reply({ turnId: active.id });
     } else if (method === "turn/interrupt") {
       assert.equal(params.threadId, active.threadId);
       assert.equal(params.turnId, active.id);
