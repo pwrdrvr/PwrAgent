@@ -16,7 +16,7 @@ afterEach(async () => { for (const dispose of disposals.splice(0)) await dispose
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "sandboxer-gateway-"));
   const registry = new McpConnectionRegistry({ configPath: path.join(root, "config.toml") });
-  registry.setEnabled("sandboxer", true);
+  registry.setEnabled("builtin:sandboxer", true);
   const sandboxer = new SandboxerConnection(async () => '{"signedIn":true,"apiReachable":true}');
   const calls = vi.fn();
   const closed = vi.fn();
@@ -54,14 +54,14 @@ function fixture() {
   let selected = true;
   const service = new McpConnectionGatewayService({
     registry, sandboxer, settings, leaseManager: null,
-    readGatewaySelection: async () => selected ? ["sandboxer"] : [],
+    readGatewaySelection: async () => selected ? ["builtin:sandboxer"] : [],
   });
   disposals.push(async () => {
     await service.close();
     await Promise.all(servers.map(async (server) => await server.close()));
     fs.rmSync(root, { recursive: true, force: true });
   });
-  const scope = (id: string) => ({ connectionId: "sandboxer", scopeKey: JSON.stringify(["gateway", "codex", id]), signal: new AbortController().signal });
+  const scope = (id: string) => ({ connectionId: "builtin:sandboxer", scopeKey: JSON.stringify(["gateway", "codex", id]), signal: new AbortController().signal });
   const list = async (id: string) => await service.requestGatewayToolOperation({ ...scope(id), operation: "gateway/tools/list" }) as McpGatewayTool[];
   const call = async (id: string, tool: McpGatewayTool, args: Record<string, unknown>) => await service.requestGatewayToolOperation({ ...scope(id), operation: "gateway/tools/call", invocation: { ...tool, arguments: args } });
   return { service, list, call, spawn, calls, closed, credentialRead, deselect: () => { selected = false; } };
@@ -80,15 +80,15 @@ describe("Sandboxer thread gateway", () => {
     expect(await f.call("a", tools[2]!, {})).toMatchObject({ content: [{ text: "fixture-a" }] });
     expect(f.spawn).toHaveBeenCalledTimes(2);
     expect(f.credentialRead).not.toHaveBeenCalled();
-    await f.service.setConnectionEnabled("sandboxer", false);
+    await f.service.setConnectionEnabled("builtin:sandboxer", false);
     expect(f.closed).toHaveBeenCalledTimes(2);
     await expect(f.list("a")).rejects.toThrow("not available");
   });
 
   it("keeps Settings discovery separate, checks selection, and closes on gateway shutdown", async () => {
     const f = fixture();
-    expect((await f.service.authorizeConnection("sandboxer")).configured).toBe(true);
-    expect((await f.service.listConnectionTools({ connectionId: "sandboxer" })).tools).toHaveLength(8);
+    expect((await f.service.authorizeConnection("builtin:sandboxer")).configured).toBe(true);
+    expect((await f.service.listConnectionTools({ connectionId: "builtin:sandboxer" })).tools).toHaveLength(8);
     expect(f.closed).toHaveBeenCalledOnce();
     const tools = await f.list("a");
     f.deselect();
@@ -116,7 +116,7 @@ describe("Sandboxer thread gateway", () => {
     const f = fixture();
     const tools = await f.list("a");
     await f.call("a", tools[2]!, { sandboxId: "fixture-old-account" });
-    await f.service.authorizeConnection("sandboxer");
+    await f.service.authorizeConnection("builtin:sandboxer");
     expect(f.closed).toHaveBeenCalledOnce();
     const refreshed = await f.list("a");
     expect(await f.call("a", refreshed[2]!, {})).toMatchObject({ content: [{ text: "none" }] });
@@ -127,9 +127,9 @@ describe("Sandboxer thread gateway", () => {
     const f = fixture();
     const sandboxer = new SandboxerConnection(async () => { throw Object.assign(new Error("missing"), { code: "ENOENT" }); });
     Object.assign(f.service, { sandboxer });
-    expect(await f.service.authorizeConnection("sandboxer")).toMatchObject({ configured: false, sandboxerCliState: "cli_missing" });
-    await expect(f.service.listConnectionTools({ connectionId: "sandboxer" })).rejects.toThrow("initialize");
-    await expect(f.service.registerBridge("sandboxer", "missing-cli-thread")).rejects.toThrow("Install");
+    expect(await f.service.authorizeConnection("builtin:sandboxer")).toMatchObject({ configured: false, sandboxerCliState: "cli_missing" });
+    await expect(f.service.listConnectionTools({ connectionId: "builtin:sandboxer" })).rejects.toThrow("initialize");
+    await expect(f.service.registerBridge("builtin:sandboxer", "missing-cli-thread")).rejects.toThrow("Install");
     expect(f.spawn).not.toHaveBeenCalled();
     expect(f.credentialRead).not.toHaveBeenCalled();
   });

@@ -303,6 +303,10 @@ describe("MCP connection owner broker", () => {
           }),
         ]),
       );
+      const ownerList = vi.spyOn(owner, "listConnections");
+      await viewer.listConnections({ cachedLocalStatus: true });
+      expect(ownerList).toHaveBeenLastCalledWith({ cachedLocalStatus: true });
+      ownerList.mockRestore();
       const first = await viewer.registerBridge(connection.id, "thread-1");
       const second = await viewer.registerBridge(connection.id, "thread-1");
 

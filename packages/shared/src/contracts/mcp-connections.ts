@@ -3,7 +3,9 @@ import type { FederationRemoteTarget } from "./federation";
 
 export const PWRSNAP_MCP_CONNECTION_ID = "pwrsnap" as const;
 export const PWRGIT_MCP_CONNECTION_ID = "pwrgit" as const;
-export const SANDBOXER_MCP_CONNECTION_ID = "sandboxer" as const;
+// The colon cannot appear in a stored custom ID. Keep legacy `sandboxer`
+// connections, credentials, and thread selections on their original identity.
+export const SANDBOXER_MCP_CONNECTION_ID = "builtin:sandboxer" as const;
 
 /** Remote compute today; a remote PwrAgent runtime is reserved for later work. */
 export type SandboxerRole = "compute" | "remote_agent";

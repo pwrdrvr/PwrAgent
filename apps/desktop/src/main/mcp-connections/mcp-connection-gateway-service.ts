@@ -616,17 +616,20 @@ export class McpConnectionGatewayService {
     return await this.connectPromise;
   }
 
-  async listConnections(): Promise<McpConnectionStatus[]> {
+  async listConnections(
+    options: { cachedLocalStatus?: boolean } = {},
+  ): Promise<McpConnectionStatus[]> {
     const ownership = await this.ensureOwnerBroker();
     if (!ownership.owned) {
       return await this.requestOwnerBroker<McpConnectionStatus[]>(
         ownership.holder,
         "broker/list",
+        options,
       );
     }
     return await Promise.all(
       this.registry.list().map(async (connection) =>
-        await this.connectionStatus(connection),
+        await this.connectionStatus(connection, options.cachedLocalStatus),
       ),
     );
   }
@@ -1775,11 +1778,21 @@ export class McpConnectionGatewayService {
 
   private async connectionStatus(
     connection: McpConnectionRecord,
+    cachedLocalStatus = false,
   ): Promise<McpConnectionStatus> {
     if (connection.kind === "sandboxer") {
+      // New-thread defaults have a two-second total budget. Refresh enabled
+      // compute in the background without delaying unrelated defaults. A cold
+      // cache skips only Sandboxer until a probe has established its login.
+      if (cachedLocalStatus && connection.enabled) {
+        void this.sandboxer.readStatus();
+      }
+      const status = cachedLocalStatus
+        ? this.sandboxer.cachedStatus()
+        : await this.sandboxer.readStatus();
       return {
         ...connection,
-        ...await this.sandboxer.readStatus(),
+        ...status,
         discovery: this.discoveryHealth.get(connection.id) ?? { state: "untested" },
       };
     }
@@ -2130,7 +2143,7 @@ export class McpConnectionGatewayService {
       ? params as Record<string, unknown>
       : {};
     if (operation === "broker/list") {
-      return await this.listConnections();
+      return await this.listConnections({ cachedLocalStatus: values.cachedLocalStatus === true });
     }
     if (operation === "broker/pwrsnap-status") {
       return await this.readStatus();

@@ -25,26 +25,62 @@ describe("McpConnectionRegistry", () => {
   it("synthesizes Sandboxer with opt-in compute and persists independent profile choices", () => {
     const target = configPath();
     const registry = new McpConnectionRegistry({ configPath: target, randomId: () => "custom" });
-    expect(registry.get("sandboxer")).toMatchObject({
+    expect(registry.get("builtin:sandboxer")).toMatchObject({
       kind: "sandboxer", authMode: "local_cli", sandboxerRole: "compute",
       enabled: false, selectForNewThreads: false, toolApproval: "prompt",
     });
     expect(registry.get("pwrsnap")?.toolApproval).toBe("auto");
     expect(registry.get("pwrgit")?.toolApproval).toBe("auto");
-    registry.setEnabled("sandboxer", true);
-    registry.setSelectForNewThreads("sandboxer", true);
-    registry.setToolApproval("sandboxer", "auto");
+    registry.setEnabled("builtin:sandboxer", true);
+    registry.setSelectForNewThreads("builtin:sandboxer", true);
+    registry.setToolApproval("builtin:sandboxer", "auto");
     const reread = new McpConnectionRegistry({ configPath: target });
-    expect(reread.get("sandboxer")).toMatchObject({ enabled: true, selectForNewThreads: true, toolApproval: "auto" });
-    registry.setEnabled("sandboxer", false);
-    expect(registry.get("sandboxer")?.selectForNewThreads).toBe(true);
-    registry.setToolApproval("sandboxer", "prompt");
+    expect(reread.get("builtin:sandboxer")).toMatchObject({ enabled: true, selectForNewThreads: true, toolApproval: "auto" });
+    registry.setEnabled("builtin:sandboxer", false);
+    expect(registry.get("builtin:sandboxer")?.selectForNewThreads).toBe(true);
+    registry.setToolApproval("builtin:sandboxer", "prompt");
     expect(fs.readFileSync(target, "utf8")).not.toContain("sandboxer_tool_approval");
-    expect(registry.get("sandboxer")?.toolApproval).toBe("prompt");
-    expect(() => registry.remove("sandboxer")).toThrow("Built-in");
-    expect(() => registry.update({ connectionId: "sandboxer", serverUrl: "https://example.com" })).toThrow("Built-in");
-    expect(registry.create({ displayName: "Sandboxer", serverUrl: "https://example.com/mcp" }).id).toBe("sandboxer-custom");
+    expect(registry.get("builtin:sandboxer")?.toolApproval).toBe("prompt");
+    expect(() => registry.remove("builtin:sandboxer")).toThrow("Built-in");
+    expect(() => registry.update({ connectionId: "builtin:sandboxer", serverUrl: "https://example.com" })).toThrow("Built-in");
+    expect(registry.create({ displayName: "Sandboxer", serverUrl: "https://example.com/mcp" }).id).toBe("sandboxer");
     expect(fs.readFileSync(target, "utf8")).not.toContain("sandboxer:compute");
+  });
+
+  it("preserves a pre-existing sandboxer custom identity alongside the built-in", () => {
+    const target = configPath();
+    const legacy = `[mcp_connections]
+# Existing operator configuration
+[[mcp_connections.connections]]
+id = "sandboxer"
+display_name = "Sandboxer"
+server_url = "https://legacy.example/mcp"
+auth_mode = "oauth"
+enabled = true
+select_for_new_threads = true
+tool_approval = "approve"
+created_at = 123
+updated_at = 456
+`;
+    fs.writeFileSync(target, legacy);
+    const registry = new McpConnectionRegistry({ configPath: target });
+    expect(registry.get("sandboxer")).toMatchObject({
+      id: "sandboxer", kind: "remote", authMode: "oauth",
+      serverUrl: "https://legacy.example/mcp", selectForNewThreads: true,
+      toolApproval: "approve", createdAt: 123, updatedAt: 456,
+    });
+    expect(registry.get("builtin:sandboxer")).toMatchObject({ kind: "sandboxer", enabled: false });
+    expect(fs.readFileSync(target, "utf8")).toBe(legacy);
+    registry.setEnabled("builtin:sandboxer", true);
+    expect(registry.get("sandboxer")?.enabled).toBe(true);
+    registry.setEnabled("sandboxer", false);
+    expect(registry.get("builtin:sandboxer")?.enabled).toBe(true);
+    registry.update({ connectionId: "sandboxer", displayName: "Existing remote" });
+    expect(new McpConnectionRegistry({ configPath: target }).get("sandboxer")).toMatchObject({
+      kind: "remote", enabled: false, displayName: "Existing remote", selectForNewThreads: true,
+    });
+    expect(registry.remove("sandboxer")).toBe(true);
+    expect(registry.get("builtin:sandboxer")).toBeDefined();
   });
 
   it("reserves PwrGit's routing ID when creating a custom connection", () => {
@@ -165,7 +201,7 @@ describe("McpConnectionRegistry", () => {
     expect(registry.list()).toMatchObject([
       { id: "pwrsnap", kind: "pwrsnap" },
       { id: "pwrgit", kind: "pwrgit" },
-      { id: "sandboxer", kind: "sandboxer" },
+      { id: "builtin:sandboxer", kind: "sandboxer" },
       {
         id: "atlassian-rovo",
         kind: "remote",
@@ -178,7 +214,7 @@ describe("McpConnectionRegistry", () => {
     expect(registry.list().map((connection) => connection.id)).toEqual([
       "pwrsnap",
       "pwrgit",
-      "sandboxer",
+      "builtin:sandboxer",
     ]);
     expect(fs.readFileSync(target, "utf8")).toContain("theme = \"dark\"");
   });
@@ -250,7 +286,7 @@ describe("McpConnectionRegistry", () => {
     });
 
     expect(registry.list().map((connection) => connection.id))
-      .toEqual(["pwrsnap", "pwrgit", "sandboxer", "acme"]);
+      .toEqual(["pwrsnap", "pwrgit", "builtin:sandboxer", "acme"]);
 
     registry.setEnabled("acme", false);
 
@@ -304,7 +340,7 @@ describe("McpConnectionRegistry", () => {
 
     expect(registry.remove("acme")).toBe(true);
     expect(registry.list().map((connection) => connection.id))
-      .toEqual(["pwrsnap", "pwrgit", "sandboxer"]);
+      .toEqual(["pwrsnap", "pwrgit", "builtin:sandboxer"]);
     expect(fs.readFileSync(target, "utf8")).not.toContain("acme");
   });
 

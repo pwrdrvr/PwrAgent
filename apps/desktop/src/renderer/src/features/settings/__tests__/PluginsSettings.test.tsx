@@ -1034,7 +1034,7 @@ describe("PluginsSettings", () => {
 
     it("offers Sandboxer CLI status and compute controls without OAuth actions", async () => {
       const sandboxer = managed({
-        id: "sandboxer", displayName: "Sandboxer", kind: "sandboxer", authMode: "local_cli",
+        id: "builtin:sandboxer", displayName: "Sandboxer", kind: "sandboxer", authMode: "local_cli",
         serverUrl: "sandboxer:compute", sandboxerRole: "compute", sandboxerCliState: "signed_in",
         enabled: false, selectForNewThreads: false, toolApproval: "prompt",
         detail: "Signed in through the Sandboxer CLI.",
@@ -1049,7 +1049,7 @@ describe("PluginsSettings", () => {
       expect(within(row).getByText(/Full Access never asks/)).toBeInTheDocument();
       expect(within(row).getByText("/usr/local/bin/sbx mcp --type small --ttl 1800")).toBeInTheDocument();
       fireEvent.click(within(row).getByRole("button", { name: "Refresh status" }));
-      await waitFor(() => expect(api.authorizeMcpConnection).toHaveBeenCalledWith({ connectionId: "sandboxer" }));
+      await waitFor(() => expect(api.authorizeMcpConnection).toHaveBeenCalledWith({ connectionId: "builtin:sandboxer" }));
       await waitFor(() => expect(within(row).getByRole("button", { name: "Refresh status" })).toBeEnabled());
     });
 

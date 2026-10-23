@@ -39,6 +39,15 @@ export class SandboxerConnection {
 
   constructor(private readonly statusCommand: RunStatus = runStatus) {}
 
+  /** Snapshot for latency-sensitive defaults reads; never starts or awaits a CLI. */
+  cachedStatus(): CliStatus {
+    return this.cached?.value ?? {
+      configured: false,
+      state: "connecting",
+      detail: "Sandboxer CLI status has not been checked yet. Refresh status in Settings → Plugins.",
+    };
+  }
+
   async readStatus(refresh = false): Promise<CliStatus> {
     if (!refresh && this.cached && Date.now() - this.cached.at < 15_000) {
       return this.cached.value;

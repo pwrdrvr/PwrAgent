@@ -27159,7 +27159,7 @@ export class DesktopBackendRegistry {
         timer.unref?.();
       });
       return mcpConnectionIdsForNewThread(
-        await Promise.race([service.listConnections(), deadline]),
+        await Promise.race([service.listConnections({ cachedLocalStatus: true }), deadline]),
       );
     } catch (error) {
       backendRegistryLog.warn("new_thread_mcp_defaults_unavailable", {

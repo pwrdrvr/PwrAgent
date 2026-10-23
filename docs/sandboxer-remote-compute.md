@@ -5,6 +5,9 @@
 The agent and thread stay on the laptop. Sandboxer supplies extra Linux CPU and
 memory for builds, tests, and other compute. It is a synthesized built-in MCP
 connection alongside PwrSnap and PwrGit, not a stored URL or a federation peer.
+Its ID is `builtin:sandboxer`: the colon is outside the custom ID grammar, so
+existing custom `sandboxer` connections retain their configuration, credentials,
+and thread selections without migration.
 Its domain role is `compute`; the shared `SandboxerRole` also reserves
 `remote_agent` for later work. Nothing accepts that role as an executable mode.
 
@@ -21,6 +24,10 @@ that path; it does not search PATH or accept arbitrary commands. Status comes
 from `/usr/local/bin/sbx status --json --no-update`, with an eight-second limit
 and a short in-memory cache. Missing CLI, missing login, and unavailable status
 have distinct remedies in Settings; Refresh status bypasses the cache.
+New-thread defaults read the last cached status without waiting for the CLI,
+including through the profile owner broker. If enabled, Sandboxer refreshes in
+the background. A cold cache skips only Sandboxer's default until its login is
+known; unrelated defaults are never held up by the CLI's eight-second probe.
 
 Sandboxer owns its local login (`/usr/local/bin/sbx login`). PwrAgent neither
 reads its credential file nor stores OAuth tokens for it. `SANDBOXER_API_KEY`
