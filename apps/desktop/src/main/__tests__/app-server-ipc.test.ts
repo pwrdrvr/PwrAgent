@@ -111,6 +111,7 @@ const federationMock = vi.hoisted(() => {
     })),
     recordRecentFileReferences: vi.fn(async () => undefined),
     attachDirectoryToThread: vi.fn(),
+    detachDirectoryFromThread: vi.fn(),
     listWorktreeUnpublishedCommits: vi.fn(async () => ({
       commits: [],
       totalCommits: 0,
@@ -10542,6 +10543,36 @@ describe("app server ipc", () => {
         path: directoryPathId,
       },
     });
+  });
+
+  it("forwards remote directory detachment without reading or writing viewer overlays", async () => {
+    const { NAVIGATION_DETACH_DIRECTORY_FROM_THREAD_CHANNEL } = await import("../../shared/ipc");
+    const federationTarget = { scope: "remote" as const, instanceId: "owner-one" };
+    const ownerRequest = { backend: "codex" as const, threadId: "source-thread",
+      directory: { id: "/owner/PwrGit", kind: "local" as const, label: "PwrGit", path: "/owner/PwrGit" } };
+    const expected = { ok: true, backend: "codex", threadId: "source-thread", directories: [] };
+    federationMock.remoteBackend.detachDirectoryFromThread.mockResolvedValueOnce(expected);
+    registerAppServerIpcHandlers();
+
+    const response = await handlers.get(NAVIGATION_DETACH_DIRECTORY_FROM_THREAD_CHANNEL)?.(
+      { sender: { id: 999 } }, { ...ownerRequest, federationTarget },
+    );
+
+    expect(response).toEqual(expected);
+    expect(federationMock.remoteBackend.detachDirectoryFromThread).toHaveBeenCalledWith(ownerRequest);
+    expect(getThreadOverlayState).not.toHaveBeenCalled();
+    expect(removeLinkedDirectory).not.toHaveBeenCalled();
+  });
+
+  it("requires an owner target for directory detachment from a federation window", async () => {
+    const { NAVIGATION_DETACH_DIRECTORY_FROM_THREAD_CHANNEL } = await import("../../shared/ipc");
+    registerAppServerIpcHandlers();
+    await expect(handlers.get(NAVIGATION_DETACH_DIRECTORY_FROM_THREAD_CHANNEL)?.(
+      { sender: { id: 999 } }, { backend: "codex", threadId: "thread-1",
+        directory: { id: "/repo/extra", kind: "local", label: "extra", path: "/repo/extra" } },
+    )).rejects.toThrow("Remote directory detachments must target the owning instance.");
+    expect(getThreadOverlayState).not.toHaveBeenCalled();
+    expect(removeLinkedDirectory).not.toHaveBeenCalled();
   });
 
   it("detaches a secondary directory while preserving the primary linked directory", async () => {

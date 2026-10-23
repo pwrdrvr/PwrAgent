@@ -382,6 +382,7 @@ test.describe("federation remote window", () => {
 
       const localRow = window.getByRole("region", { name: "Thread browser" }).getByRole("button", {
         name: "Local colliding thread",
+        exact: true,
       });
       await expect(localRow).toBeVisible({ timeout: 30_000 });
       await localRow.click();
@@ -473,6 +474,7 @@ test.describe("federation remote window", () => {
 
       const remoteRow = window.getByRole("button", {
         name: "Remote colliding thread",
+        exact: true,
       }).first();
       await expect(remoteRow).toBeVisible({ timeout: 30_000 });
       await remoteRow.click();
@@ -872,6 +874,7 @@ test.describe("federation remote window", () => {
       await window.getByRole("button", { name: /Exit Settings/i }).click();
       const locallyMountedRemoteRow = window.getByRole("button", {
         name: "Remote gateway thread one",
+        exact: true,
       });
       // Row state (selection, offline dim) lives on the CARD; the button is
       // only the title line inside it, because the chip flow beside it
@@ -999,6 +1002,7 @@ test.describe("federation remote window", () => {
       // remote-PTY terminal toggle enabled (the gateway granted remote_pty).
       const remoteRowOne = remote.getByRole("region", { name: "Thread browser" }).getByRole("button", {
         name: "Remote gateway thread one",
+        exact: true,
       });
       const remoteCardOne = remote.locator(".thread-row", {
         // `has` resolves inside each row; the browser-region locator above

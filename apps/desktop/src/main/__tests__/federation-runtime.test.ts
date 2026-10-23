@@ -301,6 +301,47 @@ function applyEventSubscription(params: {
 }
 
 describe("DesktopFederationRuntime", () => {
+  it("detaches owner secondary repositories while preserving primary and last-directory guards", async () => {
+    const stateDb = openInMemoryStateDb();
+    const overlayStore = new SqliteOverlayStore(stateDb);
+    setDesktopOverlayStoreForTests(overlayStore);
+    const primary = { id: "/owner/PwrSnap", kind: "local" as const, label: "PwrSnap", path: "/owner/PwrSnap" };
+    const extra = { id: "/owner/PwrGit", kind: "local" as const, label: "PwrGit", path: "/owner/PwrGit" };
+    const remaining = { id: "/owner/PwrAgnt", kind: "local" as const, label: "PwrAgnt", path: "/owner/PwrAgnt" };
+    const resolveThread = vi.fn(async () => ({ linkedDirectories: [primary, extra, remaining] }));
+    const publishLocalEvent = vi.fn(async () => undefined);
+    const registry = vi.spyOn(await import("../app-server/backend-registry"), "getDesktopBackendRegistry")
+      .mockReturnValue({ resolveThread, publishLocalEvent } as never);
+    try {
+      await overlayStore.addLinkedDirectory({ backend: "codex", threadId: "snap", directory: extra });
+      await overlayStore.addLinkedDirectory({ backend: "codex", threadId: "snap", directory: remaining });
+      const backend = new DesktopFederationRuntime().localBackend();
+      await expect(backend.detachDirectoryFromThread({ threadId: "snap", directory: primary }))
+        .resolves.toMatchObject({ ok: false, reason: "primary-directory" });
+      expect(publishLocalEvent).not.toHaveBeenCalled();
+      await expect(backend.detachDirectoryFromThread({ threadId: "snap", directory: extra }))
+        .resolves.toEqual({ ok: true, backend: "codex", threadId: "snap", directories: [remaining] });
+      expect(resolveThread).toHaveBeenCalledWith({ backend: "codex", threadId: "snap" });
+      expect(publishLocalEvent).toHaveBeenCalledExactlyOnceWith({ backend: "codex", notification: {
+        method: "navigation/threadDirectories/updated", params: { reason: "selected-thread", threadIds: ["snap"] },
+      } });
+      expect((await overlayStore.getThreadOverlayState({ backend: "codex", threadId: "snap" }))?.extraLinkedDirectories)
+        .toEqual([remaining]);
+
+      await overlayStore.addLinkedDirectory({ backend: "codex", threadId: "only", directory: extra });
+      resolveThread.mockResolvedValueOnce({ linkedDirectories: [extra] });
+      await expect(backend.detachDirectoryFromThread({ threadId: "only", directory: extra }))
+        .resolves.toMatchObject({ ok: false, reason: "last-directory" });
+      expect((await overlayStore.getThreadOverlayState({ backend: "codex", threadId: "only" }))?.extraLinkedDirectories)
+        .toEqual([extra]);
+      expect(publishLocalEvent).toHaveBeenCalledOnce();
+    } finally {
+      registry.mockRestore();
+      resetDesktopOverlayStoreForTests();
+      stateDb.close();
+    }
+  });
+
   it("runs incoming Agent and Token Miser changes through the owning registry", async () => {
     const agent = { name: "Manager", instructionLineCount: 0, instructionsTooLong: false, updatedAt: 1 };
     const setThreadAgent = vi.fn(async () => ({ agent }));
