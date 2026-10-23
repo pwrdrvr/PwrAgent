@@ -42,7 +42,8 @@ describe("ComposerDropdown tooltip", () => {
         };
       });
     renderAccessMode(false, true);
-    const button = screen.getByRole("button", { name: "Access mode" });
+    const button = screen.getByRole("button", { name: /^Access mode(?::|$)/ });
+    expect(button).toHaveAccessibleName("Access mode: Default Access");
     fireEvent.mouseEnter(button);
     fireEvent.focus(button);
     act(() => vi.advanceTimersByTime(TOOLTIP_HOVER_DELAY_MS));
@@ -79,7 +80,7 @@ describe("ComposerDropdown tooltip", () => {
         };
       });
     const { container } = renderAccessMode();
-    const button = screen.getByRole("button", { name: "Access mode" });
+    const button = screen.getByRole("button", { name: /^Access mode(?::|$)/ });
     fireEvent.mouseEnter(button);
     expect(screen.queryByRole("tooltip")).toBeNull();
     act(() => vi.advanceTimersByTime(TOOLTIP_HOVER_DELAY_MS));
@@ -100,7 +101,7 @@ describe("ComposerDropdown tooltip", () => {
   it("cancels a pending hover on click and supports keyboard focus after closing", () => {
     vi.useFakeTimers();
     renderAccessMode();
-    const button = screen.getByRole("button", { name: "Access mode" });
+    const button = screen.getByRole("button", { name: /^Access mode(?::|$)/ });
     fireEvent.mouseEnter(button);
     fireEvent.click(button);
     act(() => vi.advanceTimersByTime(TOOLTIP_HOVER_DELAY_MS));
@@ -132,7 +133,7 @@ describe("ComposerDropdown Other models", () => {
       />,
     );
 
-    const trigger = screen.getByRole("button", { name: "Model" });
+    const trigger = screen.getByRole("button", { name: /^Model(?::|$)/ });
     expect(trigger).toHaveTextContent("GPT-5.6-Sol");
     fireEvent.click(trigger);
     expect(screen.getAllByRole("option").map((option) =>

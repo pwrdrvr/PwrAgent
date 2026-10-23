@@ -177,7 +177,7 @@ afterEach(async () => {
 });
 
 function openDropdown(label: string): HTMLElement {
-  const dropdown = screen.getByLabelText(label);
+  const dropdown = screen.getByRole("button", { name: new RegExp(`^${label}(?::|$)`) });
   fireEvent.click(dropdown);
   return dropdown;
 }
@@ -1351,7 +1351,7 @@ describe("Composer", () => {
         model: "gpt-6-astra", fastMode: true, linkedDirectories: [], inbox: { inInbox: false },
         federation: { instanceLabel: "Owner", ref: { backend: "codex", threadId: "speed-fixture", target } },
       }} />);
-    expect(Boolean(screen.queryByLabelText("Speed"))).toBe(allowed);
+    expect(Boolean(screen.queryByLabelText(/^Speed(?::|$)/))).toBe(allowed);
     if (allowed) {
       chooseDropdownOption("Speed", "Ultrafast");
       await waitFor(() => expect(onSetThreadModelSettings).toHaveBeenCalledWith({
@@ -1371,7 +1371,7 @@ describe("Composer", () => {
       }] })]}
       thread={{ id: "speed-look", title: "Speed", titleSource: "explicit", source: "codex",
         model: "gpt-6-astra", ...settings, linkedDirectories: [], inbox: { inInbox: false } }} />);
-    const trigger = screen.getByRole("button", { name: "Speed" });
+    const trigger = screen.getByRole("button", { name: /^Speed(?::|$)/ });
     const dropdown = trigger.closest(".composer-dropdown");
     expect(trigger).toHaveAttribute("aria-description", `Speed: ${label}`);
     // Standard keeps the toggle's icon-only circle; a paid tier is named and lit.
@@ -2634,7 +2634,7 @@ describe("Composer", () => {
         }}
       />,
     );
-    const access = screen.getByRole("button", { name: "Access mode" });
+    const access = screen.getByRole("button", { name: /^Access mode(?::|$)/ });
     expect(access).not.toHaveAttribute("aria-description");
     fireEvent.focus(access);
     expect(screen.queryByRole("tooltip")).toBeNull();
@@ -2666,7 +2666,7 @@ describe("Composer", () => {
         }}
       />,
     );
-    fireEvent.click(screen.getByRole("button", { name: "Access mode" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Access mode(?::|$)/ }));
     expect(screen.getByRole("option", { name: "Auto" })).toHaveAttribute(
       "aria-description",
       "Claude Code's auto mode decides routine permission requests.",
@@ -2702,7 +2702,7 @@ describe("Composer", () => {
     );
 
     expect(
-      screen.getByLabelText("Access mode").closest(".composer-dropdown"),
+      screen.getByLabelText(/^Access mode(?::|$)/).closest(".composer-dropdown"),
     ).toHaveClass("composer-dropdown--danger");
   });
 
@@ -3047,8 +3047,8 @@ describe("Composer", () => {
       />,
     );
 
-    expect(screen.getByLabelText("Environment")).toHaveTextContent("PwrAgnt");
-    expect(screen.getByLabelText("Environment command")).toHaveTextContent(
+    expect(screen.getByLabelText(/^Environment(?::|$)/)).toHaveTextContent("PwrAgnt");
+    expect(screen.getByLabelText(/^Environment command(?::|$)/)).toHaveTextContent(
       "Dev - Messaging",
     );
     fireEvent.click(screen.getByRole("button", { name: "Run" }));
@@ -3093,7 +3093,7 @@ describe("Composer", () => {
     render(<Composer backends={[backendSummary("codex")]} disabled={false} skills={[]}
       thread={thread} onStopEnvActionRun={onStopEnvActionRun} />);
 
-    expect(screen.getByLabelText("Environment")).toHaveTextContent("No environment");
+    expect(screen.getByLabelText(/^Environment(?::|$)/)).toHaveTextContent("No environment");
     expect(screen.getByRole("button", { name: "Run" })).toBeDisabled();
     const row = screen.getByLabelText("Env action running");
     row.setAttribute("open", "");
@@ -3133,7 +3133,7 @@ describe("Composer", () => {
       ],
     });
     const environmentChip = (): HTMLElement =>
-      screen.getByRole("button", { name: "Environment" });
+      screen.getByRole("button", { name: /^Environment(?::|$)/ });
 
     it("disables the chip with a spinner and shows the target until setup returns", async () => {
       let finishSelection: () => void = () => undefined;
@@ -3528,7 +3528,7 @@ describe("Composer", () => {
       />,
     );
 
-    expect(screen.getByLabelText("Environment command")).toHaveTextContent("Test");
+    expect(screen.getByLabelText(/^Environment command(?::|$)/)).toHaveTextContent("Test");
 
     rerender(
       <Composer
@@ -3540,7 +3540,7 @@ describe("Composer", () => {
       />,
     );
 
-    expect(screen.getByLabelText("Environment command")).toHaveTextContent("Dev");
+    expect(screen.getByLabelText(/^Environment command(?::|$)/)).toHaveTextContent("Dev");
 
     rerender(
       <Composer
@@ -3552,7 +3552,7 @@ describe("Composer", () => {
       />,
     );
 
-    expect(screen.getByLabelText("Environment command")).toHaveTextContent("Test");
+    expect(screen.getByLabelText(/^Environment command(?::|$)/)).toHaveTextContent("Test");
   });
 
   it("persists thread environment command changes without running the action", async () => {
@@ -3661,11 +3661,11 @@ describe("Composer", () => {
       />,
     );
 
-    expect(screen.getByLabelText("Environment command")).toHaveTextContent(
+    expect(screen.getByLabelText(/^Environment command(?::|$)/)).toHaveTextContent(
       "No commands",
     );
-    expect(screen.getByLabelText("Environment command")).toBeDisabled();
-    expect(screen.getByLabelText("Environment")).toHaveTextContent("PwrAgnt");
+    expect(screen.getByLabelText(/^Environment command(?::|$)/)).toBeDisabled();
+    expect(screen.getByLabelText(/^Environment(?::|$)/)).toHaveTextContent("PwrAgnt");
   });
 
   it("hides thread environment commands when no environment is selected", () => {
@@ -3701,10 +3701,10 @@ describe("Composer", () => {
       />,
     );
 
-    expect(screen.getByLabelText("Environment")).toHaveTextContent(
+    expect(screen.getByLabelText(/^Environment(?::|$)/)).toHaveTextContent(
       "No environment",
     );
-    expect(screen.queryByLabelText("Environment command")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/^Environment command(?::|$)/)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Run" })).not.toBeInTheDocument();
   });
 
@@ -3751,9 +3751,9 @@ describe("Composer", () => {
       />,
     );
 
-    expect(screen.getByLabelText("Environment")).toHaveTextContent("PwrAgnt");
+    expect(screen.getByLabelText(/^Environment(?::|$)/)).toHaveTextContent("PwrAgnt");
     expect(screen.queryByText("Run setup")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Environment command")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/^Environment command(?::|$)/)).not.toBeInTheDocument();
     expect(screen.queryByText("No command")).not.toBeInTheDocument();
   });
 
@@ -5098,7 +5098,7 @@ describe("Composer", () => {
       />,
     );
 
-    expect(screen.getByLabelText("Environment")).toHaveTextContent(
+    expect(screen.getByLabelText(/^Environment(?::|$)/)).toHaveTextContent(
       "No environment",
     );
 
@@ -5174,8 +5174,8 @@ describe("Composer", () => {
       />,
     );
 
-    expect(screen.getByLabelText("Environment")).toHaveTextContent("Lunch");
-    expect(screen.queryByLabelText("Environment command")).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/^Environment(?::|$)/)).toHaveTextContent("Lunch");
+    expect(screen.queryByLabelText(/^Environment command(?::|$)/)).not.toBeInTheDocument();
 
     chooseDropdownOption("Environment", "Dinner");
 
@@ -5503,8 +5503,8 @@ describe("Composer", () => {
       />
     );
 
-    expect(screen.getByLabelText("Model")).toHaveValue("gpt-5.5");
-    expect(screen.getByLabelText("Reasoning")).toHaveValue("medium");
+    expect(screen.getByLabelText(/^Model(?::|$)/)).toHaveValue("gpt-5.5");
+    expect(screen.getByLabelText(/^Reasoning(?::|$)/)).toHaveValue("medium");
     expect(screen.queryByRole("option", { name: "Default" })).not.toBeInTheDocument();
     openDropdown("Model");
     expect(screen.getByRole("option", { name: "GPT-5.5" })).toBeVisible();
@@ -5545,7 +5545,7 @@ describe("Composer", () => {
       />,
     );
 
-    const modelButton = screen.getByRole("button", { name: "Model" });
+    const modelButton = screen.getByRole("button", { name: /^Model(?::|$)/ });
     expect(modelButton).toHaveValue("gpt-6.1-sol");
     fireEvent.click(modelButton);
     expect(screen.getAllByRole("option").map((option) =>
@@ -5578,7 +5578,7 @@ describe("Composer", () => {
         directoryPath: "/repo", backend: "claude", executionMode: "default", prompt: "", workMode: "local",
         branchName: "main", createdAt: 1, updatedAt: 1 }}
       onUpdateLaunchpad={onUpdateLaunchpad} skills={[]} />);
-    const modelButton = screen.getByRole("button", { name: "Model" });
+    const modelButton = screen.getByRole("button", { name: /^Model(?::|$)/ });
     expect(modelButton).toHaveValue("fable");
     fireEvent.click(modelButton);
     expect(screen.getAllByRole("option").map((option) => option.querySelector(".composer-dropdown__option-label")?.textContent))
@@ -5985,21 +5985,21 @@ describe("Composer", () => {
 
     render(<KimiThinkingHarness />);
 
-    expect(screen.getByLabelText("Reasoning")).toHaveValue("max");
+    expect(screen.getByLabelText(/^Reasoning(?::|$)/)).toHaveValue("max");
     chooseDropdownOption("Model", "K3-256k");
     await waitFor(() => {
-      expect(screen.getByLabelText("Reasoning")).toHaveValue("low");
+      expect(screen.getByLabelText(/^Reasoning(?::|$)/)).toHaveValue("low");
     });
 
     chooseDropdownOption("Reasoning", "high");
     chooseDropdownOption("Model", "K3");
     await waitFor(() => {
-      expect(screen.getByLabelText("Reasoning")).toHaveValue("max");
+      expect(screen.getByLabelText(/^Reasoning(?::|$)/)).toHaveValue("max");
     });
 
     chooseDropdownOption("Model", "K3-256k");
     await waitFor(() => {
-      expect(screen.getByLabelText("Reasoning")).toHaveValue("high");
+      expect(screen.getByLabelText(/^Reasoning(?::|$)/)).toHaveValue("high");
     });
   });
 
@@ -6038,8 +6038,8 @@ describe("Composer", () => {
       />
     );
 
-    expect(screen.getByLabelText("Model")).toHaveValue("grok-4.5");
-    expect(screen.getByLabelText("Reasoning")).toHaveValue("high");
+    expect(screen.getByLabelText(/^Model(?::|$)/)).toHaveValue("grok-4.5");
+    expect(screen.getByLabelText(/^Reasoning(?::|$)/)).toHaveValue("high");
   });
 
   it("restores provider-specific launchpad settings across repeated OpenAI and Grok flips", async () => {
@@ -6246,21 +6246,21 @@ describe("Composer", () => {
 
     render(<ProviderSwitchHarness />);
 
-    expect(screen.getByLabelText("Access mode")).toHaveValue("full-access");
-    expect(screen.getByLabelText("Model")).toHaveValue("gpt-5.6-luna");
-    expect(screen.getByLabelText("Reasoning")).toHaveValue("high");
+    expect(screen.getByLabelText(/^Access mode(?::|$)/)).toHaveValue("full-access");
+    expect(screen.getByLabelText(/^Model(?::|$)/)).toHaveValue("gpt-5.6-luna");
+    expect(screen.getByLabelText(/^Reasoning(?::|$)/)).toHaveValue("high");
     expect(screen.getByLabelText("Fast mode")).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByLabelText("Environment")).toHaveTextContent("Codex Environment");
+    expect(screen.getByLabelText(/^Environment(?::|$)/)).toHaveTextContent("Codex Environment");
 
     chooseDropdownOption("Model", "GPT-5.6 Sol");
     await waitFor(() => {
-      expect(screen.getByLabelText("Model")).toHaveValue("gpt-5.6-sol");
-      expect(screen.getByLabelText("Reasoning")).toHaveValue("ultra");
+      expect(screen.getByLabelText(/^Model(?::|$)/)).toHaveValue("gpt-5.6-sol");
+      expect(screen.getByLabelText(/^Reasoning(?::|$)/)).toHaveValue("ultra");
     });
 
     chooseDropdownOption("Provider", "Grok");
     await waitFor(() => {
-      expect(screen.getByLabelText("Provider")).toHaveValue("acp:grok");
+      expect(screen.getByLabelText(/^Provider(?::|$)/)).toHaveValue("acp:grok");
     });
     await waitFor(() => {
       expect(listAcpAgents).not.toHaveBeenCalled();
@@ -6274,46 +6274,46 @@ describe("Composer", () => {
       imageAttachments: undefined,
       prompt: "",
     });
-    expect(screen.getByLabelText("Access mode")).toHaveValue("full-access");
-    expect(screen.getByLabelText("Agent mode")).toHaveValue("yolo");
-    expect(screen.getByLabelText("Model")).toHaveValue("grok-4.5-pro");
-    expect(screen.getByLabelText("Reasoning")).toHaveValue("low");
-    expect(screen.getByLabelText("Service tier")).toHaveValue("priority");
-    expect(screen.getByLabelText("Environment")).toHaveTextContent("Grok Environment");
-    expect(screen.getByLabelText("Workspace mode")).toHaveValue("worktree");
-    expect(screen.getByLabelText("Base branch")).toHaveValue(
+    expect(screen.getByLabelText(/^Access mode(?::|$)/)).toHaveValue("full-access");
+    expect(screen.getByLabelText(/^Agent mode(?::|$)/)).toHaveValue("yolo");
+    expect(screen.getByLabelText(/^Model(?::|$)/)).toHaveValue("grok-4.5-pro");
+    expect(screen.getByLabelText(/^Reasoning(?::|$)/)).toHaveValue("low");
+    expect(screen.getByLabelText(/^Service tier(?::|$)/)).toHaveValue("priority");
+    expect(screen.getByLabelText(/^Environment(?::|$)/)).toHaveTextContent("Grok Environment");
+    expect(screen.getByLabelText(/^Workspace mode(?::|$)/)).toHaveValue("worktree");
+    expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue(
       "feature/provider-memory",
     );
 
     chooseDropdownOption("Reasoning", "medium");
     chooseDropdownOption("Service tier", "standard");
     await waitFor(() => {
-      expect(screen.getByLabelText("Reasoning")).toHaveValue("medium");
-      expect(screen.getByLabelText("Service tier")).toHaveValue("standard");
+      expect(screen.getByLabelText(/^Reasoning(?::|$)/)).toHaveValue("medium");
+      expect(screen.getByLabelText(/^Service tier(?::|$)/)).toHaveValue("standard");
     });
 
     chooseDropdownOption("Provider", "OpenAI");
     await waitFor(() => {
-      expect(screen.getByLabelText("Provider")).toHaveValue("codex");
+      expect(screen.getByLabelText(/^Provider(?::|$)/)).toHaveValue("codex");
     });
-    expect(screen.getByLabelText("Access mode")).toHaveValue("full-access");
-    expect(screen.getByLabelText("Model")).toHaveValue("gpt-5.6-sol");
-    expect(screen.getByLabelText("Reasoning")).toHaveValue("ultra");
+    expect(screen.getByLabelText(/^Access mode(?::|$)/)).toHaveValue("full-access");
+    expect(screen.getByLabelText(/^Model(?::|$)/)).toHaveValue("gpt-5.6-sol");
+    expect(screen.getByLabelText(/^Reasoning(?::|$)/)).toHaveValue("ultra");
     expect(screen.getByLabelText("Fast mode")).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByLabelText("Environment")).toHaveTextContent("Codex Environment");
-    expect(screen.getByLabelText("Workspace mode")).toHaveValue("worktree");
-    expect(screen.getByLabelText("Base branch")).toHaveValue(
+    expect(screen.getByLabelText(/^Environment(?::|$)/)).toHaveTextContent("Codex Environment");
+    expect(screen.getByLabelText(/^Workspace mode(?::|$)/)).toHaveValue("worktree");
+    expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue(
       "feature/provider-memory",
     );
 
     chooseDropdownOption("Provider", "Grok");
     await waitFor(() => {
-      expect(screen.getByLabelText("Provider")).toHaveValue("acp:grok");
-      expect(screen.getByLabelText("Model")).toHaveValue("grok-4.5-pro");
-      expect(screen.getByLabelText("Reasoning")).toHaveValue("medium");
-      expect(screen.getByLabelText("Service tier")).toHaveValue("standard");
-      expect(screen.getByLabelText("Agent mode")).toHaveValue("yolo");
-      expect(screen.getByLabelText("Environment")).toHaveTextContent(
+      expect(screen.getByLabelText(/^Provider(?::|$)/)).toHaveValue("acp:grok");
+      expect(screen.getByLabelText(/^Model(?::|$)/)).toHaveValue("grok-4.5-pro");
+      expect(screen.getByLabelText(/^Reasoning(?::|$)/)).toHaveValue("medium");
+      expect(screen.getByLabelText(/^Service tier(?::|$)/)).toHaveValue("standard");
+      expect(screen.getByLabelText(/^Agent mode(?::|$)/)).toHaveValue("yolo");
+      expect(screen.getByLabelText(/^Environment(?::|$)/)).toHaveTextContent(
         "Grok Environment",
       );
     });
@@ -7173,7 +7173,7 @@ describe("Composer", () => {
     fireEvent.change(screen.getByLabelText("Review project"), { target: { value: "/repo/project" } });
     fireEvent.change(picker, { target: { value: secondaryPr.url } });
     expect(screen.getByLabelText("Review project")).toHaveValue("/worktrees/other");
-    expect(screen.getByRole("button", { name: "Review run mode" })).toHaveTextContent("PwrAgent Sub Agent");
+    expect(screen.getByRole("button", { name: /^Review run mode(?::|$)/ })).toHaveTextContent("PwrAgent Sub Agent");
     expect(screen.queryByText(/Reviewing the pull request skips this checkout/)).not.toBeInTheDocument();
     expect(screen.getByText(
       "Reviews in Other. PwrAgent Sub Agent is required because the selected project is not this thread's primary workspace.",
@@ -7181,7 +7181,7 @@ describe("Composer", () => {
     if (project === "primary") {
       fireEvent.change(picker, { target: { value: prs[0].url } });
       expect(screen.getByLabelText("Review project")).toHaveValue("/repo/project");
-      expect(screen.getByRole("button", { name: "Review run mode" })).toHaveTextContent("Codex Sub Agent");
+      expect(screen.getByRole("button", { name: /^Review run mode(?::|$)/ })).toHaveTextContent("Codex Sub Agent");
       expect(screen.queryByText(/^Reviews in /)).not.toBeInTheDocument();
     }
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Start review" })); });
@@ -7841,7 +7841,7 @@ describe("Composer", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "Reply" }), { target: { value: "/review" } });
     fireEvent.keyDown(screen.getByRole("textbox", { name: "Reply" }), { key: "Enter" });
     const group = await screen.findByRole("group", { name: "Review target" });
-    const chip = within(group).getByRole("button", { name: "Review run mode" });
+    const chip = within(group).getByRole("button", { name: /^Review run mode(?::|$)/ });
     expect(chip.closest(".composer__review-reviewer")).not.toBeNull();
     expect(chip).toHaveTextContent("Codex Sub Agent");
     fireEvent.click(chip);
@@ -8037,7 +8037,7 @@ describe("Composer", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "Reply" }), { target: { value: "/review" } });
     fireEvent.keyDown(screen.getByRole("textbox", { name: "Reply" }), { key: "Enter" });
     const group = await screen.findByRole("group", { name: "Review target" });
-    const chip = within(group).getByRole("button", { name: "Review run mode" });
+    const chip = within(group).getByRole("button", { name: /^Review run mode(?::|$)/ });
     fireEvent.click(chip);
     fireEvent.click(within(group).getByRole("option", { name: "PwrAgent Sub Agent" }));
     expect(chip).toHaveTextContent("PwrAgent Sub Agent");
@@ -8066,7 +8066,7 @@ describe("Composer", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "Reply" }), { target: { value: "/review" } });
     fireEvent.keyDown(screen.getByRole("textbox", { name: "Reply" }), { key: "Enter" });
     const group = await screen.findByRole("group", { name: "Review target" });
-    const chip = within(group).getByRole("button", { name: "Review run mode" });
+    const chip = within(group).getByRole("button", { name: /^Review run mode(?::|$)/ });
     // The decision still resolves to a mode; the one state the operator cannot
     // change must not also be the one that says the least.
     expect(chip).toHaveTextContent("Owner default · Codex Sub Agent");
@@ -8147,7 +8147,7 @@ describe("Composer", () => {
     const reviewTarget = screen.getByRole("group", { name: "Review target" });
     // Defaults to the thread's own provider — the row reads as inherited.
     expect(
-      within(reviewTarget).getByRole("button", { name: "Review provider" })
+      within(reviewTarget).getByRole("button", { name: /^Review provider(?::|$)/ })
     ).toHaveAttribute("data-value", "codex");
     expect(
       within(reviewTarget).queryByRole("button", {
@@ -8156,7 +8156,7 @@ describe("Composer", () => {
     ).not.toBeInTheDocument();
 
     fireEvent.click(
-      within(reviewTarget).getByRole("button", { name: "Review provider" })
+      within(reviewTarget).getByRole("button", { name: /^Review provider(?::|$)/ })
     );
     fireEvent.click(screen.getByRole("option", { name: "Grok" }));
 
@@ -8261,15 +8261,15 @@ describe("Composer", () => {
     // The chip must name the provider that will run. It used to read
     // "OpenAI" while the panel held Claude, which is not a reviewer option.
     const provider = within(reviewTarget).getByRole("button", {
-      name: "Review provider",
+      name: /^Review provider(?::|$)/,
     });
     expect(provider).toHaveAttribute("data-value", "codex");
     expect(provider).toHaveTextContent("OpenAI");
     expect(
-      within(reviewTarget).getByRole("button", { name: "Review model" })
+      within(reviewTarget).getByRole("button", { name: /^Review model(?::|$)/ })
     ).toHaveAttribute("data-value", "gpt-5.6-sol");
     expect(
-      within(reviewTarget).getByRole("button", { name: "Review run mode" })
+      within(reviewTarget).getByRole("button", { name: /^Review run mode(?::|$)/ })
     ).toHaveTextContent("PwrAgent Sub Agent");
     // Nothing was picked, so there is nothing to reset.
     expect(
@@ -8364,7 +8364,7 @@ describe("Composer", () => {
       pending.shift()?.({ recents: [{ backend: "acp:grok", model: "grok-4" }] });
     });
     expect(
-      screen.getByRole("button", { name: "Recent reviewer settings" })
+      screen.getByRole("button", { name: /^Recent reviewer settings(?::|$)/ })
     ).toBeInTheDocument();
 
     // Same component, different owning instance. The remembered combination
@@ -8387,7 +8387,7 @@ describe("Composer", () => {
     openReviewPanel("Reply");
 
     expect(
-      screen.queryByRole("button", { name: "Recent reviewer settings" })
+      screen.queryByRole("button", { name: /^Recent reviewer settings(?::|$)/ })
     ).not.toBeInTheDocument();
   });
 
@@ -8444,7 +8444,7 @@ describe("Composer", () => {
     // the row here would accept a reviewer and then drop it.
     const reviewTarget = screen.getByRole("group", { name: "Review target" });
     expect(
-      within(reviewTarget).queryByRole("button", { name: "Review provider" })
+      within(reviewTarget).queryByRole("button", { name: /^Review provider(?::|$)/ })
     ).not.toBeInTheDocument();
   });
 
@@ -8478,7 +8478,7 @@ describe("Composer", () => {
 
     const reviewTarget = screen.getByRole("group", { name: "Review target" });
     expect(
-      within(reviewTarget).queryByRole("button", { name: "Review provider" })
+      within(reviewTarget).queryByRole("button", { name: /^Review provider(?::|$)/ })
     ).not.toBeInTheDocument();
   });
 
@@ -13092,7 +13092,7 @@ describe("Composer", () => {
 
     expect(screen.getByLabelText("Review project")).toHaveValue("/worktrees/app");
     await waitFor(() => {
-      expect(screen.getByLabelText("Base branch")).toHaveValue("release");
+      expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue("release");
     });
     expect(screen.getByRole("button", { name: "Start review" })).toBeEnabled();
 
@@ -13200,7 +13200,7 @@ describe("Composer", () => {
     });
     await clickButton("Send");
 
-    expect(screen.getByLabelText("Base branch")).toHaveValue("origin/main");
+    expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue("origin/main");
 
     fireEvent.change(screen.getByLabelText("Review project"), {
       target: {
@@ -13210,10 +13210,10 @@ describe("Composer", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByLabelText("Base branch")).toHaveValue("origin/develop");
+      expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue("origin/develop");
     });
 
-    fireEvent.click(screen.getByLabelText("Base branch"));
+    fireEvent.click(screen.getByLabelText(/^Base branch(?::|$)/));
     expect(
       screen.getByRole("option", { name: "origin/develop" }),
     ).toBeInTheDocument();
@@ -14051,14 +14051,14 @@ describe("Composer", () => {
       "tabindex",
       "-1",
     );
-    expect(screen.getByLabelText("Base branch")).not.toHaveAttribute(
+    expect(screen.getByLabelText(/^Base branch(?::|$)/)).not.toHaveAttribute(
       "tabindex",
       "-1",
     );
     await waitFor(() => {
       expect(baseBranchTarget).toHaveFocus();
     });
-    expect(screen.getByLabelText("Base branch")).toHaveValue("main");
+    expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue("main");
     expect(startReview).not.toHaveBeenCalled();
 
     fireEvent.keyDown(baseBranchTarget, {
@@ -14323,8 +14323,8 @@ describe("Composer", () => {
     });
     await clickButton("Send");
 
-    expect(screen.getByLabelText("Base branch")).toHaveValue("main");
-    fireEvent.click(screen.getByLabelText("Base branch"));
+    expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue("main");
+    fireEvent.click(screen.getByLabelText(/^Base branch(?::|$)/));
     fireEvent.click(screen.getByRole("option", { name: "release" }));
 
     const reviewTarget = screen.getByRole("group", { name: "Review target" });
@@ -14381,7 +14381,7 @@ describe("Composer", () => {
     });
     await clickButton("Send");
 
-    const baseBranchInput = screen.getByLabelText("Base branch");
+    const baseBranchInput = screen.getByLabelText(/^Base branch(?::|$)/);
     expect(baseBranchInput).toHaveValue("main");
     fireEvent.click(baseBranchInput);
     fireEvent.change(screen.getByLabelText("Find a branch"), {
@@ -14435,7 +14435,7 @@ describe("Composer", () => {
     });
     await clickButton("Send");
 
-    fireEvent.click(screen.getByLabelText("Base branch"));
+    fireEvent.click(screen.getByLabelText(/^Base branch(?::|$)/));
     const filterInput = screen.getByLabelText("Find a branch");
     fireEvent.change(filterInput, { target: { value: "no-such-branch" } });
 
@@ -14494,7 +14494,7 @@ describe("Composer", () => {
     });
     await clickButton("Send");
 
-    const baseBranchInput = screen.getByLabelText("Base branch");
+    const baseBranchInput = screen.getByLabelText(/^Base branch(?::|$)/);
     fireEvent.change(baseBranchInput, {
       target: { value: "origin/releases/2026.07" },
     });
@@ -14572,7 +14572,7 @@ describe("Composer", () => {
     });
     await clickButton("Send");
 
-    expect(screen.getByLabelText("Base branch")).toHaveValue("origin/main");
+    expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue("origin/main");
   });
 
   it("falls back to main before unrelated directory branches for review base", async () => {
@@ -14622,7 +14622,7 @@ describe("Composer", () => {
     });
     await clickButton("Send");
 
-    expect(screen.getByLabelText("Base branch")).toHaveValue("main");
+    expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue("main");
   });
 
   it("keeps an unrelated directory upstream behind safe review bases", async () => {
@@ -14674,7 +14674,7 @@ describe("Composer", () => {
     });
     await clickButton("Send");
 
-    expect(screen.getByLabelText("Base branch")).toHaveValue("origin/main");
+    expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue("origin/main");
   });
 
   it("prefers the thread git-derived worktree base branch over main for reviews", async () => {
@@ -14719,7 +14719,7 @@ describe("Composer", () => {
     });
     await clickButton("Send");
 
-    expect(screen.getByLabelText("Base branch")).toHaveValue("origin/develop");
+    expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue("origin/develop");
 
     const reviewTarget = screen.getByRole("group", { name: "Review target" });
     const form = reviewTarget.closest("form");
@@ -14798,7 +14798,7 @@ describe("Composer", () => {
     });
     await clickButton("Send");
 
-    expect(screen.getByLabelText("Base branch")).toHaveValue("origin/develop");
+    expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue("origin/develop");
 
     fireEvent.click(screen.getByRole("button", { name: "Start review" }));
 
@@ -14868,7 +14868,7 @@ describe("Composer", () => {
     });
     await clickButton("Send");
 
-    expect(screen.getByLabelText("Base branch")).toHaveValue("origin/develop");
+    expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue("origin/develop");
   });
 
   it("updates an auto-selected review base when directory branch metadata hydrates", async () => {
@@ -14940,7 +14940,7 @@ describe("Composer", () => {
     });
     await clickButton("Send");
 
-    expect(screen.getByLabelText("Base branch")).toHaveValue("main");
+    expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue("main");
 
     rerender(
       <Composer
@@ -14953,7 +14953,7 @@ describe("Composer", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByLabelText("Base branch")).toHaveValue("origin/develop");
+      expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue("origin/develop");
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Start review" }));
@@ -15021,7 +15021,7 @@ describe("Composer", () => {
     });
     await clickButton("Send");
 
-    const baseBranchInput = screen.getByLabelText("Base branch");
+    const baseBranchInput = screen.getByLabelText(/^Base branch(?::|$)/);
     fireEvent.change(baseBranchInput, {
       target: { value: "origin/release-candidate" },
     });
@@ -15036,7 +15036,7 @@ describe("Composer", () => {
       />
     );
 
-    expect(screen.getByLabelText("Base branch")).toHaveValue(
+    expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue(
       "origin/release-candidate",
     );
   });
@@ -15349,7 +15349,7 @@ describe("Composer", () => {
       "aria-pressed",
       "true",
     );
-    expect(screen.getByLabelText("Base branch")).toHaveValue("origin/main");
+    expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue("origin/main");
 
     const reviewTarget = screen.getByRole("group", { name: "Review target" });
     const form = reviewTarget.closest("form");
@@ -15425,7 +15425,7 @@ describe("Composer", () => {
       "aria-pressed",
       "true",
     );
-    expect(screen.getByLabelText("Base branch")).toHaveValue("main");
+    expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue("main");
 
     const reviewTarget = screen.getByRole("group", { name: "Review target" });
     const form = reviewTarget.closest("form");
@@ -16385,7 +16385,7 @@ describe("Composer", () => {
         } } : {}),
       }}
     />);
-    fireEvent.click(screen.getByLabelText("Workspace mode"));
+    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
     fireEvent.click(screen.getByRole("menuitem", { name: "Move to Project" }));
     const destination = screen.getByRole("combobox", { name: "Destination project" });
     fireEvent.focus(destination);
@@ -16429,7 +16429,7 @@ describe("Composer", () => {
         inbox: { inInbox: false },
       }}
     />);
-    fireEvent.click(screen.getByLabelText("Workspace mode"));
+    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
     fireEvent.click(screen.getByRole("menuitem", { name: "Move to Project" }));
     const destination = screen.getByRole("combobox", { name: "Destination project" });
     fireEvent.focus(destination);
@@ -16477,7 +16477,7 @@ describe("Composer", () => {
         } } : {}),
       }}
     />);
-    fireEvent.click(screen.getByLabelText("Workspace mode"));
+    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
     fireEvent.click(screen.getByRole("menuitem", { name: "Move to Project" }));
     const destination = screen.getByRole("combobox", { name: "Destination project" });
     fireEvent.focus(destination);
@@ -16526,7 +16526,7 @@ describe("Composer", () => {
         inbox: { inInbox: false },
       }}
     />);
-    fireEvent.click(screen.getByLabelText("Workspace mode"));
+    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
     fireEvent.click(screen.getByRole("menuitem", { name: "Move to Project" }));
     // The visible caption labels the field, so clicking it reaches the input.
     const destination = screen.getByRole("combobox", { name: "Destination project" });
@@ -16557,7 +16557,7 @@ describe("Composer", () => {
         },
       }}
     />);
-    fireEvent.click(screen.getByLabelText("Workspace mode"));
+    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
     fireEvent.click(screen.getByRole("menuitem", { name: "Move to Project" }));
     const destination = screen.getByRole("combobox", { name: "Destination project" });
     act(() => destination.focus());
@@ -16586,7 +16586,7 @@ describe("Composer", () => {
         },
       }}
     />);
-    fireEvent.click(screen.getByLabelText("Workspace mode"));
+    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
     fireEvent.click(screen.getByRole("menuitem", { name: "Move to Project" }));
     fireEvent.focus(screen.getByRole("combobox", { name: "Destination project" }));
     await screen.findByText("Peer unavailable");
@@ -16608,7 +16608,7 @@ describe("Composer", () => {
         }}
       />
     );
-    fireEvent.click(screen.getByLabelText("Workspace mode"));
+    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
     expect(screen.getByRole("menuitem", { name: "Handoff to New Worktree" })).toBeDisabled();
     fireEvent.click(screen.getByRole("menuitem", { name: "Move to Project" }));
     expect(screen.getByRole("dialog", { name: "Move to Project" })).toBeInTheDocument();
@@ -16641,7 +16641,7 @@ describe("Composer", () => {
         }}
       />
     );
-    const workspaceMode = screen.getByLabelText("Workspace mode");
+    const workspaceMode = screen.getByLabelText(/^Workspace mode(?::|$)/);
     workspaceMode.focus();
     act(() => workspaceMode.click());
     const item = screen.getByRole("menuitem", { name: "Move to Project" });
@@ -16758,14 +16758,14 @@ describe("Composer", () => {
       />
     );
 
-    expect(screen.getByLabelText("Access mode")).toHaveValue("default");
-    fireEvent.click(screen.getByLabelText("Workspace mode"));
+    expect(screen.getByLabelText(/^Access mode(?::|$)/)).toHaveValue("default");
+    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
     expect(screen.getByRole("separator")).toBeInTheDocument();
     fireEvent.pointerDown(screen.getByLabelText("Reply"));
     expect(
       screen.queryByRole("menuitem", { name: "Handoff to New Worktree" })
     ).not.toBeInTheDocument();
-    fireEvent.click(screen.getByLabelText("Workspace mode"));
+    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
     fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to New Worktree" }));
     const dialog = screen.getByRole("dialog", { name: "Handoff to New Worktree" });
     expect(dialog).toBeInTheDocument();
@@ -16774,7 +16774,7 @@ describe("Composer", () => {
     expect(
       screen.getByRole("radio", { name: /Handoff to Detached HEAD/ })
     ).toHaveAttribute("aria-checked", "true");
-    expect(screen.queryByLabelText("Leave current checkout on")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/^Leave current checkout on(?::|$)/)).not.toBeInTheDocument();
     expect(screen.getByRole("radio", { name: /Handoff to New Branch/ })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Handoff" }));
 
@@ -16835,7 +16835,7 @@ describe("Composer", () => {
       />,
     );
 
-    expect(screen.getByLabelText("Access mode")).toHaveValue("default");
+    expect(screen.getByLabelText(/^Access mode(?::|$)/)).toHaveValue("default");
 
     chooseDropdownOption("Access mode", "Full Access");
 
@@ -16886,7 +16886,7 @@ describe("Composer", () => {
       />
     );
 
-    fireEvent.click(screen.getByLabelText("Workspace mode"));
+    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
     fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to New Worktree" }));
     fireEvent.click(screen.getByRole("radio", { name: /Handoff to New Branch/ }));
 
@@ -17054,7 +17054,7 @@ describe("Composer", () => {
       />
     );
 
-    expect(screen.getByLabelText("Workspace mode")).toBeDisabled();
+    expect(screen.getByLabelText(/^Workspace mode(?::|$)/)).toBeDisabled();
 
     rerender(
       <Composer
@@ -17067,7 +17067,7 @@ describe("Composer", () => {
       />
     );
 
-    expect(screen.getByLabelText("Workspace mode")).toBeEnabled();
+    expect(screen.getByLabelText(/^Workspace mode(?::|$)/)).toBeEnabled();
   });
 
   it("disables existing thread workspace handoff when the backend marks it unavailable", () => {
@@ -17102,7 +17102,7 @@ describe("Composer", () => {
       />
     );
 
-    const workspaceMode = screen.getByLabelText("Workspace mode");
+    const workspaceMode = screen.getByLabelText(/^Workspace mode(?::|$)/);
     expect(workspaceMode).toBeDisabled();
     expect(workspaceMode).toHaveValue("local");
     fireEvent.click(workspaceMode);
@@ -17181,7 +17181,7 @@ describe("Composer", () => {
       />
     );
 
-    fireEvent.click(screen.getByLabelText("Workspace mode"));
+    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
     expect(screen.getByRole("menuitem", { name: "Handoff to New Worktree" })).toBeDisabled();
     expect(screen.getByRole("menuitem", { name: "Move to Project" })).toBeEnabled();
 
@@ -17243,11 +17243,11 @@ describe("Composer", () => {
       />
     );
 
-    fireEvent.click(screen.getByLabelText("Workspace mode"));
+    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
     fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to New Worktree" }));
     fireEvent.click(screen.getByRole("radio", { name: /Handoff Current Branch/ }));
 
-    const leaveOn = screen.getByLabelText("Leave current checkout on");
+    const leaveOn = screen.getByLabelText(/^Leave current checkout on(?::|$)/);
     expect(leaveOn).toHaveAttribute("data-value", "HEAD");
     expect(leaveOn).toHaveTextContent("Detached HEAD");
     // The aria-label names the field and suppresses the button's content, so
@@ -17302,10 +17302,10 @@ describe("Composer", () => {
       />
     );
 
-    fireEvent.click(screen.getByLabelText("Workspace mode"));
+    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
     fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to New Worktree" }));
     fireEvent.click(screen.getByRole("radio", { name: /Handoff Current Branch/ }));
-    const branchButton = screen.getByRole("button", { name: "Leave current checkout on" });
+    const branchButton = screen.getByRole("button", { name: /^Leave current checkout on(?::|$)/ });
     branchButton.focus();
     fireEvent.click(branchButton);
     expect(
@@ -17365,11 +17365,11 @@ describe("Composer", () => {
       />
     );
 
-    fireEvent.click(screen.getByLabelText("Workspace mode"));
+    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
     fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to New Worktree" }));
     fireEvent.click(screen.getByRole("radio", { name: /Handoff Current Branch/ }));
     fireEvent.click(
-      screen.getByRole("button", { name: "Leave current checkout on" })
+      screen.getByRole("button", { name: /^Leave current checkout on(?::|$)/ })
     );
 
     const listbox = screen.getByRole("listbox", {
@@ -17399,7 +17399,7 @@ describe("Composer", () => {
     ).toEqual(["release"]);
 
     fireEvent.click(within(listbox).getByRole("option", { name: "release" }));
-    expect(screen.getByLabelText("Leave current checkout on")).toHaveAttribute(
+    expect(screen.getByLabelText(/^Leave current checkout on(?::|$)/)).toHaveAttribute(
       "data-value",
       "release"
     );
@@ -17482,7 +17482,7 @@ describe("Composer", () => {
       />
     );
 
-    const workspaceMode = screen.getByLabelText("Workspace mode");
+    const workspaceMode = screen.getByLabelText(/^Workspace mode(?::|$)/);
     expect(workspaceMode).toBeEnabled();
     expect(workspaceMode).toHaveValue("local");
     fireEvent.click(workspaceMode);
@@ -17532,10 +17532,10 @@ describe("Composer", () => {
       />
     );
 
-    const workspaceMode = screen.getByLabelText("Workspace mode");
+    const workspaceMode = screen.getByLabelText(/^Workspace mode(?::|$)/);
     expect(workspaceMode).toHaveValue("worktree");
     expect(workspaceMode).toHaveTextContent("New worktree");
-    expect(screen.getByLabelText("Base branch")).toHaveValue("main");
+    expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue("main");
   });
 
   it("does not flip a new-worktree launchpad to local when review draft toggles", async () => {
@@ -17574,7 +17574,7 @@ describe("Composer", () => {
     const input = screen.getByLabelText("New thread");
     fireEvent.change(input, { target: { value: "/review" } });
     await clickButton("Start sub-thread");
-    expect(screen.getByLabelText("Workspace mode")).toHaveValue("worktree");
+    expect(screen.getByLabelText(/^Workspace mode(?::|$)/)).toHaveValue("worktree");
     expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
@@ -17593,8 +17593,8 @@ describe("Composer", () => {
       />
     );
 
-    expect(screen.getByLabelText("Workspace mode")).toHaveValue("worktree");
-    expect(screen.getByLabelText("Workspace mode")).toHaveTextContent("New worktree");
+    expect(screen.getByLabelText(/^Workspace mode(?::|$)/)).toHaveValue("worktree");
+    expect(screen.getByLabelText(/^Workspace mode(?::|$)/)).toHaveTextContent("New worktree");
   });
 
   it("locks same-worktree sub-thread launchpads to the shared worktree", () => {
@@ -17627,7 +17627,7 @@ describe("Composer", () => {
       />
     );
 
-    const workspaceMode = screen.getByLabelText("Workspace mode");
+    const workspaceMode = screen.getByLabelText(/^Workspace mode(?::|$)/);
     expect(workspaceMode).toBeDisabled();
     expect(workspaceMode).toHaveValue("local");
     expect(workspaceMode).toHaveTextContent("Same worktree");
@@ -17664,7 +17664,7 @@ describe("Composer", () => {
       />
     );
 
-    const workspaceMode = screen.getByLabelText("Workspace mode");
+    const workspaceMode = screen.getByLabelText(/^Workspace mode(?::|$)/);
     expect(workspaceMode).toBeDisabled();
     expect(workspaceMode).toHaveValue("local");
     expect(workspaceMode).toHaveTextContent("Local");
@@ -17713,7 +17713,7 @@ describe("Composer", () => {
       />
     );
 
-    const workspaceMode = screen.getByLabelText("Workspace mode");
+    const workspaceMode = screen.getByLabelText(/^Workspace mode(?::|$)/);
     expect(workspaceMode).toBeDisabled();
     expect(workspaceMode).toHaveValue("local");
     expect(workspaceMode).toHaveTextContent("Local");
@@ -17765,7 +17765,7 @@ describe("Composer", () => {
       />
     );
 
-    fireEvent.click(screen.getByLabelText("Base branch"));
+    fireEvent.click(screen.getByLabelText(/^Base branch(?::|$)/));
 
     expect(screen.getByRole("listbox").closest(".composer-dropdown")).toHaveClass(
       "composer-dropdown--branch"
@@ -17830,7 +17830,7 @@ describe("Composer", () => {
       />
     );
 
-    fireEvent.click(screen.getByLabelText("Base branch"));
+    fireEvent.click(screen.getByLabelText(/^Base branch(?::|$)/));
 
     expect(screen.getByRole("listbox").parentElement).toHaveStyle({
       transform: "translateX(220px)",
@@ -17893,7 +17893,7 @@ describe("Composer", () => {
       />
     );
 
-    fireEvent.click(screen.getByLabelText("Base branch"));
+    fireEvent.click(screen.getByLabelText(/^Base branch(?::|$)/));
 
     expect(screen.getByRole("listbox").parentElement).toHaveStyle({
       maxWidth: "300px",
@@ -17981,7 +17981,7 @@ describe("Composer", () => {
       />
     );
 
-    expect(screen.getByLabelText("Workspace mode")).toHaveValue("local");
+    expect(screen.getByLabelText(/^Workspace mode(?::|$)/)).toHaveValue("local");
     expect(
       screen.queryByRole("option", { name: "New worktree" }),
     ).not.toBeInTheDocument();
@@ -18040,7 +18040,7 @@ describe("Composer", () => {
       />
     );
 
-    fireEvent.click(screen.getByLabelText("Base branch"));
+    fireEvent.click(screen.getByLabelText(/^Base branch(?::|$)/));
 
     const inUseOption = screen.getByRole("option", {
       name: "feat/telegram-integration",
@@ -18134,7 +18134,7 @@ describe("Composer", () => {
       />
     );
 
-    fireEvent.click(screen.getByLabelText("Base branch"));
+    fireEvent.click(screen.getByLabelText(/^Base branch(?::|$)/));
 
     expect(
       screen.getByRole("option", { name: "fix/upload-mp4-compression" })
@@ -18196,7 +18196,7 @@ describe("Composer", () => {
       />
     );
 
-    fireEvent.click(screen.getByLabelText("Base branch"));
+    fireEvent.click(screen.getByLabelText(/^Base branch(?::|$)/));
 
     const optionNames = screen
       .getAllByRole("option")
@@ -18251,8 +18251,8 @@ describe("Composer", () => {
       />
     );
 
-    expect(screen.getByLabelText("Base branch")).toHaveValue("main");
-    fireEvent.click(screen.getByLabelText("Base branch"));
+    expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue("main");
+    fireEvent.click(screen.getByLabelText(/^Base branch(?::|$)/));
     expect(screen.queryByRole("option", { name: "HEAD" })).not.toBeInTheDocument();
   });
 
@@ -18331,7 +18331,7 @@ describe("Composer", () => {
       });
     });
 
-    fireEvent.click(screen.getByLabelText("Workspace mode"));
+    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
     fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to Local" }));
     const dialog = screen.getByRole("dialog", { name: "Handoff to Local" });
     expect(dialog).toBeInTheDocument();

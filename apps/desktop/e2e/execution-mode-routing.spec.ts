@@ -26,7 +26,7 @@ test("applies the correct per-turn permission policy after execution mode toggle
       })
     ).toBeVisible();
 
-    const accessMode = app.window.getByLabel("Access mode");
+    const accessMode = app.window.getByLabel(/^Access mode(?::|$)/);
     await expect(accessMode).toHaveAttribute("data-value", "default");
 
     await app.window.getByLabel("Reply").fill("First turn on default mode");

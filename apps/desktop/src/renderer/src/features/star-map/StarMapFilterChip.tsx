@@ -66,7 +66,7 @@ export function StarMapFilterChip(props: StarMapFilterChipProps) {
       onClick={props.onCycle}
     >
       <ExcludeMark state={chrome.state} />
-      <span>{props.definition.label}</span>
+      <span>{props.definition.label}</span>{" "}
       <span className="star-map__filter-count">{props.countsKnown === false ? "—" : props.count}</span>
     </button>
   );
@@ -171,6 +171,9 @@ function StarMapAttentionFilterChip(
  */
 function chipChrome(props: StarMapFilterChipProps) {
   const state = filterState(props.selection, props.definition.key);
+  const countLabel = props.attention
+    ? ""
+    : `${props.countsKnown === false ? "—" : props.count}, `;
   const next =
     state === "neutral"
       ? "show only these"
@@ -187,7 +190,7 @@ function chipChrome(props: StarMapFilterChipProps) {
     // still in the tab order, focusable, and invisible.
     tabIndex: props.dropped ? -1 : undefined,
     ariaHidden: props.dropped ? true : undefined,
-    ariaLabel: `${props.definition.label}: ${
+    ariaLabel: `${props.definition.label}: ${countLabel}${
       state === "neutral"
         ? "not filtered"
         : state === "include"

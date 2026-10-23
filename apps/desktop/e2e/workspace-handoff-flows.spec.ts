@@ -206,7 +206,7 @@ async function createHandoffFixture(testId: string): Promise<HandoffFixture> {
 
 async function openLocalHandoffDialog(page: Page, title: string) {
   await page.getByRole("button", { name: title }).click();
-  await page.getByLabel("Workspace mode").click();
+  await page.getByLabel(/^Workspace mode(?::|$)/).click();
   await page.getByRole("menuitem", { name: "Handoff to New Worktree" }).click();
   const dialog = page.getByRole("dialog", { name: "Handoff to New Worktree" });
   await expect(dialog).toBeVisible();
@@ -223,7 +223,7 @@ async function chooseLeaveLocalBranch(page: Page, optionLabel: string) {
   // `exact` matters: the picker's listbox is labelled "<name> options" and
   // getByLabel matches substrings, so a bare name resolves to two elements
   // once the popover opens.
-  await dialog.getByLabel("Leave current checkout on", { exact: true }).click();
+  await dialog.getByLabel(/^Leave current checkout on(?::|$)/, { exact: true }).click();
   await dialog
     .getByRole("listbox", { name: "Leave current checkout on options" })
     .getByRole("option", { name: optionLabel, exact: true })
@@ -231,7 +231,7 @@ async function chooseLeaveLocalBranch(page: Page, optionLabel: string) {
 }
 
 async function handoffBackToLocal(page: Page) {
-  await page.getByLabel("Workspace mode").click();
+  await page.getByLabel(/^Workspace mode(?::|$)/).click();
   await page.getByRole("menuitem", { name: "Handoff to Local" }).click();
   const dialog = page.getByRole("dialog", { name: "Handoff to Local" });
   await expect(dialog).toBeVisible();
@@ -357,7 +357,7 @@ test.describe("workspace handoff git flows", () => {
       await writeFile(path.join(fixture.repoDir, "local-wip.txt"), "local only\n", "utf8");
       await writeFile(path.join(worktree.path, "worktree-wip.txt"), "worktree only\n", "utf8");
 
-      await app.window.getByLabel("Workspace mode").click();
+      await app.window.getByLabel(/^Workspace mode(?::|$)/).click();
       await app.window.getByRole("menuitem", { name: "Handoff to Local" }).click();
       const returnDialog = app.window.getByRole("dialog", { name: "Handoff to Local" });
       await expect(returnDialog).toBeVisible();

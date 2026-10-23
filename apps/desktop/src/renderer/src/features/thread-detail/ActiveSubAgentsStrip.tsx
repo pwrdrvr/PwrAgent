@@ -162,7 +162,7 @@ export function ActiveSubAgentsStrip(props: {
       <div className="live-strip__header">
         <button
           aria-expanded={expanded}
-          aria-label={`${heading} (${headingCount})${
+          aria-label={`${heading}, ${headingCount}${
             failedNote ? `, ${failedNote}` : ""
           }`}
           className="live-strip__row"
@@ -183,7 +183,7 @@ export function ActiveSubAgentsStrip(props: {
               otherwise. Keying the tone on `running` instead would paint a
               blocked-only strip's count idle grey under an "Active
               sub-agents" heading. */}
-          <span className="live-strip__label">{heading}</span>
+          <span className="live-strip__label">{heading}</span>{" "}
           <SignalCount
             className="live-strip__count"
             count={headingCount}
@@ -196,7 +196,7 @@ export function ActiveSubAgentsStrip(props: {
             }
             tone={activeCount > 0 ? "active" : "idle"}
           />
-          <span className="live-strip__row-spacer" />
+          {" "}<span className="live-strip__row-spacer" />
           {/* Trailing, so the tally sits next to the Dismiss all that acts on
               it. Leading, it collided with the count and read as "1 12". */}
           {failedNote ? (

@@ -70,9 +70,9 @@ async function waitForInboundProvider(provider: MessagingChannelKind): Promise<v
  */
 async function chooseProvider(label: string): Promise<void> {
   await waitFor(() =>
-    expect(selectOptionLabels(screen.getByLabelText("Provider"))).toContain(label),
+    expect(selectOptionLabels(screen.getByLabelText(/^Provider(?::|$)/))).toContain(label),
   );
-  chooseSelectOption(screen.getByLabelText("Provider"), label);
+  chooseSelectOption(screen.getByLabelText(/^Provider(?::|$)/), label);
 }
 
 /** Manual entry is an action beside the list, not one of its options. */
@@ -176,14 +176,14 @@ describe("AutomationEditor", () => {
     );
     // Run settings are the composer's chip dropdowns: click the chip, then
     // pick an option from its listbox.
-    fireEvent.click(screen.getByRole("button", { name: "Automation access" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Automation access(?::|$)/ }));
     fireEvent.click(screen.getByRole("option", { name: "Full Access" }));
-    fireEvent.click(screen.getByRole("button", { name: "Automation model" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Automation model(?::|$)/ }));
     await waitFor(() =>
       expect(screen.getByRole("option", { name: "gpt-5" })).toBeInTheDocument(),
     );
     fireEvent.click(screen.getByRole("option", { name: "gpt-5" }));
-    fireEvent.click(screen.getByRole("button", { name: "Automation reasoning" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Automation reasoning(?::|$)/ }));
     fireEvent.click(screen.getByRole("option", { name: "high" }));
     chooseSelectOption(screen.getByLabelText("Max runs per hour"), "5/hr");
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
@@ -671,11 +671,11 @@ describe("AutomationEditor", () => {
     // The Provider list renders its options only while open, so read it
     // through the trigger rather than querying the document for them.
     await waitFor(() =>
-      expect(selectOptionLabels(screen.getByLabelText("Provider"))).not.toContain(
+      expect(selectOptionLabels(screen.getByLabelText(/^Provider(?::|$)/))).not.toContain(
         "Slack",
       ),
     );
-    expect(selectOptionLabels(screen.getByLabelText("Provider"))).toContain(
+    expect(selectOptionLabels(screen.getByLabelText(/^Provider(?::|$)/))).toContain(
       "Telegram",
     );
     // The authorized group is a row inside the conversation picker, so it is
@@ -2159,7 +2159,7 @@ describe("AutomationEditor Discord channels", () => {
     fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
     await screen.findByLabelText("Channel ID");
     expect(list).not.toHaveBeenCalled();
-    chooseSelectOption(screen.getByLabelText("Provider"), "Discord");
+    chooseSelectOption(screen.getByLabelText(/^Provider(?::|$)/), "Discord");
     await waitFor(() => expect(list).toHaveBeenCalledTimes(1));
   });
 });
@@ -2314,7 +2314,7 @@ describe("AutomationEditor DM wording", () => {
     );
 
     await waitFor(() =>
-      expect(selectOptionLabels(screen.getByLabelText("Provider"))).toHaveLength(2),
+      expect(selectOptionLabels(screen.getByLabelText(/^Provider(?::|$)/))).toHaveLength(2),
     );
     // Discord's example ID is a snowflake; Slack's is C0123ABCD.
     expect(screen.getByLabelText("Channel ID")).toHaveAttribute(
@@ -3109,7 +3109,7 @@ describe("AutomationEditor with several watched conversations", () => {
     add.focus();
     fireEvent.click(add);
 
-    await waitFor(() => expect(screen.getByLabelText("Provider")).toHaveFocus());
+    await waitFor(() => expect(screen.getByLabelText(/^Provider(?::|$)/)).toHaveFocus());
   });
 
   it("previews live messages from every watched conversation and says which one", async () => {

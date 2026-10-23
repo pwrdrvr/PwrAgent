@@ -113,6 +113,7 @@ describe("star map attention filter", () => {
     expect(pinned.getAttribute("aria-label")).toContain("Count unavailable");
     await act(async () => finish(baseline));
     await waitFor(() => expect(pinned).toHaveTextContent("0"));
+    expect(pinned).toHaveAccessibleName(/^Pinned: 0,/);
     expect(pinned.getAttribute("aria-label")).not.toContain("unavailable");
   });
 

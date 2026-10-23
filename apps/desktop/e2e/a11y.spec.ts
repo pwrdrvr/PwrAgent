@@ -716,7 +716,7 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
         // Four rows seeds the disclosure collapsed, so the header audits
         // first and the list is opened deliberately below.
         const strip = app.window.getByRole("button", {
-          name: /^Active sub-agents \(2\), 2 failed$/,
+          name: /^Active sub-agents, 2, 2 failed$/,
         });
 
         await test.step("sub-agents strip header", async () => {

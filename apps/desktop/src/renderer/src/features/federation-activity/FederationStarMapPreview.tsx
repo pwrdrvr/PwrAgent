@@ -76,12 +76,12 @@ export function FederationStarMapPreview(props: {
         return <button type="button" key={chip.instanceId}
           className={`federation-sky__body${chip.online ? " federation-sky__body--online" : ""}`}
           style={place(index)}
-          aria-label={`Open ${federationChipName(chip)} on the Star Map`}
+          aria-label={`Open ${federationChipName(chip)}${tag ? ` ${federationTransportShortTag(tag)}` : ""} on the Star Map`}
           {...describe(federationChipTooltip(chip, minute, "Click to open on the Star Map"))}
           onClick={() => { tooltip.hide(); props.onOpenInstance(chip.instanceId); }}>
           {chip.icon ? <CelestialIcon icon={chip.icon} size={10} /> : <InstanceGlyph instanceId={chip.instanceId} size={10} />}
-          <span className="federation-sky__host">{chip.host}</span>
-          {chip.profileName ? <span className="federation-sky__profile">{chip.profileName}</span> : null}
+          <span className="federation-sky__host">{chip.host}</span>{" "}
+          {chip.profileName ? <><span className="federation-sky__profile">{chip.profileName}</span>{" "}</> : null}
           {tag ? <span className={`federation-chip__tag federation-chip__tag--${tag.toLowerCase().replace(/ /g, "-")}`}>
             {federationTransportShortTag(tag)}</span> : null}
           {chip.online ? null : <span aria-hidden="true" className="federation-chip__offline" />}

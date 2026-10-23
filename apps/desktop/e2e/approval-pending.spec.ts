@@ -156,7 +156,7 @@ test("stops the active turn after a queued access-mode change", async () => {
         sandbox: "workspace-write",
       });
 
-    const accessMode = app.window.getByLabel("Access mode");
+    const accessMode = app.window.getByLabel(/^Access mode(?::|$)/);
     await expect(accessMode).toHaveAttribute("data-value", "default");
     await accessMode.click();
     await app.window.getByRole("option", { name: "Full Access" }).click();

@@ -191,7 +191,7 @@ it("stacks spend by model, provider or instance, and narrows the threads to one"
   const spendBy = screen.getByRole("group", { name: "Spend by" });
   expect(within(spendBy).getAllByRole("button").map((button) => button.textContent)).toEqual(["Thread", "Model", "Provider", "Account", "Instance"]);
 
-  fireEvent.click(within(spendBy).getByRole("button", { name: "Provider" }));
+  fireEvent.click(within(spendBy).getByRole("button", { name: /^Provider(?::|$)/ }));
   expect(screen.getByRole("button", { name: /^OpenAI · \$2\.00$/ })).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: /^xAI · \$1\.00$/ }));
   expect(screen.getByText("Provider: xAI")).toBeInTheDocument();
@@ -202,7 +202,7 @@ it("stacks spend by model, provider or instance, and narrows the threads to one"
   fireEvent.click(within(spendBy).getByRole("button", { name: "Instance" }));
   expect(screen.getByRole("button", { name: "Inspect codex thread" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: /^Owner · \$1\.00$/ })).toBeInTheDocument();
-  fireEvent.click(within(spendBy).getByRole("button", { name: "Model" }));
+  fireEvent.click(within(spendBy).getByRole("button", { name: /^Model(?::|$)/ }));
   expect(screen.getByRole("button", { name: /^Grok 5 · \$1\.00$/ })).toBeInTheDocument();
 });
 
@@ -234,7 +234,7 @@ it("filters totals, tokens, limits and threads by recorded account across owners
     "All accounts", "OpenAI · Local", "OpenAI · Local +1", "xAI", "No account recorded · Local",
   ]);
   const spendBy = screen.getByRole("group", { name: "Spend by" });
-  fireEvent.click(within(spendBy).getByRole("button", { name: "Provider" }));
+  fireEvent.click(within(spendBy).getByRole("button", { name: /^Provider(?::|$)/ }));
   expect(screen.getByRole("button", { name: /^OpenAI · \$10\.00$/ })).toBeInTheDocument();
   fireEvent.click(within(spendBy).getByRole("button", { name: "Account" }));
   expect(screen.getByRole("button", { name: /^OpenAI · Local \+1 · \$5\.00$/ })).toHaveAttribute("data-tooltip",
@@ -323,7 +323,7 @@ it("reads ten federated profiles, sums their provider usage and selects an accou
   expect(selectOptionLabels(picker)).toHaveLength(11); // All accounts, plus each of the ten accounts.
   expect(selectOptionLabels(picker)).toContain("OpenAI · Machine 9 (profile-9)");
   const spendBy = screen.getByRole("group", { name: "Spend by" });
-  fireEvent.click(within(spendBy).getByRole("button", { name: "Provider" }));
+  fireEvent.click(within(spendBy).getByRole("button", { name: /^Provider(?::|$)/ }));
   expect(screen.getByRole("button", { name: /^OpenAI · \$55\.00$/ })).toBeInTheDocument();
   fireEvent.click(within(spendBy).getByRole("button", { name: "Account" }));
   expect(screen.getByText("Other accounts")).toBeInTheDocument();
@@ -793,7 +793,7 @@ it("pins a slice on click, says so in the chart and the list, and walks slices b
 it("reads a slice by model, and a pinned model name narrows the threads to it", async () => {
   const { bar } = await renderSlices([sliceTurn("a", 5, 3, { model: "gpt-6", modelLabel: "GPT-6" }),
     sliceTurn("b", 6, 2, { model: "gpt-6", modelLabel: "GPT-6" }), sliceTurn("c", 7, 1, { model: "grok-5", modelLabel: "Grok 5" })]);
-  fireEvent.click(within(screen.getByRole("group", { name: "Spend by" })).getByRole("button", { name: "Model" }));
+  fireEvent.click(within(screen.getByRole("group", { name: "Spend by" })).getByRole("button", { name: /^Model(?::|$)/ }));
   const slice = bar(/^10\sAM–10:15\sAM:/);
   fireEvent.mouseEnter(slice);
   expect(cardOf(slice)).toHaveTextContent("3 completed turns · 2 models");

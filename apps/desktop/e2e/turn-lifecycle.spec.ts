@@ -389,9 +389,9 @@ test("disables workspace handoff on the focused thread while its turn is active"
       })
     ).toBeVisible();
 
-    await expect(app.window.getByLabel("Workspace mode")).toBeEnabled();
+    await expect(app.window.getByLabel(/^Workspace mode(?::|$)/)).toBeEnabled();
     await app.advance({ stepId: "turn-started-active" });
-    await expect(app.window.getByLabel("Workspace mode")).toBeDisabled();
+    await expect(app.window.getByLabel(/^Workspace mode(?::|$)/)).toBeDisabled();
 
     await app.window
       .getByRole("button", { name: /Idle workspace handoff replay/i })
@@ -404,7 +404,7 @@ test("disables workspace handoff on the focused thread while its turn is active"
         name: "Idle workspace handoff replay",
       })
     ).toBeVisible();
-    await expect(app.window.getByLabel("Workspace mode")).toBeEnabled();
+    await expect(app.window.getByLabel(/^Workspace mode(?::|$)/)).toBeEnabled();
   } finally {
     await app.close();
     await fixture.cleanup();
