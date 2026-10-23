@@ -50931,6 +50931,161 @@ script = "printf setup"
     await registry.close();
   });
 
+  // A parent on GPT-6-Astra xhigh once passed its own model and effort to
+  // every monitor it created, and each ran for minutes at the parent's price.
+  // An agent may steer a monitor only toward a cheaper setting.
+  it.each([
+    {
+      requested: "gpt-5.5",
+      requestedEffort: "xhigh",
+      expected: "gpt-6-luna",
+      expectedEffort: "medium",
+    },
+    {
+      requested: "gpt-5.5",
+      requestedEffort: "low",
+      expected: "gpt-6-luna",
+      expectedEffort: "low",
+    },
+    {
+      requested: "gpt-6-luna",
+      requestedEffort: "xhigh",
+      expected: "gpt-6-luna",
+      expectedEffort: "medium",
+    },
+    {
+      requested: "gpt-5.4-mini",
+      requestedEffort: "high",
+      expected: "gpt-5.4-mini",
+      expectedEffort: "medium",
+    },
+    {
+      requested: "gpt-6-luna",
+      requestedEffort: "max",
+      expected: "gpt-6-luna",
+      expectedEffort: "medium",
+    },
+    {
+      requested: "gpt-5.4-mini",
+      requestedEffort: "low",
+      expected: "gpt-5.4-mini",
+      expectedEffort: "low",
+    },
+  ])("does not let an agent run a monitor on $requested $requestedEffort", async ({
+    requested, requestedEffort, expected, expectedEffort,
+  }) => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      models: [
+        { id: "gpt-6-luna", label: "GPT-6-Luna", supportsReasoning: true },
+        { id: "gpt-5.5", label: "GPT-5.5", supportsReasoning: true },
+        { id: "gpt-5.4-mini", label: "GPT-5.4-Mini", supportsReasoning: true },
+      ],
+      startThreadResult: { threadId: "monitor-thread" },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-model",
+          turnId: "turn-model",
+          turn: { id: "turn-model" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-model",
+        turnId: "turn-model",
+        callId: "call-model",
+        requestId: "call-model",
+        namespace: "pwragent_task_monitors",
+        tool: "create_monitor_delegation",
+        arguments: {
+          task: "Watch PR checks until they finish.",
+          preferredModel: requested,
+          preferredReasoningEffort: requestedEffort,
+        },
+      },
+    } as AppServerPendingRequestNotification);
+    const payload = JSON.parse(
+      (response as { contentItems: Array<{ text: string }> }).contentItems[0]?.text ?? "{}",
+    ) as Record<string, unknown>;
+
+    expect(response).toMatchObject({ success: true });
+    expect(payload.preferredModel).toBe(expected);
+    expect(payload.preferredReasoningEffort).toBe(expectedEffort);
+    expect(codexClient.lastStartTurnParams).toMatchObject({
+      model: expected,
+      reasoningEffort: expectedEffort,
+    });
+
+    await registry.close();
+  });
+
+  it("still runs a monitor on the operator's own Task monitors model", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      models: [
+        { id: "gpt-6-luna", label: "GPT-6-Luna", supportsReasoning: true },
+        { id: "gpt-5.5", label: "GPT-5.5", supportsReasoning: true },
+      ],
+      startThreadResult: { threadId: "monitor-thread" },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      resolveHelperModelSettings: () => ({
+        helpers: {
+          task_monitors: { model: "gpt-5.5", reasoningEffort: "high" },
+        },
+      }),
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-model",
+          turnId: "turn-model",
+          turn: { id: "turn-model" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-model",
+        turnId: "turn-model",
+        callId: "call-model",
+        requestId: "call-model",
+        namespace: "pwragent_task_monitors",
+        tool: "create_monitor_delegation",
+        arguments: {
+          task: "Watch PR checks until they finish.",
+          preferredModel: "gpt-5.5",
+          preferredReasoningEffort: "xhigh",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+    const payload = JSON.parse(
+      (response as { contentItems: Array<{ text: string }> }).contentItems[0]?.text ?? "{}",
+    ) as Record<string, unknown>;
+
+    expect(payload.preferredModel).toBe("gpt-5.5");
+    expect(payload.preferredReasoningEffort).toBe("high");
+
+    await registry.close();
+  });
+
   it("injects task monitor progress without waking the parent and completes with one parent turn", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },

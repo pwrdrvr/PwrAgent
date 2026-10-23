@@ -7349,7 +7349,20 @@ const MONITOR_REASONING_EFFORT_ORDER = [
 ] as const;
 
 function isLightweightMonitorModel(modelId: string): boolean {
-  return /(?:mini|lite|flash|haiku|small|nano)/iu.test(modelId);
+  return /(?:mini|lite|flash|haiku|small|nano|luna)/iu.test(modelId);
+}
+
+/**
+ * The highest effort an agent may request for a Codex monitor. An effort
+ * this list does not know, such as `max`, is never accepted.
+ */
+const MAX_REQUESTED_MONITOR_REASONING_EFFORT = "medium";
+
+function isLightweightMonitorReasoningEffort(effort: string): boolean {
+  const order: readonly string[] = MONITOR_REASONING_EFFORT_ORDER;
+  const index = order.indexOf(effort.toLowerCase());
+  return index !== -1
+    && index <= order.indexOf(MAX_REQUESTED_MONITOR_REASONING_EFFORT);
 }
 
 function readAcpThoughtLevelValues(
@@ -41748,8 +41761,20 @@ export class DesktopBackendRegistry {
         "No available Codex models were discovered for task monitor delegation.",
       );
     }
-    // The agent's requested model wins when Codex offers it; otherwise the
-    // Helper model setting decides.
+    // An agent may steer a monitor only toward a cheaper setting: a
+    // lightweight model, at medium effort or lower. A parent on GPT-6-Astra
+    // xhigh once passed its own settings to every monitor it created. A
+    // request Codex offers wins; otherwise the Helper model setting decides,
+    // and the operator's Task monitors row may still name any model.
+    const requestedModel =
+      params.preferredModel && isLightweightMonitorModel(params.preferredModel)
+        ? params.preferredModel
+        : undefined;
+    const requestedReasoningEffort =
+      params.preferredReasoningEffort
+      && isLightweightMonitorReasoningEffort(params.preferredReasoningEffort)
+        ? params.preferredReasoningEffort
+        : undefined;
     const selection = resolveHelperModel({
       helper: "task_monitors",
       settings: this.resolveHelperModelSettingsFn(),
@@ -41759,8 +41784,8 @@ export class DesktopBackendRegistry {
           ?? options?.reasoningEfforts
           ?? OPENAI_REASONING_EFFORTS,
       })),
-      requestedModel: params.preferredModel,
-      requestedReasoningEffort: params.preferredReasoningEffort,
+      requestedModel,
+      requestedReasoningEffort,
     });
 
     return {
