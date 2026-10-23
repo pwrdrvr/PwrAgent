@@ -20512,9 +20512,10 @@ export class DesktopBackendRegistry {
     const reviewerOverridden = Boolean(params.reviewBackend);
     const reviewBackend = params.reviewBackend ?? params.backend;
     const reviewBackendDiffers = reviewBackend !== params.backend;
-    if (reviewBackendDiffers) {
-      this.assertReviewBackendSupported(reviewBackend);
-    }
+    // Check the reviewer before anything reads its model catalog. A Claude
+    // thread reviewing itself otherwise failed the model check against the
+    // Codex catalog, which named the wrong problem.
+    this.assertReviewBackendSupported(reviewBackend);
     if (params.runMode !== undefined && ![
       "codex-sub-agent", "pwragent-sub-agent",
     ].includes(params.runMode)) {
@@ -20609,7 +20610,10 @@ export class DesktopBackendRegistry {
           // to the same host.
           codexEnvironmentRuntime = undefined;
         }
-      } else if (acpManagedMode) {
+      } else if (managedMode) {
+        // A managed reviewer runs in a new thread, so it needs the parent's
+        // directory. Without it a Codex review of a Claude thread ran in
+        // whatever directory Codex itself started in.
         cwd =
           params.cwd?.trim()
           || await this.resolveThreadEnvironmentCwd(
@@ -26508,7 +26512,7 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind,
     settings: ModelSettings,
   ): Promise<ModelSettings> {
-    if (isAcpBackendId(backend)) {
+    if (backend !== "codex") {
       return await this.resolveModelSettings(backend, settings, "review-start");
     }
 
