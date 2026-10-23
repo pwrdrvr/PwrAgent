@@ -3350,6 +3350,31 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
+  it("checks service thread membership without trusting error-tolerant navigation inventory", async () => {
+    const thread: AppServerThreadSummary = { id: "service-thread", title: "Preview", titleSource: "explicit", source: "codex", linkedDirectories: [] };
+    const client = new MockBackendClient({ threads: [thread] });
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock() });
+    onTestFinished(() => registry.close());
+    const list = vi.spyOn(client, "listThreads").mockRejectedValue(new Error("Provider temporarily unavailable"));
+    const target = { backend: "codex" as const, threadId: thread.id };
+    // The ordinary navigation path swallows the error and caches an empty list.
+    await expect(registry.listThreads({ backend: "codex", callerReason: "federation-services" })).resolves.toEqual([]);
+    await expect(registry.isThreadActiveForService(target)).rejects.toThrow("Provider temporarily unavailable");
+    list.mockResolvedValue([thread]);
+    await expect(registry.isThreadActiveForService(target)).resolves.toBe(true);
+    expect(list).toHaveBeenLastCalledWith({ archived: false, enrichDirectories: false,
+      skipArchivedMetadataRefresh: true, requireComplete: true }, { callerReason: "federation-services" });
+    list.mockResolvedValue([]);
+    const descendants = vi.spyOn(client, "listNativeSubAgentThreads").mockRejectedValue(new Error("Descendant discovery incomplete"));
+    await expect(registry.isThreadActiveForService(target)).rejects.toThrow("Descendant discovery incomplete");
+    descendants.mockResolvedValue([thread]);
+    await expect(registry.isThreadActiveForService(target)).resolves.toBe(true);
+    descendants.mockResolvedValue([]);
+    await expect(registry.isThreadActiveForService(target)).resolves.toBe(false);
+    list.mockResolvedValue([{ ...thread, archivedAt: 1000 }]);
+    await expect(registry.isThreadActiveForService(target)).resolves.toBe(false);
+  });
+
   it("exports the authoritative handoff workspace while provider cwd synchronization is pending", async () => {
     const thread: AppServerThreadSummary = {
       id: "handoff-source", title: "Source", titleSource: "explicit", source: "codex", updatedAt: 1000,

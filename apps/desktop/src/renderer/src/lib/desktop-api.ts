@@ -1,3 +1,4 @@
+import type { ServiceUiRequest, ServiceUiResponse } from "@pwragent/shared";
 import type { NativeVoiceApi } from "../../../shared/native-voice";
 import type {
   ListBackgroundTerminalsRequest,
@@ -804,6 +805,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   waitForProfileAlive?: (
     request: WaitForDesktopProfileAliveRequest,
   ) => Promise<WaitForDesktopProfileAliveResponse>;
+  threadServices?: (request: ServiceUiRequest) => Promise<ServiceUiResponse>;
   openFederationWindow?: (
     request: OpenFederationWindowRequest,
   ) => Promise<OpenFederationWindowResponse>;

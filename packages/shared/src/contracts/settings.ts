@@ -1146,6 +1146,7 @@ export type DesktopFederationSettingsSnapshot = {
   listenPort: DesktopSettingsValue<number>;
   compressionEnabled: DesktopSettingsValue<boolean>;
   allowRemoteShells: DesktopSettingsValue<boolean>;
+  allowPortForwarding: DesktopSettingsValue<boolean>;
   allowFilePush: DesktopSettingsValue<boolean>;
   allowFilePull: DesktopSettingsValue<boolean>;
   allowFilePullOutsideThreadDirectories: DesktopSettingsValue<boolean>;
@@ -1670,6 +1671,7 @@ export type DesktopSettingsConfigPatch = {
     listenPort?: number;
     compressionEnabled?: boolean;
     allowRemoteShells?: boolean;
+    allowPortForwarding?: boolean;
     allowFilePush?: boolean;
     allowFilePull?: boolean;
     allowFilePullOutsideThreadDirectories?: boolean;

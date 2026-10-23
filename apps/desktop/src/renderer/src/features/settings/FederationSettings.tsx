@@ -1293,6 +1293,7 @@ export function FederationSettings(props: FederationSettingsProps) {
                   {peer.receiverPermissions && (
                     <span>
                       Remote shells: {peer.receiverPermissions.remoteShells ? "allowed" : "blocked"}
+                      {" · "}Port forwarding: {peer.receiverPermissions.portForwarding === undefined ? "unknown" : peer.receiverPermissions.portForwarding ? "allowed" : "blocked"}
                       {" · "}Incoming files: {peer.receiverPermissions.filePush ? "allowed" : "blocked"}
                     </span>
                   )}
@@ -1876,6 +1877,7 @@ const FEDERATION_CAPABILITY_LABELS: Record<FederationCapability, string> = {
   pwrsnap_connection: "read PwrSnap availability",
   gateway_relay: "reach sibling instances",
   remote_pty: "remote terminal protocol",
+  service_forward_v1: "port forwarding",
   file_push: "file push protocol",
   thread_handoff: "transfer existing threads",
   file_pull: "File pull",

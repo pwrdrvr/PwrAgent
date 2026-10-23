@@ -1,3 +1,4 @@
+import { registerFederationServicesIpc } from "./federation-services";
 import { BrowserWindow, ipcMain } from "electron";
 import { registerCloudflareSetupIpc } from "./federation-cloudflare";
 import type {
@@ -103,6 +104,7 @@ let activityToggle: Promise<unknown> = Promise.resolve();
 
 export function registerFederationIpcHandlers(): void {
   registerCloudflareSetupIpc();
+  registerFederationServicesIpc();
   for (const channel of [
     FEDERATION_READ_ACTIVITY_CHANNEL,
     FEDERATION_RESET_ACTIVITY_CHANNEL,

@@ -199,6 +199,7 @@ export type DesktopSettingsConfig = {
     listenPort?: number;
     compressionEnabled?: boolean;
     allowRemoteShells?: boolean;
+    allowPortForwarding?: boolean;
     allowFilePush?: boolean;
     allowFilePull?: boolean;
     allowFilePullOutsideThreadDirectories?: boolean;
@@ -1213,6 +1214,9 @@ export function desktopSettingsPatchToEdits(
     } else {
       set(["federation", "listen_host"], patch.federation.listenHost);
     }
+  }
+  if (patch.federation?.allowPortForwarding !== undefined) {
+    set(["federation", "allow_port_forwarding"], patch.federation.allowPortForwarding);
   }
   if (patch.federation?.allowRemoteShells !== undefined) {
     set(["federation", "allow_remote_shells"], patch.federation.allowRemoteShells);
@@ -2233,6 +2237,7 @@ function normalizeDesktopConfig(
       listenPort: readNumber(federation?.listen_port),
       compressionEnabled: readBoolean(federation?.compression_enabled),
       allowRemoteShells: readBoolean(federation?.allow_remote_shells),
+      allowPortForwarding: readBoolean(federation?.allow_port_forwarding),
       allowFilePush: readBoolean(federation?.allow_file_push),
       allowFilePull: readBoolean(federation?.allow_file_pull),
       allowFilePullOutsideThreadDirectories: readBoolean(federation?.allow_file_pull_outside_thread_directories),

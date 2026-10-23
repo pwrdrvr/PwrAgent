@@ -1,4 +1,5 @@
 import type {
+  AdvertiseServiceArgs,
   AppServerBackendKind,
   CreateInstanceThreadToolArgs,
   FederationSearchScope,
@@ -98,6 +99,12 @@ function descriptionForOperation(
   operation: PwrAgentFederationOperationName,
 ): string {
   switch (operation) {
+    case "advertise_service":
+      return "Declare a service running on this thread's owning machine. Records a named literal loopback port, protocol, and expiry only. Never starts forwarding, changes firewall rules, or enrolls peers. Users see it in the thread Services list and choose Connect and Open. HTTP/WebSockets and raw TCP are supported. HTTPS passes through without terminating TLS. Configure the app's absolute URLs, HMR origins, CORS and cookies for the viewer's assigned loopback port. Remove when stopped. No credentials in name or description.";
+    case "list_services":
+      return "List this calling thread's service declarations on its owning instance, including expiry. Does not activate forwarding.";
+    case "remove_service":
+      return "Remove this thread's service declaration and revoke every active forwarding lease for it. Use when the service stops.";
     case "handoff_instance_thread":
       return "Copy or move an idle Codex thread to another enrolled PwrAgent instance with history and Git workspace changes. Transfers include unpublished commits, staged changes, unstaged changes, and non-ignored untracked files. Specify sourceThreadId and targetInstanceId. Omit sourceInstanceId for a local source, or set it to the remote owner. For Git threads, get the receiver's native absolute repository path from list_instance_projects and pass targetRepositoryPath. Both machines must support thread_handoff. The receiver must allow file push. operation=move archives the source only after destination validation. Queued or running turns, symlinks, submodules, and conflicted indexes are rejected. Source files are retained. Do not retry a slow request. Check search_federation_threads after a disconnect. Return threadLink verbatim and report warnings.";
     case "push_instance_file":
@@ -119,6 +126,22 @@ function inputSchemaForOperation(
   operation: PwrAgentFederationOperationName,
 ): Record<string, unknown> {
   switch (operation) {
+    case "advertise_service":
+      return {
+        type: "object", additionalProperties: false, required: ["port", "name", "protocol"],
+        properties: {
+          port: { type: "integer", minimum: 1024, maximum: 65535 },
+          name: { type: "string", minLength: 1, maxLength: 80 },
+          protocol: { type: "string", enum: ["http", "https", "tcp"] },
+          address: { type: "string", enum: ["127.0.0.1", "::1"], description: "Literal owner loopback. Defaults to 127.0.0.1." },
+          description: { type: "string", maxLength: 240 },
+          ttlSeconds: { type: "integer", minimum: 60, maximum: 86400, description: "Defaults to one hour. Re-advertise the same endpoint to renew." },
+        },
+      };
+    case "list_services":
+      return { type: "object", additionalProperties: false, properties: {} };
+    case "remove_service":
+      return { type: "object", additionalProperties: false, required: ["serviceId"], properties: { serviceId: { type: "string" } } };
     case "handoff_instance_thread":
       return {
         type: "object", additionalProperties: false,
@@ -321,6 +344,9 @@ function normalizeArgsForOperation(
   operation: PwrAgentFederationOperationName,
   args: Record<string, unknown>,
 ):
+  | AdvertiseServiceArgs
+  | { serviceId: string }
+  | Record<string, never>
   | PushInstanceFileToolArgs
   | HandoffInstanceThreadToolArgs
   | ListFederationInstancesToolArgs
@@ -330,6 +356,19 @@ function normalizeArgsForOperation(
   | ListAttentionThreadsToolArgs
   | undefined {
   switch (operation) {
+    case "advertise_service": {
+      if (Object.keys(args).some((key) => !["port", "name", "protocol", "address", "description", "ttlSeconds"].includes(key))
+        || typeof args.port !== "number" || !Number.isInteger(args.port) || args.port < 1024 || args.port > 65535
+        || typeof args.name !== "string" || !args.name.trim() || args.name.length > 80
+        || !["http", "https", "tcp"].includes(String(args.protocol))
+        || (args.address !== undefined && args.address !== "127.0.0.1" && args.address !== "::1")
+        || (args.description !== undefined && (typeof args.description !== "string" || args.description.length > 240))
+        || (args.ttlSeconds !== undefined && (typeof args.ttlSeconds !== "number" || !Number.isInteger(args.ttlSeconds) || args.ttlSeconds < 60 || args.ttlSeconds > 86400))) return undefined;
+      return args as AdvertiseServiceArgs;
+    }
+    case "list_services": return Object.keys(args).length === 0 ? {} : undefined;
+    case "remove_service": return Object.keys(args).length === 1 && typeof args.serviceId === "string" && args.serviceId.length > 0 && args.serviceId.length <= 128
+      ? { serviceId: args.serviceId } : undefined;
     case "handoff_instance_thread": {
       const sourceThreadId = readTrimmedString(args.sourceThreadId);
       const targetInstanceId = readTrimmedString(args.targetInstanceId);
@@ -365,6 +404,9 @@ function invalidArgumentsMessageForOperation(
   operation: PwrAgentFederationOperationName,
 ): string {
   switch (operation) {
+    case "advertise_service": return "advertise_service requires a named HTTP, HTTPS, or TCP service on literal loopback port 1024–65535.";
+    case "list_services": return "list_services accepts no arguments; it uses the calling thread.";
+    case "remove_service": return "remove_service requires only serviceId from this thread's declarations.";
     case "handoff_instance_thread":
       return "handoff_instance_thread requires sourceThreadId, targetInstanceId, and operation=copy or move, with optional sourceInstanceId and targetRepositoryPath strings.";
     case "push_instance_file":

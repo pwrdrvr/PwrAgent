@@ -217,6 +217,22 @@ describe("DesktopSettingsService", () => {
     expect(hasSecret).not.toHaveBeenCalled();
   });
 
+  it("defaults port forwarding off and persists explicit owner permission", async () => {
+    const service = new DesktopSettingsService({
+      configPath: path.join(createTempRoot(), "config.toml"),
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+    expect((await service.readSettingsProjection()).federation.allowPortForwarding)
+      .toEqual({ value: false, source: "default" });
+    for (const allowed of [true, false]) {
+      await service.writeConfigPatchTargeted({ federation: { allowPortForwarding: allowed } });
+      expect((await service.readSettingsProjection()).federation.allowPortForwarding)
+        .toEqual({ value: allowed, source: "config" });
+      expect(service.readFederationConfig().allowPortForwarding).toBe(allowed);
+    }
+  });
+
   it("persists an explicit federation compression opt-out in the settings snapshot", async () => {
     const service = new DesktopSettingsService({
       configPath: path.join(createTempRoot(), "config.toml"),

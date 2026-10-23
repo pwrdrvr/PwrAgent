@@ -42,7 +42,7 @@ export function FederationCapabilities(props: {
       sectionId="capabilities"
       eyebrow="Permissions"
       title="Capabilities"
-      description="Choose what enrolled peers can do on this machine. Changes save automatically and reconnect Federation, closing existing remote terminals."
+      description="Choose what enrolled peers can do on this machine. Changes save automatically and reconnect Federation, closing existing remote terminals and forwarded ports."
     >
       <div className="settings-fields">
         <ToggleField
@@ -51,6 +51,13 @@ export function FederationCapabilities(props: {
           checked={federation.allowRemoteShells.value}
           disabled={props.saving || pending}
           onChange={(allowRemoteShells) => save({ allowRemoteShells })}
+        />
+        <ToggleField
+          label="Allow port forwarding"
+          sub="Let enrolled peers forward ports that agents advertise on this machine. A peer opens each forward with its own click, on its own loopback address. Turning this off closes live forwards."
+          checked={federation.allowPortForwarding.value}
+          disabled={props.saving || pending}
+          onChange={(allowPortForwarding) => save({ allowPortForwarding })}
         />
         <ToggleField
           label="Allow incoming files"
