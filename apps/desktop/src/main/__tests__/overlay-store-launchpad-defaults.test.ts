@@ -206,10 +206,28 @@ describe("SqliteOverlayStore - launchpad defaults", () => {
     expect(await store.getDirectoryLaunchpad({ directoryKey: "directory:/chosen" }))
       .toMatchObject({ executionMode: "full-access" });
 
+    // The upgrade changed saved access, so the notice waits to be closed.
+    expect(store.isLaunchpadAutoAccessNoticePending()).toBe(true);
+    store.dismissLaunchpadAutoAccessNotice();
+    expect(store.isLaunchpadAutoAccessNoticePending()).toBe(false);
+
     // A Default Access chosen after the migration is kept on later launches.
     await store.setLaunchpadDefaults({ executionMode: "default" });
     new SqliteOverlayStore(stateDb).migrateLegacyLaunchpadExecutionModes();
     expect((await store.getLaunchpadDefaults()).executionMode).toBe("default");
+    // ...and the closed notice does not come back.
+    expect(store.isLaunchpadAutoAccessNoticePending()).toBe(false);
+  });
+
+  it("raises no upgrade notice when the migration changes nothing", async () => {
+    await store.setLaunchpadDefaults({ backend: "claude", executionMode: "full-access" });
+
+    store.migrateLegacyLaunchpadExecutionModes();
+
+    expect(store.isLaunchpadAutoAccessNoticePending()).toBe(false);
+    // Closing a notice that never showed writes nothing.
+    store.dismissLaunchpadAutoAccessNotice();
+    expect(stateDb.getMeta("launchpad_auto_access_notice")).toBeUndefined();
   });
 
   it("persists and clears a thread's selected MCP connections", async () => {

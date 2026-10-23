@@ -221,6 +221,10 @@ import {
 import { buildGithubPrSamlEnforcementNotice } from "./features/notifications/github-pr-saml-notice";
 import { buildManagedGrokSignatureRejectedNotice } from "./features/notifications/managed-grok-signature-notice";
 import { buildBundledGitLfsNotice } from "./features/notifications/bundled-git-lfs-notice";
+import {
+  AUTO_ACCESS_UPGRADE_NOTICE_ID,
+  buildAutoAccessUpgradeNotice,
+} from "./features/notifications/auto-access-upgrade-notice";
 import { buildGithubPrAuthenticationNotice } from "./features/notifications/github-pr-authentication-notice";
 import {
   buildToolAccountingNotice,
@@ -919,6 +923,42 @@ function DesktopAppShell(props: {
   useEffect(() => {
     if (bundledGitLfsNotice) showAppNotice(bundledGitLfsNotice);
   }, [bundledGitLfsNotice, showAppNotice]);
+
+  // The upgrade that moved new Codex and Claude threads to Auto says so once.
+  // The state DB keeps it pending across restarts until the operator closes it.
+  // A window fronting a peer shows the peer's threads, not this profile's.
+  const [autoAccessUpgradePending, setAutoAccessUpgradePending] = useState(false);
+  useEffect(() => {
+    if (readRendererFederationTarget()) return;
+    let cancelled = false;
+    void desktopApi?.readLaunchpadAccessNoticePending?.()
+      .then((pending) => {
+        if (!cancelled && pending) setAutoAccessUpgradePending(true);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [desktopApi]);
+  const dismissAutoAccessUpgradeNotice = useCallback(() => {
+    dispatchAppNotice({ type: "dismiss", id: AUTO_ACCESS_UPGRADE_NOTICE_ID });
+    setAutoAccessUpgradePending(false);
+    void desktopApi?.dismissLaunchpadAccessNotice?.().catch(() => undefined);
+  }, [desktopApi]);
+  const autoAccessUpgradeNotice = useMemo(() => {
+    return autoAccessUpgradePending
+      ? buildAutoAccessUpgradeNotice({
+          onDismiss: dismissAutoAccessUpgradeNotice,
+          onReviewAccess: () => {
+            dismissAutoAccessUpgradeNotice();
+            openSettingsSection("models");
+          },
+        })
+      : undefined;
+  }, [autoAccessUpgradePending, dismissAutoAccessUpgradeNotice, openSettingsSection]);
+  useEffect(() => {
+    if (autoAccessUpgradeNotice) showAppNotice(autoAccessUpgradeNotice);
+  }, [autoAccessUpgradeNotice, showAppNotice]);
 
   const syncFederationShutdownNotice = useCallback((instanceId: string, notice: AppNoticeToastNotice | undefined): void => {
     if (notice) showAppNotice(notice);

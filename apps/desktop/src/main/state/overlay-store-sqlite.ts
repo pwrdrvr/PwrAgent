@@ -600,6 +600,12 @@ const NAVIGATION_BROWSE_MODE_META_KEY = "navigation_browse_mode";
 /** Set once the saved "default" launchpad access for Codex and Claude is forgotten. */
 const LAUNCHPAD_AUTO_ACCESS_MIGRATION_META_KEY = "launchpad_auto_access_migrated";
 /**
+ * "pending" when that migration changed a saved access, until the operator
+ * closes the notice that says so; then "dismissed". Absent for profiles the
+ * migration left alone, including fresh ones.
+ */
+const LAUNCHPAD_AUTO_ACCESS_NOTICE_META_KEY = "launchpad_auto_access_notice";
+/**
  * Whether the Pinned group, which Updated and Created share, is collapsed.
  * Beside the lens for the same reason: the first paint reads it, and
  * `config.toml` is no home for it because a config write restarts the
@@ -7538,6 +7544,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
   migrateLegacyLaunchpadExecutionModes(): void {
     if (this.stateDb.getMeta(LAUNCHPAD_AUTO_ACCESS_MIGRATION_META_KEY)) return;
     this.stateDb.raw.transaction(() => {
+      let changed = false;
       const defaultsRows = this.stateDb.raw
         .prepare("SELECT key, value FROM launchpad_defaults")
         .all() as { key: string; value: string }[];
@@ -7546,7 +7553,10 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           defaultsRows.map((row) => [row.key, JSON.parse(row.value) as unknown]),
         ) as NavigationLaunchpadDefaults;
         const migrated = forgetLegacyDefaultLaunchpadExecutionModes(stored);
-        if (migrated !== stored) this.writeLaunchpadDefaults(migrated);
+        if (migrated !== stored) {
+          this.writeLaunchpadDefaults(migrated);
+          changed = true;
+        }
       }
       const rows = this.stateDb.raw
         .prepare("SELECT directory_path, payload FROM directory_launchpads")
@@ -7566,10 +7576,25 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         const migrated = forgetLegacyDefaultLaunchpadExecutionModes(stored);
         if (migrated !== stored) {
           update.run(JSON.stringify(migrated), row.directory_path);
+          changed = true;
         }
+      }
+      if (changed) {
+        this.stateDb.setMeta(LAUNCHPAD_AUTO_ACCESS_NOTICE_META_KEY, "pending");
       }
       this.stateDb.setMeta(LAUNCHPAD_AUTO_ACCESS_MIGRATION_META_KEY, "1");
     })();
+  }
+
+  /** Whether the upgrade notice about Auto access still waits to be closed. */
+  isLaunchpadAutoAccessNoticePending(): boolean {
+    return this.stateDb.getMeta(LAUNCHPAD_AUTO_ACCESS_NOTICE_META_KEY) === "pending";
+  }
+
+  /** Closes the upgrade notice for good. Writes only when it was pending. */
+  dismissLaunchpadAutoAccessNotice(): void {
+    if (!this.isLaunchpadAutoAccessNoticePending()) return;
+    this.stateDb.setMeta(LAUNCHPAD_AUTO_ACCESS_NOTICE_META_KEY, "dismissed");
   }
 
   /** The remembered Star Map manager thread, if one was ever created. */

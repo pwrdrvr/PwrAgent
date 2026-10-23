@@ -142,6 +142,10 @@ import {
 import { buildDockProfileMenuTemplate } from "./dock-menu";
 import { disposeRendererErrorIpcHandlers, registerRendererErrorIpcHandlers } from "./ipc/renderer-error";
 import {
+  disposeLaunchpadAccessNoticeIpcHandlers,
+  registerLaunchpadAccessNoticeIpcHandlers,
+} from "./ipc/launchpad-access-notice";
+import {
   disposeRuntimeIdentityIpcHandlers,
   registerRuntimeIdentityIpcHandlers,
 } from "./ipc/runtime-identity";
@@ -664,6 +668,7 @@ function disposeMainProcessResourcesSync(options?: {
   disposeAppIconDragIpcHandlers();
   disposeDesktopConfigStore();
   disposeWindowPointerIpcHandlers();
+  disposeLaunchpadAccessNoticeIpcHandlers();
   if (isDevelopment) {
     disposeRuntimeIdentityIpcHandlers();
   }
@@ -1771,6 +1776,7 @@ export function bootstrapApp(): void {
       },
     );
     registerWindowPointerIpcHandlers();
+    registerLaunchpadAccessNoticeIpcHandlers();
     if (isDevelopment) {
       registerRuntimeIdentityIpcHandlers();
     }

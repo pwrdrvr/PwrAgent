@@ -3697,6 +3697,80 @@ describe("SettingsScreen", () => {
     });
   });
 
+  it("shows Default Access when Codex is too old for Auto and holds Full Access while saving", async () => {
+    const snapshot = createSnapshot();
+    const settings = createSettingsState(snapshot);
+    const capabilities = {
+      listThreads: true,
+      createThread: true,
+      resumeThread: true,
+      renameThread: true,
+      readThread: true,
+      startTurn: true,
+      interruptTurn: true,
+      steerTurn: true,
+      transcriptPagination: true,
+      toolUse: true,
+      approvalRequests: true,
+      multiDirectoryThreads: true,
+    };
+    const desktopApi = {
+      listAcpAgents: vi.fn(async () => ({ fetchedAt: 1000, entries: [] })),
+      listBackends: vi.fn(async () => ({
+        fetchedAt: 1000,
+        backends: [{
+          kind: "codex" as const,
+          label: "Codex",
+          available: true,
+          methods: [],
+          capabilities,
+          executionModes: [
+            { mode: "default" as const, label: "Default", available: true, isDefault: true },
+            {
+              mode: "auto" as const,
+              label: "Auto",
+              available: false,
+              unavailableReason: "Auto access requires Codex 0.153.0 or later.",
+            },
+            { mode: "full-access" as const, label: "Full Access", available: true },
+          ],
+          launchpadOptions: { models: [{ id: "gpt-5.6-sol", label: "GPT-5.6-Sol" }] },
+        }],
+      })),
+    } as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"];
+
+    const { rerender } = render(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        initialSection="models"
+        settings={settings}
+      />,
+    );
+
+    // New threads will start on Default Access, so the row says so.
+    const codexAccess = await screen.findByRole("combobox", {
+      name: "Codex access for new threads",
+    });
+    expect(codexAccess).toHaveAttribute("data-value", "default");
+    expect(
+      screen.getByText(
+        "Auto access requires Codex 0.153.0 or later. New threads start on Default Access.",
+      ),
+    ).toBeInTheDocument();
+
+    chooseSelectOption(codexAccess, "Full Access");
+    expect(await screen.findByRole("button", { name: "Use Full Access" })).toBeEnabled();
+    rerender(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        initialSection="models"
+        settings={{ ...settings, saving: true }}
+      />,
+    );
+    // A save in flight must not be answered by a second write.
+    expect(screen.getByRole("button", { name: "Updating…" })).toBeDisabled();
+  });
+
   it("saves defaults without a separate launchpad action and confirms thread and Fast actions", async () => {
     const snapshot = createSnapshot();
     snapshot.models.providerDefaults = {

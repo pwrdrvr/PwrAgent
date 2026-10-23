@@ -5526,6 +5526,51 @@ describe("DesktopBackendRegistry", () => {
     });
   });
 
+  it.each([
+    { version: "0.152.0", expected: "default" },
+    { version: "0.153.0", expected: "auto" },
+  ])("starts an Auto launchpad thread on $expected under Codex $version", async ({
+    version,
+    expected,
+  }) => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "pwragent-codex-auto-start-"));
+    const configStore = new DesktopConfigStore({
+      configPath: path.join(tempRoot, "config.toml"),
+    });
+    const command = "/opt/homebrew/bin/codex";
+    configStore.recordProviderDiscovery("codex", {
+      candidates: [{ command, source: "path", version }],
+      selectedCommand: command,
+      selectedVersion: version,
+    });
+    const codexClient = new MockBackendClient({
+      threads: [],
+      initializeResult: { userAgent: `pwragent/${version} (Mac OS 26.6.2; arm64) unknown` },
+    });
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({ codexClient, configStore, overlayStore });
+    try {
+      await registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
+      await registry.startThread({
+        backend: "codex",
+        cwd: process.cwd(),
+        executionMode: "auto",
+      });
+      expect(
+        (await overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }))
+          ?.executionMode,
+      ).toBe(expected);
+      expect(
+        (codexClient.lastStartThreadParams as { approvalsReviewer?: string } | undefined)
+          ?.approvalsReviewer,
+      ).toBe(expected === "auto" ? "auto_review" : "user");
+    } finally {
+      await registry.close();
+      configStore.dispose();
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it("dispatches the advertised tool guide only from a live owning turn", async () => {
     const codexClient = new MockBackendClient({ threads: [] });
     const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });

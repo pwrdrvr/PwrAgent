@@ -1777,10 +1777,18 @@ function ProviderAccessDefault(props: {
   onChange: (defaults: DesktopProviderModelDefaults | undefined) => void;
 }) {
   const [confirmingFullAccess, setConfirmingFullAccess] = useState(false);
-  const selected = resolveDefaultLaunchpadExecutionMode(
+  const preferred = resolveDefaultLaunchpadExecutionMode(
     props.backend.kind,
     props.defaults ? { [props.backend.kind]: props.defaults } : undefined,
   );
+  // A Codex too old for Auto starts threads on Default Access. Show that
+  // instead of an Auto that new threads will not get.
+  const unavailableAuto = preferred === "auto"
+    ? props.backend.executionModes.find(
+      (mode) => mode.mode === "auto" && !mode.available,
+    )
+    : undefined;
+  const selected: ThreadExecutionMode = unavailableAuto ? "default" : preferred;
   const options: SelectOption<ThreadExecutionMode>[] = ACCESS_DEFAULT_MODES.map(
     (mode) => {
       const advertised = props.backend.executionModes.find(
@@ -1813,11 +1821,15 @@ function ProviderAccessDefault(props: {
     <div className="settings-provider-defaults__fast">
       <div className="settings-provider-defaults__fast-copy">
         <strong>Access</strong>
-        <span>{describeExecutionModeForBackend(props.backend.kind, selected)}</span>
+        <span>
+          {unavailableAuto
+            ? `${unavailableAuto.unavailableReason ?? "Auto is unavailable."} New threads start on Default Access.`
+            : describeExecutionModeForBackend(props.backend.kind, selected)}
+        </span>
       </div>
       {confirmingFullAccess ? (
         <InlineActionConfirmation
-          applying={false}
+          applying={props.disabled}
           confirmLabel="Use Full Access"
           label={`Start new ${props.backend.label} threads with Full Access?`}
           sub={`${props.backend.label} will run without permission prompts in every launchpad that uses it. Existing threads keep their access.`}
