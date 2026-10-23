@@ -1399,6 +1399,68 @@ describe("resolveTerminalShell", () => {
     expect(service.listSessions()).toHaveLength(1);
   });
 
+  it("waits for worktree shells to exit and blocks new shells until removal completes", async () => {
+    const worktree = createTemporaryRoot("pwragent-terminal-worktree-");
+    const child = path.join(worktree, "nested");
+    mkdirSync(child);
+    const sibling = createTemporaryRoot("pwragent-terminal-sibling-");
+    const exitListeners: Array<(event: { exitCode: number }) => void> = [];
+    const lockedPty = fakePty({ onExit: vi.fn((listener) => {
+      exitListeners.push(listener);
+      return { dispose: vi.fn() };
+    }) });
+    const siblingExits: Array<(event: { exitCode: number }) => void> = [];
+    const siblingPty = fakePty({ onExit: vi.fn((listener) => {
+      siblingExits.push(listener);
+      return { dispose: vi.fn() };
+    }) });
+    siblingPty.destroy.mockImplementation(() => {
+      for (const listener of siblingExits) listener({ exitCode: 0 });
+    });
+    const spawn = vi.fn().mockReturnValueOnce(lockedPty).mockReturnValueOnce(siblingPty);
+    const service = new IntegratedTerminalService({ loadNodePty: async () => ({ spawn }) });
+    await service.createOrAttach({ threadKey: "codex:owner", cwd: child, cols: 80, rows: 24 }, fakeWebContents());
+    await service.createOrAttach({ threadKey: "codex:sibling", cwd: sibling, cols: 80, rows: 24 }, fakeWebContents());
+    let finishRemoval!: () => void;
+    const remove = vi.fn(() => new Promise<void>((resolve) => { finishRemoval = resolve; }));
+
+    const removing = service.withWorktreeClosed(worktree, remove);
+    await vi.waitFor(() => expect((lockedPty as TestPty).destroy).toHaveBeenCalledOnce());
+    expect(remove).not.toHaveBeenCalled();
+    expect((siblingPty as TestPty).destroy).not.toHaveBeenCalled();
+    await expect(service.createOrAttach({ threadKey: "codex:new", cwd: child, cols: 80, rows: 24 }, fakeWebContents()))
+      .rejects.toThrow("worktree");
+    exitListeners[1]?.({ exitCode: 0 });
+    await vi.waitFor(() => expect(remove).toHaveBeenCalledOnce());
+    await expect(service.createOrAttach({ threadKey: "codex:new", cwd: child, cols: 80, rows: 24 }, fakeWebContents()))
+      .rejects.toThrow("worktree");
+    finishRemoval();
+    await removing;
+    await service.dispose();
+  });
+
+  it("does not wait for a terminal being created outside the removed worktree", async () => {
+    const worktree = createTemporaryRoot("pwragent-terminal-removing-");
+    const sibling = createTemporaryRoot("pwragent-terminal-starting-");
+    let finishLoading!: (value: Pick<typeof import("node-pty"), "spawn">) => void;
+    const loading = new Promise<Pick<typeof import("node-pty"), "spawn">>((resolve) => { finishLoading = resolve; });
+    const loadNodePty = vi.fn(() => loading);
+    const service = new IntegratedTerminalService({ loadNodePty });
+    const creating = service.createOrAttach({ threadKey: "codex:sibling", cwd: sibling, cols: 80, rows: 24 }, fakeWebContents());
+    await vi.waitFor(() => expect(loadNodePty).toHaveBeenCalledOnce());
+    const remove = vi.fn(async () => 42);
+    const removing = service.withWorktreeClosed(worktree, remove);
+    try {
+      await vi.waitFor(() => expect(remove).toHaveBeenCalledOnce());
+      await expect(removing).resolves.toBe(42);
+    } finally {
+      // A failed assertion must still settle the outstanding creation.
+      finishLoading({ spawn: vi.fn(() => { throw new Error("fixture closed"); }) });
+      await expect(creating).rejects.toThrow("fixture closed");
+      await removing;
+    }
+  });
+
   it("closes the pty master and awaits shell exit during shutdown", async () => {
     const disposable = { dispose: vi.fn() };
     const shutdownExitDisposable = { dispose: vi.fn() };

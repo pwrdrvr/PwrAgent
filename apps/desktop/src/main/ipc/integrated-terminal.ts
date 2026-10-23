@@ -31,6 +31,7 @@ import {
 } from "../terminal/integrated-terminal-service";
 import type { IntegratedTerminalQuitSnapshot } from "../terminal/integrated-terminal-service";
 import { buildIntegratedTerminalContextMenuTemplate } from "../terminal/integrated-terminal-context-menu";
+import { registerWorktreeTerminalOwner } from "../terminal/worktree-terminals";
 import { isFederationWindowWebContents } from "../window";
 import { subscribersForChannel } from "../window-channels";
 import {
@@ -41,6 +42,7 @@ import {
 let service: IntegratedTerminalService | undefined;
 let federationBridge: FederationTerminalBridge | undefined;
 let serviceDisposalPromise: Promise<void> | undefined;
+let releaseWorktreeTerminalOwner: (() => void) | undefined;
 
 declare global {
   var __PWRAGENT_E2E_GET_INTEGRATED_TERMINAL_QUIT_SNAPSHOT__:
@@ -93,6 +95,7 @@ export function registerIntegratedTerminalIpcHandlers(): void {
         createHash("sha256").update(process.env.PWRAGENT_INSTANCE_ROOT || "default").digest("hex")),
     });
     serviceDisposalPromise = undefined;
+    releaseWorktreeTerminalOwner = registerWorktreeTerminalOwner(service);
   }
   federationBridge ??= new FederationTerminalBridge({
     localSessionsFor: () => service?.listSessions() ?? [],
@@ -219,6 +222,8 @@ export function disposeIntegratedTerminalIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(INTEGRATED_TERMINAL_LIST_CHANNEL);
   ipcMain.removeHandler(INTEGRATED_TERMINAL_SET_PANEL_HIDDEN_CHANNEL);
   serviceDisposalPromise ??= service?.dispose() ?? Promise.resolve();
+  releaseWorktreeTerminalOwner?.();
+  releaseWorktreeTerminalOwner = undefined;
   service = undefined;
   // Drops the viewer-side registry without sending pty.close for each
   // session: this runs at app shutdown, where the federation runtime is
