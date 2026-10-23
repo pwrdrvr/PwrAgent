@@ -11,4 +11,3 @@ export function serviceDataEnvelope(
     streamId: frame.streamId, seq: frame.seq, ...(frame.fin ? { fin: true } : {}), data: frame.data,
   };
 }
-

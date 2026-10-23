@@ -40,6 +40,7 @@ export class HeadlessBackend {
       this.threads = new Map();
     }
     runtime.ownsThread = (id) => this.threads.has(id);
+    this.latestJobs = new Map();
     this.syncJobs();
   }
 
@@ -48,10 +49,13 @@ export class HeadlessBackend {
     catch (error) { this.runtime.onFailure(error); throw error; }
   }
 
-  syncJobs() {
+  syncJobs(jobs = this.runtime.store.jobs.values()) {
     let changed = false;
-    for (const job of this.runtime.store.jobs.values()) {
-      if (!job.threadId || this.threads.has(job.threadId)) continue;
+    for (const job of jobs) {
+      if (!job.threadId) continue;
+      const previous = this.latestJobs.get(job.threadId);
+      if (!previous || previous.id === job.id || job.createdAt > previous.createdAt) this.latestJobs.set(job.threadId, job);
+      if (this.threads.has(job.threadId)) continue;
       this.threads.set(job.threadId, { id: job.threadId, title: `Thread ${job.threadId.slice(0, 8)}`, titleSource: "fallback",
         createdAt: Date.parse(job.createdAt), sandbox: job.sandbox, model: job.model });
       changed = true;
@@ -66,8 +70,7 @@ export class HeadlessBackend {
   }
 
   latest(id) {
-    return [...this.runtime.store.jobs.values()].filter((job) => job.threadId === id)
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+    return this.latestJobs.get(id);
   }
 
   summary(thread) {
@@ -85,7 +88,7 @@ export class HeadlessBackend {
 
   event(message) {
     if (message.method === "headless/jobChanged") {
-      this.syncJobs();
+      this.syncJobs([message.params]);
       this.publish({ backend: "codex", notification: { method: "navigation/invalidated", params: { threadId: message.params.threadId, sourceMethod: "turn/completed" } } }, "navigation");
       return;
     }
@@ -300,7 +303,8 @@ export class HeadlessBackend {
     }
     const filter = query.filter || query.text;
     if (filter) rows = rows.filter((row) => row.title.toLowerCase().includes(filter.toLowerCase()));
-    rows.sort((a, b) => (query.lens === "recents" ? b.createdAt - a.createdAt : b.updatedAt - a.updatedAt) || a.id.localeCompare(b.id));
+    const creationOrder = query.kind === "directory" || (query.kind === "lens" && query.lens === "recents");
+    rows.sort((a, b) => (creationOrder ? b.createdAt - a.createdAt : b.updatedAt - a.updatedAt) || a.id.localeCompare(b.id));
     const queryKey = digest({ backend: request.backend, query });
     const generation = digest(rows);
     let offset = 0;
