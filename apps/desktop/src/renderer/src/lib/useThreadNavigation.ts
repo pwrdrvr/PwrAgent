@@ -8254,6 +8254,17 @@ export function useThreadNavigation(
 
       const archivedKeys = new Set<string>();
       const archived: ArchivedThreadRef[] = [];
+      // Archive changes the target owners and this window's viewer mounts.
+      // Refreshing every visible owner also rereads unrelated remote pins;
+      // a busy peer can then report a list failure after a local archive.
+      const refreshOwners = new Map<string, FederationTarget>();
+      const windowTarget = readRendererFederationTarget() ?? { scope: "local" as const };
+      refreshOwners.set(JSON.stringify(windowTarget), windowTarget);
+      for (const target of targetThreads) {
+        const owner = target.federationTarget ?? target.federation?.ref.target ?? windowTarget;
+        refreshOwners.set(JSON.stringify(owner), owner);
+      }
+      const refreshOptions = { owners: [...refreshOwners.values()] };
       try {
         for (const target of targetThreads) {
           const federationTarget = target.federationTarget ?? target.federation?.ref.target
@@ -8286,13 +8297,13 @@ export function useThreadNavigation(
             });
           }
         }
-        await refresh();
+        await refresh(undefined, undefined, false, refreshOptions);
       } catch (error) {
         for (const targetKey of targetThreadKeys) {
           if (!archivedKeys.has(targetKey)) suppressedArchivedThreadKeysRef.current.delete(targetKey);
         }
         setArchiveThreadError(error instanceof Error ? error.message : String(error));
-        await refresh(archivedKeys.has(threadKey) ? undefined : threadKey, undefined, !archivedKeys.has(threadKey));
+        await refresh(archivedKeys.has(threadKey) ? undefined : threadKey, undefined, !archivedKeys.has(threadKey), refreshOptions);
       }
       return archived;
     },

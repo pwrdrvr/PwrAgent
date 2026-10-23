@@ -20,15 +20,15 @@ describe("navigation read error notices", () => {
         "Navigation retained-page budget reached. Collapse a directory or change lens to release pages.",
         failed,
         "Error: a second failure",
-      ],
+      ].map((error) => ({ error })),
     });
 
     expect(notices.map((notice) => [notice.id, notice.title, notice.autoDismiss, notice.tone])).toEqual([
       ["navigation-read-error:page-budget", "Too many thread lists open", false, "error"],
       ["navigation-read-error:read-failed", "Couldn't load threads", false, "error"],
     ]);
-    // The first failure's own message stays copyable for a bug report.
-    expect(notices[1]?.copyText).toBe(failed);
+    // Distinct failures stay copyable without duplicating the toast.
+    expect(notices[1]?.copyText).toBe(`${failed}\n\nError: a second failure`);
     expect(notices[1]?.message).not.toContain("navigation:get-query-page");
   });
 
@@ -41,7 +41,7 @@ describe("navigation read error notices", () => {
 
   it("says nothing when every read is healthy or only a peer is offline", () => {
     expect(resolveNavigationReadErrorNotices({
-      pageErrors: [undefined, "Target federation peer is not connected."],
+      pageErrors: [undefined, "Target federation peer is not connected."].map((error) => ({ error })),
     })).toEqual([]);
   });
 
@@ -90,4 +90,93 @@ describe("navigation read error notices", () => {
     }]]) }, dispatch));
     expect(dispatch.mock.calls.filter(([action]) => action.type === "show")).toEqual([]);
   });
+});
+
+const busy = "handler_failed: [navigation_busy] Navigation read cancelled or its deadline expired.";
+const peerResource = (instanceId: string, error: string | undefined = busy, loading = false): NavigationWindowResource => ({
+  id: instanceId, loading, state: { ...createNavigationPageState({ protocol: 2, consumer: "main-sidebar",
+    federationTarget: { scope: "remote", instanceId }, query: { kind: "exact", identities: [] } }), error },
+});
+
+it("names the single delayed federation instance and includes its identity in copied diagnostics", () => {
+  const dispatch = vi.fn();
+  renderHook(() => useNavigationReadErrorNotices({
+    resources: new Map([["failed", peerResource("windows-dev")], ["healthy", peerResource("studio", "", true)]]),
+    instances: [{ instanceId: "windows-dev", label: "Windows / dev" }, { instanceId: "studio", label: "Studio" }],
+  }, dispatch));
+  const notice = dispatch.mock.calls.find(([action]) => action.type === "show")?.[0].notice;
+  expect(notice).toMatchObject({ title: "Thread loading delayed",
+    message: "Thread lists from this federation instance are busy or taking too long to load.",
+    facts: [{ label: "Federation instance", value: "Windows / dev" }] });
+  expect(notice.copyText).toContain("Windows / dev (windows-dev)");
+  expect(notice.copyText).toContain(busy);
+  expect(notice.copyText).not.toContain("Studio");
+});
+
+it("names every affected instance once while distinguishing local failures", () => {
+  const dispatch = vi.fn();
+  const local = peerResource("local");
+  local.state.request.federationTarget = undefined;
+  renderHook(() => useNavigationReadErrorNotices({ resources: new Map([
+    ["peer-a", peerResource("a")], ["peer-a-more", peerResource("a")], ["peer-b", peerResource("b")], ["local", local],
+  ]), instances: [{ instanceId: "a", label: "Windows / dev" }, { instanceId: "b", label: "Studio" }] }, dispatch));
+  const notices = dispatch.mock.calls.filter(([action]) => action.type === "show").map(([action]) => action.notice);
+  expect(notices).toHaveLength(1);
+  expect(notices[0]).toMatchObject({ title: "Thread loading delayed", facts: [
+    { label: "Instance", value: "This instance" },
+    { label: "Federation instances", value: "Windows / dev, Studio" },
+  ] });
+});
+
+it("falls back to an unknown owner's instance ID without describing arbitrary failures as slow", () => {
+  const dispatch = vi.fn();
+  renderHook(() => useNavigationReadErrorNotices({
+    resources: new Map([["failed", peerResource("unknown-peer", "owner exploded")]]),
+  }, dispatch));
+  expect(dispatch.mock.calls.find(([action]) => action.type === "show")?.[0].notice).toMatchObject({
+    title: "Couldn't load threads", message: "Thread lists from this federation instance couldn't be loaded.",
+    facts: [{ label: "Federation instance", value: "unknown-peer" }],
+  });
+});
+
+it("retains attribution through refresh and removes recovered owners from the notice", () => {
+  const dispatch = vi.fn();
+  const instances = [{ instanceId: "a", label: "Windows / dev" }, { instanceId: "b", label: "Studio" }];
+  type Props = { resources: ReadonlyMap<string, NavigationWindowResource> };
+  const { rerender } = renderHook(({ resources }: Props) => useNavigationReadErrorNotices({ resources, instances }, dispatch), {
+    initialProps: { resources: new Map([["a", peerResource("a")], ["b", peerResource("b")]]) } as Props,
+  });
+  dispatch.mockClear();
+  const reading = peerResource("a");
+  reading.state.error = undefined;
+  reading.loading = true;
+  rerender({ resources: new Map([["a", reading], ["b", peerResource("b")]]) });
+  expect(dispatch).not.toHaveBeenCalled();
+  rerender({ resources: new Map([["a", { ...reading, loading: false }], ["b", peerResource("b")]]) });
+  const notice = dispatch.mock.calls.find(([action]) => action.type === "show")?.[0].notice;
+  expect(notice.facts).toEqual([{ label: "Federation instance", value: "Studio" }]);
+  expect(notice.copyText).not.toContain("Windows / dev");
+});
+
+it("preserves distinct diagnostics from one owner without labeling every failure as contention", () => {
+  const [notice] = resolveNavigationReadErrorNotices({ pageErrors: [
+    { instanceId: "a", error: busy }, { instanceId: "a", error: "Invalid owner response" },
+    { instanceId: "a", error: busy },
+  ], instances: [{ instanceId: "a", label: "Windows / dev" }] });
+  expect(notice).toMatchObject({ title: "Couldn't load threads", facts: [{ label: "Federation instance", value: "Windows / dev" }] });
+  expect(notice?.copyText?.split(busy)).toHaveLength(2);
+  expect(notice?.copyText).toContain("Invalid owner response");
+});
+
+it("does not attribute a previous owner's in-flight error to a replacement owner", () => {
+  const dispatch = vi.fn();
+  type Props = { resources: ReadonlyMap<string, NavigationWindowResource> };
+  const { rerender } = renderHook(({ resources }: Props) => useNavigationReadErrorNotices({ resources }, dispatch), {
+    initialProps: { resources: new Map([["selection", peerResource("a")]]) } as Props,
+  });
+  dispatch.mockClear();
+  const replacement = peerResource("b", "", true);
+  rerender({ resources: new Map([["selection", replacement]]) });
+  expect(dispatch.mock.calls.some(([action]) => action.type === "show")).toBe(false);
+  expect(dispatch.mock.calls.map(([action]) => action)).toContainEqual({ type: "dismiss", id: "navigation-read-error:read-failed" });
 });
