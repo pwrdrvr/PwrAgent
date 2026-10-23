@@ -1,3 +1,4 @@
+import { detachOwnedThreadDirectory } from "../app-server/thread-directory-detach";
 import type { ThreadTodosChangedEvent } from "@pwragent/shared";
 import { FEDERATION_OPERATOR_QUESTION_CAPABILITIES, FEDERATION_OPERATOR_QUESTION_METHODS,
   registerFederationOperatorQuestionHandlers, type OperatorQuestionOperation,
@@ -57,6 +58,8 @@ import type {
   AppServerReadThreadResponse,
   AppServerThreadSummary,
   AttachDirectoryToThreadResponse,
+  DetachDirectoryFromThreadRequest,
+  DetachDirectoryFromThreadResponse,
   CancelQueuedTurnResponse,
   MoveQueuedTurnResponse,
   ReleaseQueuedTurnResponse,
@@ -7350,6 +7353,24 @@ function localBackendOperations(): FederationBackendOperations {
         threadId: request.threadId,
         directory,
       };
+    },
+    async detachDirectoryFromThread(
+      request: DetachDirectoryFromThreadRequest,
+    ): Promise<DetachDirectoryFromThreadResponse> {
+      return await detachOwnedThreadDirectory(request, {
+        overlayStore: getDesktopOverlayStore(),
+        readThread: async (backend, threadId) =>
+          await getDesktopBackendRegistry().resolveThread({ backend, threadId }),
+        publishUpdate: async (backend, threadId) => {
+          await getDesktopBackendRegistry().publishLocalEvent({
+            backend,
+            notification: {
+              method: "navigation/threadDirectories/updated",
+              params: { reason: "selected-thread", threadIds: [threadId] },
+            },
+          });
+        },
+      });
     },
     async listWorktreeUnpublishedCommits(
       request: ListWorktreeUnpublishedCommitsRequest,
