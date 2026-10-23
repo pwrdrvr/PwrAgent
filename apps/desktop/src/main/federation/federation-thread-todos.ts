@@ -1,4 +1,4 @@
-import type { FederationCapability, FederationRemoteTarget, ThreadTodo, ListThreadTodosRequest } from "@pwragent/shared";
+import type { FederationCapability, FederationRemoteTarget, ThreadTodo, ListThreadTodosRequest, TodoUnavailableInstance } from "@pwragent/shared";
 import { resolveThreadTodoMergeMethod } from "@pwragent/shared";
 import type { FederationRouter } from "./federation-router";
 import type { localThreadTodoOperations } from "../thread-todos/thread-todo-operations";
@@ -93,16 +93,22 @@ export class FederatedThreadTodoService {
       && (!filter.threadId || mount.threadId === filter.threadId))
       .map((mount) => [JSON.stringify([mount.target.instanceId, mount.backend, mount.threadId]), mount]));
     const errors: string[] = [];
+    const unavailableInstances = new Map<string, TodoUnavailableInstance>();
     const remote = await Promise.all([...unique.values()].map(async (mount) => {
       try {
-        return (await this.request("listTodos", { ...filter, backend: mount.backend, threadId: mount.threadId,
-          federationTarget: mount.target })).todos;
+        const response = await this.request("listTodos", { ...filter, backend: mount.backend, threadId: mount.threadId,
+          federationTarget: mount.target });
+        for (const instance of response.unavailableInstances ?? []) unavailableInstances.set(instance.instanceId, instance);
+        errors.push(...response.errors ?? []);
+        return response.todos;
       } catch (error) {
         this.options.onUnavailable?.(error);
         errors.push(`${mount.target.instanceId}: ${error instanceof Error ? error.message : String(error)}`);
         return [];
       }
     }));
-    return { ...listed, ...(errors.length ? { errors } : {}), todos: [...listed.todos, ...remote.flat()].sort((a, b) => b.createdAt - a.createdAt) } as ThreadTodoOperationResponse<K>;
+    return { ...listed, ...(errors.length ? { errors } : {}),
+      ...(unavailableInstances.size ? { unavailableInstances: [...unavailableInstances.values()] } : {}),
+      todos: [...listed.todos, ...remote.flat()].sort((a, b) => b.createdAt - a.createdAt) } as ThreadTodoOperationResponse<K>;
   }
 }

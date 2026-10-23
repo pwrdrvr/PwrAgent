@@ -2650,6 +2650,7 @@ function DesktopAppShell(props: {
             (right.resolvedAt ?? right.updatedAt) - (left.resolvedAt ?? left.updatedAt));
       },
       queueError: [threadTodoController.error, operatorRequests.error].filter(Boolean).join("\n") || undefined,
+      unavailableInstances: [...threadTodoController.unavailableInstances, ...operatorRequests.unavailableInstances],
       waits: operatorRequests.waits,
       waitsByThreadKey: operatorRequests.waitsByThreadKey,
       seenKeys: operatorRequests.seenKeys,

@@ -728,6 +728,35 @@ describe("thread to-do checklists", () => {
 });
 
 describe("ThreadTodosPanel", () => {
+  it("keeps missing instance coverage in a quiet, deduplicated footnote and clears it after recovery", async () => {
+    const disconnected = { instanceId: "studio", label: "Studio Mac", reason: "disconnected" as const };
+    const unsupported = { instanceId: "mini", label: "Build Mini", reason: "unsupported" as const };
+    const view = createView([todo({ id: "available", title: "Available work" })], {
+      unavailableInstances: [disconnected, unsupported, disconnected, unsupported],
+    });
+    const { rerender } = render(<ThreadTodosPanel view={view} threadKey="codex:thread-a" onStartReview={vi.fn()} />);
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("heading", { name: "Available work" })).toBeTruthy();
+    const note = screen.getByRole("button", { name: /Show affected instances/ });
+    expect(note.textContent).toBe("Some instances are disconnected or do not support to-dos.");
+    await act(async () => { fireEvent.click(note); });
+    expect(screen.getByRole("tooltip").textContent).toBe("Build Mini — To-dos unavailable; update PwrAgent on this instance\nStudio Mac — Disconnected");
+    expect(note.closest("footer")).toBeTruthy();
+    await act(async () => {
+      rerender(<ThreadTodosPanel view={{ ...view, unavailableInstances: [] }} threadKey="codex:thread-a" onStartReview={vi.fn()} />);
+    });
+    expect(screen.queryByRole("button", { name: /Show affected instances/ })).toBeNull();
+  });
+
+  it.each(["disconnected", "unsupported"] as const)("explains %s coverage without an error alert", (reason) => {
+    const view = createView([], { unavailableInstances: [{ instanceId: "mini", label: "Build Mini", reason }] });
+    render(<ThreadTodosPanel view={view} threadKey="codex:thread-a" onStartReview={vi.fn()} />);
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("button", { name: /Show affected instances/ }).textContent).toBe(reason === "disconnected"
+      ? "Some instances are disconnected." : "Some instances do not support to-dos.");
+    expect(screen.getByText("No to-dos for this thread.")).toBeTruthy();
+  });
+
   it("puts this thread first and opens another thread from its row", () => {
     const other = todo({ id: "o", threadId: "thread-b", title: "Elsewhere" });
     const mine = todo({ id: "a", title: "Mine" });

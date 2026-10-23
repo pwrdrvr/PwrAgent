@@ -23669,6 +23669,35 @@ button.thread-todos-panel__row-main:is(:hover, :focus-visible)
   margin-top: 10px;
 }
 
+.thread-todos-panel__footnote {
+  margin-top: 16px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.thread-todos-panel__coverage-note {
+  display: block;
+  padding: 0;
+  border: 0;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.5;
+  text-align: left;
+  cursor: help;
+}
+
+.thread-todos-panel__coverage-note:hover {
+  color: var(--text-secondary);
+}
+
+.thread-todos-panel__coverage-note:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 3px;
+}
+
 .thread-todos-panel__controls .subagent-lens-switch {
   flex: 1 1 auto;
   margin: 0;

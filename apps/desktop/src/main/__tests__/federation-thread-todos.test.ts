@@ -98,6 +98,23 @@ describe("federated To-do ownership", () => {
     expect(response.errors).toEqual(["peer: Peer offline"]);
     expect(onUnavailable).toHaveBeenCalledOnce();
   });
+
+  it("reports an unavailable instance once across multiple mounted threads without hiding available cards", async () => {
+    const unavailable = { instanceId: "older", label: "Build Mini", reason: "unsupported" as const };
+    const service = new FederatedThreadTodoService({ local: operations(),
+      remote: vi.fn(async (target) => target.instanceId === "older"
+        ? { todos: [], unavailableInstances: [unavailable] } : { todos: [card] }) as ThreadTodoRemoteRequest,
+      mountedThreads: async () => [
+        { target: { scope: "remote", instanceId: "older" }, backend: "codex", threadId: "one" },
+        { target: { scope: "remote", instanceId: "older" }, backend: "codex", threadId: "two" },
+        { target, backend: "codex", threadId: "available" },
+      ],
+    });
+    const response = await service.request("listTodos", {});
+    expect(response.todos).toHaveLength(2);
+    expect(response.unavailableInstances).toEqual([unavailable]);
+    expect(response.errors).toBeUndefined();
+  });
 });
 
 describe("To-do federation protocol", () => {

@@ -1869,9 +1869,39 @@ describe("DesktopFederationRuntime", () => {
     await expect(runtime.requestOperatorQuestionOperation(target, "listPending", {})).resolves.toEqual([]);
     expect(send).not.toHaveBeenCalled();
     harness.router.registerConnection(createConnection({ peerId: "owner", capabilities: ["thread_detail", "turn_control", "operator_questions"], sendEnvelope: send }));
-    await expect(runtime.requestOperatorQuestionOperation(target, "list", {})).rejects.toThrow("Update that PwrAgent instance.");
+    await expect(runtime.requestOperatorQuestionOperation(target, "list", {})).resolves.toMatchObject({
+      questions: [], serverRequests: [], seenKeys: [],
+      unavailableInstances: [{ instanceId: "owner", reason: "unsupported" }],
+    });
     await expect(runtime.requestOperatorQuestionOperation(target, "reply", { backend: "codex", threadId: "thread", input: [] }))
       .rejects.toThrow("Update that PwrAgent instance.");
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("distinguishes disconnected To-do owners from connected owners without queue support", async () => {
+    const runtime = new DesktopFederationRuntime();
+    const harness = runtime as unknown as RuntimeHarness;
+    harness.localInstanceId = "viewer";
+    harness.router = new FederationRouter({ localInstanceId: "viewer" });
+    harness.store = () => ({ listPeers: () => [], getPeer: () => undefined });
+    const target = { scope: "remote" as const, instanceId: "owner" };
+    const send = vi.fn();
+    // Remembered capabilities are not evidence of a live connection.
+    harness.remotePeerDirectory.set("owner", {
+      id: "owner", label: "Studio Mac", status: "disconnected", capabilities: ["thread_todos", "operator_requests"],
+    });
+    for (const response of [await runtime.requestThreadTodoOperation(target, "listTodos", {}),
+      await runtime.requestOperatorQuestionOperation(target, "list", {})]) {
+      expect(response.unavailableInstances).toMatchObject([{ instanceId: "owner", label: expect.stringContaining("Studio Mac"), reason: "disconnected" }]);
+      expect(response.errors).toBeUndefined();
+    }
+    harness.router.registerConnection(createConnection({ peerId: "owner", capabilities: ["thread_detail"], sendEnvelope: send }));
+    expect((await runtime.requestThreadTodoOperation(target, "listTodos", {})).unavailableInstances)
+      .toMatchObject([{ instanceId: "owner", reason: "unsupported" }]);
+    expect((await runtime.requestOperatorQuestionOperation(target, "list", {})).unavailableInstances)
+      .toMatchObject([{ instanceId: "owner", reason: "unsupported" }]);
+    await expect(runtime.requestThreadTodoOperation(target, "resolveTodo", { id: "card", status: "done" }))
+      .rejects.toThrow("does not support To-dos");
     expect(send).not.toHaveBeenCalled();
   });
 

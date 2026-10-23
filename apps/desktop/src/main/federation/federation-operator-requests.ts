@@ -22,6 +22,7 @@ export class FederatedOperatorRequestService {
         this.options.remote(target, "listPending", filter),
       ]);
       return {
+        ...response,
         serverRequests: serverRequests.map((entry) => ({ ...entry, federationTarget: target })),
         questions: response.questions.map((entry) => ({ ...entry, federationTarget: target })),
         seenKeys: response.seenKeys.map((key) => projectOperatorItemKey(key, target)),
@@ -53,7 +54,12 @@ export class FederatedOperatorRequestService {
       response.questions.push(...listed.questions);
       response.serverRequests.push(...listed.serverRequests);
       response.seenKeys.push(...listed.seenKeys);
+      if (listed.errors?.length) (response.errors ??= []).push(...listed.errors);
+      if (listed.unavailableInstances?.length) (response.unavailableInstances ??= []).push(...listed.unavailableInstances);
     }
+    if (response.unavailableInstances) response.unavailableInstances = [...new Map(
+      response.unavailableInstances.map((instance) => [instance.instanceId, instance]),
+    ).values()];
     response.seenKeys = [...new Set(response.seenKeys)];
     return response;
   }

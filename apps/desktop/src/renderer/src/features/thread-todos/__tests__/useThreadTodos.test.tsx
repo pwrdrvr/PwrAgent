@@ -35,3 +35,18 @@ it("loads owner cards in a remote viewer and groups them by federated navigation
   await waitFor(() => expect(result.current.openByThreadKey.get("remote:peer:codex:owner")).toEqual([card]));
   expect(api.listThreadTodos).toHaveBeenCalledTimes(1);
 });
+
+it("clears the coverage note when a peer change reloads a recovered owner", async () => {
+  const unavailable = { instanceId: "peer", label: "Studio Mac", reason: "disconnected" as const };
+  let changed: (event: ThreadTodosChangedEvent) => void = () => {};
+  const api = {
+    listThreadTodos: vi.fn().mockResolvedValueOnce({ todos: [], unavailableInstances: [unavailable] })
+      .mockResolvedValue({ todos: [] }),
+    onThreadTodosChanged: vi.fn((listener: typeof changed) => { changed = listener; return () => {}; }),
+  };
+  const { result } = renderHook(() => useThreadTodos(api));
+  await waitFor(() => expect(result.current.unavailableInstances).toEqual([unavailable]));
+  expect(result.current.error).toBeUndefined();
+  act(() => changed({ at: 2 }));
+  await waitFor(() => expect(result.current.unavailableInstances).toEqual([]));
+});
