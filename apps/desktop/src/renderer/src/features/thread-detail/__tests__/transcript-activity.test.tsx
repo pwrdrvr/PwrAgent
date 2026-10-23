@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AppServerThreadActivityDetail, NavigationThreadSummary } from "@pwragent/shared";
 import { ThreadLinkProvider } from "../../../lib/thread-links";
 import { TranscriptActivity } from "../TranscriptActivity";
+import { buildLiveActivityEntry } from "../live-transcript-activity";
 
 describe("TranscriptActivity", () => {
   afterEach(() => {
@@ -53,6 +54,35 @@ describe("TranscriptActivity", () => {
     );
 
     expect(screen.getByRole("button", { name: "use_tool" })).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it.each(([
+    ["failed", "Failed"],
+    ["cancelled", "Cancelled"],
+    ["in_progress", "Running"],
+    ["completed", "Done"],
+  ] as const).flatMap(([status, label]) =>
+    [false, true].map((withCommand) => ({ status, label, withCommand })),
+  ))("keeps a title-only live tool's $status status accessible (command: $withCommand)", ({ status, label, withCommand }) => {
+    const entry = buildLiveActivityEntry({
+      id: "tool-1",
+      details: [{
+        id: "tool-1:detail",
+        kind: "command",
+        label: "use_tool",
+        status,
+        ...(withCommand ? { command: { displayCommand: "use_tool", source: "tool" as const } } : {}),
+      }],
+    });
+    expect(entry.status).toBe(status);
+    render(<TranscriptActivity entry={entry} />);
+
+    const toggle = screen.getByRole("button", { name: "use_tool" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(toggle);
+
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText(withCommand && status === "completed" ? "Success" : label)).toBeInTheDocument();
   });
 
   it("shows a direct activity path relative to the longest thread directory", async () => {

@@ -326,7 +326,7 @@ function hasOnlyRepeatedLabel(entry: AppServerThreadActivityEntry): boolean {
     && !detail.url
     && !detail.path
     && !detail.images?.length
-    && (!detail.status || detail.status === entry.status);
+    && !detail.status;
 }
 
 function singleDirectDetail(
