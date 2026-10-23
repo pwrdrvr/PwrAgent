@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.3.1 - 2026-10-23
+
+- Federation Port Forwarding - Access development servers running beside remote threads through an explicit local forward. The Ports panel provides connection controls, browser links, forwarding status, and traffic counts. Supports HTTP, WebSockets, HTTPS pass-through, and TCP.
+- Remote File Attachments - Drop, paste, or pick files in a remote thread's composer to transfer them to the owning machine. Uploads show progress, cancellation, and retry controls. Requires incoming-file permission on the owner.
+- Claude Sessions and Reviews - Thread names now appear during the first turn instead of waiting for completion. Review findings display meaningful categories such as Correctness and Efficiency instead of an unknown-priority badge.
+- Usage and Cost - Prevent agents from silently assigning expensive parent models to lightweight task monitors. Explicit operator-selected monitor settings remain supported.
+- Grok Permissions - Honor native Auto permission controls when supported by the installed Grok runtime, keeping permissions separate from planning mode.
+- Images and To-dos - Preserve newly pasted images when Grok/ACP conversations reopen. Disconnected Federation instances produce a compact availability notice without obscuring available To-dos.
+
+Compatibility: New Federation capabilities require compatible builds on the participating machines. Port forwarding requires explicit operator activation.
+
 ## v1.3.0 - 2026-10-23
 
 ### Claude Code Sessions
