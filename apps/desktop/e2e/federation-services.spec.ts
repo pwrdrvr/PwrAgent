@@ -53,8 +53,12 @@ test("remote thread services explicitly connect real HTTP and WS and release on 
     await remote.screenshot({ path: testInfo.outputPath("services-available.png") });
     await services.getByRole("button", { name: "Forward Port", exact: true }).click();
     await expect(services.getByRole("button", { name: "Stop Forwarding", exact: true })).toBeVisible();
-    const mapping = await services.locator(".thread-services__identity").innerText();
-    const localPort = Number(mapping.match(/127\.0\.0\.1:(\d+) →/)?.[1]);
+    // The collapsed bar's Open button names the live local address. Read the
+    // port from its accessible name, not from the row's flex layout text.
+    const openLabel = await services
+      .getByRole("button", { name: /^Open 127\.0\.0\.1:\d+ in Browser$/ })
+      .getAttribute("aria-label");
+    const localPort = Number(openLabel?.match(/127\.0\.0\.1:(\d+)/)?.[1]);
     expect(localPort).toBeGreaterThan(0);
     expect(localPort).not.toBe(ownerPort);
     const url = `http://127.0.0.1:${localPort}/`;
