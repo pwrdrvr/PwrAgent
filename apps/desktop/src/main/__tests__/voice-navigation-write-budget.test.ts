@@ -32,6 +32,31 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+it("preserves a persisted off-page peer pin without writes when opening it", async () => {
+  const store = new SqliteOverlayStore(db);
+  const target = { scope: "remote" as const, instanceId: "peer" };
+  const ref = { backend: "codex" as const, threadId: "off-page", target };
+  const summary: NavigationThreadSummary = {
+    id: ref.threadId, source: ref.backend, title: "Saved peer summary", titleSource: "explicit",
+    linkedDirectories: [], inbox: { inInbox: false },
+  };
+  await store.addRemoteThreadPin({ ref, instanceLabel: "Saved peer label", summary, addedAt: 123, pinnedVia: "companion" });
+  await store.setRemoteThreadLocalPin({ ref, pinnedRank: "a0" });
+  const before = (await store.listRemoteThreadPins())[0];
+  const { writes } = await measureSqliteWrites(async () => {
+    for (let index = 0; index < 100; index += 1) {
+      await ensureWindowThreadMounted({
+        hasRemoteThreadPin: async (request) => await store.hasRemoteThreadPin(request),
+        addRemoteThreadPin: async (request) => ({ pin: await store.addRemoteThreadPin({ ...request, instanceLabel: target.instanceId, pinnedVia: "explicit" }) }),
+      }, { backend: ref.backend, threadId: ref.threadId, federationTarget: target }, [], false);
+    }
+  });
+  expect((await store.listRemoteThreadPins())[0]).toEqual(before);
+  expect(writes.commits).toBe(0);
+  expectSqliteWriteBudget({ scenario: "voice-open-thread-persisted-off-page-peer", writes,
+    note: "100 opens with an empty loaded page and an existing ranked peer pin: exact persisted lookup preserves the complete pin payload, zero commits and 0 MB/day." });
+});
+
 it("budgets a first peer mount and 100 repeated graphical opens", async () => {
   const store = new SqliteOverlayStore(db);
   const webContents = Object.assign(new EventEmitter(), { id: 1, isDestroyed: () => false }) as unknown as WebContents;
@@ -50,7 +75,8 @@ it("budgets a first peer mount and 100 repeated graphical opens", async () => {
     send: (request) => {
       navigation = (async () => {
         await ensureWindowThreadMounted({
-          addRemoteThreadPin: async ({ ref }) => ({ pin: await store.addRemoteThreadPin({ ref, instanceLabel: target.instanceId, pinnedVia: "explicit" }) }),
+          hasRemoteThreadPin: async (request) => await store.hasRemoteThreadPin(request),
+          addRemoteThreadPin: async (request) => ({ pin: await store.addRemoteThreadPin({ ...request, instanceLabel: target.instanceId, pinnedVia: "explicit" }) }),
         }, request, mounted, false);
         mounted = [thread];
         publishOperatorFocus({ webContents, focus: { view: "thread", thread: { ...args, title: thread.title } } });

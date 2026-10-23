@@ -1239,6 +1239,24 @@ vi.mock("../pr-status/git-remote", async () => {
 });
 
 describe("app server ipc", () => {
+  it("reads exact persisted peer membership without repinning or listing navigation rows", async () => {
+    const { NAVIGATION_HAS_REMOTE_THREAD_PIN_CHANNEL } = await import("../../shared/ipc");
+    registerAppServerIpcHandlers();
+    const ref = { backend: "codex" as const, threadId: "off-page", target: { scope: "remote" as const, instanceId: "peer-laptop" } };
+    hasRemoteThreadPin.mockClear();
+    addRemoteThreadPinStore.mockClear();
+    listRemoteThreadPins.mockClear();
+    hasRemoteThreadPin.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    const read = handlers.get(NAVIGATION_HAS_REMOTE_THREAD_PIN_CHANNEL)!;
+    expect(await read({}, { ref })).toBe(true);
+    expect(await read({}, { ref })).toBe(false);
+    expect(hasRemoteThreadPin).toHaveBeenLastCalledWith({ ref });
+    expect(addRemoteThreadPinStore).not.toHaveBeenCalled();
+    expect(listRemoteThreadPins).not.toHaveBeenCalled();
+    await expect(read({}, { ref: { ...ref, target: { scope: "local" } } })).rejects.toThrow("valid remote federation target");
+    expect(hasRemoteThreadPin).toHaveBeenCalledTimes(2);
+  });
+
   it("forwards the global search archive scope to peers as well as the local search", async () => {
     const { appServerService } = await import("../ipc/app-server");
     const local: ThreadSearchResponse = {
