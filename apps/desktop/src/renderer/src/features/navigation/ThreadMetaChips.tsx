@@ -6,6 +6,7 @@ import {
   ContinueAfterIcon,
   DraftIcon,
   FolderIcon,
+  PauseIcon,
   TerminalIcon,
   TodoIcon,
   WorktreeIcon,
@@ -46,9 +47,10 @@ type ThreadMetaChipsProps = {
   hasIntegratedTerminal?: boolean;
   hasInputRequest?: boolean;
   /**
-   * When set, renders the "Scheduled" (future send time) or "Queued"
-   * (waiting on the active turn) chip. Resolved upstream so a thread with
-   * both pending states shows only the higher-priority "Scheduled".
+   * When set, renders the "Held" (waiting on the operator to retry or
+   * delete), "Scheduled" (future send time) or "Queued" (waiting on the
+   * active turn) chip. Resolved upstream so a thread with several pending
+   * states shows only the highest-priority one.
    */
   queuedMessageState?: ThreadQueuedMessageState;
   includeLinkedDirectories?: boolean;
@@ -293,7 +295,17 @@ export function ThreadMetaChips({
 
       {thread.agent ? <AgentThreadChip threadRow /> : null}
 
-      {queuedMessageState === "scheduled" ? (
+      {queuedMessageState === "held" ? (
+        <span
+          aria-label="A message is held"
+          role="img"
+          className="thread-row__chip thread-row__chip--held thread-row__chip--persistent"
+          title="A message is held. Open the thread to retry or delete it."
+        >
+          <PauseIcon size={11} strokeWidth={2.5} />
+          Held
+        </span>
+      ) : queuedMessageState === "scheduled" ? (
         <span
           aria-label="A message is scheduled to send"
           role="img"

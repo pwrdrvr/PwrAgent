@@ -167,6 +167,50 @@ describe("useThreadQueuedMessageIndicators", () => {
     expect(result.current.indicators).toEqual({ "codex:a": "scheduled" });
   });
 
+  it("prefers 'held' over a scheduled and a plain queued turn", () => {
+    const thread = makeThread("a");
+    const { result } = renderIndicators([thread]);
+    setQueued(result.current.store, thread, [
+      makeQueuedTurn({ id: "plain" }),
+      makeQueuedTurn({ id: "future", scheduledSendAt: Date.now() + 60_000 }),
+      makeQueuedTurn({
+        id: "held",
+        scheduledActionId: "scheduled-action:held",
+        manualReleaseRequired: true,
+        holdReason: "target-turn-ended",
+      }),
+    ]);
+    expect(result.current.indicators).toEqual({ "codex:a": "held" });
+  });
+
+  it("classifies a failed send as 'held'", () => {
+    const thread = makeThread("a");
+    const { result } = renderIndicators([thread]);
+    setQueued(result.current.store, thread, [
+      makeQueuedTurn({
+        failedScheduledActionId: "scheduled-action:failed",
+        errorMessage: "Provider rejected the message.",
+      }),
+    ]);
+    expect(result.current.indicators).toEqual({ "codex:a": "held" });
+  });
+
+  it("prefers 'held' over a durable scheduled start", () => {
+    const thread = {
+      ...makeThread("a"),
+      scheduledStart: {
+        actionId: "scheduled-action:1",
+        scheduledFor: Date.now() + 30_000,
+        state: "scheduled" as const,
+      },
+    };
+    const { result } = renderIndicators([thread]);
+    setQueued(result.current.store, thread, [
+      makeQueuedTurn({ manualReleaseRequired: true }),
+    ]);
+    expect(result.current.indicators).toEqual({ "codex:a": "held" });
+  });
+
   it("treats an already-elapsed send time as 'queued', not 'scheduled'", () => {
     const thread = makeThread("a");
     const { result } = renderIndicators([thread]);

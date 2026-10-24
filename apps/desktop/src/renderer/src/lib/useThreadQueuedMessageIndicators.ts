@@ -6,15 +6,23 @@ import { useStableThreadIndicators } from "./useStableThreadIndicators";
 import {
   buildThreadComposerScopeKey,
   type ComposerDraftStore,
+  type ComposerQueuedTurnSnapshot,
 } from "../features/composer/useComposerDraftStore";
 
 /**
  * A thread's pending outbound-message state, in descending information
- * priority. `"scheduled"` (a message with a future send time) outranks
- * `"queued"` (a message waiting for the active turn to finish) so a thread
- * that has both surfaces the scheduled signal.
+ * priority. `"held"` (a message that is held for retry or failed to send)
+ * outranks the rest: it waits on the operator, and nothing queued behind it
+ * sends until they retry or delete it. `"scheduled"` (a message with a future
+ * send time) outranks `"queued"` (a message waiting for the active turn to
+ * finish) so a thread that has both surfaces the scheduled signal.
  */
-export type ThreadQueuedMessageState = "scheduled" | "queued";
+export type ThreadQueuedMessageState = "held" | "scheduled" | "queued";
+
+/** The composer's "Held for retry" and "Failed to send" rows. */
+function isHeldQueuedTurn(turn: ComposerQueuedTurnSnapshot): boolean {
+  return Boolean(turn.manualReleaseRequired || turn.errorMessage);
+}
 
 /**
  * Derives a per-thread map of pending outbound-message indicators from the
@@ -67,8 +75,9 @@ export function useThreadQueuedMessageIndicators(params: {
           && turn.scheduledSendAt > now,
       );
       const threadKey = threadSummaryIdentityKey(thread);
-      indicators[threadKey] =
-        hasScheduled || indicators[threadKey] === "scheduled"
+      indicators[threadKey] = queuedTurns.some(isHeldQueuedTurn)
+        ? "held"
+        : hasScheduled || indicators[threadKey] === "scheduled"
           ? "scheduled"
           : "queued";
     }

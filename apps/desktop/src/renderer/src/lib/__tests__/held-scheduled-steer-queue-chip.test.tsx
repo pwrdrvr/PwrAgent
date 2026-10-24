@@ -84,10 +84,10 @@ function harness(selectedThread?: NavigationThreadSummary) {
 }
 
 describe("a held scheduled steer the owner's FIFO no longer holds", () => {
-  it("keeps its Queued chip after the owner's complete FIFO reads empty", async () => {
+  it("keeps its Held chip after the owner's complete FIFO reads empty", async () => {
     const { hook, queueReads } = harness(other);
     const scope = buildThreadComposerScopeKey("acp:grok", "grok-thread");
-    await waitFor(() => expect(hook.result.current.indicators["acp:grok:grok-thread"]).toBe("queued"));
+    await waitFor(() => expect(hook.result.current.indicators["acp:grok:grok-thread"]).toBe("held"));
     // Projecting the held steer demands its owner's FIFO; wait for that read
     // to land and be reconciled.
     await waitFor(() => expect(queueReads.mock.calls.some(([request]) =>
@@ -96,12 +96,12 @@ describe("a held scheduled steer the owner's FIFO no longer holds", () => {
 
     expect(hook.result.current.store.getQueuedTurns(scope).map((entry) => entry.id))
       .toEqual(["scheduled-projection:scheduled-action:steer:held"]);
-    expect(hook.result.current.indicators["acp:grok:grok-thread"]).toBe("queued");
+    expect(hook.result.current.indicators["acp:grok:grok-thread"]).toBe("held");
   });
 
-  it("does not flash the chip when focus leaves the thread", async () => {
+  it("does not flash the Held chip when focus leaves the thread", async () => {
     const { hook, queueReads } = harness(thread);
-    await waitFor(() => expect(hook.result.current.indicators["acp:grok:grok-thread"]).toBe("queued"));
+    await waitFor(() => expect(hook.result.current.indicators["acp:grok:grok-thread"]).toBe("held"));
     await waitFor(() => expect(queueReads).toHaveBeenCalled());
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
     const reads = queueReads.mock.calls.length;
@@ -110,6 +110,6 @@ describe("a held scheduled steer the owner's FIFO no longer holds", () => {
     await waitFor(() => expect(queueReads.mock.calls.length).toBeGreaterThan(reads), { timeout: 2_000 });
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
 
-    expect(hook.result.current.indicators["acp:grok:grok-thread"]).toBe("queued");
+    expect(hook.result.current.indicators["acp:grok:grok-thread"]).toBe("held");
   });
 });

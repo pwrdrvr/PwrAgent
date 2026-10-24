@@ -7149,6 +7149,17 @@ a.button {
   font-weight: 600;
 }
 
+/* "Held": a queued message that waits on the operator to retry or delete
+   it, and blocks the queue behind it. It wears the composer's held-row
+   danger tone on its label and edge, never a filled panel, so it reads as
+   "needs you" in every theme without pretending to be an error banner. */
+.thread-row__chip--held {
+  border: 1px solid var(--danger-border);
+  background: transparent;
+  color: var(--danger-text);
+  font-weight: 650;
+}
+
 /* Unsent draft. Deliberately the quietest of the three pending states: a
    Scheduled or Queued message is already committed to send and the app will
    act on it, whereas a draft is waiting on the operator and nothing is going
