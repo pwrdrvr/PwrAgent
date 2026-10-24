@@ -4,7 +4,7 @@ import type {
   AppServerThreadMessage,
 } from "@pwragent/shared";
 import { turnUsageEntryTurnId } from "@pwragent/shared";
-import { lateWorkBelongsAboveAnswer } from "../features/thread-detail/turn-answer-placement";
+import { isTurnAnswer, lateWorkBelongsAboveAnswer } from "../features/thread-detail/turn-answer-placement";
 import {
   addTranscriptReviewSegmentToIndex,
   createTranscriptReviewHistoryIndex,
@@ -557,6 +557,7 @@ function retainedPlacementTime(entry: AppServerThreadEntry): number | undefined 
 
 function findHistoryInsertionPoint(
   entry: AppServerThreadEntry,
+  turnId: string,
   turnPages: TranscriptHistoryTurnPage[],
 ): TranscriptHistoryInsertionPoint | undefined {
   const entryTime = retainedPlacementTime(entry);
@@ -604,11 +605,7 @@ function findHistoryInsertionPoint(
         }
         laterEntry = { entryIndex, page: turnPage.page, position };
       }
-      if (
-        historyEntry.type === "message"
-        && historyEntry.role === "assistant"
-        && historyEntry.phase === "final"
-      ) {
+      if (isTurnAnswer(historyEntry, turnId)) {
         lastAnswer = {
           answer: historyEntry,
           entryIndex,
@@ -660,7 +657,7 @@ function retainedEntryInsertionPoint(
     return cached.insertionPoint;
   }
 
-  const insertionPoint = findHistoryInsertionPoint(entry, turnPages);
+  const insertionPoint = findHistoryInsertionPoint(entry, turnId, turnPages);
   if (insertionPoint) {
     index.retainedEntryPlacements.set(entry.id, {
       entryTime,

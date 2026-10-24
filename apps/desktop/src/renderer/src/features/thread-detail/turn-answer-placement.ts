@@ -3,7 +3,8 @@ import { isTerminalTurnMetadata } from "@pwragent/shared";
 import { readRendererSequence } from "./live-transcript-activity";
 import { isConcreteWorkEntry } from "./transcript-render-items";
 
-function isTurnAnswer(entry: AppServerThreadEntry, turnId: string): boolean {
+/** Whether `entry` is a final assistant reply of turn `turnId`. */
+export function isTurnAnswer(entry: AppServerThreadEntry, turnId: string): boolean {
   return (
     entry.turn?.id === turnId
     && entry.type === "message"
@@ -65,6 +66,22 @@ export function turnAnswerIndexForLateWork(
   return answerIndex !== -1 && lateWorkBelongsAboveAnswer(row, entries[answerIndex]!)
     ? answerIndex
     : -1;
+}
+
+/**
+ * Caps `index`, a place a caller found for `row`, at its finished turn's
+ * answer: the earlier of the two wins. Returns `index` unchanged when the
+ * rule does not apply, and the answer's index when `index` is -1.
+ */
+export function capAtTurnAnswer(
+  entries: readonly AppServerThreadEntry[],
+  row: AppServerThreadEntry,
+  index: number,
+): number {
+  const answerIndex = turnAnswerIndexForLateWork(entries, row);
+  return answerIndex !== -1 && (index === -1 || index > answerIndex)
+    ? answerIndex
+    : index;
 }
 
 /**

@@ -352,11 +352,44 @@ describe("TranscriptList", () => {
       expect(text.indexOf("More work")).toBe(-1);
     });
 
-    it("keeps work the renderer saw after an agent's reply below that reply", () => {
-      const reply = withRendererSequence(
-        { ...completedTurnEntries[4]!, turn: { id: turn.id, status: "in_progress" as const, startedAt: turn.startedAt } },
-        4,
+    it("keeps a sequenced late work row above the answer when a later-sequenced diff follows it", () => {
+      // The Edited Files row stays below the answer; the work row must not
+      // land between them just because the renderer saw it before the diff.
+      const editedFiles = withRendererSequence<AppServerThreadActivityEntry>({
+        type: "activity",
+        id: "live-file-change-1",
+        summary: "Changed 1 file",
+        status: "completed",
+        details: [{
+          id: "diff-1",
+          kind: "write",
+          label: "src/a.ts",
+          fileDiff: { kind: "update", diff: "+a", additions: 1, removals: 0 },
+        }],
+        createdAt: turn.completedAt + 500,
+        turn,
+      }, 9);
+      const { container } = render(
+        <TranscriptList
+          entries={[...completedTurnEntries.slice(0, 5), editedFiles]}
+          loading={false}
+          loadingMore={false}
+          pendingActivityEntry={withRendererSequence(
+            { ...lateLiveRow, id: "live-tools-1", summary: "Ran 1 command" },
+            5,
+          )}
+          onLoadOlder={async () => undefined}
+        />
       );
+
+      const text = container.textContent ?? "";
+      const reply = text.indexOf("Acknowledged: PR65 is reported merged.");
+      expect(reply).toBeGreaterThan(text.indexOf("Worked for 2m 29s"));
+    });
+
+    it("keeps work the renderer saw after an agent's reply below that reply", () => {
+      // A finished turn: only the observed order keeps the row below.
+      const reply = withRendererSequence(completedTurnEntries[4]!, 4);
       const { container } = render(
         <TranscriptList
           entries={[...completedTurnEntries.slice(0, 4), reply]}

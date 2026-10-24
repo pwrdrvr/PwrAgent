@@ -41,7 +41,7 @@ import { injectMessagingBindingTransitions } from "./messaging-binding-transitio
 import { injectPermissionTransitions } from "./permission-transition-entries";
 import { injectQuestionnaireActivities } from "./questionnaire-activity-entries";
 import { injectTurnFailures } from "./turn-failure-entries";
-import { turnAnswerIndexForLateWork } from "./turn-answer-placement";
+import { capAtTurnAnswer } from "./turn-answer-placement";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ThreadLinkSource } from "../../lib/thread-links";
 import {
@@ -257,6 +257,8 @@ function insertPendingEntry(
     return;
   }
 
+  // A finished turn's work goes above its answer, however late its stamp or
+  // sequence, so each tier below is capped at that answer.
   const pendingSequence = readRendererSequence(pendingEntry);
   const sequencedIndex =
     typeof pendingSequence === "number"
@@ -269,7 +271,11 @@ function insertPendingEntry(
         })
       : -1;
   if (sequencedIndex !== -1) {
-    entries.splice(sequencedIndex, 0, pendingEntry);
+    entries.splice(
+      capAtTurnAnswer(entries, pendingEntry, sequencedIndex),
+      0,
+      pendingEntry,
+    );
     return;
   }
 
@@ -291,12 +297,7 @@ function insertPendingEntry(
           );
         })
       : -1;
-  // A finished turn's work goes above its answer, however late its stamp.
-  const answerIndex = turnAnswerIndexForLateWork(entries, pendingEntry);
-  const placedIndex =
-    answerIndex !== -1 && (timedIndex === -1 || timedIndex > answerIndex)
-      ? answerIndex
-      : timedIndex;
+  const placedIndex = capAtTurnAnswer(entries, pendingEntry, timedIndex);
   if (placedIndex !== -1) {
     entries.splice(placedIndex, 0, pendingEntry);
     return;
