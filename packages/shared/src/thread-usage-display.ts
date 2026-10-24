@@ -463,6 +463,107 @@ export function tokenUsageActivityScope(
   return undefined;
 }
 
+/** The turn a "Turn usage:" row totals, or undefined for any other row. */
+export function turnUsageEntryTurnId(
+  entry: AppServerThreadEntry,
+): string | undefined {
+  if (entry.type !== "activity" || tokenUsageActivityScope(entry) !== "turn") {
+    return undefined;
+  }
+  return entry.turn?.id ?? entry.usageLine?.turnId;
+}
+
+/**
+ * Moves each turn total ("Turn usage:") to just after the last other entry
+ * of its own turn.
+ *
+ * A turn total belongs to its turn, not to a moment. The rows around it carry
+ * clocks that disagree: Codex stamps a final reply with its second-truncated
+ * completion, the renderer stamps live rows and the total itself with the
+ * millisecond it saw them, and a re-read carries those receipt times forward.
+ * Any merge that places rows by time, or by the order they arrived in, can
+ * leave a total above a later row of its turn or below a later turn. Every
+ * path that produces transcript entries ends with this pass, so a total's
+ * position never depends on `createdAt` or on arrival order.
+ *
+ * Only totals move; every other entry keeps its order. A total whose turn has
+ * no other entry in the list stays put, because nothing here says where that
+ * turn is. Monitor usage and per-request usage are ordinary entries here: a
+ * row of the same turn that already follows them keeps following them.
+ *
+ * Two passes, O(n). Returns the input array when nothing moves, so memoized
+ * consumers keep their identity.
+ */
+export function anchorTurnUsageEntries(
+  entries: AppServerThreadEntry[],
+): AppServerThreadEntry[] {
+  const lastEntryIndexByTurnId = new Map<string, number>();
+  let hasTurnUsage = false;
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index]!;
+    if (turnUsageEntryTurnId(entry) !== undefined) {
+      hasTurnUsage = true;
+      continue;
+    }
+    const turnId = entry.turn?.id;
+    if (turnId) {
+      lastEntryIndexByTurnId.set(turnId, index);
+    }
+  }
+  if (!hasTurnUsage) {
+    return entries;
+  }
+
+  const usageByAnchorIndex = new Map<number, AppServerThreadEntry[]>();
+  const movedIndexes = new Set<number>();
+  for (let index = 0; index < entries.length; index += 1) {
+    const turnId = turnUsageEntryTurnId(entries[index]!);
+    const anchorIndex = turnId === undefined
+      ? undefined
+      : lastEntryIndexByTurnId.get(turnId);
+    if (anchorIndex === undefined) {
+      continue;
+    }
+    const anchored = usageByAnchorIndex.get(anchorIndex);
+    if (anchored) {
+      anchored.push(entries[index]!);
+    } else {
+      usageByAnchorIndex.set(anchorIndex, [entries[index]!]);
+    }
+    movedIndexes.add(index);
+  }
+  if (movedIndexes.size === 0) {
+    return entries;
+  }
+
+  const anchoredEntries: AppServerThreadEntry[] = [];
+  for (let index = 0; index < entries.length; index += 1) {
+    if (!movedIndexes.has(index)) {
+      anchoredEntries.push(entries[index]!);
+    }
+    const anchored = usageByAnchorIndex.get(index);
+    if (anchored) {
+      anchoredEntries.push(...anchored);
+    }
+  }
+  return sameEntries(anchoredEntries, entries) ? entries : anchoredEntries;
+}
+
+function sameEntries(
+  left: readonly AppServerThreadEntry[],
+  right: readonly AppServerThreadEntry[],
+): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) {
+      return false;
+    }
+  }
+  return true;
+}
+
 export function isTerminalTurnMetadata(
   turn: AppServerThreadTurnMetadata | undefined,
 ): boolean {
