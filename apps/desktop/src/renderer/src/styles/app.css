@@ -30521,14 +30521,27 @@ div.composer-error-row__toggle {
 
 /* Long sign-in addresses scroll inside the card instead of growing it. */
 .transcript-mcp__url-full {
-  display: block;
   max-height: 96px;
   overflow: auto;
   overflow-wrap: anywhere;
+  border-radius: 4px;
   color: var(--text-primary);
   font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.45;
+}
+
+.transcript-mcp__url-full code {
+  font: inherit;
+}
+
+.transcript-mcp__url-full:focus {
+  outline: none;
+}
+
+.transcript-mcp__url-full:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 /* Warnings carry their tone on a rule beside the text, not on the text or

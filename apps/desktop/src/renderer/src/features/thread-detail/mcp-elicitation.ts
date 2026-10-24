@@ -1,4 +1,6 @@
 import {
+  isSecretFieldLabel,
+  isSecretFieldName,
   mcpElicitationPurpose,
   type AppServerMcpElicitationRequestNotification,
   type AppServerMcpElicitationResponse,
@@ -89,8 +91,6 @@ export type PendingMcpUrl = {
    * punycode here, where the raw string would show the imitated name.
    */
   fullUrl: string;
-  /** The URL without its query and fragment, for compact surfaces. */
-  displayUrl: string;
   /** Only the 2025-11-25 revision sends one; 2026-07-28 removed it. */
   elicitationId?: string;
   /** The ASCII hostname the browser will contact. */
@@ -545,11 +545,6 @@ function canParseUrl(value: string): boolean {
   }
 }
 
-// Anchored at the end of the name, so `access_token` is a secret and
-// `max_tokens` is not. Matches the messaging redaction rule.
-const SECRET_FIELD_NAME =
-  /(?:api[-_ ]?key|token|secret|password|passphrase|passcode|authorization|credentials?|private[-_ ]?key|card[-_ ]?number|cvc|cvv)$/iu;
-
 // Only free text can carry a credential; a boolean or a fixed choice cannot.
 function isSecretField(key: string, label: string, schema: Record<string, unknown>): boolean {
   if (schema.type !== "string" || readStringOptions(schema).length > 0) {
@@ -557,14 +552,14 @@ function isSecretField(key: string, label: string, schema: Record<string, unknow
   }
   return schema.format === "password"
     || schema.writeOnly === true
-    || SECRET_FIELD_NAME.test(key.trim())
-    || SECRET_FIELD_NAME.test(label.trim());
+    || isSecretFieldName(key)
+    || isSecretFieldName(label)
+    || isSecretFieldLabel(label);
 }
 
 function readElicitationUrl(url: string, elicitationId: string): PendingMcpUrl {
   const base = {
     url,
-    displayUrl: redactUrl(url),
     ...(elicitationId ? { elicitationId } : {}),
   };
   let parsed: URL;
@@ -588,6 +583,10 @@ function readElicitationUrl(url: string, elicitationId: string): PendingMcpUrl {
 }
 
 function fieldContentValue(field: Exclude<PendingMcpField, { kind: "unsupported" | "secret" }>): unknown {
+  // A formatted value was validated trimmed; send what was validated.
+  if (field.kind === "string" && field.format) {
+    return field.value.trim();
+  }
   if (field.kind === "string" || field.kind === "singleSelect") {
     return field.value;
   }

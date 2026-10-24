@@ -259,7 +259,6 @@ describe("MCP elicitation helpers", () => {
     expect(state).toBeDefined();
     expect(state?.url).toEqual({
       url: "https://example.test/oauth/start?state=secret-state#fragment",
-      displayUrl: "https://example.test/oauth/start",
       elicitationId: "elicitation-1",
       fullUrl: "https://example.test/oauth/start?state=secret-state#fragment",
       host: "example.test",
@@ -340,7 +339,6 @@ describe("MCP elicitation helpers", () => {
 
     expect(state?.url).toEqual({
       url: "https://example.test/connect",
-      displayUrl: "https://example.test/connect",
       fullUrl: "https://example.test/connect",
       host: "example.test",
       internationalHost: false,
@@ -395,6 +393,9 @@ describe("MCP elicitation helpers", () => {
     ["pin_code", { format: "password" }],
     ["value", { title: "Access token" }],
     ["value", { writeOnly: true }],
+    ["pw", { title: "Password (required)" }],
+    ["key", { title: "API key:" }],
+    ["value", { title: "Client secret for the CRM app" }],
   ])("refuses to collect a credential field: %s %o", (key, extra) => {
     const state = createMcpElicitationState(buildRequest({
       requestedSchema: { type: "object", properties: { [key]: { type: "string", ...extra } } },
@@ -411,6 +412,7 @@ describe("MCP elicitation helpers", () => {
     ["token_budget", { type: "string" }],
     ["remember_password", { type: "boolean" }],
     ["auth_method", { type: "string", enum: ["token", "password"] }],
+    ["secret_question", { type: "string", title: "Secret question" }],
   ])("does not mistake %s for a credential", (key, schema) => {
     const state = createMcpElicitationState(buildRequest({
       requestedSchema: { type: "object", properties: { [key]: schema } },
@@ -437,5 +439,21 @@ describe("MCP elicitation helpers", () => {
     expect(mcpFieldFormatError(bad.form!.fields[0]!)).toBe(message);
     // An optional field may stay empty.
     expect(canAcceptMcpElicitation(state)).toBe(true);
+  });
+
+  it("sends a formatted value as it was validated, without padding", () => {
+    const state = createMcpElicitationState(buildRequest({
+      requestedSchema: { type: "object", properties: {
+        email: { type: "string", format: "email" },
+        note: { type: "string" },
+      } },
+    }))!;
+    const answered = updateMcpFieldValue(updateMcpFieldValue(state, "email", " pat@example.com "), "note", " as typed ");
+
+    expect(canAcceptMcpElicitation(answered)).toBe(true);
+    expect(buildMcpElicitationResponse(answered, "accept").content).toEqual({
+      email: "pat@example.com",
+      note: " as typed ",
+    });
   });
 });

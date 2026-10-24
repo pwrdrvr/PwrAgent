@@ -174,6 +174,9 @@ describe("buildApprovalIntent", () => {
               { name: "header", value: "Bearer fixture-token" },
               { name: "headers", value: "{\"Authorization\":\"Bearer nested-token\",\"Accept\":\"json\"}" },
               { name: "max_tokens", value: "500" },
+              // The same names the desktop card refuses to collect.
+              { name: "card_number", value: "4111111111111111" },
+              { name: "pw", label: "Password (required)", value: "hunter2" },
             ],
           },
         },
@@ -188,8 +191,12 @@ describe("buildApprovalIntent", () => {
       "header: [redacted]",
       "headers: {\"Authorization\":\"[redacted]\",\"Accept\":\"json\"}",
       "max_tokens: 500",
+      "card_number: [redacted]",
+      "Password (required): [redacted]",
     ].join("\n"));
     expect(intent.body).not.toContain("nested-token");
+    expect(intent.body).not.toContain("4111111111111111");
+    expect(intent.body).not.toContain("hunter2");
     expect(intent.body).not.toContain("fixture-key");
     expect(intent.body).not.toContain("fixture-token");
   });

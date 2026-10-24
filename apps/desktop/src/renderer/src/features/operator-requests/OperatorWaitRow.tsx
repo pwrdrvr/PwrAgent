@@ -23,7 +23,7 @@ import { formatTodoAge } from "../thread-todos/ThreadTodoCard";
 import { TodoSplitButton, type TodoSplitMenuEntry } from "../thread-todos/TodoSplitButton";
 import { OperatorQuestionForm } from "./OperatorQuestionForm";
 import {
-  OPERATOR_WAIT_LABELS,
+  operatorWaitLabel,
   isBlockingWait,
   type OperatorWait,
 } from "./operator-waits";
@@ -117,7 +117,7 @@ export function OperatorWaitRow(props: OperatorWaitRowProps) {
   );
   const mainLabel = props.current
     ? `Show question in thread: ${wait.title}${props.unread ? ", unread" : ""}`
-    : `Open thread: ${OPERATOR_WAIT_LABELS[wait.kind]}, ${wait.title}${
+    : `Open thread: ${operatorWaitLabel(wait)}, ${wait.title}${
       props.threadName ? `, in ${props.threadName}` : ""
     }${props.unread ? ", unread" : ""}`;
 
@@ -143,7 +143,7 @@ export function OperatorWaitRow(props: OperatorWaitRowProps) {
         <div className="thread-todos-panel__row-main">{main}</div>
       )}
       <p className="thread-todos-panel__row-route">
-        <span className="thread-todos-panel__wait-label">{OPERATOR_WAIT_LABELS[wait.kind]}</span>
+        <span className="thread-todos-panel__wait-label">{operatorWaitLabel(wait)}</span>
         {sub ? ` · ${sub}` : ""}
       </p>
       {error ? (

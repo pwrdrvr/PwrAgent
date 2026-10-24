@@ -171,7 +171,7 @@ describe("PendingMcpInteraction", () => {
       />
     );
 
-    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Submit" })).toBeDisabled();
 
     fireEvent.change(screen.getByLabelText(/Title/), {
       target: { value: "Fix the tabs flow" },
@@ -186,7 +186,7 @@ describe("PendingMcpInteraction", () => {
       />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
 
     expect(onSubmit).toHaveBeenCalledWith(state, "accept");
   });
@@ -245,11 +245,14 @@ describe("PendingMcpInteraction", () => {
     // The whole address, query included, and no link that a click could
     // follow before the operator decides.
     expect(screen.getByLabelText("Full address")).toHaveTextContent(url);
+    // A long address scrolls, so keyboard users must be able to reach it.
+    expect(screen.getByRole("region", { name: "Full address" })).toHaveAttribute("tabindex", "0");
     expect(screen.queryByRole("link")).not.toBeInTheDocument();
     expect(openExternalUrl).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Open in browser" }));
 
+    expect(openExternalUrl).toHaveBeenCalledWith(screen.getByLabelText("Full address").textContent);
     expect(openExternalUrl).toHaveBeenCalledWith(url);
     expect(onSubmit).toHaveBeenCalledWith(state, "accept");
   });
@@ -273,6 +276,9 @@ describe("PendingMcpInteraction", () => {
 
     expect(screen.getByText(/^xn--.*\.com$/)).toBeInTheDocument();
     expect(screen.getByLabelText("Full address").textContent).toMatch(/^https:\/\/xn--/);
+    // What opens is the punycode the operator reviewed, not the lookalike.
+    fireEvent.click(screen.getByRole("button", { name: "Open in browser" }));
+    expect(openExternalUrl.mock.calls[0]?.[0]).toMatch(/^https:\/\/xn--/);
     expect(screen.getByText(/international characters/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Open in browser" })).toBeEnabled();
   });
@@ -300,7 +306,7 @@ describe("PendingMcpInteraction", () => {
     // No input to type the key into, and nothing to submit.
     expect(screen.queryByRole("textbox", { name: /API key/ })).not.toBeInTheDocument();
     expect(screen.getByText("Not collected")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Submit" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Decline" })).toBeEnabled();
   });
 
@@ -317,12 +323,12 @@ describe("PendingMcpInteraction", () => {
 
     expect(screen.getByRole("textbox", { name: /Email/ })).toHaveAttribute("aria-invalid", "true");
     expect(screen.getByRole("textbox", { name: /Email/ })).toHaveAccessibleDescription("Enter an email address.");
-    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Submit" })).toBeDisabled();
 
     fireEvent.change(screen.getByRole("textbox", { name: /Email/ }), { target: { value: "pat@example.com" } });
     rerender(<PendingMcpInteraction state={state} onChange={(next) => { state = next; }} onSubmit={vi.fn()} />);
 
     expect(screen.getByRole("textbox", { name: /Email/ })).not.toHaveAttribute("aria-invalid");
-    expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Submit" })).toBeEnabled();
   });
 });

@@ -73,6 +73,7 @@ export * from "./thread-jump-match";
 export * from "./jump-search-text";
 export * from "./thread-pins";
 export * from "./mcp-elicitation-purpose";
+export * from "./secret-field-names";
 export * from "./thread-lock";
 export * from "./thread-terminal";
 export * from "./thread-titles";

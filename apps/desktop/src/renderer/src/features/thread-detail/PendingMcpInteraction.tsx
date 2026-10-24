@@ -41,7 +41,8 @@ export function PendingMcpInteraction(props: PendingMcpInteractionProps) {
     ? "Open in browser"
     : sessionApproval
       ? "Allow this conversation"
-      : purpose === "form" ? "Send" : "Allow";
+      // Not "Send": E2E specs find the composer's Send button page-wide.
+      : purpose === "form" ? "Submit" : "Allow";
 
   return (
     <div
@@ -90,7 +91,11 @@ export function PendingMcpInteraction(props: PendingMcpInteractionProps) {
                 Opens <strong>{url.host}</strong>
               </p>
             ) : null}
-            <code className="transcript-mcp__url-full" aria-label="Full address">{url.fullUrl}</code>
+            {/* A long address scrolls, so the box takes focus: a keyboard
+                user must be able to read all of it before consenting. */}
+            <div className="transcript-mcp__url-full" role="region" aria-label="Full address" tabIndex={0}>
+              <code>{url.fullUrl}</code>
+            </div>
             {url.internationalHost ? (
               <p className="transcript-mcp__url-warning">
                 This address uses international characters. Check that it is the site you expect, because
@@ -183,7 +188,8 @@ export function PendingMcpInteraction(props: PendingMcpInteractionProps) {
               if (url) {
                 // Accept means the operator consented to open the page; the
                 // server learns whether the flow finished on its own.
-                openExternalUrl(url.url);
+                // Open the address exactly as it was shown.
+                openExternalUrl(url.fullUrl);
                 void props.onSubmit(props.state, "accept");
               } else if (sessionApproval) {
                 void props.onSubmit(props.state, "accept", "session");
