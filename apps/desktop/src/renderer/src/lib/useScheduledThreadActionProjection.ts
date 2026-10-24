@@ -253,8 +253,8 @@ function scopesHoldingScheduledProjections(
       entry.scheduledActionId || entry.failedScheduledActionId)) continue;
     const resolved = resolveComposerScopeOwner(store, scopeKey);
     if (resolved.state !== "known") continue;
-    const { backend, threadId, target: ownerTarget } = resolved.owner;
-    if (!federationTargetsEqual(ownerTarget, target)) continue;
+    // A key rebuilt for `target` matches only when the scope is that target's.
+    const { backend, threadId } = resolved.owner;
     if (buildThreadComposerScopeKey(backend, threadId, target) === scopeKey) scopes.add(scopeKey);
   }
   return scopes;

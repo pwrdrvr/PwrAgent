@@ -540,6 +540,10 @@ describe("scheduled thread action projections", () => {
     // action was cancelled while nothing was listening.
     syncScheduledActionProjections(store, [held]);
     syncScheduledActionProjections(store, [held], new Set(), remoteTarget);
+    const failedScope = buildThreadComposerScopeKey("codex", "thread-2");
+    syncScheduledActionProjections(store, [scheduledAction({
+      id: "failed-1", threadId: "thread-2", status: "failed", errorMessage: "rejected",
+    })]);
     act(() => {
       store.setQueuedTurns(localScope, [
         ...store.getQueuedTurns(localScope),
@@ -563,6 +567,7 @@ describe("scheduled thread action projections", () => {
     });
 
     expect(store.getQueuedTurns(localScope).map((entry) => entry.id)).toEqual(["local-draft"]);
+    expect(store.getQueuedTurns(failedScope)).toEqual([]);
     expect(store.getQueuedTurns(remoteScope).map((entry) => entry.id))
       .toEqual(["scheduled-projection:held-1"]);
     projection.unmount();
