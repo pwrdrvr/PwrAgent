@@ -10,6 +10,8 @@ import remarkGfm from "remark-gfm";
 import { remarkPullRequestReferences } from "../remark-pull-request-references";
 import { remarkTableProfile } from "../remark-table-profile";
 import { toJsxRuntime } from "hast-util-to-jsx-runtime";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
 
 vi.mock("hast-util-to-jsx-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("hast-util-to-jsx-runtime")>();
@@ -103,4 +105,42 @@ it.each([16, 32, 64])("measures source work and AST equivalence for %i appends",
   }
   expect(incrementalFrames).toBe(chunks - 1);
   expect(characters).toBeLessThanOrEqual(chunk.length * chunks * 2);
+});
+
+it("matches full math parsing across flow-math cuts and parser configuration changes", () => {
+  const prosePlugins: AdvanceOptions["remarkPlugins"] = [remarkBreaks, [remarkGfm, { singleTilde: false }], remarkTableProfile];
+  const mathPlugins: AdvanceOptions["remarkPlugins"] = [[remarkMath, { singleDollarTextMath: false }], ...prosePlugins];
+  const rehypePlugins: AdvanceOptions["rehypePlugins"] = [[rehypeKatex, { maxExpand: 1000, maxSize: 20, trust: false }]];
+  const prose = "Intro.\n\n";
+  const content = prose + String.raw`$$
+\gdef\fixture{x}
+$$
+
+$$
+\fixture + \frac{a}{b}
+$$
+
+End.
+
+`;
+  let state: IncrementalParseState | null = null;
+  const plainOptions: AdvanceOptions = {
+    remarkPlugins: prosePlugins, rehypePlugins: [], remarkRehypeOptions: undefined,
+    depsKey: [prosePlugins], defListEnabled: false, gfmTaskListItems: true, mathFlow: false,
+  };
+  state = advanceIncrementalParse(null, prose, plainOptions).nextState;
+  const options: AdvanceOptions = {
+    ...plainOptions, remarkPlugins: mathPlugins, rehypePlugins, depsKey: [mathPlugins, rehypePlugins], mathFlow: true,
+  };
+  for (let end = prose.length; end <= content.length; end += 1) {
+    const text = content.slice(0, end);
+    const result = advanceIncrementalParse(state, text, options);
+    const full = advanceIncrementalParse(null, text, options);
+    expect(result.mdast, `cut ${end}`).toEqual(full.mdast);
+    expect(result.hast, `cut ${end}`).toEqual(full.hast);
+    state = result.nextState;
+  }
+  const disabled = advanceIncrementalParse(state, content, plainOptions);
+  expect(disabled.usedIncremental).toBe(false);
+  expect(disabled.hast).toEqual(advanceIncrementalParse(null, content, plainOptions).hast);
 });

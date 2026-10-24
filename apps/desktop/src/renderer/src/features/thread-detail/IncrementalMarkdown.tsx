@@ -46,6 +46,8 @@ const MarkdownBlock = memo(function MarkdownBlock(props: {
 
 // Retain one document lineage per mounted parser owner.
 // Use PwrAgent's exact plugin chain, with no AI Markdown UI/preprocessors.
+// Its transformers are block-local. A new document-global transformer needs
+// splice-equivalence coverage or must disable prefix reuse.
 export function IncrementalMarkdown(props: IncrementalMarkdownProps) {
   const previous = useRef<IncrementalParseState | null>(null);
   const result = advanceIncrementalParse(previous.current, props.children ?? "", {
