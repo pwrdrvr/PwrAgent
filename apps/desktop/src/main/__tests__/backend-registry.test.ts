@@ -9419,7 +9419,7 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
-  it("records a turn/failed outcome to the thread overlay turnFailureLog", async () => {
+  it.each(["codex", "claude"] as const)("records a %s turn/failed outcome to the thread overlay turnFailureLog", async (backend) => {
     const overlayStore = createOverlayStoreMock();
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({}),
@@ -9429,7 +9429,7 @@ describe("DesktopBackendRegistry", () => {
     await (
       registry as unknown as { emit(event: AgentEvent): Promise<void> }
     ).emit({
-      backend: "codex",
+      backend,
       notification: {
         method: "turn/failed",
         params: {
@@ -9446,7 +9446,7 @@ describe("DesktopBackendRegistry", () => {
     });
 
     const overlay = await overlayStore.getThreadOverlayState({
-      backend: "codex",
+      backend,
       threadId: "thread-fail",
     });
     expect(overlay?.turnFailureLog).toHaveLength(1);
