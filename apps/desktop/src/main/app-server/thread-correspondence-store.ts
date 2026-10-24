@@ -15,6 +15,7 @@ import type {
 import {
   buildThreadCorrespondenceHeading,
   buildThreadMarkdownLink,
+  readUuidV7Timestamp,
   type ThreadCorrespondenceState,
 } from "@pwragent/shared";
 import { isUsageActivityEntry, usageActivityScope } from "./overlay-transcript-entries";
@@ -34,12 +35,6 @@ export type CorrespondenceRecord = {
 };
 type Status = Pick<CorrespondenceRecord, "state"> & Partial<Pick<CorrespondenceRecord, "destination" | "queueEntryId" | "turnId">>;
 type Event = { type: "message"; record: CorrespondenceRecord } | { type: "status"; id: string; status: Status };
-
-function codexTurnStartedAt(id: string): number | undefined {
-  // Only UUIDv7 encodes a creation time. Arbitrary provider ids are opaque.
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)) return undefined;
-  return Number.parseInt(id.replace(/-/g, "").slice(0, 12), 16);
-}
 
 /** PwrAgent-owned supplemental correspondence, never provider history or SQLite. */
 export class ThreadCorrespondenceStore {
@@ -207,7 +202,7 @@ export class ThreadCorrespondenceStore {
       }
     });
     const startedAt = (turn: AppServerThreadTurnMetadata) => turn.startedAt
-      ?? (source.backend === "codex" ? codexTurnStartedAt(turn.id) : undefined);
+      ?? (source.backend === "codex" ? readUuidV7Timestamp(turn.id) : undefined);
     const timedTurns = [...turns.values()].flatMap((turn) => {
       const time = startedAt(turn);
       return time === undefined ? [] : [{ id: turn.id, time, completedAt: turn.completedAt }];

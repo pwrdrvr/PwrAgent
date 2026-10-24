@@ -587,4 +587,59 @@ describe("DesktopBackendRegistry usage turn ends", () => {
       expect(completedAt("peer-live")).toBeNull();
     });
   });
+
+  // Only a UUIDv7 id carries a start time. Claude turn ids are UUIDv4, whose
+  // leading bits are random: read as milliseconds, this one is Jan 7, 6903.
+  describe("turn start times", () => {
+    const claudeTurnId = "8d94fa8e-3a98-464b-914e-9b77c8bedc71";
+    const startedAt = (turnId: string) => (stateDb.raw.prepare(
+      "SELECT started_at FROM thread_usage_turns WHERE turn_id = ?",
+    ).get(turnId) as { started_at: number } | undefined)?.started_at;
+    const lineStartedAt = async (backend: AppServerBackendKind) => {
+      const { lines } = await store.readThreadPricing({ backend, threadId: "thread-1" });
+      expect(lines).toHaveLength(1);
+      return lines[0].startedAt;
+    };
+
+    it("records the start a Claude turn reports, not a time read from its UUIDv4 id", async () => {
+      const reported = 1_792_856_921_084;
+      const registry = createRegistry();
+      await internals(registry).emit({
+        backend: "claude",
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId: "thread-1",
+            turn: { id: claudeTurnId, status: "in_progress", startedAt: reported },
+          },
+        },
+      });
+      await internals(registry).emit(usage("claude", claudeTurnId));
+      await internals(registry).flushLiveThreadUsageLines();
+
+      expect(startedAt(claudeTurnId)).toBe(reported);
+      expect(await lineStartedAt("claude")).toBe(reported);
+    });
+
+    it("does not read a start time from a UUIDv4 turn id", async () => {
+      const before = Date.now();
+      const registry = createRegistry();
+      await internals(registry).emit(started("claude", claudeTurnId));
+      await internals(registry).emit(usage("claude", claudeTurnId));
+      await internals(registry).flushLiveThreadUsageLines();
+
+      const recorded = startedAt(claudeTurnId);
+      expect(recorded).toBeGreaterThanOrEqual(before);
+      expect(recorded).toBeLessThanOrEqual(Date.now());
+    });
+
+    it("still reads the start time from a Codex UUIDv7 turn id", async () => {
+      const turnId = "019a3c1f-5e2b-7a82-b681-9ca30ad325fa";
+      const registry = createRegistry();
+      await runTurn(registry, "codex", turnId);
+
+      expect(startedAt(turnId)).toBe(0x019a3c1f5e2b);
+      expect(await lineStartedAt("codex")).toBe(0x019a3c1f5e2b);
+    });
+  });
 });
