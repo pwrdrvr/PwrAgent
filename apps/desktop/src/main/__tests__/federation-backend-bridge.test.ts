@@ -29,6 +29,33 @@ import { FEDERATION_MAX_FRAME_BYTES } from "../federation/federation-transport";
 import { pageNormalizedReplay } from "../app-server/thread-replay-pagination";
 
 describe("federation backend bridge", () => {
+  it("round-trips owner-collated family pricing and requires thread_detail", async () => {
+    const request = { backend: "codex" as const, threadId: "parent" };
+    const family = { readAt: 42, members: [
+      { backend: "codex", threadId: "parent", title: "Parent", self: true, active: false,
+        totalCostMicros: 1_000_000, usageLineCount: 4, unpricedUsageLineCount: 0 },
+      { backend: "claude", threadId: "child", title: "Child", self: false, active: true,
+        totalCostMicros: 2_000_000, usageLineCount: 5, unpricedUsageLineCount: 1 },
+    ] };
+    const backend = { readThreadFamilyPricing: vi.fn(async () => family) };
+    const router = new FederationRouter({ localInstanceId: "owner", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES });
+    let rpc: FederationRpcEndpoint;
+    const connect = (capabilities: FederationCapability[]): void => {
+      router.registerConnection({ peerId: "viewer", capabilities,
+        sendEnvelope: (envelope) => { rpc.receiveEnvelope(envelope); } });
+    };
+    registerFederationBackendHandlers({ router, backend: backend as unknown as FederationBackendOperations });
+    rpc = new FederationRpcEndpoint({ localInstanceId: "viewer", remoteInstanceId: "owner",
+      sendEnvelope: (envelope) => { void router.routeEnvelope({ envelope, sourcePeerId: "viewer" }); } });
+    const client = new FederationRemoteBackendClient(rpc);
+    connect(["thread_detail"]);
+    expect(await client.readThreadFamilyPricing(request)).toEqual(family);
+    expect(backend.readThreadFamilyPricing).toHaveBeenCalledExactlyOnceWith(request);
+    connect(["thread_navigation"]);
+    await expect(client.readThreadFamilyPricing(request)).rejects.toThrow();
+    expect(backend.readThreadFamilyPricing).toHaveBeenCalledOnce();
+  });
+
   it("names the sending instance on bare thread links in start and steer input", async () => {
     const sender = "pwr_c9a3be06-b652-48df-9ea0-0a165344f86b";
     const request = vi.fn(async (_call: { method: string; params: unknown }) => ({}));
@@ -1485,6 +1512,7 @@ describe("federation backend bridge", () => {
       analyzeThreadToolHistory: vi.fn(),
       inspectTokenMiserOutput: vi.fn(),
       readUsageActivity: vi.fn(),
+      readThreadFamilyPricing: vi.fn(),
       analyzeUsageActivity: vi.fn(),
       listSkills: vi.fn(),
       listBackends: vi.fn(),
@@ -3610,6 +3638,7 @@ describe("federation backend bridge", () => {
         analyzeThreadToolHistory: vi.fn(),
       inspectTokenMiserOutput: vi.fn(),
       readUsageActivity: vi.fn(),
+      readThreadFamilyPricing: vi.fn(),
       analyzeUsageActivity: vi.fn(),
         listSkills: vi.fn(),
         listBackends: vi.fn(),
@@ -3691,6 +3720,7 @@ describe("federation backend bridge", () => {
       analyzeThreadToolHistory: vi.fn(),
       inspectTokenMiserOutput: vi.fn(),
       readUsageActivity: vi.fn(),
+      readThreadFamilyPricing: vi.fn(),
       analyzeUsageActivity: vi.fn(),
       listSkills: vi.fn(),
       startTurn: vi.fn(async () => ({
@@ -3782,6 +3812,7 @@ describe("federation backend bridge", () => {
       analyzeThreadToolHistory: vi.fn(),
       inspectTokenMiserOutput: vi.fn(),
       readUsageActivity: vi.fn(),
+      readThreadFamilyPricing: vi.fn(),
       analyzeUsageActivity: vi.fn(),
       listSkills: vi.fn(),
       replaceQueuedMessage: vi.fn(async () => ({
@@ -3936,6 +3967,7 @@ describe("federation backend bridge", () => {
       analyzeThreadToolHistory: vi.fn(),
       inspectTokenMiserOutput: vi.fn(),
       readUsageActivity: vi.fn(),
+      readThreadFamilyPricing: vi.fn(),
       analyzeUsageActivity: vi.fn(),
       readTranscriptImage: vi.fn(),
       listSkills: vi.fn(),
@@ -4367,6 +4399,7 @@ describe("federation backend bridge", () => {
         analyzeThreadToolHistory: vi.fn(),
       inspectTokenMiserOutput: vi.fn(),
       readUsageActivity: vi.fn(),
+      readThreadFamilyPricing: vi.fn(),
       analyzeUsageActivity: vi.fn(),
         readTranscriptImage: vi.fn(),
         listSkills: vi.fn(),

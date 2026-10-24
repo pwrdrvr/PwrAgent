@@ -6,6 +6,7 @@ import type {
   TerminateBackgroundTerminalResponse,
 } from "@pwragent/shared";
 import type { ReadUsageActivityRequest, ReadUsageActivityResponse, AnalyzeUsageActivityRequest, AnalyzeUsageActivityResponse } from "@pwragent/shared";
+import type { ReadThreadFamilyPricingRequest, ReadThreadFamilyPricingResponse } from "@pwragent/shared";
 import { projectFederationThreadRead, materializeFederationThreadRead, type FederationThreadReadResponse } from "./federation-thread-read";
 import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
 import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
@@ -505,6 +506,7 @@ export const FEDERATION_BACKEND_METHODS = {
   resolveThreadAdmissionState: "backend.resolveThreadAdmissionState",
   readThread: "backend.readThread",
   readUsageActivity: "backend.readUsageActivity",
+  readThreadFamilyPricing: "backend.readThreadFamilyPricing",
   analyzeUsageActivity: "backend.analyzeUsageActivity",
   inspectTokenMiserOutput: "backend.inspectTokenMiserOutput",
   analyzeThreadToolHistory: "backend.analyzeThreadToolHistory",
@@ -646,6 +648,7 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.readForge]: "thread_detail",
   /* Reads the thread's own transcript history; same data class as reading it. */
   [FEDERATION_BACKEND_METHODS.readUsageActivity]: "thread_detail",
+  [FEDERATION_BACKEND_METHODS.readThreadFamilyPricing]: "thread_detail",
   // Starts a paid helper turn on the owner; transcript-read permission is insufficient.
   [FEDERATION_BACKEND_METHODS.analyzeUsageActivity]: "turn_control",
   [FEDERATION_BACKEND_METHODS.inspectTokenMiserOutput]: "thread_detail",
@@ -851,6 +854,7 @@ export type FederationBackendOperations = {
     request: AppServerReadThreadRequest,
   ): Promise<AppServerReadThreadResponse>;
   readUsageActivity(request: ReadUsageActivityRequest): Promise<ReadUsageActivityResponse>;
+  readThreadFamilyPricing(request: ReadThreadFamilyPricingRequest): Promise<ReadThreadFamilyPricingResponse>;
   analyzeUsageActivity(request: AnalyzeUsageActivityRequest): Promise<AnalyzeUsageActivityResponse>;
   inspectTokenMiserOutput(request: InspectTokenMiserOutputRequest): Promise<InspectTokenMiserOutputResponse>;
   analyzeThreadToolHistory(
@@ -1299,6 +1303,8 @@ export function registerFederationBackendHandlers(params: {
   );
   params.router.registerHandler(FEDERATION_BACKEND_METHODS.readUsageActivity,
     async (envelope) => await params.backend.readUsageActivity(envelope.params as ReadUsageActivityRequest));
+  params.router.registerHandler(FEDERATION_BACKEND_METHODS.readThreadFamilyPricing,
+    async (envelope) => await params.backend.readThreadFamilyPricing(envelope.params as ReadThreadFamilyPricingRequest));
   params.router.registerHandler(FEDERATION_BACKEND_METHODS.analyzeUsageActivity,
     async (envelope) => await params.backend.analyzeUsageActivity(envelope.params as AnalyzeUsageActivityRequest));
   params.router.registerHandler(
@@ -2342,6 +2348,10 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
 
   async readUsageActivity(request: ReadUsageActivityRequest): Promise<ReadUsageActivityResponse> {
     return await this.rpc.request<ReadUsageActivityResponse>({ method: FEDERATION_BACKEND_METHODS.readUsageActivity, params: request });
+  }
+
+  async readThreadFamilyPricing(request: ReadThreadFamilyPricingRequest): Promise<ReadThreadFamilyPricingResponse> {
+    return await this.rpc.request<ReadThreadFamilyPricingResponse>({ method: FEDERATION_BACKEND_METHODS.readThreadFamilyPricing, params: request });
   }
 
   async analyzeUsageActivity(request: AnalyzeUsageActivityRequest): Promise<AnalyzeUsageActivityResponse> {

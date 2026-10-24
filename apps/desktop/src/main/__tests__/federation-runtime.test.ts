@@ -19,6 +19,7 @@ import type {
   NavigationSnapshotTransportResponse,
   SetCelestialIconResponse,
   StarMapArrangementEntry,
+  ThreadPricingSummary,
 } from "@pwragent/shared";
 import {
   FEDERATION_PROTOCOL_VERSION,
@@ -371,6 +372,49 @@ describe("DesktopFederationRuntime", () => {
       await runtime.threadServiceAction(1, { ...watch, threadId: "different-thread" });
       expect(leave).toHaveBeenCalledTimes(3);
     } finally { await runtime.stop(); }
+  });
+
+  it("collates family pricing on the owner from its recursive membership and stored summaries", async () => {
+    const threads = [
+      { id: "parent", title: "Parent" },
+      { id: "child", title: "Child", parentThreadId: "parent", threadStatus: "active" as const },
+      { id: "grandchild", title: "Grandchild", parentThreadId: "child" },
+      { id: "native", title: "Native worker", parentThreadId: "parent", codexNativeSubAgent: { parentThreadId: "parent" } },
+      { id: "unrelated", title: "Unrelated" },
+    ].map((thread) => ({ ...thread, source: "codex" as const, titleSource: "derived" as const,
+      createdAt: 1, updatedAt: 1, linkedDirectories: [], inbox: { inInbox: false } }));
+    const source = vi.spyOn(navigationQuerySource, "loadLocalNavigationQueryIndex")
+      .mockResolvedValue({ directories: [], threads });
+    const summaries: ThreadPricingSummary[] = ["parent", "child", "grandchild"].map((threadId, index) => ({
+      backend: "codex", threadId, provider: "openai", currency: "USD", totalCostMicros: (index + 1) * 1_000_000,
+      usageLineCount: 1, pricedUsageLineCount: 1, unpricedUsageLineCount: 0, updatedAt: 1,
+      inputTokens: 0, cachedInputTokens: 0, uncachedInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 0,
+    }));
+    const readSummaries = vi.fn(async (_threads: Array<{ backend: string; threadId: string }>) => summaries);
+    const registry = vi.spyOn(await import("../app-server/backend-registry"), "getDesktopBackendRegistry")
+      .mockReturnValue({} as never);
+    setDesktopOverlayStoreForTests({ readThreadPricingSummaries: readSummaries } as never);
+    try {
+      // An inbound routing field must not turn an owner read into another peer read.
+      const family = await new DesktopFederationRuntime().localBackend().readThreadFamilyPricing({
+        backend: "codex", threadId: "parent", federationTarget: { scope: "remote", instanceId: "another-peer" },
+      });
+      expect(source).toHaveBeenCalledExactlyOnceWith({ callerReason: "thread-family-pricing" });
+      expect(readSummaries).toHaveBeenCalledOnce();
+      expect(readSummaries.mock.calls[0]![0].map(({ backend, threadId }) => `${backend}:${threadId}`).sort())
+        .toEqual(["codex:child", "codex:grandchild", "codex:parent"]);
+      expect(family.members.map(({ threadId, self, active, totalCostMicros }) => ({ threadId, self, active, totalCostMicros })))
+        .toEqual([
+          { threadId: "parent", self: true, active: false, totalCostMicros: 1_000_000 },
+          { threadId: "grandchild", self: false, active: false, totalCostMicros: 3_000_000 },
+          { threadId: "child", self: false, active: true, totalCostMicros: 2_000_000 },
+        ]);
+      expect(family.readAt).toEqual(expect.any(Number));
+    } finally {
+      source.mockRestore();
+      registry.mockRestore();
+      resetDesktopOverlayStoreForTests();
+    }
   });
 
   it("detaches owner secondary repositories while preserving primary and last-directory guards", async () => {

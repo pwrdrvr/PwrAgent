@@ -201,6 +201,8 @@ export const PricingPanel = memo(function PricingPanel(props: PricingPanelProps)
   };
   const displayOptions = props.displayOptions ?? DEFAULT_PRICING_DISPLAY_OPTIONS;
   const { id, source, federation, updatedAt } = props.thread ?? {};
+  const familyTarget = federation?.ref.target ?? readRendererFederationTarget();
+  const familyOwner = familyTarget?.scope === "remote" ? familyTarget : undefined;
   const snapshotVersion = federation?.ref.target.scope === "remote" && !federation.capabilities?.includes("event_subscriptions") ? updatedAt : undefined;
   const gateSource = useMemo<PricingGateSource>(() => ({
     desktopApi: props.desktopApi,
@@ -305,16 +307,15 @@ export const PricingPanel = memo(function PricingPanel(props: PricingPanelProps)
         <p className="context-empty">No usage pricing recorded yet.</p>
       ) : null}
 
-      {/* Stored totals live on the owning machine, so a peer's thread has no
-          family read here, whether the thread or the whole window fronts the
-          peer. Keyed by thread so nothing read for one shows on the next. */}
-      {id !== undefined && source !== undefined
-        && (federation?.ref.target ?? readRendererFederationTarget())?.scope !== "remote" ? (
+      {/* The owner supplies family membership and stored totals. Include the
+          owner in the key so colliding thread IDs never share read state. */}
+      {id !== undefined && source !== undefined ? (
         <ThreadFamilyPricingCard
-          key={JSON.stringify([source, id])}
+          key={JSON.stringify([familyOwner?.instanceId, source, id])}
           desktopApi={props.desktopApi}
           backend={source}
           threadId={id}
+          federationTarget={familyOwner}
           subThreadCount={props.subThreadCount ?? 0}
         />
       ) : null}

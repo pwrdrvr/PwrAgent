@@ -2,6 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
+  ReadThreadFamilyPricingRequest,
   ReadThreadFamilyPricingResponse,
   ThreadFamilyPricingMember,
 } from "@pwragent/shared";
@@ -150,5 +151,23 @@ describe("ThreadFamilyPricingCard", () => {
     expect(await screen.findByText("Sub-thread totals could not be read.")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(await screen.findByText("$3.86")).toBeInTheDocument();
+  });
+
+  it("keeps the owner on refresh and child navigation", async () => {
+    const onShowThread = vi.fn();
+    const readThreadFamilyPricing = vi.fn(async (_request: ReadThreadFamilyPricingRequest) => family);
+    render(
+      <ThreadLinkProvider onShowThread={onShowThread} threads={[]}>
+        <ThreadFamilyPricingCard desktopApi={{ readThreadFamilyPricing }} backend="codex" threadId="parent"
+          federationTarget={{ scope: "remote", instanceId: "owner" }} subThreadCount={4} />
+      </ThreadLinkProvider>,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /Retry policy for webhook sends/ }));
+    expect(onShowThread).toHaveBeenCalledWith(expect.objectContaining({ backend: "codex", threadId: "retry", instanceId: "owner" }));
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(readThreadFamilyPricing).toHaveBeenCalledTimes(2));
+    for (const [request] of readThreadFamilyPricing.mock.calls) {
+      expect(request).toEqual({ backend: "codex", threadId: "parent", federationTarget: { scope: "remote", instanceId: "owner" } });
+    }
   });
 });
