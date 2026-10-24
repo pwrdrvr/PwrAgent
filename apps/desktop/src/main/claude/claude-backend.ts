@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { getSessionInfo, query, type AccountInfo, type Options, type Query, type SDKMessage, type SDKUserMessage, type SlashCommand } from "@anthropic-ai/claude-agent-sdk";
+import { getSessionInfo, query, type AccountInfo, type Options, type Query, type SDKMessage, type SDKResultMessage, type SDKUserMessage, type SlashCommand } from "@anthropic-ai/claude-agent-sdk";
 import type {
   AgentEvent, AppServerAvailableCommandSummary, AppServerPendingRequestNotification, AppServerReviewContext,
   AppServerThreadEntry, AppServerThreadMessageEntry, AppServerThreadMessagePart, AppServerThreadReplay,
@@ -49,6 +49,26 @@ const claudeBackendLog = getMainLogger("pwragent:claude-backend");
 
 /** setTimeout's longest delay; a later reset re-arms on wake. */
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
+const MAX_TURN_STDERR_LENGTH = 4_096;
+
+/** Error subtypes are authoritative even when the producer leaves is_error false. */
+function claudeResultFailure(message: SDKResultMessage): string | undefined {
+  if (message.subtype === "success" && !message.is_error) return undefined;
+  const detail = message.subtype === "success" ? message.result : message.errors.join("\n");
+  if (detail.trim()) return detail;
+  switch (message.subtype) {
+    case "error_max_turns": return "Claude reached the maximum number of turns.";
+    case "error_max_budget_usd": return "Claude reached the configured spending limit.";
+    case "error_max_structured_output_retries": return "Claude could not produce the required structured output.";
+    default: return `Claude reported an error without details (${message.subtype}).`;
+  }
+}
+
+function claudeExceptionMessage(error: unknown, stderr: string): string {
+  return (error instanceof Error ? error.message : String(error)).trim()
+    || stderr.trim()
+    || "Claude failed without providing error details.";
+}
 
 /** Signed out, or billed outside a Claude subscription: no plan limit applies. */
 function claudeHasNoPlanLimits({ authStatus, authMethod }: ClaudeInstallation): boolean {
@@ -84,6 +104,8 @@ type RunningTurn = {
   titleEnv?: NodeJS.ProcessEnv;
   /** Owned by the turn, but never awaited by the streaming message pump. */
   titleUpdate?: Promise<boolean>;
+  /** Keep only a bounded tail; emit it only when the turn fails. */
+  stderr: string;
 };
 
 /** One input pump owns the SDK's stdin until the logical turn finishes. */
@@ -292,7 +314,7 @@ export class ClaudeBackend {
     const running: RunningTurn = {
       turnId: randomUUID(), controller: new AbortController(), entries: new Map(),
       input: new ClaudeInputStream(), pendingSteers: new Set(), completedMessageText: new Map(), pendingReports: new Map(),
-      inputWrites: Promise.resolve(),
+      inputWrites: Promise.resolve(), stderr: "",
     };
     this.running.set(params.threadId, running);
     try {
@@ -345,6 +367,7 @@ export class ClaudeBackend {
         ...(["low", "medium", "high", "xhigh", "max"].includes(params.reasoningEffort ?? "")
           ? { effort: params.reasoningEffort as Options["effort"] } : {}),
         abortController: running.controller,
+        stderr: (data) => { running.stderr = (running.stderr + data).slice(-MAX_TURN_STDERR_LENGTH); },
         mcpServers: params.mcpServers,
         canUseTool: createClaudePermissionHandler({
           threadId: params.threadId, turnId: running.turnId,
@@ -379,6 +402,10 @@ export class ClaudeBackend {
       void running.done.catch(() => {});
       return { backend: "claude", threadId: params.threadId, turnId: running.turnId };
     } catch (error) {
+      const failure = claudeExceptionMessage(error, running.stderr);
+      claudeBackendLog.warn("Claude turn failed during startup", {
+        threadId: params.threadId, turnId: running.turnId, error: failure, stderr: running.stderr.slice(-320),
+      });
       running.ending = true;
       running.input.close();
       // A steer accepted during startup writes its own row; let it land
@@ -391,10 +418,10 @@ export class ClaudeBackend {
         await this.store.append(params.threadId, [...running.entries.values()]);
         await this.emit({ method: "turn/failed", params: {
           threadId: params.threadId, turnId: running.turnId,
-          turn: { id: running.turnId, status: "failed", error: { message: error instanceof Error ? error.message : String(error) } },
+          turn: { id: running.turnId, status: "failed", error: { message: failure } },
         } });
       }
-      throw error;
+      throw new Error(failure, { cause: error });
     }
   }
 
@@ -438,10 +465,15 @@ export class ClaudeBackend {
     let messageId = "";
     let failure: string | undefined;
     let receivedResult = false;
+    let resultSummary: Record<string, unknown> | undefined;
     const needsUsageBaseline = Boolean(session.sdkSessionId) && !session.modelUsage;
     const usageBaseline = session.modelUsage;
     try {
       for await (const message of running.query!) {
+        if (message.type === "assistant" && !message.parent_tool_use_id && message.error) {
+          const detail = message.message.content.flatMap((block) => block.type === "text" ? [block.text] : []).join("\n");
+          failure = detail.trim() || `Claude reported an API error (${message.error}).`;
+        }
         if (message.type === "system" && message.subtype === "init") {
           // Never publish this query's project-scoped supportedModels() to
           // the backend-wide picker. Recover through separate global discovery.
@@ -500,19 +532,34 @@ export class ClaudeBackend {
           await this.settleInputWrites(running);
           for (const id of message.user_message_uuids ?? []) running.pendingSteers.delete(id);
           if (message.user_message_uuid) running.pendingSteers.delete(message.user_message_uuid);
-          const finished = message.is_error || running.pendingSteers.size === 0;
+          failure ??= claudeResultFailure(message);
+          const finished = failure !== undefined || running.pendingSteers.size === 0;
           if (finished) running.ending = true;
           receivedResult = true;
+          resultSummary = {
+            subtype: message.subtype, isError: message.is_error, numTurns: message.num_turns,
+            stopReason: message.stop_reason,
+            errorCount: message.subtype === "success" ? 0 : message.errors.length,
+            resultLength: message.subtype === "success" ? message.result?.length : undefined,
+          };
+          // A normal send with no visible work must not silently look answered.
+          // Local slash commands can legitimately finish without model output.
+          const hasResponse = [...running.entries.values()].some((entry) =>
+            entry.type !== "message" || (entry.role === "assistant" && entry.text.trim()));
+          if (finished && !failure && message.subtype === "success" && message.result?.trim() === ""
+            && !hasResponse && !running.titlePrompt?.trimStart().startsWith("/")) {
+            failure = "Claude completed without a response or any tool activity. Try sending the message again.";
+          }
           // Even a failed turn may already have requested its title at init;
           // join it before taking the final usage snapshot as well.
           let requestedTitle = false;
           if (finished) {
-            if (!running.titleUpdate && !message.is_error && !running.controller.signal.aborted) {
+            if (!running.titleUpdate && !failure && !running.controller.signal.aborted) {
               running.titleUpdate = this.updateTitle(session, running);
             }
             requestedTitle = await running.titleUpdate ?? false;
           }
-          if (finished && !message.is_error && !running.controller.signal.aborted) {
+          if (finished && !failure && !running.controller.signal.aborted) {
             // A native request can time out before Claude persists its title.
             // Keep the result-boundary adoption, without another model request.
             await this.updateTitle(session, running, false);
@@ -535,13 +582,12 @@ export class ClaudeBackend {
               await this.emit({ method: "thread/tokenUsage/updated", params: { threadId, turnId, model: tokenUsage.model, tokenUsage } });
             }
           }
-          if (message.is_error) failure = message.subtype === "success" ? message.result : message.errors.join("\n");
           if (finished) break;
         }
       }
-      if ((!receivedResult || running.pendingSteers.size > 0) && !running.controller.signal.aborted) failure = "Claude exited before completing the turn.";
+      if ((!receivedResult || running.pendingSteers.size > 0) && !running.controller.signal.aborted) failure ??= "Claude exited before completing the turn.";
     } catch (error) {
-      failure = error instanceof Error ? error.message : String(error);
+      failure ??= claudeExceptionMessage(error, running.stderr);
     } finally {
       running.ending = true;
       running.input.close();
@@ -551,7 +597,7 @@ export class ClaudeBackend {
       // releasing the workspace, including failed and interrupted turns.
       await running.titleUpdate;
       try { running.query?.close(); }
-      catch (error) { failure ??= error instanceof Error ? error.message : String(error); }
+      catch (error) { failure ??= claudeExceptionMessage(error, running.stderr); }
       const cancelled = running.controller.signal.aborted;
       const status = cancelled ? "cancelled" : failure ? "failed" : "completed";
       for (const entry of running.entries.values()) {
@@ -570,6 +616,13 @@ export class ClaudeBackend {
         failure = `Could not save Claude history: ${error instanceof Error ? error.message : String(error)}`;
       }
       this.running.delete(threadId);
+      const diagnostics = {
+        threadId, turnId, status: cancelled ? "cancelled" : failure ? "failed" : "completed",
+        receivedResult, ...resultSummary, pendingSteerCount: running.pendingSteers.size,
+        assistantMessageCount: [...running.entries.values()].filter((entry) => entry.type === "message" && entry.role === "assistant").length,
+      };
+      if (failure && !cancelled) claudeBackendLog.warn("Claude turn failed", { ...diagnostics, error: failure, stderr: running.stderr.slice(-320) });
+      else claudeBackendLog.info("Claude turn finished", diagnostics);
       if (cancelled) {
         await this.emit({ method: "turn/cancelled", params: { threadId, turnId, turn: { id: turnId, status: "cancelled" } } });
       } else if (failure) {
