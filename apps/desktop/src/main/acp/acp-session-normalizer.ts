@@ -61,6 +61,9 @@ export function isGrokTransientUpdateKind(kind: string | undefined): boolean {
     || kind === "memory_dream_queued"
     || kind === "memory_dream_started"
     || kind === "memory_dream_completed"
+    // A snapshot of every background command, repeated in full each time one
+    // changes. The launch, output, and kill are already tool calls.
+    || kind === "background_tasks"
   );
 }
 
@@ -263,6 +266,9 @@ export class AcpSessionReplayNormalizer {
   private readonly knownToolCallIds = new Set<string>();
   /** The retry run whose row is still in progress, if any. */
   private openRetry?: { id: string; attempts: number };
+  /** The automatic compaction whose row is still in progress, if any. */
+  private openCompactionId?: string;
+  private readonly subAgents = new Map<string, AcpSubAgentState>();
 
   constructor(private readonly options: AcpSessionReplayNormalizerOptions = {}) {}
 
@@ -416,6 +422,8 @@ export class AcpSessionReplayNormalizer {
     this.assistantMessageSequence = 0;
     this.knownToolCallIds.clear();
     this.openRetry = undefined;
+    this.openCompactionId = undefined;
+    this.subAgents.clear();
     this.status = "idle";
     return this.replay();
   }
@@ -483,6 +491,18 @@ export class AcpSessionReplayNormalizer {
       // Not a message boundary: the assistant bubble stays open, as it does
       // for an unrecognized kind.
       this.upsertRetryActivity(update, createdAt);
+    } else if (kind === "image_dropped") {
+      this.upsertActivity(imageDroppedActivity(update, createdAt));
+    } else if (
+      kind === "auto_compact_started" || kind === "auto_compact_completed"
+    ) {
+      this.upsertCompactionActivity(update, kind, createdAt);
+    } else if (
+      kind === "subagent_spawned"
+      || kind === "subagent_progress"
+      || kind === "subagent_finished"
+    ) {
+      this.upsertSubAgentActivity(update, kind, createdAt);
     } else if (kind === "turn_completed" || kind === "turn_finished") {
       // Some agents persist a durable replay terminal before the live
       // session/prompt request resolves. The client defers the live idle
@@ -818,6 +838,104 @@ export class AcpSessionReplayNormalizer {
           kind: "read",
           label: reason || "The agent provider is retrying the model request.",
           status: "in_progress",
+        },
+      ],
+    });
+  }
+
+  private upsertCompactionActivity(
+    update: AcpSessionUpdate,
+    kind: "auto_compact_started" | "auto_compact_completed",
+    createdAt: number,
+  ): void {
+    const id = this.openCompactionId
+      ?? `acp-compact:${update.sessionId}:${createdAt}`;
+    const index = this.typedEntryIndexes.get(`activity:${id}`);
+    const existing = index === undefined ? undefined : this.entries[index];
+    let label: string;
+    if (kind === "auto_compact_started") {
+      this.openCompactionId = id;
+      const percentage = readNumber(update.update, "percentage");
+      label = readString(update.update, "reason")?.trim()
+        || (percentage !== undefined
+          ? `Context window ${percentage}% full`
+          : "Context window is nearly full");
+    } else {
+      this.openCompactionId = undefined;
+      const before = readNumber(update.update, "tokens_before");
+      const after = readNumber(update.update, "tokens_after");
+      const elapsedMs = readNumber(update.update, "elapsed_ms");
+      label = before !== undefined && after !== undefined
+        ? `${formatCount(before)} → ${formatCount(after)} tokens`
+        : "Older context was summarized";
+      if (elapsedMs !== undefined) {
+        label += ` in ${formatDuration(elapsedMs)}`;
+      }
+    }
+    const status = kind === "auto_compact_started" ? "in_progress" : "completed";
+    this.upsertEntry({
+      type: "activity",
+      id,
+      createdAt: existing?.createdAt ?? createdAt,
+      summary: status === "in_progress" ? "Compacting context" : "Compacted context",
+      status,
+      details: [{ id: `${id}:detail`, kind: "read", label, status }],
+    });
+  }
+
+  private upsertSubAgentActivity(
+    update: AcpSessionUpdate,
+    kind: "subagent_spawned" | "subagent_progress" | "subagent_finished",
+    createdAt: number,
+  ): void {
+    const subAgentId =
+      readString(update.update, "subagent_id")
+      ?? readString(update.update, "child_session_id")
+      ?? "unknown";
+    const id = `acp-subagent:${update.sessionId}:${subAgentId}`;
+    const state = this.subAgents.get(id) ?? { createdAt };
+    this.subAgents.set(id, state);
+    state.description =
+      readString(update.update, "description")?.trim() || state.description;
+    state.type = readString(update.update, "subagent_type") ?? state.type;
+    state.model = readString(update.update, "model") ?? state.model;
+    state.toolCalls =
+      readNumber(update.update, "tool_call_count")
+      ?? readNumber(update.update, "tool_calls")
+      ?? state.toolCalls;
+    state.tokens = readNumber(update.update, "tokens_used") ?? state.tokens;
+    state.durationMs = readNumber(update.update, "duration_ms") ?? state.durationMs;
+    if (kind === "subagent_finished") {
+      state.status =
+        readString(update.update, "status") === "completed" ? "completed" : "failed";
+    }
+    const status = state.status ?? "in_progress";
+    const verb = status === "completed"
+      ? "Sub-agent finished"
+      : status === "failed" ? "Sub-agent failed" : "Sub-agent";
+    const label = [
+      state.type,
+      state.model,
+      state.toolCalls !== undefined
+        ? `${formatCount(state.toolCalls)} tool ${state.toolCalls === 1 ? "call" : "calls"}`
+        : undefined,
+      state.tokens !== undefined ? `${formatCount(state.tokens)} tokens` : undefined,
+      state.durationMs !== undefined ? formatDuration(state.durationMs) : undefined,
+    ].filter(Boolean).join(" · ");
+    const index = this.typedEntryIndexes.get(`activity:${id}`);
+    const existing = index === undefined ? undefined : this.entries[index];
+    this.upsertEntry({
+      type: "activity",
+      id,
+      createdAt: existing?.createdAt ?? state.createdAt,
+      summary: state.description ? `${verb}: ${state.description}` : verb,
+      status,
+      details: [
+        {
+          id: `${id}:detail`,
+          kind: "read",
+          label: label || "Running",
+          status,
         },
       ],
     });
@@ -1714,6 +1832,53 @@ function readFirstLocationPath(record: Record<string, unknown>): string | undefi
     }
   }
   return undefined;
+}
+
+type AcpSubAgentState = {
+  createdAt: number;
+  description?: string;
+  type?: string;
+  model?: string;
+  toolCalls?: number;
+  tokens?: number;
+  durationMs?: number;
+  status?: "completed" | "failed";
+};
+
+function imageDroppedActivity(
+  update: AcpSessionUpdate,
+  createdAt: number,
+): AppServerThreadActivityEntry {
+  const id = `acp-image-dropped:${update.sessionId}:${createdAt}`;
+  const notes = Array.isArray(update.update.notes)
+    ? update.update.notes.filter(
+      (note): note is string => typeof note === "string" && note.trim() !== "",
+    )
+    : [];
+  return {
+    type: "activity",
+    id,
+    createdAt,
+    summary: notes.length > 1 ? "Images not sent" : "Image not sent",
+    tone: "warning",
+    details: (notes.length ? notes : ["The agent provider dropped an image."])
+      .map((note, index) => ({
+        id: `${id}:${index}`,
+        kind: "read" as const,
+        label: note,
+      })),
+  };
+}
+
+function formatCount(value: number): string {
+  return Math.round(value).toLocaleString("en-US");
+}
+
+function formatDuration(ms: number): string {
+  const totalSeconds = Math.max(0, Math.round(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
 }
 
 function unknownActivity(
