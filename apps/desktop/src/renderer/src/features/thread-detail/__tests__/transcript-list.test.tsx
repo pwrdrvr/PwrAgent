@@ -326,7 +326,7 @@ describe("TranscriptList", () => {
       expect(text.indexOf("Turn usage:", usage + 1)).toBe(-1);
     });
 
-    it("keeps the total below the reply and the turn's work groups", () => {
+    it("keeps the total below the turn's folded work group", () => {
       const { container } = render(
         <TranscriptList
           entries={completedTurnEntries}
@@ -337,15 +337,15 @@ describe("TranscriptList", () => {
         />
       );
 
-      // The turn's work folds into groups; the total is the turn's last row.
-      expect(screen.getByRole("button", { name: /Worked for 2m 29s/ })).toBeInTheDocument();
+      // Work after the reply makes the reply interim, so the turn folds into
+      // one group. The total is the turn's last row: below that group, with
+      // no second group split off beneath it.
+      const group = screen.getByRole("button", { name: /Worked for 2m 29s · 3 tool updates/ });
+      expect(group).toBeInTheDocument();
       const text = container.textContent ?? "";
-      const reply = text.indexOf("Acknowledged: PR65 is reported merged.");
-      const moreWork = text.indexOf("More work");
       const usage = text.indexOf("Turn usage: 94,799 uncached in");
-      expect(reply).toBeGreaterThan(-1);
-      expect(moreWork).toBeGreaterThan(reply);
-      expect(usage).toBeGreaterThan(moreWork);
+      expect(usage).toBeGreaterThan(text.indexOf("Worked for 2m 29s"));
+      expect(text.indexOf("More work")).toBe(-1);
     });
   });
 

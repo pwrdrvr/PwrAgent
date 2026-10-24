@@ -10904,6 +10904,47 @@ describe("useThreadSessionState", () => {
       expect(ids.slice(tUsage + 1)).toEqual([...vIds, ...wIds]);
     });
 
+    it("keeps a late final reply of an older turn, and that turn's total, above a later turn", async () => {
+      vi.spyOn(Date, "now").mockImplementation(() => turnV.completedAt + 5_000);
+      const readThread = vi.fn(async () => readThreadResponse({
+        entries: [
+          ...turnEntries(turnT, "t", turnT.completedAt - 600),
+          ...turnEntries(turnV, "v", turnV.completedAt - 400),
+        ],
+        hasPreviousPage: false,
+      }));
+      const desktopApi: DesktopApi = {
+        onAgentEvent: () => () => undefined,
+        readThread,
+      };
+      const { result } = renderHook(() =>
+        useThreadSessionState({
+          desktopApi,
+          thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+        })
+      );
+      await waitForThreadHydration(result);
+
+      // A terminal row of T stamped a few hundred milliseconds after T's
+      // second-truncated completion: newer than everything else in T.
+      act(() => {
+        result.current.upsertLiveTranscriptEntry({
+          type: "message",
+          id: "t-live-final",
+          role: "assistant",
+          phase: "final",
+          text: "t follow-up answer",
+          createdAt: turnT.completedAt + 400,
+          turn: turnT,
+        });
+      });
+
+      expect(entryIds(result.current.entries)).toEqual([
+        "t-user", "t-commentary", "activity-exec-t", "t-final", "t-live-final", "live-turn-usage-turn-t",
+        "v-user", "v-commentary", "activity-exec-v", "v-final", "live-turn-usage-turn-v",
+      ]);
+    });
+
     it("keeps an untimed retained row and its turn's total above a later turn after a lagging refresh", async () => {
       vi.spyOn(Date, "now").mockImplementation(() => turnV.completedAt + 5_000);
       const turnS = {
@@ -11013,6 +11054,50 @@ describe("useThreadSessionState", () => {
       expect(entryIds(result.current.entries)).toEqual([
         "t-user", "t-commentary", "activity-exec-t", "t-final", "live-turn-usage-turn-t",
         ...vIds,
+      ]);
+    });
+
+    it("places a late live row with its turn when the loaded history page holds only that turn's total", async () => {
+      vi.spyOn(Date, "now").mockImplementation(() => turnV.completedAt + 5_000);
+      const vPage = turnEntries(turnV, "v", turnV.completedAt - 400);
+      const readThread = vi
+        .fn()
+        .mockResolvedValueOnce(readThreadResponse({ entries: vPage, hasPreviousPage: true, previousCursor: "before-v" }))
+        // A page split inside T: T's content is further back, unloaded.
+        .mockResolvedValueOnce(readThreadResponse({
+          entries: [usageRow(turnT, turnT.completedAt - 600)],
+          hasPreviousPage: true,
+          previousCursor: "inside-t",
+        }));
+      const desktopApi: DesktopApi = {
+        onAgentEvent: () => () => undefined,
+        readThread,
+      };
+      const { result } = renderHook(() =>
+        useThreadSessionState({
+          desktopApi,
+          thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+        })
+      );
+      await waitForThreadHydration(result);
+      await act(async () => {
+        await result.current.loadOlder();
+      });
+
+      act(() => {
+        result.current.upsertLiveTranscriptEntry({
+          type: "activity",
+          id: "live-protocol-t",
+          summary: "Used 2 tools",
+          status: "completed",
+          details: [],
+          createdAt: turnT.completedAt + 400,
+          turn: turnT,
+        });
+      });
+      expect(entryIds(result.current.entries)).toEqual([
+        "live-protocol-t", "live-turn-usage-turn-t",
+        "v-user", "v-commentary", "activity-exec-v", "v-final", "live-turn-usage-turn-v",
       ]);
     });
 

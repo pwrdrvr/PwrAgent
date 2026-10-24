@@ -498,11 +498,12 @@ export function anchorTurnUsageEntries(
   entries: AppServerThreadEntry[],
 ): AppServerThreadEntry[] {
   const lastEntryIndexByTurnId = new Map<string, number>();
-  let hasTurnUsage = false;
+  const totals: Array<{ index: number; turnId: string }> = [];
   for (let index = 0; index < entries.length; index += 1) {
     const entry = entries[index]!;
-    if (turnUsageEntryTurnId(entry) !== undefined) {
-      hasTurnUsage = true;
+    const usageTurnId = turnUsageEntryTurnId(entry);
+    if (usageTurnId !== undefined) {
+      totals.push({ index, turnId: usageTurnId });
       continue;
     }
     const turnId = entry.turn?.id;
@@ -510,25 +511,22 @@ export function anchorTurnUsageEntries(
       lastEntryIndexByTurnId.set(turnId, index);
     }
   }
-  if (!hasTurnUsage) {
+  if (totals.length === 0) {
     return entries;
   }
 
-  const usageByAnchorIndex = new Map<number, AppServerThreadEntry[]>();
+  const totalsByAnchorIndex = new Map<number, AppServerThreadEntry[]>();
   const movedIndexes = new Set<number>();
-  for (let index = 0; index < entries.length; index += 1) {
-    const turnId = turnUsageEntryTurnId(entries[index]!);
-    const anchorIndex = turnId === undefined
-      ? undefined
-      : lastEntryIndexByTurnId.get(turnId);
+  for (const { index, turnId } of totals) {
+    const anchorIndex = lastEntryIndexByTurnId.get(turnId);
     if (anchorIndex === undefined) {
       continue;
     }
-    const anchored = usageByAnchorIndex.get(anchorIndex);
+    const anchored = totalsByAnchorIndex.get(anchorIndex);
     if (anchored) {
       anchored.push(entries[index]!);
     } else {
-      usageByAnchorIndex.set(anchorIndex, [entries[index]!]);
+      totalsByAnchorIndex.set(anchorIndex, [entries[index]!]);
     }
     movedIndexes.add(index);
   }
@@ -537,31 +535,20 @@ export function anchorTurnUsageEntries(
   }
 
   const anchoredEntries: AppServerThreadEntry[] = [];
+  let changed = false;
+  const push = (entry: AppServerThreadEntry): void => {
+    changed ||= entry !== entries[anchoredEntries.length];
+    anchoredEntries.push(entry);
+  };
   for (let index = 0; index < entries.length; index += 1) {
     if (!movedIndexes.has(index)) {
-      anchoredEntries.push(entries[index]!);
+      push(entries[index]!);
     }
-    const anchored = usageByAnchorIndex.get(index);
-    if (anchored) {
-      anchoredEntries.push(...anchored);
-    }
-  }
-  return sameEntries(anchoredEntries, entries) ? entries : anchoredEntries;
-}
-
-function sameEntries(
-  left: readonly AppServerThreadEntry[],
-  right: readonly AppServerThreadEntry[],
-): boolean {
-  if (left.length !== right.length) {
-    return false;
-  }
-  for (let index = 0; index < left.length; index += 1) {
-    if (left[index] !== right[index]) {
-      return false;
+    for (const total of totalsByAnchorIndex.get(index) ?? []) {
+      push(total);
     }
   }
-  return true;
+  return changed ? anchoredEntries : entries;
 }
 
 export function isTerminalTurnMetadata(
@@ -721,7 +708,6 @@ export function reconcileCompletedTurnUsageEntries(params: {
   }
 
   const filteredEntries: AppServerThreadEntry[] = [];
-  const lastEntryIndexByTurnId = new Map<string, number>();
   for (const entry of params.entries) {
     const usageTurnId = entry.type === "activity"
       ? entry.turn?.id ?? entry.usageLine?.turnId
@@ -736,24 +722,13 @@ export function reconcileCompletedTurnUsageEntries(params: {
     ) {
       continue;
     }
-
-    const index = filteredEntries.length;
     filteredEntries.push(entry);
-    if (entry.turn?.id && replacementByTurnId.has(entry.turn.id)) {
-      lastEntryIndexByTurnId.set(entry.turn.id, index);
-    }
   }
 
-  const replacementAfterIndex = new Map<number, AppServerThreadActivityEntry>();
-  for (const [turnId, replacement] of replacementByTurnId) {
-    const anchorIndex = lastEntryIndexByTurnId.get(turnId);
-    if (anchorIndex !== undefined) {
-      replacementAfterIndex.set(anchorIndex, replacement);
-    }
-  }
-
-  return filteredEntries.flatMap((entry, index) => {
-    const replacement = replacementAfterIndex.get(index);
-    return replacement ? [entry, replacement] : [entry];
-  });
+  // Every replaced turn has content on the list, so each total lands after
+  // that turn's last entry.
+  return anchorTurnUsageEntries([
+    ...filteredEntries,
+    ...replacementByTurnId.values(),
+  ]);
 }
