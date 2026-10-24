@@ -42,8 +42,7 @@ import {
   canPauseQueuedTurn,
   canResumeQueuedTurn,
   queuedTurnOwnerCanPause,
-  requestOwnerQueuedTurnPause,
-  withOwnerPauseState,
+  setQueuedTurnPausedIn,
 } from "./queued-turn-pause";
 import {
   type QueuedReorderRow,
@@ -4717,47 +4716,30 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       if (answer.failure) setSendError(answer.failure);
     });
   };
-  /**
-   * Pauses or resumes `queued`. A row only this composer holds changes at
-   * once. A row in the owner's FIFO changes when the owner answers; every
-   * window hears it from the owner's queue event, and the answer settles this
-   * one if that event has not landed yet.
-   */
+  /** Pauses or resumes `queued`; see `setQueuedTurnPausedIn`. */
   const setQueuedTurnPaused = (queued: QueuedTurnDraft, paused: boolean): void => {
     const scopeKey = composerScopeKey;
     setSendError(undefined);
-    const queueEntryId = queued.queueEntryId;
-    if (!queueEntryId) {
-      updateQueuedTurnInScope(scopeKey, queued, (current) => {
-        const { paused: _previous, ...rest } = current;
-        return paused ? { ...rest, paused: true } : rest;
-      });
-      return;
-    }
-    void runQueuedRowAction(queued, async () => {
-      const answer = await requestOwnerQueuedTurnPause({
+    const run = async (): Promise<void> => {
+      const failure = await setQueuedTurnPausedIn({
+        queued,
+        paused,
+        read: () => draftStore.getQueuedTurns(scopeKey),
+        write: (turns) => {
+          saveQueuedTurnSnapshots(scopeKey, turns);
+          if (activeComposerScopeKeyRef.current === scopeKey) setQueuedTurnsState(turns);
+        },
         desktopApi: props.desktopApi,
         federationTarget:
           props.thread?.federation?.ref.target
           ?? readRendererFederationTarget(),
-        queueEntryId,
-        paused,
       });
-      if (answer.paused !== undefined && isQueuedTurnStoreScope(scopeKey)) {
-        const settled = withOwnerPauseState(
-          draftStore.getQueuedTurns(scopeKey),
-          queueEntryId,
-          answer.paused,
-        );
-        if (settled) {
-          saveQueuedTurnSnapshots(scopeKey, settled);
-          if (activeComposerScopeKeyRef.current === scopeKey) setQueuedTurnsState(settled);
-        }
+      if (failure && activeComposerScopeKeyRef.current === scopeKey) {
+        setSendError(failure);
       }
-      if (answer.failure && activeComposerScopeKeyRef.current === scopeKey) {
-        setSendError(answer.failure);
-      }
-    });
+    };
+    // Only a request to the owner can be in flight.
+    void (queued.queueEntryId ? runQueuedRowAction(queued, run) : run());
   };
   const preserveCancelledQueuedTurnInScope = (
     scopeKey: string,

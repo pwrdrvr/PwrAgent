@@ -70,7 +70,7 @@ export function canResumeQueuedTurn(
   return queued.queueEntryId ? ownerCanPause : true;
 }
 
-export function queuedTurnPauseFailureMessage(
+function queuedTurnPauseFailureMessage(
   disposition: SetQueuedTurnPausedResponse["disposition"],
 ): string | undefined {
   switch (disposition) {
@@ -112,6 +112,12 @@ export async function requestOwnerQueuedTurnPause(params: {
   }
 }
 
+/** `turn` paused or not, with no `paused` key at all when it is not. */
+export function withPausedFlag<T extends { paused?: boolean }>(turn: T, paused: boolean): T {
+  const { paused: _previous, ...rest } = turn;
+  return (paused ? { ...rest, paused: true } : rest) as T;
+}
+
 /**
  * The list with the row for `queueEntryId` paused as the owner answered, or
  * undefined when no row disagrees: the owner's queue event usually lands
@@ -125,9 +131,40 @@ export function withOwnerPauseState<T extends PausableQueuedTurn>(
   if (!turns.some((turn) => turn.queueEntryId === queueEntryId && Boolean(turn.paused) !== paused)) {
     return undefined;
   }
-  return turns.map((turn) => {
-    if (turn.queueEntryId !== queueEntryId) return turn;
-    const { paused: _previous, ...rest } = turn;
-    return (paused ? { ...rest, paused: true } : rest) as T;
+  return turns.map((turn) => turn.queueEntryId === queueEntryId ? withPausedFlag(turn, paused) : turn);
+}
+
+/**
+ * Pauses or resumes `queued`, as every queued band does. A row only this
+ * composer holds changes at once, before the first await. A row in the
+ * owner's FIFO changes when the owner answers; every window hears it from the
+ * owner's queue event, and the answer settles this one if that event has not
+ * landed yet. Resolves to the owner's reason for refusing, if any.
+ */
+export async function setQueuedTurnPausedIn<T extends PausableQueuedTurn & { id: string }>(params: {
+  queued: T;
+  paused: boolean;
+  read: () => readonly T[];
+  write: (turns: T[]) => void;
+  desktopApi?: DesktopApi;
+  federationTarget?: FederationTarget;
+}): Promise<string | undefined> {
+  const queueEntryId = params.queued.queueEntryId;
+  if (!queueEntryId) {
+    params.write(params.read().map((turn) =>
+      turn.id === params.queued.id ? withPausedFlag(turn, params.paused) : turn
+    ));
+    return undefined;
+  }
+  const answer = await requestOwnerQueuedTurnPause({
+    desktopApi: params.desktopApi,
+    federationTarget: params.federationTarget,
+    queueEntryId,
+    paused: params.paused,
   });
+  if (answer.paused !== undefined) {
+    const settled = withOwnerPauseState(params.read(), queueEntryId, answer.paused);
+    if (settled) params.write(settled);
+  }
+  return answer.failure;
 }

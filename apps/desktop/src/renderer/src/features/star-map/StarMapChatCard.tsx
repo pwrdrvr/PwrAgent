@@ -56,8 +56,8 @@ import {
   canPauseQueuedTurn,
   canResumeQueuedTurn,
   queuedTurnOwnerCanPause,
-  requestOwnerQueuedTurnPause,
-  withOwnerPauseState,
+  setQueuedTurnPausedIn,
+  withPausedFlag,
 } from "../composer/queued-turn-pause";
 import { useQueuedRowReorder } from "../composer/useQueuedRowReorder";
 import { restoreQueuedMessage } from "../composer/queued-message-content";
@@ -549,15 +549,13 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
           const retitled = Boolean(title) || inputUpdated;
           if (!retitled && Boolean(queued.paused) === paused) return queued;
           changed = true;
-          const { paused: _previous, ...rest } = queued;
-          return {
-            ...rest,
+          return withPausedFlag({
+            ...queued,
             ...(inputUpdated && typeof notification.displayText === "string"
               ? { text: notification.displayText }
               : {}),
             ...(retitled ? { title } : {}),
-            ...(paused ? { paused: true } : {}),
-          };
+          }, paused);
         });
         if (changed) {
           ownedComposerDraftStore?.setQueuedTurns(composerScopeKey, next);
@@ -1421,42 +1419,26 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     [],
   );
 
-  /**
-   * Pauses or resumes a row, as the main composer does: a local row at once,
-   * an owner's entry once the owner answers.
-   */
+  /** Pauses or resumes a row, as the main composer does; see `setQueuedTurnPausedIn`. */
   const setQueuedTurnPaused = useCallback(
     async (queued: ComposerQueuedTurnSnapshot, paused: boolean): Promise<void> => {
       const store = ownedComposerDraftStore;
+      if (!store) return;
       const scopeKey = composerScopeKey;
       setSendError(undefined);
-      const queueEntryId = queued.queueEntryId;
-      if (!queueEntryId) {
-        if (!store) return;
-        store.setQueuedTurns(scopeKey, store.getQueuedTurns(scopeKey).map((current) => {
-          if (current.id !== queued.id) return current;
-          const { paused: _previous, ...rest } = current;
-          return paused ? { ...rest, paused: true } : rest;
-        }));
-        return;
-      }
-      await runQueuedRowAction(queued, async () => {
-        const answer = await requestOwnerQueuedTurnPause({
+      const run = async (): Promise<void> => {
+        const failure = await setQueuedTurnPausedIn({
+          queued,
+          paused,
+          read: () => store.getQueuedTurns(scopeKey),
+          write: (turns) => store.setQueuedTurns(scopeKey, turns),
           desktopApi,
           federationTarget,
-          queueEntryId,
-          paused,
         });
-        if (answer.paused !== undefined && store) {
-          const settled = withOwnerPauseState(
-            store.getQueuedTurns(scopeKey),
-            queueEntryId,
-            answer.paused,
-          );
-          if (settled) store.setQueuedTurns(scopeKey, settled);
-        }
-        if (answer.failure) setSendError(answer.failure);
-      });
+        if (failure) setSendError(failure);
+      };
+      // Only a request to the owner can be in flight.
+      await (queued.queueEntryId ? runQueuedRowAction(queued, run) : run());
     },
     [composerScopeKey, desktopApi, federationTarget, ownedComposerDraftStore, runQueuedRowAction],
   );

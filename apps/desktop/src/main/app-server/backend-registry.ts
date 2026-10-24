@@ -18221,7 +18221,12 @@ export class DesktopBackendRegistry {
     if (this.handoffTurnStarts.has(key)
       || !this.threadTurnQueue.canStartImmediately({ backend: "codex", threadId })
       || this.threadTurnQueue.getQueuedEntries({ backend: "codex", threadId }).length) {
-      throw new Error("Wait for source turns and queued prompts to finish before handoff.");
+      // A paused prompt never finishes on its own.
+      const paused = this.threadTurnQueue.getQueuedEntries({ backend: "codex", threadId })
+        .some((entry) => entry.paused);
+      throw new Error(paused
+        ? "Resume or delete paused queued prompts, and wait for source turns and queued prompts to finish before handoff."
+        : "Wait for source turns and queued prompts to finish before handoff.");
     }
     this.threadHandoffReservations.add(key);
     try {
