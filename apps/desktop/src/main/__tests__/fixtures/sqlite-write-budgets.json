@@ -931,6 +931,13 @@
     "rowsChanged": 2,
     "statements": 2
   },
+  "shared-worktree-working-state-round": {
+    "commits": 2,
+    "note": "One automatic working-state round over 24 threads in one checkout plus 1 in another: one cache-row commit per probed worktree (2), never per thread (25). ~12.4 KB/commit; every probe commits even when unchanged, so the selected checkout's 60 s refresh is ~17.8 MB/day and the 30 s automatic floor caps a continuously browsed checkout at ~35.6 MB/day, the same for 1 or 24 threads sharing it",
+    "observedWalBytes": 24720,
+    "rowsChanged": 2,
+    "statements": 2
+  },
   "star-map-intake-launchpad-initialization": {
     "commits": 2,
     "note": "initialize one missing directory launchpad for its first Star Map intake",
