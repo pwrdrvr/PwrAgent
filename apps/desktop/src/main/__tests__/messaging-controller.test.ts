@@ -20443,7 +20443,7 @@ describe("MessagingController", () => {
     },
   );
 
-  it("presents and submits MCP login requests even when Working Updates is None", async () => {
+  it("presents and declines MCP link requests even when Working Updates is None", async () => {
     const harness = await createHarness({ toolUpdateDefaultMode: "show_none" });
     await bindThread(harness);
     harness.delivered.length = 0;
@@ -20463,20 +20463,15 @@ describe("MessagingController", () => {
       },
     });
 
-    expect(harness.delivered.find((intent) => intent.kind === "approval"))
-      .toMatchObject({
-        kind: "approval",
-        title: "MCP Login",
-        decisions: expect.arrayContaining([
-          expect.objectContaining({
-            id: "approval:mcp:accept",
-            label: "Allow",
-          }),
-        ]),
-      });
+    const prompt = harness.delivered.find((intent) => intent.kind === "approval");
+    expect(prompt).toMatchObject({ kind: "approval", title: "MCP Link" });
+    // Consent to open the page happens on the desktop card, which shows the
+    // full address; a chat message offers only the refusals.
+    expect(prompt?.kind === "approval" ? prompt.decisions.map((decision) => decision.id) : [])
+      .toEqual(["approval:mcp:decline", "approval:mcp:cancel"]);
 
     await harness.controller.handleInboundEvent(
-      buildCallbackEvent({ actionId: "approval:mcp:accept" }),
+      buildCallbackEvent({ actionId: "approval:mcp:decline" }),
     );
 
     expect(harness.submitServerRequest).toHaveBeenCalledWith({
@@ -20485,8 +20480,8 @@ describe("MessagingController", () => {
       turnId: "turn-1",
       requestId: "mcp-login-1",
       response: {
-        action: "accept",
-        content: {},
+        action: "decline",
+        content: null,
         _meta: null,
       },
     });

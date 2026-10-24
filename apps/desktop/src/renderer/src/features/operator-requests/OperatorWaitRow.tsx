@@ -255,6 +255,28 @@ export function OperatorWaitRow(props: OperatorWaitRowProps) {
     ): void => {
       void run(label, () => props.respond(wait, buildMcpElicitationResponse(mcp, action, persist)));
     };
+    if (mcp.url) {
+      // The operator consents on the card, where the full address shows
+      // before anything opens. A row has room only for the host.
+      return (
+        <div className="thread-todos-panel__row-actions">
+          <button
+            type="button"
+            className="thread-todos-panel__row-link thread-todos-panel__row-link--quiet"
+            onClick={() => answer("Declining…", "decline")}
+          >
+            Decline
+          </button>
+          <button
+            type="button"
+            className="thread-todos-panel__row-link"
+            onClick={() => props.openWait(wait)}
+          >
+            Review link
+          </button>
+        </div>
+      );
+    }
     const entries: TodoSplitMenuEntry[] = [
       ...(persistence.includes("session")
         ? [{
@@ -281,16 +303,6 @@ export function OperatorWaitRow(props: OperatorWaitRowProps) {
     ];
     return (
       <div className="thread-todos-panel__row-actions">
-        {mcp.url ? (
-          <a
-            className="thread-todos-panel__row-link"
-            href={mcp.url.url}
-            rel="noreferrer"
-            target="_blank"
-          >
-            Open
-          </a>
-        ) : null}
         <button
           type="button"
           className="thread-todos-panel__row-link thread-todos-panel__row-link--quiet"

@@ -7,6 +7,7 @@ import type { AgentEvent, BackendModelOption } from "@pwragent/shared";
 import { ClaudeBackend } from "../claude/claude-backend";
 import { ClaudeSessionStore } from "../claude/claude-session-store";
 import { createClaudePermissionHandler, claudePermissionMode } from "../claude/claude-permissions";
+import { createClaudeElicitationHandler } from "../claude/claude-elicitation";
 import { buildLiveToolDetails, getNotificationItem } from "../../renderer/src/features/thread-detail/live-transcript-activity";
 import { completedThreadReview, reportedThreadReviewOutcomes } from "../thread-reviews/thread-review-events";
 
@@ -1357,5 +1358,92 @@ describe("Claude permission bridge", () => {
     await expect(handler("AskUserQuestion", { questions: [{ question: "Color?", header: "Color", options: [{ label: "Blue", description: "Blue" }] }] },
       { signal: new AbortController().signal, toolUseID: "question", requestId: "sdk-request" }))
       .resolves.toMatchObject({ behavior: "allow", updatedInput: { answers: { "Color?": "Blue" } } });
+  });
+});
+
+describe("Claude MCP elicitation bridge", () => {
+  const signal = () => ({ signal: new AbortController().signal, requestId: "sdk-request" });
+
+  it("shows a turn's MCP elicitation on the operator's card instead of declining it", async () => {
+    const f = await fixture();
+    const request = vi.fn().mockResolvedValue({ action: "accept", content: { region: "us-east-1" }, _meta: null });
+    f.backendOptions.request = request;
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    const { turnId } = await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Deploy" }] });
+    await f.waitForTurn();
+
+    const onElicitation = f.queries[0]?.onElicitation;
+    expect(onElicitation).toBeTypeOf("function");
+    await expect(onElicitation!({
+      serverName: "deploy", message: "Which region?", mode: "form",
+      requestedSchema: { type: "object", properties: { region: { type: "string" } }, required: ["region"] },
+    }, signal())).resolves.toEqual({ action: "accept", content: { region: "us-east-1" } });
+    expect(request).toHaveBeenCalledWith({
+      method: "mcpServer/elicitation/request",
+      params: {
+        threadId, turnId, requestId: expect.any(String), serverName: "deploy", mode: "form",
+        message: "Which region?", _meta: null,
+        requestedSchema: { type: "object", properties: { region: { type: "string" } }, required: ["region"] },
+      },
+    }, expect.any(AbortSignal));
+  });
+
+  it("sends a 2026-07-28 URL request without an elicitationId and accepts it without content", async () => {
+    const request = vi.fn().mockResolvedValue({ action: "accept", content: {}, _meta: null });
+    const handler = createClaudeElicitationHandler({ threadId: "thread", turnId: "turn", request, cancelRequest: async () => {} });
+
+    await expect(handler({
+      serverName: "billing", message: "Confirm the refund.", mode: "url",
+      url: "https://pay.example.com/refunds/4417", displayName: "Billing",
+    }, signal())).resolves.toEqual({ action: "accept" });
+    expect(request.mock.calls[0]?.[0]).toEqual({
+      method: "mcpServer/elicitation/request",
+      params: {
+        threadId: "thread", turnId: "turn", requestId: expect.any(String), serverName: "billing", mode: "url",
+        message: "Confirm the refund.", url: "https://pay.example.com/refunds/4417",
+        _meta: { connector_name: "Billing" },
+      },
+    });
+  });
+
+  it("treats a schema-less form as a confirmation", async () => {
+    const request = vi.fn().mockResolvedValue({ action: "accept", content: {}, _meta: null });
+    const handler = createClaudeElicitationHandler({ threadId: "thread", turnId: "turn", request, cancelRequest: async () => {} });
+
+    await expect(handler({ serverName: "crm", message: "Close the ticket?" }, signal()))
+      .resolves.toEqual({ action: "accept", content: {} });
+    expect(request.mock.calls[0]?.[0].params).toMatchObject({
+      mode: "form", requestedSchema: { type: "object", properties: {} },
+    });
+  });
+
+  it.each([
+    [{ action: "decline", content: null, _meta: null }, { action: "decline" }],
+    [{ action: "cancel", content: null, _meta: null }, { action: "cancel" }],
+    // The registry settles a withdrawn request with a generic cancel.
+    [{ decision: "cancel" }, { action: "cancel" }],
+    [undefined, { action: "cancel" }],
+  ])("returns %o as %o with no content", async (response, expected) => {
+    const handler = createClaudeElicitationHandler({
+      threadId: "thread", turnId: "turn", cancelRequest: async () => {},
+      request: vi.fn().mockResolvedValue(response),
+    });
+
+    await expect(handler({ serverName: "crm", message: "Continue?", mode: "form",
+      requestedSchema: { type: "object", properties: {} } }, signal())).resolves.toEqual(expected);
+  });
+
+  it("withdraws the card and dismisses the request when the turn stops", async () => {
+    const controller = new AbortController();
+    const cancelRequest = vi.fn().mockResolvedValue(undefined);
+    const handler = createClaudeElicitationHandler({
+      threadId: "thread", turnId: "turn", cancelRequest,
+      request: async () => await new Promise(() => {}),
+    });
+    const result = handler({ serverName: "crm", message: "Continue?" }, { signal: controller.signal, requestId: "sdk-request" });
+    controller.abort();
+
+    await expect(result).resolves.toEqual({ action: "cancel" });
+    expect(cancelRequest).toHaveBeenCalledOnce();
   });
 });

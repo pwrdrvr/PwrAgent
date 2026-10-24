@@ -4,6 +4,7 @@ import {
   buildMcpElicitationResponse,
   canAcceptMcpElicitation,
   createMcpElicitationState,
+  mcpFieldFormatError,
   redactDisplayValue,
   readMcpApprovalPersistence,
   updateMcpFieldValue,
@@ -260,6 +261,9 @@ describe("MCP elicitation helpers", () => {
       url: "https://example.test/oauth/start?state=secret-state#fragment",
       displayUrl: "https://example.test/oauth/start",
       elicitationId: "elicitation-1",
+      fullUrl: "https://example.test/oauth/start?state=secret-state#fragment",
+      host: "example.test",
+      internationalHost: false,
     });
     expect(canAcceptMcpElicitation(state!)).toBe(true);
     expect(buildMcpElicitationResponse(state!, "accept")).toEqual({
@@ -327,5 +331,111 @@ describe("MCP elicitation helpers", () => {
     expect(redactDisplayValue("https://example.test/path?token=secret#frag")).toBe(
       "https://example.test/path"
     );
+  });
+
+  it("accepts a 2026-07-28 URL request, which carries no elicitationId", () => {
+    const state = createMcpElicitationState(buildRequest({
+      mode: "url", requestedSchema: undefined, url: "https://example.test/connect",
+    }));
+
+    expect(state?.url).toEqual({
+      url: "https://example.test/connect",
+      displayUrl: "https://example.test/connect",
+      fullUrl: "https://example.test/connect",
+      host: "example.test",
+      internationalHost: false,
+    });
+    expect(canAcceptMcpElicitation(state!)).toBe(true);
+  });
+
+  it("flags a lookalike international host", () => {
+    // Cyrillic "а" in place of the Latin letter.
+    const state = createMcpElicitationState(buildRequest({
+      mode: "url", requestedSchema: undefined, url: "https://p\u0430ypal.com/login",
+    }))!;
+
+    expect(state.url?.host).toMatch(/^xn--/);
+    // The full address shows the same punycode, not the imitated name.
+    expect(state.url?.fullUrl).toBe(`https://${state.url?.host}/login`);
+    expect(state.url?.internationalHost).toBe(true);
+  });
+
+  it.each([
+    ["javascript:alert(1)", false],
+    ["file:///etc/hosts", false],
+    ["mailto:pat@example.com", false],
+    ["http://example.com/", false],
+    ["https://user:pass@example.com/", false],
+    ["http://localhost:8123/callback", true],
+    ["http://127.0.0.1:8123/callback", true],
+    ["https://example.com/", true],
+  ])("opens %s only when it is https or loopback http: %s", (url, openable) => {
+    const state = createMcpElicitationState(buildRequest({ mode: "url", requestedSchema: undefined, url }))!;
+
+    expect(canAcceptMcpElicitation(state)).toBe(openable);
+    expect(Boolean(state.url?.blockedReason)).toBe(!openable);
+  });
+
+  it.each([
+    ["tool approval", { _meta: { codex_approval_kind: "mcp_tool_call" } }, "tool-approval"],
+    ["gateway approval", { _meta: { pwragent_approval_kind: "mcp_tool_call" } }, "tool-approval"],
+    ["server confirmation", {}, "confirmation"],
+    ["form", { requestedSchema: { type: "object" as const, properties: { note: { type: "string" } } } }, "form"],
+    ["link", { mode: "url" as const, requestedSchema: undefined, url: "https://example.com/" }, "url"],
+  ])("names a %s by its purpose", (_label, params, purpose) => {
+    expect(createMcpElicitationState(buildRequest(params))?.purpose).toBe(purpose);
+  });
+
+  it.each([
+    ["api_key", {}],
+    ["githubToken", {}],
+    ["client_secret", {}],
+    ["password", {}],
+    ["card_number", {}],
+    ["pin_code", { format: "password" }],
+    ["value", { title: "Access token" }],
+    ["value", { writeOnly: true }],
+  ])("refuses to collect a credential field: %s %o", (key, extra) => {
+    const state = createMcpElicitationState(buildRequest({
+      requestedSchema: { type: "object", properties: { [key]: { type: "string", ...extra } } },
+    }))!;
+
+    expect(state.form?.fields[0]?.kind).toBe("secret");
+    expect(canAcceptMcpElicitation(state)).toBe(false);
+    expect(() => buildMcpElicitationResponse(state, "accept")).not.toThrow();
+    expect(buildMcpElicitationResponse(state, "accept").content).toEqual({});
+  });
+
+  it.each([
+    ["max_tokens", { type: "integer" }],
+    ["token_budget", { type: "string" }],
+    ["remember_password", { type: "boolean" }],
+    ["auth_method", { type: "string", enum: ["token", "password"] }],
+  ])("does not mistake %s for a credential", (key, schema) => {
+    const state = createMcpElicitationState(buildRequest({
+      requestedSchema: { type: "object", properties: { [key]: schema } },
+    }))!;
+
+    expect(state.form?.fields[0]?.kind).not.toBe("secret");
+  });
+
+  it.each([
+    ["email", "pat@example.com", "pat@", "Enter an email address."],
+    ["uri", "https://example.com/a", "example.com", "Enter a full address, such as https://example.com."],
+    ["date", "2026-02-28", "2026-02-30", "Enter a date as YYYY-MM-DD."],
+    ["date-time", "2026-10-23T14:30:00Z", "2026-10-23 14:30", "Enter a date and time as YYYY-MM-DDTHH:MM:SSZ."],
+  ])("validates the %s format", (format, valid, invalid, message) => {
+    const state = createMcpElicitationState(buildRequest({
+      requestedSchema: { type: "object", properties: { value: { type: "string", format } } },
+    }))!;
+
+    const good = updateMcpFieldValue(state, "value", valid);
+    const bad = updateMcpFieldValue(state, "value", invalid);
+    expect(canAcceptMcpElicitation(good)).toBe(true);
+    expect(mcpFieldFormatError(good.form!.fields[0]!)).toBeUndefined();
+    expect(canAcceptMcpElicitation(bad)).toBe(false);
+    expect(mcpFieldFormatError(bad.form!.fields[0]!)).toBe(message);
+    // An optional field may stay empty.
+    expect(canAcceptMcpElicitation(state)).toBe(true);
   });
 });
