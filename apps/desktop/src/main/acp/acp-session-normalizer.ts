@@ -432,7 +432,7 @@ export class AcpSessionReplayNormalizer {
     const kind = readKind(update.update);
     const createdAt =
       readAcpUpdateTimestamp(update.update) ?? update.receivedAt ?? Date.now();
-    if (this.openRetry && isModelProgressUpdate(kind, update.update)) {
+    if (this.openRetry && isAcpModelProgressUpdate(kind, update.update)) {
       // Any output after a retry means the model answered. This runs before
       // the hidden-thought return below: Grok's thoughts are not shown, but
       // they are usually the first sign that a retry succeeded.
@@ -1157,7 +1157,7 @@ function shouldSeparateTranscriptChunks(existing: string, next: string): boolean
 }
 
 /** Updates that prove the model is answering again after a retry. */
-function isModelProgressUpdate(
+export function isAcpModelProgressUpdate(
   kind: string,
   update: Record<string, unknown>,
 ): boolean {
