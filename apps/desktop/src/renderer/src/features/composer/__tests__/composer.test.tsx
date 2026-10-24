@@ -6042,7 +6042,7 @@ describe("Composer", () => {
     expect(screen.getByLabelText(/^Reasoning(?::|$)/)).toHaveValue("high");
   });
 
-  it("restores provider-specific launchpad settings across repeated OpenAI and Grok flips", async () => {
+  it("restores provider settings and shares environments across repeated OpenAI and Grok flips", async () => {
     const codexBackend = {
       ...backendSummary("codex", {
         models: [
@@ -6279,7 +6279,7 @@ describe("Composer", () => {
     expect(screen.getByLabelText(/^Model(?::|$)/)).toHaveValue("grok-4.5-pro");
     expect(screen.getByLabelText(/^Reasoning(?::|$)/)).toHaveValue("low");
     expect(screen.getByLabelText(/^Service tier(?::|$)/)).toHaveValue("priority");
-    expect(screen.getByLabelText(/^Environment(?::|$)/)).toHaveTextContent("Grok Environment");
+    expect(screen.getByLabelText(/^Environment(?::|$)/)).toHaveTextContent("Codex Environment");
     expect(screen.getByLabelText(/^Workspace mode(?::|$)/)).toHaveValue("worktree");
     expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue(
       "feature/provider-memory",
@@ -6314,7 +6314,7 @@ describe("Composer", () => {
       expect(screen.getByLabelText(/^Service tier(?::|$)/)).toHaveValue("standard");
       expect(screen.getByLabelText(/^Agent mode(?::|$)/)).toHaveValue("yolo");
       expect(screen.getByLabelText(/^Environment(?::|$)/)).toHaveTextContent(
-        "Grok Environment",
+        "Codex Environment",
       );
     });
   });
