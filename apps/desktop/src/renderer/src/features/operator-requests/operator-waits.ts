@@ -14,6 +14,7 @@ import {
 } from "@pwragent/shared";
 import {
   createMcpElicitationState,
+  mcpElicitationPurposeLabel,
   type PendingMcpInteractionState,
 } from "../thread-detail/mcp-elicitation";
 import { approvalDisplayCommand } from "../thread-detail/approval-display-command";
@@ -57,6 +58,15 @@ export const OPERATOR_WAIT_LABELS: Record<OperatorWaitKind, string> = {
   questionnaire: "Input needed",
   question: "Question",
 };
+
+/**
+ * The label a surface shows for a wait. An MCP request is named by its
+ * purpose, as its card names it: an empty form may be a tool approval or a
+ * server's own confirmation.
+ */
+export function operatorWaitLabel(wait: Pick<OperatorWait, "kind" | "mcp">): string {
+  return wait.mcp ? mcpElicitationPurposeLabel(wait.mcp.purpose) : OPERATOR_WAIT_LABELS[wait.kind];
+}
 
 /** Lower is more urgent: what the sidebar chip names when a thread has several. */
 const KIND_RANK: Record<OperatorWaitKind, number> = {

@@ -1,6 +1,9 @@
 import {
   buildPendingRequestActions,
   buildPendingRequestApprovalContext,
+  isSecretFieldLabel,
+  isSecretFieldName,
+  mcpElicitationPurpose,
   type AppServerMcpElicitationRequestNotification,
   type AppServerPendingRequestNotification,
   type PendingRequestAction,
@@ -64,7 +67,12 @@ export function buildApprovalIntent(params: {
 
 function titleForRequest(request: AppServerPendingRequestNotification): string {
   if (isMcpElicitationRequest(request)) {
-    return request.params.mode === "url" ? "MCP Login" : "MCP Approval";
+    switch (mcpElicitationPurpose(request.params)) {
+      case "tool-approval": return "Tool Approval";
+      case "confirmation": return "MCP Confirmation";
+      case "form": return "MCP Input";
+      case "url": return "MCP Link";
+    }
   }
   if (request.method.toLowerCase().includes("command")) {
     return "Command Approval";
@@ -222,13 +230,17 @@ function mcpElicitationContext(
   if (!isMcpElicitationRequest(request)) {
     return undefined;
   }
-  if (!mcpElicitationCanAcceptWithoutFormInput(request)) {
-    return request.params.mode === "url"
-      ? "This MCP login request is incomplete and must be completed in PwrAgent desktop. You can still decline or cancel it here."
-      : "This request includes fields that must be completed in PwrAgent desktop. You can still decline or cancel it here.";
-  }
   if (request.params.mode === "url") {
-    return `Open login: ${request.params.url}`;
+    // Never the address itself: chat history keeps its one-time query
+    // state, and link previews fetch the page before anyone consents.
+    const host = urlHost(request.params.url);
+    return [
+      `${request.params.serverName || "An MCP server"} asks to open a page${host ? ` on \`${host}\`` : ""}.`,
+      "Open it from PwrAgent desktop, which shows the full address first. You can still decline or cancel it here.",
+    ].join(" ");
+  }
+  if (!mcpElicitationCanAcceptWithoutFormInput(request)) {
+    return "This request includes fields that must be completed in PwrAgent desktop. You can still decline or cancel it here.";
   }
   const lines = [
     request.params.serverName ? `MCP server: ${request.params.serverName}` : undefined,
@@ -253,16 +265,13 @@ function mcpToolParamLines(request: AppServerMcpElicitationRequestNotification):
       return [];
     }
     const raw = typeof record.value === "string" ? record.value : JSON.stringify(record.value) ?? "";
-    const value = SECRET_PARAM_NAME.test(name ?? label) || /^bearer\s+/i.test(raw.trim())
+    const value = isSecretFieldName(name ?? label) || isSecretFieldLabel(label) || /^bearer\s+/i.test(raw.trim())
       ? "[redacted]"
       : redactCommandText(raw.replace(JSON_SECRET_MEMBER, "$1\"[redacted]\""));
     return [`${label}: ${value.length > MCP_PARAM_VALUE_LIMIT ? `${value.slice(0, MCP_PARAM_VALUE_LIMIT)}…` : value}`];
   });
 }
 
-// Anchored at the end of the name, so `access_token` is withheld and
-// `max_tokens` is not.
-const SECRET_PARAM_NAME = /(?:api[-_]?key|token|secret|password|authorization)$/i;
 // The same names as JSON members inside an object-valued argument, which
 // redactCommandText's `key=value` patterns never match.
 const JSON_SECRET_MEMBER =
@@ -273,10 +282,8 @@ function mcpElicitationCanAcceptWithoutFormInput(
   request: AppServerMcpElicitationRequestNotification,
 ): boolean {
   if (request.params.mode === "url") {
-    return (
-      hasNonEmptyString(request.params.url)
-      && hasNonEmptyString(request.params.elicitationId)
-    );
+    // Consent belongs where the full address is visible; see above.
+    return false;
   }
   const schema = request.params.requestedSchema;
   if (
@@ -291,8 +298,15 @@ function mcpElicitationCanAcceptWithoutFormInput(
   return required.length === 0;
 }
 
-function hasNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
+function urlHost(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  try {
+    return new URL(value).hostname || undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function objectField(value: unknown): Record<string, unknown> | undefined {

@@ -14,6 +14,7 @@ import { resolveActiveProfilePath } from "../profile";
 import { toTranscriptImageProtocolUrl } from "../transcript-image-protocol";
 import { CLAUDE_SETUP_INSTRUCTIONS, claudeEnvironment, inspectClaudeInstallation, type ClaudeInstallation } from "./claude-executable";
 import { createClaudePermissionHandler, claudePermissionMode } from "./claude-permissions";
+import { createClaudeElicitationHandler } from "./claude-elicitation";
 import { claudeHarnessOptions, discoverClaudeModels, readClaudeMetadata } from "./claude-models";
 import { CLAUDE_TERMINAL_COMMANDS_SEED, claudeCommandSummaries } from "./claude-commands";
 import {
@@ -346,6 +347,11 @@ export class ClaudeBackend {
         abortController: running.controller,
         mcpServers: params.mcpServers,
         canUseTool: createClaudePermissionHandler({
+          threadId: params.threadId, turnId: running.turnId,
+          request: this.options.request,
+          cancelRequest: (requestId) => this.options.cancelRequest(params.threadId, running.turnId, requestId),
+        }),
+        onElicitation: createClaudeElicitationHandler({
           threadId: params.threadId, turnId: running.turnId,
           request: this.options.request,
           cancelRequest: (requestId) => this.options.cancelRequest(params.threadId, running.turnId, requestId),

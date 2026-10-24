@@ -1,5 +1,10 @@
+import { openExternalUrl } from "../../lib/open-external-url";
 import {
   canAcceptMcpElicitation,
+  mcpElicitationPurposeLabel,
+  mcpFieldFormatError,
+  mcpFieldFormatPlaceholder,
+  mcpSecretFields,
   redactDisplayValue,
   readMcpApprovalPersistence,
   updateMcpFieldValue,
@@ -29,6 +34,15 @@ export function PendingMcpInteraction(props: PendingMcpInteractionProps) {
   const connectorName = readStringMeta(props.state._meta, "connector_name");
   const subtitle = readStringMeta(props.state._meta, "subtitle");
   const highRisk = readStringMeta(props.state._meta, "riskLevel") === "high";
+  const purpose = props.state.purpose;
+  const secretFields = mcpSecretFields(props.state);
+  const url = props.state.url;
+  const primaryLabel = url
+    ? "Open in browser"
+    : sessionApproval
+      ? "Allow this conversation"
+      // Not "Send": E2E specs find the composer's Send button page-wide.
+      : purpose === "form" ? "Submit" : "Allow";
 
   return (
     <div
@@ -38,9 +52,7 @@ export function PendingMcpInteraction(props: PendingMcpInteractionProps) {
     >
       <div className="transcript-mcp__header">
         <span className="transcript-mcp__identity">
-          <span className="chip chip--mode">
-            {props.state.mode === "url" ? "MCP login" : "MCP approval"}
-          </span>
+          <span className="chip chip--mode">{mcpElicitationPurposeLabel(purpose)}</span>
           {connectorName ? (
             <span className="transcript-mcp__connector">{connectorName}</span>
           ) : null}
@@ -69,20 +81,41 @@ export function PendingMcpInteraction(props: PendingMcpInteractionProps) {
           </dl>
         ) : null}
 
-        {props.state.url ? (
+        {/* The spec requires the full address before consent, and nothing
+            opens until the operator chooses Open in browser. It is text, not
+            a link, so no click or prefetch can reach the page first. */}
+        {url ? (
           <div className="transcript-mcp__url">
-            <span>{props.state.url.displayUrl}</span>
-            <a
-              className="button button--ghost"
-              href={props.state.url.url}
-              rel="noreferrer"
-              target="_blank"
-            >
-              Open
-            </a>
+            {url.host ? (
+              <p className="transcript-mcp__url-host">
+                Opens <strong>{url.host}</strong>
+              </p>
+            ) : null}
+            {/* A long address scrolls, so the box takes focus: a keyboard
+                user must be able to read all of it before consenting. */}
+            <div className="transcript-mcp__url-full" role="region" aria-label="Full address" tabIndex={0}>
+              <code>{url.fullUrl}</code>
+            </div>
+            {url.internationalHost ? (
+              <p className="transcript-mcp__url-warning">
+                This address uses international characters. Check that it is the site you expect, because
+                such addresses can imitate another site.
+              </p>
+            ) : null}
+            {url.blockedReason ? (
+              <p className="transcript-mcp__url-blocked" role="alert">{url.blockedReason}</p>
+            ) : null}
           </div>
         ) : null}
       </div>
+
+      {secretFields.length > 0 ? (
+        <p className="transcript-mcp__secret-notice" role="alert">
+          This form asks for {secretFields.map((field) => field.label).join(", ")}. PwrAgent does not send
+          passwords, keys, tokens, or payment details through a form, because the agent can read form answers.
+          Decline it; the server must ask for these through a browser page instead.
+        </p>
+      ) : null}
 
       {props.state.form && props.state.form.fields.length > 0 ? (
         <div className="transcript-mcp__fields">
@@ -152,14 +185,20 @@ export function PendingMcpInteraction(props: PendingMcpInteractionProps) {
             disabled={props.busy || !canAccept}
             type="button"
             onClick={() => {
-              if (sessionApproval) {
+              if (url) {
+                // Accept means the operator consented to open the page; the
+                // server learns whether the flow finished on its own.
+                // Open the address exactly as it was shown.
+                openExternalUrl(url.fullUrl);
+                void props.onSubmit(props.state, "accept");
+              } else if (sessionApproval) {
                 void props.onSubmit(props.state, "accept", "session");
               } else {
                 void props.onSubmit(props.state, "accept");
               }
             }}
           >
-            {sessionApproval ? "Allow this conversation" : "Allow"}
+            {primaryLabel}
           </button>
         </div>
       </div>
@@ -177,6 +216,17 @@ type PendingMcpFieldControlProps = {
 function PendingMcpFieldControl(props: PendingMcpFieldControlProps) {
   const descriptionId = `${props.state.requestId}-${props.field.key}-description`;
   const requiredText = props.field.required ? "Required" : "Optional";
+
+  if (props.field.kind === "secret") {
+    return (
+      <div className="transcript-mcp__field">
+        <div className="transcript-mcp__field-label">
+          <span>{props.field.label}</span>
+          <span>Not collected</span>
+        </div>
+      </div>
+    );
+  }
 
   if (props.field.kind === "unsupported") {
     return (
@@ -288,6 +338,10 @@ function PendingMcpFieldControl(props: PendingMcpFieldControlProps) {
   }
 
   const field = props.field as Extract<PendingMcpField, { kind: "string" | "number" }>;
+  const formatError = mcpFieldFormatError(field);
+  const errorId = `${props.state.requestId}-${field.key}-error`;
+  const describedBy = [field.description ? descriptionId : undefined, formatError ? errorId : undefined]
+    .filter(Boolean).join(" ") || undefined;
 
   return (
     <label className="transcript-mcp__field">
@@ -296,12 +350,19 @@ function PendingMcpFieldControl(props: PendingMcpFieldControlProps) {
         <span>{field.required ? "Required" : "Optional"}</span>
       </span>
       <input
-        aria-describedby={field.description ? descriptionId : undefined}
+        aria-describedby={describedBy}
+        aria-invalid={formatError ? true : undefined}
+        autoComplete="off"
         disabled={props.busy}
+        inputMode={field.kind === "string" && field.format === "email"
+          ? "email"
+          : field.kind === "string" && field.format === "uri" ? "url" : undefined}
         max={field.kind === "number" ? field.maximum : undefined}
         maxLength={field.kind === "string" ? field.maxLength : undefined}
         min={field.kind === "number" ? field.minimum : undefined}
         minLength={field.kind === "string" ? field.minLength : undefined}
+        placeholder={mcpFieldFormatPlaceholder(field)}
+        spellCheck={field.kind === "string" && field.format ? false : undefined}
         step={field.kind === "number" && field.integer ? 1 : undefined}
         type={field.kind === "number" ? "number" : "text"}
         value={field.value ?? ""}
@@ -321,6 +382,9 @@ function PendingMcpFieldControl(props: PendingMcpFieldControlProps) {
         <span id={descriptionId} className="transcript-mcp__field-help">
           {field.description}
         </span>
+      ) : null}
+      {formatError ? (
+        <span id={errorId} className="transcript-mcp__field-error">{formatError}</span>
       ) : null}
     </label>
   );

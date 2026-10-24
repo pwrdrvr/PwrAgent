@@ -30334,12 +30334,10 @@ div.composer-error-row__toggle {
 
 /* `.button` sets no size, so approval rows inherited the 16px document size:
    larger than the 14px transcript and as large as the card's title. One size
-   for every transcript approval row keeps the cards one family. The MCP
-   login card's Open link sits in its URL row and takes the same size. */
+   for every transcript approval row keeps the cards one family. */
 .transcript-request__actions .button,
 .transcript-questionnaire__actions .button,
-.transcript-mcp__actions .button,
-.transcript-mcp__url .button {
+.transcript-mcp__actions .button {
   min-height: 30px;
   font-size: 13px;
   font-weight: 600;
@@ -30511,23 +30509,74 @@ div.composer-error-row__toggle {
   line-height: 1.45;
 }
 
+/* The full address, shown before the operator consents to open it. The
+   host leads, because it is what decides whether the page is trustworthy. */
 .transcript-mcp__url {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
+  flex-direction: column;
+  gap: 6px;
   padding: 10px 12px;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
   background: var(--surface-overlay-subtle);
 }
 
-.transcript-mcp__url span {
-  min-width: 0;
-  flex: 1 1 220px;
+.transcript-mcp__url-host {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.transcript-mcp__url-host strong {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-weight: 650;
+}
+
+/* Long sign-in addresses scroll inside the card instead of growing it. */
+.transcript-mcp__url-full {
+  max-height: 96px;
+  overflow: auto;
   overflow-wrap: anywhere;
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.transcript-mcp__url-full code {
+  font: inherit;
+}
+
+.transcript-mcp__url-full:focus {
+  outline: none;
+}
+
+.transcript-mcp__url-full:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* Warnings carry their tone on a rule beside the text, not on the text or
+   a tinted panel: --status-warning is under 4.5:1 for small light-theme
+   text (see .transcript-mcp__subtitle). */
+.transcript-mcp__url-warning,
+.transcript-mcp__secret-notice {
+  margin: 0;
+  padding-left: 10px;
+  border-left: 2px solid var(--status-warning);
   color: var(--text-primary);
   font-size: 13px;
+  line-height: 1.45;
+}
+
+.transcript-mcp__url-blocked,
+.transcript-mcp__field-error {
+  margin: 0;
+  color: var(--danger-text);
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .transcript-mcp__fields {

@@ -23,7 +23,7 @@ import { formatTodoAge } from "../thread-todos/ThreadTodoCard";
 import { TodoSplitButton, type TodoSplitMenuEntry } from "../thread-todos/TodoSplitButton";
 import { OperatorQuestionForm } from "./OperatorQuestionForm";
 import {
-  OPERATOR_WAIT_LABELS,
+  operatorWaitLabel,
   isBlockingWait,
   type OperatorWait,
 } from "./operator-waits";
@@ -117,7 +117,7 @@ export function OperatorWaitRow(props: OperatorWaitRowProps) {
   );
   const mainLabel = props.current
     ? `Show question in thread: ${wait.title}${props.unread ? ", unread" : ""}`
-    : `Open thread: ${OPERATOR_WAIT_LABELS[wait.kind]}, ${wait.title}${
+    : `Open thread: ${operatorWaitLabel(wait)}, ${wait.title}${
       props.threadName ? `, in ${props.threadName}` : ""
     }${props.unread ? ", unread" : ""}`;
 
@@ -143,7 +143,7 @@ export function OperatorWaitRow(props: OperatorWaitRowProps) {
         <div className="thread-todos-panel__row-main">{main}</div>
       )}
       <p className="thread-todos-panel__row-route">
-        <span className="thread-todos-panel__wait-label">{OPERATOR_WAIT_LABELS[wait.kind]}</span>
+        <span className="thread-todos-panel__wait-label">{operatorWaitLabel(wait)}</span>
         {sub ? ` · ${sub}` : ""}
       </p>
       {error ? (
@@ -255,6 +255,28 @@ export function OperatorWaitRow(props: OperatorWaitRowProps) {
     ): void => {
       void run(label, () => props.respond(wait, buildMcpElicitationResponse(mcp, action, persist)));
     };
+    if (mcp.url) {
+      // The operator consents on the card, where the full address shows
+      // before anything opens. A row has room only for the host.
+      return (
+        <div className="thread-todos-panel__row-actions">
+          <button
+            type="button"
+            className="thread-todos-panel__row-link thread-todos-panel__row-link--quiet"
+            onClick={() => answer("Declining…", "decline")}
+          >
+            Decline
+          </button>
+          <button
+            type="button"
+            className="thread-todos-panel__row-link"
+            onClick={() => props.openWait(wait)}
+          >
+            Review link
+          </button>
+        </div>
+      );
+    }
     const entries: TodoSplitMenuEntry[] = [
       ...(persistence.includes("session")
         ? [{
@@ -281,16 +303,6 @@ export function OperatorWaitRow(props: OperatorWaitRowProps) {
     ];
     return (
       <div className="thread-todos-panel__row-actions">
-        {mcp.url ? (
-          <a
-            className="thread-todos-panel__row-link"
-            href={mcp.url.url}
-            rel="noreferrer"
-            target="_blank"
-          >
-            Open
-          </a>
-        ) : null}
         <button
           type="button"
           className="thread-todos-panel__row-link thread-todos-panel__row-link--quiet"

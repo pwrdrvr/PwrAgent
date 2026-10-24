@@ -5529,6 +5529,7 @@ Implementation notes remain in a readable bubble.`;
           message: "Allow the playwright MCP server to run tool \"browser_tabs\"?",
           mode: "form",
           turnId: "turn-1",
+          purpose: "confirmation",
           _meta: {
             tool_description: "List, create, close, or select a browser tab.",
           },
@@ -5546,7 +5547,7 @@ Implementation notes remain in a readable bubble.`;
     expect(
       screen.getByRole("group", { name: "Pending MCP interaction" })
     ).toBeInTheDocument();
-    expect(screen.getByText("MCP approval")).toBeInTheDocument();
+    expect(screen.getByText("MCP confirmation")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Allow" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
   });
