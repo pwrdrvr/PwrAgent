@@ -40,6 +40,7 @@ import {
   repairNestedLanguageFences,
 } from "../../lib/markdown-fences";
 import { useMarkdownMathRuntime } from "../../lib/markdown-rendering-options";
+import type { MarkdownMathRuntime } from "../../lib/markdown-math-runtime";
 import {
   resolveThreadHref,
   resolveThreadIdText,
@@ -711,6 +712,32 @@ const markdownComponents: Components = {
   },
 };
 
+// Parsing belongs to the document text and parser configuration, not the
+// surrounding application snapshot, file hydration, or document-viewer state.
+// Context consumers below this boundary still update their links and controls.
+const MarkdownDocument = memo(function MarkdownDocument(props: {
+  text: string;
+  mathRuntime?: MarkdownMathRuntime;
+}) {
+  return (
+    <ReactMarkdown
+      components={markdownComponents}
+      rehypePlugins={props.mathRuntime?.rehypePlugins}
+      remarkPlugins={[
+        ...(props.mathRuntime?.remarkPlugins ?? []),
+        remarkBreaks,
+        // Single tildes are common in home paths and approximate values.
+        [remarkGfm, { singleTilde: false }],
+        remarkPullRequestReferences,
+        remarkTableProfile,
+      ]}
+      urlTransform={normalizeMarkdownUrl}
+    >
+      {props.text}
+    </ReactMarkdown>
+  );
+});
+
 export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdownProps) {
   const sourceMarkdownText = useMemo(
     () => protectComposerHyphenListItems(repairNestedLanguageFences(props.text)),
@@ -889,21 +916,7 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
       <MarkdownRenderContext.Provider value={renderState}>
         <TranscriptFileRegistrationContext.Provider value={registerInlineFile}>
           <MarkdownCodeApiContext.Provider value={props.desktopApi}>
-            <ReactMarkdown
-              components={markdownComponents}
-              rehypePlugins={mathRuntime?.rehypePlugins}
-              remarkPlugins={[
-                ...(mathRuntime?.remarkPlugins ?? []),
-                remarkBreaks,
-                // Single tildes are common in home paths and approximate values.
-                [remarkGfm, { singleTilde: false }],
-                remarkPullRequestReferences,
-                remarkTableProfile,
-              ]}
-              urlTransform={normalizeMarkdownUrl}
-            >
-              {markdownText}
-            </ReactMarkdown>
+            <MarkdownDocument text={markdownText} mathRuntime={mathRuntime} />
           </MarkdownCodeApiContext.Provider>
         </TranscriptFileRegistrationContext.Provider>
       </MarkdownRenderContext.Provider>
