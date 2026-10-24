@@ -607,6 +607,7 @@ Apache-2.0
 - long@5.3.2 | https://github.com/dcodeIO/long.js
 - pdfjs-dist@6.4.299 | https://github.com/mozilla/pdf.js
 - reflect-metadata@0.2.2 | https://github.com/rbuckton/reflect-metadata
+- remend@1.4.0 | https://github.com/vercel/streamdown
 - sigstore@5.0.0 | https://github.com/sigstore/sigstore-js
 - text-decoder@1.2.7 | https://github.com/holepunchto/text-decoder
 - typescript@6.0.3 | https://github.com/microsoft/TypeScript
@@ -720,6 +721,11 @@ ISC
 
 MIT
 ~~~
+- @ai-markdown/engine@3.4.2 | https://github.com/ai-markdown/ai-markdown
+- @ai-markdown/hast-util-from-parse5@8.0.5 | ai-markdown/hast-util-from-parse5
+- @ai-markdown/hast-util-raw@9.1.3 | ai-markdown/hast-util-raw
+- @ai-markdown/rehype-raw@7.0.3 | ai-markdown/rehype-raw
+- @ai-markdown/remark-mark-highlight@1.0.3 | https://github.com/ai-markdown/ai-markdown
 - @antfu/install-pkg@2.0.1 | https://github.com/antfu-collective/install-pkg
 - @anthropic-ai/sdk@0.133.0 | github:anthropics/anthropic-sdk-typescript
 - @babel/runtime@7.29.7 | https://github.com/babel/babel
@@ -780,6 +786,7 @@ MIT
 - @sapphire/shapeshift@4.0.0 | https://github.com/sapphiredev/shapeshift
 - @sapphire/snowflake@3.5.5 | https://github.com/sapphiredev/utilities
 - @shutterstock/p-map-iterable@1.2.0 | https://github.com/shutterstock/p-map-iterable
+- @sindresorhus/is@4.6.0 | sindresorhus/is
 - @slack/logger@5.0.0 | https://github.com/slackapi/node-slack-sdk
 - @slack/socket-mode@3.1.0 | https://github.com/slackapi/node-slack-sdk
 - @slack/types@3.2.0 | https://github.com/slackapi/node-slack-sdk
@@ -853,9 +860,11 @@ MIT
 - @types/estree-jsx@1.0.5 | https://github.com/DefinitelyTyped/DefinitelyTyped
 - @types/geojson@7946.0.16 | https://github.com/DefinitelyTyped/DefinitelyTyped
 - @types/hast@3.0.4 | https://github.com/DefinitelyTyped/DefinitelyTyped
+- @types/hast@3.0.5 | https://github.com/DefinitelyTyped/DefinitelyTyped
 - @types/katex@0.16.8 | https://github.com/DefinitelyTyped/DefinitelyTyped
 - @types/mdast@4.0.4 | https://github.com/DefinitelyTyped/DefinitelyTyped
 - @types/ms@2.1.0 | https://github.com/DefinitelyTyped/DefinitelyTyped
+- @types/nlcst@2.0.3 | https://github.com/DefinitelyTyped/DefinitelyTyped
 - @types/node@24.19.2 | https://github.com/DefinitelyTyped/DefinitelyTyped
 - @types/react@19.3.0 | https://github.com/DefinitelyTyped/DefinitelyTyped
 - @types/react-dom@19.3.0 | https://github.com/DefinitelyTyped/DefinitelyTyped
@@ -879,6 +888,7 @@ MIT
 - aggregate-error@3.1.0 | sindresorhus/aggregate-error
 - ajv@8.20.0 | ajv-validator/ajv
 - ajv-formats@3.0.1 | https://github.com/ajv-validator/ajv-formats
+- array-iterate@2.0.1 | wooorm/array-iterate
 - asynckit@0.4.0 | https://github.com/alexindigo/asynckit
 - axios@1.20.0 | https://github.com/axios/axios
 - bail@2.0.2 | wooorm/bail
@@ -891,6 +901,7 @@ MIT
 - call-bind-apply-helpers@1.0.2 | https://github.com/ljharb/call-bind-apply-helpers
 - call-bound@1.0.4 | https://github.com/ljharb/call-bound
 - ccount@2.0.1 | wooorm/ccount
+- char-regex@1.0.2 | https://github.com/Richienb/char-regex
 - character-entities@2.0.2 | wooorm/character-entities
 - character-entities-html4@2.1.0 | wooorm/character-entities-html4
 - character-entities-legacy@3.0.0 | wooorm/character-entities-legacy
@@ -930,6 +941,8 @@ MIT
 - electron@44.9.3 | https://github.com/electron/electron
 - electron-log@5.4.4 | megahertz/electron-log
 - electron-updater@6.8.9 | https://github.com/electron-userland/electron-builder
+- emojilib@2.4.0 | https://github.com/muan/emojilib
+- emoticon@4.1.0 | wooorm/emoticon
 - encodeurl@2.0.0 | pillarjs/encodeurl
 - encoding@0.1.13 | https://github.com/andris9/encoding
 - es-define-property@1.0.1 | https://github.com/ljharb/es-define-property
@@ -961,6 +974,7 @@ MIT
 - fresh@2.0.0 | jshttp/fresh
 - fs-extra@10.1.0 | https://github.com/jprichardson/node-fs-extra
 - function-bind@1.1.2 | https://github.com/Raynos/function-bind
+- get-east-asian-width@1.7.0 | sindresorhus/get-east-asian-width
 - get-intrinsic@1.3.0 | https://github.com/ljharb/get-intrinsic
 - get-proto@1.0.1 | https://github.com/ljharb/get-proto
 - gopd@1.2.0 | https://github.com/ljharb/gopd
@@ -970,17 +984,29 @@ MIT
 - has-symbols@1.1.0 | https://github.com/inspect-js/has-symbols
 - has-tostringtag@1.0.2 | https://github.com/inspect-js/has-tostringtag
 - hasown@2.0.4 | https://github.com/inspect-js/hasOwn
+- hast-util-definition-list@2.1.0 | https://github.com/wataru-chocola/hast-util-definition-list
+- hast-util-embedded@3.0.0 | syntax-tree/hast-util-embedded
 - hast-util-from-html@2.0.3 | syntax-tree/hast-util-from-html
 - hast-util-from-html-isomorphic@2.0.0 | syntax-tree/hast-util-from-html-isomorphic
 - hast-util-from-parse5@8.0.3 | syntax-tree/hast-util-from-parse5
+- hast-util-has-property@3.0.0 | syntax-tree/hast-util-has-property
+- hast-util-interactive@3.0.0 | syntax-tree/hast-util-interactive
+- hast-util-is-body-ok-link@3.0.1 | https://github.com/rehypejs/rehype-minify/tree/main/packages/hast-util-is-body-ok-link
 - hast-util-is-element@3.0.0 | syntax-tree/hast-util-is-element
+- hast-util-minify-whitespace@1.0.1 | https://github.com/rehypejs/rehype-minify/tree/main/packages/hast-util-minify-whitespace
 - hast-util-parse-selector@4.0.0 | syntax-tree/hast-util-parse-selector
+- hast-util-phrasing@3.0.1 | syntax-tree/hast-util-phrasing
+- hast-util-sanitize@5.0.2 | syntax-tree/hast-util-sanitize
+- hast-util-to-html@9.0.5 | syntax-tree/hast-util-to-html
 - hast-util-to-jsx-runtime@2.3.6 | syntax-tree/hast-util-to-jsx-runtime
+- hast-util-to-mdast@10.1.2 | syntax-tree/hast-util-to-mdast
+- hast-util-to-parse5@8.0.1 | syntax-tree/hast-util-to-parse5
 - hast-util-to-text@4.0.2 | syntax-tree/hast-util-to-text
 - hast-util-whitespace@3.0.0 | syntax-tree/hast-util-whitespace
 - hastscript@9.0.1 | syntax-tree/hastscript
 - hono@4.13.5 | https://github.com/honojs/hono
 - html-url-attributes@3.0.1 | https://github.com/rehypejs/rehype-minify/tree/main/packages/html-url-attributes
+- html-void-elements@3.0.0 | wooorm/html-void-elements
 - http-errors@2.0.1 | jshttp/http-errors
 - http-proxy-agent@9.1.0 | https://github.com/TooTallNate/proxy-agents
 - https-proxy-agent@5.0.1 | https://github.com/TooTallNate/node-https-proxy-agent
@@ -1025,6 +1051,8 @@ MIT
 - marked@16.4.2 | https://github.com/markedjs/marked
 - marked@18.1.1 | https://github.com/markedjs/marked
 - math-intrinsics@1.1.0 | https://github.com/es-shims/math-intrinsics
+- mdast-squeeze-paragraphs@6.0.0 | syntax-tree/mdast-squeeze-paragraphs
+- mdast-util-definition-list@2.0.1 | https://github.com/wataru-chocola/mdast-util-definition-list
 - mdast-util-find-and-replace@3.0.2 | syntax-tree/mdast-util-find-and-replace
 - mdast-util-from-markdown@2.1.0 | syntax-tree/mdast-util-from-markdown
 - mdast-util-gfm@3.1.0 | syntax-tree/mdast-util-gfm
@@ -1041,12 +1069,18 @@ MIT
 - mdast-util-phrasing@4.1.0 | syntax-tree/mdast-util-phrasing
 - mdast-util-to-hast@13.2.1 | syntax-tree/mdast-util-to-hast
 - mdast-util-to-markdown@2.1.2 | syntax-tree/mdast-util-to-markdown
+- mdast-util-to-markdown-cjk-friendly@1.0.0 | https://github.com/tats-u/markdown-cjk-friendly
+- mdast-util-to-markdown-cjk-friendly-gfm-strikethrough@1.0.0 | https://github.com/tats-u/markdown-cjk-friendly
 - mdast-util-to-string@4.0.0 | syntax-tree/mdast-util-to-string
 - media-typer@1.1.1 | jshttp/media-typer
 - merge-descriptors@2.0.0 | sindresorhus/merge-descriptors
 - mermaid@11.17.2 | https://github.com/mermaid-js/mermaid
 - micromark@4.0.2 | https://github.com/micromark/micromark/tree/main/packages/micromark
 - micromark-core-commonmark@2.0.3 | https://github.com/micromark/micromark/tree/main/packages/micromark-core-commonmark
+- micromark-extension-cjk-friendly@2.0.2 | https://github.com/tats-u/markdown-cjk-friendly
+- micromark-extension-cjk-friendly-gfm-strikethrough@2.0.1 | https://github.com/tats-u/markdown-cjk-friendly
+- micromark-extension-cjk-friendly-util@3.0.1 | https://github.com/tats-u/markdown-cjk-friendly
+- micromark-extension-definition-list@2.0.2 | https://github.com/wataru-chocola/micromark-extension-definition-list
 - micromark-extension-gfm@3.0.0 | micromark/micromark-extension-gfm
 - micromark-extension-gfm-autolink-literal@2.1.0 | micromark/micromark-extension-gfm-autolink-literal
 - micromark-extension-gfm-footnote@2.1.0 | micromark/micromark-extension-gfm-footnote
@@ -1083,8 +1117,10 @@ MIT
 - ms@2.1.3 | vercel/ms
 - negotiator@1.0.0 | jshttp/negotiator
 - negotiator@1.1.0 | jshttp/negotiator
+- nlcst-to-string@4.0.0 | syntax-tree/nlcst-to-string
 - node-addon-api@7.1.1 | https://github.com/nodejs/node-addon-api
 - node-addon-api@8.9.2 | https://github.com/nodejs/node-addon-api
+- node-emoji@2.2.0 | https://github.com/omnidan/node-emoji
 - node-fetch@2.7.0 | https://github.com/bitinn/node-fetch
 - node-pty@1.2.0-beta.15 | https://github.com/microsoft/node-pty
 - object-assign@4.1.1 | sindresorhus/object-assign
@@ -1097,7 +1133,9 @@ MIT
 - p-retry@4.6.2 | sindresorhus/p-retry
 - p-timeout@3.2.0 | sindresorhus/p-timeout
 - package-manager-detector@1.8.0 | https://github.com/antfu-collective/package-manager-detector
+- pangu@4.0.7 | https://github.com/vinta/pangu.js
 - parse-entities@4.0.2 | wooorm/parse-entities
+- parse-latin@7.0.0 | wooorm/parse-latin
 - parse5@7.3.0 | https://github.com/inikulin/parse5
 - parseurl@1.3.3 | pillarjs/parseurl
 - path-data-parser@0.1.0 | https://github.com/pshihn/path-data-parser
@@ -1135,13 +1173,27 @@ MIT
 - react-dom@19.3.1 | https://github.com/react/react
 - react-markdown@10.1.0 | remarkjs/react-markdown
 - rehype-katex@7.0.1 | https://github.com/remarkjs/remark-math/tree/main/packages/rehype-katex
+- rehype-minify-whitespace@6.0.2 | https://github.com/rehypejs/rehype-minify/tree/main/packages/rehype-minify-whitespace
+- rehype-sanitize@6.0.0 | rehypejs/rehype-sanitize
+- rehype-unwrap-images@1.0.0 | rehypejs/rehype-unwrap-images
 - remark-breaks@4.0.0 | remarkjs/remark-breaks
+- remark-cjk-friendly@2.3.2 | https://github.com/tats-u/markdown-cjk-friendly
+- remark-cjk-friendly-gfm-strikethrough@2.3.1 | https://github.com/tats-u/markdown-cjk-friendly
+- remark-definition-list@2.0.1 | https://github.com/wataru-chocola/remark-definition-list
+- remark-emoji@5.0.2 | https://github.com/rhysd/remark-emoji
 - remark-gfm@4.0.1 | remarkjs/remark-gfm
 - remark-math@6.0.0 | https://github.com/remarkjs/remark-math/tree/main/packages/remark-math
+- remark-pangu@2.2.0 | https://github.com/VincentBel/remark-pangu
 - remark-parse@11.0.0 | https://github.com/remarkjs/remark/tree/main/packages/remark-parse
 - remark-rehype@11.1.2 | remarkjs/remark-rehype
+- remark-smartypants@3.0.3 | https://github.com/silvenon/remark-smartypants
+- remark-squeeze-paragraphs@6.0.0 | remarkjs/remark-squeeze-paragraphs
 - remark-stringify@11.0.0 | https://github.com/remarkjs/remark/tree/main/packages/remark-stringify
 - require-from-string@2.0.2 | floatdrop/require-from-string
+- retext@9.0.0 | https://github.com/retextjs/retext/tree/main/packages/retext
+- retext-latin@4.0.0 | https://github.com/retextjs/retext/tree/main/packages/retext-latin
+- retext-smartypants@6.2.0 | retextjs/retext-smartypants
+- retext-stringify@4.0.0 | https://github.com/retextjs/retext/tree/main/packages/retext-stringify
 - retry@0.12.0 | https://github.com/tim-kos/node-retry
 - retry@0.13.1 | https://github.com/tim-kos/node-retry
 - rope-sequence@1.3.4 | https://github.com/marijnh/rope-sequence
@@ -1157,6 +1209,7 @@ MIT
 - side-channel-list@1.0.1 | https://github.com/ljharb/side-channel-list
 - side-channel-map@1.0.1 | https://github.com/ljharb/side-channel-map
 - side-channel-weakmap@1.0.2 | https://github.com/ljharb/side-channel-weakmap
+- skin-tone@2.0.0 | sindresorhus/skin-tone
 - smart-buffer@4.2.0 | https://github.com/JoshGlazebrook/smart-buffer
 - socks@2.8.9 | https://github.com/JoshGlazebrook/socks
 - socks-proxy-agent@10.1.0 | https://github.com/TooTallNate/proxy-agents
@@ -1177,6 +1230,7 @@ MIT
 - toidentifier@1.0.1 | component/toidentifier
 - tr46@0.0.3 | https://github.com/Sebmaster/tr46.js
 - trim-lines@3.0.1 | wooorm/trim-lines
+- trim-trailing-lines@2.1.0 | wooorm/trim-trailing-lines
 - trough@2.2.0 | wooorm/trough
 - ts-algebra@2.0.0 | https://github.com/ThomasAribart/ts-algebra
 - ts-dedent@2.3.0 | https://github.com/tamino-martinius/node-ts-dedent
@@ -1187,13 +1241,20 @@ MIT
 - undici@6.28.1 | https://github.com/nodejs/undici
 - undici@8.12.2 | https://github.com/nodejs/undici
 - undici-types@7.24.6 | https://github.com/nodejs/undici
+- unicode-emoji-modifier-base@1.0.0 | https://github.com/mathiasbynens/unicode-emoji-modifier-base
 - unified@11.0.5 | unifiedjs/unified
+- unist-builder@4.0.0 | syntax-tree/unist-builder
 - unist-util-find-after@5.0.0 | syntax-tree/unist-util-find-after
+- unist-util-is@4.1.0 | syntax-tree/unist-util-is
 - unist-util-is@6.0.1 | syntax-tree/unist-util-is
+- unist-util-modify-children@4.0.0 | syntax-tree/unist-util-modify-children
 - unist-util-position@5.0.0 | syntax-tree/unist-util-position
 - unist-util-remove-position@5.0.0 | syntax-tree/unist-util-remove-position
 - unist-util-stringify-position@4.0.0 | syntax-tree/unist-util-stringify-position
+- unist-util-visit@2.0.3 | syntax-tree/unist-util-visit
 - unist-util-visit@5.1.0 | syntax-tree/unist-util-visit
+- unist-util-visit-children@3.0.0 | syntax-tree/unist-util-visit-children
+- unist-util-visit-parents@3.1.1 | syntax-tree/unist-util-visit-parents
 - unist-util-visit-parents@6.0.2 | syntax-tree/unist-util-visit-parents
 - universalify@2.0.1 | https://github.com/RyanZim/universalify
 - unpipe@1.0.0 | stream-utils/unpipe
@@ -1437,6 +1498,149 @@ Apache License
    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
    See the License for the specific language governing permissions and
    limitations under the License.
+
+@ai-markdown/engine@3.4.2 (MIT)
+-------------------------------
+
+Applies to:
+- @ai-markdown/engine@3.4.2 (MIT)
+
+Representative file: @ai-markdown/engine@3.4.2/LICENSE
+
+MIT License
+
+Copyright (c) 2026 Brian Lee
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+@ai-markdown/hast-util-from-parse5@8.0.5 (MIT)
+----------------------------------------------
+
+Applies to:
+- @ai-markdown/hast-util-from-parse5@8.0.5 (MIT)
+- @ai-markdown/hast-util-raw@9.1.3 (MIT)
+- @ai-markdown/rehype-raw@7.0.3 (MIT)
+- decode-named-character-reference@1.3.0 (MIT)
+- hast-util-from-parse5@8.0.3 (MIT)
+- hast-util-sanitize@5.0.2 (MIT)
+- hast-util-to-html@9.0.5 (MIT)
+- hast-util-to-jsx-runtime@2.3.6 (MIT)
+- hast-util-to-parse5@8.0.1 (MIT)
+- hastscript@9.0.1 (MIT)
+- markdown-table@3.0.4 (MIT)
+- mdast-util-find-and-replace@3.0.2 (MIT)
+- mdast-util-from-markdown@2.1.0 (MIT)
+- mdast-util-gfm@3.1.0 (MIT)
+- mdast-util-gfm-footnote@2.1.0 (MIT)
+- mdast-util-to-markdown@2.1.2 (MIT)
+- micromark@4.0.2 (MIT)
+- micromark-core-commonmark@2.0.3 (MIT)
+- micromark-extension-gfm-table@2.1.1 (MIT)
+- micromark-factory-destination@2.0.1 (MIT)
+- micromark-factory-label@2.0.1 (MIT)
+- micromark-factory-space@2.0.1 (MIT)
+- micromark-factory-title@2.0.1 (MIT)
+- micromark-factory-whitespace@2.0.1 (MIT)
+- micromark-util-character@2.1.1 (MIT)
+- micromark-util-chunked@2.0.1 (MIT)
+- micromark-util-classify-character@2.0.1 (MIT)
+- micromark-util-combine-extensions@2.0.1 (MIT)
+- micromark-util-decode-numeric-character-reference@2.0.2 (MIT)
+- micromark-util-decode-string@2.0.1 (MIT)
+- micromark-util-encode@2.0.1 (MIT)
+- micromark-util-html-tag-name@2.0.1 (MIT)
+- micromark-util-normalize-identifier@2.0.1 (MIT)
+- micromark-util-resolve-all@2.0.1 (MIT)
+- micromark-util-sanitize-uri@2.0.1 (MIT)
+- micromark-util-subtokenize@2.1.0 (MIT)
+- micromark-util-symbol@2.0.1 (MIT)
+- micromark-util-types@2.0.2 (MIT)
+- remark-gfm@4.0.1 (MIT)
+- remark-rehype@11.1.2 (MIT)
+- retext-smartypants@6.2.0 (MIT)
+- vfile-message@4.0.3 (MIT)
+
+Representative file: @ai-markdown/hast-util-from-parse5@8.0.5/license
+
+(The MIT License)
+
+Copyright (c) Titus Wormer <tituswormer@gmail.com>
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+'Software'), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED 'AS IS', WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+@ai-markdown/remark-mark-highlight@1.0.3 (MIT)
+----------------------------------------------
+
+Applies to:
+- @ai-markdown/remark-mark-highlight@1.0.3 (MIT)
+
+Representative file: @ai-markdown/remark-mark-highlight@1.0.3/LICENSE
+
+MIT License
+
+Copyright (c) 2026 Brian Lee
+
+This package is a first-party continuation of two MIT-licensed, unmaintained
+upstreams whose tokenizer this implementation derives from. Their copyright
+notices are reproduced verbatim as required by the MIT license:
+
+- remark-mark-highlight (https://github.com/widcardw/remark-mark-highlight):
+  Copyright (c) 2024 widcardw
+- remark-highlight-mark / micromark-extension-highlight-mark /
+  mdast-util-highlight-mark
+  (https://github.com/shlroland/remark-highlight-mark):
+  Copyright (c) 2024 remark-highlight-mark
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
 @antfu/install-pkg@2.0.1 (MIT)
 ------------------------------
@@ -4520,6 +4724,29 @@ Representative file: @sigstore/verify@4.1.2/package metadata
 No license text file was found in the installed package for @sigstore/verify@4.1.2.
 The package declares license: Apache-2.0.
 
+@sindresorhus/is@4.6.0 (MIT)
+----------------------------
+
+Applies to:
+- @sindresorhus/is@4.6.0 (MIT)
+- escape-string-regexp@5.0.0 (MIT)
+- get-east-asian-width@1.7.0 (MIT)
+- is-plain-obj@4.1.0 (MIT)
+- p-map@7.0.6 (MIT)
+- p-queue@6.6.2 (MIT)
+
+Representative file: @sindresorhus/is@4.6.0/license
+
+MIT License
+
+Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
 @slack/logger@5.0.0 (MIT)
 -------------------------
 
@@ -4715,9 +4942,11 @@ Applies to:
 - @types/estree-jsx@1.0.5 (MIT)
 - @types/geojson@7946.0.16 (MIT)
 - @types/hast@3.0.4 (MIT)
+- @types/hast@3.0.5 (MIT)
 - @types/katex@0.16.8 (MIT)
 - @types/mdast@4.0.4 (MIT)
 - @types/ms@2.1.0 (MIT)
+- @types/nlcst@2.0.3 (MIT)
 - @types/node@24.19.2 (MIT)
 - @types/react@19.3.0 (MIT)
 - @types/react-dom@19.3.0 (MIT)
@@ -5137,6 +5366,7 @@ Applies to:
 - p-timeout@3.2.0 (MIT)
 - path-key@3.1.1 (MIT)
 - shebang-regex@3.0.0 (MIT)
+- skin-tone@2.0.0 (MIT)
 - supports-color@7.2.0 (MIT)
 
 Representative file: aggregate-error@3.1.0/license
@@ -5474,6 +5704,38 @@ WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
 ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT
 OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
+array-iterate@2.0.1 (MIT)
+-------------------------
+
+Applies to:
+- array-iterate@2.0.1 (MIT)
+- unified@11.0.5 (MIT)
+- vfile@6.0.3 (MIT)
+
+Representative file: array-iterate@2.0.1/license
+
+(The MIT License)
+
+Copyright (c) 2015 Titus Wormer <tituswormer@gmail.com>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
 asn1js@3.0.10 (BSD-3-Clause)
 ----------------------------
 
@@ -5571,8 +5833,11 @@ Applies to:
 - character-reference-invalid@2.0.1 (MIT)
 - mdast-util-to-string@4.0.0 (MIT)
 - unist-util-find-after@5.0.0 (MIT)
+- unist-util-modify-children@4.0.0 (MIT)
 - unist-util-position@5.0.0 (MIT)
+- unist-util-visit@2.0.3 (MIT)
 - unist-util-visit@5.1.0 (MIT)
+- unist-util-visit-children@3.0.0 (MIT)
 
 Representative file: bail@2.0.2/license
 
@@ -5850,6 +6115,36 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
+char-regex@1.0.2 (MIT)
+----------------------
+
+Applies to:
+- char-regex@1.0.2 (MIT)
+
+Representative file: char-regex@1.0.2/LICENSE
+
+MIT License
+
+Copyright (c) 2019 Richie Bendall
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
 chownr@3.0.0 (BlueOak-1.0.0)
 ----------------------------
 
@@ -5958,17 +6253,24 @@ comma-separated-tokens@2.0.3 (MIT)
 
 Applies to:
 - comma-separated-tokens@2.0.3 (MIT)
+- hast-util-embedded@3.0.0 (MIT)
+- hast-util-has-property@3.0.0 (MIT)
+- hast-util-interactive@3.0.0 (MIT)
 - hast-util-is-element@3.0.0 (MIT)
 - hast-util-parse-selector@4.0.0 (MIT)
+- hast-util-phrasing@3.0.1 (MIT)
 - hast-util-whitespace@3.0.0 (MIT)
+- html-void-elements@3.0.0 (MIT)
 - is-alphabetical@2.0.1 (MIT)
 - is-alphanumerical@2.0.1 (MIT)
 - is-decimal@2.0.1 (MIT)
 - is-hexadecimal@2.0.1 (MIT)
 - mdast-util-to-hast@13.2.1 (MIT)
+- rehype-sanitize@6.0.0 (MIT)
 - space-separated-tokens@2.0.2 (MIT)
 - unist-util-remove-position@5.0.0 (MIT)
 - unist-util-stringify-position@4.0.0 (MIT)
+- unist-util-visit-parents@3.1.1 (MIT)
 - unist-util-visit-parents@6.0.2 (MIT)
 - vfile-location@5.0.3 (MIT)
 - web-namespaces@2.0.1 (MIT)
@@ -6936,71 +7238,6 @@ IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMA
 WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-decode-named-character-reference@1.3.0 (MIT)
---------------------------------------------
-
-Applies to:
-- decode-named-character-reference@1.3.0 (MIT)
-- hast-util-from-parse5@8.0.3 (MIT)
-- hast-util-to-jsx-runtime@2.3.6 (MIT)
-- hastscript@9.0.1 (MIT)
-- markdown-table@3.0.4 (MIT)
-- mdast-util-find-and-replace@3.0.2 (MIT)
-- mdast-util-from-markdown@2.1.0 (MIT)
-- mdast-util-gfm@3.1.0 (MIT)
-- mdast-util-gfm-footnote@2.1.0 (MIT)
-- mdast-util-to-markdown@2.1.2 (MIT)
-- micromark@4.0.2 (MIT)
-- micromark-core-commonmark@2.0.3 (MIT)
-- micromark-extension-gfm-table@2.1.1 (MIT)
-- micromark-factory-destination@2.0.1 (MIT)
-- micromark-factory-label@2.0.1 (MIT)
-- micromark-factory-space@2.0.1 (MIT)
-- micromark-factory-title@2.0.1 (MIT)
-- micromark-factory-whitespace@2.0.1 (MIT)
-- micromark-util-character@2.1.1 (MIT)
-- micromark-util-chunked@2.0.1 (MIT)
-- micromark-util-classify-character@2.0.1 (MIT)
-- micromark-util-combine-extensions@2.0.1 (MIT)
-- micromark-util-decode-numeric-character-reference@2.0.2 (MIT)
-- micromark-util-decode-string@2.0.1 (MIT)
-- micromark-util-encode@2.0.1 (MIT)
-- micromark-util-html-tag-name@2.0.1 (MIT)
-- micromark-util-normalize-identifier@2.0.1 (MIT)
-- micromark-util-resolve-all@2.0.1 (MIT)
-- micromark-util-sanitize-uri@2.0.1 (MIT)
-- micromark-util-subtokenize@2.1.0 (MIT)
-- micromark-util-symbol@2.0.1 (MIT)
-- micromark-util-types@2.0.2 (MIT)
-- remark-gfm@4.0.1 (MIT)
-- remark-rehype@11.1.2 (MIT)
-- vfile-message@4.0.3 (MIT)
-
-Representative file: decode-named-character-reference@1.3.0/license
-
-(The MIT License)
-
-Copyright (c) Titus Wormer <tituswormer@gmail.com>
-
-Permission is hereby granted, free of charge, to any person obtaining
-a copy of this software and associated documentation files (the
-'Software'), to deal in the Software without restriction, including
-without limitation the rights to use, copy, modify, merge, publish,
-distribute, sublicense, and/or sell copies of the Software, and to
-permit persons to whom the Software is furnished to do so, subject to
-the following conditions:
-
-The above copyright notice and this permission notice shall be
-included in all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED 'AS IS', WITHOUT WARRANTY OF ANY KIND,
-EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
-IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
-TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
-SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
 delaunator@5.1.0 (ISC)
 ----------------------
 
@@ -7298,6 +7535,69 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
+emojilib@2.4.0 (MIT)
+--------------------
+
+Applies to:
+- emojilib@2.4.0 (MIT)
+
+Representative file: emojilib@2.4.0/LICENSE
+
+The MIT License (MIT)
+
+Copyright (c) 2014 Mu-An Chiou
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+emoticon@4.1.0 (MIT)
+--------------------
+
+Applies to:
+- emoticon@4.1.0 (MIT)
+- nlcst-to-string@4.0.0 (MIT)
+- parse-latin@7.0.0 (MIT)
+
+Representative file: emoticon@4.1.0/license
+
+(The MIT License)
+
+Copyright (c) 2014 Titus Wormer <tituswormer@gmail.com>
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+'Software'), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED 'AS IS', WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
 encodeurl@2.0.0 (MIT)
 ---------------------
 
@@ -7466,27 +7766,6 @@ IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
 CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
 TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-escape-string-regexp@5.0.0 (MIT)
---------------------------------
-
-Applies to:
-- escape-string-regexp@5.0.0 (MIT)
-- is-plain-obj@4.1.0 (MIT)
-- p-map@7.0.6 (MIT)
-- p-queue@6.6.2 (MIT)
-
-Representative file: escape-string-regexp@5.0.0/license
-
-MIT License
-
-Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com)
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 estree-util-is-identifier-name@3.0.0 (MIT)
 ------------------------------------------
@@ -8413,6 +8692,36 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
+hast-util-definition-list@2.1.0 (MIT)
+-------------------------------------
+
+Applies to:
+- hast-util-definition-list@2.1.0 (MIT)
+
+Representative file: hast-util-definition-list@2.1.0/LICENSE
+
+MIT License
+
+Copyright (c) 2023 wataru-chocola
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
 hast-util-from-dom@5.0.1 (ISC)
 ------------------------------
 
@@ -8499,6 +8808,71 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
 TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+hast-util-is-body-ok-link@3.0.1 (MIT)
+-------------------------------------
+
+Applies to:
+- hast-util-is-body-ok-link@3.0.1 (MIT)
+- hast-util-minify-whitespace@1.0.1 (MIT)
+- html-url-attributes@3.0.1 (MIT)
+- rehype-minify-whitespace@6.0.2 (MIT)
+
+Representative file: hast-util-is-body-ok-link@3.0.1/license
+
+(The MIT License)
+
+Copyright (c) Titus Wormer
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+hast-util-to-mdast@10.1.2 (MIT)
+-------------------------------
+
+Applies to:
+- hast-util-to-mdast@10.1.2 (MIT)
+
+Representative file: hast-util-to-mdast@10.1.2/license
+
+(The MIT License)
+
+Copyright (c) Titus Wormer <tituswormer@gmail.com>
+Copyright (c) Seth Vincent <sethvincent@gmail.com>
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+'Software'), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED 'AS IS', WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
 hast-util-to-text@4.0.2 (MIT)
 -----------------------------
 
@@ -8559,36 +8933,6 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
-html-url-attributes@3.0.1 (MIT)
--------------------------------
-
-Applies to:
-- html-url-attributes@3.0.1 (MIT)
-
-Representative file: html-url-attributes@3.0.1/license
-
-(The MIT License)
-
-Copyright (c) Titus Wormer
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-THE SOFTWARE.
 
 http-cache-semantics@4.2.0 (BSD-2-Clause)
 -----------------------------------------
@@ -9474,6 +9818,7 @@ Applies to:
 - longest-streak@3.1.0 (MIT)
 - stringify-entities@4.0.4 (MIT)
 - trim-lines@3.0.1 (MIT)
+- trim-trailing-lines@2.1.0 (MIT)
 
 Representative file: longest-streak@3.1.0/license
 
@@ -9678,6 +10023,69 @@ Redistribution and use in source and binary forms, with or without modification,
 
 This software is provided by the copyright holders and contributors “as is” and any express or implied warranties, including, but not limited to, the implied warranties of merchantability and fitness for a particular purpose are disclaimed. In no event shall the copyright owner or contributors be liable for any direct, indirect, incidental, special, exemplary, or consequential damages (including, but not limited to, procurement of substitute goods or services; loss of use, data, or profits; or business interruption) however caused and on any theory of liability, whether in contract, strict liability, or tort (including negligence or otherwise) arising in any way out of the use of this software, even if advised of the possibility of such damage.
 
+mdast-squeeze-paragraphs@6.0.0 (MIT)
+------------------------------------
+
+Applies to:
+- mdast-squeeze-paragraphs@6.0.0 (MIT)
+- remark-squeeze-paragraphs@6.0.0 (MIT)
+- unist-builder@4.0.0 (MIT)
+
+Representative file: mdast-squeeze-paragraphs@6.0.0/license
+
+The MIT License (MIT)
+
+Copyright (c) 2015 Eugene Sharygin
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+mdast-util-definition-list@2.0.1 (MIT)
+--------------------------------------
+
+Applies to:
+- mdast-util-definition-list@2.0.1 (MIT)
+- remark-definition-list@2.0.1 (MIT)
+
+Representative file: mdast-util-definition-list@2.0.1/LICENSE
+
+MIT License
+
+Copyright (c) 2021 wataru-chocola
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
 mdast-util-newline-to-break@2.0.0 (MIT)
 ---------------------------------------
 
@@ -9742,6 +10150,46 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
 TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+mdast-util-to-markdown-cjk-friendly@1.0.0 (MIT)
+-----------------------------------------------
+
+Applies to:
+- mdast-util-to-markdown-cjk-friendly@1.0.0 (MIT)
+- mdast-util-to-markdown-cjk-friendly-gfm-strikethrough@1.0.0 (MIT)
+- remark-cjk-friendly@2.3.2 (MIT)
+- remark-cjk-friendly-gfm-strikethrough@2.3.1 (MIT)
+
+Representative file: mdast-util-to-markdown-cjk-friendly@1.0.0/LICENSE
+
+Copyright (c) 2025 Tatsunori Uchino <tats.u@live.jp>
+
+MIT LICENSE
+
+Based on remark-gfm:
+
+(The MIT License)
+
+Copyright (c) Titus Wormer <tituswormer@gmail.com>
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+'Software'), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED 'AS IS', WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
 merge-descriptors@2.0.0 (MIT)
 -----------------------------
 
@@ -9773,6 +10221,147 @@ Representative file: mermaid@11.17.2/LICENSE
 The MIT License (MIT)
 
 Copyright (c) 2014 - 2022 Knut Sveidqvist
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+micromark-extension-cjk-friendly@2.0.2 (MIT)
+--------------------------------------------
+
+Applies to:
+- micromark-extension-cjk-friendly@2.0.2 (MIT)
+
+Representative file: micromark-extension-cjk-friendly@2.0.2/LICENSE
+
+Copyright (c) 2025 Tatsunori Uchino <tats.u@live.jp>
+
+MIT LICENSE
+
+Based on micromark and micromark-core-commonmark
+
+(The MIT License)
+
+Copyright (c) Titus Wormer <tituswormer@gmail.com>
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+'Software'), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED 'AS IS', WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+micromark-extension-cjk-friendly-gfm-strikethrough@2.0.1 (MIT)
+--------------------------------------------------------------
+
+Applies to:
+- micromark-extension-cjk-friendly-gfm-strikethrough@2.0.1 (MIT)
+
+Representative file: micromark-extension-cjk-friendly-gfm-strikethrough@2.0.1/LICENSE
+
+Copyright (c) 2025 Tatsunori Uchino <tats.u@live.jp>
+
+MIT LICENSE
+
+Based on micromark and micromark-core-commonmark & micromark-extension-gfm-strikethrough
+
+(The MIT License)
+
+Copyright (c) Titus Wormer <tituswormer@gmail.com>
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+'Software'), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED 'AS IS', WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+micromark-extension-cjk-friendly-util@3.0.1 (MIT)
+-------------------------------------------------
+
+Applies to:
+- micromark-extension-cjk-friendly-util@3.0.1 (MIT)
+
+Representative file: micromark-extension-cjk-friendly-util@3.0.1/LICENSE
+
+Copyright (c) 2025 Tatsunori Uchino <tats.u@live.jp>
+
+MIT LICENSE
+
+Based on micromark's sub-packages (micromark-util-character, micromark-util-symbol, and micromark-util-classify-character)
+
+(The MIT License)
+
+Copyright (c) Titus Wormer <tituswormer@gmail.com>
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+'Software'), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED 'AS IS', WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+micromark-extension-definition-list@2.0.2 (MIT)
+-----------------------------------------------
+
+Applies to:
+- micromark-extension-definition-list@2.0.2 (MIT)
+
+Representative file: micromark-extension-definition-list@2.0.2/LICENSE
+
+MIT License
+
+Copyright (c) 2021 WATANABE Wataru <wataru.chocola@gmail.com>
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -10123,6 +10712,37 @@ The above copyright notice and this permission notice shall be included in all c
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+node-emoji@2.2.0 (MIT)
+----------------------
+
+Applies to:
+- node-emoji@2.2.0 (MIT)
+
+Representative file: node-emoji@2.2.0/LICENSE.md
+
+# MIT License
+
+Copyright (c) 2014-2023 Daniel Bugl
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+'Software'), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED 'AS IS', WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
 node-fetch@2.7.0 (MIT)
 ----------------------
 
@@ -10382,6 +11002,35 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+pangu@4.0.7 (MIT)
+-----------------
+
+Applies to:
+- pangu@4.0.7 (MIT)
+
+Representative file: pangu@4.0.7/LICENSE
+
+The MIT License (MIT)
+
+Copyright (c) 2013 Vinta
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 parse-entities@4.0.2 (MIT)
 --------------------------
@@ -11386,6 +12035,95 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
+rehype-unwrap-images@1.0.0 (MIT)
+--------------------------------
+
+Applies to:
+- rehype-unwrap-images@1.0.0 (MIT)
+
+Representative file: rehype-unwrap-images@1.0.0/license
+
+The MIT License (MIT)
+
+Copyright (c) Titus Wormer
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+remark-emoji@5.0.2 (MIT)
+------------------------
+
+Applies to:
+- remark-emoji@5.0.2 (MIT)
+
+Representative file: remark-emoji@5.0.2/LICENSE
+
+The MIT License (MIT)
+
+Copyright (c) 2016 rhysd
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+of the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
+PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR
+THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+remark-pangu@2.2.0 (MIT)
+------------------------
+
+Applies to:
+- remark-pangu@2.2.0 (MIT)
+
+Representative file: remark-pangu@2.2.0/LICENSE
+
+MIT License
+
+Copyright (c) 2017 Vincent Bel
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
 remark-parse@11.0.0 (MIT)
 -------------------------
 
@@ -11417,6 +12155,46 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
+remark-smartypants@3.0.3 (MIT)
+------------------------------
+
+Applies to:
+- remark-smartypants@3.0.3 (MIT)
+
+Representative file: remark-smartypants@3.0.3/license
+
+MIT License
+
+Copyright (c) Matija Marohnić <matija.marohnic@gmail.com> (silvenon.com)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+remend@1.4.0 (Apache-2.0)
+-------------------------
+
+Applies to:
+- remend@1.4.0 (Apache-2.0)
+
+Representative file: remend@1.4.0/LICENSE
+
+Copyright 2023 Vercel, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
 require-from-string@2.0.2 (MIT)
 -------------------------------
 
@@ -11446,6 +12224,40 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
+
+retext@9.0.0 (MIT)
+------------------
+
+Applies to:
+- retext@9.0.0 (MIT)
+- retext-latin@4.0.0 (MIT)
+- retext-stringify@4.0.0 (MIT)
+
+Representative file: retext@9.0.0/package metadata
+
+The installed package does not include a separate license file. Its package metadata declares MIT.
+
+MIT License
+
+Copyright (c) Titus Wormer <tituswormer@gmail.com> (https://wooorm.com)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
 retry@0.12.0 (MIT)
 ------------------
@@ -12359,44 +13171,43 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-unified@11.0.5 (MIT)
---------------------
+unicode-emoji-modifier-base@1.0.0 (MIT)
+---------------------------------------
 
 Applies to:
-- unified@11.0.5 (MIT)
-- vfile@6.0.3 (MIT)
+- unicode-emoji-modifier-base@1.0.0 (MIT)
 
-Representative file: unified@11.0.5/license
+Representative file: unicode-emoji-modifier-base@1.0.0/LICENSE-MIT.txt
 
-(The MIT License)
+Copyright Mathias Bynens <https://mathiasbynens.be/>
 
-Copyright (c) 2015 Titus Wormer <tituswormer@gmail.com>
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
 
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-THE SOFTWARE.
-
-unist-util-is@6.0.1 (MIT)
+unist-util-is@4.1.0 (MIT)
 -------------------------
 
 Applies to:
+- unist-util-is@4.1.0 (MIT)
 - unist-util-is@6.0.1 (MIT)
 
-Representative file: unist-util-is@6.0.1/license
+Representative file: unist-util-is@4.1.0/license
 
 (The MIT license)
 

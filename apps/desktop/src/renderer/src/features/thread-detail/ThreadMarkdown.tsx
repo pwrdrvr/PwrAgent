@@ -25,7 +25,7 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
-import ReactMarkdown, { type Components, type UrlTransform } from "react-markdown";
+import ReactMarkdown, { type Components, type Options, type UrlTransform } from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import { AppIcon } from "../../components/AppIcon";
@@ -39,7 +39,7 @@ import {
   protectComposerHyphenListItems,
   repairNestedLanguageFences,
 } from "../../lib/markdown-fences";
-import { useMarkdownMathRuntime } from "../../lib/markdown-rendering-options";
+import { useIncrementalMarkdownRenderer, useMarkdownMathRuntime } from "../../lib/markdown-rendering-options";
 import type { MarkdownMathRuntime } from "../../lib/markdown-math-runtime";
 import {
   resolveThreadHref,
@@ -719,22 +719,29 @@ const MarkdownDocument = memo(function MarkdownDocument(props: {
   text: string;
   mathRuntime?: MarkdownMathRuntime;
 }) {
-  return (
-    <ReactMarkdown
-      components={markdownComponents}
-      rehypePlugins={props.mathRuntime?.rehypePlugins}
-      remarkPlugins={[
-        ...(props.mathRuntime?.remarkPlugins ?? []),
-        remarkBreaks,
-        // Single tildes are common in home paths and approximate values.
-        [remarkGfm, { singleTilde: false }],
-        remarkPullRequestReferences,
-        remarkTableProfile,
-      ]}
-      urlTransform={normalizeMarkdownUrl}
+  const IncrementalRenderer = useIncrementalMarkdownRenderer();
+  const remarkPlugins = useMemo<Options["remarkPlugins"]>(() => [
+    ...(props.mathRuntime?.remarkPlugins ?? []),
+    remarkBreaks,
+    [remarkGfm, { singleTilde: false }],
+    remarkPullRequestReferences,
+    remarkTableProfile,
+  ], [props.mathRuntime]);
+  const options = {
+    components: markdownComponents,
+    rehypePlugins: props.mathRuntime?.rehypePlugins,
+    remarkPlugins,
+    urlTransform: normalizeMarkdownUrl,
+  };
+  return IncrementalRenderer ? (
+    <IncrementalRenderer
+      mathFlow={Boolean(props.mathRuntime)}
+      {...options}
     >
       {props.text}
-    </ReactMarkdown>
+    </IncrementalRenderer>
+  ) : (
+    <ReactMarkdown {...options}>{props.text}</ReactMarkdown>
   );
 });
 

@@ -5088,6 +5088,26 @@ describe("DesktopSettingsService", () => {
     );
   });
 
+  it("defaults incremental Markdown rendering to off and persists enable and disable", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(configPath, "# Keep this comment\n[experimental]\nmarkdown_math_rendering = true\n");
+    const service = new DesktopSettingsService({ configPath, env: {}, secretStore: new MemoryDesktopSecretStore() });
+    expect((await service.readSettingsProjection()).experimental.incrementalMarkdownRendering).toEqual({
+      value: false, source: "default",
+    });
+    for (const enabled of [true, false]) {
+      await service.writeConfigPatchTargeted({ experimental: { incrementalMarkdownRendering: enabled } });
+      const reloaded = new DesktopSettingsService({ configPath, env: {}, secretStore: new MemoryDesktopSecretStore() });
+      expect((await reloaded.readSettingsProjection()).experimental.incrementalMarkdownRendering).toEqual({
+        value: enabled, source: "config",
+      });
+      expect(fs.readFileSync(configPath, "utf8")).toContain(`incremental_markdown_rendering = ${enabled}`);
+    }
+    expect(fs.readFileSync(configPath, "utf8")).toContain("# Keep this comment");
+    expect(fs.readFileSync(configPath, "utf8")).toContain("markdown_math_rendering = true");
+  });
+
   it("defaults Git background PR polling to on and persists an explicit opt-out", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");

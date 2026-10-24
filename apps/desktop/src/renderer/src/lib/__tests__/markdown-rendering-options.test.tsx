@@ -7,7 +7,90 @@ import type { MarkdownMathRuntime } from "../markdown-math-runtime";
 afterEach(() => {
   cleanup();
   vi.doUnmock("../markdown-math-runtime");
+  vi.doUnmock("../../features/thread-detail/IncrementalMarkdown");
   vi.restoreAllMocks();
+});
+
+async function setupIncremental() {
+  vi.resetModules();
+  type Renderer = typeof import("../../features/thread-detail/IncrementalMarkdown")["IncrementalMarkdown"];
+  const renderer: Renderer = () => [];
+  let resolve!: (value: { IncrementalMarkdown: Renderer }) => void;
+  let reject!: (error: Error) => void;
+  const pending = new Promise<{ IncrementalMarkdown: Renderer }>((yes, no) => {
+    resolve = yes;
+    reject = no;
+  });
+  const load = vi.fn(() => pending);
+  vi.doMock("../../features/thread-detail/IncrementalMarkdown", load);
+  const { MarkdownRenderingOptionsProvider: Provider, useIncrementalMarkdownRenderer } =
+    await import("../markdown-rendering-options");
+  function Message() {
+    return useIncrementalMarkdownRenderer() ? "incremental" : "standard";
+  }
+  return { Provider, Message, load,
+    finish: () => act(async () => { resolve({ IncrementalMarkdown: renderer }); await pending; }),
+    fail: () => act(async () => { reject(new Error("Import failed")); await pending.catch(() => {}); }),
+  };
+}
+
+describe("incremental Markdown loading", () => {
+  it("keeps the default and explicit opt-out on the standard renderer without loading", async () => {
+    const { Provider, Message, load } = await setupIncremental();
+    const view = render(<Provider mathEnabled={false}><Message /></Provider>);
+    expect(view.container.textContent).toBe("standard");
+    view.rerender(<Provider mathEnabled={false} incrementalEnabled={false}><Message /></Provider>);
+    expect(load).not.toHaveBeenCalled();
+  });
+
+  it("shares one load, falls back while pending, and switches back immediately when disabled", async () => {
+    const { Provider, Message, load, finish } = await setupIncremental();
+    const view = render(<StrictMode><Provider mathEnabled={false} incrementalEnabled><Message /></Provider></StrictMode>);
+    const second = render(<Provider mathEnabled={false} incrementalEnabled><Message /></Provider>);
+    await act(async () => {});
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(view.container.textContent).toBe("standard");
+    await finish();
+    expect(view.container.textContent).toBe("incremental");
+    expect(second.container.textContent).toBe("incremental");
+    second.rerender(<Provider mathEnabled={false} incrementalEnabled={false}><Message /></Provider>);
+    expect(second.container.textContent).toBe("standard");
+    second.rerender(<Provider mathEnabled={false} incrementalEnabled><Message /></Provider>);
+    expect(second.container.textContent).toBe("incremental");
+    expect(load).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores a stale load after disable or unmount and does not enable a cached runtime by default", async () => {
+    const { Provider, Message, finish } = await setupIncremental();
+    const view = render(<Provider mathEnabled={false} incrementalEnabled><Message /></Provider>);
+    const unmounted = render(<Provider mathEnabled={false} incrementalEnabled><Message /></Provider>);
+    await act(async () => {});
+    view.rerender(<Provider mathEnabled={false}><Message /></Provider>);
+    unmounted.unmount();
+    await finish();
+    expect(view.container.textContent).toBe("standard");
+    const later = render(<Provider mathEnabled={false}><Message /></Provider>);
+    expect(later.container.textContent).toBe("standard");
+    view.rerender(<Provider mathEnabled={false} incrementalEnabled><Message /></Provider>);
+    await act(async () => {});
+    expect(view.container.textContent).toBe("incremental");
+  });
+
+  it("retains standard rendering after a failed import without a toggle/remount retry loop", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { Provider, Message, load, fail } = await setupIncremental();
+    const view = render(<Provider mathEnabled={false} incrementalEnabled><Message /></Provider>);
+    await act(async () => {});
+    await fail();
+    expect(view.container.textContent).toBe("standard");
+    view.rerender(<Provider mathEnabled={false}><Message /></Provider>);
+    view.rerender(<Provider mathEnabled={false} incrementalEnabled><Message /></Provider>);
+    view.unmount();
+    render(<Provider mathEnabled={false} incrementalEnabled><Message /></Provider>);
+    await act(async () => {});
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(error).toHaveBeenCalledTimes(1);
+  });
 });
 
 async function setup() {

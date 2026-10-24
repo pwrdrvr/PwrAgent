@@ -1262,6 +1262,8 @@ export type DesktopSettingsSnapshot = {
      * explicitly opts into the experiment.
      */
     markdownMathRendering?: DesktopSettingsValue<boolean>;
+    /** Opt-in incremental Markdown parser and block reuse. Defaults to off. */
+    incrementalMarkdownRendering?: DesktopSettingsValue<boolean>;
     /**
      * Controls whether the released thread context-rail Pricing tab is visible.
      * The pricing ledger continues collecting usage while the tab is hidden.
@@ -1620,6 +1622,7 @@ export type DesktopSettingsConfigPatch = {
     fullAccessRiskWarningDismissed?: boolean;
     liveTranscriptEventFiltering?: boolean;
     markdownMathRendering?: boolean;
+    incrementalMarkdownRendering?: boolean;
     threadPricingSummary?: boolean;
     threadPricingDisplayUsd?: boolean;
     threadPricingDisplayCodexCredits?: boolean;

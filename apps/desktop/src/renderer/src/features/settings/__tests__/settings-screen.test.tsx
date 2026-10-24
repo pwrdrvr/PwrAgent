@@ -2776,6 +2776,7 @@ describe("SettingsScreen", () => {
     delete experimental.liveTranscriptEventFiltering;
     delete experimental.codexDefaultModeRequestUserInput;
     delete experimental.markdownMathRendering;
+    delete experimental.incrementalMarkdownRendering;
     const settings = createSettingsState(snapshot);
 
     render(
@@ -2795,10 +2796,14 @@ describe("SettingsScreen", () => {
     const mathSwitch = screen.getByRole("switch", {
       name: "Enable Markdown math rendering",
     });
+    const incrementalSwitch = screen.getByRole("switch", {
+      name: "Enable incremental Markdown rendering",
+    });
 
     expect(filteringSwitch).toHaveAttribute("aria-checked", "false");
     expect(questionsSwitch).toHaveAttribute("aria-checked", "false");
     expect(mathSwitch).toHaveAttribute("aria-checked", "true");
+    expect(incrementalSwitch).toHaveAttribute("aria-checked", "false");
 
     fireEvent.click(filteringSwitch);
     await waitFor(() => {
@@ -2818,6 +2823,12 @@ describe("SettingsScreen", () => {
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         experimental: { markdownMathRendering: false },
+      });
+    });
+    fireEvent.click(incrementalSwitch);
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        experimental: { incrementalMarkdownRendering: true },
       });
     });
   });
