@@ -2450,7 +2450,7 @@ function mergeLaunchpadUpdateResponse(
 
   const merged: NavigationLaunchpadDraft = { ...next };
   const backendChanged = "backend" in patch;
-  const environmentChanged = backendChanged || "codexEnvironmentId" in patch;
+  const environmentChanged = "codexEnvironmentId" in patch;
   const preserveSetting = <Key extends keyof NavigationLaunchpadDraft>(
     key: Key,
   ): void => {
@@ -7762,9 +7762,9 @@ export function useThreadNavigation(
             // Remote launchpads are composed and persisted on the viewer, then
             // sent in full to the owning instance for materialization. The owner
             // clears its overlay row as part of that operation, but it cannot
-            // clear the viewer's local copy. Remove that copy after success so
-            // reopening the launchpad cannot resurrect the submitted message.
-            await desktopApi.resetDirectoryLaunchpad({ directoryKey });
+            // clear the viewer's local copy. Clear its submitted input after
+            // success while retaining the project's environment selection.
+            await desktopApi.resetDirectoryLaunchpad({ directoryKey, preserveEnvironment: true });
           } catch (error) {
             localDraftResetFailure =
               error instanceof Error ? error.message : String(error);

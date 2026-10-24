@@ -712,8 +712,11 @@ export type NavigationLaunchpadProviderSettings = {
   serviceTier?: string;
   fastMode?: boolean;
   acpRuntime?: BackendAcpSessionRuntimeState;
+  /** @deprecated Read only to migrate legacy provider-specific environment choices. */
   codexEnvironmentId?: string;
+  /** @deprecated Environment execution target now belongs to the launchpad. */
   codexEnvironmentExecutionTarget?: CodexEnvironmentExecutionTarget;
+  /** @deprecated Environment action now belongs to the launchpad. */
   codexEnvironmentActionId?: string;
 };
 
@@ -725,10 +728,26 @@ const NAVIGATION_LAUNCHPAD_PROVIDER_SETTING_KEYS = [
   "serviceTier",
   "fastMode",
   "acpRuntime",
-  "codexEnvironmentId",
-  "codexEnvironmentExecutionTarget",
-  "codexEnvironmentActionId",
 ] as const satisfies readonly (keyof NavigationLaunchpadProviderSettings)[];
+
+/** Lift the active legacy choice once, then discard inactive provider copies. */
+function normalizeNavigationLaunchpadEnvironment<T extends NavigationLaunchpadDefaults>(launchpad: T): T {
+  const active = launchpad.providerSettings?.[launchpad.backend];
+  const environment = !("codexEnvironmentId" in launchpad) && active?.codexEnvironmentId
+    ? {
+        codexEnvironmentId: active.codexEnvironmentId,
+        codexEnvironmentExecutionTarget: active.codexEnvironmentExecutionTarget,
+        codexEnvironmentActionId: active.codexEnvironmentActionId,
+      }
+    : {};
+  if (!launchpad.providerSettings) return launchpad;
+  const providerSettings = Object.fromEntries(
+    Object.entries(launchpad.providerSettings).map(([backend, settings]) => [
+      backend, settings ? extractNavigationLaunchpadProviderSettings(settings) : settings,
+    ]),
+  );
+  return { ...launchpad, ...environment, providerSettings };
+}
 
 export function extractNavigationLaunchpadProviderSettings(
   source: Partial<NavigationLaunchpadDefaults>,
@@ -884,15 +903,13 @@ function clearNavigationLaunchpadProviderFields<T extends NavigationLaunchpadDef
     serviceTier: undefined,
     fastMode: undefined,
     acpRuntime: undefined,
-    codexEnvironmentId: undefined,
-    codexEnvironmentExecutionTarget: undefined,
-    codexEnvironmentActionId: undefined,
   };
 }
 
 export function projectNavigationLaunchpadProviderSettings<
   T extends NavigationLaunchpadDefaults,
 >(launchpad: T): T {
+  launchpad = normalizeNavigationLaunchpadEnvironment(launchpad);
   const legacySettings = extractNavigationLaunchpadProviderSettings(launchpad);
   const providerSettings = launchpad.providerSettings?.[launchpad.backend];
   const settings = {
@@ -909,15 +926,13 @@ export function projectNavigationLaunchpadProviderSettings<
     serviceTier: settings.serviceTier,
     fastMode: settings.fastMode,
     acpRuntime: settings.acpRuntime,
-    codexEnvironmentId: settings.codexEnvironmentId,
-    codexEnvironmentExecutionTarget: settings.codexEnvironmentExecutionTarget,
-    codexEnvironmentActionId: settings.codexEnvironmentActionId,
   };
 }
 
 export function applyNavigationLaunchpadProviderSettingsPatch<
   T extends NavigationLaunchpadDefaults,
 >(launchpad: T, patch: Partial<T>): T {
+  launchpad = normalizeNavigationLaunchpadEnvironment(launchpad);
   const providerPatch = extractNavigationLaunchpadProviderSettings(patch);
   const backend = patch.backend ?? launchpad.backend;
   const providerSettings = seedNavigationLaunchpadProviderSettings(launchpad);

@@ -6468,6 +6468,7 @@ async function resetLaunchpadAfterMaterialize(params: {
     codexEnvironmentExecutionTarget: launchpad.codexEnvironmentId
       ? launchpad.codexEnvironmentExecutionTarget ?? "local"
       : undefined,
+    codexEnvironmentActionId: launchpad.codexEnvironmentActionId,
     createdAt: now,
     updatedAt: now,
   });
@@ -25036,6 +25037,10 @@ export class DesktopBackendRegistry {
     const codexEnvironmentOptions = options?.skipFilesystemInspection
       ? []
       : await listCodexEnvironmentOptions(request.directoryPath);
+    const withEnvironmentOptions = (launchpad: NavigationLaunchpadDraft): NavigationLaunchpadDraft =>
+      options?.skipFilesystemInspection
+        ? launchpad
+        : withCodexEnvironmentOptions(launchpad, codexEnvironmentOptions);
     const existing = await this.overlayStore.getDirectoryLaunchpad({
       directoryKey: request.directoryKey,
     });
@@ -25111,9 +25116,8 @@ export class DesktopBackendRegistry {
           updatedAt: Date.now(),
         };
         return {
-          launchpad: withCodexEnvironmentOptions(
+          launchpad: withEnvironmentOptions(
             await this.overlayStore.upsertDirectoryLaunchpad(refreshed),
-            codexEnvironmentOptions,
           ),
           defaults,
         };
@@ -25132,7 +25136,7 @@ export class DesktopBackendRegistry {
         mcpSeed !== undefined
       ) {
         return {
-          launchpad: withCodexEnvironmentOptions(
+          launchpad: withEnvironmentOptions(
             await this.overlayStore.upsertDirectoryLaunchpad({
               ...normalizedExisting,
               directoryKind: request.directoryKind,
@@ -25146,14 +25150,13 @@ export class DesktopBackendRegistry {
               ...mcpSeed,
               updatedAt: Date.now(),
             }),
-            codexEnvironmentOptions,
           ),
           defaults,
         };
       }
 
       return {
-        launchpad: withCodexEnvironmentOptions(existing, codexEnvironmentOptions),
+        launchpad: withEnvironmentOptions(existing),
         defaults,
       };
     }
@@ -25185,9 +25188,8 @@ export class DesktopBackendRegistry {
       updatedAt: Date.now(),
     };
     return {
-      launchpad: withCodexEnvironmentOptions(
+      launchpad: withEnvironmentOptions(
         await this.overlayStore.upsertDirectoryLaunchpad(launchpad),
-        codexEnvironmentOptions,
       ),
       defaults,
     };
@@ -25324,9 +25326,14 @@ export class DesktopBackendRegistry {
   async resetDirectoryLaunchpad(
     request: ResetDirectoryLaunchpadRequest,
   ): Promise<ResetDirectoryLaunchpadResponse> {
-    await this.overlayStore.resetDirectoryLaunchpad({
-      directoryKey: request.directoryKey,
-    });
+    const launchpad = request.preserveEnvironment
+      ? await this.overlayStore.getDirectoryLaunchpad({ directoryKey: request.directoryKey })
+      : undefined;
+    if (launchpad) {
+      await this.resetLaunchpadDraft(launchpad);
+    } else {
+      await this.overlayStore.resetDirectoryLaunchpad({ directoryKey: request.directoryKey });
+    }
     return {
       directoryKey: request.directoryKey,
       defaults: await this.overlayStore.getLaunchpadDefaults(),
