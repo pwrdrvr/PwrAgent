@@ -12,7 +12,11 @@ import type {
   AppServerThreadTurnMetadata,
   AppServerTurnInputItem,
 } from "@pwragent/shared";
-import { buildThreadMarkdownLink } from "@pwragent/shared";
+import {
+  buildThreadCorrespondenceHeading,
+  buildThreadMarkdownLink,
+  type ThreadCorrespondenceState,
+} from "@pwragent/shared";
 import { isUsageActivityEntry, usageActivityScope } from "./overlay-transcript-entries";
 
 type ThreadRef = { backend: AppServerBackendKind; threadId: string; instanceId?: string; title?: string };
@@ -22,7 +26,7 @@ export type CorrespondenceRecord = {
   destination: ThreadRef;
   input: AppServerTurnInputItem[];
   createdAt: number;
-  state: "sending" | "queued" | "started" | "failed" | "cancelled" | "held";
+  state: ThreadCorrespondenceState;
   queueEntryId?: string;
   turnId?: string;
   sourceTurnId?: string;
@@ -142,15 +146,8 @@ export class ThreadCorrespondenceStore {
     records.sort((left, right) => left.createdAt - right.createdAt);
     const messages: AppServerThreadMessageEntry[] = records.map((record) => {
       const destination = buildThreadMarkdownLink({ ...record.destination, ...(record.turnId ? { messageId: `user:${record.turnId}` } : {}) });
-      const state = {
-        sending: "Send outcome unknown",
-        queued: "Queued (last confirmed)",
-        started: "Receiving thread started work",
-        failed: "Failed to send",
-        cancelled: "Cancelled",
-        held: "Held for retry",
-      }[record.state];
-      const heading = `**Message to ${destination}** · ${state}`;
+      // The transcript collapses this message by parsing the heading back.
+      const heading = buildThreadCorrespondenceHeading(destination, record.state);
       const body = record.input.flatMap((item) => item.type === "text" ? [item.text] : []).join("\n");
       return {
         type: "message",

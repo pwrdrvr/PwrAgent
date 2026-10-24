@@ -24826,6 +24826,38 @@ button.thread-todos-panel__row-main:is(:hover, :focus-visible)
   transform: rotate(45deg);
 }
 
+.transcript-monitor-result__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A thread delivery previews the message it sent: quoted text, not a title. */
+.transcript-monitor-result__toggle--quote {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.transcript-monitor-result__toggle--quote:hover {
+  color: var(--text-primary);
+}
+
+/* Lines up under the label, past the 8px chevron and its 8px gap. */
+.transcript-monitor-result__preview {
+  margin: 0 0 0 16px;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.transcript-monitor-result__preview-label {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
 .transcript-monitor-result__details {
   flex: 0 0 auto;
   min-height: 26px;
