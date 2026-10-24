@@ -121,6 +121,21 @@ const THREAD_PRICING_LAZY_REPRICE_BATCH_SIZE = 10;
 // shared by more than 2 lines; one migration stamp was shared by 7,251.
 const THREAD_USAGE_BULK_REWRITE_MIN_LINES = 64;
 
+// PwrAgent recorded no turn usage before 2026.
+const EARLIEST_USAGE_TURN_START = Date.UTC(2026, 0, 1);
+
+/**
+ * A recorded turn start falls between 2026 and the end of next year. A value
+ * outside that span is not a clock reading: Claude's UUIDv4 turn ids, read as
+ * UUIDv7, stored starts in years such as 2042, 2090, and 6903.
+ */
+function plausibleUsageTurnStartSpan(now: number): { from: number; before: number } {
+  return {
+    from: EARLIEST_USAGE_TURN_START,
+    before: Date.UTC(new Date(now).getUTCFullYear() + 2, 0, 1),
+  };
+}
+
 class UnsupportedStarMapWorkspaceVersionError extends Error {}
 
 function assertSupportedStarMapWorkspacePayload(value: unknown): void {
@@ -2333,6 +2348,72 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
   }
 
   /**
+   * Ledger turns whose recorded start cannot be a real time. See
+   * `plausibleUsageTurnStartSpan`. Bounded to `limit` rows.
+   */
+  async readImplausibleThreadUsageTurnStarts(params: {
+    limit: number;
+    now?: number;
+  }): Promise<Array<{
+    backend: string;
+    threadId: string;
+    turnId?: string;
+    usageTurnId: string;
+  }>> {
+    const span = plausibleUsageTurnStartSpan(params.now ?? Date.now());
+    const rows = this.stateDb.raw.prepare(
+      `SELECT usage_turn_id, backend, thread_id, turn_id
+         FROM thread_usage_turns
+        WHERE started_at < ? OR started_at >= ?
+        ORDER BY observed_at, usage_turn_id
+        LIMIT ?`,
+    ).all(span.from, span.before, params.limit) as Array<{
+      backend: string;
+      thread_id: string;
+      turn_id: string | null;
+      usage_turn_id: string;
+    }>;
+    return rows.map((row) => ({
+      backend: row.backend,
+      threadId: row.thread_id,
+      ...(row.turn_id ? { turnId: row.turn_id } : {}),
+      usageTurnId: row.usage_turn_id,
+    }));
+  }
+
+  /**
+   * Replace implausible turn starts. A recovered start that is itself
+   * implausible, or none, clears the start: every reader then falls back to
+   * the turn's first observation. A row whose start became plausible since it
+   * was read is left alone. One transaction.
+   */
+  async repairThreadUsageTurnStarts(params: {
+    now?: number;
+    repairs: Array<{ startedAt?: number; usageTurnId: string }>;
+  }): Promise<number> {
+    if (params.repairs.length === 0) {
+      return 0;
+    }
+    const now = params.now ?? Date.now();
+    const span = plausibleUsageTurnStartSpan(now);
+    const repair = this.stateDb.raw.prepare(
+      `UPDATE thread_usage_turns
+          SET started_at = ?, updated_at = ?
+        WHERE usage_turn_id = ?
+          AND (started_at < ? OR started_at >= ?)`,
+    );
+    return this.stateDb.raw.transaction(() => params.repairs.reduce((changed, row) => {
+      const startedAt =
+        row.startedAt !== undefined
+        && row.startedAt >= span.from
+        && row.startedAt < span.before
+          ? row.startedAt
+          : null;
+      return changed + repair.run(startedAt, now, row.usageTurnId, span.from, span.before).changes;
+    }, 0))();
+  }
+
+  /**
    * Close ledger turns whose end was never observed: the process running them
    * quit or crashed, or its app-server died, before a terminal event arrived.
    * The caller picks `lastWriteBefore` so no live turn can qualify.
@@ -3534,7 +3615,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       )
       .all(backend, threadId, backend, threadId, threadId) as Array<{
       completed_at: number | null;
-      started_at: number;
+      started_at: number | null;
       usage_turn_id: string;
       observed_cold_replay_count: number | null;
       observed_cold_replay_uncached_tokens: number | null;
@@ -3556,7 +3637,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       if (!turn) {
         continue;
       }
-      line.startedAt = turn.started_at;
+      if (turn.started_at !== null) {
+        line.startedAt = turn.started_at;
+      }
       if (line.completedAt === undefined && turn.completed_at !== null) {
         line.completedAt = turn.completed_at;
       }
