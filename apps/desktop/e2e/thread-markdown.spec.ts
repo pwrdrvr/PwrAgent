@@ -23,6 +23,13 @@ async function assertMarkdownRendering(incrementalEnabled: boolean) {
   });
 
   try {
+    const parsedScripts = new Set<string>();
+    const cdp = await app.window.context().newCDPSession(app.window);
+    cdp.on("Debugger.scriptParsed", ({ url }) => parsedScripts.add(url));
+    // Resource Timing omits file:// modules. Debugger.enable also reports
+    // scripts parsed before attachment, including an already-loaded renderer.
+    await cdp.send("Debugger.enable");
+
     await app.window
       .getByRole("button", { name: /Markdown replay thread/i })
       .first()
@@ -80,8 +87,8 @@ async function assertMarkdownRendering(incrementalEnabled: boolean) {
     await expect(transcript.getByText("Preserves file links")).toBeVisible();
     await expect(transcript).toContainText("Keeps");
     await expect(transcript).toContainText("inert");
-    await expect.poll(() => app.window.evaluate(() =>
-      performance.getEntriesByType("resource").some((entry) => entry.name.includes("/IncrementalMarkdown-"))
+    await expect.poll(() => [...parsedScripts].some((url) =>
+      url.includes("/IncrementalMarkdown-")
     )).toBe(incrementalEnabled);
   } finally {
     await app.close();
