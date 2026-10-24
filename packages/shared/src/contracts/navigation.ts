@@ -2368,6 +2368,19 @@ export type SetThreadLockResponse = {
   previousLock?: ThreadLock;
 };
 
+/**
+ * Short notes the operator saved in the lock dialog, newest first. Kept per
+ * profile on this machine, whichever instance owns the locked thread.
+ */
+export type RecentThreadLockNotesResponse = {
+  notes: string[];
+};
+
+/** Remembers or forgets one recent lock note. */
+export type ThreadLockNoteRequest = {
+  note: string;
+};
+
 export type SetThreadPinRequest = {
   backend?: AppServerBackendKind;
   federationTarget?: FederationTarget;

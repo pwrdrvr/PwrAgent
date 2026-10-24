@@ -197,6 +197,8 @@ import {
   type SetNavigationBrowseModeResponse,
   type SetPinnedGroupCollapsedRequest,
   type SetPinnedGroupCollapsedResponse,
+  type RecentThreadLockNotesResponse,
+  type ThreadLockNoteRequest,
   type ListThreadMigrationSourceThreadsRequest,
   type ListThreadMigrationSourceThreadsResponse,
   type ListThreadMigrationSourcesResponse,
@@ -356,6 +358,9 @@ import {
   NAVIGATION_SET_THREAD_PIN_CHANNEL,
   NAVIGATION_SET_THREAD_REACTION_CHANNEL,
   NAVIGATION_SET_THREAD_LOCK_CHANNEL,
+  NAVIGATION_RECENT_THREAD_LOCK_NOTES_CHANNEL,
+  NAVIGATION_REMEMBER_THREAD_LOCK_NOTE_CHANNEL,
+  NAVIGATION_FORGET_THREAD_LOCK_NOTE_CHANNEL,
   NAVIGATION_SET_THREAD_TOOL_INCIDENT_NOTICE_CHANNEL,
   NAVIGATION_PENDING_THREAD_SPEND_ALERTS_CHANNEL,
   NAVIGATION_ACKNOWLEDGE_THREAD_SPEND_ALERT_CHANNEL,
@@ -2188,6 +2193,33 @@ class DesktopAppServerService {
       request.collapsed === true,
     ) ?? request.collapsed === true;
     return { collapsed };
+  }
+
+  async listRecentThreadLockNotes(): Promise<RecentThreadLockNotesResponse> {
+    return { notes: this.getOverlayStore().listRecentThreadLockNotes?.() ?? [] };
+  }
+
+  /**
+   * Remembers a note the operator saved in the lock dialog. Local to this
+   * profile even when the thread lives on a peer: the operator typed it here.
+   */
+  async rememberThreadLockNote(
+    request: ThreadLockNoteRequest,
+  ): Promise<RecentThreadLockNotesResponse> {
+    const note = readThreadLockNoteRequest(request);
+    return {
+      notes: await this.getOverlayStore().rememberRecentThreadLockNote?.(note) ?? [],
+    };
+  }
+
+  /** Removes a note from the recent list, as a chip's remove button asks. */
+  async forgetThreadLockNote(
+    request: ThreadLockNoteRequest,
+  ): Promise<RecentThreadLockNotesResponse> {
+    const note = readThreadLockNoteRequest(request);
+    return {
+      notes: await this.getOverlayStore().forgetRecentThreadLockNote?.(note) ?? [],
+    };
   }
 
   private async readNavigationSnapshot(
@@ -8412,6 +8444,11 @@ function invalidateNavigationEvent(event: AgentEvent): void {
     typeof threadId === "string" ? { backend: event.backend, threadId } : undefined);
 }
 
+/** The note in a recent-lock-note request; the renderer's payload is untrusted. */
+function readThreadLockNoteRequest(request: ThreadLockNoteRequest | undefined): string {
+  return typeof request?.note === "string" ? request.note : "";
+}
+
 export function registerAppServerIpcHandlers(): void {
   setBundledGitLfsAdvisory((repositoryPath) => {
     appServerService.publishBundledGitLfsAdvisory(repositoryPath);
@@ -8939,6 +8976,33 @@ export function registerAppServerIpcHandlers(): void {
       request: SetThreadLockRequest,
     ): Promise<SetThreadLockResponse> => {
       return await appServerService.setThreadLock(request);
+    },
+  );
+  ipcMain.removeHandler(NAVIGATION_RECENT_THREAD_LOCK_NOTES_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_RECENT_THREAD_LOCK_NOTES_CHANNEL,
+    async (): Promise<RecentThreadLockNotesResponse> => {
+      return await appServerService.listRecentThreadLockNotes();
+    },
+  );
+  ipcMain.removeHandler(NAVIGATION_REMEMBER_THREAD_LOCK_NOTE_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_REMEMBER_THREAD_LOCK_NOTE_CHANNEL,
+    async (
+      _event,
+      request: ThreadLockNoteRequest,
+    ): Promise<RecentThreadLockNotesResponse> => {
+      return await appServerService.rememberThreadLockNote(request);
+    },
+  );
+  ipcMain.removeHandler(NAVIGATION_FORGET_THREAD_LOCK_NOTE_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_FORGET_THREAD_LOCK_NOTE_CHANNEL,
+    async (
+      _event,
+      request: ThreadLockNoteRequest,
+    ): Promise<RecentThreadLockNotesResponse> => {
+      return await appServerService.forgetThreadLockNote(request);
     },
   );
   ipcMain.removeHandler(NAVIGATION_SET_THREAD_TOOL_INCIDENT_NOTICE_CHANNEL);
@@ -9710,6 +9774,9 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(NAVIGATION_MARK_THREAD_SEEN_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SET_THREAD_REACTION_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SET_THREAD_LOCK_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_RECENT_THREAD_LOCK_NOTES_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_REMEMBER_THREAD_LOCK_NOTE_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_FORGET_THREAD_LOCK_NOTE_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SET_THREAD_AGENT_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_REFRESH_THREAD_GIT_WORKING_STATE_CHANNEL);

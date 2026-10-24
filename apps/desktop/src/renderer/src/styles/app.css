@@ -9301,6 +9301,102 @@ a.button {
   outline-offset: 2px;
 }
 
+/* Recent notes: one Tab stop under the field. The chip matching the note
+   takes the accent-soft fill the Star Map filter chips use for a choice.
+   Each chip is a pill holding the note button and a remove button; both are
+   24px tall so neither is an undersized target beside the other. */
+.thread-lock-dialog__recents {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.thread-lock-dialog__recents-label {
+  margin-right: 2px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.thread-lock-dialog__recent {
+  display: inline-flex;
+  align-items: stretch;
+  max-width: 100%;
+  min-height: 26px;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+}
+
+.thread-lock-dialog__recent:has([aria-pressed="true"]) {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
+.thread-lock-dialog__recent:has(.thread-lock-dialog__recent-pick:focus-visible) {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.thread-lock-dialog__recent-pick,
+.thread-lock-dialog__recent-remove {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.thread-lock-dialog__recent-pick {
+  min-width: 0;
+  padding: 0 4px 0 10px;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-lock-dialog__recent-pick:focus-visible {
+  outline: none;
+}
+
+.thread-lock-dialog__recent-pick:hover:not(:disabled) {
+  color: var(--text-primary);
+}
+
+.thread-lock-dialog__recent-remove {
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 24px;
+  padding: 0;
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1;
+}
+
+.thread-lock-dialog__recent-remove:hover:not(:disabled) {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.thread-lock-dialog__recent:has(:disabled) {
+  opacity: 0.6;
+}
+
+.thread-lock-dialog__recent :disabled {
+  cursor: default;
+}
+
 .thread-lock-dialog__blocks {
   margin-top: 12px;
   padding: 10px 12px;

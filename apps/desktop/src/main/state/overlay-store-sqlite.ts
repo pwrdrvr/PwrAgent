@@ -101,8 +101,11 @@ import {
   isRemoteFederationTarget,
   normalizeNavigationBrowseMode,
   normalizeThreadIdentityKey,
+  forgetRecentThreadLockNote,
+  parseRecentThreadLockNotes,
   parseThreadIdentityKey,
   projectNavigationLaunchpadProviderSettings,
+  rememberRecentThreadLockNote,
   resolveDefaultLaunchpadExecutionMode,
   resolveTokenUsagePriceUnavailableReason,
 } from "@pwragent/shared";
@@ -613,6 +616,12 @@ const LAUNCHPAD_AUTO_ACCESS_NOTICE_META_KEY = "launchpad_auto_access_notice";
  * commit per toggle.
  */
 const NAVIGATION_PINNED_GROUP_COLLAPSED_META_KEY = "navigation_pinned_group_collapsed";
+/**
+ * The operator's recent short lock notes, offered as chips in the lock
+ * dialog. Written only when the dialog saves a note or a chip is removed, and
+ * not at all when the list would not change.
+ */
+const THREAD_LOCK_RECENT_NOTES_META_KEY = "thread_lock_recent_notes";
 /**
  * Which thread the Star Map manager card reopens. Written once when the
  * manager thread is created (and once more if the operator resets it), so
@@ -7760,6 +7769,35 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     return collapsed;
   }
 
+  listRecentThreadLockNotes(): string[] {
+    const raw = this.stateDb.getMeta(THREAD_LOCK_RECENT_NOTES_META_KEY);
+    if (!raw) return [];
+    try {
+      return parseRecentThreadLockNotes(JSON.parse(raw));
+    } catch {
+      return [];
+    }
+  }
+
+  async rememberRecentThreadLockNote(note: string): Promise<string[]> {
+    // Saving the newest note again commits nothing.
+    return this.writeRecentThreadLockNotes((current) => rememberRecentThreadLockNote(current, note));
+  }
+
+  async forgetRecentThreadLockNote(note: string): Promise<string[]> {
+    // Removing a note that is already gone commits nothing.
+    return this.writeRecentThreadLockNotes((current) => forgetRecentThreadLockNote(current, note));
+  }
+
+  private writeRecentThreadLockNotes(change: (current: string[]) => string[]): string[] {
+    const current = this.listRecentThreadLockNotes();
+    const next = change(current);
+    if (next.length !== current.length || next.some((entry, index) => entry !== current[index])) {
+      this.stateDb.setMeta(THREAD_LOCK_RECENT_NOTES_META_KEY, JSON.stringify(next));
+    }
+    return next;
+  }
+
   async getDirectoryLaunchpad(params: {
     directoryKey: string;
   }): Promise<DirectoryLaunchpadOverlayState | undefined> {
@@ -9917,6 +9955,9 @@ export type OverlayStoreLike = Pick<
   upsertThreadMessageOrigin?: SqliteOverlayStore["upsertThreadMessageOrigin"];
   readThreadMessageOrigins?: SqliteOverlayStore["readThreadMessageOrigins"];
   setPinnedGroupCollapsed?: SqliteOverlayStore["setPinnedGroupCollapsed"];
+  listRecentThreadLockNotes?: SqliteOverlayStore["listRecentThreadLockNotes"];
+  rememberRecentThreadLockNote?: SqliteOverlayStore["rememberRecentThreadLockNote"];
+  forgetRecentThreadLockNote?: SqliteOverlayStore["forgetRecentThreadLockNote"];
 };
 
 function reliableSubAgentCompletionBoundary(

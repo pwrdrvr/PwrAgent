@@ -284,6 +284,8 @@ import type {
   SetThreadReactionResponse,
   SetThreadLockRequest,
   SetThreadLockResponse,
+  RecentThreadLockNotesResponse,
+  ThreadLockNoteRequest,
   SetThreadToolIncidentNoticeRequest,
   SetThreadToolIncidentNoticeResponse,
   AcknowledgeThreadEnvironmentFailureRequest,
@@ -1399,6 +1401,13 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   setThreadLock?: (
     request: SetThreadLockRequest,
   ) => Promise<SetThreadLockResponse>;
+  listRecentThreadLockNotes?: () => Promise<RecentThreadLockNotesResponse>;
+  rememberThreadLockNote?: (
+    request: ThreadLockNoteRequest,
+  ) => Promise<RecentThreadLockNotesResponse>;
+  forgetThreadLockNote?: (
+    request: ThreadLockNoteRequest,
+  ) => Promise<RecentThreadLockNotesResponse>;
   setThreadToolIncidentNotice?: (
     request: SetThreadToolIncidentNoticeRequest,
   ) => Promise<SetThreadToolIncidentNoticeResponse>;
