@@ -100,27 +100,23 @@ export async function readCompleteNavigationQueue(params: {
 }
 
 /**
- * A review queued behind a turn waits in the owner's pending-review list, not
- * in its turn FIFO. Its `queueEntryId` is a pending-review id that no FIFO page
- * ever reports, so a complete FIFO is no evidence that it is gone. The
- * scheduled-action projection removes it once the review starts, fails, or is
- * cancelled.
+ * Entries whose absence from a complete FIFO is no evidence that they are
+ * gone. The scheduled-action projection owns them and removes each once it
+ * starts, fails, or is cancelled.
+ *
+ * - A review queued behind a turn waits in the owner's pending-review list,
+ *   not its turn FIFO. Its `queueEntryId` is a pending-review id that no FIFO
+ *   page ever reports.
+ * - A held scheduled action is durable, and the owner's FIFO is process-local:
+ *   after the owner restarts, the action stays held but no FIFO page reports
+ *   its entry. Pruning it here fought the scheduled-action projection, which
+ *   adds it back on its next read, so the row's Queued chip flashed on and off.
  */
-function isScheduledReview(entry: ComposerQueuedTurnSnapshot): boolean {
-  return Boolean(entry.scheduledActionId && entry.reviewCommand);
-}
-
-/**
- * A held scheduled action is durable, and the owner's FIFO is process-local:
- * after the owner restarts, the action stays held but no FIFO page reports its
- * entry. Its absence from a complete FIFO is no evidence that it is gone.
- * Pruning it here fought the scheduled-action projection, which adds it back
- * on its next read, so the row's Queued chip flashed on and off. The
- * scheduled-action projection removes it once it is retried, fails, or is
- * cancelled.
- */
-function isHeldScheduledAction(entry: ComposerQueuedTurnSnapshot): boolean {
-  return Boolean(entry.scheduledActionId && entry.manualReleaseRequired);
+function isOwnedByScheduledProjection(entry: ComposerQueuedTurnSnapshot): boolean {
+  return Boolean(
+    entry.scheduledActionId
+    && (entry.reviewCommand || entry.manualReleaseRequired),
+  );
 }
 
 /**
@@ -160,8 +156,7 @@ export function reconcileCompleteNavigationQueue(params: {
     || !entry.threadOwner
     || JSON.stringify(entry.threadOwner) !== ownerKey
     || entry.backendQueuePending
-    || isScheduledReview(entry)
-    || isHeldScheduledAction(entry)
+    || isOwnedByScheduledProjection(entry)
     || ownerById.has(entry.queueEntryId)
     || capturedById.get(entry.id) !== entry);
   const mirrorsById = new Map(retained
